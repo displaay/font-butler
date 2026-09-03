@@ -7,7 +7,21 @@ const UI = process.env.FONTCASE_UI ?? 'http://127.0.0.1:43181'
 const API = process.env.FONTCASE_API ?? 'http://127.0.0.1:43182'
 
 let mainWindow = null
+let apiToken = null
 const queuedFiles = []
+
+async function ensureApiToken() {
+  if (apiToken) {
+    return apiToken
+  }
+  const response = await fetch(`${API}/api/bootstrap`)
+  const data = await response.json()
+  if (!response.ok || !data.token) {
+    throw new Error('Could not connect to Fontcase API.')
+  }
+  apiToken = data.token
+  return apiToken
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -33,9 +47,13 @@ function createWindow() {
 
 async function openFont(filePath) {
   try {
+    const token = await ensureApiToken()
     await fetch(`${API}/api/open`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
       body: JSON.stringify({ path: filePath }),
     })
   } catch (error) {

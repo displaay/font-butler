@@ -4,6 +4,18 @@ import type { CatalogEntry, CatalogFile } from './types.ts'
 
 const emptyCatalog = (): CatalogFile => ({ version: 1, entries: [] })
 
+let catalogQueue: Promise<void> = Promise.resolve()
+
+export function runCatalogTask<T>(task: () => Promise<T> | T): Promise<T> {
+  const run = async () => task()
+  const result = catalogQueue.then(run, run)
+  catalogQueue = result.then(
+    () => undefined,
+    () => undefined,
+  )
+  return result
+}
+
 export function loadCatalog(paths: AppPaths): CatalogFile {
   if (!fs.existsSync(paths.catalogPath)) {
     return emptyCatalog()
@@ -48,4 +60,9 @@ export function findById(
   id: string,
 ): CatalogEntry | undefined {
   return catalog.entries.find((entry) => entry.id === id)
+}
+
+export function findByIds(catalog: CatalogFile, ids: string[]): CatalogEntry[] {
+  const set = new Set(ids)
+  return catalog.entries.filter((entry) => set.has(entry.id))
 }

@@ -21,7 +21,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { api, isNotice, subscribeEvents } from '@/lib/api'
-import { familyNameOf, groupCatalog, groupSystem, matchesQuery } from '@/lib/group'
+import { familyNameOf, entryIds, familyStatusSummary, groupCatalog, groupSystem, matchesQuery } from '@/lib/group'
 import { catalogInstanceRows, systemInstanceRows } from '@/lib/instances'
 import type { CatalogEntry, FamilyGroup, SystemFace, SystemFamilyGroup } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -46,12 +46,14 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null)
   const [renameEntry, setRenameEntry] = useState<CatalogEntry | null>(null)
 
   useEffect(() => {
     let cancelled = false
     async function boot() {
       try {
+        await api.bootstrap()
         const openPath = new URLSearchParams(window.location.search).get('open')
         if (openPath) {
           const opened = await api.open(openPath)
@@ -63,7 +65,10 @@ export default function App() {
           const focus =
             (openPath && catalog.entries.find((entry) => entry.sourcePath === openPath)) ||
             catalog.entries[0]
-          if (focus) setSelectedFamily((current) => current ?? familyNameOf(focus))
+          if (focus) {
+            setSelectedFamily((current) => current ?? familyNameOf(focus))
+            setSelectedEntryId((current) => current ?? focus.id)
+          }
         }
         const system = await api.system()
         if (!cancelled) setSystemFaces(system.faces)
@@ -130,7 +135,10 @@ export default function App() {
     tab === 'system' ? [] : tab === 'uninstalled' ? uninstalledGroups : tab === 'updates' ? updateGroups : libraryGroups
   const selectedGroup =
     visibleGroups.find((group) => group.familyName === selectedFamily) ?? visibleGroups[0] ?? null
-  const selectedEntry = selectedGroup?.entries[0] ?? null
+  const selectedEntry =
+    selectedGroup?.entries.find((entry) => entry.id === selectedEntryId) ??
+    selectedGroup?.entries[0] ??
+    null
   const selectedSystemGroup =
     tab === 'system'
       ? (shownSystemGroups.find((group) => group.familyName === selectedSystem) ??
@@ -139,9 +147,47 @@ export default function App() {
       : null
 
   useEffect(() => {
-    if (tab !== 'system' && selectedGroup) setSelectedFamily(selectedGroup.familyName)
+    if (tab !== 'system' && selectedGroup) {
+      setSelectedFamily(selectedGroup.familyName)
+      setSelectedEntryId((current) => {
+        if (current && selectedGroup.entries.some((entry) => entry.id === current)) {
+          return current
+        }
+        return selectedGroup.entries[0]?.id ?? null
+      })
+    }
     if (tab === 'system' && selectedSystemGroup) setSelectedSystem(selectedSystemGroup.familyName)
   }, [tab, selectedGroup, selectedSystemGroup])
+
+  function selectGroup(group: FamilyGroup) {
+    setSelectedFamily(group.familyName)
+    setSelectedEntryId(group.entries[0]?.id ?? null)
+  }
+
+  function installGroup(group: FamilyGroup, familyName?: string) {
+    const ids = entryIds(group)
+    return ids.length > 1 ? api.installMany(ids, familyName) : api.install(ids[0], familyName)
+  }
+
+  function uninstallGroup(group: FamilyGroup) {
+    const ids = entryIds(group)
+    return ids.length > 1 ? api.uninstallMany(ids) : api.uninstall(ids[0])
+  }
+
+  function deactivateGroup(group: FamilyGroup) {
+    const ids = entryIds(group)
+    return ids.length > 1 ? api.deactivateMany(ids) : api.deactivate(ids[0])
+  }
+
+  function activateGroup(group: FamilyGroup) {
+    const ids = entryIds(group)
+    return ids.length > 1 ? api.activateMany(ids) : api.activate(ids[0])
+  }
+
+  function reinstallGroup(group: FamilyGroup) {
+    const ids = entryIds(group)
+    return ids.length > 1 ? api.reinstallMany(ids) : api.reinstall(ids[0])
+  }
 
   async function run(action: () => Promise<unknown>, success?: string) {
     setBusy(true)
@@ -330,27 +376,29 @@ export default function App() {
                           key={group.key}
                           group={group}
                           selected={selectedGroup?.key === group.key}
-                          onSelect={() => setSelectedFamily(group.familyName)}
+                          selectedEntryId={selectedEntryId}
+                          onSelect={() => selectGroup(group)}
+                          onSelectEntry={setSelectedEntryId}
                           busy={busy}
                           onInstall={() =>
-                            void run(() => api.install(group.entries[0].id), `Installed ${group.familyName}`)
+                            void run(() => installGroup(group), `Installed ${group.familyName}`)
                           }
-                          onInstallAs={() => setRenameEntry(group.entries[0])}
+                          onInstallAs={() => setRenameEntry(selectedEntry ?? group.entries[0])}
                           onReinstall={() =>
-                            void run(() => api.reinstall(group.entries[0].id), `Reinstalled ${group.familyName}`)
+                            void run(() => reinstallGroup(group), `Reinstalled ${group.familyName}`)
                           }
                           onUninstall={() =>
-                            void run(() => api.uninstall(group.entries[0].id), `Removed ${group.familyName}`)
+                            void run(() => uninstallGroup(group), `Removed ${group.familyName}`)
                           }
                           onDeactivate={() =>
-                            void run(() => api.deactivate(group.entries[0].id), `Deactivated ${group.familyName}`)
+                            void run(() => deactivateGroup(group), `Deactivated ${group.familyName}`)
                           }
                           onActivate={() =>
-                            void run(() => api.activate(group.entries[0].id), `Activated ${group.familyName}`)
+                            void run(() => activateGroup(group), `Activated ${group.familyName}`)
                           }
                           onReveal={() => {
-                            setSelectedFamily(group.familyName)
-                            void revealCatalog(group.entries[0])
+                            selectGroup(group)
+                            void revealCatalog(selectedEntry ?? group.entries[0])
                           }}
                         />
                       ))}
@@ -362,23 +410,29 @@ export default function App() {
             <Inspector
               group={tab === 'system' ? null : selectedGroup}
               entry={tab === 'system' ? null : selectedEntry}
+              statusSummary={selectedGroup ? familyStatusSummary(selectedGroup) : null}
+              selectedEntryId={selectedEntryId}
+              onSelectEntry={setSelectedEntryId}
               systemGroup={selectedSystemGroup}
               busy={busy}
               onInstall={() =>
-                selectedEntry && void run(() => api.install(selectedEntry.id), `Installed ${familyNameOf(selectedEntry)}`)
+                selectedGroup &&
+                void run(() => installGroup(selectedGroup), `Installed ${selectedGroup.familyName}`)
               }
               onInstallAs={() => setRenameEntry(selectedEntry)}
               onReinstall={() =>
-                selectedEntry && void run(() => api.reinstall(selectedEntry.id))
+                selectedGroup && void run(() => reinstallGroup(selectedGroup))
               }
               onUninstall={() =>
-                selectedEntry && void run(() => api.uninstall(selectedEntry.id), `Removed ${familyNameOf(selectedEntry)}`)
+                selectedGroup &&
+                void run(() => uninstallGroup(selectedGroup), `Removed ${selectedGroup.familyName}`)
               }
               onDeactivate={() =>
-                selectedEntry && void run(() => api.deactivate(selectedEntry.id), `Deactivated ${familyNameOf(selectedEntry)}`)
+                selectedGroup &&
+                void run(() => deactivateGroup(selectedGroup), `Deactivated ${selectedGroup.familyName}`)
               }
               onActivate={() =>
-                selectedEntry && void run(() => api.activate(selectedEntry.id), `Activated ${familyNameOf(selectedEntry)}`)
+                selectedGroup && void run(() => activateGroup(selectedGroup), `Activated ${selectedGroup.familyName}`)
               }
               onReveal={(which) => selectedEntry && void revealCatalog(selectedEntry, which)}
               onUninstallSystem={() =>
@@ -435,8 +489,10 @@ function uniquePaths(faces: SystemFace[]): string[] {
 function LibraryCard({
   group,
   selected,
+  selectedEntryId,
   busy,
   onSelect,
+  onSelectEntry,
   onInstall,
   onInstallAs,
   onReinstall,
@@ -447,8 +503,10 @@ function LibraryCard({
 }: {
   group: FamilyGroup
   selected: boolean
+  selectedEntryId: string | null
   busy: boolean
   onSelect: () => void
+  onSelectEntry: (entryId: string) => void
   onInstall: () => void
   onInstallAs: () => void
   onReinstall: () => void
@@ -492,6 +550,7 @@ function LibraryCard({
                 <div className="mt-0.5 text-xs text-muted-foreground">
                   {group.instanceCount}{' '}
                   {group.instanceCount === 1 ? 'instance' : 'instances'}
+                  {group.entries.length > 1 ? ` · ${group.entries.length} files` : ''}
                 </div>
               </div>
             </button>
@@ -512,7 +571,13 @@ function LibraryCard({
               </button>
             )}
           </div>
-          {expanded && showInstances && <InstanceList rows={instances} />}
+          {expanded && showInstances && (
+            <InstanceList
+              rows={instances}
+              selectedEntryId={selectedEntryId}
+              onSelectEntry={onSelectEntry}
+            />
+          )}
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent>

@@ -1,17 +1,33 @@
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
-import { FontcaseService } from '../core/service.ts'
+import { contentDisposition } from '../core/auth.ts'
 import { onEvent } from '../core/events.ts'
+import { FontcaseService } from '../core/service.ts'
 
 const PORT = Number(process.env.FONTCASE_API_PORT || 43182)
 const service = new FontcaseService()
 
 await service.init()
 
+const apiToken = service.getApiToken()
 const app = new Hono()
 
+app.use('/api/*', async (c, next) => {
+  if (c.req.method === 'GET') {
+    return next()
+  }
+  const auth = c.req.header('Authorization')
+  const bearer = auth?.startsWith('Bearer ') ? auth.slice(7) : null
+  if (bearer !== apiToken) {
+    return c.json({ error: 'Unauthorized' }, 401)
+  }
+  return next()
+})
+
 app.get('/api/health', (c) => c.json({ ok: true, platform: process.platform }))
+
+app.get('/api/bootstrap', (c) => c.json({ token: apiToken }))
 
 app.get('/api/catalog', (c) => c.json({ entries: service.listCatalog() }))
 
@@ -56,8 +72,15 @@ app.post('/api/open', async (c) => {
 })
 
 app.post('/api/install', async (c) => {
-  const body = await c.req.json<{ id: string; familyName?: string }>()
+  const body = await c.req.json<{ id?: string; ids?: string[]; familyName?: string }>()
   try {
+    if (body.ids?.length) {
+      const entries = await service.installMany(body.ids, body.familyName)
+      return c.json({ entries })
+    }
+    if (!body.id) {
+      return c.json({ error: 'Missing id or ids' }, 400)
+    }
     const entry = await service.install(body.id, body.familyName)
     return c.json({ entry })
   } catch (error) {
@@ -69,8 +92,15 @@ app.post('/api/install', async (c) => {
 })
 
 app.post('/api/uninstall', async (c) => {
-  const body = await c.req.json<{ id: string }>()
+  const body = await c.req.json<{ id?: string; ids?: string[] }>()
   try {
+    if (body.ids?.length) {
+      const entries = await service.uninstallMany(body.ids)
+      return c.json({ entries })
+    }
+    if (!body.id) {
+      return c.json({ error: 'Missing id or ids' }, 400)
+    }
     const entry = await service.uninstall(body.id)
     return c.json({ entry })
   } catch (error) {
@@ -82,8 +112,15 @@ app.post('/api/uninstall', async (c) => {
 })
 
 app.post('/api/deactivate', async (c) => {
-  const body = await c.req.json<{ id: string }>()
+  const body = await c.req.json<{ id?: string; ids?: string[] }>()
   try {
+    if (body.ids?.length) {
+      const entries = await service.deactivateMany(body.ids)
+      return c.json({ entries })
+    }
+    if (!body.id) {
+      return c.json({ error: 'Missing id or ids' }, 400)
+    }
     const entry = await service.deactivate(body.id)
     return c.json({ entry })
   } catch (error) {
@@ -95,8 +132,15 @@ app.post('/api/deactivate', async (c) => {
 })
 
 app.post('/api/activate', async (c) => {
-  const body = await c.req.json<{ id: string }>()
+  const body = await c.req.json<{ id?: string; ids?: string[] }>()
   try {
+    if (body.ids?.length) {
+      const entries = await service.activateMany(body.ids)
+      return c.json({ entries })
+    }
+    if (!body.id) {
+      return c.json({ error: 'Missing id or ids' }, 400)
+    }
     const entry = await service.activate(body.id)
     return c.json({ entry })
   } catch (error) {
@@ -108,8 +152,15 @@ app.post('/api/activate', async (c) => {
 })
 
 app.post('/api/reinstall', async (c) => {
-  const body = await c.req.json<{ id: string }>()
+  const body = await c.req.json<{ id?: string; ids?: string[] }>()
   try {
+    if (body.ids?.length) {
+      const entries = await service.reinstallMany(body.ids)
+      return c.json({ entries })
+    }
+    if (!body.id) {
+      return c.json({ error: 'Missing id or ids' }, 400)
+    }
     const entry = await service.reinstall(body.id)
     return c.json({ entry })
   } catch (error) {
@@ -174,7 +225,7 @@ app.get('/api/font-file/:id', (c) => {
       headers: {
         'Content-Type': file.mime,
         'Cache-Control': 'no-cache',
-        'Content-Disposition': `inline; filename="${file.filename}"`,
+        'Content-Disposition': contentDisposition(file.filename),
       },
     })
   } catch (error) {
@@ -196,6 +247,7 @@ app.get('/api/system-font', (c) => {
       headers: {
         'Content-Type': file.mime,
         'Cache-Control': 'public, max-age=3600',
+        'Content-Disposition': contentDisposition(file.filename),
       },
     })
   } catch (error) {

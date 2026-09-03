@@ -1,6 +1,30 @@
 import type { CatalogEntry, Notice, SystemFace } from './types'
 
+let apiToken: string | null = null
+
+async function ensureToken(): Promise<string> {
+  if (apiToken) {
+    return apiToken
+  }
+  const response = await fetch('/api/bootstrap')
+  const data = (await response.json()) as { token?: string }
+  if (!response.ok || !data.token) {
+    throw new Error('Could not connect to Fontcase API.')
+  }
+  apiToken = data.token
+  return apiToken
+}
+
+function authHeaders(extra?: HeadersInit): HeadersInit {
+  const headers = new Headers(extra)
+  if (apiToken) {
+    headers.set('Authorization', `Bearer ${apiToken}`)
+  }
+  return headers
+}
+
 async function json<T>(input: Promise<Response>): Promise<T> {
+  await ensureToken()
   const response = await input
   const data = (await response.json()) as T & { error?: string }
   if (!response.ok) {
@@ -9,96 +33,51 @@ async function json<T>(input: Promise<Response>): Promise<T> {
   return data
 }
 
+async function post(url: string, body: unknown): Promise<Response> {
+  await ensureToken()
+  return fetch(url, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(body),
+  })
+}
+
 export const api = {
+  bootstrap: () => ensureToken(),
   catalog: () => json<{ entries: CatalogEntry[] }>(fetch('/api/catalog')),
   system: () => json<{ faces: SystemFace[] }>(fetch('/api/system')),
   importPaths: (paths: string[]) =>
-    json<{ entries: CatalogEntry[]; errors: string[] }>(
-      fetch('/api/import', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ paths }),
-      }),
-    ),
-  importFiles: (files: File[]) => {
+    json<{ entries: CatalogEntry[]; errors: string[] }>(post('/api/import', { paths })),
+  importFiles: async (files: File[]) => {
+    await ensureToken()
     const body = new FormData()
     for (const file of files) body.append('files', file)
     return json<{ entries: CatalogEntry[]; errors: string[] }>(
-      fetch('/api/import-files', { method: 'POST', body }),
+      fetch('/api/import-files', { method: 'POST', headers: authHeaders(), body }),
     )
   },
-  open: (path: string) =>
-    json<{ entry: CatalogEntry }>(
-      fetch('/api/open', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path }),
-      }),
-    ),
+  open: (path: string) => json<{ entry: CatalogEntry }>(post('/api/open', { path })),
   install: (id: string, familyName?: string) =>
-    json<{ entry: CatalogEntry }>(
-      fetch('/api/install', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, familyName }),
-      }),
-    ),
-  uninstall: (id: string) =>
-    json<{ entry: CatalogEntry }>(
-      fetch('/api/uninstall', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id }),
-      }),
-    ),
-  deactivate: (id: string) =>
-    json<{ entry: CatalogEntry }>(
-      fetch('/api/deactivate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id }),
-      }),
-    ),
-  activate: (id: string) =>
-    json<{ entry: CatalogEntry }>(
-      fetch('/api/activate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id }),
-      }),
-    ),
-  reinstall: (id: string) =>
-    json<{ entry: CatalogEntry }>(
-      fetch('/api/reinstall', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id }),
-      }),
-    ),
-  uninstallSystem: (path: string) =>
-    json<{ ok: boolean }>(
-      fetch('/api/system/uninstall', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path }),
-      }),
-    ),
+    json<{ entry: CatalogEntry }>(post('/api/install', { id, familyName })),
+  installMany: (ids: string[], familyName?: string) =>
+    json<{ entries: CatalogEntry[] }>(post('/api/install', { ids, familyName })),
+  uninstall: (id: string) => json<{ entry: CatalogEntry }>(post('/api/uninstall', { id })),
+  uninstallMany: (ids: string[]) =>
+    json<{ entries: CatalogEntry[] }>(post('/api/uninstall', { ids })),
+  deactivate: (id: string) => json<{ entry: CatalogEntry }>(post('/api/deactivate', { id })),
+  deactivateMany: (ids: string[]) =>
+    json<{ entries: CatalogEntry[] }>(post('/api/deactivate', { ids })),
+  activate: (id: string) => json<{ entry: CatalogEntry }>(post('/api/activate', { id })),
+  activateMany: (ids: string[]) =>
+    json<{ entries: CatalogEntry[] }>(post('/api/activate', { ids })),
+  reinstall: (id: string) => json<{ entry: CatalogEntry }>(post('/api/reinstall', { id })),
+  reinstallMany: (ids: string[]) =>
+    json<{ entries: CatalogEntry[] }>(post('/api/reinstall', { ids })),
+  uninstallSystem: (path: string) => json<{ ok: boolean }>(post('/api/system/uninstall', { path })),
   deactivateSystem: (path: string) =>
-    json<{ ok: boolean }>(
-      fetch('/api/system/deactivate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path }),
-      }),
-    ),
+    json<{ ok: boolean }>(post('/api/system/deactivate', { path })),
   reveal: (payload: { id?: string; path?: string; which?: 'source' | 'installed' }) =>
-    json<{ path: string }>(
-      fetch('/api/reveal', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      }),
-    ),
+    json<{ path: string }>(post('/api/reveal', payload)),
   renamePreview: (id: string, familyName: string) =>
     json<{ fullName: string; postscriptName: string }>(
       fetch(

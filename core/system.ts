@@ -1,3 +1,4 @@
+import { SYSTEM_FONT_CACHE_VERSION } from './constants.ts'
 import fs from 'node:fs'
 import path from 'node:path'
 import { loadCatalog } from './catalog.ts'
@@ -48,6 +49,7 @@ function isWritable(filePath: string): boolean {
 }
 
 type CacheFile = {
+  version?: number
   faces: SystemFace[]
   stamps: Record<string, number>
 }
@@ -66,7 +68,10 @@ export function scanSystemFonts(paths: AppPaths): SystemFace[] {
   let cache: CacheFile = { faces: [], stamps: {} }
   if (fs.existsSync(paths.systemCachePath)) {
     try {
-      cache = JSON.parse(fs.readFileSync(paths.systemCachePath, 'utf8')) as CacheFile
+      const parsed = JSON.parse(fs.readFileSync(paths.systemCachePath, 'utf8')) as CacheFile
+      if (parsed.version === SYSTEM_FONT_CACHE_VERSION) {
+        cache = parsed
+      }
     } catch {
       cache = { faces: [], stamps: {} }
     }
@@ -134,7 +139,7 @@ export function scanSystemFonts(paths: AppPaths): SystemFace[] {
   fs.mkdirSync(paths.dataRoot, { recursive: true })
   fs.writeFileSync(
     paths.systemCachePath,
-    JSON.stringify({ faces: nextFaces, stamps: nextStamps }),
+    JSON.stringify({ version: SYSTEM_FONT_CACHE_VERSION, faces: nextFaces, stamps: nextStamps }),
   )
   return nextFaces
 }

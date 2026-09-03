@@ -5,12 +5,16 @@ import { Button } from '@/components/ui/button'
 import { formatBytes, formatRelativeTime } from '@/lib/utils'
 import { familyNameOf } from '@/lib/group'
 import type { CatalogEntry, FamilyGroup, SystemFamilyGroup } from '@/lib/types'
+import { cn } from '@/lib/utils'
 
 const SAMPLE = 'The quick brown fox jumps over the lazy type.'
 
 export function Inspector({
   group,
   entry,
+  statusSummary,
+  selectedEntryId,
+  onSelectEntry,
   systemGroup,
   busy,
   onInstall,
@@ -26,6 +30,9 @@ export function Inspector({
 }: {
   group: FamilyGroup | null
   entry: CatalogEntry | null
+  statusSummary: string | null
+  selectedEntryId: string | null
+  onSelectEntry: (entryId: string) => void
   systemGroup: SystemFamilyGroup | null
   busy: boolean
   onInstall: () => void
@@ -105,6 +112,8 @@ export function Inspector({
 
   const previewFace =
     entry.faces.find((face) => /regular|roman|book/i.test(face.styleName)) ?? entry.faces[0]
+  const installed = entry.status === 'installed' || entry.status === 'outdated'
+  const showReinstall = group.entries.some((item) => item.status === 'outdated')
 
   return (
     <aside className="flex w-full flex-col gap-4 p-5 md:w-80">
@@ -123,6 +132,8 @@ export function Inspector({
         <p className="mt-1 text-sm text-muted-foreground">
           {group.instanceCount} {group.instanceCount === 1 ? 'instance' : 'instances'}
           {group.isVariable ? ' · variable' : ''}
+          {group.entries.length > 1 ? ` · ${group.entries.length} files` : ''}
+          {statusSummary ? ` · ${statusSummary}` : ''}
         </p>
       </div>
       {entry.status === 'outdated' && (
@@ -148,28 +159,39 @@ export function Inspector({
         <dd className="uppercase">{entry.format}</dd>
       </dl>
       <div className="space-y-2">
-        {group.entries.map((item) => (
-          <div key={item.id} className="flex items-center gap-3 rounded-lg bg-muted/70 px-2 py-2">
-            <AaPreview
-              family={catalogFontFamily(item.id)}
-              weight={item.faces[0]?.weight}
-              italic={item.faces[0]?.italic}
-            />
-            <div className="min-w-0">
-              <div className="truncate text-sm font-medium">
-                {item.faces.map((face) => face.styleName).join(', ')}
+        {group.entries.map((item) => {
+          const selected = item.id === selectedEntryId
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onSelectEntry(item.id)}
+              className={cn(
+                'flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors hover:bg-muted/80',
+                selected && 'bg-muted ring-1 ring-primary/30',
+              )}
+            >
+              <AaPreview
+                family={catalogFontFamily(item.id)}
+                weight={item.faces[0]?.weight}
+                italic={item.faces[0]?.italic}
+              />
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium">
+                  {item.faces.map((face) => face.styleName).join(', ')}
+                </div>
+                <div className="truncate text-xs text-muted-foreground">
+                  {item.faces[0]?.postscriptName}
+                </div>
               </div>
-              <div className="truncate text-xs text-muted-foreground">
-                {item.faces[0]?.postscriptName}
-              </div>
-            </div>
-          </div>
-        ))}
+            </button>
+          )
+        })}
       </div>
       <div className="flex flex-wrap gap-2">
-        {entry.status === 'installed' || entry.status === 'outdated' ? (
+        {installed ? (
           <>
-            {entry.status === 'outdated' && (
+            {showReinstall && (
               <Button size="sm" variant="accent" disabled={busy} onClick={onReinstall}>
                 Reinstall
               </Button>

@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { promisify } from 'node:util'
+import { assertSafeShellPath } from './auth.ts'
 import { getPaths, isMac } from './paths.ts'
 
 const execFileAsync = promisify(execFile)
@@ -51,7 +52,8 @@ export async function registerFont(filePath: string): Promise<void> {
   if (!isMac()) {
     return
   }
-  const posix = filePath.replaceAll("'", "\\'")
+  const safePath = assertSafeShellPath(filePath)
+  const posix = safePath.replaceAll("'", "\\'")
   const script = `use framework "CoreText"
 use scripting additions
 set theURL to current application's NSURL's fileURLWithPath:"${posix}"
@@ -69,7 +71,8 @@ export async function unregisterFont(filePath: string): Promise<void> {
   if (!isMac() || !filePath) {
     return
   }
-  const posix = filePath.replaceAll("'", "\\'")
+  const safePath = assertSafeShellPath(filePath)
+  const posix = safePath.replaceAll("'", "\\'")
   const script = `use framework "CoreText"
 use scripting additions
 set theURL to current application's NSURL's fileURLWithPath:"${posix}"

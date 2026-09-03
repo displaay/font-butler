@@ -204,15 +204,21 @@ async function renameWithPython(
   sourcePath: string,
   destPath: string,
   family: string,
-): Promise<boolean> {
+): Promise<{ ok: true } | { ok: false; reason: string }> {
   const script = path.join(projectRoot, 'scripts/rename_family.py')
   try {
     await execFileAsync('python3', [script, sourcePath, destPath, family], {
       timeout: 30_000,
     })
-    return fs.existsSync(destPath)
-  } catch {
-    return false
+    if (!fs.existsSync(destPath)) {
+      return { ok: false, reason: 'Python rename finished but no output file was written.' }
+    }
+    return { ok: true }
+  } catch (error) {
+    return {
+      ok: false,
+      reason: error instanceof Error ? error.message : 'Python rename failed',
+    }
   }
 }
 
@@ -225,20 +231,29 @@ export async function renameFamilyCopy(
     os.tmpdir(),
     `fontcase-rename-${Date.now()}-${Math.random().toString(16).slice(2)}${ext}`,
   )
-  const pythonOk = await renameWithPython(sourcePath, destPath, family)
-  if (pythonOk) {
+  const python = await renameWithPython(sourcePath, destPath, family)
+  if (python.ok) {
     return destPath
   }
-  const original = fs.readFileSync(sourcePath)
-  const tag = original.subarray(0, 4).toString('ascii')
-  if (tag === 'wOFF' || tag === 'wOF2' || tag === 'ttcf') {
-    throw new Error(
-      'Renaming this format needs Python fonttools. Install fonttools and try again.',
-    )
+  if (python.ok === false) {
+    const pythonReason = python.reason
+    const original = fs.readFileSync(sourcePath)
+    const tag = original.subarray(0, 4).toString('ascii')
+    if (tag === 'wOFF' || tag === 'wOF2' || tag === 'ttcf') {
+      throw new Error(
+        `Renaming this format needs Python fonttools (${pythonReason}). Install fonttools and try again.`,
+      )
+    }
+    try {
+      const rewritten = rewriteNameTable(original, family)
+      fs.writeFileSync(destPath, rewritten)
+      return destPath
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'rewrite failed'
+      throw new Error(`Could not rename font (${pythonReason}; ${detail}).`)
+    }
   }
-  const rewritten = rewriteNameTable(original, family)
-  fs.writeFileSync(destPath, rewritten)
-  return destPath
+  throw new Error('Could not rename font.')
 }
 
 export function postscriptPreview(family: string, style: string): string {

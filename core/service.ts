@@ -1,8 +1,10 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { findById, findBySourcePath, loadCatalog, saveCatalog, upsertEntry } from './catalog.ts'
+import { findById, findBySourcePath, loadCatalog, runCatalogTask, saveCatalog, upsertEntry } from './catalog.ts'
+import { getOrCreateApiToken } from './auth.ts'
 import { clearFontCaches, registerFont, unregisterFont } from './caches.ts'
+import { MAX_UPLOAD_BYTES } from './constants.ts'
 import { emitEvent } from './events.ts'
 import { isFontFile, mimeForFont, parseFontFile, readFileStat } from './parse.ts'
 import { ensureDirs, getPaths, type AppPaths } from './paths.ts'
@@ -90,6 +92,10 @@ export class FontcaseService {
     return loadCatalog(this.paths).entries
   }
 
+  getApiToken(): string {
+    return getOrCreateApiToken(this.paths.apiTokenPath)
+  }
+
   listSystem(): SystemFace[] {
     const faces = scanSystemFonts(this.paths)
     emitEvent({ type: 'system', faces })
@@ -97,237 +103,258 @@ export class FontcaseService {
   }
 
   async importPaths(filePaths: string[]): Promise<{ entries: CatalogEntry[]; errors: string[] }> {
-    const errors: string[] = []
-    const imported: CatalogEntry[] = []
-    for (const filePath of filePaths) {
-      try {
-        imported.push(this.importOne(path.resolve(filePath)))
-      } catch (error) {
-        errors.push(`${filePath}: ${error instanceof Error ? error.message : String(error)}`)
+    return runCatalogTask(async () => {
+      const errors: string[] = []
+      const imported: CatalogEntry[] = []
+      for (const filePath of filePaths) {
+        try {
+          imported.push(this.importOneUnlocked(path.resolve(filePath)))
+        } catch (error) {
+          errors.push(`${filePath}: ${error instanceof Error ? error.message : String(error)}`)
+        }
       }
-    }
-    await syncWatchers(this.paths)
-    emitCatalog(this.paths)
-    return { entries: imported, errors }
+      await syncWatchers(this.paths)
+      emitCatalog(this.paths)
+      return { entries: imported, errors }
+    })
   }
 
   async importUploads(
     files: { filename: string; data: Buffer }[],
   ): Promise<{ entries: CatalogEntry[]; errors: string[] }> {
-    fs.mkdirSync(this.paths.uploadsDir, { recursive: true })
-    const saved: string[] = []
-    for (const file of files) {
-      const safe = path.basename(file.filename).replace(/[^\w.-]+/g, '_')
-      const dest = path.join(this.paths.uploadsDir, `${Date.now()}-${safe}`)
-      fs.writeFileSync(dest, file.data)
-      saved.push(dest)
-    }
-    return this.importPaths(saved)
+    return runCatalogTask(async () => {
+      fs.mkdirSync(this.paths.uploadsDir, { recursive: true })
+      const saved: string[] = []
+      const errors: string[] = []
+      for (const file of files) {
+        if (file.data.length > MAX_UPLOAD_BYTES) {
+          errors.push(`${file.filename}: file exceeds ${MAX_UPLOAD_BYTES / (1024 * 1024)}MB limit`)
+          continue
+        }
+        const safe = path.basename(file.filename).replace(/[^\w.-]+/g, '_')
+        const dest = path.join(this.paths.uploadsDir, `${Date.now()}-${safe}`)
+        fs.writeFileSync(dest, file.data)
+        saved.push(dest)
+      }
+      const imported: CatalogEntry[] = []
+      for (const filePath of saved) {
+        try {
+          imported.push(this.importOneUnlocked(filePath))
+        } catch (error) {
+          errors.push(`${filePath}: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      }
+      await syncWatchers(this.paths)
+      emitCatalog(this.paths)
+      return { entries: imported, errors }
+    })
   }
 
   async openWith(filePath: string): Promise<CatalogEntry> {
-    const entry = this.importOne(path.resolve(filePath))
-    await syncWatchers(this.paths)
-    if (entry.status === 'installed') {
-      emitCatalog(this.paths)
+    return runCatalogTask(async () => {
+      const entry = this.importOneUnlocked(path.resolve(filePath))
+      await syncWatchers(this.paths)
+      if (entry.status === 'installed') {
+        emitCatalog(this.paths)
+        emitNotice({
+          kind: 'info',
+          message: `${displayFamily(entry)} is already installed.`,
+          entryId: entry.id,
+        })
+        return entry
+      }
+      if (entry.status === 'outdated' || entry.status === 'deactivated') {
+        return this.reinstallEntry(entry.id)
+      }
+      const installed = await this.installEntry(entry.id)
       emitNotice({
-        kind: 'info',
-        message: `${displayFamily(entry)} is already installed.`,
-        entryId: entry.id,
+        kind: 'installed',
+        message: `Installed ${displayFamily(installed)}`,
+        entryId: installed.id,
       })
-      return entry
-    }
-    if (entry.status === 'outdated' || entry.status === 'deactivated') {
-      const updated = await this.reinstall(entry.id)
-      return updated
-    }
-    const installed = await this.install(entry.id)
-    emitNotice({
-      kind: 'installed',
-      message: `Installed ${displayFamily(installed)}`,
-      entryId: installed.id,
+      return installed
     })
-    return installed
   }
 
   async install(id: string, familyName?: string): Promise<CatalogEntry> {
-    const catalog = loadCatalog(this.paths)
-    const entry = findById(catalog, id)
-    if (!entry) {
-      throw new Error('Font is not in the library.')
-    }
-    if (!fs.existsSync(entry.sourcePath)) {
-      entry.status = 'source-missing'
-      saveCatalog(this.paths, catalog)
+    return runCatalogTask(async () => {
+      const entry = await this.installEntry(id, familyName)
+      await syncWatchers(this.paths)
       emitCatalog(this.paths)
-      throw new Error('The source file is missing.')
-    }
-    let sourceForInstall = entry.sourcePath
-    let temp: string | undefined
-    if (familyName && familyName.trim()) {
-      entry.customFamilyName = familyName.trim()
-      temp = await renameFamilyCopy(entry.sourcePath, entry.customFamilyName)
-      sourceForInstall = temp
-      try {
-        entry.faces = parseFontFile(temp).faces
-      } catch {
-        // Keep original parsed faces if the renamed copy cannot be re-parsed.
+      return entry
+    })
+  }
+
+  async installMany(ids: string[], familyName?: string): Promise<CatalogEntry[]> {
+    return runCatalogTask(async () => {
+      const entries: CatalogEntry[] = []
+      for (const id of ids) {
+        entries.push(await this.installEntry(id, familyName))
       }
-    }
-    await removeInstalledCopy(entry)
-    const dest = copyIntoInstallDir(this.paths, entry, sourceForInstall)
-    if (temp && fs.existsSync(temp)) {
-      fs.rmSync(temp, { force: true })
-    }
-    await registerFont(dest)
-    const stat = readFileStat(entry.sourcePath)
-    entry.installedPath = dest
-    entry.disabledPath = undefined
-    entry.sourceMtimeMs = stat.mtimeMs
-    entry.sourceSize = stat.size
-    entry.installedSnapshotMtimeMs = stat.mtimeMs
-    entry.installedSnapshotSize = stat.size
-    entry.status = 'installed'
-    touchEntry(entry)
-    saveCatalog(this.paths, catalog)
-    await syncWatchers(this.paths)
-    emitCatalog(this.paths)
-    return entry
+      await syncWatchers(this.paths)
+      emitCatalog(this.paths)
+      return entries
+    })
   }
 
   async uninstall(id: string): Promise<CatalogEntry> {
-    const catalog = loadCatalog(this.paths)
-    const entry = findById(catalog, id)
-    if (!entry) {
-      throw new Error('Font is not in the library.')
-    }
-    await removeInstalledCopy(entry)
-    if (entry.disabledPath && fs.existsSync(entry.disabledPath)) {
-      fs.rmSync(entry.disabledPath, { force: true })
-    }
-    entry.disabledPath = undefined
-    entry.status = fs.existsSync(entry.sourcePath) ? 'uninstalled' : 'source-missing'
-    touchEntry(entry)
-    saveCatalog(this.paths, catalog)
-    emitCatalog(this.paths)
-    return entry
+    return runCatalogTask(async () => {
+      const entry = await this.uninstallEntry(id)
+      emitCatalog(this.paths)
+      return entry
+    })
+  }
+
+  async uninstallMany(ids: string[]): Promise<CatalogEntry[]> {
+    return runCatalogTask(async () => {
+      const entries: CatalogEntry[] = []
+      for (const id of ids) {
+        entries.push(await this.uninstallEntry(id))
+      }
+      emitCatalog(this.paths)
+      return entries
+    })
   }
 
   async deactivate(id: string): Promise<CatalogEntry> {
-    const catalog = loadCatalog(this.paths)
-    const entry = findById(catalog, id)
-    if (!entry) {
-      throw new Error('Font is not in the library.')
-    }
-    if (!entry.installedPath || !fs.existsSync(entry.installedPath)) {
-      throw new Error('This font is not installed.')
-    }
-    await unregisterFont(entry.installedPath)
-    fs.mkdirSync(this.paths.disabledDir, { recursive: true })
-    const dest = path.join(this.paths.disabledDir, path.basename(entry.installedPath))
-    fs.renameSync(entry.installedPath, dest)
-    entry.installedPath = undefined
-    entry.disabledPath = dest
-    entry.status = 'deactivated'
-    touchEntry(entry)
-    saveCatalog(this.paths, catalog)
-    emitCatalog(this.paths)
-    return entry
+    return runCatalogTask(async () => {
+      const entry = await this.deactivateEntry(id)
+      emitCatalog(this.paths)
+      return entry
+    })
+  }
+
+  async deactivateMany(ids: string[]): Promise<CatalogEntry[]> {
+    return runCatalogTask(async () => {
+      const entries: CatalogEntry[] = []
+      for (const id of ids) {
+        entries.push(await this.deactivateEntry(id))
+      }
+      emitCatalog(this.paths)
+      return entries
+    })
   }
 
   async activate(id: string): Promise<CatalogEntry> {
-    const catalog = loadCatalog(this.paths)
-    const entry = findById(catalog, id)
-    if (!entry) {
-      throw new Error('Font is not in the library.')
-    }
-    if (!entry.disabledPath || !fs.existsSync(entry.disabledPath)) {
-      return this.install(id)
-    }
-    fs.mkdirSync(this.paths.installDir, { recursive: true })
-    const dest = path.join(this.paths.installDir, path.basename(entry.disabledPath))
-    fs.renameSync(entry.disabledPath, dest)
-    await registerFont(dest)
-    entry.installedPath = dest
-    entry.disabledPath = undefined
-    entry.status = 'installed'
-    touchEntry(entry)
-    saveCatalog(this.paths, catalog)
-    emitCatalog(this.paths)
-    return entry
+    return runCatalogTask(async () => {
+      const entry = await this.activateEntry(id)
+      emitCatalog(this.paths)
+      return entry
+    })
+  }
+
+  async activateMany(ids: string[]): Promise<CatalogEntry[]> {
+    return runCatalogTask(async () => {
+      const entries: CatalogEntry[] = []
+      for (const id of ids) {
+        entries.push(await this.activateEntry(id))
+      }
+      emitCatalog(this.paths)
+      return entries
+    })
   }
 
   async reinstall(id: string): Promise<CatalogEntry> {
-    const catalog = loadCatalog(this.paths)
-    const entry = findById(catalog, id)
-    if (!entry) {
-      throw new Error('Font is not in the library.')
-    }
-    await removeInstalledCopy(entry)
-    await clearFontCaches()
-    const updated = await this.install(id, entry.customFamilyName)
-    emitNotice({
-      kind: 'reinstalled',
-      message: `Reinstalled ${displayFamily(updated)}`,
-      entryId: updated.id,
+    return runCatalogTask(async () => {
+      const entry = await this.reinstallEntry(id)
+      emitCatalog(this.paths)
+      return entry
     })
-    return updated
+  }
+
+  async reinstallMany(ids: string[]): Promise<CatalogEntry[]> {
+    return runCatalogTask(async () => {
+      await clearFontCaches()
+      const entries: CatalogEntry[] = []
+      for (const id of ids) {
+        const catalog = loadCatalog(this.paths)
+        const entry = findById(catalog, id)
+        if (!entry) {
+          throw new Error('Font is not in the library.')
+        }
+        await removeInstalledCopy(entry)
+        entries.push(await this.installEntry(id, entry.customFamilyName))
+      }
+      await syncWatchers(this.paths)
+      emitCatalog(this.paths)
+      const first = entries[0]
+      if (first) {
+        emitNotice({
+          kind: 'reinstalled',
+          message: `Reinstalled ${entries.length} ${entries.length === 1 ? 'font' : 'fonts'}`,
+          entryId: first.id,
+        })
+      }
+      return entries
+    })
   }
 
   async uninstallSystem(filePath: string): Promise<void> {
-    const resolved = path.resolve(filePath)
-    if (!allowedFontPath(resolved, this.paths)) {
-      throw new Error('That font is outside the font folders Fontcase can manage.')
-    }
-    const catalog = loadCatalog(this.paths)
-    const managed = catalog.entries.find(
-      (entry) =>
-        entry.installedPath && path.resolve(entry.installedPath) === resolved,
-    )
-    if (managed) {
-      await this.uninstall(managed.id)
-      return
-    }
-    if (!fs.existsSync(resolved)) {
-      throw new Error('Font file is already gone.')
-    }
-    if (isProtectedSystem(resolved, this.paths)) {
-      throw new Error('Protected system fonts cannot be removed.')
-    }
-    try {
-      fs.accessSync(resolved, fs.constants.W_OK)
-    } catch {
-      throw new Error('Protected system fonts cannot be removed.')
-    }
-    await unregisterFont(resolved)
-    fs.rmSync(resolved, { force: true })
-    emitEvent({ type: 'system', faces: scanSystemFonts(this.paths) })
+    return runCatalogTask(async () => {
+      const resolved = path.resolve(filePath)
+      if (!allowedFontPath(resolved, this.paths)) {
+        throw new Error('That font is outside the font folders Fontcase can manage.')
+      }
+      const catalog = loadCatalog(this.paths)
+      const managed = catalog.entries.find(
+        (entry) =>
+          entry.installedPath && path.resolve(entry.installedPath) === resolved,
+      )
+      if (managed) {
+        await this.uninstallEntry(managed.id)
+        emitCatalog(this.paths)
+        return
+      }
+      if (!fs.existsSync(resolved)) {
+        throw new Error('Font file is already gone.')
+      }
+      if (isProtectedSystem(resolved, this.paths)) {
+        throw new Error('Protected system fonts cannot be removed.')
+      }
+      try {
+        fs.accessSync(resolved, fs.constants.W_OK)
+      } catch {
+        throw new Error('Protected system fonts cannot be removed.')
+      }
+      await unregisterFont(resolved)
+      fs.rmSync(resolved, { force: true })
+      emitEvent({ type: 'system', faces: scanSystemFonts(this.paths) })
+    })
   }
 
   async deactivateSystem(filePath: string): Promise<void> {
-    const resolved = path.resolve(filePath)
-    const catalog = loadCatalog(this.paths)
-    const managed = catalog.entries.find(
-      (entry) =>
-        entry.installedPath && path.resolve(entry.installedPath) === resolved,
-    )
-    if (managed) {
-      await this.deactivate(managed.id)
-      return
-    }
-    if (isProtectedSystem(resolved, this.paths)) {
-      throw new Error('Protected system fonts cannot be deactivated.')
-    }
-    try {
-      fs.accessSync(resolved, fs.constants.W_OK)
-    } catch {
-      throw new Error('Protected system fonts cannot be deactivated.')
-    }
-    await unregisterFont(resolved)
-    fs.mkdirSync(this.paths.disabledDir, { recursive: true })
-    const dest = path.join(this.paths.disabledDir, path.basename(resolved))
-    fs.renameSync(resolved, dest)
-    emitEvent({ type: 'system', faces: scanSystemFonts(this.paths) })
+    return runCatalogTask(async () => {
+      const resolved = path.resolve(filePath)
+      if (!allowedFontPath(resolved, this.paths)) {
+        throw new Error('That font is outside the font folders Fontcase can manage.')
+      }
+      const catalog = loadCatalog(this.paths)
+      const managed = catalog.entries.find(
+        (entry) =>
+          entry.installedPath && path.resolve(entry.installedPath) === resolved,
+      )
+      if (managed) {
+        await this.deactivateEntry(managed.id)
+        emitCatalog(this.paths)
+        return
+      }
+      if (!fs.existsSync(resolved)) {
+        throw new Error('Font file is already gone.')
+      }
+      if (isProtectedSystem(resolved, this.paths)) {
+        throw new Error('Protected system fonts cannot be deactivated.')
+      }
+      try {
+        fs.accessSync(resolved, fs.constants.W_OK)
+      } catch {
+        throw new Error('Protected system fonts cannot be deactivated.')
+      }
+      await unregisterFont(resolved)
+      fs.mkdirSync(this.paths.disabledDir, { recursive: true })
+      const dest = path.join(this.paths.disabledDir, path.basename(resolved))
+      fs.renameSync(resolved, dest)
+      emitEvent({ type: 'system', faces: scanSystemFonts(this.paths) })
+    })
   }
 
   async reveal(id: string, which: 'source' | 'installed'): Promise<string> {
@@ -347,11 +374,15 @@ export class FontcaseService {
   }
 
   async revealPath(filePath: string): Promise<string> {
-    if (!allowedFontPath(filePath, this.paths) && !fs.existsSync(filePath)) {
-      throw new Error('Cannot show that file.')
+    const resolved = path.resolve(filePath)
+    if (!allowedFontPath(resolved, this.paths)) {
+      throw new Error('That path is outside the font folders Fontcase can reveal.')
     }
-    await revealInFileManager(filePath)
-    return filePath
+    if (!fs.existsSync(resolved)) {
+      throw new Error('That file is no longer on disk.')
+    }
+    await revealInFileManager(resolved)
+    return resolved
   }
 
   fontBytesForEntry(id: string): { buffer: Buffer; mime: string; filename: string } {
@@ -396,7 +427,125 @@ export class FontcaseService {
     }
   }
 
-  private importOne(filePath: string): CatalogEntry {
+  private async installEntry(id: string, familyName?: string): Promise<CatalogEntry> {
+    const catalog = loadCatalog(this.paths)
+    const entry = findById(catalog, id)
+    if (!entry) {
+      throw new Error('Font is not in the library.')
+    }
+    if (!fs.existsSync(entry.sourcePath)) {
+      entry.status = 'source-missing'
+      saveCatalog(this.paths, catalog)
+      throw new Error('The source file is missing.')
+    }
+    let sourceForInstall = entry.sourcePath
+    let temp: string | undefined
+    if (familyName && familyName.trim()) {
+      entry.customFamilyName = familyName.trim()
+      temp = await renameFamilyCopy(entry.sourcePath, entry.customFamilyName)
+      sourceForInstall = temp
+      try {
+        entry.faces = parseFontFile(temp).faces
+      } catch {
+        // Keep original parsed faces if the renamed copy cannot be re-parsed.
+      }
+    }
+    await removeInstalledCopy(entry)
+    const dest = copyIntoInstallDir(this.paths, entry, sourceForInstall)
+    if (temp && fs.existsSync(temp)) {
+      fs.rmSync(temp, { force: true })
+    }
+    await registerFont(dest)
+    const stat = readFileStat(entry.sourcePath)
+    entry.installedPath = dest
+    entry.disabledPath = undefined
+    entry.sourceMtimeMs = stat.mtimeMs
+    entry.sourceSize = stat.size
+    entry.installedSnapshotMtimeMs = stat.mtimeMs
+    entry.installedSnapshotSize = stat.size
+    entry.status = 'installed'
+    touchEntry(entry)
+    saveCatalog(this.paths, catalog)
+    return entry
+  }
+
+  private async uninstallEntry(id: string): Promise<CatalogEntry> {
+    const catalog = loadCatalog(this.paths)
+    const entry = findById(catalog, id)
+    if (!entry) {
+      throw new Error('Font is not in the library.')
+    }
+    await removeInstalledCopy(entry)
+    if (entry.disabledPath && fs.existsSync(entry.disabledPath)) {
+      fs.rmSync(entry.disabledPath, { force: true })
+    }
+    entry.disabledPath = undefined
+    entry.status = fs.existsSync(entry.sourcePath) ? 'uninstalled' : 'source-missing'
+    touchEntry(entry)
+    saveCatalog(this.paths, catalog)
+    return entry
+  }
+
+  private async deactivateEntry(id: string): Promise<CatalogEntry> {
+    const catalog = loadCatalog(this.paths)
+    const entry = findById(catalog, id)
+    if (!entry) {
+      throw new Error('Font is not in the library.')
+    }
+    if (!entry.installedPath || !fs.existsSync(entry.installedPath)) {
+      throw new Error('This font is not installed.')
+    }
+    await unregisterFont(entry.installedPath)
+    fs.mkdirSync(this.paths.disabledDir, { recursive: true })
+    const dest = path.join(this.paths.disabledDir, path.basename(entry.installedPath))
+    fs.renameSync(entry.installedPath, dest)
+    entry.installedPath = undefined
+    entry.disabledPath = dest
+    entry.status = 'deactivated'
+    touchEntry(entry)
+    saveCatalog(this.paths, catalog)
+    return entry
+  }
+
+  private async activateEntry(id: string): Promise<CatalogEntry> {
+    const catalog = loadCatalog(this.paths)
+    const entry = findById(catalog, id)
+    if (!entry) {
+      throw new Error('Font is not in the library.')
+    }
+    if (!entry.disabledPath || !fs.existsSync(entry.disabledPath)) {
+      return this.installEntry(id)
+    }
+    fs.mkdirSync(this.paths.installDir, { recursive: true })
+    const dest = path.join(this.paths.installDir, path.basename(entry.disabledPath))
+    fs.renameSync(entry.disabledPath, dest)
+    await registerFont(dest)
+    entry.installedPath = dest
+    entry.disabledPath = undefined
+    entry.status = 'installed'
+    touchEntry(entry)
+    saveCatalog(this.paths, catalog)
+    return entry
+  }
+
+  private async reinstallEntry(id: string): Promise<CatalogEntry> {
+    const catalog = loadCatalog(this.paths)
+    const entry = findById(catalog, id)
+    if (!entry) {
+      throw new Error('Font is not in the library.')
+    }
+    await removeInstalledCopy(entry)
+    await clearFontCaches()
+    const updated = await this.installEntry(id, entry.customFamilyName)
+    emitNotice({
+      kind: 'reinstalled',
+      message: `Reinstalled ${displayFamily(updated)}`,
+      entryId: updated.id,
+    })
+    return updated
+  }
+
+  private importOneUnlocked(filePath: string): CatalogEntry {
     if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
       throw new Error('Not a file.')
     }

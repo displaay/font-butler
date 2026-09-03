@@ -88,3 +88,16 @@ export function matchesQuery(haystack: string, query: string): boolean {
   if (!query.trim()) return true
   return haystack.toLowerCase().includes(query.trim().toLowerCase())
 }
+
+export function familyStatusSummary(group: { entries: CatalogEntry[] }): string | null {
+  const statuses = new Set(group.entries.map((entry) => entry.status))
+  if (statuses.size <= 1) {
+    return null
+  }
+  const installed = group.entries.filter((entry) => entry.status === 'installed').length
+  return `${installed}/${group.entries.length} installed`
+}
+
+export function entryIds(group: { entries: CatalogEntry[] }): string[] {
+  return group.entries.map((entry) => entry.id)
+}
