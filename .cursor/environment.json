@@ -1,0 +1,15 @@
+{
+  "name": "Font Butler",
+  "install": "npm ci && python3 -m pip install fonttools",
+  "terminals": [
+    {
+      "name": "dev",
+      "command": "npm run dev",
+      "description": "Runs the Hono API server (port 43182) and the Vite dev server (port 43181) via `npm run dev`. Open http://127.0.0.1:43181 for the Linux UI-only preview of Font Butler."
+    }
+  ],
+  "ports": [
+    { "name": "vite", "port": 43181 },
+    { "name": "api", "port": 43182 }
+  ]
+}
