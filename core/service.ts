@@ -73,7 +73,7 @@ function copyIntoInstallDir(
   return dest
 }
 
-export class FontcaseService {
+export class FontButlerService {
   readonly paths: AppPaths
 
   constructor(paths: AppPaths = getPaths()) {
@@ -327,7 +327,7 @@ export class FontcaseService {
     return runCatalogTask(async () => {
       const resolved = path.resolve(filePath)
       if (!allowedFontPath(resolved, this.paths)) {
-        throw new Error('That font is outside the font folders Fontcase can manage.')
+        throw new Error('That font is outside the font folders Font Butler can manage.')
       }
       const catalog = loadCatalog(this.paths)
       const managed = catalog.entries.find(
@@ -360,7 +360,7 @@ export class FontcaseService {
     return runCatalogTask(async () => {
       const resolved = path.resolve(filePath)
       if (!allowedFontPath(resolved, this.paths)) {
-        throw new Error('That font is outside the font folders Fontcase can manage.')
+        throw new Error('That font is outside the font folders Font Butler can manage.')
       }
       const catalog = loadCatalog(this.paths)
       const managed = catalog.entries.find(
@@ -410,7 +410,7 @@ export class FontcaseService {
   async revealPath(filePath: string): Promise<string> {
     const resolved = path.resolve(filePath)
     if (!allowedFontPath(resolved, this.paths)) {
-      throw new Error('That path is outside the font folders Fontcase can reveal.')
+      throw new Error('That path is outside the font folders Font Butler can reveal.')
     }
     if (!fs.existsSync(resolved)) {
       throw new Error('That file is no longer on disk.')
@@ -715,7 +715,7 @@ export class FontcaseService {
     )
     if (
       outdatedDemo &&
-      (process.platform !== 'darwin' || process.env.FONTCASE_DEMO === '1')
+      (process.platform !== 'darwin' || process.env.FONT_BUTLER_DEMO === '1' || process.env.FONTCASE_DEMO === '1')
     ) {
       const latest = loadCatalog(this.paths)
       const row = findById(latest, outdatedDemo.id)

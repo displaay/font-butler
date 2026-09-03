@@ -15,6 +15,7 @@ release
 
 # App data created at runtime
 .data
+.font-butler-data
 .fontcase-data
 
 # Editor

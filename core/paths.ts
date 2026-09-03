@@ -30,15 +30,15 @@ export type AppPaths = {
 
 export function getPaths(): AppPaths {
   const home = os.homedir()
-  const override = process.env.FONTCASE_DATA
+  const override = process.env.FONT_BUTLER_DATA ?? process.env.FONTCASE_DATA
   const dataRoot =
     override ??
     (isMac()
-      ? path.join(home, 'Library/Application Support/Fontcase')
-      : path.join(projectRoot, '.fontcase-data'))
+      ? path.join(home, 'Library/Application Support/Font Butler')
+      : path.join(projectRoot, '.font-butler-data'))
 
   const installDir = isMac()
-    ? path.join(home, 'Library/Fonts/Fontcase')
+    ? path.join(home, 'Library/Fonts/Font Butler')
     : path.join(dataRoot, 'installed')
 
   return {

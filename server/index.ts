@@ -3,10 +3,10 @@ import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { contentDisposition } from '../core/auth.ts'
 import { onEvent } from '../core/events.ts'
-import { FontcaseService } from '../core/service.ts'
+import { FontButlerService } from '../core/service.ts'
 
-const PORT = Number(process.env.FONTCASE_API_PORT || 43182)
-const service = new FontcaseService()
+const PORT = Number(process.env.FONT_BUTLER_API_PORT || process.env.FONTCASE_API_PORT || 43182)
+const service = new FontButlerService()
 
 await service.init()
 
@@ -308,5 +308,5 @@ app.get('/api/events', (c) => {
 })
 
 serve({ fetch: app.fetch, port: PORT, hostname: '127.0.0.1' }, (info) => {
-  console.log(`Fontcase API on http://127.0.0.1:${info.port}`)
+  console.log(`Font Butler API on http://127.0.0.1:${info.port}`)
 })

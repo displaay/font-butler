@@ -97,7 +97,7 @@ export function Inspector({
         </div>
         {!systemGroup.writable && (
           <p className="text-xs text-muted-foreground">
-            Protected fonts stay on the Mac. Fontcase can only remove fonts you installed.
+            Protected fonts stay on the Mac. Font Butler can only remove fonts you installed.
           </p>
         )}
       </aside>

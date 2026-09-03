@@ -3,8 +3,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const UI = process.env.FONTCASE_UI ?? 'http://127.0.0.1:43181'
-const API = process.env.FONTCASE_API ?? 'http://127.0.0.1:43182'
+const UI = process.env.FONT_BUTLER_UI ?? process.env.FONTCASE_UI ?? 'http://127.0.0.1:43181'
+const API = process.env.FONT_BUTLER_API ?? process.env.FONTCASE_API ?? 'http://127.0.0.1:43182'
 
 let mainWindow = null
 let apiToken = null
@@ -17,7 +17,7 @@ async function ensureApiToken() {
   const response = await fetch(`${API}/api/bootstrap`)
   const data = await response.json()
   if (!response.ok || !data.token) {
-    throw new Error('Could not connect to Fontcase API.')
+    throw new Error('Could not connect to Font Butler API.')
   }
   apiToken = data.token
   return apiToken
@@ -29,7 +29,7 @@ function createWindow() {
     height: 860,
     minWidth: 920,
     minHeight: 620,
-    title: 'Fontcase',
+    title: 'Font Butler',
     backgroundColor: '#d9d4cc',
     autoHideMenuBar: true,
     webPreferences: {

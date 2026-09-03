@@ -171,7 +171,7 @@ function rewriteNameTable(file: Buffer, family: string): Buffer {
   const psStyle = style.replace(/\s+/g, '')
   const full = `${family} ${style}`.trim()
   const postscript = `${psFamily}-${psStyle}`
-  const unique = `${postscript};Fontcase;${style}`
+  const unique = `${postscript};FontButler;${style}`
   const replacements: Record<number, string> = {
     1: family,
     3: unique,
@@ -229,7 +229,7 @@ export async function renameFamilyCopy(
   const ext = path.extname(sourcePath) || '.ttf'
   const destPath = path.join(
     os.tmpdir(),
-    `fontcase-rename-${Date.now()}-${Math.random().toString(16).slice(2)}${ext}`,
+    `font-butler-rename-${Date.now()}-${Math.random().toString(16).slice(2)}${ext}`,
   )
   const python = await renameWithPython(sourcePath, destPath, family)
   if (python.ok) {

@@ -4,7 +4,7 @@ export {}
 
 declare global {
   interface Window {
-    fontcaseDesktop?: {
+    fontButlerDesktop?: {
       reveal: (filePath: string) => Promise<void>
     }
   }

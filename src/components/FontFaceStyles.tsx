@@ -41,7 +41,7 @@ export function FontFaceStyles({
 
   useEffect(() => {
     const style = document.createElement('style')
-    style.setAttribute('data-fontcase-faces', 'true')
+    style.setAttribute('data-font-butler-faces', 'true')
     style.textContent = css
     document.head.append(style)
     return () => style.remove()

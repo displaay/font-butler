@@ -1,5 +1,5 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
-contextBridge.exposeInMainWorld('fontcaseDesktop', {
+contextBridge.exposeInMainWorld('fontButlerDesktop', {
   reveal: (filePath) => ipcRenderer.invoke('reveal', filePath),
 })

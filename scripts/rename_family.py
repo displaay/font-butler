@@ -49,7 +49,7 @@ def rename_font(tt: TTFont, family: str) -> None:
     ps_style = style.replace(" ", "")
     full = f"{family} {style}".strip()
     postscript = f"{ps_family}-{ps_style}"
-    unique = f"{postscript};Fontcase;{style}"
+    unique = f"{postscript};FontButler;{style}"
     prefix = ps_family
 
     nametable = tt["name"]
@@ -76,7 +76,7 @@ def rename_font(tt: TTFont, family: str) -> None:
             cff.cff[0].FullName = full
             cff.cff.fontNames = [postscript]
         except Exception as exc:
-            sys.stderr.write(f"[fontcase] CFF rename warning: {exc}\n")
+            sys.stderr.write(f"[font-butler] CFF rename warning: {exc}\n")
 
 
 def rename_path(src: Path, dest: Path, family: str) -> None:
@@ -99,7 +99,7 @@ def main(argv: list[str]) -> int:
         return 1
     src, dest, family = Path(argv[0]), Path(argv[1]), argv[2]
     if not src.is_file():
-        sys.stderr.write(f"[fontcase] missing file: {src}\n")
+        sys.stderr.write(f"[font-butler] missing file: {src}\n")
         return 1
     rename_path(src, dest, family)
     print(f"[ok] {dest} as {family}")

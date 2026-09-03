@@ -50,10 +50,10 @@ export default function App() {
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null)
   const [renameEntry, setRenameEntry] = useState<CatalogEntry | null>(null)
   const [showSources, setShowSources] = useState(
-    () => localStorage.getItem('fontcase-show-sources') === 'true',
+    () => localStorage.getItem('font-butler-show-sources') === 'true',
   )
   const [viewLayout, setViewLayout] = useState<ViewLayout>(() =>
-    localStorage.getItem('fontcase-view-layout') === 'grid' ? 'grid' : 'list',
+    localStorage.getItem('font-butler-view-layout') === 'grid' ? 'grid' : 'list',
   )
 
   useEffect(() => {
@@ -296,7 +296,7 @@ export default function App() {
         />
         <header className="flex flex-col gap-3 border-b bg-card/80 px-4 py-3 backdrop-blur md:flex-row md:items-center">
           <div className="flex items-baseline gap-3">
-            <h1 className="font-sans text-[28px] leading-none tracking-tight">Fontcase</h1>
+            <h1 className="font-sans text-[28px] leading-none tracking-tight">Font Butler</h1>
             <p className="hidden text-sm text-muted-foreground sm:block">
               Source-tracked fonts
             </p>
@@ -393,12 +393,12 @@ export default function App() {
                     layout={viewLayout}
                     onLayoutChange={(next) => {
                       setViewLayout(next)
-                      localStorage.setItem('fontcase-view-layout', next)
+                      localStorage.setItem('font-butler-view-layout', next)
                     }}
                     showSources={showSources}
                     onShowSourcesChange={(next) => {
                       setShowSources(next)
-                      localStorage.setItem('fontcase-show-sources', String(next))
+                      localStorage.setItem('font-butler-show-sources', String(next))
                     }}
                     showSourcesToggle={tab !== 'system'}
                   />

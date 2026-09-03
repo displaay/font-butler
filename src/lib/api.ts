@@ -9,7 +9,7 @@ async function ensureToken(): Promise<string> {
   const response = await fetch('/api/bootstrap')
   const data = (await response.json()) as { token?: string }
   if (!response.ok || !data.token) {
-    throw new Error('Could not connect to Fontcase API.')
+    throw new Error('Could not connect to Font Butler API.')
   }
   apiToken = data.token
   return apiToken
