@@ -2,13 +2,18 @@ export function AaPreview({
   family,
   weight = 400,
   italic = false,
+  size = 'md',
 }: {
   family: string
   weight?: number
   italic?: boolean
+  size?: 'sm' | 'md'
 }) {
+  const box = size === 'sm' ? 'size-8 text-[17px] rounded-[7px]' : 'size-12 text-[27px] rounded-[10px]'
   return (
-    <div className="flex size-12 shrink-0 items-center justify-center rounded-[10px] bg-white text-[27px] leading-none text-foreground shadow-[inset_0_0_0_1px_rgba(28,25,23,0.06)]">
+    <div
+      className={`flex shrink-0 items-center justify-center bg-white leading-none text-foreground shadow-[inset_0_0_0_1px_rgba(28,25,23,0.06)] ${box}`}
+    >
       <span
         className="translate-y-px select-none"
         style={{

@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { Search } from 'lucide-react'
+import { ChevronDown, Search } from 'lucide-react'
 import { AaPreview } from '@/components/AaPreview'
 import { StatusBadge, VfBadge } from '@/components/Badges'
 import { FontFaceStyles, catalogFontFamily, systemFontFamily } from '@/components/FontFaceStyles'
+import { InstanceList } from '@/components/InstanceList'
 import { Inspector } from '@/components/Inspector'
 import { RenameDialog } from '@/components/RenameDialog'
 import { Badge } from '@/components/ui/badge'
@@ -21,6 +22,7 @@ import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { api, isNotice, subscribeEvents } from '@/lib/api'
 import { familyNameOf, groupCatalog, groupSystem, matchesQuery } from '@/lib/group'
+import { catalogInstanceRows, systemInstanceRows } from '@/lib/instances'
 import type { CatalogEntry, FamilyGroup, SystemFace, SystemFamilyGroup } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
@@ -455,36 +457,63 @@ function LibraryCard({
   onActivate: () => void
   onReveal: () => void
 }) {
+  const [expanded, setExpanded] = useState(false)
   const preview = group.entries[0]
   const installed = group.status === 'installed' || group.status === 'outdated'
+  const instances = useMemo(() => catalogInstanceRows(group), [group])
+  const showInstances = instances.length > 0
+
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <button
-          type="button"
-          onClick={onSelect}
+        <div
           className={cn(
-            'flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-colors',
-            selected ? 'border-primary bg-card shadow-sm' : 'border-transparent bg-card/70 hover:bg-card',
+            'overflow-hidden rounded-xl border transition-colors',
+            selected ? 'border-primary bg-card shadow-sm' : 'border-transparent bg-card/70',
           )}
         >
-          <AaPreview
-            family={catalogFontFamily(group.previewEntryId)}
-            weight={preview.faces[0]?.weight}
-            italic={preview.faces[0]?.italic}
-          />
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <span className="truncate font-medium">{group.familyName}</span>
-              <VfBadge show={group.isVariable} />
-              <StatusBadge status={group.status} />
-            </div>
-            <div className="mt-0.5 text-xs text-muted-foreground">
-              {group.instanceCount} {group.instanceCount === 1 ? 'instance' : 'instances'}
-              {group.faces.length > 1 ? ` · ${group.faces.map((face) => face.styleName).join(', ')}` : ''}
-            </div>
+          <div className="flex items-stretch">
+            <button
+              type="button"
+              onClick={onSelect}
+              className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left hover:bg-card"
+            >
+              <AaPreview
+                family={catalogFontFamily(group.previewEntryId)}
+                weight={preview.faces[0]?.weight}
+                italic={preview.faces[0]?.italic}
+              />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="truncate font-medium">{group.familyName}</span>
+                  <VfBadge show={group.isVariable} />
+                  <StatusBadge status={group.status} />
+                </div>
+                <div className="mt-0.5 text-xs text-muted-foreground">
+                  {group.instanceCount}{' '}
+                  {group.instanceCount === 1 ? 'instance' : 'instances'}
+                </div>
+              </div>
+            </button>
+            {showInstances && (
+              <button
+                type="button"
+                aria-expanded={expanded}
+                aria-label={expanded ? 'Hide instances' : 'Show instances'}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setExpanded((value) => !value)
+                }}
+                className="flex w-10 shrink-0 items-center justify-center text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+              >
+                <ChevronDown
+                  className={cn('size-4 transition-transform', expanded && 'rotate-180')}
+                />
+              </button>
+            )}
           </div>
-        </button>
+          {expanded && showInstances && <InstanceList rows={instances} />}
+        </div>
       </ContextMenuTrigger>
       <ContextMenuContent>
         <ContextMenuItem onSelect={onReveal}>Show in Finder</ContextMenuItem>
@@ -537,34 +566,62 @@ function SystemCard({
   onUninstall: () => void
   onDeactivate: () => void
 }) {
+  const [expanded, setExpanded] = useState(false)
   const face = group.faces[0]
+  const instances = useMemo(() => systemInstanceRows(group), [group])
+  const showInstances = instances.length > 0
+
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <button
-          type="button"
-          onClick={onSelect}
+        <div
           className={cn(
-            'flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-colors',
-            selected ? 'border-primary bg-card shadow-sm' : 'border-transparent bg-card/70 hover:bg-card',
+            'overflow-hidden rounded-xl border transition-colors',
+            selected ? 'border-primary bg-card shadow-sm' : 'border-transparent bg-card/70',
           )}
         >
-          <AaPreview
-            family={systemFontFamily(face.path)}
-            weight={400}
-            italic={false}
-          />
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <span className="truncate font-medium">{group.familyName}</span>
-              <VfBadge show={group.isVariable} />
-              {group.protected && <Badge>System</Badge>}
-            </div>
-            <div className="mt-0.5 text-xs text-muted-foreground">
-              {group.instanceCount} {group.instanceCount === 1 ? 'instance' : 'instances'}
-            </div>
+          <div className="flex items-stretch">
+            <button
+              type="button"
+              onClick={onSelect}
+              className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left hover:bg-card"
+            >
+              <AaPreview
+                family={systemFontFamily(face.path)}
+                weight={face.weight}
+                italic={face.italic}
+              />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="truncate font-medium">{group.familyName}</span>
+                  <VfBadge show={group.isVariable} />
+                  {group.protected && <Badge>System</Badge>}
+                </div>
+                <div className="mt-0.5 text-xs text-muted-foreground">
+                  {group.instanceCount}{' '}
+                  {group.instanceCount === 1 ? 'instance' : 'instances'}
+                </div>
+              </div>
+            </button>
+            {showInstances && (
+              <button
+                type="button"
+                aria-expanded={expanded}
+                aria-label={expanded ? 'Hide instances' : 'Show instances'}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setExpanded((value) => !value)
+                }}
+                className="flex w-10 shrink-0 items-center justify-center text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+              >
+                <ChevronDown
+                  className={cn('size-4 transition-transform', expanded && 'rotate-180')}
+                />
+              </button>
+            )}
           </div>
-        </button>
+          {expanded && showInstances && <InstanceList rows={instances} />}
+        </div>
       </ContextMenuTrigger>
       <ContextMenuContent>
         <ContextMenuItem onSelect={onReveal}>Show in Finder</ContextMenuItem>

@@ -42,6 +42,9 @@ export type SystemFace = {
   postscriptName: string
   isVariable: boolean
   instanceCount: number
+  instanceNames?: string[]
+  weight?: number
+  italic?: boolean
   format: string
   protected: boolean
   writable: boolean
