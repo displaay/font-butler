@@ -4,7 +4,7 @@ import type { FontStatus } from '@/lib/types'
 export function VfBadge({ show }: { show: boolean }) {
   if (!show) return null
   return (
-    <Badge tone="ink" className="h-4 min-w-6 justify-center px-1 tracking-[0.14em]">
+    <Badge tone="ink" className="h-4 min-w-6 justify-center px-1 tracking-normal">
       VF
     </Badge>
   )
