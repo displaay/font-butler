@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { findById, findBySourcePath, loadCatalog, runCatalogTask, saveCatalog, upsertEntry } from './catalog.ts'
+import { findById, findBySourcePath, loadCatalog, resolveStatusWhenSourceFound, runCatalogTask, saveCatalog, upsertEntry } from './catalog.ts'
 import { getOrCreateApiToken } from './auth.ts'
 import { clearFontCaches, registerFont, unregisterFont } from './caches.ts'
 import { MAX_UPLOAD_BYTES } from './constants.ts'
@@ -565,7 +565,7 @@ export class FontcaseService {
       existing.sourceMtimeMs = stat.mtimeMs
       existing.sourceSize = stat.size
       if (existing.status === 'source-missing') {
-        existing.status = existing.installedPath ? 'installed' : 'uninstalled'
+        existing.status = resolveStatusWhenSourceFound(existing)
       }
       if (
         existing.status === 'installed' &&

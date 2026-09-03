@@ -21,7 +21,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { api, isNotice, subscribeEvents } from '@/lib/api'
-import { familyNameOf, entryIds, familyStatusSummary, groupCatalog, groupSystem, matchesQuery } from '@/lib/group'
+import { familyNameOf, entryIds, familyStatusSummary, groupCatalog, groupSystem, isInactiveEntry, isLibraryEntry, matchesQuery } from '@/lib/group'
 import { catalogInstanceRows, systemInstanceRows } from '@/lib/instances'
 import type { CatalogEntry, FamilyGroup, SystemFace, SystemFamilyGroup } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -106,15 +106,15 @@ export default function App() {
 
   const libraryGroups = useMemo(
     () =>
-      groupCatalog(entries.filter((entry) => entry.status !== 'uninstalled')).filter((group) =>
+      groupCatalog(entries.filter(isLibraryEntry)).filter((group) =>
         matchesQuery(`${group.familyName} ${group.faces.map((face) => face.styleName).join(' ')}`, query),
       ),
     [entries, query],
   )
   const uninstalledGroups = useMemo(
     () =>
-      groupCatalog(entries.filter((entry) => entry.status === 'uninstalled' || entry.status === 'source-missing')).filter(
-        (group) => matchesQuery(group.familyName, query),
+      groupCatalog(entries.filter(isInactiveEntry)).filter((group) =>
+        matchesQuery(group.familyName, query),
       ),
     [entries, query],
   )
@@ -715,13 +715,15 @@ function EmptyState({
         {tab === 'updates'
           ? 'No source updates'
           : tab === 'uninstalled'
-            ? 'Nothing waiting to be installed'
+            ? 'No inactive fonts'
             : 'Drop font files here'}
       </p>
       <p className="mt-2 max-w-sm text-sm text-muted-foreground">
         {tab === 'library'
           ? 'TrueType, OpenType, collections, and WOFF files stay linked to their original path.'
-          : 'Fonts you uninstall stay in the library so you can put them back in one click.'}
+          : tab === 'uninstalled'
+            ? 'Fonts you uninstall or deactivate stay here. Reinstall or activate them when you need them again.'
+            : 'Fonts you uninstall stay in the library so you can put them back in one click.'}
       </p>
       <input
         type="file"

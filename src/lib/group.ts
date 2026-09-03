@@ -89,6 +89,24 @@ export function matchesQuery(haystack: string, query: string): boolean {
   return haystack.toLowerCase().includes(query.trim().toLowerCase())
 }
 
+/** Installed on the Mac, or installed copy remains while the source file is gone. */
+export function isLibraryEntry(entry: CatalogEntry): boolean {
+  return (
+    entry.status === 'installed' ||
+    entry.status === 'outdated' ||
+    (entry.status === 'source-missing' && Boolean(entry.installedPath))
+  )
+}
+
+/** Tracked in the catalog but not active: not installed, deactivated, or source gone. */
+export function isInactiveEntry(entry: CatalogEntry): boolean {
+  return (
+    entry.status === 'uninstalled' ||
+    entry.status === 'deactivated' ||
+    (entry.status === 'source-missing' && !entry.installedPath)
+  )
+}
+
 export function familyStatusSummary(group: { entries: CatalogEntry[] }): string | null {
   const statuses = new Set(group.entries.map((entry) => entry.status))
   if (statuses.size <= 1) {

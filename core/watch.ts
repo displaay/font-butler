@@ -1,6 +1,6 @@
 import chokidar, { type FSWatcher } from 'chokidar'
 import fs from 'node:fs'
-import { findBySourcePath, loadCatalog, saveCatalog } from './catalog.ts'
+import { findBySourcePath, loadCatalog, resolveStatusWhenSourceFound, saveCatalog } from './catalog.ts'
 import { emitEvent } from './events.ts'
 import { readFileStat } from './parse.ts'
 import type { AppPaths } from './paths.ts'
@@ -31,7 +31,7 @@ function refreshStatus(paths: AppPaths, sourcePath: string): CatalogEntry | unde
   ) {
     entry.status = 'outdated'
   } else if (entry.status === 'source-missing') {
-    entry.status = entry.installedPath ? 'installed' : 'uninstalled'
+    entry.status = resolveStatusWhenSourceFound(entry)
   } else if (
     entry.status === 'outdated' &&
     stat.mtimeMs === entry.installedSnapshotMtimeMs &&

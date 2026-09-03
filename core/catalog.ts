@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import type { AppPaths } from './paths.ts'
-import type { CatalogEntry, CatalogFile } from './types.ts'
+import type { CatalogEntry, CatalogFile, FontStatus } from './types.ts'
 
 const emptyCatalog = (): CatalogFile => ({ version: 1, entries: [] })
 
@@ -65,4 +65,14 @@ export function findById(
 export function findByIds(catalog: CatalogFile, ids: string[]): CatalogEntry[] {
   const set = new Set(ids)
   return catalog.entries.filter((entry) => set.has(entry.id))
+}
+
+export function resolveStatusWhenSourceFound(entry: CatalogEntry): FontStatus {
+  if (entry.installedPath && fs.existsSync(entry.installedPath)) {
+    return 'installed'
+  }
+  if (entry.disabledPath && fs.existsSync(entry.disabledPath)) {
+    return 'deactivated'
+  }
+  return 'uninstalled'
 }
