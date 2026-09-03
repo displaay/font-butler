@@ -412,6 +412,7 @@ export default function App() {
                         <LibraryCard
                           key={group.key}
                           group={group}
+                          showSourcePath={tab === 'uninstalled'}
                           selected={selectedGroup?.key === group.key}
                           selectedEntryId={selectedEntryId}
                           onSelect={() => selectGroup(group)}
@@ -541,6 +542,7 @@ function uniquePaths(faces: SystemFace[]): string[] {
 
 function LibraryCard({
   group,
+  showSourcePath,
   selected,
   selectedEntryId,
   busy,
@@ -556,6 +558,7 @@ function LibraryCard({
   onForget,
 }: {
   group: FamilyGroup
+  showSourcePath?: boolean
   selected: boolean
   selectedEntryId: string | null
   busy: boolean
@@ -608,6 +611,19 @@ function LibraryCard({
                   {group.instanceCount === 1 ? 'instance' : 'instances'}
                   {group.entries.length > 1 ? ` · ${group.entries.length} files` : ''}
                 </div>
+                {showSourcePath && (
+                  <div className="mt-1 space-y-0.5">
+                    {group.entries.map((item) => (
+                      <div
+                        key={item.id}
+                        className="truncate font-mono text-[11px] text-muted-foreground/90"
+                        title={item.sourcePath}
+                      >
+                        {item.sourcePath}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </button>
             {showInstances && (
