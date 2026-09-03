@@ -119,3 +119,13 @@ export function familyStatusSummary(group: { entries: CatalogEntry[] }): string 
 export function entryIds(group: { entries: CatalogEntry[] }): string[] {
   return group.entries.map((entry) => entry.id)
 }
+
+export function sourceMissingIds(group: { entries: CatalogEntry[] }): string[] {
+  return group.entries
+    .filter((entry) => entry.status === 'source-missing')
+    .map((entry) => entry.id)
+}
+
+export function hasSourceMissing(group: { entries: CatalogEntry[] }): boolean {
+  return group.entries.some((entry) => entry.status === 'source-missing')
+}

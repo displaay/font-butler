@@ -171,6 +171,30 @@ app.post('/api/reinstall', async (c) => {
   }
 })
 
+app.post('/api/forget', async (c) => {
+  const body = await c.req.json<{ id?: string; ids?: string[]; allMissing?: boolean }>()
+  try {
+    if (body.allMissing) {
+      const result = await service.forgetMissingSources()
+      return c.json(result)
+    }
+    if (body.ids?.length) {
+      const result = await service.forgetMany(body.ids)
+      return c.json(result)
+    }
+    if (!body.id) {
+      return c.json({ error: 'Missing id, ids, or allMissing' }, 400)
+    }
+    await service.forget(body.id)
+    return c.json({ removed: 1 })
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : 'Could not remove font' },
+      400,
+    )
+  }
+})
+
 app.post('/api/system/uninstall', async (c) => {
   const body = await c.req.json<{ path: string }>()
   try {

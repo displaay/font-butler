@@ -27,6 +27,7 @@ export function Inspector({
   onUninstallSystem,
   onDeactivateSystem,
   onRevealSystem,
+  onForget,
 }: {
   group: FamilyGroup | null
   entry: CatalogEntry | null
@@ -45,6 +46,7 @@ export function Inspector({
   onUninstallSystem: () => void
   onDeactivateSystem: () => void
   onRevealSystem: () => void
+  onForget: () => void
 }) {
   if (systemGroup) {
     const face = systemGroup.faces[0]
@@ -143,7 +145,7 @@ export function Inspector({
       )}
       {entry.status === 'source-missing' && (
         <div className="rounded-lg bg-red-100 px-3 py-2 text-sm text-red-900">
-          The source file is missing. Fontcase still remembers this family.
+          The source file is missing. Remove this entry if you no longer need it.
         </div>
       )}
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
@@ -189,7 +191,11 @@ export function Inspector({
         })}
       </div>
       <div className="flex flex-wrap gap-2">
-        {installed ? (
+        {entry.status === 'source-missing' ? (
+          <Button size="sm" variant="destructive" disabled={busy} onClick={onForget}>
+            Remove from library
+          </Button>
+        ) : installed ? (
           <>
             {showReinstall && (
               <Button size="sm" variant="accent" disabled={busy} onClick={onReinstall}>
@@ -209,15 +215,10 @@ export function Inspector({
           </Button>
         ) : (
           <>
-            <Button size="sm" disabled={busy || entry.status === 'source-missing'} onClick={onInstall}>
+            <Button size="sm" disabled={busy} onClick={onInstall}>
               Install
             </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={busy || entry.status === 'source-missing'}
-              onClick={onInstallAs}
-            >
+            <Button size="sm" variant="outline" disabled={busy} onClick={onInstallAs}>
               Install as…
             </Button>
           </>

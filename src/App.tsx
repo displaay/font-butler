@@ -21,7 +21,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { api, isNotice, subscribeEvents } from '@/lib/api'
-import { familyNameOf, entryIds, familyStatusSummary, groupCatalog, groupSystem, isInactiveEntry, isLibraryEntry, matchesQuery } from '@/lib/group'
+import { familyNameOf, entryIds, familyStatusSummary, groupCatalog, groupSystem, hasSourceMissing, isInactiveEntry, isLibraryEntry, matchesQuery, sourceMissingIds } from '@/lib/group'
 import { catalogInstanceRows, systemInstanceRows } from '@/lib/instances'
 import type { CatalogEntry, FamilyGroup, SystemFace, SystemFamilyGroup } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -130,6 +130,10 @@ export default function App() {
     [systemFaces, query],
   )
   const shownSystemGroups = query.trim() ? systemGroups : systemGroups.slice(0, 80)
+  const missingSourceCount = useMemo(
+    () => entries.filter((entry) => entry.status === 'source-missing').length,
+    [entries],
+  )
 
   const visibleGroups =
     tab === 'system' ? [] : tab === 'uninstalled' ? uninstalledGroups : tab === 'updates' ? updateGroups : libraryGroups
@@ -187,6 +191,18 @@ export default function App() {
   function reinstallGroup(group: FamilyGroup) {
     const ids = entryIds(group)
     return ids.length > 1 ? api.reinstallMany(ids) : api.reinstall(ids[0])
+  }
+
+  function forgetGroup(group: FamilyGroup) {
+    const ids = sourceMissingIds(group)
+    if (ids.length === 0) {
+      return Promise.resolve({ removed: 0 })
+    }
+    return ids.length > 1 ? api.forgetMany(ids) : api.forget(ids[0])
+  }
+
+  function forgetEntry(entry: CatalogEntry) {
+    return api.forget(entry.id)
   }
 
   async function run(action: () => Promise<unknown>, success?: string) {
@@ -341,6 +357,27 @@ export default function App() {
                     the rest.
                   </p>
                 )}
+                {!loading && missingSourceCount > 0 && tab !== 'system' && tab !== 'updates' && (
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-dashed bg-card/60 px-3 py-2">
+                    <p className="text-sm text-muted-foreground">
+                      {missingSourceCount}{' '}
+                      {missingSourceCount === 1 ? 'font has' : 'fonts have'} a missing source file.
+                    </p>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={busy}
+                      onClick={() =>
+                        void run(
+                          () => api.forgetMissingSources(),
+                          `Removed ${missingSourceCount} missing ${missingSourceCount === 1 ? 'font' : 'fonts'} from the library`,
+                        )
+                      }
+                    >
+                      Remove all missing sources
+                    </Button>
+                  </div>
+                )}
                 <div className="grid gap-2">
                   {tab === 'system'
                     ? shownSystemGroups.map((group) => (
@@ -400,6 +437,15 @@ export default function App() {
                             selectGroup(group)
                             void revealCatalog(selectedEntry ?? group.entries[0])
                           }}
+                          onForget={() => {
+                            const count = sourceMissingIds(group).length
+                            void run(
+                              () => forgetGroup(group),
+                              count === 1
+                                ? `Removed ${group.familyName} from the library`
+                                : `Removed ${count} missing files from ${group.familyName}`,
+                            )
+                          }}
                         />
                       ))}
                 </div>
@@ -456,6 +502,13 @@ export default function App() {
               onRevealSystem={() =>
                 selectedSystemGroup?.faces[0] && void revealSystem(selectedSystemGroup.faces[0].path)
               }
+              onForget={() => {
+                if (!selectedEntry || selectedEntry.status !== 'source-missing') return
+                void run(
+                  () => forgetEntry(selectedEntry),
+                  `Removed ${familyNameOf(selectedEntry)} from the library`,
+                )
+              }}
             />
           </div>
         </div>
@@ -500,6 +553,7 @@ function LibraryCard({
   onDeactivate,
   onActivate,
   onReveal,
+  onForget,
 }: {
   group: FamilyGroup
   selected: boolean
@@ -514,10 +568,12 @@ function LibraryCard({
   onDeactivate: () => void
   onActivate: () => void
   onReveal: () => void
+  onForget: () => void
 }) {
   const [expanded, setExpanded] = useState(false)
   const preview = group.entries[0]
   const installed = group.status === 'installed' || group.status === 'outdated'
+  const missingSource = hasSourceMissing(group)
   const instances = useMemo(() => catalogInstanceRows(group), [group])
   const showInstances = instances.length > 0
 
@@ -608,6 +664,18 @@ function LibraryCard({
             </ContextMenuItem>
             <ContextMenuItem disabled={busy} onSelect={onInstallAs}>
               Install as…
+            </ContextMenuItem>
+          </>
+        )}
+        {missingSource && (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem
+              disabled={busy}
+              className="text-destructive focus:text-destructive"
+              onSelect={onForget}
+            >
+              Remove from library
             </ContextMenuItem>
           </>
         )}

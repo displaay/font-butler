@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { findById, findBySourcePath, loadCatalog, resolveStatusWhenSourceFound, runCatalogTask, saveCatalog, upsertEntry } from './catalog.ts'
+import { findById, findBySourcePath, loadCatalog, removeEntryById, resolveStatusWhenSourceFound, runCatalogTask, saveCatalog, upsertEntry } from './catalog.ts'
 import { getOrCreateApiToken } from './auth.ts'
 import { clearFontCaches, registerFont, unregisterFont } from './caches.ts'
 import { MAX_UPLOAD_BYTES } from './constants.ts'
@@ -289,6 +289,40 @@ export class FontcaseService {
     })
   }
 
+  async forget(id: string): Promise<void> {
+    return runCatalogTask(async () => {
+      await this.forgetEntry(id)
+      await syncWatchers(this.paths)
+      emitCatalog(this.paths)
+    })
+  }
+
+  async forgetMany(ids: string[]): Promise<{ removed: number }> {
+    return runCatalogTask(async () => {
+      for (const id of ids) {
+        await this.forgetEntry(id)
+      }
+      await syncWatchers(this.paths)
+      emitCatalog(this.paths)
+      return { removed: ids.length }
+    })
+  }
+
+  async forgetMissingSources(): Promise<{ removed: number }> {
+    return runCatalogTask(async () => {
+      const catalog = loadCatalog(this.paths)
+      const ids = catalog.entries
+        .filter((entry) => entry.status === 'source-missing')
+        .map((entry) => entry.id)
+      for (const id of ids) {
+        await this.forgetEntry(id)
+      }
+      await syncWatchers(this.paths)
+      emitCatalog(this.paths)
+      return { removed: ids.length }
+    })
+  }
+
   async uninstallSystem(filePath: string): Promise<void> {
     return runCatalogTask(async () => {
       const resolved = path.resolve(filePath)
@@ -543,6 +577,25 @@ export class FontcaseService {
       entryId: updated.id,
     })
     return updated
+  }
+
+  private async forgetEntry(id: string): Promise<CatalogEntry> {
+    const catalog = loadCatalog(this.paths)
+    const entry = findById(catalog, id)
+    if (!entry) {
+      throw new Error('Font is not in the library.')
+    }
+    if (entry.status !== 'source-missing') {
+      throw new Error('Only fonts with a missing source can be removed from the library.')
+    }
+    await removeInstalledCopy(entry)
+    if (entry.disabledPath && fs.existsSync(entry.disabledPath)) {
+      fs.rmSync(entry.disabledPath, { force: true })
+    }
+    entry.disabledPath = undefined
+    removeEntryById(catalog, id)
+    saveCatalog(this.paths, catalog)
+    return entry
   }
 
   private importOneUnlocked(filePath: string): CatalogEntry {

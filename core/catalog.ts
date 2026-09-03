@@ -67,6 +67,15 @@ export function findByIds(catalog: CatalogFile, ids: string[]): CatalogEntry[] {
   return catalog.entries.filter((entry) => set.has(entry.id))
 }
 
+export function removeEntryById(catalog: CatalogFile, id: string): CatalogEntry | undefined {
+  const index = catalog.entries.findIndex((entry) => entry.id === id)
+  if (index === -1) {
+    return undefined
+  }
+  const [removed] = catalog.entries.splice(index, 1)
+  return removed
+}
+
 export function resolveStatusWhenSourceFound(entry: CatalogEntry): FontStatus {
   if (entry.installedPath && fs.existsSync(entry.installedPath)) {
     return 'installed'

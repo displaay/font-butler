@@ -73,6 +73,9 @@ export const api = {
   reinstall: (id: string) => json<{ entry: CatalogEntry }>(post('/api/reinstall', { id })),
   reinstallMany: (ids: string[]) =>
     json<{ entries: CatalogEntry[] }>(post('/api/reinstall', { ids })),
+  forget: (id: string) => json<{ removed: number }>(post('/api/forget', { id })),
+  forgetMany: (ids: string[]) => json<{ removed: number }>(post('/api/forget', { ids })),
+  forgetMissingSources: () => json<{ removed: number }>(post('/api/forget', { allMissing: true })),
   uninstallSystem: (path: string) => json<{ ok: boolean }>(post('/api/system/uninstall', { path })),
   deactivateSystem: (path: string) =>
     json<{ ok: boolean }>(post('/api/system/deactivate', { path })),
