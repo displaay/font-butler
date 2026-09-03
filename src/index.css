@@ -1,0 +1,75 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-sans: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --font-ui: "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+}
+
+:root {
+  --background: #d9d4cc;
+  --foreground: #1c1917;
+  --card: #f7f3ec;
+  --card-foreground: #1c1917;
+  --popover: #fffaf3;
+  --popover-foreground: #1c1917;
+  --primary: #1f2933;
+  --primary-foreground: #f8f1e7;
+  --secondary: #ece4d8;
+  --secondary-foreground: #292524;
+  --muted: #e8e0d4;
+  --muted-foreground: #6b6258;
+  --accent: #c45c26;
+  --accent-foreground: #fffaf3;
+  --destructive: #b42318;
+  --border: #d5ccbf;
+  --input: #d5ccbf;
+  --ring: #c45c26;
+}
+
+* {
+  border-color: var(--border);
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-ui);
+  letter-spacing: 0.01em;
+}
+
+::selection {
+  background: #e8c9b4;
+}
