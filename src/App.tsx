@@ -17,6 +17,7 @@ import {
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -48,6 +49,9 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null)
   const [renameEntry, setRenameEntry] = useState<CatalogEntry | null>(null)
+  const [showSources, setShowSources] = useState(
+    () => localStorage.getItem('fontcase-show-sources') === 'true',
+  )
 
   useEffect(() => {
     let cancelled = false
@@ -378,6 +382,23 @@ export default function App() {
                     </Button>
                   </div>
                 )}
+                {!loading && tab !== 'system' && visibleGroups.length > 0 && (
+                  <div className="mb-3 flex justify-end">
+                    <Label className="flex cursor-pointer items-center gap-2 font-normal text-foreground">
+                      <input
+                        type="checkbox"
+                        checked={showSources}
+                        onChange={(event) => {
+                          const next = event.target.checked
+                          setShowSources(next)
+                          localStorage.setItem('fontcase-show-sources', String(next))
+                        }}
+                        className="size-3.5 rounded border border-input accent-primary"
+                      />
+                      Show sources
+                    </Label>
+                  </div>
+                )}
                 <div className="grid gap-2">
                   {tab === 'system'
                     ? shownSystemGroups.map((group) => (
@@ -412,7 +433,7 @@ export default function App() {
                         <LibraryCard
                           key={group.key}
                           group={group}
-                          showSourcePath={tab === 'uninstalled'}
+                          showSourcePath={showSources}
                           selected={selectedGroup?.key === group.key}
                           selectedEntryId={selectedEntryId}
                           onSelect={() => selectGroup(group)}
