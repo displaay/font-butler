@@ -7,9 +7,14 @@ export function AaPreview({
   family: string
   weight?: number
   italic?: boolean
-  size?: 'sm' | 'md'
+  size?: 'sm' | 'md' | 'lg'
 }) {
-  const box = size === 'sm' ? 'size-8 text-[17px] rounded-[7px]' : 'size-12 text-[27px] rounded-[10px]'
+  const box =
+    size === 'sm'
+      ? 'size-8 text-[17px] rounded-[7px]'
+      : size === 'lg'
+        ? 'min-h-[8.5rem] w-full text-[4.25rem] rounded-none border-b border-stone-900/5'
+        : 'size-12 text-[27px] rounded-[10px]'
   return (
     <div
       className={`flex shrink-0 items-center justify-center bg-white leading-none text-foreground shadow-[inset_0_0_0_1px_rgba(28,25,23,0.06)] ${box}`}

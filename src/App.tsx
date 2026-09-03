@@ -7,6 +7,7 @@ import { FontFaceStyles, catalogFontFamily, systemFontFamily } from '@/component
 import { InstanceList } from '@/components/InstanceList'
 import { Inspector } from '@/components/Inspector'
 import { RenameDialog } from '@/components/RenameDialog'
+import { ViewOptions, type ViewLayout } from '@/components/ViewOptions'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -17,7 +18,6 @@ import {
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -51,6 +51,9 @@ export default function App() {
   const [renameEntry, setRenameEntry] = useState<CatalogEntry | null>(null)
   const [showSources, setShowSources] = useState(
     () => localStorage.getItem('fontcase-show-sources') === 'true',
+  )
+  const [viewLayout, setViewLayout] = useState<ViewLayout>(() =>
+    localStorage.getItem('fontcase-view-layout') === 'grid' ? 'grid' : 'list',
   )
 
   useEffect(() => {
@@ -141,6 +144,8 @@ export default function App() {
 
   const visibleGroups =
     tab === 'system' ? [] : tab === 'uninstalled' ? uninstalledGroups : tab === 'updates' ? updateGroups : libraryGroups
+  const hasCatalogList =
+    tab === 'system' ? shownSystemGroups.length > 0 : visibleGroups.length > 0
   const selectedGroup =
     visibleGroups.find((group) => group.familyName === selectedFamily) ?? visibleGroups[0] ?? null
   const selectedEntry =
@@ -382,28 +387,34 @@ export default function App() {
                     </Button>
                   </div>
                 )}
-                {!loading && tab !== 'system' && visibleGroups.length > 0 && (
-                  <div className="mb-3 flex justify-end">
-                    <Label className="flex cursor-pointer items-center gap-2 font-normal text-foreground">
-                      <input
-                        type="checkbox"
-                        checked={showSources}
-                        onChange={(event) => {
-                          const next = event.target.checked
-                          setShowSources(next)
-                          localStorage.setItem('fontcase-show-sources', String(next))
-                        }}
-                        className="size-3.5 rounded border border-input accent-primary"
-                      />
-                      Show sources
-                    </Label>
-                  </div>
+                {!loading && hasCatalogList && (
+                  <ViewOptions
+                    className="mb-3"
+                    layout={viewLayout}
+                    onLayoutChange={(next) => {
+                      setViewLayout(next)
+                      localStorage.setItem('fontcase-view-layout', next)
+                    }}
+                    showSources={showSources}
+                    onShowSourcesChange={(next) => {
+                      setShowSources(next)
+                      localStorage.setItem('fontcase-show-sources', String(next))
+                    }}
+                    showSourcesToggle={tab !== 'system'}
+                  />
                 )}
-                <div className="grid gap-2">
+                <div
+                  className={cn(
+                    viewLayout === 'grid'
+                      ? 'grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4'
+                      : 'grid gap-2',
+                  )}
+                >
                   {tab === 'system'
                     ? shownSystemGroups.map((group) => (
                         <SystemCard
                           key={group.key}
+                          layout={viewLayout}
                           group={group}
                           selected={selectedSystemGroup?.key === group.key}
                           onSelect={() => setSelectedSystem(group.familyName)}
@@ -432,6 +443,7 @@ export default function App() {
                     : visibleGroups.map((group) => (
                         <LibraryCard
                           key={group.key}
+                          layout={viewLayout}
                           group={group}
                           showSourcePath={showSources}
                           selected={selectedGroup?.key === group.key}
@@ -563,6 +575,7 @@ function uniquePaths(faces: SystemFace[]): string[] {
 
 function LibraryCard({
   group,
+  layout,
   showSourcePath,
   selected,
   selectedEntryId,
@@ -579,6 +592,7 @@ function LibraryCard({
   onForget,
 }: {
   group: FamilyGroup
+  layout: ViewLayout
   showSourcePath?: boolean
   selected: boolean
   selectedEntryId: string | null
@@ -599,7 +613,37 @@ function LibraryCard({
   const installed = group.status === 'installed' || group.status === 'outdated'
   const missingSource = hasSourceMissing(group)
   const instances = useMemo(() => catalogInstanceRows(group), [group])
-  const showInstances = instances.length > 0
+  const showInstances = instances.length > 0 && layout === 'list'
+  const previewFamily = catalogFontFamily(group.previewEntryId)
+  const previewWeight = preview.faces[0]?.weight
+  const previewItalic = preview.faces[0]?.italic
+
+  const metadata = (
+    <>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="truncate font-medium">{group.familyName}</span>
+        <VfBadge show={group.isVariable} />
+        <StatusBadge status={group.status} />
+      </div>
+      <div className="mt-0.5 text-xs text-muted-foreground">
+        {group.instanceCount} {group.instanceCount === 1 ? 'instance' : 'instances'}
+        {group.entries.length > 1 ? ` · ${group.entries.length} files` : ''}
+      </div>
+      {showSourcePath && (
+        <div className="mt-1 space-y-0.5">
+          {group.entries.map((item) => (
+            <div
+              key={item.id}
+              className="truncate font-mono text-[11px] text-muted-foreground/90"
+              title={item.sourcePath}
+            >
+              {item.sourcePath}
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  )
 
   return (
     <ContextMenu>
@@ -610,66 +654,60 @@ function LibraryCard({
             selected ? 'border-primary bg-card shadow-sm' : 'border-transparent bg-card/70',
           )}
         >
-          <div className="flex items-stretch">
+          {layout === 'grid' ? (
             <button
               type="button"
               onClick={onSelect}
-              className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left hover:bg-card"
+              className="flex w-full flex-col text-left hover:bg-card"
             >
               <AaPreview
-                family={catalogFontFamily(group.previewEntryId)}
-                weight={preview.faces[0]?.weight}
-                italic={preview.faces[0]?.italic}
+                family={previewFamily}
+                weight={previewWeight}
+                italic={previewItalic}
+                size="lg"
               />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="truncate font-medium">{group.familyName}</span>
-                  <VfBadge show={group.isVariable} />
-                  <StatusBadge status={group.status} />
-                </div>
-                <div className="mt-0.5 text-xs text-muted-foreground">
-                  {group.instanceCount}{' '}
-                  {group.instanceCount === 1 ? 'instance' : 'instances'}
-                  {group.entries.length > 1 ? ` · ${group.entries.length} files` : ''}
-                </div>
-                {showSourcePath && (
-                  <div className="mt-1 space-y-0.5">
-                    {group.entries.map((item) => (
-                      <div
-                        key={item.id}
-                        className="truncate font-mono text-[11px] text-muted-foreground/90"
-                        title={item.sourcePath}
-                      >
-                        {item.sourcePath}
-                      </div>
-                    ))}
-                  </div>
+              <div className="p-3">{metadata}</div>
+            </button>
+          ) : (
+            <>
+              <div className="flex items-stretch">
+                <button
+                  type="button"
+                  onClick={onSelect}
+                  className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left hover:bg-card"
+                >
+                  <AaPreview
+                    family={previewFamily}
+                    weight={previewWeight}
+                    italic={previewItalic}
+                  />
+                  <div className="min-w-0 flex-1">{metadata}</div>
+                </button>
+                {showInstances && (
+                  <button
+                    type="button"
+                    aria-expanded={expanded}
+                    aria-label={expanded ? 'Hide instances' : 'Show instances'}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      setExpanded((value) => !value)
+                    }}
+                    className="flex w-10 shrink-0 items-center justify-center text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                  >
+                    <ChevronDown
+                      className={cn('size-4 transition-transform', expanded && 'rotate-180')}
+                    />
+                  </button>
                 )}
               </div>
-            </button>
-            {showInstances && (
-              <button
-                type="button"
-                aria-expanded={expanded}
-                aria-label={expanded ? 'Hide instances' : 'Show instances'}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  setExpanded((value) => !value)
-                }}
-                className="flex w-10 shrink-0 items-center justify-center text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-              >
-                <ChevronDown
-                  className={cn('size-4 transition-transform', expanded && 'rotate-180')}
+              {expanded && showInstances && (
+                <InstanceList
+                  rows={instances}
+                  selectedEntryId={selectedEntryId}
+                  onSelectEntry={onSelectEntry}
                 />
-              </button>
-            )}
-          </div>
-          {expanded && showInstances && (
-            <InstanceList
-              rows={instances}
-              selectedEntryId={selectedEntryId}
-              onSelectEntry={onSelectEntry}
-            />
+              )}
+            </>
           )}
         </div>
       </ContextMenuTrigger>
@@ -723,6 +761,7 @@ function LibraryCard({
 
 function SystemCard({
   group,
+  layout,
   selected,
   onSelect,
   onReveal,
@@ -730,6 +769,7 @@ function SystemCard({
   onDeactivate,
 }: {
   group: SystemFamilyGroup
+  layout: ViewLayout
   selected: boolean
   onSelect: () => void
   onReveal: () => void
@@ -739,7 +779,29 @@ function SystemCard({
   const [expanded, setExpanded] = useState(false)
   const face = group.faces[0]
   const instances = useMemo(() => systemInstanceRows(group), [group])
-  const showInstances = instances.length > 0
+  const showInstances = instances.length > 0 && layout === 'list'
+  const previewFamily = systemFontFamily(face.path)
+
+  const metadata = (
+    <>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="truncate font-medium">{group.familyName}</span>
+        <VfBadge show={group.isVariable} />
+        {group.protected && <Badge>System</Badge>}
+      </div>
+      <div className="mt-0.5 text-xs text-muted-foreground">
+        {group.instanceCount} {group.instanceCount === 1 ? 'instance' : 'instances'}
+      </div>
+      {layout === 'grid' && (
+        <div
+          className="mt-1 truncate font-mono text-[11px] text-muted-foreground/90"
+          title={face.path}
+        >
+          {face.path}
+        </div>
+      )}
+    </>
+  )
 
   return (
     <ContextMenu>
@@ -750,47 +812,55 @@ function SystemCard({
             selected ? 'border-primary bg-card shadow-sm' : 'border-transparent bg-card/70',
           )}
         >
-          <div className="flex items-stretch">
+          {layout === 'grid' ? (
             <button
               type="button"
               onClick={onSelect}
-              className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left hover:bg-card"
+              className="flex w-full flex-col text-left hover:bg-card"
             >
               <AaPreview
-                family={systemFontFamily(face.path)}
+                family={previewFamily}
                 weight={face.weight}
                 italic={face.italic}
+                size="lg"
               />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="truncate font-medium">{group.familyName}</span>
-                  <VfBadge show={group.isVariable} />
-                  {group.protected && <Badge>System</Badge>}
-                </div>
-                <div className="mt-0.5 text-xs text-muted-foreground">
-                  {group.instanceCount}{' '}
-                  {group.instanceCount === 1 ? 'instance' : 'instances'}
-                </div>
-              </div>
+              <div className="p-3">{metadata}</div>
             </button>
-            {showInstances && (
-              <button
-                type="button"
-                aria-expanded={expanded}
-                aria-label={expanded ? 'Hide instances' : 'Show instances'}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  setExpanded((value) => !value)
-                }}
-                className="flex w-10 shrink-0 items-center justify-center text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-              >
-                <ChevronDown
-                  className={cn('size-4 transition-transform', expanded && 'rotate-180')}
-                />
-              </button>
-            )}
-          </div>
-          {expanded && showInstances && <InstanceList rows={instances} />}
+          ) : (
+            <>
+              <div className="flex items-stretch">
+                <button
+                  type="button"
+                  onClick={onSelect}
+                  className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left hover:bg-card"
+                >
+                  <AaPreview
+                    family={previewFamily}
+                    weight={face.weight}
+                    italic={face.italic}
+                  />
+                  <div className="min-w-0 flex-1">{metadata}</div>
+                </button>
+                {showInstances && (
+                  <button
+                    type="button"
+                    aria-expanded={expanded}
+                    aria-label={expanded ? 'Hide instances' : 'Show instances'}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      setExpanded((value) => !value)
+                    }}
+                    className="flex w-10 shrink-0 items-center justify-center text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                  >
+                    <ChevronDown
+                      className={cn('size-4 transition-transform', expanded && 'rotate-180')}
+                    />
+                  </button>
+                )}
+              </div>
+              {expanded && showInstances && <InstanceList rows={instances} />}
+            </>
+          )}
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent>
