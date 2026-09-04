@@ -1,6 +1,7 @@
-import { LayoutGrid, List } from 'lucide-react'
+import { ArrowDownAZ, CalendarClock, LayoutGrid, List } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
+import type { SortMode } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 export type ViewLayout = 'list' | 'grid'
@@ -8,6 +9,8 @@ export type ViewLayout = 'list' | 'grid'
 export function ViewOptions({
   layout,
   onLayoutChange,
+  sortMode,
+  onSortModeChange,
   showSources,
   onShowSourcesChange,
   showSourcesToggle = true,
@@ -15,6 +18,8 @@ export function ViewOptions({
 }: {
   layout: ViewLayout
   onLayoutChange: (layout: ViewLayout) => void
+  sortMode: SortMode
+  onSortModeChange: (mode: SortMode) => void
   showSources: boolean
   onShowSourcesChange: (value: boolean) => void
   showSourcesToggle?: boolean
@@ -22,31 +27,59 @@ export function ViewOptions({
 }) {
   return (
     <div className={cn('flex flex-wrap items-center justify-between gap-3', className)}>
-      <div className="flex items-center gap-1 rounded-lg border bg-card/60 p-0.5">
-        <Button
-          type="button"
-          size="sm"
-          variant={layout === 'list' ? 'default' : 'ghost'}
-          className="h-8 gap-1.5"
-          onClick={() => onLayoutChange('list')}
-          aria-label="List view"
-          aria-pressed={layout === 'list'}
-        >
-          <List className="size-4" />
-          List
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant={layout === 'grid' ? 'default' : 'ghost'}
-          className="h-8 gap-1.5"
-          onClick={() => onLayoutChange('grid')}
-          aria-label="Grid view"
-          aria-pressed={layout === 'grid'}
-        >
-          <LayoutGrid className="size-4" />
-          Grid
-        </Button>
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-1 rounded-lg border bg-card/60 p-0.5">
+          <Button
+            type="button"
+            size="sm"
+            variant={layout === 'list' ? 'default' : 'ghost'}
+            className="h-8 gap-1.5"
+            onClick={() => onLayoutChange('list')}
+            aria-label="List view"
+            aria-pressed={layout === 'list'}
+          >
+            <List className="size-4" />
+            List
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={layout === 'grid' ? 'default' : 'ghost'}
+            className="h-8 gap-1.5"
+            onClick={() => onLayoutChange('grid')}
+            aria-label="Grid view"
+            aria-pressed={layout === 'grid'}
+          >
+            <LayoutGrid className="size-4" />
+            Grid
+          </Button>
+        </div>
+        <div className="flex items-center gap-1 rounded-lg border bg-card/60 p-0.5">
+          <Button
+            type="button"
+            size="sm"
+            variant={sortMode === 'name' ? 'default' : 'ghost'}
+            className="h-8 gap-1.5"
+            onClick={() => onSortModeChange('name')}
+            aria-label="Sort alphabetically"
+            aria-pressed={sortMode === 'name'}
+          >
+            <ArrowDownAZ className="size-4" />
+            A–Z
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={sortMode === 'installed' ? 'default' : 'ghost'}
+            className="h-8 gap-1.5"
+            onClick={() => onSortModeChange('installed')}
+            aria-label="Sort by date of installation"
+            aria-pressed={sortMode === 'installed'}
+          >
+            <CalendarClock className="size-4" />
+            Installed
+          </Button>
+        </div>
       </div>
       {showSourcesToggle && (
         <Label className="flex cursor-pointer items-center gap-2 font-normal text-foreground">
