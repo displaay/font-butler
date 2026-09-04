@@ -63,7 +63,7 @@ import {
 import { applyTheme } from '@/lib/theme'
 import type { AppSettings, CatalogEntry, FamilyGroup, SortMode, SystemFace, SystemFamilyGroup } from '@/lib/types'
 import { cn } from '@/lib/utils'
-import { isPathUnderFolder, mergeWatchFolders, watchFolderName } from '@/lib/watchFolders'
+import { isPathUnderFolder, isWatchFolderEntry, mergeWatchFolders, watchFolderName } from '@/lib/watchFolders'
 
 const EMPTY_WATCH_FOLDERS: string[] = []
 
@@ -258,7 +258,7 @@ function AppShell() {
     () =>
       entries
         .filter(isLibraryEntry)
-        .filter((entry) => !watchFolderFilter || isPathUnderFolder(entry.sourcePath, watchFolderFilter)),
+        .filter((entry) => !watchFolderFilter || isWatchFolderEntry(entry, watchFolderFilter)),
     [entries, watchFolderFilter],
   )
   const libraryGroups = useMemo(
@@ -281,7 +281,7 @@ function AppShell() {
     const counts: Record<string, number> = {}
     for (const folder of watchFolders) {
       counts[folder] = groupCatalog(
-        entries.filter(isLibraryEntry).filter((entry) => isPathUnderFolder(entry.sourcePath, folder)),
+        entries.filter(isLibraryEntry).filter((entry) => isWatchFolderEntry(entry, folder)),
       ).length
     }
     return counts
