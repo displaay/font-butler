@@ -109,12 +109,14 @@ test('groupCatalog merges installed and uninstalled styles onto one Fonts card',
     entry('italic', 'Booton', 2, 'uninstalled', 'Italic', true),
   ])
   assert.equal(groups.length, 1)
-  assert.equal(groups[0]?.familyName, 'Booton')
-  assert.equal(groups[0]?.status, 'installed')
-  assert.equal(groups[0]?.instanceCount, 2)
-  assert.equal(familyStatusSummary(groups[0]!), '1/2 installed')
-  assert.equal(isUninstallableGroup(groups[0]!), true)
-}))
+  const booton = groups[0]
+  assert.ok(booton)
+  assert.equal(booton.familyName, 'Booton')
+  assert.equal(booton.status, 'installed')
+  assert.equal(booton.instanceCount, 2)
+  assert.equal(familyStatusSummary(booton), '1/2 installed')
+  assert.equal(isUninstallableGroup(booton), true)
+})
 
 test('groupCatalog keeps typographic family styles on one card', () => {
   const groups = groupCatalog([
