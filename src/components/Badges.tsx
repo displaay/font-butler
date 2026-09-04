@@ -17,3 +17,22 @@ export function StatusBadge({ status }: { status: FontStatus }) {
   if (status === 'uninstalled') return <Badge>Not installed</Badge>
   return null
 }
+
+export function SourceBadge({
+  present,
+  showMissing = false,
+}: {
+  present: boolean
+  showMissing?: boolean
+}) {
+  return (
+    <>
+      {present ? (
+        <Badge tone="ink" className="tracking-normal">
+          Source
+        </Badge>
+      ) : null}
+      {showMissing ? <Badge tone="accent">Source missing</Badge> : null}
+    </>
+  )
+}

@@ -22,6 +22,7 @@ export type CatalogEntry = {
   sourcePath: string
   sourceMtimeMs: number
   sourceSize: number
+  sourcePresent?: boolean
   installedSnapshotMtimeMs?: number
   installedSnapshotSize?: number
   status: FontStatus

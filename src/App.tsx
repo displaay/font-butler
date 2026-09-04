@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEven
 import { toast } from 'sonner'
 import { ChevronDown, FolderOpen, X } from 'lucide-react'
 import { AaPreview, CyclingAaPreview } from '@/components/AaPreview'
-import { StatusBadge, VfBadge } from '@/components/Badges'
+import { SourceBadge, StatusBadge, VfBadge } from '@/components/Badges'
 import {
   BatchActionBar,
   CatalogBatchButtons,
@@ -40,7 +40,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { api, isNotice, isSettingsEvent, subscribeEvents } from '@/lib/api'
 import { collectDropPayload, isDroppedFontName, isWebOnlyDrop, partitionDropPayload } from '@/lib/drop'
 import { WOFF_INSTALL_ERROR } from '@/lib/formats'
-import { familyNameOf, deletableSourceIds, entryIds, familyStatusSummary, forgettableIds, groupCatalog, groupSystem, hasSourceMissing, isForgettableOnlyGroup, isLibraryEntry, isUninstallableGroup, matchesQuery, sortFamilyGroups } from '@/lib/group'
+import { familyNameOf, deletableSourceIds, entryIds, familyStatusSummary, forgettableIds, groupCatalog, groupSystem, hasMissingTrackedSource, hasSourceMissing, hasTrackedSource, isForgettableOnlyGroup, isLibraryEntry, isUninstallableGroup, matchesQuery, sortFamilyGroups } from '@/lib/group'
 import { actionCopy, actionCopyFor, emptyImportError, importDoneCopy, remainingActionCopy } from '@/lib/notify'
 import { catalogInstanceRows, systemInstanceRows } from '@/lib/instances'
 import {
@@ -63,7 +63,7 @@ import {
 import { applyTheme } from '@/lib/theme'
 import type { AppSettings, CatalogEntry, FamilyGroup, SortMode, SystemFace, SystemFamilyGroup } from '@/lib/types'
 import { cn } from '@/lib/utils'
-import { isPathUnderFolder, mergeWatchFolders, watchFolderName } from '@/lib/watchFolders'
+import { isPathUnderFolder, isWatchFolderEntry, mergeWatchFolders, watchFolderName } from '@/lib/watchFolders'
 
 const EMPTY_WATCH_FOLDERS: string[] = []
 
@@ -258,7 +258,7 @@ function AppShell() {
     () =>
       entries
         .filter(isLibraryEntry)
-        .filter((entry) => !watchFolderFilter || isPathUnderFolder(entry.sourcePath, watchFolderFilter)),
+        .filter((entry) => !watchFolderFilter || isWatchFolderEntry(entry, watchFolderFilter)),
     [entries, watchFolderFilter],
   )
   const libraryGroups = useMemo(
@@ -281,7 +281,7 @@ function AppShell() {
     const counts: Record<string, number> = {}
     for (const folder of watchFolders) {
       counts[folder] = groupCatalog(
-        entries.filter(isLibraryEntry).filter((entry) => isPathUnderFolder(entry.sourcePath, folder)),
+        entries.filter(isLibraryEntry).filter((entry) => isWatchFolderEntry(entry, folder)),
       ).length
     }
     return counts
@@ -1563,6 +1563,10 @@ function LibraryCard({
         <span className="truncate font-medium">{group.familyName}</span>
         <VfBadge show={group.isVariable} />
         <StatusBadge status={group.status} />
+        <SourceBadge
+          present={hasTrackedSource(group)}
+          showMissing={group.status !== 'source-missing' && hasMissingTrackedSource(group)}
+        />
       </div>
       <div className="mt-0.5 text-xs text-muted-foreground">
         {group.instanceCount} {group.instanceCount === 1 ? 'instance' : 'instances'}

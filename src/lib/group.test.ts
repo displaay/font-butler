@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
+  entryHasTrackedSource,
   familyStatusSummary,
   groupCatalog,
+  hasMissingTrackedSource,
+  hasTrackedSource,
   isForgettableOnlyGroup,
   isLibraryEntry,
   isUninstallableGroup,
@@ -116,6 +119,19 @@ test('groupCatalog merges installed and uninstalled styles onto one Fonts card',
   assert.equal(booton.instanceCount, 2)
   assert.equal(familyStatusSummary(booton), '1/2 installed')
   assert.equal(isUninstallableGroup(booton), true)
+})
+
+test('entryHasTrackedSource prefers the stored flag and falls back to status', () => {
+  const tracked = entry('on', 'On', 1, 'installed')
+  tracked.sourcePresent = true
+  const installedMissing = entry('off', 'Off', 2, 'installed')
+  installedMissing.sourcePresent = false
+  const orphan = entry('lost', 'Lost', 3, 'source-missing')
+  assert.equal(entryHasTrackedSource(tracked), true)
+  assert.equal(entryHasTrackedSource(installedMissing), false)
+  assert.equal(entryHasTrackedSource(orphan), false)
+  assert.equal(hasTrackedSource({ entries: [tracked, installedMissing] }), true)
+  assert.equal(hasMissingTrackedSource({ entries: [tracked, installedMissing] }), true)
 })
 
 test('groupCatalog keeps typographic family styles on one card', () => {

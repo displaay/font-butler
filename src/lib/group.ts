@@ -161,3 +161,18 @@ export function deletableSourceIds(group: { entries: CatalogEntry[] }): string[]
 export function hasSourceMissing(group: { entries: CatalogEntry[] }): boolean {
   return group.entries.some((entry) => entry.status === 'source-missing')
 }
+
+export function entryHasTrackedSource(entry: CatalogEntry): boolean {
+  if (typeof entry.sourcePresent === 'boolean') {
+    return entry.sourcePresent
+  }
+  return entry.status !== 'source-missing'
+}
+
+export function hasTrackedSource(group: { entries: CatalogEntry[] }): boolean {
+  return group.entries.some(entryHasTrackedSource)
+}
+
+export function hasMissingTrackedSource(group: { entries: CatalogEntry[] }): boolean {
+  return group.entries.some((entry) => !entryHasTrackedSource(entry))
+}

@@ -1,7 +1,7 @@
 import chokidar, { type FSWatcher } from 'chokidar'
 import fs from 'node:fs'
 import path from 'node:path'
-import { findBySourcePath, loadCatalog, resolveStatusWhenSourceFound, saveCatalog } from './catalog.ts'
+import { applySourcePresence, findBySourcePath, loadCatalog, resolveStatusWhenSourceFound, saveCatalog } from './catalog.ts'
 import { emitEvent } from './events.ts'
 import { isWebFontFile } from './formats.ts'
 import { isFontFile, readFileStat } from './parse.ts'
@@ -19,8 +19,8 @@ function refreshStatus(paths: AppPaths, sourcePath: string): CatalogEntry | unde
   if (!entry) {
     return undefined
   }
-  if (!fs.existsSync(sourcePath)) {
-    entry.status = 'source-missing'
+  applySourcePresence(entry)
+  if (!entry.sourcePresent) {
     entry.updatedAt = Date.now()
     saveCatalog(paths, catalog)
     emitEvent({ type: 'catalog', entries: catalog.entries })
