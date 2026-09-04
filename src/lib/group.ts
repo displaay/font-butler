@@ -2,6 +2,7 @@ import type {
   CatalogEntry,
   FamilyGroup,
   FontStatus,
+  SortMode,
   SystemFace,
   SystemFamilyGroup,
 } from './types'
@@ -52,9 +53,20 @@ export function groupCatalog(entries: CatalogEntry[]): FamilyGroup[] {
         instanceCount,
         status,
         previewEntryId: preview.id,
+        addedAt: Math.max(...groupEntries.map((entry) => entry.addedAt)),
       }
     })
     .sort((a, b) => a.familyName.localeCompare(b.familyName))
+}
+
+export function sortFamilyGroups(groups: FamilyGroup[], mode: SortMode): FamilyGroup[] {
+  const copy = [...groups]
+  if (mode === 'installed') {
+    copy.sort((a, b) => b.addedAt - a.addedAt || a.familyName.localeCompare(b.familyName))
+  } else {
+    copy.sort((a, b) => a.familyName.localeCompare(b.familyName))
+  }
+  return copy
 }
 
 export function groupSystem(faces: SystemFace[]): SystemFamilyGroup[] {
