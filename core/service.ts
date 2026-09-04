@@ -7,6 +7,7 @@ import {
   clearFontCaches,
   clearOfficeFontCache as removeOfficeFontCache,
   clearUserFontCache as removeUserFontCache,
+  locateOfficeFontCache,
   registerFont,
   unregisterFont,
 } from './caches.ts'
@@ -19,7 +20,7 @@ import { postscriptPreview, renameFamilyCopy } from './rename.ts'
 import { moveToTrash, revealInFileManager } from './reveal.ts'
 import { loadSettings, saveSettings } from './settings.ts'
 import { allowedFontPath, scanSystemFonts } from './system.ts'
-import type { AppSettings, CatalogEntry, Notice, SortMode, SystemFace, ThemeMode, ViewLayout } from './types.ts'
+import type { AppSettings, CatalogEntry, Notice, OfficeFontCacheInfo, SortMode, SystemFace, ThemeMode, ViewLayout } from './types.ts'
 import { expandImportPaths, listInboxFontFiles, syncInboxWatcher, syncWatchers } from './watch.ts'
 
 function now(): number {
@@ -123,7 +124,7 @@ export class FontButlerService {
     await this.seedIfEmpty()
     await this.refreshSourceStatuses()
     await syncWatchers(this.paths)
-    await this.refreshInboxWatcher(loadSettings(this.paths).watchFolder, { importExisting: true })
+    await this.refreshInboxWatcher(loadSettings(this.paths).watchFolders, { importExisting: true })
   }
 
   listCatalog(): CatalogEntry[] {
@@ -135,12 +136,14 @@ export class FontButlerService {
   }
 
   async updateSettings(patch: {
-    watchFolder?: string | null
+    watchFolders?: string[]
     defaultView?: ViewLayout
     defaultSort?: SortMode
     installAfterUpload?: boolean
     theme?: ThemeMode
     menuBarIcon?: boolean
+    openAtLogin?: boolean
+    clearOfficeFontCache?: boolean
   }): Promise<AppSettings> {
     const current = loadSettings(this.paths)
     const next: AppSettings = { ...current }
@@ -159,23 +162,25 @@ export class FontButlerService {
     if (typeof patch.menuBarIcon === 'boolean') {
       next.menuBarIcon = patch.menuBarIcon
     }
-    if ('watchFolder' in patch) {
-      if (patch.watchFolder) {
-        const resolved = path.resolve(patch.watchFolder)
-        if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
-          throw new Error('That folder does not exist.')
-        }
-        next.watchFolder = resolved
-      } else {
-        next.watchFolder = null
-      }
+    if (typeof patch.openAtLogin === 'boolean') {
+      next.openAtLogin = patch.openAtLogin
+    }
+    if (typeof patch.clearOfficeFontCache === 'boolean') {
+      next.clearOfficeFontCache = patch.clearOfficeFontCache
+    }
+    if ('watchFolders' in patch) {
+      next.watchFolders = this.resolveWatchFolders(patch.watchFolders ?? [])
     }
     saveSettings(this.paths, next)
     emitEvent({ type: 'settings', settings: next })
-    if ('watchFolder' in patch) {
-      await this.refreshInboxWatcher(next.watchFolder, { importExisting: true })
+    if ('watchFolders' in patch) {
+      await this.refreshInboxWatcher(next.watchFolders, { importExisting: true })
     }
     return next
+  }
+
+  officeFontCacheInfo(): OfficeFontCacheInfo {
+    return locateOfficeFontCache()
   }
 
   getApiToken(): string {
@@ -355,7 +360,7 @@ export class FontButlerService {
 
   async reinstallMany(ids: string[]): Promise<CatalogEntry[]> {
     return runCatalogTask(async () => {
-      await clearFontCaches()
+      await this.clearCachesAfterInstall()
       const entries: CatalogEntry[] = []
       for (const id of ids) {
         const catalog = loadCatalog(this.paths)
@@ -414,6 +419,9 @@ export class FontButlerService {
   }
 
   async clearOfficeFontCache(): Promise<{ mac: boolean; cleared: boolean }> {
+    if (!loadSettings(this.paths).clearOfficeFontCache) {
+      throw new Error('Microsoft Office cache clearing is turned off in Settings.')
+    }
     const result = await removeOfficeFontCache()
     emitNotice({
       kind: 'info',
@@ -445,7 +453,7 @@ export class FontButlerService {
     return runCatalogTask(async () => {
       const resolved = path.resolve(filePath)
       if (!allowedFontPath(resolved, this.paths)) {
-        throw new Error('That font is outside the font folders Font Butler can manage.')
+        throw new Error('That font is outside the font folders Font Buttler can manage.')
       }
       const catalog = loadCatalog(this.paths)
       const managed = catalog.entries.find(
@@ -478,7 +486,7 @@ export class FontButlerService {
     return runCatalogTask(async () => {
       const resolved = path.resolve(filePath)
       if (!allowedFontPath(resolved, this.paths)) {
-        throw new Error('That font is outside the font folders Font Butler can manage.')
+        throw new Error('That font is outside the font folders Font Buttler can manage.')
       }
       const catalog = loadCatalog(this.paths)
       const managed = catalog.entries.find(
@@ -528,7 +536,7 @@ export class FontButlerService {
   async revealPath(filePath: string): Promise<string> {
     const resolved = path.resolve(filePath)
     if (!allowedFontPath(resolved, this.paths)) {
-      throw new Error('That path is outside the font folders Font Butler can reveal.')
+      throw new Error('That path is outside the font folders Font Buttler can reveal.')
     }
     if (!fs.existsSync(resolved)) {
       throw new Error('That file is no longer on disk.')
@@ -687,7 +695,7 @@ export class FontButlerService {
       throw new Error('Font is not in the library.')
     }
     await removeInstalledCopy(entry)
-    await clearFontCaches()
+    await this.clearCachesAfterInstall()
     const updated = await this.installEntry(id, entry.customFamilyName)
     emitNotice({
       kind: 'reinstalled',
@@ -742,7 +750,7 @@ export class FontButlerService {
     for (const entry of pending) {
       if (entry.status === 'outdated' || entry.status === 'deactivated') {
         await removeInstalledCopy(entry)
-        await clearFontCaches()
+        await this.clearCachesAfterInstall()
       }
       await this.installEntry(entry.id, entry.customFamilyName)
     }
@@ -866,18 +874,40 @@ export class FontButlerService {
     }
   }
 
+  private async clearCachesAfterInstall(): Promise<void> {
+    await clearFontCaches({ office: loadSettings(this.paths).clearOfficeFontCache })
+  }
+
+  private resolveWatchFolders(folders: string[]): string[] {
+    const resolved: string[] = []
+    const seen = new Set<string>()
+    for (const folder of folders) {
+      if (typeof folder !== 'string' || !folder.trim()) continue
+      const next = path.resolve(folder.trim())
+      if (seen.has(next)) continue
+      if (!fs.existsSync(next) || !fs.statSync(next).isDirectory()) {
+        throw new Error(`${folder} does not exist.`)
+      }
+      seen.add(next)
+      resolved.push(next)
+    }
+    return resolved
+  }
+
   private async refreshInboxWatcher(
-    folder: string | null,
+    folders: string[],
     options: { importExisting: boolean },
   ): Promise<void> {
-    await syncInboxWatcher(folder, (filePaths) => {
+    await syncInboxWatcher(folders, (filePaths) => {
       void this.importInboxFiles(filePaths)
     })
-    if (options.importExisting && folder) {
+    if (options.importExisting && folders.length) {
       const known = new Set(
         this.listCatalog().map((entry) => path.resolve(entry.sourcePath)),
       )
-      const discovered = listInboxFontFiles(folder).filter((filePath) => !known.has(filePath))
+      const discovered = [
+        ...new Set(folders.flatMap((folder) => listInboxFontFiles(folder))),
+      ].filter((filePath) => !known.has(filePath))
       if (discovered.length) {
         await this.importInboxFiles(discovered)
       }
@@ -894,8 +924,8 @@ export class FontButlerService {
         kind: 'info',
         message:
           added.length === 1
-            ? `Added ${displayFamily(firstAdded)} from the watch folder`
-            : `Added ${added.length} fonts from the watch folder`,
+            ? `Added ${displayFamily(firstAdded)} from a watch folder`
+            : `Added ${added.length} fonts from a watch folder`,
         entryId: firstAdded.id,
       })
     }

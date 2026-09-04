@@ -16,6 +16,26 @@ export type InstanceRow = {
   italic?: boolean
 }
 
+export function weightFromStyleName(name: string, fallback = 400): number {
+  const compact = name.replace(/[\s\-_]/g, '').toLowerCase()
+  if (/hairline|ultrathin|extrathin/.test(compact)) return 100
+  if (/thin/.test(compact)) return 100
+  if (/ultralight|extralight/.test(compact)) return 200
+  if (/light/.test(compact)) return 300
+  if (/medium/.test(compact)) return 500
+  if (/semibold|demibold/.test(compact)) return 600
+  if (/extrabold|ultrabold/.test(compact)) return 800
+  if (/bold/.test(compact)) return 700
+  if (/ultrablack|extrablack/.test(compact)) return 950
+  if (/black|heavy/.test(compact)) return 900
+  if (/book|roman|regular|normal|text/.test(compact)) return 400
+  return fallback
+}
+
+export function italicFromStyleName(name: string, fallback = false): boolean {
+  return /italic|oblique/i.test(name) || fallback
+}
+
 function rowsFromFace(
   face: FontFaceInfo,
   entryId: string,
@@ -26,8 +46,8 @@ function rowsFromFace(
       label: name,
       sublabel: face.postscriptName,
       catalogEntryId: entryId,
-      weight: face.weight,
-      italic: face.italic,
+      weight: weightFromStyleName(name, face.weight),
+      italic: italicFromStyleName(name, face.italic),
     }))
   }
   return [
@@ -60,8 +80,8 @@ function rowsFromSystemFace(face: SystemFace): InstanceRow[] {
       label: name,
       sublabel: face.postscriptName,
       systemPath: face.path,
-      weight: face.weight,
-      italic: face.italic,
+      weight: weightFromStyleName(name, face.weight),
+      italic: italicFromStyleName(name, face.italic),
     }))
   }
   return [

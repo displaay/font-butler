@@ -1,14 +1,66 @@
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
+import fs from 'node:fs'
+import path from 'node:path'
 import { contentDisposition } from '../core/auth.ts'
 import { onEvent } from '../core/events.ts'
 import { FontButlerService } from '../core/service.ts'
 
-const PORT = Number(process.env.FONT_BUTLER_API_PORT || process.env.FONTCASE_API_PORT || 43182)
-const service = new FontButlerService()
+function mimeForStatic(filePath: string): string {
+  switch (path.extname(filePath).toLowerCase()) {
+    case '.html':
+      return 'text/html; charset=utf-8'
+    case '.js':
+      return 'text/javascript; charset=utf-8'
+    case '.css':
+      return 'text/css; charset=utf-8'
+    case '.json':
+      return 'application/json'
+    case '.png':
+      return 'image/png'
+    case '.svg':
+      return 'image/svg+xml'
+    case '.ico':
+      return 'image/x-icon'
+    case '.woff':
+      return 'font/woff'
+    case '.woff2':
+      return 'font/woff2'
+    default:
+      return 'application/octet-stream'
+  }
+}
 
-await service.init()
+function mountStatic(app: Hono, staticDir: string): void {
+  const root = path.resolve(staticDir)
+  app.get('*', async (c) => {
+    const urlPath = decodeURIComponent(new URL(c.req.url).pathname)
+    const rel = urlPath === '/' ? 'index.html' : urlPath.replace(/^\/+/, '')
+    const candidate = path.normalize(path.join(root, rel))
+    if (!candidate.startsWith(root)) {
+      return c.body('Forbidden', 403)
+    }
+    const target =
+      fs.existsSync(candidate) && fs.statSync(candidate).isFile()
+        ? candidate
+        : path.join(root, 'index.html')
+    if (!fs.existsSync(target) || !fs.statSync(target).isFile()) {
+      return c.body('Not found', 404)
+    }
+    return new Response(fs.readFileSync(target), {
+      headers: { 'Content-Type': mimeForStatic(target) },
+    })
+  })
+}
+
+export async function startFontButlerServer(
+  options: { staticDir?: string; port?: number } = {},
+): Promise<{ port: number }> {
+  const PORT = options.port ?? Number(process.env.FONT_BUTLER_API_PORT || process.env.FONTCASE_API_PORT || 43182)
+  const service = new FontButlerService()
+
+  await service.init()
 
 const apiToken = service.getApiToken()
 const app = new Hono()
@@ -27,22 +79,35 @@ app.use('/api/*', async (c, next) => {
 
 app.get('/api/health', (c) => c.json({ ok: true, platform: process.platform }))
 
-app.get('/api/bootstrap', (c) => c.json({ token: apiToken, settings: service.getSettings() }))
+app.get('/api/bootstrap', (c) =>
+  c.json({
+    token: apiToken,
+    settings: service.getSettings(),
+    officeFontCache: service.officeFontCacheInfo(),
+  }),
+)
 
-app.get('/api/settings', (c) => c.json({ settings: service.getSettings() }))
+app.get('/api/settings', (c) =>
+  c.json({
+    settings: service.getSettings(),
+    officeFontCache: service.officeFontCacheInfo(),
+  }),
+)
 
 app.post('/api/settings', async (c) => {
   const body = await c.req.json<{
-    watchFolder?: string | null
+    watchFolders?: string[]
     defaultView?: 'list' | 'grid'
     defaultSort?: 'name' | 'installed'
     installAfterUpload?: boolean
     theme?: 'light' | 'dark' | 'system'
     menuBarIcon?: boolean
+    openAtLogin?: boolean
+    clearOfficeFontCache?: boolean
   }>()
   try {
     const settings = await service.updateSettings(body)
-    return c.json({ settings })
+    return c.json({ settings, officeFontCache: service.officeFontCacheInfo() })
   } catch (error) {
     return c.json(
       { error: error instanceof Error ? error.message : 'Could not save settings' },
@@ -359,6 +424,22 @@ app.get('/api/events', (c) => {
   })
 })
 
-serve({ fetch: app.fetch, port: PORT, hostname: '127.0.0.1' }, (info) => {
-  console.log(`Font Butler API on http://127.0.0.1:${info.port}`)
-})
+  if (options.staticDir) {
+    mountStatic(app, options.staticDir)
+  }
+
+  return new Promise<{ port: number }>((resolve, reject) => {
+    const server = serve({ fetch: app.fetch, port: PORT, hostname: '127.0.0.1' }, (info) => {
+      console.log(`Font Buttler API on http://127.0.0.1:${info.port}`)
+      resolve({ port: info.port })
+    })
+    server.once('error', reject)
+  })
+}
+
+const invokedAsCli = process.argv[1]
+  ? path.normalize(process.argv[1]).includes(`${path.sep}server${path.sep}index`)
+  : false
+if (invokedAsCli) {
+  await startFontButlerServer()
+}

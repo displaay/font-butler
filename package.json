@@ -1,17 +1,17 @@
 {
   "name": "font-butler",
-  "productName": "Font Butler",
+  "productName": "Font Buttler",
   "private": true,
   "version": "0.1.1",
   "description": "Source-tracked font manager for macOS",
-  "author": "Font Butler",
+  "author": "Font Buttler",
   "type": "module",
   "main": "electron/main.mjs",
   "scripts": {
     "dev": "concurrently -k -n server,vite -c cyan,magenta \"npm run server\" \"vite\"",
     "server": "tsx server/index.ts",
     "electron": "concurrently -k -n server,vite,app -c cyan,magenta,green \"npm run server\" \"vite\" \"wait-on http://127.0.0.1:43181 && electron .\"",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && node scripts/bundle-server.mjs",
     "dist": "npm run build && electron-builder --mac",
     "preview": "vite preview --host 127.0.0.1 --port 43181",
     "lint": "oxlint"
@@ -56,7 +56,7 @@
   },
   "build": {
     "appId": "app.fontbutler.desktop",
-    "productName": "Font Butler",
+    "productName": "Font Buttler",
     "files": [
       "dist/**/*",
       "electron/**/*",

@@ -96,7 +96,7 @@ export function Inspector({
             />
             {multiSelect.systemPlan.uninstall === 0 && (
               <p className="text-xs text-muted-foreground">
-                Protected fonts stay on the Mac. Font Butler can only remove fonts you installed.
+                Protected fonts stay on the Mac. Font Buttler can only remove fonts you installed.
               </p>
             )}
           </>
@@ -122,7 +122,7 @@ export function Inspector({
     return (
       <aside className="flex w-full flex-col gap-4 p-5 md:w-80">
         <div
-          className="rounded-lg border bg-muted/40 px-4 py-6 text-3xl leading-tight"
+          className="font-preview rounded-lg border bg-muted/40 px-4 py-6 text-3xl leading-tight"
           style={{ fontFamily: `"${face ? systemFontFamily(face.path) : ''}", ui-sans-serif` }}
         >
           {SAMPLE}
@@ -166,7 +166,7 @@ export function Inspector({
         </div>
         {!systemGroup.writable && (
           <p className="text-xs text-muted-foreground">
-            Protected fonts stay on the Mac. Font Butler can only remove fonts you installed.
+            Protected fonts stay on the Mac. Font Buttler can only remove fonts you installed.
           </p>
         )}
       </aside>
@@ -189,7 +189,7 @@ export function Inspector({
   return (
     <aside className="flex w-full flex-col gap-4 p-5 md:w-80">
       <div
-        className="rounded-lg border bg-muted/40 px-4 py-6 text-3xl leading-tight"
+        className="font-preview rounded-lg border bg-muted/40 px-4 py-6 text-3xl leading-tight"
         style={{
           fontFamily: `"${catalogFontFamily(entry.id)}", ui-sans-serif`,
           fontWeight: previewFace?.weight,

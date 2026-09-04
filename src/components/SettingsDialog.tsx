@@ -1,6 +1,6 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { FolderOpen, Monitor, Moon, Sun } from 'lucide-react'
+import { FolderOpen, Monitor, Moon, Sun, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -13,8 +13,9 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useSetActionStatus } from '@/components/NotifyProvider'
 import { api } from '@/lib/api'
-import type { AppSettings, SortMode, ThemeMode, ViewLayout } from '@/lib/types'
+import type { AppSettings, OfficeFontCacheInfo, SortMode, ThemeMode, ViewLayout } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { mergeWatchFolders, watchFolderName } from '@/lib/watchFolders'
 
 const selectClass =
   'h-8 w-full rounded-md border bg-background px-2 text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring/30'
@@ -39,25 +40,57 @@ export function SettingsDialog({
   const folderInputRef = useRef<HTMLInputElement>(null)
   const setActionStatus = useSetActionStatus()
   const [busy, setBusy] = useState(false)
+  const [officeFontCache, setOfficeFontCache] = useState<OfficeFontCacheInfo | null>(null)
   const canPickFolder = Boolean(window.fontButlerDesktop?.pickFolder)
-  const watchFolder = settings?.watchFolder ?? ''
+  const isDesktop = Boolean(window.fontButlerDesktop)
+  const watchFolders = settings?.watchFolders ?? []
+  const officeCacheEnabled = settings?.clearOfficeFontCache !== false
+
+  useEffect(() => {
+    if (!open || !officeCacheEnabled) return
+    let cancelled = false
+    void api
+      .settings()
+      .then((result) => {
+        if (!cancelled) setOfficeFontCache(result.officeFontCache)
+      })
+      .catch(() => {
+        if (!cancelled) setOfficeFontCache(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, officeCacheEnabled])
 
   async function save(patch: {
-    watchFolder?: string | null
+    watchFolders?: string[]
     defaultView?: ViewLayout
     defaultSort?: SortMode
     installAfterUpload?: boolean
     theme?: ThemeMode
     menuBarIcon?: boolean
+    openAtLogin?: boolean
+    clearOfficeFontCache?: boolean
   }) {
     setBusy(true)
-    const watchingFolder = 'watchFolder' in patch
-    if (watchingFolder) setActionStatus('Updating watch folder…')
+    const watchingFolder = 'watchFolders' in patch
+    if (watchingFolder) setActionStatus('Updating watch folders…')
     try {
       const result = await api.updateSettings(patch)
       onSettingsChange(result.settings)
+      if (result.officeFontCache) setOfficeFontCache(result.officeFontCache)
       if (watchingFolder) {
-        toast.success(result.settings.watchFolder ? 'Watch folder updated' : 'Watch folder removed')
+        const before = watchFolders.length
+        const after = result.settings.watchFolders.length
+        toast.success(
+          after > before
+            ? after === 1
+              ? 'Watch folder added'
+              : 'Watch folders updated'
+            : after < before
+              ? 'Watch folder removed'
+              : 'Watch folders updated',
+        )
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not save settings')
@@ -67,14 +100,27 @@ export function SettingsDialog({
     }
   }
 
+  async function addFolders(folders: string[]) {
+    const next = mergeWatchFolders(watchFolders, folders)
+    if (next.length === watchFolders.length) {
+      toast.message(folders.length === 1 ? 'Already watching that folder' : 'Already watching those folders')
+      return
+    }
+    await save({ watchFolders: next })
+  }
+
   async function chooseFolder() {
     const picked = await window.fontButlerDesktop?.pickFolder()
     if (!picked) return
-    await save({ watchFolder: picked })
+    await addFolders([picked])
   }
 
-  function folderFromInput(): string {
-    return folderInputRef.current?.value.trim() || watchFolder
+  function addTypedFolder() {
+    const next = folderInputRef.current?.value.trim()
+    if (!next) return
+    void addFolders([next]).then(() => {
+      if (folderInputRef.current) folderInputRef.current.value = ''
+    })
   }
 
   return (
@@ -83,24 +129,60 @@ export function SettingsDialog({
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription>
-            Watch a folder for new fonts, choose whether to install them on drop, and set
+            Watch folders for new fonts, choose whether to install them on drop, and set
             appearance and how families are shown by default.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-5">
           <section className="space-y-2">
-            <h2 className="text-sm font-medium text-foreground">Watch folder</h2>
+            <h2 className="text-sm font-medium text-foreground">Watch folders</h2>
             <p className="text-sm text-muted-foreground">
-              Fonts you add to this folder are imported automatically. Source files stay linked to
-              their original path.
+              Fonts you add to these folders are imported automatically. Source files stay linked
+              to their original path.
             </p>
+            {watchFolders.length > 0 && (
+              <ul className="space-y-1.5">
+                {watchFolders.map((folder) => (
+                  <li
+                    key={folder}
+                    className="flex items-center gap-2 rounded-md border bg-background px-2 py-1.5"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm">{watchFolderName(folder)}</div>
+                      <div className="truncate font-mono text-[11px] text-muted-foreground" title={folder}>
+                        {folder}
+                      </div>
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 w-7 px-0"
+                      disabled={busy}
+                      aria-label={`Stop watching ${watchFolderName(folder)}`}
+                      onClick={() =>
+                        void save({
+                          watchFolders: watchFolders.filter((item) => item !== folder),
+                        })
+                      }
+                    >
+                      <X className="size-3.5" />
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
             <div className="flex flex-col gap-2">
               <Input
-                key={watchFolder || 'none'}
                 ref={folderInputRef}
-                defaultValue={watchFolder}
                 placeholder="/Users/you/Fonts/Inbox"
                 aria-label="Watch folder path"
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    addTypedFolder()
+                  }
+                }}
               />
               <div className="flex flex-wrap gap-2">
                 {canPickFolder && (
@@ -114,25 +196,8 @@ export function SettingsDialog({
                     Choose folder
                   </Button>
                 )}
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={busy}
-                  onClick={() => {
-                    const next = folderFromInput()
-                    if (!next) return
-                    void save({ watchFolder: next })
-                  }}
-                >
-                  Use this folder
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  disabled={busy || !watchFolder}
-                  onClick={() => void save({ watchFolder: null })}
-                >
-                  Remove
+                <Button type="button" variant="outline" disabled={busy} onClick={addTypedFolder}>
+                  Add folder
                 </Button>
               </div>
             </div>
@@ -153,7 +218,7 @@ export function SettingsDialog({
               <span>
                 <span className="block text-sm">Install after adding</span>
                 <span className="block text-sm text-muted-foreground">
-                  Dropping fonts or folders onto Font Butler installs them and selects them in the
+                  Dropping fonts or folders onto Font Buttler installs them and selects them in the
                   list. Turn this off to add fonts to the library without installing.
                 </span>
               </span>
@@ -173,12 +238,84 @@ export function SettingsDialog({
               <span>
                 <span className="block text-sm">Icon in menu bar</span>
                 <span className="block text-sm text-muted-foreground">
-                  Keep Font Butler running in the menu bar after you close the window. Click the
+                  Keep Font Buttler running in the menu bar after you close the window. Click the
                   icon to reinstall updated fonts, clear caches, or quit.
                 </span>
               </span>
             </Label>
           </section>
+
+          <section className="space-y-2">
+            <h2 className="text-sm font-medium text-foreground">Microsoft Office cache</h2>
+            <Label className="flex cursor-pointer items-start gap-2 font-normal text-foreground">
+              <input
+                type="checkbox"
+                checked={officeCacheEnabled}
+                disabled={busy || !settings}
+                onChange={(event) =>
+                  void save({ clearOfficeFontCache: event.target.checked })
+                }
+                className="mt-0.5 size-3.5 rounded border border-input accent-primary"
+              />
+              <span>
+                <span className="block text-sm">Remove MS Office cache</span>
+                <span className="block text-sm text-muted-foreground">
+                  Clear Office’s FontCache when you reinstall fonts or use the Font cache menu.
+                  Turn this off to leave Office alone.
+                </span>
+              </span>
+            </Label>
+            {officeCacheEnabled && (
+              <div className="rounded-md border bg-background px-2 py-1.5">
+                {officeFontCache?.exists ? (
+                  <>
+                    <div className="text-sm">Found on this Mac</div>
+                    <div
+                      className="truncate font-mono text-[11px] text-muted-foreground"
+                      title={officeFontCache.path}
+                    >
+                      {officeFontCache.path}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-sm text-muted-foreground">
+                      No Microsoft Office font cache was found on this Mac.
+                    </div>
+                    {officeFontCache?.path ? (
+                      <div
+                        className="truncate font-mono text-[11px] text-muted-foreground"
+                        title={officeFontCache.path}
+                      >
+                        Looked in {officeFontCache.path}
+                      </div>
+                    ) : null}
+                  </>
+                )}
+              </div>
+            )}
+          </section>
+
+          {isDesktop && (
+            <section className="space-y-2">
+              <h2 className="text-sm font-medium text-foreground">Startup</h2>
+              <Label className="flex cursor-pointer items-start gap-2 font-normal text-foreground">
+                <input
+                  type="checkbox"
+                  checked={settings?.openAtLogin === true}
+                  disabled={busy || !settings}
+                  onChange={(event) => void save({ openAtLogin: event.target.checked })}
+                  className="mt-0.5 size-3.5 rounded border border-input accent-primary"
+                />
+                <span>
+                  <span className="block text-sm">Open at login</span>
+                  <span className="block text-sm text-muted-foreground">
+                    Start Font Buttler when you turn on this computer.
+                  </span>
+                </span>
+              </Label>
+            </section>
+          )}
 
           <section className="space-y-2">
             <h2 className="text-sm font-medium text-foreground">Appearance</h2>

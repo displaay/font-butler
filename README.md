@@ -1,8 +1,8 @@
-# Font Butler
+# Font Buttler
 
 A source-tracked font manager for macOS — a simpler stand-in for Font Book.
 
-Drop a font file into Font Butler and it remembers the original path. When that source file changes, Font Butler offers a reinstall. Reinstalling uninstalls the old copy, clears user font caches (including Microsoft Office’s cache when present), then installs the new file.
+Drop a font file into Font Buttler and it remembers the original path. When that source file changes, Font Buttler offers a reinstall. Reinstalling uninstalls the old copy, clears user font caches (including Microsoft Office’s cache when present), then installs the new file.
 
 ## What it does
 
@@ -13,7 +13,7 @@ Drop a font file into Font Butler and it remembers the original path. When that 
 - **Install as…** rewrites the family name across OpenType name (and CFF) tables, then installs a copy. The original file is never mutated
 - Lists fonts already on the computer and lets you remove ones that are not protected
 - Right-click a card → **Show in Finder**
-- If Font Butler is the default app for a font, double-clicking the file adds it to the library and installs it immediately
+- If Font Buttler is the default app for a font, double-clicking the file adds it to the library and installs it immediately
 
 ## Run on your Mac
 
@@ -22,17 +22,17 @@ npm install
 npm run electron
 ```
 
-To replace Font Book as the double-click handler: select a `.otf` or `.ttf` in Finder, **Get Info → Open with → Font Butler → Change All**.
+To replace Font Book as the double-click handler: select a `.otf` or `.ttf` in Finder, **Get Info → Open with → Font Buttler → Change All**.
 
-Font Butler installs copies into `~/Library/Fonts/Font Butler/`. Catalog data lives in `~/Library/Application Support/Font Butler/`.
+Font Buttler installs copies into `~/Library/Fonts/Font Buttler/`. Catalog data lives in `~/Library/Application Support/Font Buttler/`.
 
 ### Font cache menu
 
-**Font cache** in the menu bar can remove the user ATS cache or Microsoft Office’s `FontCache` folder on their own. Reinstall still clears both automatically.
+**Font cache** in the menu bar can remove the user ATS cache or, when enabled in Settings, Microsoft Office’s `FontCache` folder. Reinstall also clears Office’s cache only when that option is on.
 
 ### Optional full cache reset
 
-Font Butler clears the **user** ATS cache and Office’s `FontCache` folder. A machine-wide wipe still needs:
+Font Buttler clears the **user** ATS cache and Office’s `FontCache` folder. A machine-wide wipe still needs:
 
 ```bash
 sudo atsutil databases -remove

@@ -99,8 +99,9 @@ function ActionDock({
 }) {
   return (
     <div
+      data-no-marquee=""
       className={cn(
-        'absolute top-1.5 z-10 flex gap-0.5 rounded-md border bg-background p-0.5 transition-opacity',
+        'absolute top-1.5 z-10 flex gap-0.5 transition-opacity',
         offset ? 'right-11' : 'right-1.5',
         visible
           ? 'opacity-100'

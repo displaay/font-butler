@@ -77,12 +77,19 @@ export type ThemeMode = 'light' | 'dark' | 'system'
 
 export type AppSettings = {
   version: 1
-  watchFolder: string | null
+  watchFolders: string[]
   defaultView: ViewLayout
   defaultSort: SortMode
   installAfterUpload: boolean
   theme: ThemeMode
   menuBarIcon: boolean
+  openAtLogin: boolean
+  clearOfficeFontCache: boolean
+}
+
+export type OfficeFontCacheInfo = {
+  path: string
+  exists: boolean
 }
 
 export type SystemFamilyGroup = {

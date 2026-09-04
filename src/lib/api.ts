@@ -1,4 +1,4 @@
-import type { AppSettings, CatalogEntry, Notice, SortMode, SystemFace, ThemeMode, ViewLayout } from './types'
+import type { AppSettings, CatalogEntry, Notice, OfficeFontCacheInfo, SortMode, SystemFace, ThemeMode, ViewLayout } from './types'
 
 let apiToken: string | null = null
 let bootstrapSettings: AppSettings | null = null
@@ -10,7 +10,7 @@ async function ensureToken(): Promise<string> {
   const response = await fetch('/api/bootstrap')
   const data = (await response.json()) as { token?: string; settings?: AppSettings }
   if (!response.ok || !data.token) {
-    throw new Error('Could not connect to Font Butler API.')
+    throw new Error('Could not connect to Font Buttler API.')
   }
   apiToken = data.token
   if (data.settings) {
@@ -95,15 +95,21 @@ export const api = {
     json<{ mac: boolean; cleared: boolean }>(post('/api/caches/office', {})),
   reveal: (payload: { id?: string; path?: string; which?: 'source' | 'installed' }) =>
     json<{ path: string }>(post('/api/reveal', payload)),
-  settings: () => json<{ settings: AppSettings }>(fetch('/api/settings')),
+  settings: () =>
+    json<{ settings: AppSettings; officeFontCache: OfficeFontCacheInfo }>(fetch('/api/settings')),
   updateSettings: (patch: {
-    watchFolder?: string | null
+    watchFolders?: string[]
     defaultView?: ViewLayout
     defaultSort?: SortMode
     installAfterUpload?: boolean
     theme?: ThemeMode
     menuBarIcon?: boolean
-  }) => json<{ settings: AppSettings }>(post('/api/settings', patch)),
+    openAtLogin?: boolean
+    clearOfficeFontCache?: boolean
+  }) =>
+    json<{ settings: AppSettings; officeFontCache: OfficeFontCacheInfo }>(
+      post('/api/settings', patch),
+    ),
   renamePreview: (id: string, familyName: string) =>
     json<{ fullName: string; postscriptName: string }>(
       fetch(

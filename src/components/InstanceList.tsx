@@ -29,7 +29,7 @@ export function InstanceList({
               disabled={!clickable}
               onClick={() => row.catalogEntryId && onSelectEntry?.(row.catalogEntryId)}
               className={cn(
-                'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left',
+                'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors duration-150 ease-out motion-reduce:transition-none',
                 clickable && 'hover:bg-muted/80',
                 selected && 'bg-muted ring-1 ring-primary/30',
                 !clickable && 'cursor-default',

@@ -5,8 +5,11 @@ import { fileURLToPath } from 'node:url'
 import { outdatedFamilies } from './updates-menu.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const UI = process.env.FONT_BUTLER_UI ?? process.env.FONTCASE_UI ?? 'http://127.0.0.1:43181'
 const API = process.env.FONT_BUTLER_API ?? process.env.FONTCASE_API ?? 'http://127.0.0.1:43182'
+const UI =
+  process.env.FONT_BUTLER_UI ??
+  process.env.FONTCASE_UI ??
+  (app.isPackaged ? API : 'http://127.0.0.1:43181')
 const ICON_PATH = path.join(__dirname, '../build/icon.png')
 const MENUBAR_ICON_PATH = path.join(__dirname, '../build/menubarTemplate.png')
 const APP_ICON = fs.existsSync(ICON_PATH) ? nativeImage.createFromPath(ICON_PATH) : undefined
@@ -28,6 +31,7 @@ let tray = null
 let apiToken = null
 let catalogEntries = []
 let menuBarIconEnabled = true
+let clearOfficeFontCacheEnabled = true
 let isQuitting = false
 const queuedFiles = []
 
@@ -39,12 +43,14 @@ async function ensureApiToken() {
   const bootstrapBody = await response.text()
   const data = bootstrapBody ? JSON.parse(bootstrapBody) : {}
   if (!response.ok || !data.token) {
-    throw new Error('Could not connect to Font Butler API.')
+    throw new Error('Could not connect to Font Buttler API.')
   }
   apiToken = data.token
   if (data.settings) {
     applyThemeSetting(data.settings.theme)
     applyMenuBarSetting(data.settings.menuBarIcon)
+    applyOpenAtLogin(data.settings.openAtLogin)
+    applyOfficeCacheSetting(data.settings.clearOfficeFontCache)
   }
   return apiToken
 }
@@ -87,7 +93,7 @@ function createWindow() {
     height: 860,
     minWidth: 920,
     minHeight: 620,
-    title: 'Font Butler',
+    title: 'Font Buttler',
     icon: APP_ICON,
     backgroundColor: windowBackgroundColor(),
     titleBarStyle: 'hiddenInset',
@@ -156,7 +162,7 @@ async function clearCacheFromMenu(kind) {
     } catch {
       if (response.status === 404) {
         throw new Error(
-          'The Font Butler API is out of date. Quit Font Butler completely, then reopen it.',
+          'The Font Buttler API is out of date. Quit Font Buttler completely, then reopen it.',
         )
       }
       throw new Error(
@@ -234,6 +240,7 @@ function buildTrayMenu() {
   })
   items.push({
     label: 'Remove MS Office cache',
+    enabled: clearOfficeFontCacheEnabled,
     click: () => {
       void clearCacheFromMenu('office')
     },
@@ -248,7 +255,7 @@ function refreshTrayMenu() {
     return
   }
   const families = outdatedFamilies(catalogEntries)
-  tray.setToolTip(families.length > 0 ? `Font Butler — ${families.length} updates` : 'Font Butler')
+  tray.setToolTip(families.length > 0 ? `Font Buttler — ${families.length} updates` : 'Font Buttler')
   tray.setContextMenu(buildTrayMenu())
 }
 
@@ -279,6 +286,22 @@ function ensureTray() {
   refreshTrayMenu()
 }
 
+function applyOfficeCacheSetting(enabled) {
+  const next = enabled !== false
+  if (clearOfficeFontCacheEnabled === next) {
+    return
+  }
+  clearOfficeFontCacheEnabled = next
+  Menu.setApplicationMenu(buildAppMenu())
+  refreshTrayMenu()
+}
+
+function applyOpenAtLogin(enabled) {
+  app.setLoginItemSettings({
+    openAtLogin: enabled === true,
+  })
+}
+
 function applyMenuBarSetting(enabled) {
   const next = enabled !== false
   const turningOff = menuBarIconEnabled && !next
@@ -304,6 +327,8 @@ function handleApiEvent(event) {
   if (event.type === 'settings' && event.settings) {
     applyThemeSetting(event.settings.theme)
     applyMenuBarSetting(event.settings.menuBarIcon)
+    applyOpenAtLogin(event.settings.openAtLogin)
+    applyOfficeCacheSetting(event.settings.clearOfficeFontCache)
   }
 }
 
@@ -403,6 +428,7 @@ function buildAppMenu() {
         },
         {
           label: 'Remove MS Office cache',
+          enabled: clearOfficeFontCacheEnabled,
           click: () => {
             void clearCacheFromMenu('office')
           },
@@ -438,6 +464,15 @@ if (!gotLock) {
     isQuitting = true
   })
 
+  async function startPackagedBackend() {
+    if (!app.isPackaged) {
+      return
+    }
+    const staticDir = path.join(__dirname, '../dist')
+    const { startFontButlerServer } = await import('./server.bundle.mjs')
+    await startFontButlerServer({ staticDir })
+  }
+
   app.whenReady().then(async () => {
     if (process.platform === 'darwin' && app.dock && APP_ICON && !APP_ICON.isEmpty() && !app.isPackaged) {
       app.dock.setIcon(APP_ICON)
@@ -447,9 +482,10 @@ if (!gotLock) {
       mainWindow?.setBackgroundColor(windowBackgroundColor())
     })
     try {
+      await startPackagedBackend()
       await ensureApiToken()
     } catch (error) {
-      console.error('Could not bootstrap Font Butler API', error)
+      console.error('Could not bootstrap Font Buttler API', error)
     }
     ensureTray()
     createWindow()

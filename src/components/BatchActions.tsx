@@ -115,7 +115,7 @@ export function BatchActionBar({
   return (
     <div
       data-keep-selection=""
-      className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-muted/40 px-3 py-2"
+      className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-muted/40 px-3 py-2"
     >
       <div className="min-w-0">
         <p className="text-sm font-medium">

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
 import { toast } from 'sonner'
-import { ChevronDown, FolderOpen } from 'lucide-react'
-import { AaPreview } from '@/components/AaPreview'
+import { ChevronDown, FolderOpen, X } from 'lucide-react'
+import { AaPreview, CyclingAaPreview } from '@/components/AaPreview'
 import { StatusBadge, VfBadge } from '@/components/Badges'
 import {
   BatchActionBar,
@@ -14,6 +14,7 @@ import { CatalogCardActions, SystemCardActions } from '@/components/FontCardActi
 import { FontFaceStyles, catalogFontFamily, systemFontFamily } from '@/components/FontFaceStyles'
 import { InstanceList } from '@/components/InstanceList'
 import { Inspector } from '@/components/Inspector'
+import { DropFolderDialog } from '@/components/DropFolderDialog'
 import { RenameDialog } from '@/components/RenameDialog'
 import { SettingsDialog } from '@/components/SettingsDialog'
 import { Sidebar, type Tab } from '@/components/Sidebar'
@@ -49,10 +50,21 @@ import {
   type CatalogBatchPlan,
   type SystemBatchPlan,
 } from '@/lib/batch'
-import { nextSelection, shortcutAction } from '@/lib/selection'
+import {
+  canStartMarquee,
+  clientRect,
+  keysInMarquee,
+  mergeMarqueeSelection,
+  nextSelection,
+  shortcutAction,
+  type Rect,
+} from '@/lib/selection'
 import { applyTheme } from '@/lib/theme'
 import type { AppSettings, CatalogEntry, FamilyGroup, SortMode, SystemFace, SystemFamilyGroup } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { isPathUnderFolder, mergeWatchFolders, watchFolderName } from '@/lib/watchFolders'
+
+const EMPTY_WATCH_FOLDERS: string[] = []
 
 export default function App() {
   return (
@@ -82,6 +94,12 @@ function AppShell() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const settingsRef = useRef<AppSettings | null>(null)
+  const [watchFolderFilter, setWatchFolderFilter] = useState<string | null>(null)
+  const [folderDrop, setFolderDrop] = useState<{
+    folders: string[]
+    paths: string[]
+    files: File[]
+  } | null>(null)
   const [showSources, setShowSources] = useState(
     () => localStorage.getItem('font-butler-show-sources') === 'true',
   )
@@ -94,6 +112,18 @@ function AppShell() {
   const [selectedFamilyKeys, setSelectedFamilyKeys] = useState<string[]>([])
   const [selectedSystemKeys, setSelectedSystemKeys] = useState<string[]>([])
   const [selectionAnchor, setSelectionAnchor] = useState<string | null>(null)
+  const [marqueeRect, setMarqueeRect] = useState<Rect | null>(null)
+  const marqueeRef = useRef<{
+    startX: number
+    startY: number
+    lastX: number
+    lastY: number
+    additive: boolean
+    baseKeys: string[]
+    active: boolean
+  } | null>(null)
+  const suppressClickRef = useRef(false)
+  const applyMarqueeKeysRef = useRef<(keys: string[]) => void>(() => {})
   const [scrollToFamily, setScrollToFamily] = useState<string | null>(null)
   const [hideDeactivated, setHideDeactivated] = useState(
     () => localStorage.getItem('font-butler-hide-deactivated') === 'true',
@@ -221,24 +251,39 @@ function AppShell() {
     }
   }, [])
 
+  const watchFolders = settings?.watchFolders ?? EMPTY_WATCH_FOLDERS
+  const librarySourceEntries = useMemo(
+    () =>
+      entries
+        .filter(isLibraryEntry)
+        .filter((entry) => !watchFolderFilter || isPathUnderFolder(entry.sourcePath, watchFolderFilter)),
+    [entries, watchFolderFilter],
+  )
   const libraryGroups = useMemo(
     () =>
       sortFamilyGroups(
         groupCatalog(
-          entries
-            .filter(isLibraryEntry)
-            .filter((entry) => !hideDeactivated || entry.status !== 'deactivated'),
+          librarySourceEntries.filter((entry) => !hideDeactivated || entry.status !== 'deactivated'),
         ).filter((group) =>
           matchesQuery(`${group.familyName} ${group.faces.map((face) => face.styleName).join(' ')}`, query),
         ),
         sortMode,
       ),
-    [entries, query, sortMode, hideDeactivated],
+    [librarySourceEntries, query, sortMode, hideDeactivated],
   )
   const libraryGroupsUnfiltered = useMemo(
-    () => groupCatalog(entries.filter(isLibraryEntry)),
-    [entries],
+    () => groupCatalog(librarySourceEntries),
+    [librarySourceEntries],
   )
+  const watchFolderCounts = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const folder of watchFolders) {
+      counts[folder] = groupCatalog(
+        entries.filter(isLibraryEntry).filter((entry) => isPathUnderFolder(entry.sourcePath, folder)),
+      ).length
+    }
+    return counts
+  }, [entries, watchFolders])
   const uninstalledGroups = useMemo(
     () =>
       sortFamilyGroups(
@@ -307,6 +352,12 @@ function AppShell() {
   }, [tab, updateGroups.length])
 
   useEffect(() => {
+    if (watchFolderFilter && !watchFolders.includes(watchFolderFilter)) {
+      setWatchFolderFilter(null)
+    }
+  }, [watchFolderFilter, watchFolders])
+
+  useEffect(() => {
     if (loading) return
     if (tab === 'system') {
       const visible = new Set(shownSystemGroups.map((group) => group.familyName))
@@ -356,6 +407,7 @@ function AppShell() {
   }
 
   function handleCatalogSelect(group: FamilyGroup, event: MouseEvent) {
+    if (suppressClickRef.current) return
     const current = selectedFamilyKeys.length
       ? selectedFamilyKeys
       : selectedFamily
@@ -375,6 +427,7 @@ function AppShell() {
   }
 
   function handleSystemSelect(group: SystemFamilyGroup, event: MouseEvent) {
+    if (suppressClickRef.current) return
     const current = selectedSystemKeys.length
       ? selectedSystemKeys
       : selectedSystem
@@ -412,7 +465,8 @@ function AppShell() {
   const systemPlan = systemBatchPlan(systemSelection)
   const catalogSummary = catalogBatchSummary(catalogSelection)
   const systemSummary = systemBatchSummary(systemSelection)
-  const hasSelection = tab === 'system' ? systemSelection.length > 0 : catalogSelection.length > 0
+  const selectionCount = tab === 'system' ? systemSelection.length : catalogSelection.length
+  const showInspector = selectionCount === 1
 
   function clearSelection() {
     setSelectedFamily(null)
@@ -423,10 +477,95 @@ function AppShell() {
     setSelectionAnchor(null)
   }
 
+  applyMarqueeKeysRef.current = (keys: string[]) => {
+    if (tab === 'system') {
+      setSelectedSystemKeys((current) => (sameKeys(current, keys) ? current : keys))
+      setSelectedSystem(keys[keys.length - 1] ?? null)
+      setSelectionAnchor(keys[0] ?? null)
+      return
+    }
+    setSelectedFamilyKeys((current) => (sameKeys(current, keys) ? current : keys))
+    const last = keys[keys.length - 1] ?? null
+    setSelectedFamily(last)
+    const group = visibleGroups.find((item) => item.familyName === last)
+    setSelectedEntryId(group?.entries[0]?.id ?? null)
+    setSelectionAnchor(keys[0] ?? null)
+  }
+
   function handleListPointerDown(event: PointerEvent<HTMLElement>) {
-    if (dragging || event.button !== 0 || !hasSelection) return
-    if (clickPreservesSelection(event.target)) return
-    clearSelection()
+    if (dragging || event.button !== 0) return
+    if (!canStartMarquee(event.target)) return
+
+    const currentKeys =
+      tab === 'system'
+        ? selectedSystemKeys.length
+          ? selectedSystemKeys
+          : selectedSystem
+            ? [selectedSystem]
+            : []
+        : selectedFamilyKeys.length
+          ? selectedFamilyKeys
+          : selectedFamily
+            ? [selectedFamily]
+            : []
+    const additive = event.metaKey || event.ctrlKey || event.shiftKey
+    marqueeRef.current = {
+      startX: event.clientX,
+      startY: event.clientY,
+      lastX: event.clientX,
+      lastY: event.clientY,
+      additive,
+      baseKeys: additive ? currentKeys : [],
+      active: false,
+    }
+
+    const updateFromPoint = (x: number, y: number) => {
+      const session = marqueeRef.current
+      if (!session) return
+      session.lastX = x
+      session.lastY = y
+      const distance = Math.hypot(x - session.startX, y - session.startY)
+      if (!session.active) {
+        if (distance < 5) return
+        session.active = true
+        suppressClickRef.current = true
+      }
+      const rect = clientRect(session.startX, session.startY, x, y)
+      setMarqueeRect(rect)
+      const hit = keysInMarquee(collectFamilyCardRects(), rect)
+      applyMarqueeKeysRef.current(mergeMarqueeSelection(session.baseKeys, hit, session.additive))
+    }
+
+    const onMove = (move: globalThis.PointerEvent) => {
+      if (marqueeRef.current?.active) move.preventDefault()
+      updateFromPoint(move.clientX, move.clientY)
+    }
+    const onScroll = () => {
+      const session = marqueeRef.current
+      if (!session?.active) return
+      updateFromPoint(session.lastX, session.lastY)
+    }
+    const onUp = (up: globalThis.PointerEvent) => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+      window.removeEventListener('scroll', onScroll, true)
+      const session = marqueeRef.current
+      marqueeRef.current = null
+      setMarqueeRect(null)
+      if (!session?.active) {
+        if (!clickPreservesSelection(up.target)) clearSelection()
+        return
+      }
+      window.setTimeout(() => {
+        suppressClickRef.current = false
+      }, 0)
+    }
+
+    window.addEventListener('pointermove', onMove, { passive: false })
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+    window.addEventListener('scroll', onScroll, true)
   }
 
   function selectAllVisible() {
@@ -688,9 +827,53 @@ function AppShell() {
   async function handleDrop(dataTransfer: DataTransfer) {
     try {
       const payload = await collectDropPayload(dataTransfer)
+      setDragging(false)
+      if (payload.folders.length > 0) {
+        setFolderDrop(payload)
+        return
+      }
       await importDropped(payload.paths, payload.files)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not add fonts')
+      setDragging(false)
+    }
+  }
+
+  function selectLibrary(folder: string | null) {
+    setTab('library')
+    setWatchFolderFilter(folder)
+  }
+
+  async function watchDroppedFolders(folders: string[], leftover: { paths: string[]; files: File[] }) {
+    const next = mergeWatchFolders(watchFolders, folders)
+    busyRef.current = true
+    setBusy(true)
+    setActionStatus(folders.length === 1 ? 'Adding watch folder…' : 'Adding watch folders…')
+    try {
+      const result = await api.updateSettings({ watchFolders: next })
+      applySettings(result.settings)
+      selectLibrary(folders[0] ?? null)
+      setQuery('')
+      toast.success(
+        folders.length === 1
+          ? `Watching ${watchFolderName(folders[0])}`
+          : `Watching ${folders.length} folders`,
+      )
+      const loosePaths = leftover.paths.filter(
+        (filePath) => !folders.some((folder) => isPathUnderFolder(filePath, folder)),
+      )
+      if (loosePaths.length || leftover.files.length) {
+        await importDropped(loosePaths, leftover.files)
+        selectLibrary(folders[0] ?? null)
+        return
+      }
+      setEntries((await api.catalog()).entries)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not add watch folder')
+    } finally {
+      busyRef.current = false
+      setBusy(false)
+      setActionStatus(null)
       setDragging(false)
     }
   }
@@ -735,6 +918,7 @@ function AppShell() {
           entry.status === 'deactivated',
       )
       setQuery('')
+      setWatchFolderFilter(null)
       setTab(installed || alreadyInLibrary ? 'library' : 'uninstalled')
       setSelectedFamily(names[0] ?? null)
       setSelectedFamilyKeys(names)
@@ -777,7 +961,7 @@ function AppShell() {
 
   return (
       <div
-        className="flex h-full min-h-0 flex-col bg-background text-foreground md:flex-row"
+        className="flex h-dvh min-h-0 flex-col overflow-hidden bg-background text-foreground md:flex-row"
         onDragEnter={(event) => {
           event.preventDefault()
           setDragging(true)
@@ -802,7 +986,14 @@ function AppShell() {
           query={query}
           onQueryChange={setQuery}
           tab={tab}
-          onTabChange={setTab}
+          onTabChange={(next) => {
+            setTab(next)
+            if (next !== 'library') setWatchFolderFilter(null)
+          }}
+          watchFolders={watchFolders}
+          watchFolderFilter={watchFolderFilter}
+          watchFolderCounts={watchFolderCounts}
+          onSelectWatchFolder={selectLibrary}
           counts={{
             uninstalled: uninstalledGroups.length,
             updates: updateGroups.length,
@@ -810,9 +1001,77 @@ function AppShell() {
           onOpenSettings={() => setSettingsOpen(true)}
         />
 
-        <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-          <section className="min-h-0 min-w-0 flex-1" onPointerDown={handleListPointerDown}>
-            <ScrollArea className="h-full">
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+          <section
+            className={cn('flex min-h-0 min-w-0 flex-1 flex-col', marqueeRect && 'select-none')}
+            onPointerDown={handleListPointerDown}
+          >
+            {!loading && hasCatalogList && (
+              <div data-keep-selection="" className="shrink-0 space-y-3 bg-background px-4 pt-4 pb-3">
+                <ViewOptions
+                    layout={viewLayout}
+                    onLayoutChange={(next) => {
+                      setViewLayout(next)
+                      localStorage.setItem('font-butler-view-layout', next)
+                      void persistPreferences({ defaultView: next })
+                    }}
+                    sortMode={sortMode}
+                    onSortModeChange={(next) => {
+                      setSortMode(next)
+                      localStorage.setItem('font-butler-sort', next)
+                      void persistPreferences({ defaultSort: next })
+                    }}
+                    showSources={showSources}
+                    onShowSourcesChange={(next) => {
+                      setShowSources(next)
+                      localStorage.setItem('font-butler-show-sources', String(next))
+                    }}
+                    showSourcesToggle
+                    hideDeactivated={hideDeactivated}
+                    onHideDeactivatedChange={(next) => {
+                      setHideDeactivated(next)
+                      localStorage.setItem('font-butler-hide-deactivated', String(next))
+                    }}
+                    showHideDeactivated={tab === 'library'}
+                    previewSize={gridPreviewSize}
+                    onPreviewSizeChange={(next) => {
+                      setGridPreviewSize(next)
+                      localStorage.setItem(GRID_PREVIEW_SIZE_KEY, String(next))
+                    }}
+                  />
+                {tab === 'system' && !query.trim() && systemGroups.length > shownSystemGroups.length && (
+                  <p className="text-sm text-muted-foreground">
+                    Showing {shownSystemGroups.length} of {systemGroups.length} families. Search to jump to
+                    the rest.
+                  </p>
+                )}
+                {tab === 'system' ? (
+                  <BatchActionBar count={systemPlan.count} summary={systemSummary}>
+                    <SystemBatchButtons
+                      plan={systemPlan}
+                      busy={busy}
+                      onDeactivate={() => void deactivateSelected()}
+                      onUninstall={() => void uninstallSelected()}
+                    />
+                  </BatchActionBar>
+                ) : (
+                  <BatchActionBar count={catalogPlan.count} summary={catalogSummary}>
+                    <CatalogBatchButtons
+                      plan={catalogPlan}
+                      busy={busy}
+                      onInstall={() => void installSelected()}
+                      onActivate={() => void activateSelected()}
+                      onDeactivate={() => void deactivateSelected()}
+                      onUninstall={() => void uninstallSelected()}
+                      onReinstall={() => void reinstallSelected()}
+                      onForget={() => void forgetSelected()}
+                      onDeleteFiles={() => void deleteFilesSelected()}
+                    />
+                  </BatchActionBar>
+                )}
+              </div>
+            )}
+            <ScrollArea className="min-h-0 flex-1">
               <div className="p-4">
                 {loading && (
                   <p className="px-2 py-12 text-center text-sm text-muted-foreground">
@@ -825,18 +1084,17 @@ function AppShell() {
                 {!loading && tab !== 'system' && visibleGroups.length === 0 && (
                   <EmptyState
                     tab={tab}
+                    watchFolderName={
+                      tab === 'library' && watchFolderFilter
+                        ? watchFolderName(watchFolderFilter)
+                        : null
+                    }
                     onPickFiles={(files) => void handleFiles(files)}
                   />
                 )}
                 {!loading && tab === 'system' && systemGroups.length === 0 && (
                   <p className="px-2 py-12 text-center text-sm text-muted-foreground">
                     No fonts found in the system folders.
-                  </p>
-                )}
-                {tab === 'system' && !query.trim() && systemGroups.length > shownSystemGroups.length && (
-                  <p className="mb-3 text-sm text-muted-foreground">
-                    Showing {shownSystemGroups.length} of {systemGroups.length} families. Search to jump to
-                    the rest.
                   </p>
                 )}
                 {!loading && missingSourceCount > 0 && tab !== 'system' && tab !== 'updates' && (
@@ -863,64 +1121,6 @@ function AppShell() {
                     </Button>
                   </div>
                 )}
-                {!loading && hasCatalogList && (
-                  <ViewOptions
-                    className="mb-3"
-                    layout={viewLayout}
-                    onLayoutChange={(next) => {
-                      setViewLayout(next)
-                      localStorage.setItem('font-butler-view-layout', next)
-                      void persistPreferences({ defaultView: next })
-                    }}
-                    sortMode={sortMode}
-                    onSortModeChange={(next) => {
-                      setSortMode(next)
-                      localStorage.setItem('font-butler-sort', next)
-                      void persistPreferences({ defaultSort: next })
-                    }}
-                    showSources={showSources}
-                    onShowSourcesChange={(next) => {
-                      setShowSources(next)
-                      localStorage.setItem('font-butler-show-sources', String(next))
-                    }}
-                    showSourcesToggle={tab !== 'system'}
-                    hideDeactivated={hideDeactivated}
-                    onHideDeactivatedChange={(next) => {
-                      setHideDeactivated(next)
-                      localStorage.setItem('font-butler-hide-deactivated', String(next))
-                    }}
-                    showHideDeactivated={tab === 'library'}
-                    previewSize={gridPreviewSize}
-                    onPreviewSizeChange={(next) => {
-                      setGridPreviewSize(next)
-                      localStorage.setItem(GRID_PREVIEW_SIZE_KEY, String(next))
-                    }}
-                  />
-                )}
-                {tab === 'system' ? (
-                  <BatchActionBar count={systemPlan.count} summary={systemSummary}>
-                    <SystemBatchButtons
-                      plan={systemPlan}
-                      busy={busy}
-                      onDeactivate={() => void deactivateSelected()}
-                      onUninstall={() => void uninstallSelected()}
-                    />
-                  </BatchActionBar>
-                ) : (
-                  <BatchActionBar count={catalogPlan.count} summary={catalogSummary}>
-                    <CatalogBatchButtons
-                      plan={catalogPlan}
-                      busy={busy}
-                      onInstall={() => void installSelected()}
-                      onActivate={() => void activateSelected()}
-                      onDeactivate={() => void deactivateSelected()}
-                      onUninstall={() => void uninstallSelected()}
-                      onReinstall={() => void reinstallSelected()}
-                      onForget={() => void forgetSelected()}
-                      onDeleteFiles={() => void deleteFilesSelected()}
-                    />
-                  </BatchActionBar>
-                )}
                 <div
                   className={cn(
                     viewLayout === 'grid'
@@ -937,6 +1137,7 @@ function AppShell() {
                           layout={viewLayout}
                           previewSize={gridPreviewSize}
                           group={group}
+                          showSourcePath={showSources}
                           selected={inSelection || selectedSystemGroup?.key === group.key}
                           busy={busy}
                           batch={systemSelection.length > 1 && inSelection ? systemPlan : null}
@@ -1045,8 +1246,24 @@ function AppShell() {
               </div>
             </ScrollArea>
           </section>
-          {hasSelection && (
-          <div className="border-t md:border-t-0 md:border-l">
+          {showInspector && (
+          <div
+            data-keep-selection=""
+            className="absolute inset-y-0 right-0 z-20 flex w-full flex-col border-l bg-background shadow-xl md:w-80"
+          >
+            <div className="flex shrink-0 justify-end px-2 pt-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-7 w-7 px-0"
+                aria-label="Close details"
+                onClick={clearSelection}
+              >
+                <X />
+              </Button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto">
             <Inspector
               group={tab === 'system' ? null : selectedGroup}
               entry={tab === 'system' ? null : selectedEntry}
@@ -1146,6 +1363,7 @@ function AppShell() {
                   : undefined
               }
             />
+            </div>
           </div>
           )}
         </div>
@@ -1155,6 +1373,21 @@ function AppShell() {
             <p className="text-base font-medium tracking-tight">Drop fonts or folders to add them</p>
           </div>
         )}
+        <DropFolderDialog
+          open={Boolean(folderDrop)}
+          folders={folderDrop?.folders ?? []}
+          onCancel={() => setFolderDrop(null)}
+          onAddFonts={() => {
+            const pending = folderDrop
+            setFolderDrop(null)
+            if (pending) void importDropped(pending.paths, pending.files)
+          }}
+          onWatch={() => {
+            const pending = folderDrop
+            setFolderDrop(null)
+            if (pending) void watchDroppedFolders(pending.folders, pending)
+          }}
+        />
         <RenameDialog
           entry={renameEntry}
           open={Boolean(renameEntry)}
@@ -1172,6 +1405,7 @@ function AppShell() {
           settings={settings}
           onSettingsChange={applySettings}
         />
+        <MarqueeOverlay rect={marqueeRect} />
         <Toaster theme={settings?.theme ?? 'system'} />
       </div>
   )
@@ -1183,6 +1417,35 @@ function uniquePaths(faces: SystemFace[]): string[] {
 
 function sameKeys(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((key, index) => key === right[index])
+}
+
+function collectFamilyCardRects(): Array<{ key: string; rect: Rect }> {
+  return Array.from(document.querySelectorAll('[data-family-key]')).flatMap((node) => {
+    const key = node.getAttribute('data-family-key')
+    if (!key) return []
+    const box = node.getBoundingClientRect()
+    return [
+      {
+        key,
+        rect: { left: box.left, top: box.top, right: box.right, bottom: box.bottom },
+      },
+    ]
+  })
+}
+
+function MarqueeOverlay({ rect }: { rect: Rect | null }) {
+  if (!rect) return null
+  return (
+    <div
+      className="pointer-events-none fixed z-50 border border-foreground/30 bg-foreground/10"
+      style={{
+        left: rect.left,
+        top: rect.top,
+        width: rect.right - rect.left,
+        height: rect.bottom - rect.top,
+      }}
+    />
+  )
 }
 
 function clickPreservesSelection(target: EventTarget | null): boolean {
@@ -1238,13 +1501,24 @@ function LibraryCard({
   onDeleteFiles: () => void
 }) {
   const [expanded, setExpanded] = useState(false)
-  const preview = group.entries[0]
+  const [hovered, setHovered] = useState(false)
+  const preview = group.entries.find((entry) => entry.id === group.previewEntryId) ?? group.entries[0]
   const missingSource = hasSourceMissing(group)
   const instances = useMemo(() => catalogInstanceRows(group), [group])
   const showInstances = instances.length > 0 && layout === 'list'
   const previewFamily = catalogFontFamily(group.previewEntryId)
   const previewWeight = preview.faces[0]?.weight
   const previewItalic = preview.faces[0]?.italic
+  const previewFaces = useMemo(
+    () =>
+      instances.map((row) => ({
+        family: row.catalogEntryId ? catalogFontFamily(row.catalogEntryId) : previewFamily,
+        weight: row.weight,
+        italic: row.italic,
+        label: row.label,
+      })),
+    [instances, previewFamily],
+  )
   const plan = batch ?? catalogBatchPlan([group])
 
   const muted = group.status === 'deactivated'
@@ -1286,6 +1560,8 @@ function LibraryCard({
             selected ? 'border-border bg-muted/60' : 'border-border/80 hover:bg-muted/40',
             muted && 'opacity-50',
           )}
+          onPointerEnter={() => setHovered(true)}
+          onPointerLeave={() => setHovered(false)}
         >
           {layout === 'grid' ? (
             <button
@@ -1293,10 +1569,18 @@ function LibraryCard({
               onClick={onSelect}
               className="flex w-full flex-col text-left"
             >
-              <AaPreview
-                family={previewFamily}
-                weight={previewWeight}
-                italic={previewItalic}
+              <CyclingAaPreview
+                faces={previewFaces}
+                rest={
+                  previewFaces.find((face) => face.family === previewFamily && !face.italic) ??
+                  previewFaces.find((face) => face.family === previewFamily) ?? {
+                    family: previewFamily,
+                    weight: previewWeight,
+                    italic: previewItalic,
+                    label: preview.faces[0]?.styleName ?? 'Regular',
+                  }
+                }
+                active={hovered && !selected}
                 size={previewSize}
               />
               <div className="p-3">{metadata}</div>
@@ -1319,6 +1603,7 @@ function LibraryCard({
                 {showInstances && (
                   <button
                     type="button"
+                    data-no-marquee=""
                     aria-expanded={expanded}
                     aria-label={expanded ? 'Hide instances' : 'Show instances'}
                     onClick={(event) => {
@@ -1385,6 +1670,7 @@ function SystemCard({
   group,
   layout,
   previewSize,
+  showSourcePath,
   selected,
   busy,
   batch,
@@ -1397,6 +1683,7 @@ function SystemCard({
   group: SystemFamilyGroup
   layout: ViewLayout
   previewSize: number
+  showSourcePath?: boolean
   selected: boolean
   busy: boolean
   batch: SystemBatchPlan | null
@@ -1407,10 +1694,21 @@ function SystemCard({
   onDeactivate: () => void
 }) {
   const [expanded, setExpanded] = useState(false)
+  const [hovered, setHovered] = useState(false)
   const face = group.faces[0]
   const instances = useMemo(() => systemInstanceRows(group), [group])
   const showInstances = instances.length > 0 && layout === 'list'
   const previewFamily = systemFontFamily(face.path)
+  const previewFaces = useMemo(
+    () =>
+      instances.map((row) => ({
+        family: row.systemPath ? systemFontFamily(row.systemPath) : previewFamily,
+        weight: row.weight,
+        italic: row.italic,
+        label: row.label,
+      })),
+    [instances, previewFamily],
+  )
   const plan = batch ?? systemBatchPlan([group])
 
   const metadata = (
@@ -1423,7 +1721,7 @@ function SystemCard({
       <div className="mt-0.5 text-xs text-muted-foreground">
         {group.instanceCount} {group.instanceCount === 1 ? 'instance' : 'instances'}
       </div>
-      {layout === 'grid' && (
+      {showSourcePath && (
         <div
           className="mt-1 truncate font-mono text-[11px] text-muted-foreground/90"
           title={face.path}
@@ -1443,6 +1741,8 @@ function SystemCard({
             'group relative overflow-hidden rounded-lg border transition-colors',
             selected ? 'border-border bg-muted/60' : 'border-border/80 hover:bg-muted/40',
           )}
+          onPointerEnter={() => setHovered(true)}
+          onPointerLeave={() => setHovered(false)}
         >
           {layout === 'grid' ? (
             <button
@@ -1450,10 +1750,15 @@ function SystemCard({
               onClick={onSelect}
               className="flex w-full flex-col text-left"
             >
-              <AaPreview
-                family={previewFamily}
-                weight={face.weight}
-                italic={face.italic}
+              <CyclingAaPreview
+                faces={previewFaces}
+                rest={{
+                  family: previewFamily,
+                  weight: face.weight,
+                  italic: face.italic,
+                  label: face.styleName,
+                }}
+                active={hovered && !selected}
                 size={previewSize}
               />
               <div className="p-3">{metadata}</div>
@@ -1476,6 +1781,7 @@ function SystemCard({
                 {showInstances && (
                   <button
                     type="button"
+                    data-no-marquee=""
                     aria-expanded={expanded}
                     aria-label={expanded ? 'Hide instances' : 'Show instances'}
                     onClick={(event) => {
@@ -1523,9 +1829,11 @@ function SystemCard({
 
 function EmptyState({
   tab,
+  watchFolderName,
   onPickFiles,
 }: {
   tab: Tab
+  watchFolderName?: string | null
   onPickFiles: (files: FileList | File[]) => void
 }) {
   const folderInputRef = useRef<HTMLInputElement>(null)
@@ -1534,18 +1842,22 @@ function EmptyState({
     <div className="flex flex-col items-center justify-center rounded-lg border border-dashed px-6 py-16 text-center">
       <label className="flex cursor-pointer flex-col items-center">
         <p className="text-base font-medium tracking-tight">
-          {tab === 'updates'
-            ? 'No source updates'
-            : tab === 'uninstalled'
-              ? 'No inactive fonts'
-              : 'Drop font files or folders here'}
+          {watchFolderName
+            ? `No fonts in ${watchFolderName}`
+            : tab === 'updates'
+              ? 'No source updates'
+              : tab === 'uninstalled'
+                ? 'No inactive fonts'
+                : 'Drop font files or folders here'}
         </p>
         <p className="mt-2 max-w-sm text-sm text-muted-foreground">
-          {tab === 'library'
-            ? 'Drop a folder to add every TrueType, OpenType, collection, and WOFF file inside it, including subfolders. Source files stay linked to their original path.'
-            : tab === 'uninstalled'
-              ? 'Fonts you uninstall stay here so you can put them back in one click.'
-              : 'Fonts you uninstall stay in the library so you can put them back in one click.'}
+          {watchFolderName
+            ? 'Drop fonts into this folder in Finder, or drop them here to add them.'
+            : tab === 'library'
+              ? 'Drop a folder to add every TrueType, OpenType, collection, and WOFF file inside it, including subfolders. You can also watch a folder so new fonts are imported automatically.'
+              : tab === 'uninstalled'
+                ? 'Fonts you uninstall stay here so you can put them back in one click.'
+                : 'Fonts you uninstall stay in the library so you can put them back in one click.'}
         </p>
         <input
           type="file"

@@ -158,8 +158,23 @@ export function expandImportPaths(inputPaths: string[]): { files: string[]; erro
   return { files, errors }
 }
 
+function existingWatchFolders(folders: string[]): string[] {
+  const existing: string[] = []
+  for (const folder of folders) {
+    if (!folder) continue
+    try {
+      if (fs.existsSync(folder) && fs.statSync(folder).isDirectory()) {
+        existing.push(folder)
+      }
+    } catch {
+      // Skip folders that disappeared between settings save and watch setup.
+    }
+  }
+  return existing
+}
+
 export async function syncInboxWatcher(
-  folder: string | null,
+  folders: string[],
   onBatch: (filePaths: string[]) => void,
 ): Promise<void> {
   if (inboxTimer) {
@@ -171,10 +186,11 @@ export async function syncInboxWatcher(
     await inboxWatcher.close()
     inboxWatcher = null
   }
-  if (!folder || !fs.existsSync(folder) || !fs.statSync(folder).isDirectory()) {
+  const existing = existingWatchFolders(folders)
+  if (existing.length === 0) {
     return
   }
-  inboxWatcher = chokidar.watch(folder, {
+  inboxWatcher = chokidar.watch(existing, {
     ignoreInitial: true,
     awaitWriteFinish: { stabilityThreshold: 400, pollInterval: 100 },
     depth: FONT_TREE_MAX_DEPTH,

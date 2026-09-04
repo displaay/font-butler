@@ -1,4 +1,5 @@
-export const FONT_EXTENSIONS = ['.ttf', '.otf', '.ttc', '.otc', '.woff', '.woff2'] as const
+export const FONT_EXTENSIONS = ['.ttf', '.otf', '.ttc', '.otc'] as const
+export const WEB_FONT_EXTENSIONS = ['.woff', '.woff2'] as const
 
 export type FontStatus =
   | 'installed'
@@ -72,12 +73,19 @@ export type ThemeMode = 'light' | 'dark' | 'system'
 
 export type AppSettings = {
   version: 1
-  watchFolder: string | null
+  watchFolders: string[]
   defaultView: ViewLayout
   defaultSort: SortMode
   installAfterUpload: boolean
   theme: ThemeMode
   menuBarIcon: boolean
+  openAtLogin: boolean
+  clearOfficeFontCache: boolean
+}
+
+export type OfficeFontCacheInfo = {
+  path: string
+  exists: boolean
 }
 
 export type ServiceEvent =

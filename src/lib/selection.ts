@@ -1,3 +1,54 @@
+export type Rect = {
+  left: number
+  top: number
+  right: number
+  bottom: number
+}
+
+export function clientRect(x1: number, y1: number, x2: number, y2: number): Rect {
+  return {
+    left: Math.min(x1, x2),
+    top: Math.min(y1, y2),
+    right: Math.max(x1, x2),
+    bottom: Math.max(y1, y2),
+  }
+}
+
+export function rectsIntersect(a: Rect, b: Rect): boolean {
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
+}
+
+export function keysInMarquee(
+  items: Array<{ key: string; rect: Rect }>,
+  marquee: Rect,
+): string[] {
+  return items.filter((item) => rectsIntersect(item.rect, marquee)).map((item) => item.key)
+}
+
+export function mergeMarqueeSelection(base: string[], hit: string[], additive: boolean): string[] {
+  if (!additive) return hit
+  const seen = new Set(base)
+  const next = [...base]
+  for (const key of hit) {
+    if (seen.has(key)) continue
+    seen.add(key)
+    next.push(key)
+  }
+  return next
+}
+
+export function canStartMarquee(target: EventTarget | null): boolean {
+  if (typeof Element === 'undefined' || !(target instanceof Element)) return false
+  if (
+    target.closest(
+      '[role="dialog"], [data-radix-popper-content-wrapper], [data-keep-selection], [data-radix-scroll-area-scrollbar], [data-no-marquee], input, textarea, select, a',
+    )
+  ) {
+    return false
+  }
+  return true
+}
+
 export function nextSelection(
   orderedKeys: string[],
   current: string[],

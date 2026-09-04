@@ -67,7 +67,7 @@ export function RenameDialog({
         <DialogHeader>
           <DialogTitle>Install as a different name</DialogTitle>
           <DialogDescription>
-            Font Butler writes a copy with a new family name in the name and CFF
+            Font Buttler writes a copy with a new family name in the name and CFF
             tables. Your source file stays unchanged.
           </DialogDescription>
         </DialogHeader>

@@ -1,9 +1,36 @@
 import { execFile } from 'node:child_process'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { assertSafeShellPath } from './auth.ts'
 import { getPaths, isMac } from './paths.ts'
+import type { OfficeFontCacheInfo } from './types.ts'
+
+export function locateOfficeFontCache(home = os.homedir()): OfficeFontCacheInfo {
+  const groupContainers = path.join(home, 'Library/Group Containers')
+  const known = path.join(groupContainers, 'UBF8T346G9.Office', 'FontCache')
+  const candidates = [known]
+  try {
+    if (fs.existsSync(groupContainers)) {
+      for (const entry of fs.readdirSync(groupContainers)) {
+        if (!/office/i.test(entry)) continue
+        const cache = path.join(groupContainers, entry, 'FontCache')
+        if (!candidates.includes(cache)) candidates.push(cache)
+      }
+    }
+  } catch {
+    // Missing or unreadable Group Containers is fine; fall back to the known path.
+  }
+  const found = candidates.find((item) => {
+    try {
+      return fs.existsSync(item)
+    } catch {
+      return false
+    }
+  })
+  return { path: found ?? known, exists: Boolean(found) }
+}
 
 const execFileAsync = promisify(execFile)
 
@@ -47,16 +74,23 @@ export async function clearOfficeFontCache(): Promise<{ mac: boolean; cleared: b
   if (!isMac()) {
     return { mac: false, cleared: false }
   }
-  const paths = getPaths()
-  if (fs.existsSync(paths.officeFontCacheDir)) {
-    emptyDir(paths.officeFontCacheDir)
+  const located = locateOfficeFontCache()
+  const fallback = getPaths().officeFontCacheDir
+  const target = located.exists ? located.path : fallback
+  if (fs.existsSync(target)) {
+    emptyDir(target)
     return { mac: true, cleared: true }
   }
   return { mac: true, cleared: false }
 }
 
-export async function clearFontCaches(): Promise<{ mac: boolean; office: boolean }> {
+export async function clearFontCaches(
+  options: { office?: boolean } = {},
+): Promise<{ mac: boolean; office: boolean }> {
   const font = await clearUserFontCache()
+  if (options.office === false) {
+    return { mac: font.mac, office: false }
+  }
   const office = await clearOfficeFontCache()
   return { mac: font.mac, office: office.cleared }
 }

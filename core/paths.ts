@@ -35,11 +35,11 @@ export function getPaths(): AppPaths {
   const dataRoot =
     override ??
     (isMac()
-      ? path.join(home, 'Library/Application Support/Font Butler')
+      ? path.join(home, 'Library/Application Support/Font Buttler')
       : path.join(projectRoot, '.font-butler-data'))
 
   const installDir = isMac()
-    ? path.join(home, 'Library/Fonts/Font Butler')
+    ? path.join(home, 'Library/Fonts/Font Buttler')
     : path.join(dataRoot, 'installed')
 
   return {
