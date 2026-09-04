@@ -14,6 +14,9 @@ export function ViewOptions({
   showSources,
   onShowSourcesChange,
   showSourcesToggle = true,
+  hideDeactivated = false,
+  onHideDeactivatedChange,
+  showHideDeactivated = false,
   className,
 }: {
   layout: ViewLayout
@@ -23,6 +26,9 @@ export function ViewOptions({
   showSources: boolean
   onShowSourcesChange: (value: boolean) => void
   showSourcesToggle?: boolean
+  hideDeactivated?: boolean
+  onHideDeactivatedChange?: (value: boolean) => void
+  showHideDeactivated?: boolean
   className?: string
 }) {
   return (
@@ -81,17 +87,30 @@ export function ViewOptions({
           </Button>
         </div>
       </div>
-      {showSourcesToggle && (
-        <Label className="flex cursor-pointer items-center gap-2 font-normal text-foreground">
-          <input
-            type="checkbox"
-            checked={showSources}
-            onChange={(event) => onShowSourcesChange(event.target.checked)}
-            className="size-3.5 rounded border border-input accent-primary"
-          />
-          Show sources
-        </Label>
-      )}
+      <div className="flex flex-wrap items-center gap-4">
+        {showHideDeactivated && (
+          <Label className="flex cursor-pointer items-center gap-2 font-normal text-foreground">
+            <input
+              type="checkbox"
+              checked={hideDeactivated}
+              onChange={(event) => onHideDeactivatedChange?.(event.target.checked)}
+              className="size-3.5 rounded border border-input accent-primary"
+            />
+            Hide deactivated
+          </Label>
+        )}
+        {showSourcesToggle && (
+          <Label className="flex cursor-pointer items-center gap-2 font-normal text-foreground">
+            <input
+              type="checkbox"
+              checked={showSources}
+              onChange={(event) => onShowSourcesChange(event.target.checked)}
+              className="size-3.5 rounded border border-input accent-primary"
+            />
+            Show sources
+          </Label>
+        )}
+      </div>
     </div>
   )
 }

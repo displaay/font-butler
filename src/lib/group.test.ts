@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { groupCatalog, sortFamilyGroups } from './group.ts'
+import { groupCatalog, isInactiveEntry, isLibraryEntry, sortFamilyGroups } from './group.ts'
 import type { CatalogEntry, FontFaceInfo } from './types.ts'
 
 function face(familyName: string): FontFaceInfo {
@@ -17,13 +17,18 @@ function face(familyName: string): FontFaceInfo {
   }
 }
 
-function entry(id: string, familyName: string, addedAt: number): CatalogEntry {
+function entry(
+  id: string,
+  familyName: string,
+  addedAt: number,
+  status: CatalogEntry['status'] = 'installed',
+): CatalogEntry {
   return {
     id,
     sourcePath: `/tmp/${id}.otf`,
     sourceMtimeMs: addedAt,
     sourceSize: 1000,
-    status: 'installed',
+    status,
     faces: [face(familyName)],
     format: 'otf',
     addedAt,
@@ -69,4 +74,13 @@ test('sortFamilyGroups by installed date puts newer families first', () => {
     sortFamilyGroups(groups, 'installed').map((group) => group.familyName),
     ['New Style', 'Mid Style', 'Old Style'],
   )
+})
+
+test('deactivated fonts belong on Fonts, not Uninstalled', () => {
+  const deactivated = entry('off', 'Off', 1, 'deactivated')
+  const uninstalled = entry('gone', 'Gone', 2, 'uninstalled')
+  assert.equal(isLibraryEntry(deactivated), true)
+  assert.equal(isInactiveEntry(deactivated), false)
+  assert.equal(isLibraryEntry(uninstalled), false)
+  assert.equal(isInactiveEntry(uninstalled), true)
 })
