@@ -69,6 +69,7 @@
       "output": "release"
     },
     "mac": {
+      "icon": "build/icon.icns",
       "category": "public.app-category.utilities",
       "target": [
         "dmg",

@@ -1,10 +1,13 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell } from 'electron'
+import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const UI = process.env.FONT_BUTLER_UI ?? process.env.FONTCASE_UI ?? 'http://127.0.0.1:43181'
 const API = process.env.FONT_BUTLER_API ?? process.env.FONTCASE_API ?? 'http://127.0.0.1:43182'
+const ICON_PATH = path.join(__dirname, '../build/icon.png')
+const APP_ICON = fs.existsSync(ICON_PATH) ? nativeImage.createFromPath(ICON_PATH) : undefined
 
 let mainWindow = null
 let apiToken = null
@@ -30,6 +33,7 @@ function createWindow() {
     minWidth: 920,
     minHeight: 620,
     title: 'Font Butler',
+    icon: APP_ICON,
     backgroundColor: '#d9d4cc',
     autoHideMenuBar: false,
     webPreferences: {
@@ -146,6 +150,9 @@ if (!gotLock) {
   })
 
   app.whenReady().then(async () => {
+    if (process.platform === 'darwin' && app.dock && APP_ICON && !APP_ICON.isEmpty() && !app.isPackaged) {
+      app.dock.setIcon(APP_ICON)
+    }
     Menu.setApplicationMenu(buildAppMenu())
     createWindow()
     const fromArgv = process.argv.filter((arg) =>
