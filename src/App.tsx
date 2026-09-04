@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type MouseEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { toast } from 'sonner'
 import { ChevronDown, FolderOpen, Search } from 'lucide-react'
 import { AaPreview } from '@/components/AaPreview'
@@ -69,6 +69,7 @@ export default function App() {
   const [renameEntry, setRenameEntry] = useState<CatalogEntry | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settings, setSettings] = useState<AppSettings | null>(null)
+  const settingsRef = useRef<AppSettings | null>(null)
   const [showSources, setShowSources] = useState(
     () => localStorage.getItem('font-butler-show-sources') === 'true',
   )
@@ -87,19 +88,16 @@ export default function App() {
   )
 
   function applySettings(next: AppSettings) {
+    const current = settingsRef.current
+    settingsRef.current = next
     setSettings(next)
-    setViewLayout(next.defaultView)
-    setSortMode(next.defaultSort)
-    localStorage.setItem('font-butler-view-layout', next.defaultView)
-    localStorage.setItem('font-butler-sort', next.defaultSort)
-  }
-
-  async function persistPreferences(patch: { defaultView?: ViewLayout; defaultSort?: SortMode }) {
-    try {
-      const result = await api.updateSettings(patch)
-      applySettings(result.settings)
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Could not save settings')
+    if (!current || current.defaultView !== next.defaultView) {
+      setViewLayout(next.defaultView)
+      localStorage.setItem('font-butler-view-layout', next.defaultView)
+    }
+    if (!current || current.defaultSort !== next.defaultSort) {
+      setSortMode(next.defaultSort)
+      localStorage.setItem('font-butler-sort', next.defaultSort)
     }
   }
 
@@ -107,14 +105,18 @@ export default function App() {
     let cancelled = false
     async function boot() {
       try {
-        await api.bootstrap()
+        const boot = await api.bootstrap()
+        if (!cancelled && boot.settings) {
+          applySettings(boot.settings)
+        }
         const openPath = new URLSearchParams(window.location.search).get('open')
         if (openPath) {
           const opened = await api.open(openPath)
           toast.success(`Installed ${familyNameOf(opened.entry)}`)
         }
-        const catalog = await api.catalog()
+        const [catalog, settingsResult] = await Promise.all([api.catalog(), api.settings()])
         if (!cancelled) {
+          applySettings(settingsResult.settings)
           setEntries(catalog.entries)
           const focus =
             (openPath && catalog.entries.find((entry) => entry.sourcePath === openPath)) ||
@@ -124,10 +126,9 @@ export default function App() {
             setSelectedEntryId((current) => current ?? focus.id)
           }
         }
-        const [system, settingsResult] = await Promise.all([api.system(), api.settings()])
+        const system = await api.system()
         if (!cancelled) {
           setSystemFaces(system.faces)
-          applySettings(settingsResult.settings)
         }
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Could not load fonts')
@@ -772,13 +773,11 @@ export default function App() {
                     onLayoutChange={(next) => {
                       setViewLayout(next)
                       localStorage.setItem('font-butler-view-layout', next)
-                      void persistPreferences({ defaultView: next })
                     }}
                     sortMode={sortMode}
                     onSortModeChange={(next) => {
                       setSortMode(next)
                       localStorage.setItem('font-butler-sort', next)
-                      void persistPreferences({ defaultSort: next })
                     }}
                     showSources={showSources}
                     onShowSourcesChange={(next) => {

@@ -1,17 +1,21 @@
 import type { AppSettings, CatalogEntry, Notice, SortMode, SystemFace, ViewLayout } from './types'
 
 let apiToken: string | null = null
+let bootstrapSettings: AppSettings | null = null
 
 async function ensureToken(): Promise<string> {
   if (apiToken) {
     return apiToken
   }
   const response = await fetch('/api/bootstrap')
-  const data = (await response.json()) as { token?: string }
+  const data = (await response.json()) as { token?: string; settings?: AppSettings }
   if (!response.ok || !data.token) {
     throw new Error('Could not connect to Font Butler API.')
   }
   apiToken = data.token
+  if (data.settings) {
+    bootstrapSettings = data.settings
+  }
   return apiToken
 }
 
@@ -43,7 +47,10 @@ async function post(url: string, body: unknown): Promise<Response> {
 }
 
 export const api = {
-  bootstrap: () => ensureToken(),
+  bootstrap: async () => {
+    await ensureToken()
+    return { settings: bootstrapSettings }
+  },
   catalog: () => json<{ entries: CatalogEntry[] }>(fetch('/api/catalog')),
   system: () => json<{ faces: SystemFace[] }>(fetch('/api/system')),
   importPaths: (paths: string[]) =>
