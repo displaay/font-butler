@@ -29,23 +29,36 @@ function emptyDir(dir: string): void {
   }
 }
 
-export async function clearFontCaches(): Promise<{ mac: boolean; office: boolean }> {
-  const paths = getPaths()
-  let office = false
-  if (isMac()) {
-    await runQuiet('atsutil', ['databases', '-removeUser'])
-    await runQuiet('atsutil', ['server', '-shutdown'])
-    await runQuiet('atsutil', ['server', '-ping'])
-    if (fs.existsSync(paths.atsCacheDir)) {
-      emptyDir(paths.atsCacheDir)
-    }
-    if (fs.existsSync(paths.officeFontCacheDir)) {
-      emptyDir(paths.officeFontCacheDir)
-      office = true
-    }
-    return { mac: true, office }
+export async function clearUserFontCache(): Promise<{ mac: boolean; cleared: boolean }> {
+  if (!isMac()) {
+    return { mac: false, cleared: false }
   }
-  return { mac: false, office: false }
+  const paths = getPaths()
+  await runQuiet('atsutil', ['databases', '-removeUser'])
+  await runQuiet('atsutil', ['server', '-shutdown'])
+  await runQuiet('atsutil', ['server', '-ping'])
+  if (fs.existsSync(paths.atsCacheDir)) {
+    emptyDir(paths.atsCacheDir)
+  }
+  return { mac: true, cleared: true }
+}
+
+export async function clearOfficeFontCache(): Promise<{ mac: boolean; cleared: boolean }> {
+  if (!isMac()) {
+    return { mac: false, cleared: false }
+  }
+  const paths = getPaths()
+  if (fs.existsSync(paths.officeFontCacheDir)) {
+    emptyDir(paths.officeFontCacheDir)
+    return { mac: true, cleared: true }
+  }
+  return { mac: true, cleared: false }
+}
+
+export async function clearFontCaches(): Promise<{ mac: boolean; office: boolean }> {
+  const font = await clearUserFontCache()
+  const office = await clearOfficeFontCache()
+  return { mac: font.mac, office: office.cleared }
 }
 
 export async function registerFont(filePath: string): Promise<void> {

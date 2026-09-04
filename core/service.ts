@@ -3,7 +3,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { findById, findBySourcePath, loadCatalog, removeEntryById, resolveStatusWhenSourceFound, runCatalogTask, saveCatalog, upsertEntry } from './catalog.ts'
 import { getOrCreateApiToken } from './auth.ts'
-import { clearFontCaches, registerFont, unregisterFont } from './caches.ts'
+import {
+  clearFontCaches,
+  clearOfficeFontCache as removeOfficeFontCache,
+  clearUserFontCache as removeUserFontCache,
+  registerFont,
+  unregisterFont,
+} from './caches.ts'
 import { MAX_UPLOAD_BYTES } from './constants.ts'
 import { emitEvent } from './events.ts'
 import { isFontFile, mimeForFont, parseFontFile, readFileStat } from './parse.ts'
@@ -306,6 +312,30 @@ export class FontButlerService {
       emitCatalog(this.paths)
       return { removed: ids.length }
     })
+  }
+
+  async clearUserFontCache(): Promise<{ mac: boolean; cleared: boolean }> {
+    const result = await removeUserFontCache()
+    emitNotice({
+      kind: 'info',
+      message: result.mac
+        ? 'Removed the user font cache.'
+        : 'Font cache clearing is available on macOS.',
+    })
+    return result
+  }
+
+  async clearOfficeFontCache(): Promise<{ mac: boolean; cleared: boolean }> {
+    const result = await removeOfficeFontCache()
+    emitNotice({
+      kind: 'info',
+      message: result.mac
+        ? result.cleared
+          ? 'Removed the Microsoft Office font cache.'
+          : 'No Microsoft Office font cache was found.'
+        : 'Microsoft Office cache clearing is available on macOS.',
+    })
+    return result
   }
 
   async forgetMissingSources(): Promise<{ removed: number }> {

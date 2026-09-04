@@ -26,6 +26,10 @@ To replace Font Book as the double-click handler: select a `.otf` or `.ttf` in F
 
 Font Butler installs copies into `~/Library/Fonts/Font Butler/`. Catalog data lives in `~/Library/Application Support/Font Butler/`.
 
+### Font cache menu
+
+**Font cache** in the menu bar can remove the user ATS cache or Microsoft Office’s `FontCache` folder on their own. Reinstall still clears both automatically.
+
 ### Optional full cache reset
 
 Font Butler clears the **user** ATS cache and Office’s `FontCache` folder. A machine-wide wipe still needs:

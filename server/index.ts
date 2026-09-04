@@ -221,6 +221,30 @@ app.post('/api/system/deactivate', async (c) => {
   }
 })
 
+app.post('/api/caches/font', async (c) => {
+  try {
+    const result = await service.clearUserFontCache()
+    return c.json(result)
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : 'Could not remove font cache' },
+      400,
+    )
+  }
+})
+
+app.post('/api/caches/office', async (c) => {
+  try {
+    const result = await service.clearOfficeFontCache()
+    return c.json(result)
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : 'Could not remove Microsoft Office cache' },
+      400,
+    )
+  }
+})
+
 app.post('/api/reveal', async (c) => {
   const body = await c.req.json<{ id?: string; path?: string; which?: 'source' | 'installed' }>()
   try {

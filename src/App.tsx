@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type MouseEvent } from 'react'
 import { toast } from 'sonner'
 import { ChevronDown, Download, FolderOpen, Power, PowerOff, RefreshCw, Search, Trash2 } from 'lucide-react'
+import { AppMenuBar } from '@/components/AppMenuBar'
 import { AaPreview } from '@/components/AaPreview'
 import { StatusBadge, VfBadge } from '@/components/Badges'
 import { CatalogCardActions, SystemCardActions } from '@/components/FontCardActions'
@@ -464,6 +465,17 @@ export default function App() {
     }
   }
 
+  async function clearCache(action: () => Promise<unknown>) {
+    setBusy(true)
+    try {
+      await action()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not clear cache')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function revealSystem(path: string) {
     try {
       const result = await api.reveal({ path })
@@ -493,6 +505,11 @@ export default function App() {
         <FontFaceStyles
           entries={entries}
           systemFaces={tab === 'system' ? shownSystemGroups.flatMap((group) => group.faces) : []}
+        />
+        <AppMenuBar
+          busy={busy}
+          onClearFontCache={() => void clearCache(() => api.clearFontCache())}
+          onClearOfficeCache={() => void clearCache(() => api.clearOfficeCache())}
         />
         <header className="flex flex-col gap-3 border-b bg-card/80 px-4 py-3 backdrop-blur md:flex-row md:items-center">
           <div className="flex items-baseline gap-3">

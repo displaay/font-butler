@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -31,7 +31,7 @@ function createWindow() {
     minHeight: 620,
     title: 'Font Butler',
     backgroundColor: '#d9d4cc',
-    autoHideMenuBar: true,
+    autoHideMenuBar: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -63,6 +63,64 @@ async function openFont(filePath) {
   mainWindow?.focus()
 }
 
+async function clearCacheFromMenu(kind) {
+  const pathByKind = {
+    font: '/api/caches/font',
+    office: '/api/caches/office',
+  }
+  const titleByKind = {
+    font: 'Remove font cache',
+    office: 'Remove MS Office cache',
+  }
+  try {
+    const token = await ensureApiToken()
+    const response = await fetch(`${API}${pathByKind[kind]}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({}),
+    })
+    const data = await response.json()
+    if (!response.ok) {
+      throw new Error(data.error || 'Could not clear cache')
+    }
+  } catch (error) {
+    dialog.showErrorBox(
+      titleByKind[kind],
+      error instanceof Error ? error.message : 'Could not clear cache',
+    )
+  }
+}
+
+function buildAppMenu() {
+  return Menu.buildFromTemplate([
+    ...(process.platform === 'darwin' ? [{ role: 'appMenu' }] : []),
+    { role: 'fileMenu' },
+    { role: 'editMenu' },
+    { role: 'viewMenu' },
+    {
+      label: 'Font cache',
+      submenu: [
+        {
+          label: 'Remove font cache',
+          click: () => {
+            void clearCacheFromMenu('font')
+          },
+        },
+        {
+          label: 'Remove MS Office cache',
+          click: () => {
+            void clearCacheFromMenu('office')
+          },
+        },
+      ],
+    },
+    { role: 'windowMenu' },
+  ])
+}
+
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
@@ -88,6 +146,7 @@ if (!gotLock) {
   })
 
   app.whenReady().then(async () => {
+    Menu.setApplicationMenu(buildAppMenu())
     createWindow()
     const fromArgv = process.argv.filter((arg) =>
       /\.(ttf|otf|ttc|otc|woff2?)$/i.test(arg),
