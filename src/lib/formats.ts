@@ -1,5 +1,6 @@
 export const INSTALLABLE_FORMATS = ['otf', 'ttf', 'ttc', 'otc'] as const
 export const WEB_FORMATS = ['woff', 'woff2'] as const
+export const WOFF_INSTALL_ERROR = 'WOFF files cannot be installed.'
 
 export type InstallableFormat = (typeof INSTALLABLE_FORMATS)[number]
 

@@ -13,6 +13,7 @@ import {
 } from './caches.ts'
 import { MAX_UPLOAD_BYTES } from './constants.ts'
 import { emitEvent } from './events.ts'
+import { assertNotWebFont, isWebFontFile, WOFF_INSTALL_ERROR } from './formats.ts'
 import { isFontFile, mimeForFont, parseFontFile, readFileStat } from './parse.ts'
 import { isUnderAnyRoot } from './containment.ts'
 import { ensureDirs, getPaths, type AppPaths } from './paths.ts'
@@ -193,10 +194,17 @@ export class FontButlerService {
     return faces
   }
 
-  async importPaths(filePaths: string[]): Promise<{ entries: CatalogEntry[]; errors: string[] }> {
+  async importPaths(filePaths: string[]): Promise<{
+    entries: CatalogEntry[]
+    errors: string[]
+    ignored: number
+  }> {
     return runCatalogTask(async () => {
       const expanded = expandImportPaths(filePaths)
       const errors = [...expanded.errors]
+      if (expanded.files.length === 0 && expanded.skippedWeb > 0 && errors.length === 0) {
+        errors.push(WOFF_INSTALL_ERROR)
+      }
       const imported: CatalogEntry[] = []
       for (const filePath of expanded.files) {
         try {
@@ -207,18 +215,23 @@ export class FontButlerService {
       }
       await syncWatchers(this.paths)
       emitCatalog(this.paths)
-      return { entries: imported, errors }
+      return { entries: imported, errors, ignored: expanded.skippedWeb }
     })
   }
 
   async importUploads(
     files: { filename: string; data: Buffer }[],
-  ): Promise<{ entries: CatalogEntry[]; errors: string[] }> {
+  ): Promise<{ entries: CatalogEntry[]; errors: string[]; ignored: number }> {
     return runCatalogTask(async () => {
       fs.mkdirSync(this.paths.uploadsDir, { recursive: true })
       const saved: string[] = []
       const errors: string[] = []
+      let ignored = 0
       for (const file of files) {
+        if (isWebFontFile(file.filename)) {
+          ignored += 1
+          continue
+        }
         if (file.data.length > MAX_UPLOAD_BYTES) {
           errors.push(`${file.filename}: file exceeds ${MAX_UPLOAD_BYTES / (1024 * 1024)}MB limit`)
           continue
@@ -236,9 +249,12 @@ export class FontButlerService {
           errors.push(`${filePath}: ${error instanceof Error ? error.message : String(error)}`)
         }
       }
+      if (imported.length === 0 && ignored > 0 && errors.length === 0) {
+        errors.push(WOFF_INSTALL_ERROR)
+      }
       await syncWatchers(this.paths)
       emitCatalog(this.paths)
-      return { entries: imported, errors }
+      return { entries: imported, errors, ignored }
     })
   }
 
@@ -742,6 +758,9 @@ export class FontButlerService {
       }
     }
     if (imported.length === 0) {
+      if (expanded.skippedWeb > 0 && errors.length === 0) {
+        throw new Error(WOFF_INSTALL_ERROR)
+      }
       throw new Error(errors[0] ?? 'No font files in that folder.')
     }
     const pending = imported.filter(
@@ -770,9 +789,13 @@ export class FontButlerService {
       emitNotice({
         kind: 'installed',
         message:
-          imported.length === 1
-            ? `Installed ${displayFamily(first)}`
-            : `Installed ${imported.length} fonts from folder`,
+          expanded.skippedWeb > 0
+            ? `${imported.length} ${imported.length === 1 ? 'font' : 'fonts'} installed and ${expanded.skippedWeb} ${
+                expanded.skippedWeb === 1 ? 'font' : 'fonts'
+              } ignored`
+            : imported.length === 1
+              ? `Installed ${displayFamily(first)}`
+              : `Installed ${imported.length} fonts from folder`,
         entryId: first.id,
       })
     }
@@ -789,6 +812,7 @@ export class FontButlerService {
     if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
       throw new Error('Not a file.')
     }
+    assertNotWebFont(filePath)
     if (!isFontFile(filePath)) {
       throw new Error('Not a font file.')
     }

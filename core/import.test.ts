@@ -54,3 +54,29 @@ test('importPaths installs catalog entries from a nested folder', async (t) => {
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
 })
+
+test('importPaths rejects woff-only folders and ignores woff next to desktop fonts', async () => {
+  const paths = tempPaths()
+  const webOnly = path.join(paths.dataRoot, 'web')
+  const mixed = path.join(paths.dataRoot, 'mixed')
+  fs.mkdirSync(webOnly, { recursive: true })
+  fs.mkdirSync(mixed, { recursive: true })
+  fs.writeFileSync(path.join(webOnly, 'Family.woff2'), 'font')
+  fs.writeFileSync(path.join(mixed, 'Family.woff'), 'font')
+  fs.writeFileSync(path.join(mixed, 'Regular.otf'), 'font')
+  const service = new FontButlerService(paths)
+  try {
+    await service.init()
+    const rejected = await service.importPaths([webOnly])
+    assert.deepEqual(rejected.entries, [])
+    assert.equal(rejected.ignored, 1)
+    assert.equal(rejected.errors.length, 1)
+    assert.match(rejected.errors[0], /WOFF files cannot be installed/)
+
+    const mixedResult = await service.importPaths([mixed])
+    assert.equal(mixedResult.ignored, 1)
+    assert.equal(mixedResult.errors.some((message) => /WOFF files cannot be installed/.test(message)), false)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})

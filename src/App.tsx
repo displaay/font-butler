@@ -38,9 +38,10 @@ import { NotifyProvider, useSetActionStatus } from '@/components/NotifyProvider'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { api, isNotice, isSettingsEvent, subscribeEvents } from '@/lib/api'
-import { collectDropPayload, hasDroppedFonts, isDroppedFontName } from '@/lib/drop'
+import { collectDropPayload, isDroppedFontName, isWebOnlyDrop, partitionDropPayload } from '@/lib/drop'
+import { WOFF_INSTALL_ERROR } from '@/lib/formats'
 import { familyNameOf, deletableSourceIds, entryIds, familyStatusSummary, forgettableIds, groupCatalog, groupSystem, hasSourceMissing, isInactiveEntry, isLibraryEntry, matchesQuery, sortFamilyGroups } from '@/lib/group'
-import { actionCopy, actionCopyFor } from '@/lib/notify'
+import { actionCopy, actionCopyFor, emptyImportError, importDoneCopy, remainingActionCopy } from '@/lib/notify'
 import { catalogInstanceRows, systemInstanceRows } from '@/lib/instances'
 import {
   catalogBatchPlan,
@@ -687,8 +688,15 @@ function AppShell() {
     const groups = selectedCatalogGroups().filter((group) => group.status === 'uninstalled')
     if (groups.length === 0) return
     await run(async () => {
-      for (const group of groups) {
-        await installGroup(group)
+      for (let index = 0; index < groups.length; index += 1) {
+        setActionStatus(
+          remainingActionCopy(
+            'install',
+            groups.length - index,
+            groups.length === 1 ? groups[0].familyName : undefined,
+          ),
+        )
+        await installGroup(groups[index])
       }
     }, actionCopyFor('install', groups))
   }
@@ -710,9 +718,16 @@ function AppShell() {
     if (groups.length === 0) return
     const verb = groups.every((group) => group.status === 'deactivated') ? 'activate' : 'install'
     await run(async () => {
-      for (const group of groups) {
-        if (group.status === 'deactivated') await activateGroup(group)
-        else await installGroup(group)
+      for (let index = 0; index < groups.length; index += 1) {
+        setActionStatus(
+          remainingActionCopy(
+            verb,
+            groups.length - index,
+            groups.length === 1 ? groups[0].familyName : undefined,
+          ),
+        )
+        if (groups[index].status === 'deactivated') await activateGroup(groups[index])
+        else await installGroup(groups[index])
       }
     }, actionCopyFor(verb, groups))
   }
@@ -851,8 +866,8 @@ function AppShell() {
       const payload = await collectDropPayload(dataTransfer)
       setDragging(false)
       if (payload.folders.length > 0) {
-        if (!hasDroppedFonts(payload)) {
-          await watchDroppedFolders(payload.folders, { paths: [], files: [] })
+        if (isWebOnlyDrop(partitionDropPayload(payload.paths, payload.files))) {
+          toast.error(WOFF_INSTALL_ERROR)
           return
         }
         setFolderDrop(payload)
@@ -905,30 +920,46 @@ function AppShell() {
   }
 
   async function importDropped(paths: string[], files: File[]) {
+    const partitioned = partitionDropPayload(paths, files)
+    if (isWebOnlyDrop(partitioned)) {
+      toast.error(WOFF_INSTALL_ERROR)
+      setDragging(false)
+      return
+    }
     busyRef.current = true
     setBusy(true)
     setActionStatus('Adding fonts…')
     try {
-      const result = paths.length ? await api.importPaths(paths) : await api.importFiles(files)
+      const result =
+        partitioned.paths.length
+          ? await api.importPaths(partitioned.paths)
+          : await api.importFiles(partitioned.files)
+      const ignored = partitioned.skippedWeb + (result.ignored ?? 0)
+      const visibleErrors = result.errors.filter((message) => message !== WOFF_INSTALL_ERROR)
       if (result.entries.length === 0) {
-        toast.error(result.errors.length ? result.errors.join('\n') : 'Could not add fonts')
+        toast.error(emptyImportError(visibleErrors, ignored))
         return
       }
-      if (result.errors.length) toast.error(result.errors.join('\n'))
+      if (visibleErrors.length) toast.error(visibleErrors.join('\n'))
       const shouldInstall = settings?.installAfterUpload !== false
       const pendingIds = result.entries
         .filter((entry) => entry.status !== 'installed' && entry.status !== 'source-missing')
         .map((entry) => entry.id)
       let installed = false
       if (shouldInstall && pendingIds.length > 0) {
-        setActionStatus(
-          pendingIds.length === 1
-            ? `Installing ${familyNameOf(result.entries[0])}…`
-            : `Installing ${pendingIds.length} fonts…`,
-        )
         try {
-          if (pendingIds.length === 1) await api.install(pendingIds[0])
-          else await api.installMany(pendingIds)
+          for (let index = 0; index < pendingIds.length; index += 1) {
+            const remaining = pendingIds.length - index
+            const current = result.entries.find((entry) => entry.id === pendingIds[index])
+            setActionStatus(
+              remainingActionCopy(
+                'install',
+                remaining,
+                pendingIds.length === 1 && current ? familyNameOf(current) : undefined,
+              ),
+            )
+            await api.install(pendingIds[index])
+          }
           installed = true
         } catch (error) {
           toast.error(error instanceof Error ? error.message : 'Could not install fonts')
@@ -953,9 +984,12 @@ function AppShell() {
       setSelectedEntryId(result.entries[0]?.id ?? null)
       setScrollToFamily(names[0] ?? null)
       toast.success(
-        result.entries.length === 1
-          ? `${installed ? 'Installed' : 'Added'} ${familyNameOf(result.entries[0])}`
-          : `${installed ? 'Installed' : 'Added'} ${result.entries.length} fonts`,
+        importDoneCopy({
+          installed,
+          count: result.entries.length,
+          name: familyNameOf(result.entries[0]),
+          ignored,
+        }),
       )
       setEntries((await api.catalog()).entries)
     } catch (err) {
@@ -1411,12 +1445,7 @@ function AppShell() {
           onAddFonts={() => {
             const pending = folderDrop
             setFolderDrop(null)
-            if (!pending) return
-            if (!hasDroppedFonts(pending)) {
-              void watchDroppedFolders(pending.folders, { paths: [], files: [] })
-              return
-            }
-            void importDropped(pending.paths, pending.files)
+            if (pending) void importDropped(pending.paths, pending.files)
           }}
           onWatch={() => {
             const pending = folderDrop

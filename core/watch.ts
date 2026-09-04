@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { findBySourcePath, loadCatalog, resolveStatusWhenSourceFound, saveCatalog } from './catalog.ts'
 import { emitEvent } from './events.ts'
+import { isWebFontFile } from './formats.ts'
 import { isFontFile, readFileStat } from './parse.ts'
 import type { AppPaths } from './paths.ts'
 import type { CatalogEntry } from './types.ts'
@@ -77,43 +78,68 @@ export function shouldSkipFontWalkName(name: string): boolean {
   return name.startsWith('.') || name === '__MACOSX'
 }
 
-export function listFontFilesInTree(
+type TreeFonts = {
+  files: string[]
+  skippedWeb: number
+}
+
+function collectTreeFonts(
   root: string,
   depth = 0,
   maxDepth = FONT_TREE_MAX_DEPTH,
-): string[] {
+): TreeFonts {
   if (depth > maxDepth) {
-    return []
+    return { files: [], skippedWeb: 0 }
   }
   let entries: fs.Dirent[]
   try {
     entries = fs.readdirSync(root, { withFileTypes: true })
   } catch {
-    return []
+    return { files: [], skippedWeb: 0 }
   }
   const files: string[] = []
+  let skippedWeb = 0
   for (const entry of entries) {
     if (shouldSkipFontWalkName(entry.name)) {
       continue
     }
     const full = path.join(root, entry.name)
     if (entry.isDirectory()) {
-      files.push(...listFontFilesInTree(full, depth + 1, maxDepth))
-    } else if (entry.isFile() && isFontFile(full)) {
-      files.push(path.resolve(full))
+      const nested = collectTreeFonts(full, depth + 1, maxDepth)
+      files.push(...nested.files)
+      skippedWeb += nested.skippedWeb
+    } else if (entry.isFile()) {
+      if (isWebFontFile(full)) {
+        skippedWeb += 1
+      } else if (isFontFile(full)) {
+        files.push(path.resolve(full))
+      }
     }
   }
-  return files
+  return { files, skippedWeb }
+}
+
+export function listFontFilesInTree(
+  root: string,
+  depth = 0,
+  maxDepth = FONT_TREE_MAX_DEPTH,
+): string[] {
+  return collectTreeFonts(root, depth, maxDepth).files
 }
 
 export function listInboxFontFiles(root: string, depth = 0): string[] {
   return listFontFilesInTree(root, depth)
 }
 
-export function expandImportPaths(inputPaths: string[]): { files: string[]; errors: string[] } {
+export function expandImportPaths(inputPaths: string[]): {
+  files: string[]
+  errors: string[]
+  skippedWeb: number
+} {
   const files: string[] = []
   const errors: string[] = []
   const seen = new Set<string>()
+  let skippedWeb = 0
 
   const addFile = (filePath: string) => {
     const resolved = path.resolve(filePath)
@@ -138,24 +164,31 @@ export function expandImportPaths(inputPaths: string[]): { files: string[]; erro
       continue
     }
     if (stat.isDirectory()) {
-      const found = listFontFilesInTree(resolved)
-      if (found.length === 0) {
-        errors.push(`${raw}: No font files in that folder.`)
+      const found = collectTreeFonts(resolved)
+      skippedWeb += found.skippedWeb
+      if (found.files.length === 0) {
+        if (found.skippedWeb === 0) {
+          errors.push(`${raw}: No font files in that folder.`)
+        }
         continue
       }
-      for (const filePath of found) {
+      for (const filePath of found.files) {
         addFile(filePath)
       }
       continue
     }
     if (stat.isFile()) {
+      if (isWebFontFile(resolved)) {
+        skippedWeb += 1
+        continue
+      }
       addFile(resolved)
       continue
     }
     errors.push(`${raw}: Not a file.`)
   }
 
-  return { files, errors }
+  return { files, errors, skippedWeb }
 }
 
 function existingWatchFolders(folders: string[]): string[] {

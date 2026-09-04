@@ -54,12 +54,12 @@ export const api = {
   catalog: () => json<{ entries: CatalogEntry[] }>(fetch('/api/catalog')),
   system: () => json<{ faces: SystemFace[] }>(fetch('/api/system')),
   importPaths: (paths: string[]) =>
-    json<{ entries: CatalogEntry[]; errors: string[] }>(post('/api/import', { paths })),
+    json<{ entries: CatalogEntry[]; errors: string[]; ignored: number }>(post('/api/import', { paths })),
   importFiles: async (files: File[]) => {
     await ensureToken()
     const body = new FormData()
     for (const file of files) body.append('files', file)
-    return json<{ entries: CatalogEntry[]; errors: string[] }>(
+    return json<{ entries: CatalogEntry[]; errors: string[]; ignored: number }>(
       fetch('/api/import-files', { method: 'POST', headers: authHeaders(), body }),
     )
   },

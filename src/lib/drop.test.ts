@@ -7,6 +7,7 @@ import {
   inferDroppedFolderPath,
   isDroppedFolderPath,
   isDroppedFontName,
+  isWebOnlyDrop,
   partitionDropPayload,
   shouldSkipDroppedName,
 } from './drop.ts'
@@ -167,4 +168,28 @@ test('partitionDropPayload keeps folder paths when no files were expanded', () =
   const result = partitionDropPayload(['/fonts/Desktop package'], [])
   assert.deepEqual(result.paths, ['/fonts/Desktop package'])
   assert.deepEqual(result.formats, [])
+})
+
+test('partitionDropPayload treats woff-only drops as web-only', () => {
+  const result = partitionDropPayload(
+    ['/fonts/Web/Family.woff2', '/fonts/Web/Family.woff'],
+    [],
+  )
+  assert.deepEqual(result.paths, [])
+  assert.deepEqual(result.files, [])
+  assert.equal(result.skippedWeb, 2)
+  assert.equal(isWebOnlyDrop(result), true)
+})
+
+test('partitionDropPayload does not double-count files that already have native paths', () => {
+  const otf = fileWithPath('Family.otf', '/fonts/Family.otf')
+  const woff = fileWithPath('Family.woff2', '/fonts/Family.woff2')
+  const result = partitionDropPayload(
+    ['/fonts/Family.otf', '/fonts/Family.woff2'],
+    [otf, woff],
+  )
+  assert.deepEqual(result.paths, ['/fonts/Family.otf'])
+  assert.equal(result.files.length, 0)
+  assert.equal(result.skippedWeb, 1)
+  assert.equal(isWebOnlyDrop(result), false)
 })
