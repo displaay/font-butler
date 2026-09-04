@@ -1,8 +1,20 @@
-import { useState } from 'react'
+import { useState, type ComponentType } from 'react'
 import { Archive, ChevronDown, Folder, Laptop, RefreshCw, Search, Settings, Type } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import {
+  ContextMenu,
+  ContextMenuCheckboxItem,
+  ContextMenuContent,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu'
+import {
+  readShowTotals,
+  setShowTotal,
+  watchShowTotalId,
+  writeShowTotals,
+} from '@/lib/showTotals'
 import { cn } from '@/lib/utils'
 import { watchFolderLabel } from '@/lib/watchFolders'
 
@@ -20,6 +32,62 @@ function navButtonClass(active: boolean, extra?: string) {
     'h-8 justify-start font-normal text-muted-foreground',
     active && 'bg-black/[0.05] font-medium text-foreground dark:bg-white/[0.08]',
     extra,
+  )
+}
+
+function SidebarItem({
+  active,
+  icon: Icon,
+  label,
+  count,
+  showTotal,
+  onShowTotalChange,
+  onClick,
+  className,
+  title,
+  badgeTone = 'muted',
+}: {
+  active: boolean
+  icon: ComponentType<{ className?: string }>
+  label: string
+  count: number
+  showTotal: boolean
+  onShowTotalChange: (value: boolean) => void
+  onClick: () => void
+  className?: string
+  title?: string
+  badgeTone?: 'muted' | 'warn'
+}) {
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <Button
+          size="default"
+          variant="ghost"
+          title={title}
+          aria-current={active ? 'page' : undefined}
+          className={navButtonClass(active, className)}
+          onClick={onClick}
+        >
+          <Icon className="size-3.5 opacity-70" />
+          <span className="min-w-0 truncate">{label}</span>
+          {showTotal ? (
+            <Badge tone={badgeTone} className="ml-auto">
+              {count}
+            </Badge>
+          ) : null}
+        </Button>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuCheckboxItem
+          checked={showTotal}
+          aria-label="Show total"
+          onCheckedChange={onShowTotalChange}
+        >
+          Show total
+        </ContextMenuCheckboxItem>
+      </ContextMenuContent>
+    </ContextMenu>
   )
 }
 
@@ -43,12 +111,19 @@ export function Sidebar({
   watchFolderFilter: string | null
   watchFolderCounts: Record<string, number>
   onSelectWatchFolder: (folder: string | null) => void
-  counts: { uninstalled: number; updates: number }
+  counts: { library: number; system: number; uninstalled: number; updates: number }
   onOpenSettings: () => void
 }) {
   const insetTrafficLights = window.fontButlerDesktop?.platform === 'darwin'
   const [fontsOpen, setFontsOpen] = useState(true)
+  const [showTotals, setShowTotals] = useState(readShowTotals)
   const fontsActive = tab === 'library' && !watchFolderFilter
+
+  function changeShowTotal(id: string, value: boolean) {
+    const next = setShowTotal(showTotals, id, value)
+    setShowTotals(next)
+    writeShowTotals(next)
+  }
 
   return (
     <aside
@@ -74,20 +149,19 @@ export function Sidebar({
       <nav className="flex min-h-0 flex-1 flex-row flex-wrap gap-0.5 overflow-y-auto px-2 pb-2 md:flex-col md:flex-nowrap">
         {TABS.filter((item) => item.id !== 'updates' || counts.updates > 0).map((item) => {
           if (item.id === 'library') {
-            const Icon = item.icon
             return (
               <div key={item.id} className="flex w-full flex-col gap-0.5">
                 <div className="flex items-center gap-0.5">
-                  <Button
-                    size="default"
-                    variant="ghost"
-                    aria-current={fontsActive ? 'page' : undefined}
-                    className={navButtonClass(fontsActive, 'min-w-0 flex-1 md:flex-none md:flex-1')}
+                  <SidebarItem
+                    active={fontsActive}
+                    icon={item.icon}
+                    label={item.label}
+                    count={counts.library}
+                    showTotal={Boolean(showTotals.library)}
+                    onShowTotalChange={(value) => changeShowTotal('library', value)}
                     onClick={() => onSelectWatchFolder(null)}
-                  >
-                    <Icon className="size-3.5 opacity-70" />
-                    <span className="min-w-0 truncate">{item.label}</span>
-                  </Button>
+                    className="min-w-0 flex-1 md:flex-none md:flex-1"
+                  />
                   {watchFolders.length > 0 && (
                     <Button
                       type="button"
@@ -106,59 +180,44 @@ export function Sidebar({
                 </div>
                 {fontsOpen &&
                   watchFolders.map((folder) => {
-                    const active = tab === 'library' && watchFolderFilter === folder
-                    const count = watchFolderCounts[folder] ?? 0
+                    const id = watchShowTotalId(folder)
                     return (
-                      <Button
+                      <SidebarItem
                         key={folder}
-                        size="default"
-                        variant="ghost"
-                        title={folder}
-                        aria-current={active ? 'page' : undefined}
-                        className={navButtonClass(active, 'w-full pl-7')}
+                        active={tab === 'library' && watchFolderFilter === folder}
+                        icon={Folder}
+                        label={watchFolderLabel(folder, watchFolders)}
+                        count={watchFolderCounts[folder] ?? 0}
+                        showTotal={Boolean(showTotals[id])}
+                        onShowTotalChange={(value) => changeShowTotal(id, value)}
                         onClick={() => onSelectWatchFolder(folder)}
-                      >
-                        <Folder className="size-3.5 opacity-70" />
-                        <span className="min-w-0 truncate">{watchFolderLabel(folder, watchFolders)}</span>
-                        {count ? (
-                          <Badge tone="muted" className="ml-auto">
-                            {count}
-                          </Badge>
-                        ) : null}
-                      </Button>
+                        className="w-full pl-7"
+                        title={folder}
+                      />
                     )
                   })}
               </div>
             )
           }
-          const Icon = item.icon
-          const count =
-            item.id === 'updates'
-              ? counts.updates
-              : item.id === 'uninstalled'
-                ? counts.uninstalled
-                : null
-          const active = tab === item.id
           return (
-            <Button
+            <SidebarItem
               key={item.id}
-              size="default"
-              variant="ghost"
-              aria-current={active ? 'page' : undefined}
-              className={navButtonClass(active, 'flex-1 md:flex-none')}
+              active={tab === item.id}
+              icon={item.icon}
+              label={item.label}
+              count={
+                item.id === 'system'
+                  ? counts.system
+                  : item.id === 'updates'
+                    ? counts.updates
+                    : counts.uninstalled
+              }
+              showTotal={Boolean(showTotals[item.id])}
+              onShowTotalChange={(value) => changeShowTotal(item.id, value)}
               onClick={() => onTabChange(item.id)}
-            >
-              <Icon className="size-3.5 opacity-70" />
-              <span className="min-w-0 truncate">{item.label}</span>
-              {count ? (
-                <Badge
-                  tone={item.id === 'updates' ? 'warn' : 'muted'}
-                  className="ml-auto"
-                >
-                  {count}
-                </Badge>
-              ) : null}
-            </Button>
+              className="flex-1 md:flex-none"
+              badgeTone={item.id === 'updates' ? 'warn' : 'muted'}
+            />
           )
         })}
       </nav>

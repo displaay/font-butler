@@ -125,15 +125,15 @@ export function SettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[min(92vw,520px)]">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[min(90vh,900px)] w-[min(92vw,520px)] flex-col overflow-hidden">
+        <DialogHeader className="shrink-0 pr-6">
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription>
             Watch folders for new fonts, choose whether to install them on drop, and set
             appearance and how families are shown by default.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-5">
+        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain">
           <section className="space-y-2">
             <h2 className="text-sm font-medium text-foreground">Watch folders</h2>
             <p className="text-sm text-muted-foreground">

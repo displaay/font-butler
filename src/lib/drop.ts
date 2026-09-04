@@ -124,14 +124,18 @@ async function walkEntry(
   paths: Set<string>,
   files: File[],
   depth: number,
+  folders?: Set<string>,
+  rootDir?: FileSystemDirectoryEntry,
 ): Promise<void> {
   if (depth > MAX_DEPTH || shouldSkipDroppedName(entry.name)) {
     return
   }
   if (entry.isDirectory) {
-    const children = await readDirectory(entry as FileSystemDirectoryEntry)
+    const dir = entry as FileSystemDirectoryEntry
+    const root = depth === 0 ? dir : rootDir
+    const children = await readDirectory(dir)
     for (const child of children) {
-      await walkEntry(child, paths, files, depth + 1)
+      await walkEntry(child, paths, files, depth + 1, folders, root)
     }
     return
   }
@@ -142,9 +146,33 @@ async function walkEntry(
   const filePath = nativePath(file)
   if (filePath) {
     paths.add(filePath)
+    if (folders && rootDir) {
+      const folderPath = inferDroppedFolderPath(filePath, entry.fullPath, rootDir.fullPath)
+      if (folderPath) folders.add(folderPath)
+    }
     return
   }
   files.push(file)
+}
+
+export function inferDroppedFolderPath(
+  nativeFilePath: string,
+  fileFullPath: string,
+  folderFullPath: string,
+): string | undefined {
+  const sep = nativeFilePath.includes('\\') ? '\\' : '/'
+  const fileFull = fileFullPath.replace(/\\/g, '/')
+  const folderFull = folderFullPath.replace(/\\/g, '/').replace(/\/+$/, '') || '/'
+  if (fileFull !== folderFull && !fileFull.startsWith(`${folderFull}/`)) return undefined
+  const relativePosix = fileFull.slice(folderFull.length)
+  if (!relativePosix) return nativeFilePath
+  const relativeNative = relativePosix.replace(/\//g, sep)
+  if (!nativeFilePath.endsWith(relativeNative)) return undefined
+  const inferred = nativeFilePath.slice(0, nativeFilePath.length - relativeNative.length)
+  if (!inferred) return undefined
+  const folderName = folderFull.split('/').filter(Boolean).pop()
+  if (folderName && !inferred.endsWith(folderName)) return undefined
+  return inferred
 }
 
 export function collectNativeFolderPaths(
@@ -159,18 +187,38 @@ export function collectNativeFolderPaths(
   return [...folders]
 }
 
+export function isDroppedFolderPath(filePath: string, fileName = filePath): boolean {
+  return !isDroppedFontName(fileName) && !isDroppedFontName(filePath)
+}
+
+export function hasDroppedFonts(payload: { paths: string[]; files: File[] }): boolean {
+  return (
+    payload.files.some((file) => isDroppedFontName(file.name)) ||
+    payload.paths.some((filePath) => isDroppedFontName(filePath))
+  )
+}
+
+function filePathNamed(files: File[], name: string): string | undefined {
+  const match = files.find((file) => file.name === name)
+  return match ? nativePath(match) : undefined
+}
+
 function droppedFolderItems(dataTransfer: DataTransfer): Array<{
   isDirectory: boolean
   path?: string
 }> {
+  const listed = Array.from(dataTransfer.files ?? [])
   return Array.from(dataTransfer.items ?? [])
     .filter((item) => item.kind === 'file')
     .map((item) => {
       const entry = item.webkitGetAsEntry?.() ?? null
       const file = typeof item.getAsFile === 'function' ? item.getAsFile() : null
+      const directory = entry?.isDirectory ? (entry as FileSystemDirectoryEntry) : null
       return {
-        isDirectory: Boolean(entry?.isDirectory),
-        path: file ? nativePath(file) : undefined,
+        isDirectory: Boolean(directory),
+        path:
+          (file ? nativePath(file) : undefined) ??
+          (directory ? filePathNamed(listed, directory.name) : undefined),
       }
     })
 }
@@ -182,12 +230,14 @@ export async function collectDropPayload(dataTransfer: DataTransfer): Promise<{
 }> {
   const paths = new Set<string>()
   const files: File[] = []
-  const folders = collectNativeFolderPaths(droppedFolderItems(dataTransfer))
+  const folders = new Set(collectNativeFolderPaths(droppedFolderItems(dataTransfer)))
 
   for (const file of Array.from(dataTransfer.files ?? [])) {
     const filePath = nativePath(file)
-    if (filePath) {
-      paths.add(filePath)
+    if (!filePath) continue
+    paths.add(filePath)
+    if (isDroppedFolderPath(filePath, file.name)) {
+      folders.add(filePath)
     }
   }
 
@@ -197,7 +247,14 @@ export async function collectDropPayload(dataTransfer: DataTransfer): Promise<{
     .filter((entry): entry is FileSystemEntry => Boolean(entry))
 
   for (const entry of entries) {
-    await walkEntry(entry, paths, files, 0)
+    await walkEntry(
+      entry,
+      paths,
+      files,
+      0,
+      folders,
+      entry.isDirectory ? (entry as FileSystemDirectoryEntry) : undefined,
+    )
   }
 
   if (paths.size === 0 && files.length === 0) {
@@ -208,5 +265,5 @@ export async function collectDropPayload(dataTransfer: DataTransfer): Promise<{
     }
   }
 
-  return { paths: [...paths], files, folders }
+  return { paths: [...paths], files, folders: [...folders] }
 }

@@ -111,11 +111,11 @@ export function BatchActionBar({
   summary: string
   children: ReactNode
 }) {
-  if (count <= 1) return null
+  if (count < 1) return null
   return (
     <div
       data-keep-selection=""
-      className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-muted/40 px-3 py-2"
+      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-background/95 px-4 py-3 shadow-lg backdrop-blur"
     >
       <div className="min-w-0">
         <p className="text-sm font-medium">

@@ -38,7 +38,7 @@ import { NotifyProvider, useSetActionStatus } from '@/components/NotifyProvider'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { api, isNotice, isSettingsEvent, subscribeEvents } from '@/lib/api'
-import { collectDropPayload, isDroppedFontName } from '@/lib/drop'
+import { collectDropPayload, hasDroppedFonts, isDroppedFontName } from '@/lib/drop'
 import { familyNameOf, deletableSourceIds, entryIds, familyStatusSummary, forgettableIds, groupCatalog, groupSystem, hasSourceMissing, isInactiveEntry, isLibraryEntry, matchesQuery, sortFamilyGroups } from '@/lib/group'
 import { actionCopy, actionCopyFor } from '@/lib/notify'
 import { catalogInstanceRows, systemInstanceRows } from '@/lib/instances'
@@ -112,6 +112,7 @@ function AppShell() {
   const [selectedFamilyKeys, setSelectedFamilyKeys] = useState<string[]>([])
   const [selectedSystemKeys, setSelectedSystemKeys] = useState<string[]>([])
   const [selectionAnchor, setSelectionAnchor] = useState<string | null>(null)
+  const [inspectSelection, setInspectSelection] = useState(false)
   const [marqueeRect, setMarqueeRect] = useState<Rect | null>(null)
   const marqueeRef = useRef<{
     startX: number
@@ -316,6 +317,15 @@ function AppShell() {
     () => entries.filter((entry) => entry.status === 'source-missing').length,
     [entries],
   )
+  const tabCounts = useMemo(
+    () => ({
+      library: groupCatalog(entries.filter(isLibraryEntry)).length,
+      system: groupSystem(systemFaces).length,
+      uninstalled: groupCatalog(entries.filter(isInactiveEntry)).length,
+      updates: groupCatalog(entries.filter((entry) => entry.status === 'outdated')).length,
+    }),
+    [entries, systemFaces],
+  )
 
   const visibleGroups = useMemo(
     () =>
@@ -404,6 +414,7 @@ function AppShell() {
     setSelectedFamilyKeys([group.familyName])
     setSelectionAnchor(group.familyName)
     setSelectedEntryId(group.entries[0]?.id ?? null)
+    setInspectSelection(true)
   }
 
   function handleCatalogSelect(group: FamilyGroup, event: MouseEvent) {
@@ -413,17 +424,20 @@ function AppShell() {
       : selectedFamily
         ? [selectedFamily]
         : []
+    const range = event.shiftKey
+    const toggle = event.metaKey || event.ctrlKey
     const keys = nextSelection(
       visibleGroups.map((item) => item.familyName),
       current,
       group.familyName,
-      { toggle: event.metaKey || event.ctrlKey, range: event.shiftKey },
+      { toggle, range },
       selectionAnchor ?? selectedFamily,
     )
     setSelectedFamilyKeys(keys)
     setSelectedFamily(group.familyName)
     setSelectedEntryId(group.entries[0]?.id ?? null)
-    if (!event.shiftKey) setSelectionAnchor(group.familyName)
+    if (!range) setSelectionAnchor(group.familyName)
+    setInspectSelection(keys.length === 1 && !toggle && !range)
   }
 
   function handleSystemSelect(group: SystemFamilyGroup, event: MouseEvent) {
@@ -433,16 +447,19 @@ function AppShell() {
       : selectedSystem
         ? [selectedSystem]
         : []
+    const range = event.shiftKey
+    const toggle = event.metaKey || event.ctrlKey
     const keys = nextSelection(
       shownSystemGroups.map((item) => item.familyName),
       current,
       group.familyName,
-      { toggle: event.metaKey || event.ctrlKey, range: event.shiftKey },
+      { toggle, range },
       selectionAnchor ?? selectedSystem,
     )
     setSelectedSystemKeys(keys)
     setSelectedSystem(group.familyName)
-    if (!event.shiftKey) setSelectionAnchor(group.familyName)
+    if (!range) setSelectionAnchor(group.familyName)
+    setInspectSelection(keys.length === 1 && !toggle && !range)
   }
 
   function selectedCatalogGroups(): FamilyGroup[] {
@@ -466,7 +483,8 @@ function AppShell() {
   const catalogSummary = catalogBatchSummary(catalogSelection)
   const systemSummary = systemBatchSummary(systemSelection)
   const selectionCount = tab === 'system' ? systemSelection.length : catalogSelection.length
-  const showInspector = selectionCount === 1
+  const showInspector = selectionCount === 1 && inspectSelection
+  const showBatchBar = selectionCount > 1 || (selectionCount === 1 && !inspectSelection)
 
   function clearSelection() {
     setSelectedFamily(null)
@@ -475,9 +493,11 @@ function AppShell() {
     setSelectedSystem(null)
     setSelectedSystemKeys([])
     setSelectionAnchor(null)
+    setInspectSelection(false)
   }
 
   applyMarqueeKeysRef.current = (keys: string[]) => {
+    setInspectSelection(false)
     if (tab === 'system') {
       setSelectedSystemKeys((current) => (sameKeys(current, keys) ? current : keys))
       setSelectedSystem(keys[keys.length - 1] ?? null)
@@ -529,6 +549,7 @@ function AppShell() {
         if (distance < 5) return
         session.active = true
         suppressClickRef.current = true
+        setInspectSelection(false)
       }
       const rect = clientRect(session.startX, session.startY, x, y)
       setMarqueeRect(rect)
@@ -569,6 +590,7 @@ function AppShell() {
   }
 
   function selectAllVisible() {
+    setInspectSelection(false)
     if (tab === 'system') {
       const keys = shownSystemGroups.map((group) => group.familyName)
       if (keys.length === 0) return
@@ -829,6 +851,10 @@ function AppShell() {
       const payload = await collectDropPayload(dataTransfer)
       setDragging(false)
       if (payload.folders.length > 0) {
+        if (!hasDroppedFonts(payload)) {
+          await watchDroppedFolders(payload.folders, { paths: [], files: [] })
+          return
+        }
         setFolderDrop(payload)
         return
       }
@@ -923,6 +949,7 @@ function AppShell() {
       setSelectedFamily(names[0] ?? null)
       setSelectedFamilyKeys(names)
       setSelectionAnchor(names[0] ?? null)
+      setInspectSelection(names.length === 1)
       setSelectedEntryId(result.entries[0]?.id ?? null)
       setScrollToFamily(names[0] ?? null)
       toast.success(
@@ -994,10 +1021,7 @@ function AppShell() {
           watchFolderFilter={watchFolderFilter}
           watchFolderCounts={watchFolderCounts}
           onSelectWatchFolder={selectLibrary}
-          counts={{
-            uninstalled: uninstalledGroups.length,
-            updates: updateGroups.length,
-          }}
+          counts={tabCounts}
           onOpenSettings={() => setSettingsOpen(true)}
         />
 
@@ -1045,34 +1069,10 @@ function AppShell() {
                     the rest.
                   </p>
                 )}
-                {tab === 'system' ? (
-                  <BatchActionBar count={systemPlan.count} summary={systemSummary}>
-                    <SystemBatchButtons
-                      plan={systemPlan}
-                      busy={busy}
-                      onDeactivate={() => void deactivateSelected()}
-                      onUninstall={() => void uninstallSelected()}
-                    />
-                  </BatchActionBar>
-                ) : (
-                  <BatchActionBar count={catalogPlan.count} summary={catalogSummary}>
-                    <CatalogBatchButtons
-                      plan={catalogPlan}
-                      busy={busy}
-                      onInstall={() => void installSelected()}
-                      onActivate={() => void activateSelected()}
-                      onDeactivate={() => void deactivateSelected()}
-                      onUninstall={() => void uninstallSelected()}
-                      onReinstall={() => void reinstallSelected()}
-                      onForget={() => void forgetSelected()}
-                      onDeleteFiles={() => void deleteFilesSelected()}
-                    />
-                  </BatchActionBar>
-                )}
               </div>
             )}
             <ScrollArea className="min-h-0 flex-1">
-              <div className="p-4">
+              <div className={cn('p-4', showBatchBar && 'pb-24')}>
                 {loading && (
                   <p className="px-2 py-12 text-center text-sm text-muted-foreground">
                     Reading fonts…
@@ -1147,6 +1147,7 @@ function AppShell() {
                               setSelectedSystem(group.familyName)
                               setSelectedSystemKeys([group.familyName])
                               setSelectionAnchor(group.familyName)
+                              setInspectSelection(true)
                             }
                           }}
                           onReveal={() => {
@@ -1246,6 +1247,36 @@ function AppShell() {
               </div>
             </ScrollArea>
           </section>
+          {showBatchBar && (
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex justify-center p-4">
+              <div className="pointer-events-auto w-full max-w-3xl">
+                {tab === 'system' ? (
+                  <BatchActionBar count={systemPlan.count} summary={systemSummary}>
+                    <SystemBatchButtons
+                      plan={systemPlan}
+                      busy={busy}
+                      onDeactivate={() => void deactivateSelected()}
+                      onUninstall={() => void uninstallSelected()}
+                    />
+                  </BatchActionBar>
+                ) : (
+                  <BatchActionBar count={catalogPlan.count} summary={catalogSummary}>
+                    <CatalogBatchButtons
+                      plan={catalogPlan}
+                      busy={busy}
+                      onInstall={() => void installSelected()}
+                      onActivate={() => void activateSelected()}
+                      onDeactivate={() => void deactivateSelected()}
+                      onUninstall={() => void uninstallSelected()}
+                      onReinstall={() => void reinstallSelected()}
+                      onForget={() => void forgetSelected()}
+                      onDeleteFiles={() => void deleteFilesSelected()}
+                    />
+                  </BatchActionBar>
+                )}
+              </div>
+            </div>
+          )}
           {showInspector && (
           <div
             data-keep-selection=""
@@ -1380,7 +1411,12 @@ function AppShell() {
           onAddFonts={() => {
             const pending = folderDrop
             setFolderDrop(null)
-            if (pending) void importDropped(pending.paths, pending.files)
+            if (!pending) return
+            if (!hasDroppedFonts(pending)) {
+              void watchDroppedFolders(pending.folders, { paths: [], files: [] })
+              return
+            }
+            void importDropped(pending.paths, pending.files)
           }}
           onWatch={() => {
             const pending = folderDrop
@@ -1854,14 +1890,14 @@ function EmptyState({
           {watchFolderName
             ? 'Drop fonts into this folder in Finder, or drop them here to add them.'
             : tab === 'library'
-              ? 'Drop a folder to add every TrueType, OpenType, collection, and WOFF file inside it, including subfolders. You can also watch a folder so new fonts are imported automatically.'
+              ? 'Drop a folder to add every TrueType and OpenType file inside it, including collections and subfolders. You can also watch a folder so new fonts are imported automatically.'
               : tab === 'uninstalled'
                 ? 'Fonts you uninstall stay here so you can put them back in one click.'
                 : 'Fonts you uninstall stay in the library so you can put them back in one click.'}
         </p>
         <input
           type="file"
-          accept=".ttf,.otf,.ttc,.otc,.woff,.woff2"
+          accept=".ttf,.otf,.ttc,.otc"
           multiple
           className="hidden"
           onChange={(event) => {

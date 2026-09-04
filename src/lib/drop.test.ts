@@ -1,11 +1,21 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
+  collectDropPayload,
   collectNativeFolderPaths,
+  hasDroppedFonts,
+  inferDroppedFolderPath,
+  isDroppedFolderPath,
   isDroppedFontName,
   partitionDropPayload,
   shouldSkipDroppedName,
 } from './drop.ts'
+
+function fileWithPath(name: string, filePath?: string): File {
+  const file = new File(['x'], name)
+  if (filePath) (file as File & { path?: string }).path = filePath
+  return file
+}
 
 test('isDroppedFontName accepts common font extensions', () => {
   assert.equal(isDroppedFontName('Family-Bold.ttf'), true)
@@ -21,6 +31,17 @@ test('shouldSkipDroppedName ignores hidden and junk folders', () => {
   assert.equal(shouldSkipDroppedName('Desktop'), false)
 })
 
+test('isDroppedFolderPath treats extensionless paths as folders', () => {
+  assert.equal(isDroppedFolderPath('/Users/you/Fonts/Inbox'), true)
+  assert.equal(isDroppedFolderPath('/Users/you/Fonts/Inbox', 'Inbox'), true)
+  assert.equal(isDroppedFolderPath('/Users/you/Fonts/Regular.otf', 'Regular.otf'), false)
+})
+
+test('hasDroppedFonts ignores folder-only drops', () => {
+  assert.equal(hasDroppedFonts({ paths: ['/Users/you/Fonts/Inbox'], files: [] }), false)
+  assert.equal(hasDroppedFonts({ paths: ['/Users/you/Fonts/Inbox/Regular.otf'], files: [] }), true)
+})
+
 test('collectNativeFolderPaths keeps directory paths only', () => {
   assert.deepEqual(
     collectNativeFolderPaths([
@@ -30,6 +51,92 @@ test('collectNativeFolderPaths keeps directory paths only', () => {
       { isDirectory: true },
     ]),
     ['/Users/you/Fonts/Inbox', '/Users/you/Clients'],
+  )
+})
+
+test('collectDropPayload recovers a folder from dataTransfer.files when getAsFile is empty', async () => {
+  const folder = fileWithPath('Inbox', '/Users/you/Fonts/Inbox')
+  const payload = await collectDropPayload({
+    files: [folder],
+    items: [
+      {
+        kind: 'file',
+        getAsFile: () => null,
+        webkitGetAsEntry: () => ({
+          isDirectory: true,
+          isFile: false,
+          name: 'Inbox',
+          fullPath: '/Inbox',
+          createReader: () => ({
+            readEntries: (ok: (batch: FileSystemEntry[]) => void) => ok([]),
+          }),
+        }),
+      },
+    ],
+  } as unknown as DataTransfer)
+  assert.deepEqual(payload.folders, ['/Users/you/Fonts/Inbox'])
+})
+
+test('collectDropPayload infers a folder from child native paths', async () => {
+  const child = fileWithPath('Regular.otf', '/Users/you/Fonts/Inbox/Regular.otf')
+  let sent = false
+  const payload = await collectDropPayload({
+    files: [child],
+    items: [
+      {
+        kind: 'file',
+        getAsFile: () => null,
+        webkitGetAsEntry: () => ({
+          isDirectory: true,
+          isFile: false,
+          name: 'Inbox',
+          fullPath: '/Inbox',
+          createReader: () => ({
+            readEntries: (ok: (batch: unknown[]) => void) => {
+              if (sent) {
+                ok([])
+                return
+              }
+              sent = true
+              ok([
+                {
+                  isDirectory: false,
+                  isFile: true,
+                  name: 'Regular.otf',
+                  fullPath: '/Inbox/Regular.otf',
+                  file: (okFile: (file: File) => void) => okFile(child),
+                },
+              ])
+            },
+          }),
+        }),
+      },
+    ],
+  } as unknown as DataTransfer)
+  assert.deepEqual(payload.folders, ['/Users/you/Fonts/Inbox'])
+  assert.deepEqual(payload.paths, ['/Users/you/Fonts/Inbox/Regular.otf'])
+})
+
+test('inferDroppedFolderPath recovers the dropped folder from a child file path', () => {
+  assert.equal(
+    inferDroppedFolderPath(
+      '/Users/you/Fonts/Inbox/OTF/Regular.otf',
+      '/Inbox/OTF/Regular.otf',
+      '/Inbox',
+    ),
+    '/Users/you/Fonts/Inbox',
+  )
+  assert.equal(
+    inferDroppedFolderPath(
+      'C:\\Users\\you\\Fonts\\Inbox\\Regular.otf',
+      '/Inbox/Regular.otf',
+      '/Inbox',
+    ),
+    'C:\\Users\\you\\Fonts\\Inbox',
+  )
+  assert.equal(
+    inferDroppedFolderPath('/Users/you/Other/Regular.otf', '/Inbox/Regular.otf', '/Inbox'),
+    undefined,
   )
 })
 

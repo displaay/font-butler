@@ -1,5 +1,6 @@
 import * as React from 'react'
 import * as ContextMenuPrimitive from '@radix-ui/react-context-menu'
+import { Check } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 function ContextMenu(props: React.ComponentProps<typeof ContextMenuPrimitive.Root>) {
@@ -58,10 +59,36 @@ function ContextMenuSeparator({
   )
 }
 
+function ContextMenuCheckboxItem({
+  className,
+  children,
+  checked,
+  ...props
+}: React.ComponentProps<typeof ContextMenuPrimitive.CheckboxItem>) {
+  return (
+    <ContextMenuPrimitive.CheckboxItem
+      className={cn(
+        'flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none data-[disabled]:opacity-40 data-[highlighted]:bg-muted [&_svg]:size-4',
+        className,
+      )}
+      checked={checked}
+      {...props}
+    >
+      <span className="flex size-4 items-center justify-center">
+        <ContextMenuPrimitive.ItemIndicator>
+          <Check />
+        </ContextMenuPrimitive.ItemIndicator>
+      </span>
+      {children}
+    </ContextMenuPrimitive.CheckboxItem>
+  )
+}
+
 export {
   ContextMenu,
   ContextMenuTrigger,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuCheckboxItem,
   ContextMenuSeparator,
 }
