@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { groupCatalog, isInactiveEntry, isLibraryEntry, sortFamilyGroups } from './group.ts'
+import {
+  familyStatusSummary,
+  groupCatalog,
+  isForgettableOnlyGroup,
+  isLibraryEntry,
+  isUninstallableGroup,
+  sortFamilyGroups,
+} from './group.ts'
 import type { CatalogEntry, FontFaceInfo } from './types.ts'
 
 function face(
@@ -82,14 +89,32 @@ test('sortFamilyGroups by installed date puts newer families first', () => {
   )
 })
 
-test('deactivated fonts belong on Fonts, not Uninstalled', () => {
+test('Fonts includes deactivated, uninstalled, and source-missing entries', () => {
   const deactivated = entry('off', 'Off', 1, 'deactivated')
   const uninstalled = entry('gone', 'Gone', 2, 'uninstalled')
+  const missing = entry('lost', 'Lost', 3, 'source-missing')
   assert.equal(isLibraryEntry(deactivated), true)
-  assert.equal(isInactiveEntry(deactivated), false)
-  assert.equal(isLibraryEntry(uninstalled), false)
-  assert.equal(isInactiveEntry(uninstalled), true)
+  assert.equal(isLibraryEntry(uninstalled), true)
+  assert.equal(isLibraryEntry(missing), true)
+  assert.equal(isUninstallableGroup({ status: 'deactivated' }), true)
+  assert.equal(isUninstallableGroup({ status: 'uninstalled' }), false)
+  assert.equal(isForgettableOnlyGroup({ status: 'uninstalled' }), true)
+  assert.equal(isForgettableOnlyGroup({ status: 'source-missing' }), true)
+  assert.equal(isForgettableOnlyGroup({ status: 'installed' }), false)
 })
+
+test('groupCatalog merges installed and uninstalled styles onto one Fonts card', () => {
+  const groups = groupCatalog([
+    entry('regular', 'Booton', 1, 'installed', 'Regular', false),
+    entry('italic', 'Booton', 2, 'uninstalled', 'Italic', true),
+  ])
+  assert.equal(groups.length, 1)
+  assert.equal(groups[0]?.familyName, 'Booton')
+  assert.equal(groups[0]?.status, 'installed')
+  assert.equal(groups[0]?.instanceCount, 2)
+  assert.equal(familyStatusSummary(groups[0]!), '1/2 installed')
+  assert.equal(isUninstallableGroup(groups[0]!), true)
+}))
 
 test('groupCatalog keeps typographic family styles on one card', () => {
   const groups = groupCatalog([

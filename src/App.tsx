@@ -40,7 +40,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { api, isNotice, isSettingsEvent, subscribeEvents } from '@/lib/api'
 import { collectDropPayload, isDroppedFontName, isWebOnlyDrop, partitionDropPayload } from '@/lib/drop'
 import { WOFF_INSTALL_ERROR } from '@/lib/formats'
-import { familyNameOf, deletableSourceIds, entryIds, familyStatusSummary, forgettableIds, groupCatalog, groupSystem, hasSourceMissing, isInactiveEntry, isLibraryEntry, matchesQuery, sortFamilyGroups } from '@/lib/group'
+import { familyNameOf, deletableSourceIds, entryIds, familyStatusSummary, forgettableIds, groupCatalog, groupSystem, hasSourceMissing, isForgettableOnlyGroup, isLibraryEntry, isUninstallableGroup, matchesQuery, sortFamilyGroups } from '@/lib/group'
 import { actionCopy, actionCopyFor, emptyImportError, importDoneCopy, remainingActionCopy } from '@/lib/notify'
 import { catalogInstanceRows, systemInstanceRows } from '@/lib/instances'
 import {
@@ -286,16 +286,6 @@ function AppShell() {
     }
     return counts
   }, [entries, watchFolders])
-  const uninstalledGroups = useMemo(
-    () =>
-      sortFamilyGroups(
-        groupCatalog(entries.filter(isInactiveEntry)).filter((group) =>
-          matchesQuery(group.familyName, query),
-        ),
-        sortMode,
-      ),
-    [entries, query, sortMode],
-  )
   const updateGroups = useMemo(
     () =>
       sortFamilyGroups(
@@ -322,7 +312,6 @@ function AppShell() {
     () => ({
       library: groupCatalog(entries.filter(isLibraryEntry)).length,
       system: groupSystem(systemFaces).length,
-      uninstalled: groupCatalog(entries.filter(isInactiveEntry)).length,
       updates: groupCatalog(entries.filter((entry) => entry.status === 'outdated')).length,
     }),
     [entries, systemFaces],
@@ -330,14 +319,8 @@ function AppShell() {
 
   const visibleGroups = useMemo(
     () =>
-      tab === 'system'
-        ? []
-        : tab === 'uninstalled'
-          ? uninstalledGroups
-          : tab === 'updates'
-            ? updateGroups
-            : libraryGroups,
-    [tab, uninstalledGroups, updateGroups, libraryGroups],
+      tab === 'system' ? [] : tab === 'updates' ? updateGroups : libraryGroups,
+    [tab, updateGroups, libraryGroups],
   )
   const hasCatalogList =
     tab === 'system'
@@ -660,28 +643,20 @@ function AppShell() {
       }, actionCopyFor('remove', groups))
       return
     }
-    if (tab === 'uninstalled') {
-      await forgetSelected()
-      return
-    }
     const groups = selectedCatalogGroups()
-    const removable = groups.filter(
-      (group) =>
-        hasSourceMissing(group) ||
-        group.status === 'installed' ||
-        group.status === 'outdated' ||
-        group.status === 'deactivated',
-    )
-    if (removable.length === 0) return
+    const toUninstall = groups.filter(isUninstallableGroup)
+    const toForget = groups.filter(isForgettableOnlyGroup)
+    if (toUninstall.length === 0 && toForget.length === 0) return
+    const copyGroups = [...toUninstall, ...toForget]
+    const verb = toUninstall.length === 0 ? 'forget' : 'remove'
     await run(async () => {
-      for (const group of removable) {
-        if (hasSourceMissing(group) && group.status === 'source-missing') {
-          await forgetGroup(group)
-        } else {
-          await uninstallGroup(group)
-        }
+      for (const group of toUninstall) {
+        await uninstallGroup(group)
       }
-    }, actionCopyFor('remove', removable))
+      for (const group of toForget) {
+        await forgetGroup(group)
+      }
+    }, actionCopyFor(verb, copyGroups))
   }
 
   async function installSelected() {
@@ -968,15 +943,9 @@ function AppShell() {
         }
       }
       const names = [...new Set(result.entries.map(familyNameOf))]
-      const alreadyInLibrary = result.entries.every(
-        (entry) =>
-          entry.status === 'installed' ||
-          entry.status === 'outdated' ||
-          entry.status === 'deactivated',
-      )
       setQuery('')
       setWatchFolderFilter(null)
-      setTab(installed || alreadyInLibrary ? 'library' : 'uninstalled')
+      setTab('library')
       setSelectedFamily(names[0] ?? null)
       setSelectedFamilyKeys(names)
       setSelectionAnchor(names[0] ?? null)
@@ -1911,18 +1880,14 @@ function EmptyState({
             ? `No fonts in ${watchFolderName}`
             : tab === 'updates'
               ? 'No source updates'
-              : tab === 'uninstalled'
-                ? 'No inactive fonts'
-                : 'Drop font files or folders here'}
+              : 'Drop font files or folders here'}
         </p>
         <p className="mt-2 max-w-sm text-sm text-muted-foreground">
           {watchFolderName
             ? 'Drop fonts into this folder in Finder, or drop them here to add them.'
             : tab === 'library'
-              ? 'Drop a folder to add every TrueType and OpenType file inside it, including collections and subfolders. You can also watch a folder so new fonts are imported automatically.'
-              : tab === 'uninstalled'
-                ? 'Fonts you uninstall stay here so you can put them back in one click.'
-                : 'Fonts you uninstall stay in the library so you can put them back in one click.'}
+              ? 'Drop a folder to add every TrueType and OpenType file inside it, including collections and subfolders. You can also watch a folder so new fonts are imported automatically. Uninstalled fonts stay here so you can put them back in one click.'
+              : 'Fonts you uninstall stay in the library so you can put them back in one click.'}
         </p>
         <input
           type="file"

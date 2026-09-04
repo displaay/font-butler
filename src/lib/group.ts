@@ -105,22 +105,26 @@ export function matchesQuery(haystack: string, query: string): boolean {
   return haystack.toLowerCase().includes(query.trim().toLowerCase())
 }
 
-/** Shown on the Fonts tab: active, outdated, deactivated, or installed with a missing source. */
+/** Every catalog status belongs on the Fonts tab, including uninstalled. */
 export function isLibraryEntry(entry: CatalogEntry): boolean {
-  return (
-    entry.status === 'installed' ||
-    entry.status === 'outdated' ||
-    entry.status === 'deactivated' ||
-    (entry.status === 'source-missing' && Boolean(entry.installedPath))
-  )
+  switch (entry.status) {
+    case 'installed':
+    case 'outdated':
+    case 'deactivated':
+    case 'uninstalled':
+    case 'source-missing':
+      return true
+  }
 }
 
-/** Shown on Uninstalled: tracked sources that are not on the Mac. Never includes deactivated. */
-export function isInactiveEntry(entry: CatalogEntry): boolean {
-  return (
-    entry.status === 'uninstalled' ||
-    (entry.status === 'source-missing' && !entry.installedPath)
-  )
+/** Delete/Backspace uninstalls these families; they stay on Fonts as not installed. */
+export function isUninstallableGroup(group: { status: FontStatus }): boolean {
+  return group.status === 'installed' || group.status === 'outdated' || group.status === 'deactivated'
+}
+
+/** Delete/Backspace forgets these families (already off the Mac). */
+export function isForgettableOnlyGroup(group: { status: FontStatus }): boolean {
+  return group.status === 'uninstalled' || group.status === 'source-missing'
 }
 
 export function familyStatusSummary(group: { entries: CatalogEntry[] }): string | null {

@@ -2,7 +2,7 @@ import { normalizeWatchPath } from './watchFolders.ts'
 
 export const SHOW_TOTALS_KEY = 'font-butler-show-totals'
 
-export type ShowTotalId = 'library' | 'system' | 'uninstalled' | 'updates' | `watch:${string}`
+export type ShowTotalId = 'library' | 'system' | 'updates' | `watch:${string}`
 
 export function watchShowTotalId(folder: string): ShowTotalId {
   return `watch:${normalizeWatchPath(folder)}`

@@ -1,5 +1,5 @@
 import { useState, type ComponentType } from 'react'
-import { Archive, ChevronDown, Folder, Laptop, RefreshCw, Search, Settings, Type } from 'lucide-react'
+import { ChevronDown, Folder, Laptop, RefreshCw, Search, Settings, Type } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -18,12 +18,11 @@ import {
 import { cn } from '@/lib/utils'
 import { watchFolderLabel } from '@/lib/watchFolders'
 
-export type Tab = 'library' | 'system' | 'uninstalled' | 'updates'
+export type Tab = 'library' | 'system' | 'updates'
 
 const TABS: { id: Tab; label: string; icon: typeof Type }[] = [
   { id: 'library', label: 'Fonts', icon: Type },
   { id: 'system', label: 'On this Mac', icon: Laptop },
-  { id: 'uninstalled', label: 'Uninstalled', icon: Archive },
   { id: 'updates', label: 'Updates', icon: RefreshCw },
 ]
 
@@ -111,7 +110,7 @@ export function Sidebar({
   watchFolderFilter: string | null
   watchFolderCounts: Record<string, number>
   onSelectWatchFolder: (folder: string | null) => void
-  counts: { library: number; system: number; uninstalled: number; updates: number }
+  counts: { library: number; system: number; updates: number }
   onOpenSettings: () => void
 }) {
   const insetTrafficLights = window.fontButlerDesktop?.platform === 'darwin'
@@ -205,13 +204,7 @@ export function Sidebar({
               active={tab === item.id}
               icon={item.icon}
               label={item.label}
-              count={
-                item.id === 'system'
-                  ? counts.system
-                  : item.id === 'updates'
-                    ? counts.updates
-                    : counts.uninstalled
-              }
+              count={item.id === 'system' ? counts.system : counts.updates}
               showTotal={Boolean(showTotals[item.id])}
               onShowTotalChange={(value) => changeShowTotal(item.id, value)}
               onClick={() => onTabChange(item.id)}
