@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { actionCopy, actionCopyFor } from './notify.ts'
+import { actionCopy, actionCopyFor, importDoneCopy, remainingActionCopy } from './notify.ts'
 
 test('actionCopy names the family and uses an ellipsis while pending', () => {
   assert.deepEqual(actionCopy('install', 'Inter'), {
@@ -23,5 +23,27 @@ test('actionCopyFor uses a count when more than one family is selected', () => {
       pending: 'Removing 2 fonts…',
       done: 'Removed 2 fonts',
     },
+  )
+})
+
+test('remainingActionCopy counts remaining fonts down', () => {
+  assert.equal(remainingActionCopy('install', 5), 'Installing 5 fonts…')
+  assert.equal(remainingActionCopy('install', 1), 'Installing 1 font…')
+  assert.equal(remainingActionCopy('install', 1, 'Inter'), 'Installing Inter…')
+})
+
+test('importDoneCopy mentions ignored web fonts only in the success line', () => {
+  assert.equal(
+    importDoneCopy({ installed: true, count: 1, name: 'Inter', ignored: 0 }),
+    'Installed Inter',
+  )
+  assert.equal(importDoneCopy({ installed: true, count: 5, ignored: 0 }), 'Installed 5 fonts')
+  assert.equal(
+    importDoneCopy({ installed: true, count: 5, ignored: 3 }),
+    '5 fonts installed and 3 fonts ignored',
+  )
+  assert.equal(
+    importDoneCopy({ installed: false, count: 1, name: 'Inter', ignored: 2 }),
+    '1 font added and 2 fonts ignored',
   )
 })

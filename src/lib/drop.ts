@@ -51,7 +51,10 @@ export function partitionDropPayload(
     counted.push(format)
   }
 
+  const listedPaths = new Set(paths)
   for (const file of files) {
+    const filePath = nativePath(file)
+    if (filePath && listedPaths.has(filePath)) continue
     const format = formatFromName(file.name)
     if (!format) continue
     if (isWebFormat(format)) {
@@ -195,6 +198,15 @@ export function hasDroppedFonts(payload: { paths: string[]; files: File[] }): bo
   return (
     payload.files.some((file) => isDroppedFontName(file.name)) ||
     payload.paths.some((filePath) => isDroppedFontName(filePath))
+  )
+}
+
+export function isWebOnlyDrop(partition: DropPartition): boolean {
+  return (
+    partition.skippedWeb > 0 &&
+    partition.files.length === 0 &&
+    partition.formats.length === 0 &&
+    !partition.paths.some((filePath) => isDroppedFolderPath(filePath))
   )
 }
 

@@ -22,9 +22,11 @@ export function uniqueFormats(entries: Array<Pick<CatalogEntry, 'format' | 'sour
   return [...new Set(entries.map(entryFormat).filter(Boolean))]
 }
 
+export const WOFF_INSTALL_ERROR = 'WOFF files cannot be installed.'
+
 export function assertNotWebFont(filePath: string): void {
   if (isWebFontFile(filePath)) {
-    throw new Error('WOFF files cannot be installed.')
+    throw new Error(WOFF_INSTALL_ERROR)
   }
 }
 
@@ -33,7 +35,7 @@ export function assertSingleInstallableFormat(
 ): void {
   for (const entry of entries) {
     if (isWebFontFormat(entryFormat(entry)) || isWebFontFile(entry.sourcePath)) {
-      throw new Error('WOFF files cannot be installed.')
+      throw new Error(WOFF_INSTALL_ERROR)
     }
   }
   if (uniqueFormats(entries).length > 1) {

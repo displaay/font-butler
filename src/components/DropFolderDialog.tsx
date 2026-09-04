@@ -25,8 +25,8 @@ export function DropFolderDialog({
   const many = folders.length > 1
   const title = many ? `Add ${folders.length} folders?` : `Add ${names[0] ?? 'this folder'}?`
   const description = many
-    ? 'Import the fonts inside these folders once, or watch them so new fonts are added automatically.'
-    : `Import the fonts inside ${names[0] ?? 'this folder'} once, or watch the folder so new fonts are added automatically.`
+    ? 'Add these as watch folders so new fonts are imported automatically, or upload the fonts inside them once.'
+    : `Add ${names[0] ?? 'this folder'} as a watch folder so new fonts are imported automatically, or upload the fonts inside it once.`
 
   return (
     <Dialog
@@ -54,9 +54,9 @@ export function DropFolderDialog({
             Cancel
           </Button>
           <Button variant="outline" onClick={onAddFonts}>
-            Add fonts only
+            Upload fonts only
           </Button>
-          <Button onClick={onWatch}>{many ? 'Watch folders' : 'Watch folder'}</Button>
+          <Button onClick={onWatch}>{many ? 'Add as watch folders' : 'Add as watch folder'}</Button>
         </div>
       </DialogContent>
     </Dialog>
