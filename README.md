@@ -6,7 +6,7 @@ Drop a font file into Font Buttler and it remembers the original path. When that
 
 ## What it does
 
-- Tracks source files and last-modified time
+- Tracks source files and last-modified time. A **Source** badge means the original file is still on disk; removing it does not uninstall the font
 - Groups families, counts instances, and marks variable fonts with a **VF** badge
 - Shows a live **Aa** preview on every card
 - Installs, uninstalls, and deactivates user fonts. Uninstalling keeps the family on the Fonts list with a **Not installed** badge until you remove it from the list

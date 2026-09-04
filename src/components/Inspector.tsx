@@ -1,10 +1,11 @@
 import { FolderOpen, ListX, Power, PowerOff, RefreshCw, Trash2, Download } from 'lucide-react'
 import { AaPreview } from '@/components/AaPreview'
 import { CatalogBatchButtons, SystemBatchButtons } from '@/components/BatchActions'
+import { SourceBadge } from '@/components/Badges'
 import { catalogFontFamily, systemFontFamily } from '@/components/FontFaceStyles'
 import { Button } from '@/components/ui/button'
 import { formatBytes, formatRelativeTime } from '@/lib/utils'
-import { familyNameOf } from '@/lib/group'
+import { entryHasTrackedSource, familyNameOf } from '@/lib/group'
 import type { CatalogBatchPlan, SystemBatchPlan } from '@/lib/batch'
 import type { CatalogEntry, FamilyGroup, SystemFamilyGroup } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -217,10 +218,21 @@ export function Inspector({
           The source file is missing. Remove this entry if you no longer need it.
         </div>
       )}
+      {entry.status !== 'source-missing' && !entryHasTrackedSource(entry) && (
+        <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+          The tracked source file is gone. The installed copy stays on the Mac.
+        </div>
+      )}
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
         <dt className="text-muted-foreground">Source</dt>
-        <dd className="truncate" title={entry.sourcePath}>
-          {entry.sourcePath}
+        <dd className="flex min-w-0 items-center gap-2">
+          <span className="truncate" title={entry.sourcePath}>
+            {entry.sourcePath}
+          </span>
+          <SourceBadge
+            present={entryHasTrackedSource(entry)}
+            showMissing={entry.status !== 'source-missing' && !entryHasTrackedSource(entry)}
+          />
         </dd>
         <dt className="text-muted-foreground">Modified</dt>
         <dd>{formatRelativeTime(entry.sourceMtimeMs)}</dd>

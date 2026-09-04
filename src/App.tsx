@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEven
 import { toast } from 'sonner'
 import { ChevronDown, FolderOpen, X } from 'lucide-react'
 import { AaPreview, CyclingAaPreview } from '@/components/AaPreview'
-import { StatusBadge, VfBadge } from '@/components/Badges'
+import { SourceBadge, StatusBadge, VfBadge } from '@/components/Badges'
 import {
   BatchActionBar,
   CatalogBatchButtons,
@@ -40,7 +40,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { api, isNotice, isSettingsEvent, subscribeEvents } from '@/lib/api'
 import { collectDropPayload, isDroppedFontName, isWebOnlyDrop, partitionDropPayload } from '@/lib/drop'
 import { WOFF_INSTALL_ERROR } from '@/lib/formats'
-import { familyNameOf, deletableSourceIds, entryIds, familyStatusSummary, forgettableIds, groupCatalog, groupSystem, hasSourceMissing, isForgettableOnlyGroup, isLibraryEntry, isUninstallableGroup, matchesQuery, sortFamilyGroups } from '@/lib/group'
+import { familyNameOf, deletableSourceIds, entryIds, familyStatusSummary, forgettableIds, groupCatalog, groupSystem, hasMissingTrackedSource, hasSourceMissing, hasTrackedSource, isForgettableOnlyGroup, isLibraryEntry, isUninstallableGroup, matchesQuery, sortFamilyGroups } from '@/lib/group'
 import { actionCopy, actionCopyFor, emptyImportError, importDoneCopy, remainingActionCopy } from '@/lib/notify'
 import { catalogInstanceRows, systemInstanceRows } from '@/lib/instances'
 import {
@@ -1563,6 +1563,10 @@ function LibraryCard({
         <span className="truncate font-medium">{group.familyName}</span>
         <VfBadge show={group.isVariable} />
         <StatusBadge status={group.status} />
+        <SourceBadge
+          present={hasTrackedSource(group)}
+          showMissing={group.status !== 'source-missing' && hasMissingTrackedSource(group)}
+        />
       </div>
       <div className="mt-0.5 text-xs text-muted-foreground">
         {group.instanceCount} {group.instanceCount === 1 ? 'instance' : 'instances'}

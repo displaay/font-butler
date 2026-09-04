@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import type { AppPaths } from './paths.ts'
-import type { CatalogEntry, CatalogFile, FontStatus } from './types.ts'
+import type { CatalogEntry, CatalogFile, FontFaceInfo, FontStatus } from './types.ts'
 
 const emptyCatalog = (): CatalogFile => ({ version: 1, entries: [] })
 
@@ -25,6 +25,11 @@ export function loadCatalog(paths: AppPaths): CatalogFile {
     const parsed = JSON.parse(raw) as CatalogFile
     if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.entries)) {
       return emptyCatalog()
+    }
+    for (const entry of parsed.entries) {
+      if (typeof entry.sourcePresent !== 'boolean') {
+        entry.sourcePresent = entry.status !== 'source-missing'
+      }
     }
     return parsed
   } catch {
@@ -53,6 +58,33 @@ export function findBySourcePath(
   sourcePath: string,
 ): CatalogEntry | undefined {
   return catalog.entries.find((entry) => entry.sourcePath === sourcePath)
+}
+
+export function faceIdentityKey(faces: FontFaceInfo[]): string | null {
+  const names = faces.map((face) => face.postscriptName.trim()).filter(Boolean)
+  if (names.length === 0 || names.length !== faces.length) {
+    return null
+  }
+  return names.slice().sort().join('\0')
+}
+
+export function findByFaceIdentity(
+  catalog: CatalogFile,
+  faces: FontFaceInfo[],
+): CatalogEntry | undefined {
+  const key = faceIdentityKey(faces)
+  if (!key) {
+    return undefined
+  }
+  return catalog.entries.find((entry) => faceIdentityKey(entry.faces) === key)
+}
+
+export function sourceFileExists(sourcePath: string): boolean {
+  try {
+    return fs.existsSync(sourcePath) && fs.statSync(sourcePath).isFile()
+  } catch {
+    return false
+  }
 }
 
 export function findById(
@@ -84,4 +116,33 @@ export function resolveStatusWhenSourceFound(entry: CatalogEntry): FontStatus {
     return 'deactivated'
   }
   return 'uninstalled'
+}
+
+export function resolveStatusWhenSourceMissing(entry: CatalogEntry): FontStatus {
+  if (entry.installedPath && fs.existsSync(entry.installedPath)) {
+    return 'installed'
+  }
+  if (entry.disabledPath && fs.existsSync(entry.disabledPath)) {
+    return 'deactivated'
+  }
+  return 'source-missing'
+}
+
+export function applySourcePresence(entry: CatalogEntry): boolean {
+  const present = sourceFileExists(entry.sourcePath)
+  let changed = entry.sourcePresent !== present
+  entry.sourcePresent = present
+  if (!present) {
+    const next = resolveStatusWhenSourceMissing(entry)
+    if (entry.status !== next) {
+      entry.status = next
+      changed = true
+    }
+    return changed
+  }
+  if (entry.status === 'source-missing') {
+    entry.status = resolveStatusWhenSourceFound(entry)
+    changed = true
+  }
+  return changed
 }

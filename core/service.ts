@@ -1,7 +1,19 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { findById, findBySourcePath, loadCatalog, removeEntryById, resolveStatusWhenSourceFound, runCatalogTask, saveCatalog, upsertEntry } from './catalog.ts'
+import {
+  applySourcePresence,
+  findByFaceIdentity,
+  findById,
+  findBySourcePath,
+  loadCatalog,
+  removeEntryById,
+  resolveStatusWhenSourceFound,
+  runCatalogTask,
+  saveCatalog,
+  sourceFileExists,
+  upsertEntry,
+} from './catalog.ts'
 import { getOrCreateApiToken } from './auth.ts'
 import {
   clearFontCaches,
@@ -454,7 +466,12 @@ export class FontButlerService {
     return runCatalogTask(async () => {
       const catalog = loadCatalog(this.paths)
       const ids = catalog.entries
-        .filter((entry) => entry.status === 'source-missing')
+        .filter(
+          (entry) =>
+            entry.status === 'source-missing' &&
+            !entry.installedPath &&
+            !entry.disabledPath,
+        )
         .map((entry) => entry.id)
       for (const id of ids) {
         await this.forgetEntry(id)
@@ -609,10 +626,25 @@ export class FontButlerService {
     if (!entry) {
       throw new Error('Font is not in the library.')
     }
-    if (!fs.existsSync(entry.sourcePath)) {
-      entry.status = 'source-missing'
+    if (!sourceFileExists(entry.sourcePath)) {
+      applySourcePresence(entry)
       saveCatalog(this.paths, catalog)
       throw new Error('The source file is missing.')
+    }
+    if (
+      !familyName &&
+      entry.status === 'installed' &&
+      entry.installedPath &&
+      fs.existsSync(entry.installedPath)
+    ) {
+      const current = readFileStat(entry.sourcePath)
+      if (
+        current.mtimeMs === entry.installedSnapshotMtimeMs &&
+        current.size === entry.installedSnapshotSize
+      ) {
+        entry.sourcePresent = true
+        return entry
+      }
     }
     let sourceForInstall = entry.sourcePath
     let temp: string | undefined
@@ -637,6 +669,7 @@ export class FontButlerService {
     entry.disabledPath = undefined
     entry.sourceMtimeMs = stat.mtimeMs
     entry.sourceSize = stat.size
+    entry.sourcePresent = true
     entry.installedSnapshotMtimeMs = stat.mtimeMs
     entry.installedSnapshotSize = stat.size
     entry.status = 'installed'
@@ -656,7 +689,8 @@ export class FontButlerService {
       fs.rmSync(entry.disabledPath, { force: true })
     }
     entry.disabledPath = undefined
-    entry.status = fs.existsSync(entry.sourcePath) ? 'uninstalled' : 'source-missing'
+    entry.sourcePresent = sourceFileExists(entry.sourcePath)
+    entry.status = entry.sourcePresent ? 'uninstalled' : 'source-missing'
     touchEntry(entry)
     saveCatalog(this.paths, catalog)
     return entry
@@ -731,6 +765,12 @@ export class FontButlerService {
       throw new Error('Font is not in the library.')
     }
     if (entry.status !== 'source-missing' && entry.status !== 'uninstalled') {
+      throw new Error('Only uninstalled fonts can be removed from the list.')
+    }
+    if (
+      (entry.installedPath && fs.existsSync(entry.installedPath)) ||
+      (entry.disabledPath && fs.existsSync(entry.disabledPath))
+    ) {
       throw new Error('Only uninstalled fonts can be removed from the list.')
     }
     if (options.deleteFiles && entry.status === 'uninstalled') {
@@ -809,25 +849,29 @@ export class FontButlerService {
   }
 
   private importOneUnlocked(filePath: string): CatalogEntry {
-    if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+    const resolved = path.resolve(filePath)
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
       throw new Error('Not a file.')
     }
-    assertNotWebFont(filePath)
-    if (!isFontFile(filePath)) {
+    assertNotWebFont(resolved)
+    if (!isFontFile(resolved)) {
       throw new Error('Not a font file.')
     }
-    const parsed = parseFontFile(filePath)
+    const parsed = parseFontFile(resolved)
     if (parsed.faces.length === 0) {
       throw new Error('Could not read any faces in that font.')
     }
     const catalog = loadCatalog(this.paths)
-    const existing = findBySourcePath(catalog, filePath)
-    const stat = readFileStat(filePath)
+    const existing =
+      findBySourcePath(catalog, resolved) ?? findByFaceIdentity(catalog, parsed.faces)
+    const stat = readFileStat(resolved)
     if (existing) {
+      this.rebindSourcePath(existing, resolved)
       existing.faces = parsed.faces
       existing.format = parsed.format
       existing.sourceMtimeMs = stat.mtimeMs
       existing.sourceSize = stat.size
+      existing.sourcePresent = true
       if (existing.status === 'source-missing') {
         existing.status = resolveStatusWhenSourceFound(existing)
       }
@@ -844,9 +888,10 @@ export class FontButlerService {
     }
     const entry: CatalogEntry = {
       id: newId(),
-      sourcePath: filePath,
+      sourcePath: resolved,
       sourceMtimeMs: stat.mtimeMs,
       sourceSize: stat.size,
+      sourcePresent: true,
       status: 'uninstalled',
       faces: parsed.faces,
       format: parsed.format,
@@ -858,16 +903,34 @@ export class FontButlerService {
     return entry
   }
 
+  private rebindSourcePath(entry: CatalogEntry, nextPath: string): void {
+    const previous = entry.sourcePath
+    if (previous === nextPath) {
+      return
+    }
+    entry.sourcePath = nextPath
+    if (!previous || previous === nextPath) {
+      return
+    }
+    const uploadsRoot = path.resolve(this.paths.uploadsDir)
+    const resolvedPrevious = path.resolve(previous)
+    if (resolvedPrevious === nextPath || !resolvedPrevious.startsWith(`${uploadsRoot}${path.sep}`)) {
+      return
+    }
+    if (fs.existsSync(resolvedPrevious)) {
+      fs.rmSync(resolvedPrevious, { force: true })
+    }
+  }
+
   private async refreshSourceStatuses(): Promise<void> {
     const catalog = loadCatalog(this.paths)
     let changed = false
     for (const entry of catalog.entries) {
-      if (!fs.existsSync(entry.sourcePath)) {
-        if (entry.status !== 'source-missing') {
-          entry.status = 'source-missing'
-          touchEntry(entry)
-          changed = true
-        }
+      if (applySourcePresence(entry)) {
+        touchEntry(entry)
+        changed = true
+      }
+      if (!entry.sourcePresent) {
         continue
       }
       const stat = readFileStat(entry.sourcePath)
