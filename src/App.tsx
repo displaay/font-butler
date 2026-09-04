@@ -914,6 +914,7 @@ function LibraryCard({
             status={group.status}
             missingSource={missingSource}
             busy={busy}
+            visible={selected}
             offset={layout === 'list' && showInstances}
             onInstall={onInstall}
             onDeactivate={onDeactivate}
@@ -1080,6 +1081,7 @@ function SystemCard({
           <SystemCardActions
             writable={group.writable}
             busy={busy}
+            visible={selected}
             offset={layout === 'list' && showInstances}
             onDeactivate={onDeactivate}
             onUninstall={onUninstall}

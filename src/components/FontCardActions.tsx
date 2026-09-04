@@ -18,6 +18,7 @@ export function CatalogCardActions({
   missingSource,
   busy,
   offset,
+  visible,
   onInstall,
   onDeactivate,
   onUninstall,
@@ -27,10 +28,11 @@ export function CatalogCardActions({
   status: FontStatus
   missingSource: boolean
   offset?: boolean
+  visible?: boolean
 }) {
   const installed = status === 'installed' || status === 'outdated'
   return (
-    <ActionDock offset={offset}>
+    <ActionDock offset={offset} visible={visible}>
       {installed ? (
         <>
           <IconAction label="Deactivate" disabled={busy} onClick={onDeactivate}>
@@ -62,18 +64,20 @@ export function SystemCardActions({
   writable,
   busy,
   offset,
+  visible,
   onDeactivate,
   onUninstall,
 }: {
   writable: boolean
   busy: boolean
   offset?: boolean
+  visible?: boolean
   onDeactivate: () => void
   onUninstall: () => void
 }) {
   if (!writable) return null
   return (
-    <ActionDock offset={offset}>
+    <ActionDock offset={offset} visible={visible}>
       <IconAction label="Deactivate" disabled={busy} onClick={onDeactivate}>
         <PowerOff />
       </IconAction>
@@ -84,12 +88,21 @@ export function SystemCardActions({
   )
 }
 
-function ActionDock({ children, offset }: { children: ReactNode; offset?: boolean }) {
+function ActionDock({
+  children,
+  offset,
+  visible,
+}: {
+  children: ReactNode
+  offset?: boolean
+  visible?: boolean
+}) {
   return (
     <div
       className={cn(
         'absolute top-1.5 z-10 flex gap-0.5 rounded-lg bg-card/95 p-0.5 opacity-0 shadow-sm ring-1 ring-border/80 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100',
         offset ? 'right-11' : 'right-1.5',
+        visible && 'opacity-100',
       )}
     >
       {children}
