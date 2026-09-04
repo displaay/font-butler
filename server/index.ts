@@ -27,7 +27,26 @@ app.use('/api/*', async (c, next) => {
 
 app.get('/api/health', (c) => c.json({ ok: true, platform: process.platform }))
 
-app.get('/api/bootstrap', (c) => c.json({ token: apiToken }))
+app.get('/api/bootstrap', (c) => c.json({ token: apiToken, settings: service.getSettings() }))
+
+app.get('/api/settings', (c) => c.json({ settings: service.getSettings() }))
+
+app.post('/api/settings', async (c) => {
+  const body = await c.req.json<{
+    watchFolder?: string | null
+    defaultView?: 'list' | 'grid'
+    defaultSort?: 'name' | 'installed'
+  }>()
+  try {
+    const settings = await service.updateSettings(body)
+    return c.json({ settings })
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : 'Could not save settings' },
+      400,
+    )
+  }
+})
 
 app.get('/api/catalog', (c) => c.json({ entries: service.listCatalog() }))
 

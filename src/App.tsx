@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type MouseEvent } from 'react'
 import { toast } from 'sonner'
-import { ChevronDown, Download, FolderOpen, Power, PowerOff, RefreshCw, Search, Trash2 } from 'lucide-react'
+import { ChevronDown, Download, FolderOpen, Power, PowerOff, RefreshCw, Search, Settings, Trash2 } from 'lucide-react'
 import { AppMenuBar } from '@/components/AppMenuBar'
 import { AaPreview } from '@/components/AaPreview'
 import { StatusBadge, VfBadge } from '@/components/Badges'
@@ -9,6 +9,7 @@ import { FontFaceStyles, catalogFontFamily, systemFontFamily } from '@/component
 import { InstanceList } from '@/components/InstanceList'
 import { Inspector } from '@/components/Inspector'
 import { RenameDialog } from '@/components/RenameDialog'
+import { SettingsDialog } from '@/components/SettingsDialog'
 import { ViewOptions, type ViewLayout } from '@/components/ViewOptions'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -23,11 +24,11 @@ import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { api, isNotice, subscribeEvents } from '@/lib/api'
+import { api, isNotice, isSettingsEvent, subscribeEvents } from '@/lib/api'
 import { familyNameOf, entryIds, familyStatusSummary, groupCatalog, groupSystem, hasSourceMissing, isInactiveEntry, isLibraryEntry, matchesQuery, sortFamilyGroups, sourceMissingIds } from '@/lib/group'
 import { catalogInstanceRows, systemInstanceRows } from '@/lib/instances'
 import { nextSelection, shortcutAction } from '@/lib/selection'
-import type { CatalogEntry, FamilyGroup, SortMode, SystemFace, SystemFamilyGroup } from '@/lib/types'
+import type { AppSettings, CatalogEntry, FamilyGroup, SortMode, SystemFace, SystemFamilyGroup } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 type Tab = 'library' | 'system' | 'uninstalled' | 'updates'
@@ -52,6 +53,8 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null)
   const [renameEntry, setRenameEntry] = useState<CatalogEntry | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settings, setSettings] = useState<AppSettings | null>(null)
   const [showSources, setShowSources] = useState(
     () => localStorage.getItem('font-butler-show-sources') === 'true',
   )
@@ -67,6 +70,23 @@ export default function App() {
   const [hideDeactivated, setHideDeactivated] = useState(
     () => localStorage.getItem('font-butler-hide-deactivated') === 'true',
   )
+
+  function applySettings(next: AppSettings) {
+    setSettings(next)
+    setViewLayout(next.defaultView)
+    setSortMode(next.defaultSort)
+    localStorage.setItem('font-butler-view-layout', next.defaultView)
+    localStorage.setItem('font-butler-sort', next.defaultSort)
+  }
+
+  async function persistPreferences(patch: { defaultView?: ViewLayout; defaultSort?: SortMode }) {
+    try {
+      const result = await api.updateSettings(patch)
+      applySettings(result.settings)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not save settings')
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -89,8 +109,11 @@ export default function App() {
             setSelectedEntryId((current) => current ?? focus.id)
           }
         }
-        const system = await api.system()
-        if (!cancelled) setSystemFaces(system.faces)
+        const [system, settingsResult] = await Promise.all([api.system(), api.settings()])
+        if (!cancelled) {
+          setSystemFaces(system.faces)
+          applySettings(settingsResult.settings)
+        }
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Could not load fonts')
       } finally {
@@ -110,6 +133,10 @@ export default function App() {
         }
         return
       }
+      if (isSettingsEvent(event)) {
+        applySettings(event.settings)
+        return
+      }
       if (event && typeof event === 'object' && (event as { type?: string }).type === 'catalog') {
         setEntries((event as { entries: CatalogEntry[] }).entries)
       }
@@ -120,6 +147,21 @@ export default function App() {
     return () => {
       cancelled = true
       stop()
+    }
+  }, [])
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key === ',') {
+        event.preventDefault()
+        setSettingsOpen(true)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    const stopDesktop = window.fontButlerDesktop?.onOpenSettings(() => setSettingsOpen(true))
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      stopDesktop?.()
     }
   }, [])
 
@@ -510,6 +552,7 @@ export default function App() {
           busy={busy}
           onClearFontCache={() => void clearCache(() => api.clearFontCache())}
           onClearOfficeCache={() => void clearCache(() => api.clearOfficeCache())}
+          onOpenSettings={() => setSettingsOpen(true)}
         />
         <header className="flex flex-col gap-3 border-b bg-card/80 px-4 py-3 backdrop-blur md:flex-row md:items-center">
           <div className="flex items-baseline gap-3">
@@ -527,7 +570,7 @@ export default function App() {
               className="pl-8"
             />
           </div>
-          <nav className="flex flex-wrap gap-1">
+          <nav className="flex flex-wrap items-center gap-1">
             {TABS.map((item) => {
               const count =
                 item.id === 'updates'
@@ -551,6 +594,15 @@ export default function App() {
                 </Button>
               )
             })}
+            <Button
+              size="sm"
+              variant={settingsOpen ? 'default' : 'ghost'}
+              aria-label="Settings"
+              onClick={() => setSettingsOpen(true)}
+            >
+              <Settings className="size-4" />
+              Settings
+            </Button>
           </nav>
         </header>
 
@@ -611,11 +663,13 @@ export default function App() {
                     onLayoutChange={(next) => {
                       setViewLayout(next)
                       localStorage.setItem('font-butler-view-layout', next)
+                      void persistPreferences({ defaultView: next })
                     }}
                     sortMode={sortMode}
                     onSortModeChange={(next) => {
                       setSortMode(next)
                       localStorage.setItem('font-butler-sort', next)
+                      void persistPreferences({ defaultSort: next })
                     }}
                     showSources={showSources}
                     onShowSourcesChange={(next) => {
@@ -797,6 +851,12 @@ export default function App() {
             setSelectedFamily(familyNameOf(entry))
             void api.catalog().then((result) => setEntries(result.entries))
           }}
+        />
+        <SettingsDialog
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          settings={settings}
+          onSettingsChange={applySettings}
         />
         <Toaster />
       </div>

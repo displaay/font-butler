@@ -64,7 +64,19 @@ export type Notice = {
   entryId?: string
 }
 
+export type ViewLayout = 'list' | 'grid'
+
+export type SortMode = 'name' | 'installed'
+
+export type AppSettings = {
+  version: 1
+  watchFolder: string | null
+  defaultView: ViewLayout
+  defaultSort: SortMode
+}
+
 export type ServiceEvent =
   | { type: 'catalog'; entries: CatalogEntry[] }
   | { type: 'system'; faces: SystemFace[] }
   | { type: 'notice'; notice: Notice }
+  | { type: 'settings'; settings: AppSettings }

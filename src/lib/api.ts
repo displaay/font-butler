@@ -1,4 +1,4 @@
-import type { CatalogEntry, Notice, SystemFace } from './types'
+import type { AppSettings, CatalogEntry, Notice, SortMode, SystemFace, ViewLayout } from './types'
 
 let apiToken: string | null = null
 
@@ -84,6 +84,12 @@ export const api = {
     json<{ mac: boolean; cleared: boolean }>(post('/api/caches/office', {})),
   reveal: (payload: { id?: string; path?: string; which?: 'source' | 'installed' }) =>
     json<{ path: string }>(post('/api/reveal', payload)),
+  settings: () => json<{ settings: AppSettings }>(fetch('/api/settings')),
+  updateSettings: (patch: {
+    watchFolder?: string | null
+    defaultView?: ViewLayout
+    defaultSort?: SortMode
+  }) => json<{ settings: AppSettings }>(post('/api/settings', patch)),
   renamePreview: (id: string, familyName: string) =>
     json<{ fullName: string; postscriptName: string }>(
       fetch(
@@ -106,4 +112,12 @@ export function subscribeEvents(onEvent: (event: unknown) => void): () => void {
 
 export function isNotice(value: unknown): value is { type: 'notice'; notice: Notice } {
   return Boolean(value && typeof value === 'object' && (value as { type?: string }).type === 'notice')
+}
+
+export function isSettingsEvent(
+  value: unknown,
+): value is { type: 'settings'; settings: AppSettings } {
+  return Boolean(
+    value && typeof value === 'object' && (value as { type?: string }).type === 'settings',
+  )
 }

@@ -13,6 +13,7 @@ export function isMac(): boolean {
 export type AppPaths = {
   dataRoot: string
   catalogPath: string
+  settingsPath: string
   apiTokenPath: string
   installDir: string
   disabledDir: string
@@ -44,6 +45,7 @@ export function getPaths(): AppPaths {
   return {
     dataRoot,
     catalogPath: path.join(dataRoot, 'catalog.json'),
+    settingsPath: path.join(dataRoot, 'settings.json'),
     apiTokenPath: path.join(dataRoot, 'api-token'),
     installDir,
     disabledDir: path.join(dataRoot, 'Disabled'),

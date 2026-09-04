@@ -16,9 +16,10 @@ import { isFontFile, mimeForFont, parseFontFile, readFileStat } from './parse.ts
 import { ensureDirs, getPaths, type AppPaths } from './paths.ts'
 import { postscriptPreview, renameFamilyCopy } from './rename.ts'
 import { revealInFileManager } from './reveal.ts'
+import { loadSettings, saveSettings } from './settings.ts'
 import { allowedFontPath, scanSystemFonts } from './system.ts'
-import type { CatalogEntry, Notice, SystemFace } from './types.ts'
-import { syncWatchers } from './watch.ts'
+import type { AppSettings, CatalogEntry, Notice, SortMode, SystemFace, ViewLayout } from './types.ts'
+import { listInboxFontFiles, syncInboxWatcher, syncWatchers } from './watch.ts'
 
 function now(): number {
   return Date.now()
@@ -92,10 +93,47 @@ export class FontButlerService {
     await this.seedIfEmpty()
     await this.refreshSourceStatuses()
     await syncWatchers(this.paths)
+    await this.refreshInboxWatcher(loadSettings(this.paths).watchFolder, { importExisting: true })
   }
 
   listCatalog(): CatalogEntry[] {
     return loadCatalog(this.paths).entries
+  }
+
+  getSettings(): AppSettings {
+    return loadSettings(this.paths)
+  }
+
+  async updateSettings(patch: {
+    watchFolder?: string | null
+    defaultView?: ViewLayout
+    defaultSort?: SortMode
+  }): Promise<AppSettings> {
+    const current = loadSettings(this.paths)
+    const next: AppSettings = { ...current }
+    if (patch.defaultView === 'list' || patch.defaultView === 'grid') {
+      next.defaultView = patch.defaultView
+    }
+    if (patch.defaultSort === 'name' || patch.defaultSort === 'installed') {
+      next.defaultSort = patch.defaultSort
+    }
+    if ('watchFolder' in patch) {
+      if (patch.watchFolder) {
+        const resolved = path.resolve(patch.watchFolder)
+        if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
+          throw new Error('That folder does not exist.')
+        }
+        next.watchFolder = resolved
+      } else {
+        next.watchFolder = null
+      }
+    }
+    saveSettings(this.paths, next)
+    emitEvent({ type: 'settings', settings: next })
+    if ('watchFolder' in patch) {
+      await this.refreshInboxWatcher(next.watchFolder, { importExisting: true })
+    }
+    return next
   }
 
   getApiToken(): string {
@@ -704,6 +742,47 @@ export class FontButlerService {
     }
     if (changed) {
       saveCatalog(this.paths, catalog)
+    }
+  }
+
+  private async refreshInboxWatcher(
+    folder: string | null,
+    options: { importExisting: boolean },
+  ): Promise<void> {
+    await syncInboxWatcher(folder, (filePaths) => {
+      void this.importInboxFiles(filePaths)
+    })
+    if (options.importExisting && folder) {
+      const known = new Set(
+        this.listCatalog().map((entry) => path.resolve(entry.sourcePath)),
+      )
+      const discovered = listInboxFontFiles(folder).filter((filePath) => !known.has(filePath))
+      if (discovered.length) {
+        await this.importInboxFiles(discovered)
+      }
+    }
+  }
+
+  private async importInboxFiles(filePaths: string[]): Promise<void> {
+    const beforeIds = new Set(this.listCatalog().map((entry) => entry.id))
+    const result = await this.importPaths(filePaths)
+    const added = result.entries.filter((entry) => !beforeIds.has(entry.id))
+    const firstAdded = added[0]
+    if (firstAdded) {
+      emitNotice({
+        kind: 'info',
+        message:
+          added.length === 1
+            ? `Added ${displayFamily(firstAdded)} from the watch folder`
+            : `Added ${added.length} fonts from the watch folder`,
+        entryId: firstAdded.id,
+      })
+    }
+    if (result.errors.length) {
+      emitNotice({
+        kind: 'error',
+        message: result.errors.join('\n'),
+      })
     }
   }
 

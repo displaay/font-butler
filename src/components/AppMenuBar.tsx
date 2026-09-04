@@ -5,10 +5,12 @@ export function AppMenuBar({
   busy,
   onClearFontCache,
   onClearOfficeCache,
+  onOpenSettings,
 }: {
   busy: boolean
   onClearFontCache: () => void
   onClearOfficeCache: () => void
+  onOpenSettings: () => void
 }) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -79,6 +81,13 @@ export function AppMenuBar({
           </div>
         ) : null}
       </div>
+      <button
+        type="button"
+        className="rounded-md px-2 py-1 text-sm hover:bg-muted"
+        onClick={onOpenSettings}
+      >
+        Settings
+      </button>
     </div>
   )
 }

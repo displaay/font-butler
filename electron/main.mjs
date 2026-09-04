@@ -26,6 +26,24 @@ async function ensureApiToken() {
   return apiToken
 }
 
+function openSettings() {
+  if (!mainWindow) {
+    createWindow()
+  }
+  const win = mainWindow
+  if (!win) {
+    return
+  }
+  const send = () => win.webContents.send('open-settings')
+  if (win.webContents.isLoading()) {
+    win.webContents.once('did-finish-load', send)
+  } else {
+    send()
+  }
+  win.show()
+  win.focus()
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1320,
@@ -99,9 +117,38 @@ async function clearCacheFromMenu(kind) {
 }
 
 function buildAppMenu() {
+  const settingsItem = {
+    label: 'Settings…',
+    accelerator: 'CommandOrControl+,',
+    click: openSettings,
+  }
   return Menu.buildFromTemplate([
-    ...(process.platform === 'darwin' ? [{ role: 'appMenu' }] : []),
-    { role: 'fileMenu' },
+    ...(process.platform === 'darwin'
+      ? [
+          {
+            label: app.name,
+            submenu: [
+              { role: 'about' },
+              { type: 'separator' },
+              settingsItem,
+              { type: 'separator' },
+              { role: 'services' },
+              { type: 'separator' },
+              { role: 'hide' },
+              { role: 'hideOthers' },
+              { role: 'unhide' },
+              { type: 'separator' },
+              { role: 'quit' },
+            ],
+          },
+        ]
+      : [
+          {
+            label: 'File',
+            submenu: [settingsItem, { type: 'separator' }, { role: 'quit' }],
+          },
+        ]),
+    ...(process.platform === 'darwin' ? [{ role: 'fileMenu' }] : []),
     { role: 'editMenu' },
     { role: 'viewMenu' },
     {
@@ -179,4 +226,18 @@ if (!gotLock) {
 
 ipcMain.handle('reveal', async (_event, filePath) => {
   shell.showItemInFolder(filePath)
+})
+
+ipcMain.handle('pick-folder', async () => {
+  const options = {
+    title: 'Choose a folder to watch',
+    properties: ['openDirectory', 'createDirectory'],
+  }
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, options)
+    : await dialog.showOpenDialog(options)
+  if (result.canceled) {
+    return null
+  }
+  return result.filePaths[0] ?? null
 })

@@ -71,6 +71,15 @@ export type FamilyGroup = {
   addedAt: number
 }
 
+export type ViewLayout = 'list' | 'grid'
+
+export type AppSettings = {
+  version: 1
+  watchFolder: string | null
+  defaultView: ViewLayout
+  defaultSort: SortMode
+}
+
 export type SystemFamilyGroup = {
   key: string
   familyName: string
