@@ -125,7 +125,7 @@ export function SettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[min(90vh,900px)] w-[min(92vw,520px)] flex-col overflow-hidden">
+      <DialogContent className="flex max-h-[min(90vh,900px)] w-[min(92vw,640px)] flex-col overflow-hidden p-6">
         <DialogHeader className="shrink-0 pr-6">
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription>
@@ -383,7 +383,7 @@ export function SettingsDialog({
                 }
               >
                 <option value="name">A–Z</option>
-                <option value="installed">Installed</option>
+                <option value="added">Added</option>
               </select>
             </div>
           </section>

@@ -7,6 +7,7 @@ import { test } from 'node:test'
 import { saveCatalog } from './catalog.ts'
 import type { AppPaths } from './paths.ts'
 import { FontButlerService } from './service.ts'
+import { closeAllWatchers } from './watch.ts'
 import type { CatalogEntry } from './types.ts'
 
 function tempPaths(): AppPaths {
@@ -98,6 +99,7 @@ test('init keeps an installed font installed after its source file is removed', 
     assert.equal(entry.installedPath, installed)
     assert.equal(fs.existsSync(installed), true)
   } finally {
+    await closeAllWatchers()
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
 })
@@ -125,6 +127,7 @@ test('init marks an uninstalled font source-missing when its file is gone', asyn
     assert.equal(entry.status, 'source-missing')
     assert.equal(entry.sourcePresent, false)
   } finally {
+    await closeAllWatchers()
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
 })
@@ -143,6 +146,7 @@ test('importPaths reuses a catalog entry for the same source path', async () => 
     assert.equal(first.entries[0].id, second.entries[0].id)
     assert.equal(service.listCatalog().length, 1)
   } finally {
+    await closeAllWatchers()
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
 })
@@ -165,6 +169,7 @@ test('importPaths reuses an uninstalled upload when the same font arrives from a
     assert.equal(again.entries[0].status, 'uninstalled')
     assert.equal(service.listCatalog().length, 1)
   } finally {
+    await closeAllWatchers()
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
 })
@@ -187,6 +192,7 @@ test('importing an already installed font keeps the same entry installed', async
     assert.equal(still.installedPath, installed.installedPath)
     assert.equal(service.listCatalog().length, 1)
   } finally {
+    await closeAllWatchers()
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
 })

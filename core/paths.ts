@@ -131,9 +131,10 @@ export function getPaths(): AppPaths {
           installDir: '',
         }
   const dataRoot = migrated.dataRoot
-  const installDir = isMac()
-    ? migrated.installDir || path.join(home, 'Library/Fonts', APP_FOLDER_NAME)
-    : path.join(dataRoot, 'installed')
+  const userFontsDir = isMac()
+    ? path.join(home, 'Library/Fonts')
+    : path.join(home, '.local/share/fonts')
+  const installDir = isMac() ? userFontsDir : path.join(dataRoot, 'installed')
 
   return {
     dataRoot,
@@ -146,9 +147,7 @@ export function getPaths(): AppPaths {
     uploadsDir: path.join(dataRoot, 'uploads'),
     systemCachePath: path.join(dataRoot, 'system-cache.json'),
     seedDir: path.join(projectRoot, 'seed-fonts'),
-    userFontsDir: isMac()
-      ? path.join(home, 'Library/Fonts')
-      : path.join(home, '.local/share/fonts'),
+    userFontsDir,
     computerFontsDir: isMac() ? '/Library/Fonts' : '/usr/local/share/fonts',
     systemFontsDir: isMac() ? '/System/Library/Fonts' : '/usr/share/fonts',
     supplementalFontsDir: isMac()

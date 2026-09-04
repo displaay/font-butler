@@ -7,6 +7,7 @@ import {
   applySourcePresence,
   faceIdentityKey,
   findByFaceIdentity,
+  isExternalSource,
   resolveStatusWhenSourceMissing,
 } from './catalog.ts'
 import type { CatalogEntry, CatalogFile, FontFaceInfo } from './types.ts'
@@ -76,6 +77,48 @@ test('resolveStatusWhenSourceMissing keeps installed and deactivated copies', ()
     assert.equal(
       resolveStatusWhenSourceMissing(entry({ id: 'gone', sourcePath: '/missing.ttf', status: 'uninstalled' })),
       'source-missing',
+    )
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('applySourcePresence treats a user font as having no external source', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-catalog-'))
+  try {
+    const installed = path.join(root, 'Mine.ttf')
+    fs.writeFileSync(installed, 'font')
+    const row = entry({
+      id: 'mine',
+      sourcePath: installed,
+      status: 'installed',
+      installedPath: installed,
+      sourcePresent: true,
+    })
+    assert.equal(isExternalSource(row), false)
+    assert.equal(applySourcePresence(row), true)
+    assert.equal(row.sourcePresent, false)
+    assert.equal(row.status, 'installed')
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('resolveStatusWhenSourceMissing keeps an in-place deactivated font deactivated', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-catalog-'))
+  try {
+    const installed = path.join(root, 'Off.ttf')
+    fs.writeFileSync(installed, 'font')
+    assert.equal(
+      resolveStatusWhenSourceMissing(
+        entry({
+          id: 'off',
+          sourcePath: '/missing.ttf',
+          status: 'deactivated',
+          installedPath: installed,
+        }),
+      ),
+      'deactivated',
     )
   } finally {
     fs.rmSync(root, { recursive: true, force: true })

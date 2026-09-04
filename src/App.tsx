@@ -40,7 +40,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { api, isNotice, isSettingsEvent, subscribeEvents } from '@/lib/api'
 import { collectDropPayload, isDroppedFontName, isWebOnlyDrop, partitionDropPayload } from '@/lib/drop'
 import { WOFF_INSTALL_ERROR } from '@/lib/formats'
-import { familyNameOf, deletableSourceIds, entryIds, familyStatusSummary, forgettableIds, groupCatalog, groupSystem, hasMissingTrackedSource, hasSourceMissing, hasTrackedSource, isForgettableOnlyGroup, isLibraryEntry, isUninstallableGroup, matchesQuery, sortFamilyGroups } from '@/lib/group'
+import { familyNameOf, deletableSourceIds, entryIds, familyStatusSummary, forgettableIds, groupCatalog, groupSystem, hasMissingTrackedSource, hasSourceMissing, hasTrackedSource, isForgettableOnlyGroup, isLibraryEntry, isUninstallableGroup, matchesLibraryFilter, matchesQuery, sortFamilyGroups } from '@/lib/group'
 import { actionCopy, actionCopyFor, emptyImportError, importDoneCopy, remainingActionCopy } from '@/lib/notify'
 import { catalogInstanceRows, systemInstanceRows } from '@/lib/instances'
 import {
@@ -61,11 +61,32 @@ import {
   type Rect,
 } from '@/lib/selection'
 import { applyTheme } from '@/lib/theme'
-import type { AppSettings, CatalogEntry, FamilyGroup, SortMode, SystemFace, SystemFamilyGroup } from '@/lib/types'
+import type { AppSettings, CatalogEntry, FamilyGroup, LibraryStatusFilter, SortMode, SystemFace, SystemFamilyGroup } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { isPathUnderFolder, isWatchFolderEntry, mergeWatchFolders, watchFolderName } from '@/lib/watchFolders'
 
 const EMPTY_WATCH_FOLDERS: string[] = []
+const LIBRARY_FILTERS_KEY = 'font-butler-library-filters'
+
+function readSortMode(): SortMode {
+  const stored = localStorage.getItem('font-butler-sort')
+  return stored === 'added' || stored === 'installed' ? 'added' : 'name'
+}
+
+function readLibraryFilters(): LibraryStatusFilter[] {
+  const raw = localStorage.getItem(LIBRARY_FILTERS_KEY)
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (item): item is LibraryStatusFilter =>
+        item === 'installed' || item === 'deactivated' || item === 'uninstalled',
+    )
+  } catch {
+    return []
+  }
+}
 
 export default function App() {
   return (
@@ -107,9 +128,7 @@ function AppShell() {
   const [viewLayout, setViewLayout] = useState<ViewLayout>(() =>
     localStorage.getItem('font-butler-view-layout') === 'grid' ? 'grid' : 'list',
   )
-  const [sortMode, setSortMode] = useState<SortMode>(() =>
-    localStorage.getItem('font-butler-sort') === 'installed' ? 'installed' : 'name',
-  )
+  const [sortMode, setSortMode] = useState<SortMode>(readSortMode)
   const [selectedFamilyKeys, setSelectedFamilyKeys] = useState<string[]>([])
   const [selectedSystemKeys, setSelectedSystemKeys] = useState<string[]>([])
   const [selectionAnchor, setSelectionAnchor] = useState<string | null>(null)
@@ -127,9 +146,7 @@ function AppShell() {
   const suppressClickRef = useRef(false)
   const applyMarqueeKeysRef = useRef<(keys: string[]) => void>(() => {})
   const [scrollToFamily, setScrollToFamily] = useState<string | null>(null)
-  const [hideDeactivated, setHideDeactivated] = useState(
-    () => localStorage.getItem('font-butler-hide-deactivated') === 'true',
-  )
+  const [libraryFilters, setLibraryFilters] = useState<LibraryStatusFilter[]>(readLibraryFilters)
   const [gridPreviewSize, setGridPreviewSize] = useState(readGridPreviewSize)
 
   function applySettings(next: AppSettings) {
@@ -265,13 +282,13 @@ function AppShell() {
     () =>
       sortFamilyGroups(
         groupCatalog(
-          librarySourceEntries.filter((entry) => !hideDeactivated || entry.status !== 'deactivated'),
+          librarySourceEntries.filter((entry) => matchesLibraryFilter(entry, libraryFilters)),
         ).filter((group) =>
           matchesQuery(`${group.familyName} ${group.faces.map((face) => face.styleName).join(' ')}`, query),
         ),
         sortMode,
       ),
-    [librarySourceEntries, query, sortMode, hideDeactivated],
+    [librarySourceEntries, query, sortMode, libraryFilters],
   )
   const libraryGroupsUnfiltered = useMemo(
     () => groupCatalog(librarySourceEntries),
@@ -1054,12 +1071,12 @@ function AppShell() {
                       localStorage.setItem('font-butler-show-sources', String(next))
                     }}
                     showSourcesToggle
-                    hideDeactivated={hideDeactivated}
-                    onHideDeactivatedChange={(next) => {
-                      setHideDeactivated(next)
-                      localStorage.setItem('font-butler-hide-deactivated', String(next))
+                    statusFilters={libraryFilters}
+                    onStatusFiltersChange={(next) => {
+                      setLibraryFilters(next)
+                      localStorage.setItem(LIBRARY_FILTERS_KEY, JSON.stringify(next))
                     }}
-                    showHideDeactivated={tab === 'library'}
+                    showStatusFilters={tab === 'library'}
                     previewSize={gridPreviewSize}
                     onPreviewSizeChange={(next) => {
                       setGridPreviewSize(next)
@@ -1085,15 +1102,21 @@ function AppShell() {
                   <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>
                 )}
                 {!loading && tab !== 'system' && visibleGroups.length === 0 && (
-                  <EmptyState
-                    tab={tab}
-                    watchFolderName={
-                      tab === 'library' && watchFolderFilter
-                        ? watchFolderName(watchFolderFilter)
-                        : null
-                    }
-                    onPickFiles={(files) => void handleFiles(files)}
-                  />
+                  tab === 'library' && libraryGroupsUnfiltered.length > 0 && libraryFilters.length > 0 ? (
+                    <p className="px-2 py-12 text-center text-sm text-muted-foreground">
+                      No fonts match these filters.
+                    </p>
+                  ) : (
+                    <EmptyState
+                      tab={tab}
+                      watchFolderName={
+                        tab === 'library' && watchFolderFilter
+                          ? watchFolderName(watchFolderFilter)
+                          : null
+                      }
+                      onPickFiles={(files) => void handleFiles(files)}
+                    />
+                  )
                 )}
                 {!loading && tab === 'system' && systemGroups.length === 0 && (
                   <p className="px-2 py-12 text-center text-sm text-muted-foreground">
@@ -1563,10 +1586,6 @@ function LibraryCard({
         <span className="truncate font-medium">{group.familyName}</span>
         <VfBadge show={group.isVariable} />
         <StatusBadge status={group.status} />
-        <SourceBadge
-          present={hasTrackedSource(group)}
-          showMissing={group.status !== 'source-missing' && hasMissingTrackedSource(group)}
-        />
       </div>
       <div className="mt-0.5 text-xs text-muted-foreground">
         {group.instanceCount} {group.instanceCount === 1 ? 'instance' : 'instances'}
@@ -1601,6 +1620,11 @@ function LibraryCard({
           onPointerEnter={() => setHovered(true)}
           onPointerLeave={() => setHovered(false)}
         >
+          <SourceBadge
+            className="pointer-events-none absolute top-1.5 left-1.5 z-10"
+            present={hasTrackedSource(group)}
+            showMissing={group.status !== 'source-missing' && hasMissingTrackedSource(group)}
+          />
           {layout === 'grid' ? (
             <button
               type="button"
@@ -1890,8 +1914,8 @@ function EmptyState({
           {watchFolderName
             ? 'Drop fonts into this folder in Finder, or drop them here to add them.'
             : tab === 'library'
-              ? 'Drop a folder to add every TrueType and OpenType file inside it, including collections and subfolders. You can also watch a folder so new fonts are imported automatically. Uninstalled fonts stay here so you can put them back in one click.'
-              : 'Fonts you uninstall stay in the library so you can put them back in one click.'}
+              ? 'Fonts already in My Fonts appear here. Drop a folder to add every TrueType and OpenType file inside it, including collections and subfolders. You can also watch a folder so new fonts are imported automatically. Uninstalling keeps a family here only when a separate source file is still on disk.'
+              : 'Uninstalling keeps a family here only when a separate source file is still on disk.'}
         </p>
         <input
           type="file"

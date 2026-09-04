@@ -1,6 +1,19 @@
 import fs from 'node:fs'
+import path from 'node:path'
 import type { AppPaths } from './paths.ts'
 import type { CatalogEntry, CatalogFile, FontFaceInfo, FontStatus } from './types.ts'
+
+function resolvedPath(value: string | undefined): string | undefined {
+  if (!value) return undefined
+  return path.resolve(value)
+}
+
+/** True when sourcePath is a separate file from the installed/disabled copy. */
+export function isExternalSource(entry: CatalogEntry): boolean {
+  const source = resolvedPath(entry.sourcePath)
+  if (!source) return false
+  return source !== resolvedPath(entry.installedPath) && source !== resolvedPath(entry.disabledPath)
+}
 
 const emptyCatalog = (): CatalogFile => ({ version: 1, entries: [] })
 
@@ -57,7 +70,19 @@ export function findBySourcePath(
   catalog: CatalogFile,
   sourcePath: string,
 ): CatalogEntry | undefined {
-  return catalog.entries.find((entry) => entry.sourcePath === sourcePath)
+  const resolved = path.resolve(sourcePath)
+  return catalog.entries.find((entry) => resolvedPath(entry.sourcePath) === resolved)
+}
+
+export function findByInstalledPath(
+  catalog: CatalogFile,
+  filePath: string,
+): CatalogEntry | undefined {
+  const resolved = path.resolve(filePath)
+  return catalog.entries.find(
+    (entry) =>
+      resolvedPath(entry.installedPath) === resolved || resolvedPath(entry.disabledPath) === resolved,
+  )
 }
 
 export function faceIdentityKey(faces: FontFaceInfo[]): string | null {
@@ -108,27 +133,30 @@ export function removeEntryById(catalog: CatalogFile, id: string): CatalogEntry 
   return removed
 }
 
-export function resolveStatusWhenSourceFound(entry: CatalogEntry): FontStatus {
+function statusForPresentCopy(entry: CatalogEntry): FontStatus | null {
   if (entry.installedPath && fs.existsSync(entry.installedPath)) {
-    return 'installed'
+    return entry.status === 'deactivated' ? 'deactivated' : 'installed'
   }
   if (entry.disabledPath && fs.existsSync(entry.disabledPath)) {
     return 'deactivated'
   }
-  return 'uninstalled'
+  return null
+}
+
+export function resolveStatusWhenSourceFound(entry: CatalogEntry): FontStatus {
+  return statusForPresentCopy(entry) ?? 'uninstalled'
 }
 
 export function resolveStatusWhenSourceMissing(entry: CatalogEntry): FontStatus {
-  if (entry.installedPath && fs.existsSync(entry.installedPath)) {
-    return 'installed'
-  }
-  if (entry.disabledPath && fs.existsSync(entry.disabledPath)) {
-    return 'deactivated'
-  }
-  return 'source-missing'
+  return statusForPresentCopy(entry) ?? 'source-missing'
 }
 
 export function applySourcePresence(entry: CatalogEntry): boolean {
+  if (!isExternalSource(entry)) {
+    const changed = entry.sourcePresent !== false
+    entry.sourcePresent = false
+    return changed
+  }
   const present = sourceFileExists(entry.sourcePath)
   let changed = entry.sourcePresent !== present
   entry.sourcePresent = present

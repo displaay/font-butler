@@ -2,6 +2,7 @@ import type {
   CatalogEntry,
   FamilyGroup,
   FontStatus,
+  LibraryStatusFilter,
   SortMode,
   SystemFace,
   SystemFamilyGroup,
@@ -65,12 +66,31 @@ export function groupCatalog(entries: CatalogEntry[]): FamilyGroup[] {
 
 export function sortFamilyGroups(groups: FamilyGroup[], mode: SortMode): FamilyGroup[] {
   const copy = [...groups]
-  if (mode === 'installed') {
+  if (mode === 'added') {
     copy.sort((a, b) => b.addedAt - a.addedAt || a.familyName.localeCompare(b.familyName))
   } else {
     copy.sort((a, b) => a.familyName.localeCompare(b.familyName))
   }
   return copy
+}
+
+export function matchesLibraryFilter(
+  entry: CatalogEntry,
+  filters: readonly LibraryStatusFilter[],
+): boolean {
+  if (filters.length === 0) {
+    return true
+  }
+  return filters.some((filter) => {
+    switch (filter) {
+      case 'installed':
+        return entry.status === 'installed' || entry.status === 'outdated'
+      case 'deactivated':
+        return entry.status === 'deactivated'
+      case 'uninstalled':
+        return entry.status === 'uninstalled' || entry.status === 'source-missing'
+    }
+  })
 }
 
 export function groupSystem(faces: SystemFace[]): SystemFamilyGroup[] {
@@ -117,7 +137,7 @@ export function isLibraryEntry(entry: CatalogEntry): boolean {
   }
 }
 
-/** Delete/Backspace uninstalls these families; they stay on Fonts as not installed. */
+/** Delete/Backspace uninstalls these families from ~/Library/Fonts. */
 export function isUninstallableGroup(group: { status: FontStatus }): boolean {
   return group.status === 'installed' || group.status === 'outdated' || group.status === 'deactivated'
 }
@@ -162,7 +182,17 @@ export function hasSourceMissing(group: { entries: CatalogEntry[] }): boolean {
   return group.entries.some((entry) => entry.status === 'source-missing')
 }
 
+function isSelfSourced(entry: CatalogEntry): boolean {
+  if (!entry.sourcePath) return true
+  if (entry.installedPath && entry.sourcePath === entry.installedPath) return true
+  if (entry.disabledPath && entry.sourcePath === entry.disabledPath) return true
+  return false
+}
+
 export function entryHasTrackedSource(entry: CatalogEntry): boolean {
+  if (isSelfSourced(entry)) {
+    return false
+  }
   if (typeof entry.sourcePresent === 'boolean') {
     return entry.sourcePresent
   }

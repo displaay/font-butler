@@ -58,7 +58,9 @@ export type Notice = {
   entryId?: string
 }
 
-export type SortMode = 'name' | 'installed'
+export type SortMode = 'name' | 'added'
+
+export type LibraryStatusFilter = 'installed' | 'deactivated' | 'uninstalled'
 
 export type FamilyGroup = {
   key: string

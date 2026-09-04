@@ -68,7 +68,7 @@ export type Notice = {
 
 export type ViewLayout = 'list' | 'grid'
 
-export type SortMode = 'name' | 'installed'
+export type SortMode = 'name' | 'added'
 
 export type ThemeMode = 'light' | 'dark' | 'system'
 

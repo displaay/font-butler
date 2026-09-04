@@ -98,7 +98,7 @@ app.post('/api/settings', async (c) => {
   const body = await c.req.json<{
     watchFolders?: string[]
     defaultView?: 'list' | 'grid'
-    defaultSort?: 'name' | 'installed'
+    defaultSort?: 'name' | 'added' | 'installed'
     installAfterUpload?: boolean
     theme?: 'light' | 'dark' | 'system'
     menuBarIcon?: boolean

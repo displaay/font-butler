@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { FontButlerService } from './service.ts'
+import { closeAllWatchers } from './watch.ts'
 import type { AppPaths } from './paths.ts'
 
 function tempPaths(): AppPaths {
@@ -51,6 +52,7 @@ test('importPaths installs catalog entries from a nested folder', async (t) => {
     assert.equal(path.basename(result.entries[0].sourcePath), otf)
     assert.equal(result.entries[0].status, 'uninstalled')
   } finally {
+    await closeAllWatchers()
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
 })
@@ -77,6 +79,7 @@ test('importPaths rejects woff-only folders and ignores woff next to desktop fon
     assert.equal(mixedResult.ignored, 1)
     assert.equal(mixedResult.errors.some((message) => /WOFF files cannot be installed/.test(message)), false)
   } finally {
+    await closeAllWatchers()
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
 })

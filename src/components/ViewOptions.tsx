@@ -1,9 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowDownAZ, CalendarClock, Ellipsis, LayoutGrid, List } from 'lucide-react'
+import { ArrowDownAZ, CalendarPlus, Ellipsis, LayoutGrid, List } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
-import type { SortMode } from '@/lib/types'
+import type { LibraryStatusFilter, SortMode } from '@/lib/types'
 import { cn } from '@/lib/utils'
+
+const STATUS_FILTERS: { id: LibraryStatusFilter; label: string }[] = [
+  { id: 'installed', label: 'Installed' },
+  { id: 'deactivated', label: 'Deactivated' },
+  { id: 'uninstalled', label: 'Uninstalled' },
+]
 
 export type ViewLayout = 'list' | 'grid'
 
@@ -30,9 +36,9 @@ export function ViewOptions({
   showSources,
   onShowSourcesChange,
   showSourcesToggle = true,
-  hideDeactivated = false,
-  onHideDeactivatedChange,
-  showHideDeactivated = false,
+  statusFilters = [],
+  onStatusFiltersChange,
+  showStatusFilters = false,
   previewSize,
   onPreviewSizeChange,
   className,
@@ -44,16 +50,16 @@ export function ViewOptions({
   showSources: boolean
   onShowSourcesChange: (value: boolean) => void
   showSourcesToggle?: boolean
-  hideDeactivated?: boolean
-  onHideDeactivatedChange?: (value: boolean) => void
-  showHideDeactivated?: boolean
+  statusFilters?: LibraryStatusFilter[]
+  onStatusFiltersChange?: (value: LibraryStatusFilter[]) => void
+  showStatusFilters?: boolean
   previewSize: number
   onPreviewSizeChange: (size: number) => void
   className?: string
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
-  const showMenu = showHideDeactivated || showSourcesToggle
+  const showMenu = showSourcesToggle
 
   useEffect(() => {
     if (!menuOpen) return
@@ -121,6 +127,32 @@ export function ViewOptions({
             </span>
           </label>
         )}
+        {showStatusFilters && (
+          <div className="flex items-center gap-0.5 rounded-md border bg-background p-0.5">
+            {STATUS_FILTERS.map((filter) => {
+              const active = statusFilters.includes(filter.id)
+              return (
+                <Button
+                  key={filter.id}
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className={cn('h-7 gap-1.5', active && 'bg-muted font-medium')}
+                  onClick={() => {
+                    const next = active
+                      ? statusFilters.filter((item) => item !== filter.id)
+                      : [...statusFilters, filter.id]
+                    onStatusFiltersChange?.(next)
+                  }}
+                  aria-label={`Filter ${filter.label.toLowerCase()}`}
+                  aria-pressed={active}
+                >
+                  {filter.label}
+                </Button>
+              )
+            })}
+          </div>
+        )}
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex items-center gap-0.5 rounded-md border bg-background p-0.5">
@@ -140,13 +172,13 @@ export function ViewOptions({
             type="button"
             size="sm"
             variant="ghost"
-            className={cn('h-7 gap-1.5', sortMode === 'installed' && 'bg-muted font-medium')}
-            onClick={() => onSortModeChange('installed')}
-            aria-label="Sort by date of installation"
-            aria-pressed={sortMode === 'installed'}
+            className={cn('h-7 gap-1.5', sortMode === 'added' && 'bg-muted font-medium')}
+            onClick={() => onSortModeChange('added')}
+            aria-label="Sort by date added"
+            aria-pressed={sortMode === 'added'}
           >
-            <CalendarClock className="size-3.5 text-muted-foreground" />
-            Installed
+            <CalendarPlus className="size-3.5 text-muted-foreground" />
+            Added
           </Button>
         </div>
         {showMenu && (
@@ -168,17 +200,6 @@ export function ViewOptions({
                 role="menu"
                 className="absolute top-full right-0 z-30 mt-1 min-w-48 rounded-md border bg-popover p-1 shadow-sm"
               >
-                {showHideDeactivated && (
-                  <Label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 font-normal text-foreground hover:bg-muted">
-                    <input
-                      type="checkbox"
-                      checked={hideDeactivated}
-                      onChange={(event) => onHideDeactivatedChange?.(event.target.checked)}
-                      className="size-3.5 rounded border border-input accent-primary"
-                    />
-                    Hide deactivated
-                  </Label>
-                )}
                 {showSourcesToggle && (
                   <Label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 font-normal text-foreground hover:bg-muted">
                     <input

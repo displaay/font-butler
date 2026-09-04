@@ -1,5 +1,7 @@
+import { Link2, Unlink } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import type { FontStatus } from '@/lib/types'
+import { cn } from '@/lib/utils'
 
 export function VfBadge({ show }: { show: boolean }) {
   if (!show) return null
@@ -21,18 +23,39 @@ export function StatusBadge({ status }: { status: FontStatus }) {
 export function SourceBadge({
   present,
   showMissing = false,
+  className,
 }: {
   present: boolean
   showMissing?: boolean
+  className?: string
 }) {
-  return (
-    <>
-      {present ? (
-        <Badge tone="ink" className="tracking-normal">
-          Source
-        </Badge>
-      ) : null}
-      {showMissing ? <Badge tone="accent">Source missing</Badge> : null}
-    </>
-  )
+  if (present) {
+    return (
+      <span
+        title="Source file on disk"
+        aria-label="Source file on disk"
+        className={cn(
+          'inline-flex size-5 items-center justify-center rounded-md bg-background/85 text-muted-foreground shadow-[inset_0_0_0_1px_var(--border)] backdrop-blur-sm',
+          className,
+        )}
+      >
+        <Link2 className="size-3" />
+      </span>
+    )
+  }
+  if (showMissing) {
+    return (
+      <span
+        title="Source file missing"
+        aria-label="Source file missing"
+        className={cn(
+          'inline-flex size-5 items-center justify-center rounded-md bg-background/85 text-red-700 shadow-[inset_0_0_0_1px_var(--border)] backdrop-blur-sm dark:text-red-400',
+          className,
+        )}
+      >
+        <Unlink className="size-3" />
+      </span>
+    )
+  }
+  return null
 }

@@ -230,6 +230,7 @@ export function Inspector({
             {entry.sourcePath}
           </span>
           <SourceBadge
+            className="bg-transparent shadow-none"
             present={entryHasTrackedSource(entry)}
             showMissing={entry.status !== 'source-missing' && !entryHasTrackedSource(entry)}
           />

@@ -1,7 +1,7 @@
 import chokidar, { type FSWatcher } from 'chokidar'
 import fs from 'node:fs'
 import path from 'node:path'
-import { applySourcePresence, findBySourcePath, loadCatalog, resolveStatusWhenSourceFound, saveCatalog } from './catalog.ts'
+import { applySourcePresence, findBySourcePath, isExternalSource, loadCatalog, resolveStatusWhenSourceFound, saveCatalog } from './catalog.ts'
 import { emitEvent } from './events.ts'
 import { isWebFontFile } from './formats.ts'
 import { isFontFile, readFileStat } from './parse.ts'
@@ -10,6 +10,8 @@ import type { CatalogEntry } from './types.ts'
 
 let watcher: FSWatcher | null = null
 let inboxWatcher: FSWatcher | null = null
+let userFontsWatcher: FSWatcher | null = null
+let userFontsTimer: ReturnType<typeof setTimeout> | null = null
 let inboxTimer: ReturnType<typeof setTimeout> | null = null
 let inboxPending: string[] = []
 
@@ -52,7 +54,9 @@ function refreshStatus(paths: AppPaths, sourcePath: string): CatalogEntry | unde
 
 export async function syncWatchers(paths: AppPaths): Promise<void> {
   const catalog = loadCatalog(paths)
-  const sources = catalog.entries.map((entry) => entry.sourcePath)
+  const sources = catalog.entries
+    .filter((entry) => isExternalSource(entry) && entry.sourcePath)
+    .map((entry) => entry.sourcePath)
   if (watcher) {
     await watcher.close()
     watcher = null
@@ -246,4 +250,46 @@ export async function syncInboxWatcher(
     }, 350)
   }
   inboxWatcher.on('add', queue)
+}
+
+export async function syncUserFontsWatcher(
+  userFontsDir: string,
+  onChange: () => void,
+): Promise<void> {
+  if (userFontsTimer) {
+    clearTimeout(userFontsTimer)
+    userFontsTimer = null
+  }
+  if (userFontsWatcher) {
+    await userFontsWatcher.close()
+    userFontsWatcher = null
+  }
+  if (!userFontsDir || !fs.existsSync(userFontsDir)) {
+    return
+  }
+  userFontsWatcher = chokidar.watch(userFontsDir, {
+    ignoreInitial: true,
+    awaitWriteFinish: { stabilityThreshold: 400, pollInterval: 100 },
+    depth: FONT_TREE_MAX_DEPTH,
+  })
+  const kick = () => {
+    if (userFontsTimer) {
+      clearTimeout(userFontsTimer)
+    }
+    userFontsTimer = setTimeout(() => {
+      userFontsTimer = null
+      onChange()
+    }, 350)
+  }
+  userFontsWatcher.on('add', kick)
+  userFontsWatcher.on('unlink', kick)
+}
+
+export async function closeAllWatchers(): Promise<void> {
+  if (watcher) {
+    await watcher.close()
+    watcher = null
+  }
+  await syncInboxWatcher([], () => {})
+  await syncUserFontsWatcher('', () => {})
 }

@@ -53,11 +53,7 @@ type CacheFile = {
 }
 
 export function scanSystemFonts(paths: AppPaths): SystemFace[] {
-  const roots = [
-    paths.userFontsDir,
-    paths.computerFontsDir,
-    paths.systemFontsDir,
-  ]
+  const roots = [paths.computerFontsDir, paths.systemFontsDir]
   const files: string[] = []
   for (const root of [...new Set(roots)]) {
     walkFonts(root, files)

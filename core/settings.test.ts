@@ -79,6 +79,7 @@ test('loadSettings fills installAfterUpload on older settings files', () => {
     const settings = loadSettings(paths)
     assert.equal(settings.installAfterUpload, true)
     assert.equal(settings.defaultView, 'grid')
+    assert.equal(settings.defaultSort, 'added')
     assert.equal(settings.theme, 'system')
     assert.equal(settings.menuBarIcon, true)
     assert.equal(settings.openAtLogin, false)

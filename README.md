@@ -6,12 +6,13 @@ Drop a font file into Font Buttler and it remembers the original path. When that
 
 ## What it does
 
-- Tracks source files and last-modified time. A **Source** badge means the original file is still on disk; removing it does not uninstall the font
+- Shows Font Book’s **My Fonts** (`~/Library/Fonts`) on the Fonts tab as soon as the app opens
+- Tracks a separate source file when you drop or watch one. A **Source** badge means that original file is still on disk; removing it does not uninstall the font
 - Groups families, counts instances, and marks variable fonts with a **VF** badge
 - Shows a live **Aa** preview on every card
-- Installs, uninstalls, and deactivates user fonts. Uninstalling keeps the family on the Fonts list with a **Not installed** badge until you remove it from the list
+- Installs, uninstalls, and deactivates user fonts in place, like Font Book. Uninstalling removes the file from `~/Library/Fonts`. If a separate source file is still on disk, the family stays on the Fonts list as **Not installed**; otherwise it leaves the list
 - **Install as…** rewrites the family name across OpenType name (and CFF) tables, then installs a copy. The original file is never mutated
-- Lists fonts already on the computer and lets you remove ones that are not protected
+- **On this Mac** lists computer and system fonts and lets you remove ones that are not protected
 - Right-click a card → **Show in Finder**
 - If Font Buttler is the default app for a font, double-clicking the file adds it to the library and installs it immediately
 
@@ -24,7 +25,7 @@ npm run electron
 
 To replace Font Book as the double-click handler: select a `.otf` or `.ttf` in Finder, **Get Info → Open with → Font Buttler → Change All**.
 
-Font Buttler installs copies into `~/Library/Fonts/Font Buttler/`. Catalog data lives in `~/Library/Application Support/Font Buttler/`.
+Font Buttler installs copies into `~/Library/Fonts`, the same user font folder Font Book uses. Fonts already there show up on the Fonts tab on launch. Catalog data lives in `~/Library/Application Support/Font Buttler/`.
 
 ### Font cache menu
 
@@ -58,3 +59,5 @@ http://127.0.0.1:43181/?open=/absolute/path/to/font.ttf
 ## Stack
 
 Electron + Vite + React + TypeScript. Font metadata comes from `fontkit`. Family renaming prefers Python `fonttools` (`scripts/rename_family.py`) and falls back to a JavaScript name-table rewrite for TTF/OTF.
+
+The packaged macOS app ships its own CPython and `fonttools`, so “Install as…” does not need a system Python. `npm run dist` downloads that runtime into `vendor/python`. From source, install fonttools (`python3 -m pip install fonttools`) or run `npm run bundle:python`.

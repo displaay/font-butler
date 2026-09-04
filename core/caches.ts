@@ -132,3 +132,81 @@ current application's CTFontManagerUnregisterFontsForURL(theURL, 1, missing valu
     // File removal still deactivates fonts living in standard folders.
   }
 }
+
+const FONT_ENABLE_SCRIPT = `ObjC.import('CoreText')
+ObjC.import('Foundation')
+function descriptorsFor(filePath) {
+  const url = $.NSURL.fileURLWithPath(filePath)
+  return $.CTFontManagerCreateFontDescriptorsFromURL(url)
+}
+function isEnabled(filePath) {
+  const descs = descriptorsFor(filePath)
+  if (!descs || Number(descs.count) === 0) return true
+  const key = $.kCTFontEnabledAttribute
+  for (let i = 0; i < Number(descs.count); i++) {
+    const value = $.CTFontDescriptorCopyAttribute(descs.objectAtIndex(i), key)
+    if (value && !ObjC.unwrap(value)) return false
+  }
+  return true
+}
+function run(argv) {
+  const mode = argv[0]
+  if (mode === 'get') {
+    const paths = JSON.parse(argv[1] || '[]')
+    const out = {}
+    for (const filePath of paths) out[filePath] = isEnabled(filePath)
+    return JSON.stringify(out)
+  }
+  if (mode === 'set') {
+    const descs = descriptorsFor(argv[1])
+    if (descs) $.CTFontManagerEnableFontDescriptors(descs, argv[2] === '1')
+    return 'ok'
+  }
+  return '{}'
+}
+`
+
+export async function setFontEnabled(filePath: string, enabled: boolean): Promise<void> {
+  if (!isMac() || !filePath) {
+    return
+  }
+  const safePath = assertSafeShellPath(filePath)
+  try {
+    await execFileAsync(
+      'osascript',
+      ['-l', 'JavaScript', '-e', FONT_ENABLE_SCRIPT, 'set', safePath, enabled ? '1' : '0'],
+      { timeout: 10_000 },
+    )
+  } catch {
+    // Catalog status still records deactivate when Core Text cannot be reached.
+  }
+}
+
+export async function fontActivationStates(filePaths: string[]): Promise<Record<string, boolean>> {
+  const result: Record<string, boolean> = {}
+  for (const filePath of filePaths) {
+    result[filePath] = true
+  }
+  if (!isMac() || filePaths.length === 0) {
+    return result
+  }
+  const safe = filePaths.map((filePath) => assertSafeShellPath(filePath))
+  const chunkSize = 40
+  for (let index = 0; index < safe.length; index += chunkSize) {
+    const chunk = safe.slice(index, index + chunkSize)
+    try {
+      const { stdout } = await execFileAsync(
+        'osascript',
+        ['-l', 'JavaScript', '-e', FONT_ENABLE_SCRIPT, 'get', JSON.stringify(chunk)],
+        { timeout: 20_000 },
+      )
+      const parsed = JSON.parse(stdout.trim() || '{}') as Record<string, boolean>
+      for (const [filePath, enabled] of Object.entries(parsed)) {
+        result[filePath] = Boolean(enabled)
+      }
+    } catch {
+      // Assume enabled when the font registry cannot be queried.
+    }
+  }
+  return result
+}

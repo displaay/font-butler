@@ -19,7 +19,17 @@ function isViewLayout(value: unknown): value is ViewLayout {
 }
 
 function isSortMode(value: unknown): value is SortMode {
-  return value === 'name' || value === 'installed'
+  return value === 'name' || value === 'added'
+}
+
+function readSortMode(value: unknown): SortMode | undefined {
+  if (isSortMode(value)) {
+    return value
+  }
+  if (value === 'installed') {
+    return 'added'
+  }
+  return undefined
 }
 
 function isThemeMode(value: unknown): value is ThemeMode {
@@ -58,7 +68,7 @@ export function loadSettings(paths: AppPaths): AppSettings {
       version: 1,
       watchFolders: readWatchFolders(parsed),
       defaultView: isViewLayout(parsed.defaultView) ? parsed.defaultView : defaults.defaultView,
-      defaultSort: isSortMode(parsed.defaultSort) ? parsed.defaultSort : defaults.defaultSort,
+      defaultSort: readSortMode(parsed.defaultSort) ?? defaults.defaultSort,
       installAfterUpload:
         typeof parsed.installAfterUpload === 'boolean'
           ? parsed.installAfterUpload

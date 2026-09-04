@@ -5,7 +5,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 import type { AppPaths } from './paths.ts'
 import { FontButlerService } from './service.ts'
-import { syncInboxWatcher } from './watch.ts'
+import { closeAllWatchers, syncInboxWatcher } from './watch.ts'
 
 function tempPaths(): AppPaths {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-watch-settings-'))
@@ -44,6 +44,21 @@ test('updateSettings accepts multiple watch folders', async () => {
     assert.deepEqual(service.getSettings().watchFolders, [inbox, clients])
   } finally {
     await syncInboxWatcher([], () => {})
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('updateSettings rejects the user fonts folder as a watch folder', async () => {
+  const paths = tempPaths()
+  fs.mkdirSync(paths.userFontsDir, { recursive: true })
+  const service = new FontButlerService(paths)
+  try {
+    await assert.rejects(
+      () => service.updateSettings({ watchFolders: [paths.userFontsDir] }),
+      /already shown on the Fonts tab/,
+    )
+  } finally {
+    await closeAllWatchers()
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
 })
