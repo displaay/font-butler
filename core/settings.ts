@@ -7,6 +7,7 @@ const emptySettings = (): AppSettings => ({
   watchFolder: null,
   defaultView: 'list',
   defaultSort: 'name',
+  installAfterUpload: true,
 })
 
 function isViewLayout(value: unknown): value is ViewLayout {
@@ -35,6 +36,10 @@ export function loadSettings(paths: AppPaths): AppSettings {
           : null,
       defaultView: isViewLayout(parsed.defaultView) ? parsed.defaultView : defaults.defaultView,
       defaultSort: isSortMode(parsed.defaultSort) ? parsed.defaultSort : defaults.defaultSort,
+      installAfterUpload:
+        typeof parsed.installAfterUpload === 'boolean'
+          ? parsed.installAfterUpload
+          : defaults.installAfterUpload,
     }
   } catch {
     return emptySettings()

@@ -32,13 +32,15 @@ export function isTypingTarget(target: EventTarget | null): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
 }
 
-export type ShortcutAction = 'remove' | 'install' | 'deactivate'
+export type ShortcutAction = 'remove' | 'install' | 'deactivate' | 'selectAll'
 
 export function shortcutAction(event: KeyboardEvent): ShortcutAction | null {
-  if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) {
-    return null
-  }
+  if (event.defaultPrevented) return null
   if (isTypingTarget(event.target)) return null
+  if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 'a') {
+    return 'selectAll'
+  }
+  if (event.metaKey || event.ctrlKey || event.altKey) return null
   if (event.key === 'Backspace' || event.key === 'Delete') return 'remove'
   if (event.key === 'i' || event.key === 'I') return 'install'
   if (event.key === 'd' || event.key === 'D') return 'deactivate'

@@ -37,6 +37,7 @@ export function SettingsDialog({
     watchFolder?: string | null
     defaultView?: ViewLayout
     defaultSort?: SortMode
+    installAfterUpload?: boolean
   }) {
     setBusy(true)
     try {
@@ -72,15 +73,16 @@ export function SettingsDialog({
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription>
-            Watch a folder for new fonts, and choose how families are shown by default.
+            Watch a folder for new fonts, choose whether to install them on drop, and set how
+            families are shown by default.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-5">
           <section className="space-y-2">
             <h2 className="text-sm font-medium text-foreground">Watch folder</h2>
             <p className="text-sm text-muted-foreground">
-              Fonts you add to this folder are imported automatically, the same as dropping
-              them onto Font Butler. Source files stay linked to their original path.
+              Fonts you add to this folder are imported automatically. Source files stay linked to
+              their original path.
             </p>
             <div className="flex flex-col gap-2">
               <Input
@@ -124,6 +126,28 @@ export function SettingsDialog({
                 </Button>
               </div>
             </div>
+          </section>
+
+          <section className="space-y-2">
+            <h2 className="text-sm font-medium text-foreground">Adding fonts</h2>
+            <Label className="flex cursor-pointer items-start gap-2 font-normal text-foreground">
+              <input
+                type="checkbox"
+                checked={settings?.installAfterUpload !== false}
+                disabled={busy || !settings}
+                onChange={(event) =>
+                  void save({ installAfterUpload: event.target.checked })
+                }
+                className="mt-0.5 size-3.5 rounded border border-input accent-primary"
+              />
+              <span>
+                <span className="block text-sm">Install after adding</span>
+                <span className="block text-sm text-muted-foreground">
+                  Dropping fonts onto Font Butler installs them and selects them in the list. Turn
+                  this off to add fonts to the library without installing.
+                </span>
+              </span>
+            </Label>
           </section>
 
           <section className="grid gap-3 sm:grid-cols-2">

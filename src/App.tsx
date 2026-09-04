@@ -1,9 +1,15 @@
 import { useEffect, useMemo, useState, type MouseEvent } from 'react'
 import { toast } from 'sonner'
-import { ChevronDown, Download, FolderOpen, Power, PowerOff, RefreshCw, Search, Settings, Trash2 } from 'lucide-react'
-import { AppMenuBar } from '@/components/AppMenuBar'
+import { ChevronDown, FolderOpen, Search } from 'lucide-react'
 import { AaPreview } from '@/components/AaPreview'
 import { StatusBadge, VfBadge } from '@/components/Badges'
+import {
+  BatchActionBar,
+  CatalogBatchButtons,
+  CatalogMenuItems,
+  SystemBatchButtons,
+  SystemMenuItems,
+} from '@/components/BatchActions'
 import { CatalogCardActions, SystemCardActions } from '@/components/FontCardActions'
 import { FontFaceStyles, catalogFontFamily, systemFontFamily } from '@/components/FontFaceStyles'
 import { InstanceList } from '@/components/InstanceList'
@@ -27,6 +33,14 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { api, isNotice, isSettingsEvent, subscribeEvents } from '@/lib/api'
 import { familyNameOf, entryIds, familyStatusSummary, groupCatalog, groupSystem, hasSourceMissing, isInactiveEntry, isLibraryEntry, matchesQuery, sortFamilyGroups, sourceMissingIds } from '@/lib/group'
 import { catalogInstanceRows, systemInstanceRows } from '@/lib/instances'
+import {
+  catalogBatchPlan,
+  catalogBatchSummary,
+  systemBatchPlan,
+  systemBatchSummary,
+  type CatalogBatchPlan,
+  type SystemBatchPlan,
+} from '@/lib/batch'
 import { nextSelection, shortcutAction } from '@/lib/selection'
 import type { AppSettings, CatalogEntry, FamilyGroup, SortMode, SystemFace, SystemFamilyGroup } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -67,6 +81,7 @@ export default function App() {
   const [selectedFamilyKeys, setSelectedFamilyKeys] = useState<string[]>([])
   const [selectedSystemKeys, setSelectedSystemKeys] = useState<string[]>([])
   const [selectionAnchor, setSelectionAnchor] = useState<string | null>(null)
+  const [scrollToFamily, setScrollToFamily] = useState<string | null>(null)
   const [hideDeactivated, setHideDeactivated] = useState(
     () => localStorage.getItem('font-butler-hide-deactivated') === 'true',
   )
@@ -275,6 +290,14 @@ export default function App() {
     }
   }, [tab, selectedGroup, selectedSystemGroup, visibleGroups, shownSystemGroups])
 
+  useEffect(() => {
+    if (!scrollToFamily) return
+    const node = document.querySelector(`[data-family-key="${CSS.escape(scrollToFamily)}"]`)
+    if (!node) return
+    node.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    setScrollToFamily(null)
+  }, [scrollToFamily, visibleGroups, tab])
+
   function selectGroup(group: FamilyGroup) {
     setSelectedFamily(group.familyName)
     setSelectedFamilyKeys([group.familyName])
@@ -331,6 +354,31 @@ export default function App() {
       selectedSystemKeys.length ? selectedSystemKeys : selectedSystem ? [selectedSystem] : [],
     )
     return shownSystemGroups.filter((group) => keys.has(group.familyName))
+  }
+
+  const catalogSelection = selectedCatalogGroups()
+  const systemSelection = selectedSystemList()
+  const catalogPlan = catalogBatchPlan(catalogSelection)
+  const systemPlan = systemBatchPlan(systemSelection)
+  const catalogSummary = catalogBatchSummary(catalogSelection)
+  const systemSummary = systemBatchSummary(systemSelection)
+
+  function selectAllVisible() {
+    if (tab === 'system') {
+      const keys = shownSystemGroups.map((group) => group.familyName)
+      if (keys.length === 0) return
+      setSelectedSystemKeys(keys)
+      setSelectedSystem(keys[keys.length - 1] ?? null)
+      setSelectionAnchor(keys[0] ?? null)
+      return
+    }
+    const keys = visibleGroups.map((group) => group.familyName)
+    if (keys.length === 0) return
+    setSelectedFamilyKeys(keys)
+    const last = visibleGroups[visibleGroups.length - 1]
+    setSelectedFamily(last?.familyName ?? null)
+    setSelectedEntryId(last?.entries[0]?.id ?? null)
+    setSelectionAnchor(keys[0] ?? null)
   }
 
   function installGroup(group: FamilyGroup, familyName?: string) {
@@ -405,6 +453,26 @@ export default function App() {
   }
 
   async function installSelected() {
+    const groups = selectedCatalogGroups().filter((group) => group.status === 'uninstalled')
+    if (groups.length === 0) return
+    await run(async () => {
+      for (const group of groups) {
+        await installGroup(group)
+      }
+    }, groups.length === 1 ? `Installed ${groups[0].familyName}` : `Installed ${groups.length} fonts`)
+  }
+
+  async function activateSelected() {
+    const groups = selectedCatalogGroups().filter((group) => group.status === 'deactivated')
+    if (groups.length === 0) return
+    await run(async () => {
+      for (const group of groups) {
+        await activateGroup(group)
+      }
+    }, groups.length === 1 ? `Activated ${groups[0].familyName}` : `Activated ${groups.length} fonts`)
+  }
+
+  async function installOrActivateSelected() {
     const groups = selectedCatalogGroups().filter(
       (group) => group.status === 'uninstalled' || group.status === 'deactivated',
     )
@@ -415,6 +483,47 @@ export default function App() {
         else await installGroup(group)
       }
     }, groups.length === 1 ? `Installed ${groups[0].familyName}` : `Installed ${groups.length} fonts`)
+  }
+
+  async function reinstallSelected() {
+    const groups = selectedCatalogGroups().filter((group) => group.status === 'outdated')
+    if (groups.length === 0) return
+    await run(async () => {
+      for (const group of groups) {
+        await reinstallGroup(group)
+      }
+    }, groups.length === 1 ? `Reinstalled ${groups[0].familyName}` : `Reinstalled ${groups.length} fonts`)
+  }
+
+  async function forgetSelected() {
+    const groups = selectedCatalogGroups().filter(hasSourceMissing)
+    if (groups.length === 0) return
+    await run(async () => {
+      for (const group of groups) {
+        await forgetGroup(group)
+      }
+    }, groups.length === 1
+      ? `Removed ${groups[0].familyName} from the library`
+      : `Removed ${groups.length} fonts from the library`)
+  }
+
+  async function uninstallSelected() {
+    if (tab === 'system') {
+      await removeSelected()
+      return
+    }
+    const groups = selectedCatalogGroups().filter(
+      (group) =>
+        group.status === 'installed' ||
+        group.status === 'outdated' ||
+        group.status === 'deactivated',
+    )
+    if (groups.length === 0) return
+    await run(async () => {
+      for (const group of groups) {
+        await uninstallGroup(group)
+      }
+    }, groups.length === 1 ? `Removed ${groups[0].familyName}` : `Removed ${groups.length} fonts`)
   }
 
   async function deactivateSelected() {
@@ -450,8 +559,9 @@ export default function App() {
       if (!action) return
       event.preventDefault()
       if (action === 'remove') void removeSelected()
-      if (action === 'install') void installSelected()
+      if (action === 'install') void installOrActivateSelected()
       if (action === 'deactivate') void deactivateSelected()
+      if (action === 'selectAll') selectAllVisible()
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
@@ -480,15 +590,40 @@ export default function App() {
     try {
       const result = paths.length ? await api.importPaths(paths) : await api.importFiles(files)
       if (result.errors.length) toast.error(result.errors.join('\n'))
-      if (result.entries[0]) {
-        setSelectedFamily(familyNameOf(result.entries[0]))
-        setTab('library')
-        toast.success(
-          result.entries.length === 1
-            ? `Added ${familyNameOf(result.entries[0])}`
-            : `Added ${result.entries.length} fonts`,
-        )
+      if (result.entries.length === 0) return
+      const shouldInstall = settings?.installAfterUpload !== false
+      const pendingIds = result.entries
+        .filter((entry) => entry.status !== 'installed' && entry.status !== 'source-missing')
+        .map((entry) => entry.id)
+      let installed = false
+      if (shouldInstall && pendingIds.length > 0) {
+        try {
+          if (pendingIds.length === 1) await api.install(pendingIds[0])
+          else await api.installMany(pendingIds)
+          installed = true
+        } catch (error) {
+          toast.error(error instanceof Error ? error.message : 'Could not install fonts')
+        }
       }
+      const names = [...new Set(result.entries.map(familyNameOf))]
+      const alreadyInLibrary = result.entries.every(
+        (entry) =>
+          entry.status === 'installed' ||
+          entry.status === 'outdated' ||
+          entry.status === 'deactivated',
+      )
+      setQuery('')
+      setTab(installed || alreadyInLibrary ? 'library' : 'uninstalled')
+      setSelectedFamily(names[0] ?? null)
+      setSelectedFamilyKeys(names)
+      setSelectionAnchor(names[0] ?? null)
+      setSelectedEntryId(result.entries[0]?.id ?? null)
+      setScrollToFamily(names[0] ?? null)
+      toast.success(
+        result.entries.length === 1
+          ? `${installed ? 'Installed' : 'Added'} ${familyNameOf(result.entries[0])}`
+          : `${installed ? 'Installed' : 'Added'} ${result.entries.length} fonts`,
+      )
       setEntries((await api.catalog()).entries)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not add fonts')
@@ -504,17 +639,6 @@ export default function App() {
       toast.message(`Showing ${result.path}`)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not show file')
-    }
-  }
-
-  async function clearCache(action: () => Promise<unknown>) {
-    setBusy(true)
-    try {
-      await action()
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not clear cache')
-    } finally {
-      setBusy(false)
     }
   }
 
@@ -547,12 +671,6 @@ export default function App() {
         <FontFaceStyles
           entries={entries}
           systemFaces={tab === 'system' ? shownSystemGroups.flatMap((group) => group.faces) : []}
-        />
-        <AppMenuBar
-          busy={busy}
-          onClearFontCache={() => void clearCache(() => api.clearFontCache())}
-          onClearOfficeCache={() => void clearCache(() => api.clearOfficeCache())}
-          onOpenSettings={() => setSettingsOpen(true)}
         />
         <header className="flex flex-col gap-3 border-b bg-card/80 px-4 py-3 backdrop-blur md:flex-row md:items-center">
           <div className="flex items-baseline gap-3">
@@ -594,15 +712,6 @@ export default function App() {
                 </Button>
               )
             })}
-            <Button
-              size="sm"
-              variant={settingsOpen ? 'default' : 'ghost'}
-              aria-label="Settings"
-              onClick={() => setSettingsOpen(true)}
-            >
-              <Settings className="size-4" />
-              Settings
-            </Button>
           </nav>
         </header>
 
@@ -685,6 +794,29 @@ export default function App() {
                     showHideDeactivated={tab === 'library'}
                   />
                 )}
+                {tab === 'system' ? (
+                  <BatchActionBar count={systemPlan.count} summary={systemSummary}>
+                    <SystemBatchButtons
+                      plan={systemPlan}
+                      busy={busy}
+                      onDeactivate={() => void deactivateSelected()}
+                      onUninstall={() => void uninstallSelected()}
+                    />
+                  </BatchActionBar>
+                ) : (
+                  <BatchActionBar count={catalogPlan.count} summary={catalogSummary}>
+                    <CatalogBatchButtons
+                      plan={catalogPlan}
+                      busy={busy}
+                      onInstall={() => void installSelected()}
+                      onActivate={() => void activateSelected()}
+                      onDeactivate={() => void deactivateSelected()}
+                      onUninstall={() => void uninstallSelected()}
+                      onReinstall={() => void reinstallSelected()}
+                      onForget={() => void forgetSelected()}
+                    />
+                  </BatchActionBar>
+                )}
                 <div
                   className={cn(
                     viewLayout === 'grid'
@@ -693,74 +825,104 @@ export default function App() {
                   )}
                 >
                   {tab === 'system'
-                    ? shownSystemGroups.map((group) => (
+                    ? shownSystemGroups.map((group) => {
+                        const inSelection = systemSelection.some((item) => item.key === group.key)
+                        return (
                         <SystemCard
                           key={group.key}
                           layout={viewLayout}
                           group={group}
-                          selected={
-                            selectedSystemKeys.includes(group.familyName) ||
-                            selectedSystemGroup?.key === group.key
-                          }
+                          selected={inSelection || selectedSystemGroup?.key === group.key}
                           busy={busy}
+                          batch={systemSelection.length > 1 && inSelection ? systemPlan : null}
                           onSelect={(event) => handleSystemSelect(group, event)}
+                          onEnsureSelected={() => {
+                            if (!inSelection) {
+                              setSelectedSystem(group.familyName)
+                              setSelectedSystemKeys([group.familyName])
+                              setSelectionAnchor(group.familyName)
+                            }
+                          }}
                           onReveal={() => {
                             setSelectedSystem(group.familyName)
                             void revealSystem(group.faces[0].path)
                           }}
                           onUninstall={() =>
-                            void run(async () => {
-                              for (const face of uniquePaths(group.faces)) {
-                                await api.uninstallSystem(face)
-                              }
-                              setSystemFaces((await api.system()).faces)
-                            }, `Removed ${group.familyName}`)
+                            systemSelection.length > 1 && inSelection
+                              ? void uninstallSelected()
+                              : void run(async () => {
+                                  for (const face of uniquePaths(group.faces)) {
+                                    await api.uninstallSystem(face)
+                                  }
+                                  setSystemFaces((await api.system()).faces)
+                                }, `Removed ${group.familyName}`)
                           }
                           onDeactivate={() =>
-                            void run(async () => {
-                              for (const face of uniquePaths(group.faces)) {
-                                await api.deactivateSystem(face)
-                              }
-                              setSystemFaces((await api.system()).faces)
-                            }, `Deactivated ${group.familyName}`)
+                            systemSelection.length > 1 && inSelection
+                              ? void deactivateSelected()
+                              : void run(async () => {
+                                  for (const face of uniquePaths(group.faces)) {
+                                    await api.deactivateSystem(face)
+                                  }
+                                  setSystemFaces((await api.system()).faces)
+                                }, `Deactivated ${group.familyName}`)
                           }
                         />
-                      ))
-                    : visibleGroups.map((group) => (
+                        )
+                      })
+                    : visibleGroups.map((group) => {
+                        const inSelection = catalogSelection.some((item) => item.key === group.key)
+                        const useBatch = catalogSelection.length > 1 && inSelection
+                        return (
                         <LibraryCard
                           key={group.key}
                           layout={viewLayout}
                           group={group}
                           showSourcePath={showSources}
-                          selected={
-                            selectedFamilyKeys.includes(group.familyName) ||
-                            selectedGroup?.key === group.key
-                          }
+                          selected={inSelection || selectedGroup?.key === group.key}
                           selectedEntryId={selectedEntryId}
+                          batch={useBatch ? catalogPlan : null}
                           onSelect={(event) => handleCatalogSelect(group, event)}
                           onSelectEntry={setSelectedEntryId}
+                          onEnsureSelected={() => {
+                            if (!inSelection) selectGroup(group)
+                          }}
                           busy={busy}
                           onInstall={() =>
-                            void run(() => installGroup(group), `Installed ${group.familyName}`)
+                            useBatch
+                              ? void installSelected()
+                              : void run(() => installGroup(group), `Installed ${group.familyName}`)
                           }
                           onInstallAs={() => setRenameEntry(selectedEntry ?? group.entries[0])}
                           onReinstall={() =>
-                            void run(() => reinstallGroup(group), `Reinstalled ${group.familyName}`)
+                            useBatch
+                              ? void reinstallSelected()
+                              : void run(() => reinstallGroup(group), `Reinstalled ${group.familyName}`)
                           }
                           onUninstall={() =>
-                            void run(() => uninstallGroup(group), `Removed ${group.familyName}`)
+                            useBatch
+                              ? void uninstallSelected()
+                              : void run(() => uninstallGroup(group), `Removed ${group.familyName}`)
                           }
                           onDeactivate={() =>
-                            void run(() => deactivateGroup(group), `Deactivated ${group.familyName}`)
+                            useBatch
+                              ? void deactivateSelected()
+                              : void run(() => deactivateGroup(group), `Deactivated ${group.familyName}`)
                           }
                           onActivate={() =>
-                            void run(() => activateGroup(group), `Activated ${group.familyName}`)
+                            useBatch
+                              ? void activateSelected()
+                              : void run(() => activateGroup(group), `Activated ${group.familyName}`)
                           }
                           onReveal={() => {
                             selectGroup(group)
                             void revealCatalog(selectedEntry ?? group.entries[0])
                           }}
                           onForget={() => {
+                            if (useBatch) {
+                              void forgetSelected()
+                              return
+                            }
                             const count = sourceMissingIds(group).length
                             void run(
                               () => forgetGroup(group),
@@ -770,7 +932,8 @@ export default function App() {
                             )
                           }}
                         />
-                      ))}
+                        )
+                      })}
                 </div>
               </div>
             </ScrollArea>
@@ -832,6 +995,37 @@ export default function App() {
                   `Removed ${familyNameOf(selectedEntry)} from the library`,
                 )
               }}
+              multiSelect={
+                (tab === 'system' ? systemSelection.length : catalogSelection.length) > 1
+                  ? tab === 'system'
+                    ? {
+                        names: systemSelection.map((group) => group.familyName),
+                        summary: systemSummary,
+                        systemPlan,
+                        onInstall: () => void installSelected(),
+                        onActivate: () => void activateSelected(),
+                        onDeactivate: () => void deactivateSelected(),
+                        onUninstall: () => void uninstallSelected(),
+                        onReinstall: () => void reinstallSelected(),
+                        onForget: () => void forgetSelected(),
+                        onDeactivateSystem: () => void deactivateSelected(),
+                        onUninstallSystem: () => void uninstallSelected(),
+                      }
+                    : {
+                        names: catalogSelection.map((group) => group.familyName),
+                        summary: catalogSummary,
+                        catalogPlan,
+                        onInstall: () => void installSelected(),
+                        onActivate: () => void activateSelected(),
+                        onDeactivate: () => void deactivateSelected(),
+                        onUninstall: () => void uninstallSelected(),
+                        onReinstall: () => void reinstallSelected(),
+                        onForget: () => void forgetSelected(),
+                        onDeactivateSystem: () => void deactivateSelected(),
+                        onUninstallSystem: () => void uninstallSelected(),
+                      }
+                  : undefined
+              }
             />
           </div>
         </div>
@@ -879,8 +1073,10 @@ function LibraryCard({
   selected,
   selectedEntryId,
   busy,
+  batch,
   onSelect,
   onSelectEntry,
+  onEnsureSelected,
   onInstall,
   onInstallAs,
   onReinstall,
@@ -896,8 +1092,10 @@ function LibraryCard({
   selected: boolean
   selectedEntryId: string | null
   busy: boolean
+  batch: CatalogBatchPlan | null
   onSelect: (event: MouseEvent) => void
   onSelectEntry: (entryId: string) => void
+  onEnsureSelected: () => void
   onInstall: () => void
   onInstallAs: () => void
   onReinstall: () => void
@@ -909,13 +1107,13 @@ function LibraryCard({
 }) {
   const [expanded, setExpanded] = useState(false)
   const preview = group.entries[0]
-  const installed = group.status === 'installed' || group.status === 'outdated'
   const missingSource = hasSourceMissing(group)
   const instances = useMemo(() => catalogInstanceRows(group), [group])
   const showInstances = instances.length > 0 && layout === 'list'
   const previewFamily = catalogFontFamily(group.previewEntryId)
   const previewWeight = preview.faces[0]?.weight
   const previewItalic = preview.faces[0]?.italic
+  const plan = batch ?? catalogBatchPlan([group])
 
   const muted = group.status === 'deactivated'
 
@@ -947,9 +1145,10 @@ function LibraryCard({
   )
 
   return (
-    <ContextMenu>
+    <ContextMenu onOpenChange={(open) => { if (open) onEnsureSelected() }}>
       <ContextMenuTrigger asChild>
         <div
+          data-family-key={group.familyName}
           className={cn(
             'group relative overflow-hidden rounded-xl border transition-colors',
             selected ? 'border-primary bg-card shadow-sm' : 'border-transparent bg-card/70',
@@ -1011,18 +1210,20 @@ function LibraryCard({
               )}
             </>
           )}
-          <CatalogCardActions
-            status={group.status}
-            missingSource={missingSource}
-            busy={busy}
-            visible={selected}
-            offset={layout === 'list' && showInstances}
-            onInstall={onInstall}
-            onDeactivate={onDeactivate}
-            onUninstall={onUninstall}
-            onActivate={onActivate}
-            onForget={onForget}
-          />
+          {!batch && (
+            <CatalogCardActions
+              status={group.status}
+              missingSource={missingSource}
+              busy={busy}
+              visible={selected}
+              offset={layout === 'list' && showInstances}
+              onInstall={onInstall}
+              onDeactivate={onDeactivate}
+              onUninstall={onUninstall}
+              onActivate={onActivate}
+              onForget={onForget}
+            />
+          )}
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent>
@@ -1030,46 +1231,18 @@ function LibraryCard({
           <FolderOpen /> Show in Finder
         </ContextMenuItem>
         <ContextMenuSeparator />
-        {installed ? (
-          <>
-            {group.status === 'outdated' && (
-              <ContextMenuItem disabled={busy} onSelect={onReinstall}>
-                <RefreshCw /> Reinstall
-              </ContextMenuItem>
-            )}
-            <ContextMenuItem disabled={busy} onSelect={onDeactivate}>
-              <PowerOff /> Deactivate
-            </ContextMenuItem>
-            <ContextMenuItem disabled={busy} onSelect={onUninstall}>
-              <Trash2 /> Uninstall
-            </ContextMenuItem>
-          </>
-        ) : group.status === 'deactivated' ? (
-          <ContextMenuItem disabled={busy} onSelect={onActivate}>
-            <Power /> Activate
-          </ContextMenuItem>
-        ) : (
-          <>
-            <ContextMenuItem disabled={busy} onSelect={onInstall}>
-              <Download /> Install
-            </ContextMenuItem>
-            <ContextMenuItem disabled={busy} onSelect={onInstallAs}>
-              <Download /> Install as…
-            </ContextMenuItem>
-          </>
-        )}
-        {missingSource && (
-          <>
-            <ContextMenuSeparator />
-            <ContextMenuItem
-              disabled={busy}
-              className="text-destructive focus:text-destructive"
-              onSelect={onForget}
-            >
-              <Trash2 /> Remove from library
-            </ContextMenuItem>
-          </>
-        )}
+        <CatalogMenuItems
+          plan={plan}
+          busy={busy}
+          showInstallAs={!batch}
+          onInstall={onInstall}
+          onInstallAs={onInstallAs}
+          onReinstall={onReinstall}
+          onDeactivate={onDeactivate}
+          onUninstall={onUninstall}
+          onActivate={onActivate}
+          onForget={onForget}
+        />
       </ContextMenuContent>
     </ContextMenu>
   )
@@ -1080,7 +1253,9 @@ function SystemCard({
   layout,
   selected,
   busy,
+  batch,
   onSelect,
+  onEnsureSelected,
   onReveal,
   onUninstall,
   onDeactivate,
@@ -1089,7 +1264,9 @@ function SystemCard({
   layout: ViewLayout
   selected: boolean
   busy: boolean
+  batch: SystemBatchPlan | null
   onSelect: (event: MouseEvent) => void
+  onEnsureSelected: () => void
   onReveal: () => void
   onUninstall: () => void
   onDeactivate: () => void
@@ -1099,6 +1276,7 @@ function SystemCard({
   const instances = useMemo(() => systemInstanceRows(group), [group])
   const showInstances = instances.length > 0 && layout === 'list'
   const previewFamily = systemFontFamily(face.path)
+  const plan = batch ?? systemBatchPlan([group])
 
   const metadata = (
     <>
@@ -1122,7 +1300,7 @@ function SystemCard({
   )
 
   return (
-    <ContextMenu>
+    <ContextMenu onOpenChange={(open) => { if (open) onEnsureSelected() }}>
       <ContextMenuTrigger asChild>
         <div
           className={cn(
@@ -1179,14 +1357,16 @@ function SystemCard({
               {expanded && showInstances && <InstanceList rows={instances} />}
             </>
           )}
-          <SystemCardActions
-            writable={group.writable}
-            busy={busy}
-            visible={selected}
-            offset={layout === 'list' && showInstances}
-            onDeactivate={onDeactivate}
-            onUninstall={onUninstall}
-          />
+          {!batch && (
+            <SystemCardActions
+              writable={group.writable}
+              busy={busy}
+              visible={selected}
+              offset={layout === 'list' && showInstances}
+              onDeactivate={onDeactivate}
+              onUninstall={onUninstall}
+            />
+          )}
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent>
@@ -1194,12 +1374,12 @@ function SystemCard({
           <FolderOpen /> Show in Finder
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem disabled={!group.writable} onSelect={onDeactivate}>
-          <PowerOff /> Deactivate
-        </ContextMenuItem>
-        <ContextMenuItem disabled={!group.writable} onSelect={onUninstall}>
-          <Trash2 /> Uninstall
-        </ContextMenuItem>
+        <SystemMenuItems
+          plan={plan}
+          busy={busy}
+          onDeactivate={onDeactivate}
+          onUninstall={onUninstall}
+        />
       </ContextMenuContent>
     </ContextMenu>
   )

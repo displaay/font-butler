@@ -1,9 +1,11 @@
-import { Download, FolderOpen, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
+import { FolderOpen, Power, PowerOff, RefreshCw, Trash2, Download } from 'lucide-react'
 import { AaPreview } from '@/components/AaPreview'
+import { CatalogBatchButtons, SystemBatchButtons } from '@/components/BatchActions'
 import { catalogFontFamily, systemFontFamily } from '@/components/FontFaceStyles'
 import { Button } from '@/components/ui/button'
 import { formatBytes, formatRelativeTime } from '@/lib/utils'
 import { familyNameOf } from '@/lib/group'
+import type { CatalogBatchPlan, SystemBatchPlan } from '@/lib/batch'
 import type { CatalogEntry, FamilyGroup, SystemFamilyGroup } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
@@ -28,6 +30,7 @@ export function Inspector({
   onDeactivateSystem,
   onRevealSystem,
   onForget,
+  multiSelect,
 }: {
   group: FamilyGroup | null
   entry: CatalogEntry | null
@@ -47,7 +50,69 @@ export function Inspector({
   onDeactivateSystem: () => void
   onRevealSystem: () => void
   onForget: () => void
+  multiSelect?: {
+    names: string[]
+    summary: string
+    catalogPlan?: CatalogBatchPlan
+    systemPlan?: SystemBatchPlan
+    onInstall: () => void
+    onActivate: () => void
+    onDeactivate: () => void
+    onUninstall: () => void
+    onReinstall: () => void
+    onForget: () => void
+    onDeactivateSystem: () => void
+    onUninstallSystem: () => void
+  }
 }) {
+  if (multiSelect && multiSelect.names.length > 1) {
+    return (
+      <aside className="flex w-full flex-col gap-4 p-5 md:w-80">
+        <div>
+          <h2 className="font-sans text-2xl tracking-tight">
+            {multiSelect.names.length} selected
+          </h2>
+          {multiSelect.summary ? (
+            <p className="mt-1 text-sm text-muted-foreground">{multiSelect.summary}</p>
+          ) : null}
+        </div>
+        <ul className="max-h-48 space-y-1 overflow-auto text-sm">
+          {multiSelect.names.map((name) => (
+            <li key={name} className="truncate">
+              {name}
+            </li>
+          ))}
+        </ul>
+        {multiSelect.systemPlan ? (
+          <>
+            <SystemBatchButtons
+              plan={multiSelect.systemPlan}
+              busy={busy}
+              onDeactivate={multiSelect.onDeactivateSystem}
+              onUninstall={multiSelect.onUninstallSystem}
+            />
+            {multiSelect.systemPlan.uninstall === 0 && (
+              <p className="text-xs text-muted-foreground">
+                Protected fonts stay on the Mac. Font Butler can only remove fonts you installed.
+              </p>
+            )}
+          </>
+        ) : multiSelect.catalogPlan ? (
+          <CatalogBatchButtons
+            plan={multiSelect.catalogPlan}
+            busy={busy}
+            onInstall={multiSelect.onInstall}
+            onActivate={multiSelect.onActivate}
+            onDeactivate={multiSelect.onDeactivate}
+            onUninstall={multiSelect.onUninstall}
+            onReinstall={multiSelect.onReinstall}
+            onForget={multiSelect.onForget}
+          />
+        ) : null}
+      </aside>
+    )
+  }
+
   if (systemGroup) {
     const face = systemGroup.faces[0]
     return (

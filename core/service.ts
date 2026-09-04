@@ -108,6 +108,7 @@ export class FontButlerService {
     watchFolder?: string | null
     defaultView?: ViewLayout
     defaultSort?: SortMode
+    installAfterUpload?: boolean
   }): Promise<AppSettings> {
     const current = loadSettings(this.paths)
     const next: AppSettings = { ...current }
@@ -116,6 +117,9 @@ export class FontButlerService {
     }
     if (patch.defaultSort === 'name' || patch.defaultSort === 'installed') {
       next.defaultSort = patch.defaultSort
+    }
+    if (typeof patch.installAfterUpload === 'boolean') {
+      next.installAfterUpload = patch.installAfterUpload
     }
     if ('watchFolder' in patch) {
       if (patch.watchFolder) {

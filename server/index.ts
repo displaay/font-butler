@@ -36,6 +36,7 @@ app.post('/api/settings', async (c) => {
     watchFolder?: string | null
     defaultView?: 'list' | 'grid'
     defaultSort?: 'name' | 'installed'
+    installAfterUpload?: boolean
   }>()
   try {
     const settings = await service.updateSettings(body)

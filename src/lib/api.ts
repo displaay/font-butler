@@ -89,6 +89,7 @@ export const api = {
     watchFolder?: string | null
     defaultView?: ViewLayout
     defaultSort?: SortMode
+    installAfterUpload?: boolean
   }) => json<{ settings: AppSettings }>(post('/api/settings', patch)),
   renamePreview: (id: string, familyName: string) =>
     json<{ fullName: string; postscriptName: string }>(

@@ -50,5 +50,7 @@ test('shortcutAction maps keys and ignores typing', () => {
   assert.equal(shortcutAction(key({ key: 'i' })), 'install')
   assert.equal(shortcutAction(key({ key: 'd' })), 'deactivate')
   assert.equal(shortcutAction(key({ key: 'i', metaKey: true })), null)
+  assert.equal(shortcutAction(key({ key: 'a', metaKey: true })), 'selectAll')
+  assert.equal(shortcutAction(key({ key: 'a' })), null)
   assert.equal(isTypingTarget(null), false)
 })

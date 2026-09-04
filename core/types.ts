@@ -73,6 +73,7 @@ export type AppSettings = {
   watchFolder: string | null
   defaultView: ViewLayout
   defaultSort: SortMode
+  installAfterUpload: boolean
 }
 
 export type ServiceEvent =
