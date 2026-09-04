@@ -57,6 +57,8 @@ export type Notice = {
   entryId?: string
 }
 
+export type SortMode = 'name' | 'installed'
+
 export type FamilyGroup = {
   key: string
   familyName: string
@@ -66,6 +68,7 @@ export type FamilyGroup = {
   instanceCount: number
   status: FontStatus
   previewEntryId: string
+  addedAt: number
 }
 
 export type SystemFamilyGroup = {

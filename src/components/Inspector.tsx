@@ -1,4 +1,4 @@
-import { FolderOpen } from 'lucide-react'
+import { Download, FolderOpen, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
 import { AaPreview } from '@/components/AaPreview'
 import { catalogFontFamily, systemFontFamily } from '@/components/FontFaceStyles'
 import { Button } from '@/components/ui/button'
@@ -84,7 +84,7 @@ export function Inspector({
             disabled={!systemGroup.writable || busy}
             onClick={onDeactivateSystem}
           >
-            Deactivate
+            <PowerOff /> Deactivate
           </Button>
           <Button
             variant="destructive"
@@ -92,7 +92,7 @@ export function Inspector({
             disabled={!systemGroup.writable || busy}
             onClick={onUninstallSystem}
           >
-            Uninstall
+            <Trash2 /> Uninstall
           </Button>
         </div>
         {!systemGroup.writable && (
@@ -193,33 +193,33 @@ export function Inspector({
       <div className="flex flex-wrap gap-2">
         {entry.status === 'source-missing' ? (
           <Button size="sm" variant="destructive" disabled={busy} onClick={onForget}>
-            Remove from library
+            <Trash2 /> Remove from library
           </Button>
         ) : installed ? (
           <>
             {showReinstall && (
               <Button size="sm" variant="accent" disabled={busy} onClick={onReinstall}>
-                Reinstall
+                <RefreshCw /> Reinstall
               </Button>
             )}
             <Button size="sm" variant="outline" disabled={busy} onClick={onDeactivate}>
-              Deactivate
+              <PowerOff /> Deactivate
             </Button>
             <Button size="sm" variant="destructive" disabled={busy} onClick={onUninstall}>
-              Uninstall
+              <Trash2 /> Uninstall
             </Button>
           </>
         ) : entry.status === 'deactivated' ? (
           <Button size="sm" disabled={busy} onClick={onActivate}>
-            Activate
+            <Power /> Activate
           </Button>
         ) : (
           <>
             <Button size="sm" disabled={busy} onClick={onInstall}>
-              Install
+              <Download /> Install
             </Button>
             <Button size="sm" variant="outline" disabled={busy} onClick={onInstallAs}>
-              Install as…
+              <Download /> Install as…
             </Button>
           </>
         )}

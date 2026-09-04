@@ -2,6 +2,7 @@ import type {
   CatalogEntry,
   FamilyGroup,
   FontStatus,
+  SortMode,
   SystemFace,
   SystemFamilyGroup,
 } from './types'
@@ -52,9 +53,20 @@ export function groupCatalog(entries: CatalogEntry[]): FamilyGroup[] {
         instanceCount,
         status,
         previewEntryId: preview.id,
+        addedAt: Math.max(...groupEntries.map((entry) => entry.addedAt)),
       }
     })
     .sort((a, b) => a.familyName.localeCompare(b.familyName))
+}
+
+export function sortFamilyGroups(groups: FamilyGroup[], mode: SortMode): FamilyGroup[] {
+  const copy = [...groups]
+  if (mode === 'installed') {
+    copy.sort((a, b) => b.addedAt - a.addedAt || a.familyName.localeCompare(b.familyName))
+  } else {
+    copy.sort((a, b) => a.familyName.localeCompare(b.familyName))
+  }
+  return copy
 }
 
 export function groupSystem(faces: SystemFace[]): SystemFamilyGroup[] {
@@ -89,20 +101,20 @@ export function matchesQuery(haystack: string, query: string): boolean {
   return haystack.toLowerCase().includes(query.trim().toLowerCase())
 }
 
-/** Installed on the Mac, or installed copy remains while the source file is gone. */
+/** Shown on the Fonts tab: active, outdated, deactivated, or installed with a missing source. */
 export function isLibraryEntry(entry: CatalogEntry): boolean {
   return (
     entry.status === 'installed' ||
     entry.status === 'outdated' ||
+    entry.status === 'deactivated' ||
     (entry.status === 'source-missing' && Boolean(entry.installedPath))
   )
 }
 
-/** Tracked in the catalog but not active: not installed, deactivated, or source gone. */
+/** Shown on Uninstalled: tracked sources that are not on the Mac. Never includes deactivated. */
 export function isInactiveEntry(entry: CatalogEntry): boolean {
   return (
     entry.status === 'uninstalled' ||
-    entry.status === 'deactivated' ||
     (entry.status === 'source-missing' && !entry.installedPath)
   )
 }
