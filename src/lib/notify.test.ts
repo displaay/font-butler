@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { actionCopy, actionCopyFor, importDoneCopy, remainingActionCopy } from './notify.ts'
+import { WOFF_INSTALL_ERROR } from './formats.ts'
+import {
+  actionCopy,
+  actionCopyFor,
+  emptyImportError,
+  importDoneCopy,
+  remainingActionCopy,
+} from './notify.ts'
 
 test('actionCopy names the family and uses an ellipsis while pending', () => {
   assert.deepEqual(actionCopy('install', 'Inter'), {
@@ -46,4 +53,13 @@ test('importDoneCopy mentions ignored web fonts only in the success line', () =>
     importDoneCopy({ installed: false, count: 1, name: 'Inter', ignored: 2 }),
     '1 font added and 2 fonts ignored',
   )
+})
+
+test('emptyImportError prefers real failures over skipped WOFF files', () => {
+  assert.equal(
+    emptyImportError(['/fonts/Regular.otf: Could not read any faces in that font.'], 2),
+    '/fonts/Regular.otf: Could not read any faces in that font.',
+  )
+  assert.equal(emptyImportError([], 3), WOFF_INSTALL_ERROR)
+  assert.equal(emptyImportError([]), 'Could not add fonts')
 })

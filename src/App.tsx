@@ -41,7 +41,7 @@ import { api, isNotice, isSettingsEvent, subscribeEvents } from '@/lib/api'
 import { collectDropPayload, isDroppedFontName, isWebOnlyDrop, partitionDropPayload } from '@/lib/drop'
 import { WOFF_INSTALL_ERROR } from '@/lib/formats'
 import { familyNameOf, deletableSourceIds, entryIds, familyStatusSummary, forgettableIds, groupCatalog, groupSystem, hasSourceMissing, isInactiveEntry, isLibraryEntry, matchesQuery, sortFamilyGroups } from '@/lib/group'
-import { actionCopy, actionCopyFor, importDoneCopy, remainingActionCopy } from '@/lib/notify'
+import { actionCopy, actionCopyFor, emptyImportError, importDoneCopy, remainingActionCopy } from '@/lib/notify'
 import { catalogInstanceRows, systemInstanceRows } from '@/lib/instances'
 import {
   catalogBatchPlan,
@@ -937,13 +937,7 @@ function AppShell() {
       const ignored = partitioned.skippedWeb + (result.ignored ?? 0)
       const visibleErrors = result.errors.filter((message) => message !== WOFF_INSTALL_ERROR)
       if (result.entries.length === 0) {
-        toast.error(
-          ignored > 0
-            ? WOFF_INSTALL_ERROR
-            : visibleErrors.length
-              ? visibleErrors.join('\n')
-              : 'Could not add fonts',
-        )
+        toast.error(emptyImportError(visibleErrors, ignored))
         return
       }
       if (visibleErrors.length) toast.error(visibleErrors.join('\n'))
