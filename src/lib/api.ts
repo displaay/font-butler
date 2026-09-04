@@ -79,6 +79,9 @@ export const api = {
   uninstallSystem: (path: string) => json<{ ok: boolean }>(post('/api/system/uninstall', { path })),
   deactivateSystem: (path: string) =>
     json<{ ok: boolean }>(post('/api/system/deactivate', { path })),
+  clearFontCache: () => json<{ mac: boolean; cleared: boolean }>(post('/api/caches/font', {})),
+  clearOfficeCache: () =>
+    json<{ mac: boolean; cleared: boolean }>(post('/api/caches/office', {})),
   reveal: (payload: { id?: string; path?: string; which?: 'source' | 'installed' }) =>
     json<{ path: string }>(post('/api/reveal', payload)),
   renamePreview: (id: string, familyName: string) =>
