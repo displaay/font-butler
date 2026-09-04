@@ -9,7 +9,7 @@ Drop a font file into Font Buttler and it remembers the original path. When that
 - Tracks source files and last-modified time
 - Groups families, counts instances, and marks variable fonts with a **VF** badge
 - Shows a live **Aa** preview on every card
-- Installs, uninstalls, and deactivates user fonts
+- Installs, uninstalls, and deactivates user fonts. Uninstalling keeps the family on the Fonts list with a **Not installed** badge until you remove it from the list
 - **Install as…** rewrites the family name across OpenType name (and CFF) tables, then installs a copy. The original file is never mutated
 - Lists fonts already on the computer and lets you remove ones that are not protected
 - Right-click a card → **Show in Finder**
