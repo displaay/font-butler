@@ -46,6 +46,8 @@ test('loadSettings keeps a stored installAfterUpload false', () => {
       defaultView: 'list',
       defaultSort: 'name',
       installAfterUpload: false,
+      theme: 'system',
+      menuBarIcon: true,
     })
     assert.equal(loadSettings(paths).installAfterUpload, false)
   } finally {
@@ -69,6 +71,104 @@ test('loadSettings fills installAfterUpload on older settings files', () => {
     const settings = loadSettings(paths)
     assert.equal(settings.installAfterUpload, true)
     assert.equal(settings.defaultView, 'grid')
+    assert.equal(settings.theme, 'system')
+    assert.equal(settings.menuBarIcon, true)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings defaults theme to system', () => {
+  const paths = tempPaths()
+  try {
+    assert.equal(loadSettings(paths).theme, 'system')
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings keeps a stored theme dark', () => {
+  const paths = tempPaths()
+  try {
+    saveSettings(paths, {
+      version: 1,
+      watchFolder: null,
+      defaultView: 'list',
+      defaultSort: 'name',
+      installAfterUpload: true,
+      theme: 'dark',
+      menuBarIcon: true,
+    })
+    assert.equal(loadSettings(paths).theme, 'dark')
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings fills theme on older settings files', () => {
+  const paths = tempPaths()
+  try {
+    fs.mkdirSync(paths.dataRoot, { recursive: true })
+    fs.writeFileSync(
+      paths.settingsPath,
+      JSON.stringify({
+        version: 1,
+        watchFolder: null,
+        defaultView: 'list',
+        defaultSort: 'name',
+        installAfterUpload: true,
+      }),
+    )
+    assert.equal(loadSettings(paths).theme, 'system')
+    assert.equal(loadSettings(paths).menuBarIcon, true)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings defaults menuBarIcon to true', () => {
+  const paths = tempPaths()
+  try {
+    assert.equal(loadSettings(paths).menuBarIcon, true)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings keeps a stored menuBarIcon false', () => {
+  const paths = tempPaths()
+  try {
+    saveSettings(paths, {
+      version: 1,
+      watchFolder: null,
+      defaultView: 'list',
+      defaultSort: 'name',
+      installAfterUpload: true,
+      theme: 'system',
+      menuBarIcon: false,
+    })
+    assert.equal(loadSettings(paths).menuBarIcon, false)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings fills menuBarIcon on older settings files', () => {
+  const paths = tempPaths()
+  try {
+    fs.mkdirSync(paths.dataRoot, { recursive: true })
+    fs.writeFileSync(
+      paths.settingsPath,
+      JSON.stringify({
+        version: 1,
+        watchFolder: null,
+        defaultView: 'list',
+        defaultSort: 'name',
+        installAfterUpload: true,
+        theme: 'system',
+      }),
+    )
+    assert.equal(loadSettings(paths).menuBarIcon, true)
   } finally {
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }

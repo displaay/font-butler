@@ -9,11 +9,11 @@ function Badge({
   return (
     <span
       className={cn(
-        'inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold tracking-wide uppercase',
+        'inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium tracking-wide uppercase',
         tone === 'muted' && 'bg-muted text-muted-foreground',
-        tone === 'accent' && 'bg-accent text-accent-foreground',
-        tone === 'ink' && 'bg-primary text-primary-foreground',
-        tone === 'warn' && 'bg-amber-100 text-amber-800',
+        tone === 'accent' && 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-400',
+        tone === 'ink' && 'bg-muted text-foreground',
+        tone === 'warn' && 'bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-400',
         className,
       )}
       {...props}

@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import type { AppPaths } from './paths.ts'
-import type { AppSettings, SortMode, ViewLayout } from './types.ts'
+import type { AppSettings, SortMode, ThemeMode, ViewLayout } from './types.ts'
 
 const emptySettings = (): AppSettings => ({
   version: 1,
@@ -8,6 +8,8 @@ const emptySettings = (): AppSettings => ({
   defaultView: 'list',
   defaultSort: 'name',
   installAfterUpload: true,
+  theme: 'system',
+  menuBarIcon: true,
 })
 
 function isViewLayout(value: unknown): value is ViewLayout {
@@ -16,6 +18,10 @@ function isViewLayout(value: unknown): value is ViewLayout {
 
 function isSortMode(value: unknown): value is SortMode {
   return value === 'name' || value === 'installed'
+}
+
+function isThemeMode(value: unknown): value is ThemeMode {
+  return value === 'light' || value === 'dark' || value === 'system'
 }
 
 export function loadSettings(paths: AppPaths): AppSettings {
@@ -40,6 +46,9 @@ export function loadSettings(paths: AppPaths): AppSettings {
         typeof parsed.installAfterUpload === 'boolean'
           ? parsed.installAfterUpload
           : defaults.installAfterUpload,
+      theme: isThemeMode(parsed.theme) ? parsed.theme : defaults.theme,
+      menuBarIcon:
+        typeof parsed.menuBarIcon === 'boolean' ? parsed.menuBarIcon : defaults.menuBarIcon,
     }
   } catch {
     return emptySettings()

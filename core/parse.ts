@@ -21,6 +21,35 @@ function namedInstanceCount(font: Font): { count: number; names: string[] } {
   return { count: Math.max(names.length, 1), names }
 }
 
+function englishOrFirst(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined
+  }
+  const map = value as Record<string, unknown>
+  const preferred = map.en
+  if (typeof preferred === 'string' && preferred.trim()) {
+    return preferred
+  }
+  for (const item of Object.values(map)) {
+    if (typeof item === 'string' && item.trim()) {
+      return item
+    }
+  }
+  return undefined
+}
+
+export function resolveFamilyNames(input: {
+  familyName?: string | null
+  subfamilyName?: string | null
+  preferredFamily?: string
+  preferredSubfamily?: string
+}): { familyName: string; styleName: string } {
+  return {
+    familyName: input.preferredFamily?.trim() || input.familyName?.trim() || 'Unknown',
+    styleName: input.preferredSubfamily?.trim() || input.subfamilyName?.trim() || 'Regular',
+  }
+}
+
 function faceFromFont(font: Font): FontFaceInfo {
   const axes = font.variationAxes ?? {}
   const isVariable = Object.keys(axes).length > 0
@@ -29,12 +58,20 @@ function faceFromFont(font: Font): FontFaceInfo {
     : { count: 1, names: [] }
   const os2 = font['OS/2']
   const italicAngle = font.italicAngle ?? 0
-  const styleName = font.subfamilyName || 'Regular'
+  const records = (
+    font as Font & { name?: { records?: Record<string, unknown> } }
+  ).name?.records
+  const { familyName, styleName } = resolveFamilyNames({
+    familyName: font.familyName,
+    subfamilyName: font.subfamilyName,
+    preferredFamily: englishOrFirst(records?.preferredFamily),
+    preferredSubfamily: englishOrFirst(records?.preferredSubfamily),
+  })
 
   return {
-    familyName: font.familyName || 'Unknown',
+    familyName,
     styleName,
-    fullName: font.fullName || `${font.familyName ?? 'Unknown'} ${styleName}`,
+    fullName: font.fullName || `${familyName} ${styleName}`,
     postscriptName: font.postscriptName || '',
     isVariable,
     instanceCount: isVariable ? instances.count : 1,

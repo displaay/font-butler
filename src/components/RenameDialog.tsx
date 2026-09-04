@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { useSetActionStatus } from '@/components/NotifyProvider'
 import { api } from '@/lib/api'
 import type { CatalogEntry } from '@/lib/types'
 import { familyNameOf } from '@/lib/group'
@@ -25,6 +26,7 @@ export function RenameDialog({
   onOpenChange: (open: boolean) => void
   onDone: (entry: CatalogEntry) => void
 }) {
+  const setActionStatus = useSetActionStatus()
   const original = entry ? familyNameOf(entry) : ''
   const [name, setName] = useState(original)
   const [preview, setPreview] = useState({ fullName: '', postscriptName: '' })
@@ -45,6 +47,7 @@ export function RenameDialog({
   async function install() {
     if (!entry || !name.trim()) return
     setBusy(true)
+    setActionStatus(`Installing as ${name.trim()}…`)
     try {
       const result = await api.install(entry.id, name.trim())
       toast.success(`Installed as ${name.trim()}`)
@@ -54,6 +57,7 @@ export function RenameDialog({
       toast.error(error instanceof Error ? error.message : 'Install as failed')
     } finally {
       setBusy(false)
+      setActionStatus(null)
     }
   }
 

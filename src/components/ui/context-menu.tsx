@@ -20,7 +20,7 @@ function ContextMenuContent({
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.Content
         className={cn(
-          'z-50 min-w-44 rounded-lg border bg-popover p-1 shadow-lg',
+          'z-50 min-w-44 rounded-md border bg-popover p-1 shadow-sm',
           className,
         )}
         {...props}

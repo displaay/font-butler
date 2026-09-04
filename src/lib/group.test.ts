@@ -3,17 +3,21 @@ import { test } from 'node:test'
 import { groupCatalog, isInactiveEntry, isLibraryEntry, sortFamilyGroups } from './group.ts'
 import type { CatalogEntry, FontFaceInfo } from './types.ts'
 
-function face(familyName: string): FontFaceInfo {
+function face(
+  familyName: string,
+  styleName = 'Regular',
+  italic = false,
+): FontFaceInfo {
   return {
     familyName,
-    styleName: 'Regular',
-    fullName: `${familyName} Regular`,
-    postscriptName: `${familyName}-Regular`,
+    styleName,
+    fullName: `${familyName} ${styleName}`,
+    postscriptName: `${familyName}-${styleName.replace(/\s+/g, '')}`,
     isVariable: false,
     instanceCount: 1,
     instanceNames: [],
     weight: 400,
-    italic: false,
+    italic,
   }
 }
 
@@ -22,6 +26,8 @@ function entry(
   familyName: string,
   addedAt: number,
   status: CatalogEntry['status'] = 'installed',
+  styleName = 'Regular',
+  italic = false,
 ): CatalogEntry {
   return {
     id,
@@ -29,7 +35,7 @@ function entry(
     sourceMtimeMs: addedAt,
     sourceSize: 1000,
     status,
-    faces: [face(familyName)],
+    faces: [face(familyName, styleName, italic)],
     format: 'otf',
     addedAt,
     updatedAt: addedAt,
@@ -83,4 +89,18 @@ test('deactivated fonts belong on Fonts, not Uninstalled', () => {
   assert.equal(isInactiveEntry(deactivated), false)
   assert.equal(isLibraryEntry(uninstalled), false)
   assert.equal(isInactiveEntry(uninstalled), true)
+})
+
+test('groupCatalog keeps typographic family styles on one card', () => {
+  const groups = groupCatalog([
+    entry('regular', 'Booton', 1, 'installed', 'Regular', false),
+    entry('italic', 'Booton', 2, 'installed', 'Italic', true),
+    entry('el', 'Booton', 3, 'installed', 'ExtraLight', false),
+    entry('eli', 'Booton', 4, 'installed', 'ExtraLight Italic', true),
+    entry('heavy', 'Booton', 5, 'installed', 'Heavy', false),
+  ])
+  assert.equal(groups.length, 1)
+  assert.equal(groups[0]?.familyName, 'Booton')
+  assert.equal(groups[0]?.instanceCount, 5)
+  assert.equal(groups[0]?.previewEntryId, 'regular')
 })

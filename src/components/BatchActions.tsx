@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { Download, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
+import { Download, ListX, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   ContextMenuItem,
@@ -22,6 +22,7 @@ export function CatalogBatchButtons({
   onUninstall,
   onReinstall,
   onForget,
+  onDeleteFiles,
 }: {
   plan: CatalogBatchPlan
   busy: boolean
@@ -31,6 +32,7 @@ export function CatalogBatchButtons({
   onUninstall: () => void
   onReinstall: () => void
   onForget: () => void
+  onDeleteFiles?: () => void
 }) {
   if (!hasCatalogBatchActions(plan)) return null
   const multi = plan.count > 1
@@ -62,8 +64,13 @@ export function CatalogBatchButtons({
         </Button>
       )}
       {plan.forget > 0 && (
-        <Button size="sm" variant="destructive" disabled={busy} onClick={onForget}>
-          <Trash2 /> {actionLabel('Remove from library', plan.forget, multi)}
+        <Button size="sm" variant="outline" disabled={busy} onClick={onForget}>
+          <ListX /> {multi ? `Remove ${plan.forget} from list` : 'Remove from list'}
+        </Button>
+      )}
+      {plan.deleteFiles > 0 && onDeleteFiles && (
+        <Button size="sm" variant="destructive" disabled={busy} onClick={onDeleteFiles}>
+          <Trash2 /> {multi ? `Delete ${plan.deleteFiles} files` : 'Delete files'}
         </Button>
       )}
     </div>
@@ -106,7 +113,10 @@ export function BatchActionBar({
 }) {
   if (count <= 1) return null
   return (
-    <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card px-3 py-2">
+    <div
+      data-keep-selection=""
+      className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-muted/40 px-3 py-2"
+    >
       <div className="min-w-0">
         <p className="text-sm font-medium">
           {count} {count === 1 ? 'font' : 'fonts'} selected
@@ -129,6 +139,7 @@ export function CatalogMenuItems({
   onUninstall,
   onActivate,
   onForget,
+  onDeleteFiles,
 }: {
   plan: CatalogBatchPlan
   busy: boolean
@@ -140,6 +151,7 @@ export function CatalogMenuItems({
   onUninstall: () => void
   onActivate: () => void
   onForget: () => void
+  onDeleteFiles?: () => void
 }) {
   const multi = plan.count > 1
   const hasPrimary =
@@ -180,16 +192,23 @@ export function CatalogMenuItems({
           <Trash2 /> {actionLabel('Uninstall', plan.uninstall, multi)}
         </ContextMenuItem>
       )}
-      {plan.forget > 0 && (
+      {(plan.forget > 0 || plan.deleteFiles > 0) && (
         <>
           {hasPrimary && <ContextMenuSeparator />}
-          <ContextMenuItem
-            disabled={busy}
-            className="text-destructive focus:text-destructive"
-            onSelect={onForget}
-          >
-            <Trash2 /> {actionLabel('Remove from library', plan.forget, multi)}
-          </ContextMenuItem>
+          {plan.forget > 0 && (
+            <ContextMenuItem disabled={busy} onSelect={onForget}>
+              <ListX /> {multi ? `Remove ${plan.forget} from list` : 'Remove from list'}
+            </ContextMenuItem>
+          )}
+          {plan.deleteFiles > 0 && onDeleteFiles && (
+            <ContextMenuItem
+              disabled={busy}
+              className="text-destructive focus:text-destructive"
+              onSelect={onDeleteFiles}
+            >
+              <Trash2 /> {multi ? `Delete ${plan.deleteFiles} files` : 'Delete files'}
+            </ContextMenuItem>
+          )}
         </>
       )}
     </>

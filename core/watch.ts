@@ -71,10 +71,18 @@ export async function syncWatchers(paths: AppPaths): Promise<void> {
   })
 }
 
-const INBOX_MAX_DEPTH = 5
+export const FONT_TREE_MAX_DEPTH = 10
 
-export function listInboxFontFiles(root: string, depth = 0): string[] {
-  if (depth > INBOX_MAX_DEPTH) {
+export function shouldSkipFontWalkName(name: string): boolean {
+  return name.startsWith('.') || name === '__MACOSX'
+}
+
+export function listFontFilesInTree(
+  root: string,
+  depth = 0,
+  maxDepth = FONT_TREE_MAX_DEPTH,
+): string[] {
+  if (depth > maxDepth) {
     return []
   }
   let entries: fs.Dirent[]
@@ -85,17 +93,69 @@ export function listInboxFontFiles(root: string, depth = 0): string[] {
   }
   const files: string[] = []
   for (const entry of entries) {
-    if (entry.name.startsWith('.')) {
+    if (shouldSkipFontWalkName(entry.name)) {
       continue
     }
     const full = path.join(root, entry.name)
     if (entry.isDirectory()) {
-      files.push(...listInboxFontFiles(full, depth + 1))
+      files.push(...listFontFilesInTree(full, depth + 1, maxDepth))
     } else if (entry.isFile() && isFontFile(full)) {
       files.push(path.resolve(full))
     }
   }
   return files
+}
+
+export function listInboxFontFiles(root: string, depth = 0): string[] {
+  return listFontFilesInTree(root, depth)
+}
+
+export function expandImportPaths(inputPaths: string[]): { files: string[]; errors: string[] } {
+  const files: string[] = []
+  const errors: string[] = []
+  const seen = new Set<string>()
+
+  const addFile = (filePath: string) => {
+    const resolved = path.resolve(filePath)
+    if (seen.has(resolved)) {
+      return
+    }
+    seen.add(resolved)
+    files.push(resolved)
+  }
+
+  for (const raw of inputPaths) {
+    const resolved = path.resolve(raw)
+    if (!fs.existsSync(resolved)) {
+      errors.push(`${raw}: Not found.`)
+      continue
+    }
+    let stat: fs.Stats
+    try {
+      stat = fs.statSync(resolved)
+    } catch (error) {
+      errors.push(`${raw}: ${error instanceof Error ? error.message : String(error)}`)
+      continue
+    }
+    if (stat.isDirectory()) {
+      const found = listFontFilesInTree(resolved)
+      if (found.length === 0) {
+        errors.push(`${raw}: No font files in that folder.`)
+        continue
+      }
+      for (const filePath of found) {
+        addFile(filePath)
+      }
+      continue
+    }
+    if (stat.isFile()) {
+      addFile(resolved)
+      continue
+    }
+    errors.push(`${raw}: Not a file.`)
+  }
+
+  return { files, errors }
 }
 
 export async function syncInboxWatcher(
@@ -117,7 +177,7 @@ export async function syncInboxWatcher(
   inboxWatcher = chokidar.watch(folder, {
     ignoreInitial: true,
     awaitWriteFinish: { stabilityThreshold: 400, pollInterval: 100 },
-    depth: INBOX_MAX_DEPTH,
+    depth: FONT_TREE_MAX_DEPTH,
   })
   const queue = (filePath: string) => {
     if (!isFontFile(filePath)) {

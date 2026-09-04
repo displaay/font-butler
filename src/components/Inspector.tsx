@@ -1,4 +1,4 @@
-import { FolderOpen, Power, PowerOff, RefreshCw, Trash2, Download } from 'lucide-react'
+import { FolderOpen, ListX, Power, PowerOff, RefreshCw, Trash2, Download } from 'lucide-react'
 import { AaPreview } from '@/components/AaPreview'
 import { CatalogBatchButtons, SystemBatchButtons } from '@/components/BatchActions'
 import { catalogFontFamily, systemFontFamily } from '@/components/FontFaceStyles'
@@ -30,6 +30,7 @@ export function Inspector({
   onDeactivateSystem,
   onRevealSystem,
   onForget,
+  onDeleteFiles,
   multiSelect,
 }: {
   group: FamilyGroup | null
@@ -50,6 +51,7 @@ export function Inspector({
   onDeactivateSystem: () => void
   onRevealSystem: () => void
   onForget: () => void
+  onDeleteFiles?: () => void
   multiSelect?: {
     names: string[]
     summary: string
@@ -61,6 +63,7 @@ export function Inspector({
     onUninstall: () => void
     onReinstall: () => void
     onForget: () => void
+    onDeleteFiles?: () => void
     onDeactivateSystem: () => void
     onUninstallSystem: () => void
   }
@@ -69,7 +72,7 @@ export function Inspector({
     return (
       <aside className="flex w-full flex-col gap-4 p-5 md:w-80">
         <div>
-          <h2 className="font-sans text-2xl tracking-tight">
+          <h2 className="text-base font-semibold tracking-tight">
             {multiSelect.names.length} selected
           </h2>
           {multiSelect.summary ? (
@@ -107,6 +110,7 @@ export function Inspector({
             onUninstall={multiSelect.onUninstall}
             onReinstall={multiSelect.onReinstall}
             onForget={multiSelect.onForget}
+            onDeleteFiles={multiSelect.onDeleteFiles}
           />
         ) : null}
       </aside>
@@ -118,13 +122,13 @@ export function Inspector({
     return (
       <aside className="flex w-full flex-col gap-4 p-5 md:w-80">
         <div
-          className="rounded-xl bg-white px-4 py-6 text-3xl leading-tight"
+          className="rounded-lg border bg-muted/40 px-4 py-6 text-3xl leading-tight"
           style={{ fontFamily: `"${face ? systemFontFamily(face.path) : ''}", ui-sans-serif` }}
         >
           {SAMPLE}
         </div>
         <div>
-          <h2 className="font-sans text-2xl tracking-tight">{systemGroup.familyName}</h2>
+          <h2 className="text-base font-semibold tracking-tight">{systemGroup.familyName}</h2>
           <p className="mt-1 text-sm text-muted-foreground">
             {systemGroup.instanceCount} {systemGroup.instanceCount === 1 ? 'instance' : 'instances'}
             {systemGroup.protected ? ' · system font' : ''}
@@ -185,7 +189,7 @@ export function Inspector({
   return (
     <aside className="flex w-full flex-col gap-4 p-5 md:w-80">
       <div
-        className="rounded-xl bg-white px-4 py-6 text-3xl leading-tight"
+        className="rounded-lg border bg-muted/40 px-4 py-6 text-3xl leading-tight"
         style={{
           fontFamily: `"${catalogFontFamily(entry.id)}", ui-sans-serif`,
           fontWeight: previewFace?.weight,
@@ -195,7 +199,7 @@ export function Inspector({
         {SAMPLE}
       </div>
       <div>
-        <h2 className="font-sans text-2xl tracking-tight">{familyNameOf(entry)}</h2>
+        <h2 className="text-base font-semibold tracking-tight">{familyNameOf(entry)}</h2>
         <p className="mt-1 text-sm text-muted-foreground">
           {group.instanceCount} {group.instanceCount === 1 ? 'instance' : 'instances'}
           {group.isVariable ? ' · variable' : ''}
@@ -204,12 +208,12 @@ export function Inspector({
         </p>
       </div>
       {entry.status === 'outdated' && (
-        <div className="rounded-lg bg-amber-100 px-3 py-2 text-sm text-amber-900">
+        <div className="rounded-md border bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">
           Source changed. Reinstall to use the new file.
         </div>
       )}
       {entry.status === 'source-missing' && (
-        <div className="rounded-lg bg-red-100 px-3 py-2 text-sm text-red-900">
+        <div className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
           The source file is missing. Remove this entry if you no longer need it.
         </div>
       )}
@@ -258,7 +262,7 @@ export function Inspector({
       <div className="flex flex-wrap gap-2">
         {entry.status === 'source-missing' ? (
           <Button size="sm" variant="destructive" disabled={busy} onClick={onForget}>
-            <Trash2 /> Remove from library
+            <ListX /> Remove from list
           </Button>
         ) : installed ? (
           <>
@@ -286,6 +290,14 @@ export function Inspector({
             <Button size="sm" variant="outline" disabled={busy} onClick={onInstallAs}>
               <Download /> Install as…
             </Button>
+            <Button size="sm" variant="outline" disabled={busy} onClick={onForget}>
+              <ListX /> Remove from list
+            </Button>
+            {onDeleteFiles && (
+              <Button size="sm" variant="destructive" disabled={busy} onClick={onDeleteFiles}>
+                <Trash2 /> Delete files
+              </Button>
+            )}
           </>
         )}
         <Button size="sm" variant="outline" onClick={() => onReveal('source')}>

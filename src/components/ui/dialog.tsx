@@ -37,7 +37,7 @@ function DialogContent({
       <DialogOverlay />
       <DialogPrimitive.Content
         className={cn(
-          'fixed top-1/2 left-1/2 z-50 w-[min(92vw,420px)] -translate-x-1/2 -translate-y-1/2 rounded-xl border bg-card p-5 shadow-xl',
+          'fixed top-1/2 left-1/2 z-50 w-[min(92vw,420px)] -translate-x-1/2 -translate-y-1/2 rounded-lg border bg-popover p-5 shadow-sm',
           className,
         )}
         {...props}
@@ -61,7 +61,7 @@ function DialogTitle({
 }: React.ComponentProps<typeof DialogPrimitive.Title>) {
   return (
     <DialogPrimitive.Title
-      className={cn('font-sans text-xl tracking-tight', className)}
+      className={cn('text-base font-semibold tracking-tight', className)}
       {...props}
     />
   )

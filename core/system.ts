@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { loadCatalog } from './catalog.ts'
 import { isFontFile, parseFontFile, readFileStat } from './parse.ts'
+import { isFullyUnderAnyRoot, isUnderAnyRoot } from './containment.ts'
 import { type AppPaths, isMac } from './paths.ts'
 import type { SystemFace } from './types.ts'
 
@@ -29,14 +30,11 @@ function walkFonts(root: string, acc: string[]): void {
 }
 
 function isProtectedPath(filePath: string, paths: AppPaths): boolean {
-  const resolved = path.resolve(filePath)
-  if (resolved.startsWith(path.resolve(paths.systemFontsDir))) {
-    return true
+  const roots = [paths.systemFontsDir]
+  if (!isMac()) {
+    roots.push('/usr/share/fonts')
   }
-  if (!isMac() && resolved.startsWith('/usr/share/fonts')) {
-    return true
-  }
-  return false
+  return isUnderAnyRoot(filePath, roots)
 }
 
 function isWritable(filePath: string): boolean {
@@ -145,8 +143,7 @@ export function scanSystemFonts(paths: AppPaths): SystemFace[] {
 }
 
 export function allowedFontPath(filePath: string, paths: AppPaths): boolean {
-  const resolved = path.resolve(filePath)
-  const allowedRoots = [
+  return isFullyUnderAnyRoot(filePath, [
     paths.installDir,
     paths.disabledDir,
     paths.sourcesDir,
@@ -155,6 +152,5 @@ export function allowedFontPath(filePath: string, paths: AppPaths): boolean {
     paths.computerFontsDir,
     paths.systemFontsDir,
     paths.seedDir,
-  ]
-  return allowedRoots.some((root) => resolved.startsWith(path.resolve(root) + path.sep) || resolved === path.resolve(root))
+  ])
 }

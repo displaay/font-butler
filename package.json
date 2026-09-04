@@ -2,7 +2,7 @@
   "name": "font-butler",
   "productName": "Font Butler",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Source-tracked font manager for macOS",
   "author": "Font Butler",
   "type": "module",
@@ -63,6 +63,9 @@
       "core/**/*",
       "server/**/*",
       "scripts/**/*",
+      "build/icon.png",
+      "build/menubarTemplate.png",
+      "build/menubarTemplate@2x.png",
       "package.json"
     ],
     "directories": {

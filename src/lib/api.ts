@@ -1,4 +1,4 @@
-import type { AppSettings, CatalogEntry, Notice, SortMode, SystemFace, ViewLayout } from './types'
+import type { AppSettings, CatalogEntry, Notice, SortMode, SystemFace, ThemeMode, ViewLayout } from './types'
 
 let apiToken: string | null = null
 let bootstrapSettings: AppSettings | null = null
@@ -80,8 +80,12 @@ export const api = {
   reinstall: (id: string) => json<{ entry: CatalogEntry }>(post('/api/reinstall', { id })),
   reinstallMany: (ids: string[]) =>
     json<{ entries: CatalogEntry[] }>(post('/api/reinstall', { ids })),
-  forget: (id: string) => json<{ removed: number }>(post('/api/forget', { id })),
-  forgetMany: (ids: string[]) => json<{ removed: number }>(post('/api/forget', { ids })),
+  forget: (id: string, options?: { deleteFiles?: boolean }) =>
+    json<{ removed: number }>(post('/api/forget', { id, deleteFiles: options?.deleteFiles })),
+  forgetMany: (ids: string[], options?: { deleteFiles?: boolean }) =>
+    json<{ removed: number }>(
+      post('/api/forget', { ids, deleteFiles: options?.deleteFiles }),
+    ),
   forgetMissingSources: () => json<{ removed: number }>(post('/api/forget', { allMissing: true })),
   uninstallSystem: (path: string) => json<{ ok: boolean }>(post('/api/system/uninstall', { path })),
   deactivateSystem: (path: string) =>
@@ -97,6 +101,8 @@ export const api = {
     defaultView?: ViewLayout
     defaultSort?: SortMode
     installAfterUpload?: boolean
+    theme?: ThemeMode
+    menuBarIcon?: boolean
   }) => json<{ settings: AppSettings }>(post('/api/settings', patch)),
   renamePreview: (id: string, familyName: string) =>
     json<{ fullName: string; postscriptName: string }>(

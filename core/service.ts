@@ -13,13 +13,14 @@ import {
 import { MAX_UPLOAD_BYTES } from './constants.ts'
 import { emitEvent } from './events.ts'
 import { isFontFile, mimeForFont, parseFontFile, readFileStat } from './parse.ts'
+import { isUnderAnyRoot } from './containment.ts'
 import { ensureDirs, getPaths, type AppPaths } from './paths.ts'
 import { postscriptPreview, renameFamilyCopy } from './rename.ts'
-import { revealInFileManager } from './reveal.ts'
+import { moveToTrash, revealInFileManager } from './reveal.ts'
 import { loadSettings, saveSettings } from './settings.ts'
 import { allowedFontPath, scanSystemFonts } from './system.ts'
-import type { AppSettings, CatalogEntry, Notice, SortMode, SystemFace, ViewLayout } from './types.ts'
-import { listInboxFontFiles, syncInboxWatcher, syncWatchers } from './watch.ts'
+import type { AppSettings, CatalogEntry, Notice, SortMode, SystemFace, ThemeMode, ViewLayout } from './types.ts'
+import { expandImportPaths, listInboxFontFiles, syncInboxWatcher, syncWatchers } from './watch.ts'
 
 function now(): number {
   return Date.now()
@@ -69,6 +70,35 @@ async function removeInstalledCopy(entry: CatalogEntry): Promise<void> {
   entry.installedPath = undefined
 }
 
+function isProtectedSource(filePath: string, paths: AppPaths): boolean {
+  return isUnderAnyRoot(filePath, [
+    paths.systemFontsDir,
+    paths.computerFontsDir,
+    paths.supplementalFontsDir,
+  ])
+}
+
+async function deleteSourceFile(filePath: string, paths: AppPaths): Promise<void> {
+  const resolved = path.resolve(filePath)
+  if (isProtectedSource(resolved, paths)) {
+    throw new Error('System font files cannot be deleted.')
+  }
+  let stat: fs.Stats
+  try {
+    stat = fs.lstatSync(resolved)
+  } catch {
+    return
+  }
+  if (stat.isSymbolicLink()) {
+    fs.unlinkSync(resolved)
+    return
+  }
+  if (!stat.isFile()) {
+    throw new Error('That source path is not a file.')
+  }
+  await moveToTrash(resolved)
+}
+
 function copyIntoInstallDir(
   paths: AppPaths,
   entry: CatalogEntry,
@@ -109,6 +139,8 @@ export class FontButlerService {
     defaultView?: ViewLayout
     defaultSort?: SortMode
     installAfterUpload?: boolean
+    theme?: ThemeMode
+    menuBarIcon?: boolean
   }): Promise<AppSettings> {
     const current = loadSettings(this.paths)
     const next: AppSettings = { ...current }
@@ -120,6 +152,12 @@ export class FontButlerService {
     }
     if (typeof patch.installAfterUpload === 'boolean') {
       next.installAfterUpload = patch.installAfterUpload
+    }
+    if (patch.theme === 'light' || patch.theme === 'dark' || patch.theme === 'system') {
+      next.theme = patch.theme
+    }
+    if (typeof patch.menuBarIcon === 'boolean') {
+      next.menuBarIcon = patch.menuBarIcon
     }
     if ('watchFolder' in patch) {
       if (patch.watchFolder) {
@@ -152,11 +190,12 @@ export class FontButlerService {
 
   async importPaths(filePaths: string[]): Promise<{ entries: CatalogEntry[]; errors: string[] }> {
     return runCatalogTask(async () => {
-      const errors: string[] = []
+      const expanded = expandImportPaths(filePaths)
+      const errors = [...expanded.errors]
       const imported: CatalogEntry[] = []
-      for (const filePath of filePaths) {
+      for (const filePath of expanded.files) {
         try {
-          imported.push(this.importOneUnlocked(path.resolve(filePath)))
+          imported.push(this.importOneUnlocked(filePath))
         } catch (error) {
           errors.push(`${filePath}: ${error instanceof Error ? error.message : String(error)}`)
         }
@@ -200,7 +239,11 @@ export class FontButlerService {
 
   async openWith(filePath: string): Promise<CatalogEntry> {
     return runCatalogTask(async () => {
-      const entry = this.importOneUnlocked(path.resolve(filePath))
+      const resolved = path.resolve(filePath)
+      if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
+        return this.openFolderUnlocked(resolved)
+      }
+      const entry = this.importOneUnlocked(resolved)
       await syncWatchers(this.paths)
       if (entry.status === 'installed') {
         emitCatalog(this.paths)
@@ -337,18 +380,21 @@ export class FontButlerService {
     })
   }
 
-  async forget(id: string): Promise<void> {
+  async forget(id: string, options: { deleteFiles?: boolean } = {}): Promise<void> {
     return runCatalogTask(async () => {
-      await this.forgetEntry(id)
+      await this.forgetEntry(id, options)
       await syncWatchers(this.paths)
       emitCatalog(this.paths)
     })
   }
 
-  async forgetMany(ids: string[]): Promise<{ removed: number }> {
+  async forgetMany(
+    ids: string[],
+    options: { deleteFiles?: boolean } = {},
+  ): Promise<{ removed: number }> {
     return runCatalogTask(async () => {
       for (const id of ids) {
-        await this.forgetEntry(id)
+        await this.forgetEntry(id, options)
       }
       await syncWatchers(this.paths)
       emitCatalog(this.paths)
@@ -651,14 +697,20 @@ export class FontButlerService {
     return updated
   }
 
-  private async forgetEntry(id: string): Promise<CatalogEntry> {
+  private async forgetEntry(
+    id: string,
+    options: { deleteFiles?: boolean } = {},
+  ): Promise<CatalogEntry> {
     const catalog = loadCatalog(this.paths)
     const entry = findById(catalog, id)
     if (!entry) {
       throw new Error('Font is not in the library.')
     }
-    if (entry.status !== 'source-missing') {
-      throw new Error('Only fonts with a missing source can be removed from the library.')
+    if (entry.status !== 'source-missing' && entry.status !== 'uninstalled') {
+      throw new Error('Only uninstalled fonts can be removed from the list.')
+    }
+    if (options.deleteFiles && entry.status === 'uninstalled') {
+      await deleteSourceFile(entry.sourcePath, this.paths)
     }
     await removeInstalledCopy(entry)
     if (entry.disabledPath && fs.existsSync(entry.disabledPath)) {
@@ -668,6 +720,61 @@ export class FontButlerService {
     removeEntryById(catalog, id)
     saveCatalog(this.paths, catalog)
     return entry
+  }
+
+  private async openFolderUnlocked(folderPath: string): Promise<CatalogEntry> {
+    const expanded = expandImportPaths([folderPath])
+    const errors = [...expanded.errors]
+    const imported: CatalogEntry[] = []
+    for (const filePath of expanded.files) {
+      try {
+        imported.push(this.importOneUnlocked(filePath))
+      } catch (error) {
+        errors.push(`${filePath}: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    if (imported.length === 0) {
+      throw new Error(errors[0] ?? 'No font files in that folder.')
+    }
+    const pending = imported.filter(
+      (entry) => entry.status !== 'installed' && entry.status !== 'source-missing',
+    )
+    for (const entry of pending) {
+      if (entry.status === 'outdated' || entry.status === 'deactivated') {
+        await removeInstalledCopy(entry)
+        await clearFontCaches()
+      }
+      await this.installEntry(entry.id, entry.customFamilyName)
+    }
+    await syncWatchers(this.paths)
+    emitCatalog(this.paths)
+    const first = imported[0]
+    if (pending.length === 0) {
+      emitNotice({
+        kind: 'info',
+        message:
+          imported.length === 1
+            ? `${displayFamily(first)} is already installed.`
+            : `${imported.length} fonts are already installed.`,
+        entryId: first.id,
+      })
+    } else {
+      emitNotice({
+        kind: 'installed',
+        message:
+          imported.length === 1
+            ? `Installed ${displayFamily(first)}`
+            : `Installed ${imported.length} fonts from folder`,
+        entryId: first.id,
+      })
+    }
+    if (errors.length) {
+      emitNotice({
+        kind: 'error',
+        message: errors.join('\n'),
+      })
+    }
+    return first
   }
 
   private importOneUnlocked(filePath: string): CatalogEntry {
@@ -734,6 +841,16 @@ export class FontButlerService {
       const stat = readFileStat(entry.sourcePath)
       entry.sourceMtimeMs = stat.mtimeMs
       entry.sourceSize = stat.size
+      try {
+        const parsed = parseFontFile(entry.sourcePath)
+        if (JSON.stringify(entry.faces) !== JSON.stringify(parsed.faces)) {
+          entry.faces = parsed.faces
+          entry.format = parsed.format
+          changed = true
+        }
+      } catch {
+        // Keep stored names if the file can no longer be parsed.
+      }
       if (
         entry.status === 'installed' &&
         (stat.mtimeMs !== entry.installedSnapshotMtimeMs ||
@@ -842,9 +959,5 @@ export class FontButlerService {
 }
 
 function isProtectedSystem(filePath: string, paths: AppPaths): boolean {
-  const resolved = path.resolve(filePath)
-  return (
-    resolved.startsWith(path.resolve(paths.systemFontsDir)) ||
-    resolved.startsWith('/usr/share/fonts')
-  )
+  return isUnderAnyRoot(filePath, [paths.systemFontsDir, '/usr/share/fonts'])
 }

@@ -42,8 +42,12 @@ export function groupCatalog(entries: CatalogEntry[]): FamilyGroup[] {
       )
       const preview =
         groupEntries.find((entry) =>
-          entry.faces.some((face) => /regular|roman|book/i.test(face.styleName)),
-        ) ?? groupEntries[0]
+          entry.faces.some(
+            (face) => !face.italic && /regular|roman|book/i.test(face.styleName),
+          ),
+        ) ??
+        groupEntries.find((entry) => entry.faces.some((face) => !face.italic)) ??
+        groupEntries[0]
       return {
         key: familyName,
         familyName,
@@ -135,6 +139,18 @@ export function entryIds(group: { entries: CatalogEntry[] }): string[] {
 export function sourceMissingIds(group: { entries: CatalogEntry[] }): string[] {
   return group.entries
     .filter((entry) => entry.status === 'source-missing')
+    .map((entry) => entry.id)
+}
+
+export function forgettableIds(group: { entries: CatalogEntry[] }): string[] {
+  return group.entries
+    .filter((entry) => entry.status === 'uninstalled' || entry.status === 'source-missing')
+    .map((entry) => entry.id)
+}
+
+export function deletableSourceIds(group: { entries: CatalogEntry[] }): string[] {
+  return group.entries
+    .filter((entry) => entry.status === 'uninstalled')
     .map((entry) => entry.id)
 }
 

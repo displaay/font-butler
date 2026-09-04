@@ -6,6 +6,21 @@ import { cn } from '@/lib/utils'
 
 export type ViewLayout = 'list' | 'grid'
 
+export const GRID_PREVIEW_SIZE_KEY = 'font-butler-grid-preview-size'
+export const GRID_PREVIEW_SIZE_MIN = 2
+export const GRID_PREVIEW_SIZE_MAX = 6.5
+export const GRID_PREVIEW_SIZE_DEFAULT = 4.25
+export const GRID_PREVIEW_SIZE_STEP = 0.25
+
+export function readGridPreviewSize(): number {
+  const raw = localStorage.getItem(GRID_PREVIEW_SIZE_KEY)
+  if (raw == null || raw === '') return GRID_PREVIEW_SIZE_DEFAULT
+  const stored = Number(raw)
+  if (!Number.isFinite(stored)) return GRID_PREVIEW_SIZE_DEFAULT
+  const clamped = Math.min(GRID_PREVIEW_SIZE_MAX, Math.max(GRID_PREVIEW_SIZE_MIN, stored))
+  return Math.round(clamped / GRID_PREVIEW_SIZE_STEP) * GRID_PREVIEW_SIZE_STEP
+}
+
 export function ViewOptions({
   layout,
   onLayoutChange,
@@ -17,6 +32,8 @@ export function ViewOptions({
   hideDeactivated = false,
   onHideDeactivatedChange,
   showHideDeactivated = false,
+  previewSize,
+  onPreviewSizeChange,
   className,
 }: {
   layout: ViewLayout
@@ -29,60 +46,85 @@ export function ViewOptions({
   hideDeactivated?: boolean
   onHideDeactivatedChange?: (value: boolean) => void
   showHideDeactivated?: boolean
+  previewSize: number
+  onPreviewSizeChange: (size: number) => void
   className?: string
 }) {
   return (
-    <div className={cn('flex flex-wrap items-center justify-between gap-3', className)}>
+    <div
+      data-keep-selection=""
+      className={cn('flex flex-wrap items-center justify-between gap-3', className)}
+    >
       <div className="flex flex-wrap items-center gap-2">
-        <div className="flex items-center gap-1 rounded-lg border bg-card/60 p-0.5">
+        <div className="flex items-center gap-0.5 rounded-md border bg-background p-0.5">
           <Button
             type="button"
             size="sm"
-            variant={layout === 'list' ? 'default' : 'ghost'}
-            className="h-8 gap-1.5"
+            variant="ghost"
+            className={cn('h-7 gap-1.5', layout === 'list' && 'bg-muted font-medium')}
             onClick={() => onLayoutChange('list')}
             aria-label="List view"
             aria-pressed={layout === 'list'}
           >
-            <List className="size-4" />
+            <List className="size-3.5 text-muted-foreground" />
             List
           </Button>
           <Button
             type="button"
             size="sm"
-            variant={layout === 'grid' ? 'default' : 'ghost'}
-            className="h-8 gap-1.5"
+            variant="ghost"
+            className={cn('h-7 gap-1.5', layout === 'grid' && 'bg-muted font-medium')}
             onClick={() => onLayoutChange('grid')}
             aria-label="Grid view"
             aria-pressed={layout === 'grid'}
           >
-            <LayoutGrid className="size-4" />
+            <LayoutGrid className="size-3.5 text-muted-foreground" />
             Grid
           </Button>
         </div>
-        <div className="flex items-center gap-1 rounded-lg border bg-card/60 p-0.5">
+        {layout === 'grid' && (
+          <label className="flex h-8 items-center gap-2 rounded-md border bg-background px-2.5">
+            <span className="select-none text-[10px] leading-none text-muted-foreground" aria-hidden>
+              A
+            </span>
+            <input
+              type="range"
+              min={GRID_PREVIEW_SIZE_MIN}
+              max={GRID_PREVIEW_SIZE_MAX}
+              step={GRID_PREVIEW_SIZE_STEP}
+              value={previewSize}
+              onChange={(event) => onPreviewSizeChange(Number(event.target.value))}
+              aria-label="Preview size"
+              className="preview-size-slider w-24"
+            />
+            <span className="select-none text-sm leading-none text-muted-foreground" aria-hidden>
+              A
+            </span>
+          </label>
+        )}
+        <div className="flex items-center gap-0.5 rounded-md border bg-background p-0.5">
           <Button
             type="button"
             size="sm"
-            variant={sortMode === 'name' ? 'default' : 'ghost'}
-            className="h-8 gap-1.5"
+            variant="ghost"
+            className={cn('h-7 gap-1.5', sortMode === 'name' && 'bg-muted font-medium')}
             onClick={() => onSortModeChange('name')}
             aria-label="Sort alphabetically"
             aria-pressed={sortMode === 'name'}
           >
-            <ArrowDownAZ className="size-4" />
+            <ArrowDownAZ className="size-3.5 text-muted-foreground" />
             A–Z
           </Button>
           <Button
             type="button"
             size="sm"
-            variant={sortMode === 'installed' ? 'default' : 'ghost'}
-            className="h-8 gap-1.5"
+            variant="ghost"
+            className={cn('h-7 gap-1.5', sortMode === 'installed' && 'bg-muted font-medium')}
             onClick={() => onSortModeChange('installed')}
             aria-label="Sort by date of installation"
             aria-pressed={sortMode === 'installed'}
           >
-            <CalendarClock className="size-4" />
+            <CalendarClock className="size-3.5 text-muted-foreground" />
             Installed
           </Button>
         </div>

@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('fontButlerDesktop', {
+  platform: process.platform,
   reveal: (filePath) => ipcRenderer.invoke('reveal', filePath),
   pickFolder: () => ipcRenderer.invoke('pick-folder'),
   onOpenSettings: (callback) => {

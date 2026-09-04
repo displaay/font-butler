@@ -52,7 +52,7 @@ export function CatalogCardActions({
         </IconAction>
       )}
       {missingSource && (
-        <IconAction label="Remove from library" disabled={busy} destructive onClick={onForget}>
+        <IconAction label="Remove from list" disabled={busy} destructive onClick={onForget}>
           <Trash2 />
         </IconAction>
       )}
@@ -100,9 +100,11 @@ function ActionDock({
   return (
     <div
       className={cn(
-        'absolute top-1.5 z-10 flex gap-0.5 rounded-lg bg-card/95 p-0.5 opacity-0 shadow-sm ring-1 ring-border/80 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100',
+        'absolute top-1.5 z-10 flex gap-0.5 rounded-md border bg-background p-0.5 transition-opacity',
         offset ? 'right-11' : 'right-1.5',
-        visible && 'opacity-100',
+        visible
+          ? 'opacity-100'
+          : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100',
       )}
     >
       {children}

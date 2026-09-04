@@ -1,16 +1,34 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, shell, Tray } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { outdatedFamilies } from './updates-menu.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const UI = process.env.FONT_BUTLER_UI ?? process.env.FONTCASE_UI ?? 'http://127.0.0.1:43181'
 const API = process.env.FONT_BUTLER_API ?? process.env.FONTCASE_API ?? 'http://127.0.0.1:43182'
 const ICON_PATH = path.join(__dirname, '../build/icon.png')
+const MENUBAR_ICON_PATH = path.join(__dirname, '../build/menubarTemplate.png')
 const APP_ICON = fs.existsSync(ICON_PATH) ? nativeImage.createFromPath(ICON_PATH) : undefined
+const LIGHT_BACKGROUND = '#ffffff'
+const DARK_BACKGROUND = '#0a0a0a'
+
+function windowBackgroundColor() {
+  return nativeTheme.shouldUseDarkColors ? DARK_BACKGROUND : LIGHT_BACKGROUND
+}
+
+function applyThemeSetting(theme) {
+  nativeTheme.themeSource =
+    theme === 'light' || theme === 'dark' || theme === 'system' ? theme : 'system'
+  mainWindow?.setBackgroundColor(windowBackgroundColor())
+}
 
 let mainWindow = null
+let tray = null
 let apiToken = null
+let catalogEntries = []
+let menuBarIconEnabled = true
+let isQuitting = false
 const queuedFiles = []
 
 async function ensureApiToken() {
@@ -18,18 +36,36 @@ async function ensureApiToken() {
     return apiToken
   }
   const response = await fetch(`${API}/api/bootstrap`)
-  const data = await response.json()
+  const bootstrapBody = await response.text()
+  const data = bootstrapBody ? JSON.parse(bootstrapBody) : {}
   if (!response.ok || !data.token) {
     throw new Error('Could not connect to Font Butler API.')
   }
   apiToken = data.token
+  if (data.settings) {
+    applyThemeSetting(data.settings.theme)
+    applyMenuBarSetting(data.settings.menuBarIcon)
+  }
   return apiToken
 }
 
-function openSettings() {
+function showMainWindow() {
   if (!mainWindow) {
     createWindow()
   }
+  const win = mainWindow
+  if (!win) {
+    return
+  }
+  if (win.isMinimized()) {
+    win.restore()
+  }
+  win.show()
+  win.focus()
+}
+
+function openSettings() {
+  showMainWindow()
   const win = mainWindow
   if (!win) {
     return
@@ -40,11 +76,12 @@ function openSettings() {
   } else {
     send()
   }
-  win.show()
-  win.focus()
 }
 
 function createWindow() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    return
+  }
   mainWindow = new BrowserWindow({
     width: 1320,
     height: 860,
@@ -52,7 +89,9 @@ function createWindow() {
     minHeight: 620,
     title: 'Font Butler',
     icon: APP_ICON,
-    backgroundColor: '#d9d4cc',
+    backgroundColor: windowBackgroundColor(),
+    titleBarStyle: 'hiddenInset',
+    trafficLightPosition: { x: 16, y: 18 },
     autoHideMenuBar: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -62,6 +101,12 @@ function createWindow() {
     },
   })
   mainWindow.loadURL(UI)
+  mainWindow.on('close', (event) => {
+    if (!isQuitting && menuBarIconEnabled) {
+      event.preventDefault()
+      mainWindow?.hide()
+    }
+  })
   mainWindow.on('closed', () => {
     mainWindow = null
   })
@@ -81,8 +126,7 @@ async function openFont(filePath) {
   } catch (error) {
     console.error('Failed to open font', error)
   }
-  mainWindow?.show()
-  mainWindow?.focus()
+  showMainWindow()
 }
 
 async function clearCacheFromMenu(kind) {
@@ -96,7 +140,8 @@ async function clearCacheFromMenu(kind) {
   }
   try {
     const token = await ensureApiToken()
-    const response = await fetch(`${API}${pathByKind[kind]}`, {
+    const url = `${API}${pathByKind[kind]}`
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -104,7 +149,20 @@ async function clearCacheFromMenu(kind) {
       },
       body: JSON.stringify({}),
     })
-    const data = await response.json()
+    const rawBody = await response.text()
+    let data
+    try {
+      data = rawBody ? JSON.parse(rawBody) : {}
+    } catch {
+      if (response.status === 404) {
+        throw new Error(
+          'The Font Butler API is out of date. Quit Font Butler completely, then reopen it.',
+        )
+      }
+      throw new Error(
+        `Unexpected API response (HTTP ${response.status}): ${rawBody.slice(0, 120)}`,
+      )
+    }
     if (!response.ok) {
       throw new Error(data.error || 'Could not clear cache')
     }
@@ -113,6 +171,189 @@ async function clearCacheFromMenu(kind) {
       titleByKind[kind],
       error instanceof Error ? error.message : 'Could not clear cache',
     )
+  }
+}
+
+async function reinstallFromTray(ids, title) {
+  if (ids.length === 0) {
+    return
+  }
+  try {
+    const token = await ensureApiToken()
+    const body = ids.length === 1 ? { id: ids[0] } : { ids }
+    const response = await fetch(`${API}/api/reinstall`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      throw new Error(data.error || 'Could not reinstall fonts')
+    }
+  } catch (error) {
+    dialog.showErrorBox(
+      `Reinstall ${title}`,
+      error instanceof Error ? error.message : 'Could not reinstall fonts',
+    )
+  }
+}
+
+function buildTrayMenu() {
+  const families = outdatedFamilies(catalogEntries)
+  const allIds = families.flatMap((family) => family.ids)
+  /** @type {import('electron').MenuItemConstructorOptions[]} */
+  const items = []
+  if (families.length === 0) {
+    items.push({ label: 'No source updates', enabled: false })
+  } else {
+    for (const family of families) {
+      items.push({
+        label: family.name,
+        click: () => {
+          void reinstallFromTray(family.ids, family.name)
+        },
+      })
+    }
+  }
+  items.push({
+    label: 'Reinstall all fonts',
+    enabled: allIds.length > 0,
+    click: () => {
+      void reinstallFromTray(allIds, 'updated fonts')
+    },
+  })
+  items.push({ type: 'separator' })
+  items.push({
+    label: 'Remove font cache',
+    click: () => {
+      void clearCacheFromMenu('font')
+    },
+  })
+  items.push({
+    label: 'Remove MS Office cache',
+    click: () => {
+      void clearCacheFromMenu('office')
+    },
+  })
+  items.push({ type: 'separator' })
+  items.push({ role: 'quit' })
+  return Menu.buildFromTemplate(items)
+}
+
+function refreshTrayMenu() {
+  if (!tray) {
+    return
+  }
+  const families = outdatedFamilies(catalogEntries)
+  tray.setToolTip(families.length > 0 ? `Font Butler — ${families.length} updates` : 'Font Butler')
+  tray.setContextMenu(buildTrayMenu())
+}
+
+function destroyTray() {
+  tray?.destroy()
+  tray = null
+}
+
+function ensureTray() {
+  if (!menuBarIconEnabled) {
+    destroyTray()
+    return
+  }
+  if (tray) {
+    refreshTrayMenu()
+    return
+  }
+  if (!fs.existsSync(MENUBAR_ICON_PATH)) {
+    return
+  }
+  const icon = nativeImage.createFromPath(MENUBAR_ICON_PATH)
+  if (icon.isEmpty()) {
+    return
+  }
+  icon.setTemplateImage(true)
+  tray = new Tray(icon)
+  tray.setIgnoreDoubleClickEvents(true)
+  refreshTrayMenu()
+}
+
+function applyMenuBarSetting(enabled) {
+  const next = enabled !== false
+  const turningOff = menuBarIconEnabled && !next
+  menuBarIconEnabled = next
+  if (next) {
+    ensureTray()
+    return
+  }
+  destroyTray()
+  if (turningOff && mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+    showMainWindow()
+  }
+}
+
+function handleApiEvent(event) {
+  if (!event || typeof event !== 'object') {
+    return
+  }
+  if (event.type === 'catalog' && Array.isArray(event.entries)) {
+    catalogEntries = event.entries
+    refreshTrayMenu()
+  }
+  if (event.type === 'settings' && event.settings) {
+    applyThemeSetting(event.settings.theme)
+    applyMenuBarSetting(event.settings.menuBarIcon)
+  }
+}
+
+async function loadCatalog() {
+  try {
+    const response = await fetch(`${API}/api/catalog`)
+    const data = await response.json()
+    if (Array.isArray(data.entries)) {
+      catalogEntries = data.entries
+      refreshTrayMenu()
+    }
+  } catch (error) {
+    console.error('Failed to load catalog for menu bar', error)
+  }
+}
+
+async function listenForApiEvents() {
+  while (!isQuitting) {
+    try {
+      const response = await fetch(`${API}/api/events`)
+      if (!response.ok || !response.body) {
+        throw new Error('events unavailable')
+      }
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      while (!isQuitting) {
+        const { done, value } = await reader.read()
+        if (done) {
+          break
+        }
+        buffer += decoder.decode(value, { stream: true })
+        const chunks = buffer.split('\n\n')
+        buffer = chunks.pop() ?? ''
+        for (const chunk of chunks) {
+          const line = chunk.split('\n').find((item) => item.startsWith('data:'))
+          if (!line) continue
+          try {
+            handleApiEvent(JSON.parse(line.slice(5).trim()))
+          } catch {
+            // ignore malformed SSE
+          }
+        }
+      }
+    } catch {
+      if (isQuitting) {
+        return
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2000))
+    }
   }
 }
 
@@ -181,10 +422,7 @@ if (!gotLock) {
     extra.forEach((filePath) => {
       void openFont(filePath)
     })
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore()
-      mainWindow.focus()
-    }
+    showMainWindow()
   })
 
   app.on('open-file', (event, filePath) => {
@@ -196,12 +434,27 @@ if (!gotLock) {
     }
   })
 
+  app.on('before-quit', () => {
+    isQuitting = true
+  })
+
   app.whenReady().then(async () => {
     if (process.platform === 'darwin' && app.dock && APP_ICON && !APP_ICON.isEmpty() && !app.isPackaged) {
       app.dock.setIcon(APP_ICON)
     }
     Menu.setApplicationMenu(buildAppMenu())
+    nativeTheme.on('updated', () => {
+      mainWindow?.setBackgroundColor(windowBackgroundColor())
+    })
+    try {
+      await ensureApiToken()
+    } catch (error) {
+      console.error('Could not bootstrap Font Butler API', error)
+    }
+    ensureTray()
     createWindow()
+    void loadCatalog()
+    void listenForApiEvents()
     const fromArgv = process.argv.filter((arg) =>
       /\.(ttf|otf|ttc|otc|woff2?)$/i.test(arg),
     )
@@ -212,15 +465,16 @@ if (!gotLock) {
   })
 
   app.on('window-all-closed', () => {
+    if (menuBarIconEnabled) {
+      return
+    }
     if (process.platform !== 'darwin') {
       app.quit()
     }
   })
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow()
-    }
+    showMainWindow()
   })
 }
 

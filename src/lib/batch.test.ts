@@ -74,7 +74,8 @@ test('catalogBatchPlan counts each action by family status', () => {
     deactivate: 2,
     uninstall: 3,
     reinstall: 1,
-    forget: 1,
+    forget: 2,
+    deleteFiles: 1,
   })
 })
 

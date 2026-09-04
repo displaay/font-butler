@@ -68,12 +68,16 @@ export type ViewLayout = 'list' | 'grid'
 
 export type SortMode = 'name' | 'installed'
 
+export type ThemeMode = 'light' | 'dark' | 'system'
+
 export type AppSettings = {
   version: 1
   watchFolder: string | null
   defaultView: ViewLayout
   defaultSort: SortMode
   installAfterUpload: boolean
+  theme: ThemeMode
+  menuBarIcon: boolean
 }
 
 export type ServiceEvent =

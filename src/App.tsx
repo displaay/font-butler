@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
 import { toast } from 'sonner'
-import { ChevronDown, FolderOpen, Search } from 'lucide-react'
+import { ChevronDown, FolderOpen } from 'lucide-react'
 import { AaPreview } from '@/components/AaPreview'
 import { StatusBadge, VfBadge } from '@/components/Badges'
 import {
@@ -16,7 +16,13 @@ import { InstanceList } from '@/components/InstanceList'
 import { Inspector } from '@/components/Inspector'
 import { RenameDialog } from '@/components/RenameDialog'
 import { SettingsDialog } from '@/components/SettingsDialog'
-import { ViewOptions, type ViewLayout } from '@/components/ViewOptions'
+import { Sidebar, type Tab } from '@/components/Sidebar'
+import {
+  GRID_PREVIEW_SIZE_KEY,
+  ViewOptions,
+  readGridPreviewSize,
+  type ViewLayout,
+} from '@/components/ViewOptions'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -26,12 +32,14 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
-import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { NotifyProvider, useSetActionStatus } from '@/components/NotifyProvider'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { api, isNotice, isSettingsEvent, subscribeEvents } from '@/lib/api'
-import { familyNameOf, entryIds, familyStatusSummary, groupCatalog, groupSystem, hasSourceMissing, isInactiveEntry, isLibraryEntry, matchesQuery, sortFamilyGroups, sourceMissingIds } from '@/lib/group'
+import { collectDropPayload, isDroppedFontName } from '@/lib/drop'
+import { familyNameOf, deletableSourceIds, entryIds, familyStatusSummary, forgettableIds, groupCatalog, groupSystem, hasSourceMissing, isInactiveEntry, isLibraryEntry, matchesQuery, sortFamilyGroups } from '@/lib/group'
+import { actionCopy, actionCopyFor } from '@/lib/notify'
 import { catalogInstanceRows, systemInstanceRows } from '@/lib/instances'
 import {
   catalogBatchPlan,
@@ -42,19 +50,22 @@ import {
   type SystemBatchPlan,
 } from '@/lib/batch'
 import { nextSelection, shortcutAction } from '@/lib/selection'
+import { applyTheme } from '@/lib/theme'
 import type { AppSettings, CatalogEntry, FamilyGroup, SortMode, SystemFace, SystemFamilyGroup } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
-type Tab = 'library' | 'system' | 'uninstalled' | 'updates'
-
-const TABS: { id: Tab; label: string }[] = [
-  { id: 'library', label: 'Fonts' },
-  { id: 'system', label: 'On this Mac' },
-  { id: 'uninstalled', label: 'Uninstalled' },
-  { id: 'updates', label: 'Updates' },
-]
-
 export default function App() {
+  return (
+    <TooltipProvider>
+      <NotifyProvider>
+        <AppShell />
+      </NotifyProvider>
+    </TooltipProvider>
+  )
+}
+
+function AppShell() {
+  const setActionStatus = useSetActionStatus()
   const [entries, setEntries] = useState<CatalogEntry[]>([])
   const [systemFaces, setSystemFaces] = useState<SystemFace[]>([])
   const [tab, setTab] = useState<Tab>('library')
@@ -65,6 +76,7 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const busyRef = useRef(false)
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null)
   const [renameEntry, setRenameEntry] = useState<CatalogEntry | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -86,6 +98,7 @@ export default function App() {
   const [hideDeactivated, setHideDeactivated] = useState(
     () => localStorage.getItem('font-butler-hide-deactivated') === 'true',
   )
+  const [gridPreviewSize, setGridPreviewSize] = useState(readGridPreviewSize)
 
   function applySettings(next: AppSettings) {
     const current = settingsRef.current
@@ -99,6 +112,18 @@ export default function App() {
       setSortMode(next.defaultSort)
       localStorage.setItem('font-butler-sort', next.defaultSort)
     }
+    if (!current || current.theme !== next.theme) {
+      applyTheme(next.theme)
+    }
+  }
+
+  async function persistPreferences(patch: { defaultView?: ViewLayout; defaultSort?: SortMode }) {
+    try {
+      const result = await api.updateSettings(patch)
+      applySettings(result.settings)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not save settings')
+    }
   }
 
   useEffect(() => {
@@ -111,19 +136,21 @@ export default function App() {
         }
         const openPath = new URLSearchParams(window.location.search).get('open')
         if (openPath) {
-          const opened = await api.open(openPath)
-          toast.success(`Installed ${familyNameOf(opened.entry)}`)
+          await api.open(openPath)
         }
         const [catalog, settingsResult] = await Promise.all([api.catalog(), api.settings()])
         if (!cancelled) {
           applySettings(settingsResult.settings)
           setEntries(catalog.entries)
-          const focus =
-            (openPath && catalog.entries.find((entry) => entry.sourcePath === openPath)) ||
-            catalog.entries[0]
+          const focus = openPath
+            ? catalog.entries.find((entry) => entry.sourcePath === openPath)
+            : undefined
           if (focus) {
-            setSelectedFamily((current) => current ?? familyNameOf(focus))
-            setSelectedEntryId((current) => current ?? focus.id)
+            const name = familyNameOf(focus)
+            setSelectedFamily(name)
+            setSelectedFamilyKeys([name])
+            setSelectedEntryId(focus.id)
+            setSelectionAnchor(name)
           }
         }
         const system = await api.system()
@@ -139,7 +166,9 @@ export default function App() {
     void boot()
     const stop = subscribeEvents((event) => {
       if (isNotice(event)) {
-        toast[event.notice.kind === 'error' ? 'error' : 'success'](event.notice.message)
+        if (event.notice.kind === 'error' || !busyRef.current) {
+          toast[event.notice.kind === 'error' ? 'error' : 'success'](event.notice.message)
+        }
         if (event.notice.entryId) {
           setEntries((current) => {
             const match = current.find((entry) => entry.id === event.notice.entryId)
@@ -165,6 +194,17 @@ export default function App() {
       stop()
     }
   }, [])
+
+  useEffect(() => {
+    const mode = settings?.theme
+    if (!mode) return
+    applyTheme(mode)
+    if (mode !== 'system') return
+    const media = window.matchMedia('(prefers-color-scheme: dark)')
+    const onChange = () => applyTheme('system')
+    media.addEventListener('change', onChange)
+    return () => media.removeEventListener('change', onChange)
+  }, [settings?.theme])
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -250,46 +290,55 @@ export default function App() {
         ? libraryGroupsUnfiltered.length > 0
         : visibleGroups.length > 0
   const selectedGroup =
-    visibleGroups.find((group) => group.familyName === selectedFamily) ?? visibleGroups[0] ?? null
+    visibleGroups.find((group) => group.familyName === selectedFamily) ?? null
   const selectedEntry =
     selectedGroup?.entries.find((entry) => entry.id === selectedEntryId) ??
     selectedGroup?.entries[0] ??
     null
   const selectedSystemGroup =
     tab === 'system'
-      ? (shownSystemGroups.find((group) => group.familyName === selectedSystem) ??
-        shownSystemGroups[0] ??
-        null)
+      ? (shownSystemGroups.find((group) => group.familyName === selectedSystem) ?? null)
       : null
 
   useEffect(() => {
-    if (tab !== 'system' && selectedGroup) {
-      setSelectedFamily(selectedGroup.familyName)
-      setSelectedFamilyKeys((current) => {
-        const visible = new Set(visibleGroups.map((group) => group.familyName))
-        const kept = current.filter((key) => visible.has(key))
-        const next = kept.length > 0 ? kept : [selectedGroup.familyName]
-        if (sameKeys(current, next)) return current
-        return next
-      })
-      setSelectedEntryId((current) => {
-        if (current && selectedGroup.entries.some((entry) => entry.id === current)) {
-          return current
-        }
-        return selectedGroup.entries[0]?.id ?? null
-      })
+    if (tab === 'updates' && updateGroups.length === 0) {
+      setTab('library')
     }
-    if (tab === 'system' && selectedSystemGroup) {
-      setSelectedSystem(selectedSystemGroup.familyName)
+  }, [tab, updateGroups.length])
+
+  useEffect(() => {
+    if (loading) return
+    if (tab === 'system') {
+      const visible = new Set(shownSystemGroups.map((group) => group.familyName))
       setSelectedSystemKeys((current) => {
-        const visible = new Set(shownSystemGroups.map((group) => group.familyName))
         const kept = current.filter((key) => visible.has(key))
-        const next = kept.length > 0 ? kept : [selectedSystemGroup.familyName]
-        if (sameKeys(current, next)) return current
-        return next
+        if (sameKeys(current, kept)) return current
+        return kept
       })
+      setSelectedSystem((current) => (current && visible.has(current) ? current : null))
+      return
     }
-  }, [tab, selectedGroup, selectedSystemGroup, visibleGroups, shownSystemGroups])
+    const visible = new Set(visibleGroups.map((group) => group.familyName))
+    setSelectedFamilyKeys((current) => {
+      const kept = current.filter((key) => visible.has(key))
+      if (sameKeys(current, kept)) return current
+      return kept
+    })
+    setSelectedFamily((current) => (current && visible.has(current) ? current : null))
+  }, [loading, tab, visibleGroups, shownSystemGroups])
+
+  useEffect(() => {
+    if (!selectedGroup) {
+      setSelectedEntryId(null)
+      return
+    }
+    setSelectedEntryId((current) => {
+      if (current && selectedGroup.entries.some((entry) => entry.id === current)) {
+        return current
+      }
+      return selectedGroup.entries[0]?.id ?? null
+    })
+  }, [selectedGroup])
 
   useEffect(() => {
     if (!scrollToFamily) return
@@ -363,6 +412,22 @@ export default function App() {
   const systemPlan = systemBatchPlan(systemSelection)
   const catalogSummary = catalogBatchSummary(catalogSelection)
   const systemSummary = systemBatchSummary(systemSelection)
+  const hasSelection = tab === 'system' ? systemSelection.length > 0 : catalogSelection.length > 0
+
+  function clearSelection() {
+    setSelectedFamily(null)
+    setSelectedFamilyKeys([])
+    setSelectedEntryId(null)
+    setSelectedSystem(null)
+    setSelectedSystemKeys([])
+    setSelectionAnchor(null)
+  }
+
+  function handleListPointerDown(event: PointerEvent<HTMLElement>) {
+    if (dragging || event.button !== 0 || !hasSelection) return
+    if (clickPreservesSelection(event.target)) return
+    clearSelection()
+  }
 
   function selectAllVisible() {
     if (tab === 'system') {
@@ -407,16 +472,16 @@ export default function App() {
     return ids.length > 1 ? api.reinstallMany(ids) : api.reinstall(ids[0])
   }
 
-  function forgetGroup(group: FamilyGroup) {
-    const ids = sourceMissingIds(group)
+  function forgetGroup(group: FamilyGroup, options?: { deleteFiles?: boolean }) {
+    const ids = options?.deleteFiles ? deletableSourceIds(group) : forgettableIds(group)
     if (ids.length === 0) {
       return Promise.resolve({ removed: 0 })
     }
-    return ids.length > 1 ? api.forgetMany(ids) : api.forget(ids[0])
+    return ids.length > 1 ? api.forgetMany(ids, options) : api.forget(ids[0], options)
   }
 
-  function forgetEntry(entry: CatalogEntry) {
-    return api.forget(entry.id)
+  function forgetEntry(entry: CatalogEntry, options?: { deleteFiles?: boolean }) {
+    return api.forget(entry.id, options)
   }
 
   async function removeSelected() {
@@ -430,7 +495,11 @@ export default function App() {
           }
         }
         setSystemFaces((await api.system()).faces)
-      }, groups.length === 1 ? `Removed ${groups[0].familyName}` : `Removed ${groups.length} fonts`)
+      }, actionCopyFor('remove', groups))
+      return
+    }
+    if (tab === 'uninstalled') {
+      await forgetSelected()
       return
     }
     const groups = selectedCatalogGroups()
@@ -450,7 +519,7 @@ export default function App() {
           await uninstallGroup(group)
         }
       }
-    }, removable.length === 1 ? `Removed ${removable[0].familyName}` : `Removed ${removable.length} fonts`)
+    }, actionCopyFor('remove', removable))
   }
 
   async function installSelected() {
@@ -460,7 +529,7 @@ export default function App() {
       for (const group of groups) {
         await installGroup(group)
       }
-    }, groups.length === 1 ? `Installed ${groups[0].familyName}` : `Installed ${groups.length} fonts`)
+    }, actionCopyFor('install', groups))
   }
 
   async function activateSelected() {
@@ -470,7 +539,7 @@ export default function App() {
       for (const group of groups) {
         await activateGroup(group)
       }
-    }, groups.length === 1 ? `Activated ${groups[0].familyName}` : `Activated ${groups.length} fonts`)
+    }, actionCopyFor('activate', groups))
   }
 
   async function installOrActivateSelected() {
@@ -478,12 +547,13 @@ export default function App() {
       (group) => group.status === 'uninstalled' || group.status === 'deactivated',
     )
     if (groups.length === 0) return
+    const verb = groups.every((group) => group.status === 'deactivated') ? 'activate' : 'install'
     await run(async () => {
       for (const group of groups) {
         if (group.status === 'deactivated') await activateGroup(group)
         else await installGroup(group)
       }
-    }, groups.length === 1 ? `Installed ${groups[0].familyName}` : `Installed ${groups.length} fonts`)
+    }, actionCopyFor(verb, groups))
   }
 
   async function reinstallSelected() {
@@ -493,19 +563,38 @@ export default function App() {
       for (const group of groups) {
         await reinstallGroup(group)
       }
-    }, groups.length === 1 ? `Reinstalled ${groups[0].familyName}` : `Reinstalled ${groups.length} fonts`)
+    }, actionCopyFor('reinstall', groups))
   }
 
   async function forgetSelected() {
-    const groups = selectedCatalogGroups().filter(hasSourceMissing)
+    const groups = selectedCatalogGroups().filter((group) => forgettableIds(group).length > 0)
     if (groups.length === 0) return
     await run(async () => {
       for (const group of groups) {
         await forgetGroup(group)
       }
-    }, groups.length === 1
-      ? `Removed ${groups[0].familyName} from the library`
-      : `Removed ${groups.length} fonts from the library`)
+    }, actionCopyFor('forget', groups))
+  }
+
+  async function deleteFilesFor(groups: FamilyGroup[]) {
+    const targets = groups.filter((group) => deletableSourceIds(group).length > 0)
+    if (targets.length === 0) return
+    const fileCount = targets.reduce((sum, group) => sum + deletableSourceIds(group).length, 0)
+    const confirmed = window.confirm(
+      fileCount === 1
+        ? `Delete the source file for ${targets[0].familyName}? It will be moved to Trash.`
+        : `Delete ${fileCount} source files? They will be moved to Trash.`,
+    )
+    if (!confirmed) return
+    await run(async () => {
+      for (const group of targets) {
+        await forgetGroup(group, { deleteFiles: true })
+      }
+    }, actionCopyFor('deleteFiles', targets))
+  }
+
+  async function deleteFilesSelected() {
+    await deleteFilesFor(selectedCatalogGroups())
   }
 
   async function uninstallSelected() {
@@ -524,7 +613,7 @@ export default function App() {
       for (const group of groups) {
         await uninstallGroup(group)
       }
-    }, groups.length === 1 ? `Removed ${groups[0].familyName}` : `Removed ${groups.length} fonts`)
+    }, actionCopyFor('remove', groups))
   }
 
   async function deactivateSelected() {
@@ -538,7 +627,7 @@ export default function App() {
           }
         }
         setSystemFaces((await api.system()).faces)
-      }, groups.length === 1 ? `Deactivated ${groups[0].familyName}` : `Deactivated ${groups.length} fonts`)
+      }, actionCopyFor('deactivate', groups))
       return
     }
     const groups = selectedCatalogGroups().filter(
@@ -549,7 +638,7 @@ export default function App() {
       for (const group of groups) {
         await deactivateGroup(group)
       }
-    }, groups.length === 1 ? `Deactivated ${groups[0].familyName}` : `Deactivated ${groups.length} fonts`)
+    }, actionCopyFor('deactivate', groups))
   }
 
   useEffect(() => {
@@ -568,17 +657,23 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   })
 
-  async function run(action: () => Promise<unknown>, success?: string) {
+  async function run(action: () => Promise<unknown>, copy: { pending: string; done: string }) {
+    busyRef.current = true
     setBusy(true)
+    setActionStatus(copy.pending)
     try {
       await action()
-      if (success) toast.success(success)
+      setActionStatus(null)
+      toast.success(copy.done)
       const catalog = await api.catalog()
       setEntries(catalog.entries)
     } catch (err) {
+      setActionStatus(null)
       toast.error(err instanceof Error ? err.message : 'Something went wrong')
     } finally {
+      busyRef.current = false
       setBusy(false)
+      setActionStatus(null)
     }
   }
 
@@ -587,23 +682,49 @@ export default function App() {
     const paths = files
       .map((file) => (file as File & { path?: string }).path)
       .filter((value): value is string => Boolean(value))
+    await importDropped(paths, files)
+  }
+
+  async function handleDrop(dataTransfer: DataTransfer) {
+    try {
+      const payload = await collectDropPayload(dataTransfer)
+      await importDropped(payload.paths, payload.files)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not add fonts')
+      setDragging(false)
+    }
+  }
+
+  async function importDropped(paths: string[], files: File[]) {
+    busyRef.current = true
     setBusy(true)
+    setActionStatus('Adding fonts…')
     try {
       const result = paths.length ? await api.importPaths(paths) : await api.importFiles(files)
+      if (result.entries.length === 0) {
+        toast.error(result.errors.length ? result.errors.join('\n') : 'Could not add fonts')
+        return
+      }
       if (result.errors.length) toast.error(result.errors.join('\n'))
-      if (result.entries.length === 0) return
       const shouldInstall = settings?.installAfterUpload !== false
       const pendingIds = result.entries
         .filter((entry) => entry.status !== 'installed' && entry.status !== 'source-missing')
         .map((entry) => entry.id)
       let installed = false
       if (shouldInstall && pendingIds.length > 0) {
+        setActionStatus(
+          pendingIds.length === 1
+            ? `Installing ${familyNameOf(result.entries[0])}…`
+            : `Installing ${pendingIds.length} fonts…`,
+        )
         try {
           if (pendingIds.length === 1) await api.install(pendingIds[0])
           else await api.installMany(pendingIds)
           installed = true
         } catch (error) {
           toast.error(error instanceof Error ? error.message : 'Could not install fonts')
+          setEntries((await api.catalog()).entries)
+          return
         }
       }
       const names = [...new Set(result.entries.map(familyNameOf))]
@@ -629,7 +750,9 @@ export default function App() {
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not add fonts')
     } finally {
+      busyRef.current = false
       setBusy(false)
+      setActionStatus(null)
       setDragging(false)
     }
   }
@@ -653,71 +776,42 @@ export default function App() {
   }
 
   return (
-    <TooltipProvider>
       <div
-        className="flex h-full min-h-0 flex-col"
+        className="flex h-full min-h-0 flex-col bg-background text-foreground md:flex-row"
         onDragEnter={(event) => {
           event.preventDefault()
           setDragging(true)
         }}
-        onDragOver={(event) => event.preventDefault()}
+        onDragOver={(event) => {
+          event.preventDefault()
+          event.dataTransfer.dropEffect = 'copy'
+        }}
         onDragLeave={(event) => {
           if (event.currentTarget === event.target) setDragging(false)
         }}
         onDrop={(event) => {
           event.preventDefault()
-          void handleFiles(event.dataTransfer.files)
+          void handleDrop(event.dataTransfer)
         }}
       >
         <FontFaceStyles
           entries={entries}
           systemFaces={tab === 'system' ? shownSystemGroups.flatMap((group) => group.faces) : []}
         />
-        <header className="flex flex-col gap-3 border-b bg-card/80 px-4 py-3 backdrop-blur md:flex-row md:items-center">
-          <div className="flex items-baseline gap-3">
-            <h1 className="font-sans text-[28px] leading-none tracking-tight">Font Butler</h1>
-            <p className="hidden text-sm text-muted-foreground sm:block">
-              Source-tracked fonts
-            </p>
-          </div>
-          <div className="relative min-w-0 flex-1">
-            <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search families"
-              className="pl-8"
-            />
-          </div>
-          <nav className="flex flex-wrap items-center gap-1">
-            {TABS.map((item) => {
-              const count =
-                item.id === 'updates'
-                  ? updateGroups.length
-                  : item.id === 'uninstalled'
-                    ? uninstalledGroups.length
-                    : null
-              return (
-                <Button
-                  key={item.id}
-                  size="sm"
-                  variant={tab === item.id ? 'default' : 'ghost'}
-                  onClick={() => setTab(item.id)}
-                >
-                  {item.label}
-                  {count ? (
-                    <Badge tone={item.id === 'updates' ? 'warn' : 'muted'} className="ml-1">
-                      {count}
-                    </Badge>
-                  ) : null}
-                </Button>
-              )
-            })}
-          </nav>
-        </header>
+        <Sidebar
+          query={query}
+          onQueryChange={setQuery}
+          tab={tab}
+          onTabChange={setTab}
+          counts={{
+            uninstalled: uninstalledGroups.length,
+            updates: updateGroups.length,
+          }}
+          onOpenSettings={() => setSettingsOpen(true)}
+        />
 
         <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-          <section className="min-h-0 min-w-0 flex-1">
+          <section className="min-h-0 min-w-0 flex-1" onPointerDown={handleListPointerDown}>
             <ScrollArea className="h-full">
               <div className="p-4">
                 {loading && (
@@ -726,7 +820,7 @@ export default function App() {
                   </p>
                 )}
                 {error && (
-                  <p className="rounded-lg bg-red-100 px-3 py-2 text-sm text-red-900">{error}</p>
+                  <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>
                 )}
                 {!loading && tab !== 'system' && visibleGroups.length === 0 && (
                   <EmptyState
@@ -746,7 +840,7 @@ export default function App() {
                   </p>
                 )}
                 {!loading && missingSourceCount > 0 && tab !== 'system' && tab !== 'updates' && (
-                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-dashed bg-card/60 px-3 py-2">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-dashed bg-muted/40 px-3 py-2">
                     <p className="text-sm text-muted-foreground">
                       {missingSourceCount}{' '}
                       {missingSourceCount === 1 ? 'font has' : 'fonts have'} a missing source file.
@@ -758,7 +852,10 @@ export default function App() {
                       onClick={() =>
                         void run(
                           () => api.forgetMissingSources(),
-                          `Removed ${missingSourceCount} missing ${missingSourceCount === 1 ? 'font' : 'fonts'} from the library`,
+                          actionCopy(
+                            'forget',
+                            `${missingSourceCount} missing ${missingSourceCount === 1 ? 'font' : 'fonts'}`,
+                          ),
                         )
                       }
                     >
@@ -773,11 +870,13 @@ export default function App() {
                     onLayoutChange={(next) => {
                       setViewLayout(next)
                       localStorage.setItem('font-butler-view-layout', next)
+                      void persistPreferences({ defaultView: next })
                     }}
                     sortMode={sortMode}
                     onSortModeChange={(next) => {
                       setSortMode(next)
                       localStorage.setItem('font-butler-sort', next)
+                      void persistPreferences({ defaultSort: next })
                     }}
                     showSources={showSources}
                     onShowSourcesChange={(next) => {
@@ -791,6 +890,11 @@ export default function App() {
                       localStorage.setItem('font-butler-hide-deactivated', String(next))
                     }}
                     showHideDeactivated={tab === 'library'}
+                    previewSize={gridPreviewSize}
+                    onPreviewSizeChange={(next) => {
+                      setGridPreviewSize(next)
+                      localStorage.setItem(GRID_PREVIEW_SIZE_KEY, String(next))
+                    }}
                   />
                 )}
                 {tab === 'system' ? (
@@ -813,6 +917,7 @@ export default function App() {
                       onUninstall={() => void uninstallSelected()}
                       onReinstall={() => void reinstallSelected()}
                       onForget={() => void forgetSelected()}
+                      onDeleteFiles={() => void deleteFilesSelected()}
                     />
                   </BatchActionBar>
                 )}
@@ -830,6 +935,7 @@ export default function App() {
                         <SystemCard
                           key={group.key}
                           layout={viewLayout}
+                          previewSize={gridPreviewSize}
                           group={group}
                           selected={inSelection || selectedSystemGroup?.key === group.key}
                           busy={busy}
@@ -854,7 +960,7 @@ export default function App() {
                                     await api.uninstallSystem(face)
                                   }
                                   setSystemFaces((await api.system()).faces)
-                                }, `Removed ${group.familyName}`)
+                                }, actionCopy('remove', group.familyName))
                           }
                           onDeactivate={() =>
                             systemSelection.length > 1 && inSelection
@@ -864,7 +970,7 @@ export default function App() {
                                     await api.deactivateSystem(face)
                                   }
                                   setSystemFaces((await api.system()).faces)
-                                }, `Deactivated ${group.familyName}`)
+                                }, actionCopy('deactivate', group.familyName))
                           }
                         />
                         )
@@ -876,6 +982,7 @@ export default function App() {
                         <LibraryCard
                           key={group.key}
                           layout={viewLayout}
+                          previewSize={gridPreviewSize}
                           group={group}
                           showSourcePath={showSources}
                           selected={inSelection || selectedGroup?.key === group.key}
@@ -890,28 +997,28 @@ export default function App() {
                           onInstall={() =>
                             useBatch
                               ? void installSelected()
-                              : void run(() => installGroup(group), `Installed ${group.familyName}`)
+                              : void run(() => installGroup(group), actionCopy('install', group.familyName))
                           }
                           onInstallAs={() => setRenameEntry(selectedEntry ?? group.entries[0])}
                           onReinstall={() =>
                             useBatch
                               ? void reinstallSelected()
-                              : void run(() => reinstallGroup(group), `Reinstalled ${group.familyName}`)
+                              : void run(() => reinstallGroup(group), actionCopy('reinstall', group.familyName))
                           }
                           onUninstall={() =>
                             useBatch
                               ? void uninstallSelected()
-                              : void run(() => uninstallGroup(group), `Removed ${group.familyName}`)
+                              : void run(() => uninstallGroup(group), actionCopy('remove', group.familyName))
                           }
                           onDeactivate={() =>
                             useBatch
                               ? void deactivateSelected()
-                              : void run(() => deactivateGroup(group), `Deactivated ${group.familyName}`)
+                              : void run(() => deactivateGroup(group), actionCopy('deactivate', group.familyName))
                           }
                           onActivate={() =>
                             useBatch
                               ? void activateSelected()
-                              : void run(() => activateGroup(group), `Activated ${group.familyName}`)
+                              : void run(() => activateGroup(group), actionCopy('activate', group.familyName))
                           }
                           onReveal={() => {
                             selectGroup(group)
@@ -922,13 +1029,14 @@ export default function App() {
                               void forgetSelected()
                               return
                             }
-                            const count = sourceMissingIds(group).length
-                            void run(
-                              () => forgetGroup(group),
-                              count === 1
-                                ? `Removed ${group.familyName} from the library`
-                                : `Removed ${count} missing files from ${group.familyName}`,
-                            )
+                            void run(() => forgetGroup(group), actionCopy('forget', group.familyName))
+                          }}
+                          onDeleteFiles={() => {
+                            if (useBatch) {
+                              void deleteFilesSelected()
+                              return
+                            }
+                            void deleteFilesFor([group])
                           }}
                         />
                         )
@@ -937,6 +1045,7 @@ export default function App() {
               </div>
             </ScrollArea>
           </section>
+          {hasSelection && (
           <div className="border-t md:border-t-0 md:border-l">
             <Inspector
               group={tab === 'system' ? null : selectedGroup}
@@ -948,22 +1057,24 @@ export default function App() {
               busy={busy}
               onInstall={() =>
                 selectedGroup &&
-                void run(() => installGroup(selectedGroup), `Installed ${selectedGroup.familyName}`)
+                void run(() => installGroup(selectedGroup), actionCopy('install', selectedGroup.familyName))
               }
               onInstallAs={() => setRenameEntry(selectedEntry)}
               onReinstall={() =>
-                selectedGroup && void run(() => reinstallGroup(selectedGroup))
+                selectedGroup &&
+                void run(() => reinstallGroup(selectedGroup), actionCopy('reinstall', selectedGroup.familyName))
               }
               onUninstall={() =>
                 selectedGroup &&
-                void run(() => uninstallGroup(selectedGroup), `Removed ${selectedGroup.familyName}`)
+                void run(() => uninstallGroup(selectedGroup), actionCopy('remove', selectedGroup.familyName))
               }
               onDeactivate={() =>
                 selectedGroup &&
-                void run(() => deactivateGroup(selectedGroup), `Deactivated ${selectedGroup.familyName}`)
+                void run(() => deactivateGroup(selectedGroup), actionCopy('deactivate', selectedGroup.familyName))
               }
               onActivate={() =>
-                selectedGroup && void run(() => activateGroup(selectedGroup), `Activated ${selectedGroup.familyName}`)
+                selectedGroup &&
+                void run(() => activateGroup(selectedGroup), actionCopy('activate', selectedGroup.familyName))
               }
               onReveal={(which) => selectedEntry && void revealCatalog(selectedEntry, which)}
               onUninstallSystem={() =>
@@ -973,7 +1084,7 @@ export default function App() {
                     await api.uninstallSystem(face)
                   }
                   setSystemFaces((await api.system()).faces)
-                }, `Removed ${selectedSystemGroup.familyName}`)
+                }, actionCopy('remove', selectedSystemGroup.familyName))
               }
               onDeactivateSystem={() =>
                 selectedSystemGroup &&
@@ -982,17 +1093,24 @@ export default function App() {
                     await api.deactivateSystem(face)
                   }
                   setSystemFaces((await api.system()).faces)
-                }, `Deactivated ${selectedSystemGroup.familyName}`)
+                }, actionCopy('deactivate', selectedSystemGroup.familyName))
               }
               onRevealSystem={() =>
                 selectedSystemGroup?.faces[0] && void revealSystem(selectedSystemGroup.faces[0].path)
               }
               onForget={() => {
-                if (!selectedEntry || selectedEntry.status !== 'source-missing') return
+                if (!selectedEntry) return
+                if (selectedEntry.status !== 'source-missing' && selectedEntry.status !== 'uninstalled') {
+                  return
+                }
                 void run(
                   () => forgetEntry(selectedEntry),
-                  `Removed ${familyNameOf(selectedEntry)} from the library`,
+                  actionCopy('forget', familyNameOf(selectedEntry)),
                 )
+              }}
+              onDeleteFiles={() => {
+                if (!selectedGroup) return
+                void deleteFilesFor([selectedGroup])
               }}
               multiSelect={
                 (tab === 'system' ? systemSelection.length : catalogSelection.length) > 1
@@ -1007,6 +1125,7 @@ export default function App() {
                         onUninstall: () => void uninstallSelected(),
                         onReinstall: () => void reinstallSelected(),
                         onForget: () => void forgetSelected(),
+                        onDeleteFiles: () => void deleteFilesSelected(),
                         onDeactivateSystem: () => void deactivateSelected(),
                         onUninstallSystem: () => void uninstallSelected(),
                       }
@@ -1020,6 +1139,7 @@ export default function App() {
                         onUninstall: () => void uninstallSelected(),
                         onReinstall: () => void reinstallSelected(),
                         onForget: () => void forgetSelected(),
+                        onDeleteFiles: () => void deleteFilesSelected(),
                         onDeactivateSystem: () => void deactivateSelected(),
                         onUninstallSystem: () => void uninstallSelected(),
                       }
@@ -1027,11 +1147,12 @@ export default function App() {
               }
             />
           </div>
+          )}
         </div>
 
         {dragging && (
-          <div className="pointer-events-none fixed inset-3 z-40 flex items-center justify-center rounded-2xl border-2 border-dashed border-accent bg-accent/15">
-            <p className="font-sans text-3xl">Drop fonts to add them</p>
+          <div className="pointer-events-none fixed inset-3 z-40 flex items-center justify-center rounded-lg border border-dashed border-foreground/20 bg-background/80">
+            <p className="text-base font-medium tracking-tight">Drop fonts or folders to add them</p>
           </div>
         )}
         <RenameDialog
@@ -1051,9 +1172,8 @@ export default function App() {
           settings={settings}
           onSettingsChange={applySettings}
         />
-        <Toaster />
+        <Toaster theme={settings?.theme ?? 'system'} />
       </div>
-    </TooltipProvider>
   )
 }
 
@@ -1065,9 +1185,19 @@ function sameKeys(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((key, index) => key === right[index])
 }
 
+function clickPreservesSelection(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element &&
+    target.closest(
+      '[data-family-key], [data-keep-selection], [data-radix-scroll-area-scrollbar]',
+    ) != null
+  )
+}
+
 function LibraryCard({
   group,
   layout,
+  previewSize,
   showSourcePath,
   selected,
   selectedEntryId,
@@ -1084,9 +1214,11 @@ function LibraryCard({
   onActivate,
   onReveal,
   onForget,
+  onDeleteFiles,
 }: {
   group: FamilyGroup
   layout: ViewLayout
+  previewSize: number
   showSourcePath?: boolean
   selected: boolean
   selectedEntryId: string | null
@@ -1103,6 +1235,7 @@ function LibraryCard({
   onActivate: () => void
   onReveal: () => void
   onForget: () => void
+  onDeleteFiles: () => void
 }) {
   const [expanded, setExpanded] = useState(false)
   const preview = group.entries[0]
@@ -1149,8 +1282,8 @@ function LibraryCard({
         <div
           data-family-key={group.familyName}
           className={cn(
-            'group relative overflow-hidden rounded-xl border transition-colors',
-            selected ? 'border-primary bg-card shadow-sm' : 'border-transparent bg-card/70',
+            'group relative overflow-hidden rounded-lg border transition-colors',
+            selected ? 'border-border bg-muted/60' : 'border-border/80 hover:bg-muted/40',
             muted && 'opacity-50',
           )}
         >
@@ -1158,13 +1291,13 @@ function LibraryCard({
             <button
               type="button"
               onClick={onSelect}
-              className="flex w-full flex-col text-left hover:bg-card"
+              className="flex w-full flex-col text-left"
             >
               <AaPreview
                 family={previewFamily}
                 weight={previewWeight}
                 italic={previewItalic}
-                size="lg"
+                size={previewSize}
               />
               <div className="p-3">{metadata}</div>
             </button>
@@ -1174,7 +1307,7 @@ function LibraryCard({
                 <button
                   type="button"
                   onClick={onSelect}
-                  className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left hover:bg-card"
+                  className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left"
                 >
                   <AaPreview
                     family={previewFamily}
@@ -1241,6 +1374,7 @@ function LibraryCard({
           onUninstall={onUninstall}
           onActivate={onActivate}
           onForget={onForget}
+          onDeleteFiles={onDeleteFiles}
         />
       </ContextMenuContent>
     </ContextMenu>
@@ -1250,6 +1384,7 @@ function LibraryCard({
 function SystemCard({
   group,
   layout,
+  previewSize,
   selected,
   busy,
   batch,
@@ -1261,6 +1396,7 @@ function SystemCard({
 }: {
   group: SystemFamilyGroup
   layout: ViewLayout
+  previewSize: number
   selected: boolean
   busy: boolean
   batch: SystemBatchPlan | null
@@ -1302,22 +1438,23 @@ function SystemCard({
     <ContextMenu onOpenChange={(open) => { if (open) onEnsureSelected() }}>
       <ContextMenuTrigger asChild>
         <div
+          data-family-key={group.familyName}
           className={cn(
-            'group relative overflow-hidden rounded-xl border transition-colors',
-            selected ? 'border-primary bg-card shadow-sm' : 'border-transparent bg-card/70',
+            'group relative overflow-hidden rounded-lg border transition-colors',
+            selected ? 'border-border bg-muted/60' : 'border-border/80 hover:bg-muted/40',
           )}
         >
           {layout === 'grid' ? (
             <button
               type="button"
               onClick={onSelect}
-              className="flex w-full flex-col text-left hover:bg-card"
+              className="flex w-full flex-col text-left"
             >
               <AaPreview
                 family={previewFamily}
                 weight={face.weight}
                 italic={face.italic}
-                size="lg"
+                size={previewSize}
               />
               <div className="p-3">{metadata}</div>
             </button>
@@ -1327,7 +1464,7 @@ function SystemCard({
                 <button
                   type="button"
                   onClick={onSelect}
-                  className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left hover:bg-card"
+                  className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left"
                 >
                   <AaPreview
                     family={previewFamily}
@@ -1389,33 +1526,67 @@ function EmptyState({
   onPickFiles,
 }: {
   tab: Tab
-  onPickFiles: (files: FileList) => void
+  onPickFiles: (files: FileList | File[]) => void
 }) {
+  const folderInputRef = useRef<HTMLInputElement>(null)
+
   return (
-    <label className="flex cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed px-6 py-16 text-center">
-      <p className="font-sans text-2xl">
-        {tab === 'updates'
-          ? 'No source updates'
-          : tab === 'uninstalled'
-            ? 'No inactive fonts'
-            : 'Drop font files here'}
-      </p>
-      <p className="mt-2 max-w-sm text-sm text-muted-foreground">
-        {tab === 'library'
-          ? 'TrueType, OpenType, collections, and WOFF files stay linked to their original path.'
-          : tab === 'uninstalled'
-            ? 'Fonts you uninstall stay here so you can put them back in one click.'
-            : 'Fonts you uninstall stay in the library so you can put them back in one click.'}
-      </p>
-      <input
-        type="file"
-        accept=".ttf,.otf,.ttc,.otc,.woff,.woff2"
-        multiple
-        className="hidden"
-        onChange={(event) => {
-          if (event.target.files) onPickFiles(event.target.files)
-        }}
-      />
-    </label>
+    <div className="flex flex-col items-center justify-center rounded-lg border border-dashed px-6 py-16 text-center">
+      <label className="flex cursor-pointer flex-col items-center">
+        <p className="text-base font-medium tracking-tight">
+          {tab === 'updates'
+            ? 'No source updates'
+            : tab === 'uninstalled'
+              ? 'No inactive fonts'
+              : 'Drop font files or folders here'}
+        </p>
+        <p className="mt-2 max-w-sm text-sm text-muted-foreground">
+          {tab === 'library'
+            ? 'Drop a folder to add every TrueType, OpenType, collection, and WOFF file inside it, including subfolders. Source files stay linked to their original path.'
+            : tab === 'uninstalled'
+              ? 'Fonts you uninstall stay here so you can put them back in one click.'
+              : 'Fonts you uninstall stay in the library so you can put them back in one click.'}
+        </p>
+        <input
+          type="file"
+          accept=".ttf,.otf,.ttc,.otc,.woff,.woff2"
+          multiple
+          className="hidden"
+          onChange={(event) => {
+            if (event.target.files) onPickFiles(event.target.files)
+          }}
+        />
+      </label>
+      {tab === 'library' && (
+        <>
+          <input
+            ref={folderInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            {...{ webkitdirectory: '', directory: '' }}
+            onChange={(event) => {
+              const list = event.target.files
+              if (!list) return
+              const fonts = Array.from(list).filter((file) => isDroppedFontName(file.name))
+              if (fonts.length === 0) {
+                toast.error('No font files in that folder.')
+                return
+              }
+              onPickFiles(fonts)
+              event.target.value = ''
+            }}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            className="mt-4"
+            onClick={() => folderInputRef.current?.click()}
+          >
+            <FolderOpen /> Choose folder
+          </Button>
+        </>
+      )}
+    </div>
   )
 }

@@ -37,6 +37,8 @@ app.post('/api/settings', async (c) => {
     defaultView?: 'list' | 'grid'
     defaultSort?: 'name' | 'installed'
     installAfterUpload?: boolean
+    theme?: 'light' | 'dark' | 'system'
+    menuBarIcon?: boolean
   }>()
   try {
     const settings = await service.updateSettings(body)
@@ -192,20 +194,26 @@ app.post('/api/reinstall', async (c) => {
 })
 
 app.post('/api/forget', async (c) => {
-  const body = await c.req.json<{ id?: string; ids?: string[]; allMissing?: boolean }>()
+  const body = await c.req.json<{
+    id?: string
+    ids?: string[]
+    allMissing?: boolean
+    deleteFiles?: boolean
+  }>()
+  const options = { deleteFiles: Boolean(body.deleteFiles) }
   try {
     if (body.allMissing) {
       const result = await service.forgetMissingSources()
       return c.json(result)
     }
     if (body.ids?.length) {
-      const result = await service.forgetMany(body.ids)
+      const result = await service.forgetMany(body.ids, options)
       return c.json(result)
     }
     if (!body.id) {
       return c.json({ error: 'Missing id, ids, or allMissing' }, 400)
     }
-    await service.forget(body.id)
+    await service.forget(body.id, options)
     return c.json({ removed: 1 })
   } catch (error) {
     return c.json(
