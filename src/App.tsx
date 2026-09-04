@@ -30,7 +30,7 @@ import { cn } from '@/lib/utils'
 type Tab = 'library' | 'system' | 'uninstalled' | 'updates'
 
 const TABS: { id: Tab; label: string }[] = [
-  { id: 'library', label: 'Library' },
+  { id: 'library', label: 'Fonts' },
   { id: 'system', label: 'On this Mac' },
   { id: 'uninstalled', label: 'Uninstalled' },
   { id: 'updates', label: 'Updates' },
@@ -54,6 +54,9 @@ export default function App() {
   )
   const [viewLayout, setViewLayout] = useState<ViewLayout>(() =>
     localStorage.getItem('font-butler-view-layout') === 'grid' ? 'grid' : 'list',
+  )
+  const [hideDeactivated, setHideDeactivated] = useState(
+    () => localStorage.getItem('font-butler-hide-deactivated') === 'true',
   )
 
   useEffect(() => {
@@ -113,10 +116,16 @@ export default function App() {
 
   const libraryGroups = useMemo(
     () =>
-      groupCatalog(entries.filter(isLibraryEntry)).filter((group) =>
+      groupCatalog(
+        entries.filter(isLibraryEntry).filter((entry) => !hideDeactivated || entry.status !== 'deactivated'),
+      ).filter((group) =>
         matchesQuery(`${group.familyName} ${group.faces.map((face) => face.styleName).join(' ')}`, query),
       ),
-    [entries, query],
+    [entries, query, hideDeactivated],
+  )
+  const libraryGroupsUnfiltered = useMemo(
+    () => groupCatalog(entries.filter(isLibraryEntry)),
+    [entries],
   )
   const uninstalledGroups = useMemo(
     () =>
@@ -145,7 +154,11 @@ export default function App() {
   const visibleGroups =
     tab === 'system' ? [] : tab === 'uninstalled' ? uninstalledGroups : tab === 'updates' ? updateGroups : libraryGroups
   const hasCatalogList =
-    tab === 'system' ? shownSystemGroups.length > 0 : visibleGroups.length > 0
+    tab === 'system'
+      ? shownSystemGroups.length > 0
+      : tab === 'library'
+        ? libraryGroupsUnfiltered.length > 0
+        : visibleGroups.length > 0
   const selectedGroup =
     visibleGroups.find((group) => group.familyName === selectedFamily) ?? visibleGroups[0] ?? null
   const selectedEntry =
@@ -401,6 +414,12 @@ export default function App() {
                       localStorage.setItem('font-butler-show-sources', String(next))
                     }}
                     showSourcesToggle={tab !== 'system'}
+                    hideDeactivated={hideDeactivated}
+                    onHideDeactivatedChange={(next) => {
+                      setHideDeactivated(next)
+                      localStorage.setItem('font-butler-hide-deactivated', String(next))
+                    }}
+                    showHideDeactivated={tab === 'library'}
                   />
                 )}
                 <div
@@ -618,6 +637,8 @@ function LibraryCard({
   const previewWeight = preview.faces[0]?.weight
   const previewItalic = preview.faces[0]?.italic
 
+  const muted = group.status === 'deactivated'
+
   const metadata = (
     <>
       <div className="flex flex-wrap items-center gap-2">
@@ -652,6 +673,7 @@ function LibraryCard({
           className={cn(
             'overflow-hidden rounded-xl border transition-colors',
             selected ? 'border-primary bg-card shadow-sm' : 'border-transparent bg-card/70',
+            muted && 'opacity-50',
           )}
         >
           {layout === 'grid' ? (
@@ -897,7 +919,7 @@ function EmptyState({
         {tab === 'library'
           ? 'TrueType, OpenType, collections, and WOFF files stay linked to their original path.'
           : tab === 'uninstalled'
-            ? 'Fonts you uninstall or deactivate stay here. Reinstall or activate them when you need them again.'
+            ? 'Fonts you uninstall stay here so you can put them back in one click.'
             : 'Fonts you uninstall stay in the library so you can put them back in one click.'}
       </p>
       <input
