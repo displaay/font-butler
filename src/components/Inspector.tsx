@@ -1,4 +1,4 @@
-import { FolderOpen, ListX, Power, PowerOff, RefreshCw, Trash2, Download } from 'lucide-react'
+import { CirclePlus, FolderOpen, ListX, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
 import { AaPreview } from '@/components/AaPreview'
 import { CatalogBatchButtons, SystemBatchButtons } from '@/components/BatchActions'
 import { SourceBadge } from '@/components/Badges'
@@ -229,11 +229,9 @@ export function Inspector({
           <span className="truncate" title={entry.sourcePath}>
             {entry.sourcePath}
           </span>
-          <SourceBadge
-            className="bg-transparent shadow-none"
-            present={entryHasTrackedSource(entry)}
-            showMissing={entry.status !== 'source-missing' && !entryHasTrackedSource(entry)}
-          />
+          {entryHasTrackedSource(entry) ? (
+            <SourceBadge className="bg-transparent shadow-none" />
+          ) : null}
         </dd>
         <dt className="text-muted-foreground">Modified</dt>
         <dd>{formatRelativeTime(entry.sourceMtimeMs)}</dd>
@@ -298,10 +296,10 @@ export function Inspector({
         ) : (
           <>
             <Button size="sm" disabled={busy} onClick={onInstall}>
-              <Download /> Install
+              <CirclePlus /> Install
             </Button>
             <Button size="sm" variant="outline" disabled={busy} onClick={onInstallAs}>
-              <Download /> Install as…
+              <CirclePlus /> Install as…
             </Button>
             <Button size="sm" variant="outline" disabled={busy} onClick={onForget}>
               <ListX /> Remove from list

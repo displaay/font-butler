@@ -200,20 +200,72 @@ function rewriteNameTable(file: Buffer, family: string): Buffer {
   return packSfnt(sfntVersion, tables)
 }
 
+export type RenameRuntime = {
+  command: string
+  script: string
+  source: 'bundled' | 'system'
+}
+
+function processResourcesPath(): string {
+  const value = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
+  return typeof value === 'string' ? value : ''
+}
+
+export function resolveRenameRuntime({
+  resourcesPath = processResourcesPath(),
+  root = projectRoot,
+}: {
+  resourcesPath?: string
+  root?: string
+} = {}): RenameRuntime | null {
+  const projectScript = path.join(root, 'scripts/rename_family.py')
+  const candidates: RenameRuntime[] = [
+    {
+      command: path.join(resourcesPath, 'python', 'bin', 'python3'),
+      script: path.join(resourcesPath, 'python', 'rename_family.py'),
+      source: 'bundled',
+    },
+    {
+      command: path.join(root, 'vendor/python/bin/python3'),
+      script: path.join(root, 'vendor/python/rename_family.py'),
+      source: 'bundled',
+    },
+    {
+      command: 'python3',
+      script: projectScript,
+      source: 'system',
+    },
+  ]
+  for (const candidate of candidates) {
+    const commandReady =
+      candidate.command === 'python3' || fs.existsSync(candidate.command)
+    if (commandReady && fs.existsSync(candidate.script)) {
+      return candidate
+    }
+  }
+  return null
+}
+
 async function renameWithPython(
   sourcePath: string,
   destPath: string,
   family: string,
-): Promise<{ ok: true } | { ok: false; reason: string }> {
-  const script = path.join(projectRoot, 'scripts/rename_family.py')
+): Promise<{ ok: true; source: RenameRuntime['source'] } | { ok: false; reason: string }> {
+  const runtime = resolveRenameRuntime()
+  if (!runtime) {
+    return { ok: false, reason: 'Bundled fonttools runtime was not found.' }
+  }
   try {
-    await execFileAsync('python3', [script, sourcePath, destPath, family], {
-      timeout: 30_000,
-    })
+    const isolated = runtime.source === 'bundled' ? ['-I'] : []
+    await execFileAsync(
+      runtime.command,
+      [...isolated, runtime.script, sourcePath, destPath, family],
+      { timeout: 30_000 },
+    )
     if (!fs.existsSync(destPath)) {
       return { ok: false, reason: 'Python rename finished but no output file was written.' }
     }
-    return { ok: true }
+    return { ok: true, source: runtime.source }
   } catch (error) {
     return {
       ok: false,
@@ -232,28 +284,23 @@ export async function renameFamilyCopy(
     `font-butler-rename-${Date.now()}-${Math.random().toString(16).slice(2)}${ext}`,
   )
   const python = await renameWithPython(sourcePath, destPath, family)
-  if (python.ok) {
+  if (python.ok === true) {
     return destPath
   }
-  if (python.ok === false) {
-    const pythonReason = python.reason
-    const original = fs.readFileSync(sourcePath)
-    const tag = original.subarray(0, 4).toString('ascii')
-    if (tag === 'wOFF' || tag === 'wOF2' || tag === 'ttcf') {
-      throw new Error(
-        `Renaming this format needs Python fonttools (${pythonReason}). Install fonttools and try again.`,
-      )
-    }
-    try {
-      const rewritten = rewriteNameTable(original, family)
-      fs.writeFileSync(destPath, rewritten)
-      return destPath
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : 'rewrite failed'
-      throw new Error(`Could not rename font (${pythonReason}; ${detail}).`)
-    }
+  const pythonReason = python.reason
+  const original = fs.readFileSync(sourcePath)
+  const tag = original.subarray(0, 4).toString('ascii')
+  if (tag === 'wOFF' || tag === 'wOF2' || tag === 'ttcf') {
+    throw new Error(`Renaming this format needs fonttools (${pythonReason}).`)
   }
-  throw new Error('Could not rename font.')
+  try {
+    const rewritten = rewriteNameTable(original, family)
+    fs.writeFileSync(destPath, rewritten)
+    return destPath
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : 'rewrite failed'
+    throw new Error(`Could not rename font (${pythonReason}; ${detail}).`)
+  }
 }
 
 export function postscriptPreview(family: string, style: string): string {

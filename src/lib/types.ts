@@ -60,7 +60,14 @@ export type Notice = {
 
 export type SortMode = 'name' | 'added'
 
-export type LibraryStatusFilter = 'installed' | 'deactivated' | 'uninstalled'
+export type LibraryFilter =
+  | 'installed'
+  | 'deactivated'
+  | 'uninstalled'
+  | 'vf'
+  | 'static'
+  | 'source'
+  | 'no-source'
 
 export type FamilyGroup = {
   key: string

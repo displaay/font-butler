@@ -1,5 +1,22 @@
 import { useState, type ComponentType } from 'react'
-import { ChevronDown, Folder, Laptop, RefreshCw, Search, Settings, Type } from 'lucide-react'
+import {
+  ALargeSmall,
+  ChevronDown,
+  CircleCheck,
+  CircleOff,
+  Folder,
+  FolderMinus,
+  FolderOpen,
+  Laptop,
+  Link2,
+  PowerOff,
+  RefreshCw,
+  Search,
+  Settings,
+  SlidersHorizontal,
+  Type,
+  Unlink,
+} from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -7,6 +24,8 @@ import {
   ContextMenu,
   ContextMenuCheckboxItem,
   ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
 import {
@@ -15,10 +34,43 @@ import {
   watchShowTotalId,
   writeShowTotals,
 } from '@/lib/showTotals'
+import type { LibraryFilter } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { watchFolderLabel } from '@/lib/watchFolders'
 
 export type Tab = 'library' | 'system' | 'updates'
+
+const LIBRARY_FILTER_GROUPS: {
+  heading: string
+  filters: {
+    id: LibraryFilter
+    label: string
+    icon: ComponentType<{ className?: string }>
+  }[]
+}[] = [
+  {
+    heading: 'Status',
+    filters: [
+      { id: 'installed', label: 'Installed', icon: CircleCheck },
+      { id: 'deactivated', label: 'Deactivated', icon: PowerOff },
+      { id: 'uninstalled', label: 'Not installed', icon: CircleOff },
+    ],
+  },
+  {
+    heading: 'Type',
+    filters: [
+      { id: 'vf', label: 'VF', icon: SlidersHorizontal },
+      { id: 'static', label: 'Static', icon: ALargeSmall },
+    ],
+  },
+  {
+    heading: 'Source',
+    filters: [
+      { id: 'source', label: 'Source', icon: Link2 },
+      { id: 'no-source', label: 'No source', icon: Unlink },
+    ],
+  },
+]
 
 const TABS: { id: Tab; label: string; icon: typeof Type }[] = [
   { id: 'library', label: 'Fonts', icon: Type },
@@ -45,6 +97,8 @@ function SidebarItem({
   className,
   title,
   badgeTone = 'muted',
+  onReveal,
+  onRemove,
 }: {
   active: boolean
   icon: ComponentType<{ className?: string }>
@@ -56,6 +110,8 @@ function SidebarItem({
   className?: string
   title?: string
   badgeTone?: 'muted' | 'warn'
+  onReveal?: () => void
+  onRemove?: () => void
 }) {
   return (
     <ContextMenu>
@@ -78,6 +134,21 @@ function SidebarItem({
         </Button>
       </ContextMenuTrigger>
       <ContextMenuContent>
+        {onReveal || onRemove ? (
+          <>
+            {onReveal ? (
+              <ContextMenuItem onSelect={onReveal}>
+                <FolderOpen /> Show in Finder
+              </ContextMenuItem>
+            ) : null}
+            {onRemove ? (
+              <ContextMenuItem onSelect={onRemove}>
+                <FolderMinus /> Remove Watch folder
+              </ContextMenuItem>
+            ) : null}
+            <ContextMenuSeparator />
+          </>
+        ) : null}
         <ContextMenuCheckboxItem
           checked={showTotal}
           aria-label="Show total"
@@ -99,6 +170,11 @@ export function Sidebar({
   watchFolderFilter,
   watchFolderCounts,
   onSelectWatchFolder,
+  onRevealWatchFolder,
+  onRemoveWatchFolder,
+  libraryFilters,
+  libraryFilterCounts,
+  onLibraryFiltersChange,
   counts,
   onOpenSettings,
 }: {
@@ -110,6 +186,11 @@ export function Sidebar({
   watchFolderFilter: string | null
   watchFolderCounts: Record<string, number>
   onSelectWatchFolder: (folder: string | null) => void
+  onRevealWatchFolder: (folder: string) => void
+  onRemoveWatchFolder: (folder: string) => void
+  libraryFilters: LibraryFilter[]
+  libraryFilterCounts: Record<LibraryFilter, number>
+  onLibraryFiltersChange: (value: LibraryFilter[]) => void
   counts: { library: number; system: number; updates: number }
   onOpenSettings: () => void
 }) {
@@ -122,6 +203,14 @@ export function Sidebar({
     const next = setShowTotal(showTotals, id, value)
     setShowTotals(next)
     writeShowTotals(next)
+  }
+
+  function toggleFilter(id: LibraryFilter) {
+    onLibraryFiltersChange(
+      libraryFilters.includes(id)
+        ? libraryFilters.filter((item) => item !== id)
+        : [...libraryFilters, id],
+    )
   }
 
   return (
@@ -192,6 +281,8 @@ export function Sidebar({
                         onClick={() => onSelectWatchFolder(folder)}
                         className="w-full pl-7"
                         title={folder}
+                        onReveal={() => onRevealWatchFolder(folder)}
+                        onRemove={() => onRemoveWatchFolder(folder)}
                       />
                     )
                   })}
@@ -213,6 +304,37 @@ export function Sidebar({
             />
           )
         })}
+        {tab === 'library' && (
+          <div className="flex w-full flex-wrap gap-3 md:mt-2 md:flex-col md:gap-2 md:border-t md:pt-2">
+            {LIBRARY_FILTER_GROUPS.map((group) => (
+              <div key={group.heading} className="flex w-full flex-col gap-0.5">
+                <p className="px-2 pt-1 text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+                  {group.heading}
+                </p>
+                {group.filters.map((filter) => {
+                  const active = libraryFilters.includes(filter.id)
+                  const Icon = filter.icon
+                  return (
+                    <Button
+                      key={filter.id}
+                      type="button"
+                      size="default"
+                      variant="ghost"
+                      aria-pressed={active}
+                      aria-label={`Filter ${filter.label.toLowerCase()}`}
+                      className={navButtonClass(active, 'w-full')}
+                      onClick={() => toggleFilter(filter.id)}
+                    >
+                      <Icon className="size-3.5 opacity-70" />
+                      <span className="min-w-0 truncate">{filter.label}</span>
+                      <Badge className="ml-auto">{libraryFilterCounts[filter.id] ?? 0}</Badge>
+                    </Button>
+                  )
+                })}
+              </div>
+            ))}
+          </div>
+        )}
       </nav>
       <div className="border-t p-2">
         <Button

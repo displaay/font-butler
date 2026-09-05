@@ -32,17 +32,8 @@ function useHoverCycle(length: number, active: boolean, restIndex: number) {
   return index
 }
 
-function isFlushPreview(size: 'sm' | 'md' | 'lg' | number) {
-  return typeof size === 'number' || size === 'lg'
-}
-
-function previewBoxClass(size: 'sm' | 'md' | 'lg' | number) {
-  if (typeof size === 'number') {
-    return 'w-full overflow-hidden rounded-none border-b border-border'
-  }
-  if (size === 'sm') return 'size-8 text-[17px] rounded-md'
-  if (size === 'lg') return 'min-h-[8.5rem] w-full text-[4.25rem] rounded-none border-b border-border'
-  return 'size-11 text-[24px] rounded-md'
+function previewBoxClass(size: 'sm' | 'md') {
+  return size === 'sm' ? 'size-8 text-[17px] rounded-md' : 'size-11 text-[24px] rounded-md'
 }
 
 function AaGlyph({
@@ -82,26 +73,20 @@ export function AaPreview({
   weight = 400,
   italic = false,
   size = 'md',
-  label,
 }: {
   family: string
   weight?: number
   italic?: boolean
-  size?: 'sm' | 'md' | 'lg' | number
-  label?: string
+  size?: 'sm' | 'md'
 }) {
-  const custom = typeof size === 'number'
   return (
     <div
       className={cn(
-        'relative flex shrink-0 items-center justify-center bg-muted/40 leading-none text-foreground',
-        !isFlushPreview(size) && 'shadow-[inset_0_0_0_1px_var(--border)]',
+        'relative flex shrink-0 items-center justify-center bg-muted/40 leading-none text-foreground shadow-[inset_0_0_0_1px_var(--border)]',
         previewBoxClass(size),
       )}
-      style={custom ? { fontSize: `${size}rem`, minHeight: `${size * 2}rem` } : undefined}
     >
       <AaGlyph family={family} weight={weight} italic={italic} />
-      {label ? <PreviewLabel>{label}</PreviewLabel> : null}
     </div>
   )
 }

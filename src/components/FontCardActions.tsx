@@ -1,10 +1,10 @@
 import type { ReactNode } from 'react'
-import { Download, Power, PowerOff, Trash2 } from 'lucide-react'
+import { CirclePlus, Power, PowerOff, Trash2 } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { FontStatus } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
-export type CatalogCardActionHandlers = {
+type CatalogCardActionHandlers = {
   busy: boolean
   onInstall: () => void
   onDeactivate: () => void
@@ -48,7 +48,7 @@ export function CatalogCardActions({
         </IconAction>
       ) : (
         <IconAction label="Install" disabled={busy} onClick={onInstall}>
-          <Download />
+          <CirclePlus />
         </IconAction>
       )}
       {missingSource && (

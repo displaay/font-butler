@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import type { ServiceEvent } from './types.ts'
 
-export const bus = new EventEmitter()
+const bus = new EventEmitter()
 
 export function emitEvent(event: ServiceEvent): void {
   bus.emit('event', event)

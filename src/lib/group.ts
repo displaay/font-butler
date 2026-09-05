@@ -2,7 +2,7 @@ import type {
   CatalogEntry,
   FamilyGroup,
   FontStatus,
-  LibraryStatusFilter,
+  LibraryFilter,
   SortMode,
   SystemFace,
   SystemFamilyGroup,
@@ -74,23 +74,88 @@ export function sortFamilyGroups(groups: FamilyGroup[], mode: SortMode): FamilyG
   return copy
 }
 
+const STATUS_FILTERS = new Set<LibraryFilter>(['installed', 'deactivated', 'uninstalled'])
+const KIND_FILTERS = new Set<LibraryFilter>(['vf', 'static'])
+const SOURCE_FILTERS = new Set<LibraryFilter>(['source', 'no-source'])
+
+const LIBRARY_FILTERS = new Set<LibraryFilter>([
+  ...STATUS_FILTERS,
+  ...KIND_FILTERS,
+  ...SOURCE_FILTERS,
+])
+
+export function isLibraryFilter(value: unknown): value is LibraryFilter {
+  return typeof value === 'string' && LIBRARY_FILTERS.has(value as LibraryFilter)
+}
+
+function matchesStatusFilter(entry: CatalogEntry, filter: LibraryFilter): boolean {
+  switch (filter) {
+    case 'installed':
+      return entry.status === 'installed' || entry.status === 'outdated'
+    case 'deactivated':
+      return entry.status === 'deactivated'
+    case 'uninstalled':
+      return entry.status === 'uninstalled' || entry.status === 'source-missing'
+    default:
+      return false
+  }
+}
+
+function matchesKindFilter(entry: CatalogEntry, filter: LibraryFilter): boolean {
+  const variable = entry.faces.some((face) => face.isVariable)
+  const statik = entry.faces.some((face) => !face.isVariable)
+  if (filter === 'vf') return variable
+  if (filter === 'static') return statik
+  return false
+}
+
+function matchesSourceFilter(entry: CatalogEntry, filter: LibraryFilter): boolean {
+  const tracked = entryHasTrackedSource(entry)
+  if (filter === 'source') return tracked
+  if (filter === 'no-source') return !tracked
+  return false
+}
+
+export function countLibraryFilters(entries: CatalogEntry[]): Record<LibraryFilter, number> {
+  const counts = {
+    installed: 0,
+    deactivated: 0,
+    uninstalled: 0,
+    vf: 0,
+    static: 0,
+    source: 0,
+    'no-source': 0,
+  } satisfies Record<LibraryFilter, number>
+  for (const group of groupCatalog(entries)) {
+    for (const filter of LIBRARY_FILTERS) {
+      if (group.entries.some((entry) => matchesLibraryFilter(entry, [filter]))) {
+        counts[filter]++
+      }
+    }
+  }
+  return counts
+}
+
 export function matchesLibraryFilter(
   entry: CatalogEntry,
-  filters: readonly LibraryStatusFilter[],
+  filters: readonly LibraryFilter[],
 ): boolean {
   if (filters.length === 0) {
     return true
   }
-  return filters.some((filter) => {
-    switch (filter) {
-      case 'installed':
-        return entry.status === 'installed' || entry.status === 'outdated'
-      case 'deactivated':
-        return entry.status === 'deactivated'
-      case 'uninstalled':
-        return entry.status === 'uninstalled' || entry.status === 'source-missing'
-    }
-  })
+  const statuses = filters.filter((filter) => STATUS_FILTERS.has(filter))
+  const kinds = filters.filter((filter) => KIND_FILTERS.has(filter))
+  const sources = filters.filter((filter) => SOURCE_FILTERS.has(filter))
+  if (statuses.length > 0 && !statuses.some((filter) => matchesStatusFilter(entry, filter))) {
+    return false
+  }
+  if (kinds.length > 0 && !kinds.some((filter) => matchesKindFilter(entry, filter))) {
+    return false
+  }
+  if (sources.length > 0 && !sources.some((filter) => matchesSourceFilter(entry, filter))) {
+    return false
+  }
+  return true
 }
 
 export function groupSystem(faces: SystemFace[]): SystemFamilyGroup[] {
@@ -125,18 +190,6 @@ export function matchesQuery(haystack: string, query: string): boolean {
   return haystack.toLowerCase().includes(query.trim().toLowerCase())
 }
 
-/** Every catalog status belongs on the Fonts tab, including uninstalled. */
-export function isLibraryEntry(entry: CatalogEntry): boolean {
-  switch (entry.status) {
-    case 'installed':
-    case 'outdated':
-    case 'deactivated':
-    case 'uninstalled':
-    case 'source-missing':
-      return true
-  }
-}
-
 /** Delete/Backspace uninstalls these families from ~/Library/Fonts. */
 export function isUninstallableGroup(group: { status: FontStatus }): boolean {
   return group.status === 'installed' || group.status === 'outdated' || group.status === 'deactivated'
@@ -158,12 +211,6 @@ export function familyStatusSummary(group: { entries: CatalogEntry[] }): string 
 
 export function entryIds(group: { entries: CatalogEntry[] }): string[] {
   return group.entries.map((entry) => entry.id)
-}
-
-export function sourceMissingIds(group: { entries: CatalogEntry[] }): string[] {
-  return group.entries
-    .filter((entry) => entry.status === 'source-missing')
-    .map((entry) => entry.id)
 }
 
 export function forgettableIds(group: { entries: CatalogEntry[] }): string[] {
@@ -201,8 +248,4 @@ export function entryHasTrackedSource(entry: CatalogEntry): boolean {
 
 export function hasTrackedSource(group: { entries: CatalogEntry[] }): boolean {
   return group.entries.some(entryHasTrackedSource)
-}
-
-export function hasMissingTrackedSource(group: { entries: CatalogEntry[] }): boolean {
-  return group.entries.some((entry) => !entryHasTrackedSource(entry))
 }

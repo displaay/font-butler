@@ -5,8 +5,9 @@ import { fileURLToPath } from 'node:url'
 import { outdatedFamilies } from './updates-menu.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const API = process.env.FONT_BUTLER_API ?? process.env.FONTCASE_API ?? 'http://127.0.0.1:43182'
-const UI =
+const DEFAULT_API_PORT = 43182
+let API = process.env.FONT_BUTLER_API ?? process.env.FONTCASE_API ?? `http://127.0.0.1:${DEFAULT_API_PORT}`
+let UI =
   process.env.FONT_BUTLER_UI ??
   process.env.FONTCASE_UI ??
   (app.isPackaged ? API : 'http://127.0.0.1:43181')
@@ -470,7 +471,25 @@ if (!gotLock) {
     }
     const staticDir = path.join(__dirname, '../dist')
     const { startFontButlerServer } = await import('./server.bundle.mjs')
-    await startFontButlerServer({ staticDir })
+    const preferred = Number(new URL(API).port || DEFAULT_API_PORT)
+    let lastError
+    for (let port = preferred; port < preferred + 20; port += 1) {
+      try {
+        const info = await startFontButlerServer({ staticDir, port })
+        API = `http://127.0.0.1:${info.port}`
+        if (!process.env.FONT_BUTLER_UI && !process.env.FONTCASE_UI) {
+          UI = API
+        }
+        return
+      } catch (error) {
+        lastError = error
+        if (error && typeof error === 'object' && 'code' in error && error.code === 'EADDRINUSE') {
+          continue
+        }
+        throw error
+      }
+    }
+    throw lastError
   }
 
   app.whenReady().then(async () => {

@@ -21,8 +21,8 @@ import { Sidebar, type Tab } from '@/components/Sidebar'
 import {
   GRID_PREVIEW_SIZE_KEY,
   ViewOptions,
+  gridCardMinWidthRem,
   readGridPreviewSize,
-  type ViewLayout,
 } from '@/components/ViewOptions'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -40,7 +40,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { api, isNotice, isSettingsEvent, subscribeEvents } from '@/lib/api'
 import { collectDropPayload, isDroppedFontName, isWebOnlyDrop, partitionDropPayload } from '@/lib/drop'
 import { WOFF_INSTALL_ERROR } from '@/lib/formats'
-import { familyNameOf, deletableSourceIds, entryIds, familyStatusSummary, forgettableIds, groupCatalog, groupSystem, hasMissingTrackedSource, hasSourceMissing, hasTrackedSource, isForgettableOnlyGroup, isLibraryEntry, isUninstallableGroup, matchesLibraryFilter, matchesQuery, sortFamilyGroups } from '@/lib/group'
+import { familyNameOf, countLibraryFilters, deletableSourceIds, entryIds, familyStatusSummary, forgettableIds, groupCatalog, groupSystem, hasSourceMissing, hasTrackedSource, isForgettableOnlyGroup, isLibraryFilter, isUninstallableGroup, matchesLibraryFilter, matchesQuery, sortFamilyGroups } from '@/lib/group'
 import { actionCopy, actionCopyFor, emptyImportError, importDoneCopy, remainingActionCopy } from '@/lib/notify'
 import { catalogInstanceRows, systemInstanceRows } from '@/lib/instances'
 import {
@@ -61,7 +61,7 @@ import {
   type Rect,
 } from '@/lib/selection'
 import { applyTheme } from '@/lib/theme'
-import type { AppSettings, CatalogEntry, FamilyGroup, LibraryStatusFilter, SortMode, SystemFace, SystemFamilyGroup } from '@/lib/types'
+import type { AppSettings, CatalogEntry, FamilyGroup, LibraryFilter, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { isPathUnderFolder, isWatchFolderEntry, mergeWatchFolders, watchFolderName } from '@/lib/watchFolders'
 
@@ -73,16 +73,13 @@ function readSortMode(): SortMode {
   return stored === 'added' || stored === 'installed' ? 'added' : 'name'
 }
 
-function readLibraryFilters(): LibraryStatusFilter[] {
+function readLibraryFilters(): LibraryFilter[] {
   const raw = localStorage.getItem(LIBRARY_FILTERS_KEY)
   if (!raw) return []
   try {
     const parsed = JSON.parse(raw) as unknown
     if (!Array.isArray(parsed)) return []
-    return parsed.filter(
-      (item): item is LibraryStatusFilter =>
-        item === 'installed' || item === 'deactivated' || item === 'uninstalled',
-    )
+    return parsed.filter(isLibraryFilter)
   } catch {
     return []
   }
@@ -146,7 +143,7 @@ function AppShell() {
   const suppressClickRef = useRef(false)
   const applyMarqueeKeysRef = useRef<(keys: string[]) => void>(() => {})
   const [scrollToFamily, setScrollToFamily] = useState<string | null>(null)
-  const [libraryFilters, setLibraryFilters] = useState<LibraryStatusFilter[]>(readLibraryFilters)
+  const [libraryFilters, setLibraryFilters] = useState<LibraryFilter[]>(readLibraryFilters)
   const [gridPreviewSize, setGridPreviewSize] = useState(readGridPreviewSize)
 
   function applySettings(next: AppSettings) {
@@ -273,9 +270,7 @@ function AppShell() {
   const watchFolders = settings?.watchFolders ?? EMPTY_WATCH_FOLDERS
   const librarySourceEntries = useMemo(
     () =>
-      entries
-        .filter(isLibraryEntry)
-        .filter((entry) => !watchFolderFilter || isWatchFolderEntry(entry, watchFolderFilter)),
+      entries.filter((entry) => !watchFolderFilter || isWatchFolderEntry(entry, watchFolderFilter)),
     [entries, watchFolderFilter],
   )
   const libraryGroups = useMemo(
@@ -294,11 +289,15 @@ function AppShell() {
     () => groupCatalog(librarySourceEntries),
     [librarySourceEntries],
   )
+  const libraryFilterCounts = useMemo(
+    () => countLibraryFilters(librarySourceEntries),
+    [librarySourceEntries],
+  )
   const watchFolderCounts = useMemo(() => {
     const counts: Record<string, number> = {}
     for (const folder of watchFolders) {
       counts[folder] = groupCatalog(
-        entries.filter(isLibraryEntry).filter((entry) => isWatchFolderEntry(entry, folder)),
+        entries.filter((entry) => isWatchFolderEntry(entry, folder)),
       ).length
     }
     return counts
@@ -327,7 +326,7 @@ function AppShell() {
   )
   const tabCounts = useMemo(
     () => ({
-      library: groupCatalog(entries.filter(isLibraryEntry)).length,
+      library: groupCatalog(entries).length,
       system: groupSystem(systemFaces).length,
       updates: groupCatalog(entries.filter((entry) => entry.status === 'outdated')).length,
     }),
@@ -1006,6 +1005,28 @@ function AppShell() {
     }
   }
 
+  async function revealWatchFolder(folder: string) {
+    try {
+      const result = await api.reveal({ path: folder })
+      toast.message(`Showing ${result.path}`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not show folder')
+    }
+  }
+
+  async function removeWatchFolder(folder: string) {
+    try {
+      const result = await api.updateSettings({
+        watchFolders: watchFolders.filter((item) => item !== folder),
+      })
+      applySettings(result.settings)
+      if (watchFolderFilter === folder) setWatchFolderFilter(null)
+      toast.success(`Stopped watching ${watchFolderName(folder)}`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not remove watch folder')
+    }
+  }
+
   return (
       <div
         className="flex h-dvh min-h-0 flex-col overflow-hidden bg-background text-foreground md:flex-row"
@@ -1041,6 +1062,14 @@ function AppShell() {
           watchFolderFilter={watchFolderFilter}
           watchFolderCounts={watchFolderCounts}
           onSelectWatchFolder={selectLibrary}
+          onRevealWatchFolder={(folder) => void revealWatchFolder(folder)}
+          onRemoveWatchFolder={(folder) => void removeWatchFolder(folder)}
+          libraryFilters={libraryFilters}
+          libraryFilterCounts={libraryFilterCounts}
+          onLibraryFiltersChange={(next) => {
+            setLibraryFilters(next)
+            localStorage.setItem(LIBRARY_FILTERS_KEY, JSON.stringify(next))
+          }}
           counts={tabCounts}
           onOpenSettings={() => setSettingsOpen(true)}
         />
@@ -1051,7 +1080,7 @@ function AppShell() {
             onPointerDown={handleListPointerDown}
           >
             {!loading && hasCatalogList && (
-              <div data-keep-selection="" className="shrink-0 space-y-3 bg-background px-4 pt-4 pb-3">
+              <div className="shrink-0 space-y-3 bg-background px-4 pt-4 pb-3">
                 <ViewOptions
                     layout={viewLayout}
                     onLayoutChange={(next) => {
@@ -1071,12 +1100,6 @@ function AppShell() {
                       localStorage.setItem('font-butler-show-sources', String(next))
                     }}
                     showSourcesToggle
-                    statusFilters={libraryFilters}
-                    onStatusFiltersChange={(next) => {
-                      setLibraryFilters(next)
-                      localStorage.setItem(LIBRARY_FILTERS_KEY, JSON.stringify(next))
-                    }}
-                    showStatusFilters={tab === 'library'}
                     previewSize={gridPreviewSize}
                     onPreviewSizeChange={(next) => {
                       setGridPreviewSize(next)
@@ -1092,7 +1115,7 @@ function AppShell() {
               </div>
             )}
             <ScrollArea className="min-h-0 flex-1">
-              <div className={cn('p-4', showBatchBar && 'pb-24')}>
+              <div className={cn('flex min-h-full flex-col p-4', showBatchBar && 'pb-24')}>
                 {loading && (
                   <p className="px-2 py-12 text-center text-sm text-muted-foreground">
                     Reading fonts…
@@ -1148,11 +1171,15 @@ function AppShell() {
                   </div>
                 )}
                 <div
-                  className={cn(
+                  className={cn(viewLayout === 'grid' ? 'grid' : 'grid gap-2')}
+                  style={
                     viewLayout === 'grid'
-                      ? 'grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4'
-                      : 'grid gap-2',
-                  )}
+                      ? {
+                          gridTemplateColumns: `repeat(auto-fill, minmax(${gridCardMinWidthRem(gridPreviewSize)}rem, 1fr))`,
+                          gap: `${Math.max(0.5, gridPreviewSize * 0.18)}rem`,
+                        }
+                      : undefined
+                  }
                 >
                   {tab === 'system'
                     ? shownSystemGroups.map((group) => {
@@ -1173,8 +1200,8 @@ function AppShell() {
                               setSelectedSystem(group.familyName)
                               setSelectedSystemKeys([group.familyName])
                               setSelectionAnchor(group.familyName)
-                              setInspectSelection(true)
                             }
+                            setInspectSelection(false)
                           }}
                           onReveal={() => {
                             setSelectedSystem(group.familyName)
@@ -1219,7 +1246,13 @@ function AppShell() {
                           onSelect={(event) => handleCatalogSelect(group, event)}
                           onSelectEntry={setSelectedEntryId}
                           onEnsureSelected={() => {
-                            if (!inSelection) selectGroup(group)
+                            if (!inSelection) {
+                              setSelectedFamily(group.familyName)
+                              setSelectedFamilyKeys([group.familyName])
+                              setSelectionAnchor(group.familyName)
+                              setSelectedEntryId(group.entries[0]?.id ?? null)
+                            }
+                            setInspectSelection(false)
                           }}
                           busy={busy}
                           onInstall={() =>
@@ -1270,6 +1303,7 @@ function AppShell() {
                         )
                       })}
                 </div>
+                <div className="min-h-8 flex-1" aria-hidden />
               </div>
             </ScrollArea>
           </section>
@@ -1620,11 +1654,9 @@ function LibraryCard({
           onPointerEnter={() => setHovered(true)}
           onPointerLeave={() => setHovered(false)}
         >
-          <SourceBadge
-            className="pointer-events-none absolute top-1.5 left-1.5 z-10"
-            present={hasTrackedSource(group)}
-            showMissing={group.status !== 'source-missing' && hasMissingTrackedSource(group)}
-          />
+          {hasTrackedSource(group) ? (
+            <SourceBadge className="pointer-events-none absolute top-1.5 left-1.5 z-10" />
+          ) : null}
           {layout === 'grid' ? (
             <button
               type="button"
@@ -1645,7 +1677,7 @@ function LibraryCard({
                 active={hovered && !selected}
                 size={previewSize}
               />
-              <div className="p-3">{metadata}</div>
+              <div className={previewSize < 3.25 ? 'p-2' : 'p-3'}>{metadata}</div>
             </button>
           ) : (
             <>
@@ -1823,7 +1855,7 @@ function SystemCard({
                 active={hovered && !selected}
                 size={previewSize}
               />
-              <div className="p-3">{metadata}</div>
+              <div className={previewSize < 3.25 ? 'p-2' : 'p-3'}>{metadata}</div>
             </button>
           ) : (
             <>

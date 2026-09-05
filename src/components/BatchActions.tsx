@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { Download, ListX, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
+import { CirclePlus, ListX, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   ContextMenuItem,
@@ -45,7 +45,7 @@ export function CatalogBatchButtons({
       )}
       {plan.install > 0 && (
         <Button size="sm" disabled={busy} onClick={onInstall}>
-          <Download /> {actionLabel('Install', plan.install, multi)}
+          <CirclePlus /> {actionLabel('Install', plan.install, multi)}
         </Button>
       )}
       {plan.activate > 0 && (
@@ -169,12 +169,12 @@ export function CatalogMenuItems({
       )}
       {plan.install > 0 && (
         <ContextMenuItem disabled={busy} onSelect={onInstall}>
-          <Download /> {actionLabel('Install', plan.install, multi)}
+          <CirclePlus /> {actionLabel('Install', plan.install, multi)}
         </ContextMenuItem>
       )}
       {showInstallAs && plan.install > 0 && onInstallAs && (
         <ContextMenuItem disabled={busy} onSelect={onInstallAs}>
-          <Download /> Install as…
+          <CirclePlus /> Install as…
         </ContextMenuItem>
       )}
       {plan.activate > 0 && (

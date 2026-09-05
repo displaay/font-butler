@@ -634,7 +634,11 @@ export class FontButlerService {
 
   async revealPath(filePath: string): Promise<string> {
     const resolved = path.resolve(filePath)
-    if (!allowedFontPath(resolved, this.paths)) {
+    const watchFolders = loadSettings(this.paths).watchFolders
+    if (
+      !allowedFontPath(resolved, this.paths) &&
+      !isUnderAnyRoot(resolved, watchFolders)
+    ) {
       throw new Error('That path is outside the font folders Font Buttler can reveal.')
     }
     if (!fs.existsSync(resolved)) {

@@ -1,13 +1,12 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
+  countLibraryFilters,
   entryHasTrackedSource,
   familyStatusSummary,
   groupCatalog,
-  hasMissingTrackedSource,
   hasTrackedSource,
   isForgettableOnlyGroup,
-  isLibraryEntry,
   isUninstallableGroup,
   matchesLibraryFilter,
   sortFamilyGroups,
@@ -110,13 +109,43 @@ test('matchesLibraryFilter treats empty as all and maps related statuses', () =>
   assert.equal(matchesLibraryFilter(outdated, ['installed', 'deactivated']), true)
 })
 
-test('Fonts includes deactivated, uninstalled, and source-missing entries', () => {
-  const deactivated = entry('off', 'Off', 1, 'deactivated')
-  const uninstalled = entry('gone', 'Gone', 2, 'uninstalled')
-  const missing = entry('lost', 'Lost', 3, 'source-missing')
-  assert.equal(isLibraryEntry(deactivated), true)
-  assert.equal(isLibraryEntry(uninstalled), true)
-  assert.equal(isLibraryEntry(missing), true)
+test('countLibraryFilters totals families per filter and can count one family twice', () => {
+  const installed = entry('in', 'In', 1, 'installed')
+  const vf = entry('vf', 'Variable', 2, 'uninstalled')
+  vf.faces[0]!.isVariable = true
+  vf.sourcePresent = true
+  const bootonOn = entry('br', 'Booton', 3, 'installed')
+  const bootonOff = entry('bi', 'Booton', 4, 'uninstalled')
+  assert.deepEqual(countLibraryFilters([installed, vf, bootonOn, bootonOff]), {
+    installed: 2,
+    deactivated: 0,
+    uninstalled: 2,
+    vf: 1,
+    static: 2,
+    source: 3,
+    'no-source': 0,
+  })
+})
+
+test('matchesLibraryFilter combines status, kind, and source dimensions', () => {
+  const vf = entry('vf', 'Variable', 1, 'installed')
+  vf.faces[0]!.isVariable = true
+  vf.sourcePresent = true
+  const statik = entry('st', 'Static', 2, 'installed')
+  statik.installedPath = statik.sourcePath
+  statik.sourcePresent = true
+  assert.equal(matchesLibraryFilter(vf, ['vf']), true)
+  assert.equal(matchesLibraryFilter(statik, ['vf']), false)
+  assert.equal(matchesLibraryFilter(statik, ['static']), true)
+  assert.equal(matchesLibraryFilter(vf, ['source']), true)
+  assert.equal(matchesLibraryFilter(statik, ['source']), false)
+  assert.equal(matchesLibraryFilter(statik, ['no-source']), true)
+  assert.equal(matchesLibraryFilter(vf, ['installed', 'vf', 'source']), true)
+  assert.equal(matchesLibraryFilter(statik, ['installed', 'vf']), false)
+  assert.equal(matchesLibraryFilter(vf, ['uninstalled', 'vf']), false)
+})
+
+test('Delete uninstalls installed families and forgets the rest', () => {
   assert.equal(isUninstallableGroup({ status: 'deactivated' }), true)
   assert.equal(isUninstallableGroup({ status: 'uninstalled' }), false)
   assert.equal(isForgettableOnlyGroup({ status: 'uninstalled' }), true)
@@ -153,7 +182,6 @@ test('entryHasTrackedSource prefers the stored flag and falls back to status', (
   assert.equal(entryHasTrackedSource(orphan), false)
   assert.equal(entryHasTrackedSource(adopted), false)
   assert.equal(hasTrackedSource({ entries: [tracked, installedMissing] }), true)
-  assert.equal(hasMissingTrackedSource({ entries: [tracked, installedMissing] }), true)
 })
 
 test('groupCatalog keeps typographic family styles on one card', () => {

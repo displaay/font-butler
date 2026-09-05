@@ -1,5 +1,4 @@
 export const INSTALLABLE_FORMATS = ['otf', 'ttf', 'ttc', 'otc'] as const
-export const WEB_FORMATS = ['woff', 'woff2'] as const
 export const WOFF_INSTALL_ERROR = 'WOFF files cannot be installed.'
 
 export type InstallableFormat = (typeof INSTALLABLE_FORMATS)[number]
@@ -7,13 +6,6 @@ export type InstallableFormat = (typeof INSTALLABLE_FORMATS)[number]
 export type FormatCount = {
   format: string
   count: number
-}
-
-const FORMAT_LABELS: Record<string, string> = {
-  otf: 'OpenType',
-  ttf: 'TrueType',
-  ttc: 'TrueType Collection',
-  otc: 'OpenType Collection',
 }
 
 export function normalizeFormat(format: string): string {
@@ -30,34 +22,8 @@ export function isWebFormat(format: string): boolean {
   return value === 'woff' || value === 'woff2'
 }
 
-export function isWebFontName(name: string): boolean {
-  const format = formatFromName(name)
-  return Boolean(format && isWebFormat(format))
-}
-
 export function isInstallableFormat(format: string): format is InstallableFormat {
   return (INSTALLABLE_FORMATS as readonly string[]).includes(normalizeFormat(format))
-}
-
-export function isInstallableFontName(name: string): boolean {
-  const format = formatFromName(name)
-  return Boolean(format && isInstallableFormat(format))
-}
-
-export function formatLabel(format: string): string {
-  const value = normalizeFormat(format)
-  return FORMAT_LABELS[value] ?? value.toUpperCase()
-}
-
-export function formatExtension(format: string): string {
-  return `.${normalizeFormat(format)}`
-}
-
-export function preferredFormat(formats: string[]): string | undefined {
-  for (const format of INSTALLABLE_FORMATS) {
-    if (formats.includes(format)) return format
-  }
-  return formats[0]
 }
 
 export function countFormats(formats: string[]): FormatCount[] {
@@ -71,8 +37,4 @@ export function countFormats(formats: string[]): FormatCount[] {
     format,
     count: counts.get(format) ?? 0,
   }))
-}
-
-export function fileCountLabel(count: number): string {
-  return count === 1 ? '1 file' : `${count} files`
 }

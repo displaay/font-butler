@@ -9,7 +9,7 @@ function ScrollArea({
 }: ComponentProps<typeof ScrollAreaPrimitive.Root>) {
   return (
     <ScrollAreaPrimitive.Root className={cn('overflow-hidden', className)} {...props}>
-      <ScrollAreaPrimitive.Viewport className="h-full w-full">
+      <ScrollAreaPrimitive.Viewport className="h-full w-full [&>div]:flex [&>div]:min-h-full [&>div]:flex-col">
         {children}
       </ScrollAreaPrimitive.Viewport>
       <ScrollAreaPrimitive.Scrollbar

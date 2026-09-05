@@ -31,3 +31,7 @@ release
 *.sw?
 
 agent-tools
+
+# Bundled CPython + fonttools created by npm run bundle:python
+vendor/python
+vendor/cache

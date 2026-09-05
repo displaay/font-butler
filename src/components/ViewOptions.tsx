@@ -2,22 +2,18 @@ import { useEffect, useRef, useState } from 'react'
 import { ArrowDownAZ, CalendarPlus, Ellipsis, LayoutGrid, List } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
-import type { LibraryStatusFilter, SortMode } from '@/lib/types'
+import type { SortMode, ViewLayout } from '@/lib/types'
 import { cn } from '@/lib/utils'
-
-const STATUS_FILTERS: { id: LibraryStatusFilter; label: string }[] = [
-  { id: 'installed', label: 'Installed' },
-  { id: 'deactivated', label: 'Deactivated' },
-  { id: 'uninstalled', label: 'Uninstalled' },
-]
-
-export type ViewLayout = 'list' | 'grid'
 
 export const GRID_PREVIEW_SIZE_KEY = 'font-butler-grid-preview-size'
 export const GRID_PREVIEW_SIZE_MIN = 2
 export const GRID_PREVIEW_SIZE_MAX = 6.5
 export const GRID_PREVIEW_SIZE_DEFAULT = 4.25
 export const GRID_PREVIEW_SIZE_STEP = 0.25
+
+export function gridCardMinWidthRem(previewSize: number): number {
+  return 5.25 + previewSize * 1.85
+}
 
 export function readGridPreviewSize(): number {
   const raw = localStorage.getItem(GRID_PREVIEW_SIZE_KEY)
@@ -36,9 +32,6 @@ export function ViewOptions({
   showSources,
   onShowSourcesChange,
   showSourcesToggle = true,
-  statusFilters = [],
-  onStatusFiltersChange,
-  showStatusFilters = false,
   previewSize,
   onPreviewSizeChange,
   className,
@@ -50,9 +43,6 @@ export function ViewOptions({
   showSources: boolean
   onShowSourcesChange: (value: boolean) => void
   showSourcesToggle?: boolean
-  statusFilters?: LibraryStatusFilter[]
-  onStatusFiltersChange?: (value: LibraryStatusFilter[]) => void
-  showStatusFilters?: boolean
   previewSize: number
   onPreviewSizeChange: (size: number) => void
   className?: string
@@ -78,11 +68,8 @@ export function ViewOptions({
   }, [menuOpen])
 
   return (
-    <div
-      data-keep-selection=""
-      className={cn('flex flex-wrap items-center justify-between gap-3', className)}
-    >
-      <div className="flex flex-wrap items-center gap-2">
+    <div className={cn('flex flex-wrap items-center justify-between gap-3', className)}>
+      <div data-keep-selection="" className="flex flex-wrap items-center gap-2">
         <div className="flex items-center gap-0.5 rounded-md border bg-background p-0.5">
           <Button
             type="button"
@@ -127,34 +114,8 @@ export function ViewOptions({
             </span>
           </label>
         )}
-        {showStatusFilters && (
-          <div className="flex items-center gap-0.5 rounded-md border bg-background p-0.5">
-            {STATUS_FILTERS.map((filter) => {
-              const active = statusFilters.includes(filter.id)
-              return (
-                <Button
-                  key={filter.id}
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  className={cn('h-7 gap-1.5', active && 'bg-muted font-medium')}
-                  onClick={() => {
-                    const next = active
-                      ? statusFilters.filter((item) => item !== filter.id)
-                      : [...statusFilters, filter.id]
-                    onStatusFiltersChange?.(next)
-                  }}
-                  aria-label={`Filter ${filter.label.toLowerCase()}`}
-                  aria-pressed={active}
-                >
-                  {filter.label}
-                </Button>
-              )
-            })}
-          </div>
-        )}
       </div>
-      <div className="flex flex-wrap items-center gap-2">
+      <div data-keep-selection="" className="flex flex-wrap items-center gap-2">
         <div className="flex items-center gap-0.5 rounded-md border bg-background p-0.5">
           <Button
             type="button"

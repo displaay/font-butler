@@ -1,5 +1,4 @@
 import type {
-  CatalogEntry,
   FamilyGroup,
   FontFaceInfo,
   SystemFace,
@@ -16,7 +15,7 @@ export type InstanceRow = {
   italic?: boolean
 }
 
-export function weightFromStyleName(name: string, fallback = 400): number {
+function weightFromStyleName(name: string, fallback = 400): number {
   const compact = name.replace(/[\s\-_]/g, '').toLowerCase()
   if (/hairline|ultrathin|extrathin/.test(compact)) return 100
   if (/thin/.test(compact)) return 100
@@ -32,7 +31,7 @@ export function weightFromStyleName(name: string, fallback = 400): number {
   return fallback
 }
 
-export function italicFromStyleName(name: string, fallback = false): boolean {
+function italicFromStyleName(name: string, fallback = false): boolean {
   return /italic|oblique/i.test(name) || fallback
 }
 
@@ -98,8 +97,4 @@ function rowsFromSystemFace(face: SystemFace): InstanceRow[] {
 
 export function systemInstanceRows(group: SystemFamilyGroup): InstanceRow[] {
   return group.faces.flatMap((face) => rowsFromSystemFace(face))
-}
-
-export function entryInstanceRows(entry: CatalogEntry): InstanceRow[] {
-  return entry.faces.flatMap((face) => rowsFromFace(face, entry.id))
 }

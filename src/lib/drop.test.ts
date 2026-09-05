@@ -3,7 +3,6 @@ import { test } from 'node:test'
 import {
   collectDropPayload,
   collectNativeFolderPaths,
-  hasDroppedFonts,
   inferDroppedFolderPath,
   isDroppedFolderPath,
   isDroppedFontName,
@@ -36,11 +35,6 @@ test('isDroppedFolderPath treats extensionless paths as folders', () => {
   assert.equal(isDroppedFolderPath('/Users/you/Fonts/Inbox'), true)
   assert.equal(isDroppedFolderPath('/Users/you/Fonts/Inbox', 'Inbox'), true)
   assert.equal(isDroppedFolderPath('/Users/you/Fonts/Regular.otf', 'Regular.otf'), false)
-})
-
-test('hasDroppedFonts ignores folder-only drops', () => {
-  assert.equal(hasDroppedFonts({ paths: ['/Users/you/Fonts/Inbox'], files: [] }), false)
-  assert.equal(hasDroppedFonts({ paths: ['/Users/you/Fonts/Inbox/Regular.otf'], files: [] }), true)
 })
 
 test('collectNativeFolderPaths keeps directory paths only', () => {
@@ -141,7 +135,7 @@ test('inferDroppedFolderPath recovers the dropped folder from a child file path'
   )
 })
 
-test('partitionDropPayload asks for a choice when otf and ttf are mixed', () => {
+test('partitionDropPayload counts mixed desktop formats', () => {
   const result = partitionDropPayload(
     ['/fonts/Family-Regular.otf', '/fonts/Family-Regular.ttf', '/fonts/Family-Bold.otf'],
     [],

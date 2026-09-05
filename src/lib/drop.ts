@@ -83,17 +83,6 @@ export function partitionDropPayload(
   }
 }
 
-export function filterPayloadToFormat(
-  paths: string[],
-  files: File[],
-  format: string,
-): { paths: string[]; files: File[] } {
-  return {
-    paths: paths.filter((filePath) => formatFromName(filePath) === format),
-    files: files.filter((file) => formatFromName(file.name) === format),
-  }
-}
-
 export function shouldSkipDroppedName(name: string): boolean {
   return name.startsWith('.') || name === '__MACOSX'
 }
@@ -192,13 +181,6 @@ export function collectNativeFolderPaths(
 
 export function isDroppedFolderPath(filePath: string, fileName = filePath): boolean {
   return !isDroppedFontName(fileName) && !isDroppedFontName(filePath)
-}
-
-export function hasDroppedFonts(payload: { paths: string[]; files: File[] }): boolean {
-  return (
-    payload.files.some((file) => isDroppedFontName(file.name)) ||
-    payload.paths.some((filePath) => isDroppedFontName(filePath))
-  )
 }
 
 export function isWebOnlyDrop(partition: DropPartition): boolean {
