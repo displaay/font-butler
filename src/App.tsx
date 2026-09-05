@@ -18,6 +18,7 @@ import { DropFolderDialog } from '@/components/DropFolderDialog'
 import { FormatDialog } from '@/components/FormatDialog'
 import { RenameDialog } from '@/components/RenameDialog'
 import { ReplaceFormatDialog } from '@/components/ReplaceFormatDialog'
+import { OnboardingDialog } from '@/components/OnboardingDialog'
 import { SettingsDialog } from '@/components/SettingsDialog'
 import { Sidebar, type Tab } from '@/components/Sidebar'
 import {
@@ -86,6 +87,13 @@ import { isPathUnderFolder, isWatchFolderEntry, mergeWatchFolders, watchFolderNa
 const EMPTY_WATCH_FOLDERS: string[] = []
 const LIBRARY_FILTERS_KEY = 'font-butler-library-filters'
 
+function shouldShowOnboarding(settings: AppSettings) {
+  return (
+    new URLSearchParams(window.location.search).get('onboarding') === '1' ||
+    settings.onboardingCompleted === false
+  )
+}
+
 function readSortMode(): SortMode {
   const stored = localStorage.getItem('font-butler-sort')
   return stored === 'added' || stored === 'installed' ? 'added' : 'name'
@@ -129,6 +137,7 @@ function AppShell() {
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null)
   const [renameEntry, setRenameEntry] = useState<CatalogEntry | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [onboardingOpen, setOnboardingOpen] = useState(false)
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const settingsRef = useRef<AppSettings | null>(null)
   const [watchFolderFilter, setWatchFolderFilter] = useState<string | null>(null)
@@ -217,6 +226,9 @@ function AppShell() {
         const [catalog, settingsResult] = await Promise.all([api.catalog(), api.settings()])
         if (!cancelled) {
           applySettings(settingsResult.settings)
+          if (shouldShowOnboarding(settingsResult.settings)) {
+            setOnboardingOpen(true)
+          }
           setEntries(catalog.entries)
           const focus = openPath
             ? catalog.entries.find((entry) => entry.sourcePath === openPath)
@@ -1811,6 +1823,12 @@ function AppShell() {
             setSelectedFamily(familyNameOf(entry))
             void api.catalog().then((result) => setEntries(result.entries))
           }}
+        />
+        <OnboardingDialog
+          open={onboardingOpen}
+          settings={settings}
+          onSettingsChange={applySettings}
+          onComplete={() => setOnboardingOpen(false)}
         />
         <SettingsDialog
           open={settingsOpen}

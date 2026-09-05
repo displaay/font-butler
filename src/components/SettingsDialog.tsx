@@ -13,6 +13,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useSetActionStatus } from '@/components/NotifyProvider'
 import { api } from '@/lib/api'
+import { requestNotificationPermission } from '@/lib/notifications'
 import type {
   AdobeFontCacheInfo,
   AppSettings,
@@ -88,6 +89,8 @@ export function SettingsDialog({
     clearAdobeFontCache?: boolean
     autoReinstallOnUpdate?: boolean
     skipCacheClearOnReinstall?: boolean
+    nativeNotifications?: boolean
+    onboardingCompleted?: boolean
   }) {
     setBusy(true)
     const watchingFolder = 'watchFolders' in patch
@@ -454,6 +457,41 @@ export function SettingsDialog({
               </Label>
             </section>
           )}
+
+          <section className="space-y-2">
+            <h2 className="text-sm font-medium text-foreground">Notifications</h2>
+            <Label className="flex cursor-pointer items-start gap-2 font-normal text-foreground">
+              <input
+                type="checkbox"
+                checked={settings?.nativeNotifications === true}
+                disabled={busy || !settings}
+                onChange={(event) => {
+                  const enabled = event.target.checked
+                  if (!enabled) {
+                    void save({ nativeNotifications: false })
+                    return
+                  }
+                  void (async () => {
+                    const permission = await requestNotificationPermission()
+                    if (permission !== 'granted') {
+                      toast.message(
+                        'Notifications were not allowed. You can enable them in System Settings.',
+                      )
+                      return
+                    }
+                    await save({ nativeNotifications: true })
+                  })()
+                }}
+                className="mt-0.5 size-3.5 rounded border border-input accent-primary"
+              />
+              <span>
+                <span className="block text-sm">Allow notifications</span>
+                <span className="block text-sm text-muted-foreground">
+                  Font Buttler can notify you when fonts are installed or updated.
+                </span>
+              </span>
+            </Label>
+          </section>
 
           <section className="space-y-2">
             <h2 className="text-sm font-medium text-foreground">Appearance</h2>

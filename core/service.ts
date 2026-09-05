@@ -266,6 +266,8 @@ export class FontButlerService {
     clearAdobeFontCache?: boolean
     autoReinstallOnUpdate?: boolean
     skipCacheClearOnReinstall?: boolean
+    nativeNotifications?: boolean
+    onboardingCompleted?: boolean
   }): Promise<AppSettings> {
     const current = loadSettings(this.paths)
     const next: AppSettings = { ...current }
@@ -303,6 +305,12 @@ export class FontButlerService {
     }
     if (typeof patch.skipCacheClearOnReinstall === 'boolean') {
       next.skipCacheClearOnReinstall = patch.skipCacheClearOnReinstall
+    }
+    if (typeof patch.nativeNotifications === 'boolean') {
+      next.nativeNotifications = patch.nativeNotifications
+    }
+    if (typeof patch.onboardingCompleted === 'boolean') {
+      next.onboardingCompleted = patch.onboardingCompleted
     }
     if ('watchFolders' in patch) {
       next.watchFolders = this.resolveWatchFolders(patch.watchFolders ?? [])

@@ -80,6 +80,9 @@
     "mac": {
       "icon": "build/icon.icns",
       "category": "public.app-category.utilities",
+      "extendInfo": {
+        "NSUserNotificationsUsageDescription": "Font Buttler can notify you when fonts are installed or updated."
+      },
       "target": [
         "dmg",
         "zip"

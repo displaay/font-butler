@@ -86,6 +86,8 @@ export type AppSettings = {
   clearAdobeFontCache: boolean
   autoReinstallOnUpdate: boolean
   skipCacheClearOnReinstall: boolean
+  nativeNotifications: boolean
+  onboardingCompleted: boolean
 }
 
 export type OfficeFontCacheInfo = {

@@ -12,6 +12,16 @@ contextBridge.exposeInMainWorld('fontButlerDesktop', {
   },
   reveal: (filePath) => ipcRenderer.invoke('reveal', filePath),
   pickFolder: () => ipcRenderer.invoke('pick-folder'),
+  requestNotifications: () => {
+    try {
+      if (typeof Notification === 'undefined') {
+        return Promise.resolve('denied')
+      }
+      return Notification.requestPermission()
+    } catch {
+      return Promise.resolve('denied')
+    }
+  },
   onOpenSettings: (callback) => {
     const listener = () => callback()
     ipcRenderer.on('open-settings', listener)

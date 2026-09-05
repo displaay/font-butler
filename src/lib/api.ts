@@ -141,6 +141,8 @@ export const api = {
     clearAdobeFontCache?: boolean
     autoReinstallOnUpdate?: boolean
     skipCacheClearOnReinstall?: boolean
+    nativeNotifications?: boolean
+    onboardingCompleted?: boolean
   }) =>
     json<{
       settings: AppSettings

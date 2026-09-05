@@ -44,6 +44,8 @@ function sampleSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     clearAdobeFontCache: true,
     autoReinstallOnUpdate: false,
     skipCacheClearOnReinstall: false,
+    nativeNotifications: false,
+    onboardingCompleted: false,
     ...overrides,
   }
 }
@@ -111,6 +113,8 @@ test('loadSettings fills installAfterUpload on older settings files', () => {
     assert.equal(settings.clearAdobeFontCache, true)
     assert.equal(settings.autoReinstallOnUpdate, false)
     assert.equal(settings.skipCacheClearOnReinstall, false)
+    assert.equal(settings.nativeNotifications, false)
+    assert.equal(settings.onboardingCompleted, true)
     assert.deepEqual(settings.watchFolders, [])
   } finally {
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
@@ -324,6 +328,82 @@ test('loadSettings keeps a stored skipCacheClearOnReinstall true', () => {
   try {
     saveSettings(paths, sampleSettings({ skipCacheClearOnReinstall: true }))
     assert.equal(loadSettings(paths).skipCacheClearOnReinstall, true)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings defaults onboardingCompleted to false', () => {
+  const paths = tempPaths()
+  try {
+    assert.equal(loadSettings(paths).onboardingCompleted, false)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings treats an older settings file as already onboarded', () => {
+  const paths = tempPaths()
+  try {
+    fs.mkdirSync(paths.dataRoot, { recursive: true })
+    fs.writeFileSync(
+      paths.settingsPath,
+      JSON.stringify({
+        version: 1,
+        watchFolders: [],
+        defaultView: 'list',
+        defaultSort: 'name',
+      }),
+    )
+    assert.equal(loadSettings(paths).onboardingCompleted, true)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings keeps a stored onboardingCompleted false', () => {
+  const paths = tempPaths()
+  try {
+    saveSettings(paths, sampleSettings({ onboardingCompleted: false }))
+    assert.equal(loadSettings(paths).onboardingCompleted, false)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings defaults nativeNotifications to false', () => {
+  const paths = tempPaths()
+  try {
+    assert.equal(loadSettings(paths).nativeNotifications, false)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings fills nativeNotifications on older settings files', () => {
+  const paths = tempPaths()
+  try {
+    fs.mkdirSync(paths.dataRoot, { recursive: true })
+    fs.writeFileSync(
+      paths.settingsPath,
+      JSON.stringify({
+        version: 1,
+        watchFolders: [],
+        defaultView: 'list',
+        defaultSort: 'name',
+      }),
+    )
+    assert.equal(loadSettings(paths).nativeNotifications, false)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings keeps a stored nativeNotifications true', () => {
+  const paths = tempPaths()
+  try {
+    saveSettings(paths, sampleSettings({ nativeNotifications: true }))
+    assert.equal(loadSettings(paths).nativeNotifications, true)
   } finally {
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }

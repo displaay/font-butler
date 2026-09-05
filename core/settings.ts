@@ -16,6 +16,8 @@ const emptySettings = (): AppSettings => ({
   clearAdobeFontCache: true,
   autoReinstallOnUpdate: false,
   skipCacheClearOnReinstall: false,
+  nativeNotifications: false,
+  onboardingCompleted: false,
 })
 
 function isViewLayout(value: unknown): value is ViewLayout {
@@ -102,6 +104,12 @@ export function loadSettings(paths: AppPaths): AppSettings {
         typeof parsed.skipCacheClearOnReinstall === 'boolean'
           ? parsed.skipCacheClearOnReinstall
           : defaults.skipCacheClearOnReinstall,
+      nativeNotifications:
+        typeof parsed.nativeNotifications === 'boolean'
+          ? parsed.nativeNotifications
+          : defaults.nativeNotifications,
+      onboardingCompleted:
+        typeof parsed.onboardingCompleted === 'boolean' ? parsed.onboardingCompleted : true,
     }
   } catch {
     return emptySettings()

@@ -110,6 +110,8 @@ app.post('/api/settings', async (c) => {
     clearAdobeFontCache?: boolean
     autoReinstallOnUpdate?: boolean
     skipCacheClearOnReinstall?: boolean
+    nativeNotifications?: boolean
+    onboardingCompleted?: boolean
   }>()
   try {
     const settings = await service.updateSettings(body)
