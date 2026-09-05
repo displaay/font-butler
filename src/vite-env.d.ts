@@ -9,6 +9,7 @@ declare global {
       getPathForFile: (file: File) => string | undefined
       reveal: (filePath: string) => Promise<void>
       pickFolder: () => Promise<string | null>
+      getApiToken?: () => Promise<string | null>
       requestNotifications: () => Promise<'granted' | 'denied' | 'default'>
       onOpenSettings: (callback: () => void) => () => void
       onReinstallFonts: (callback: (payload: { ids?: string[] }) => void) => () => void

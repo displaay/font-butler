@@ -17,18 +17,7 @@ import {
   upsertEntry,
 } from './catalog.ts'
 import { getOrCreateApiToken } from './auth.ts'
-import {
-  clearFontCaches,
-  clearAdobeFontCache as removeAdobeFontCache,
-  clearOfficeFontCache as removeOfficeFontCache,
-  clearUserFontCache as removeUserFontCache,
-  locateAdobeFontCache,
-  locateOfficeFontCache,
-  fontActivationStates,
-  registerFont,
-  setFontEnabled,
-  unregisterFont,
-} from './caches.ts'
+import { locateAdobeFontCache, locateOfficeFontCache } from './caches.ts'
 import { MAX_UPLOAD_BYTES } from './constants.ts'
 import { emitEvent } from './events.ts'
 import {
@@ -39,6 +28,16 @@ import {
   isWebFontFile,
   WOFF_INSTALL_ERROR,
 } from './formats.ts'
+import {
+  applyInstalledMetadata,
+  commitInstalledFile,
+  extensionForFormat,
+  removeStagedFile,
+  stageFontFile,
+  uniquePathFromOriginal,
+  uniqueSiblingPath,
+} from './install.ts'
+import { getFontNative } from './native.ts'
 import { isFontFile, mimeForFont, parseFontFile, readFileStat } from './parse.ts'
 import { isUnderAnyRoot } from './containment.ts'
 import { ensureDirs, getPaths, isMac, type AppPaths } from './paths.ts'
@@ -62,6 +61,7 @@ import {
   inspectDropPaths,
   listFontFilesInTree,
   listInboxFontFiles,
+  reconcileWatchedSources,
   setSourceStatusListener,
   syncInboxWatcher,
   syncUserFontsWatcher,
@@ -122,14 +122,18 @@ function destinationForInstall(
     fs.existsSync(entry.installedPath) &&
     isUnderAnyRoot(entry.installedPath, [paths.installDir, paths.userFontsDir])
   ) {
-    return path.resolve(entry.installedPath)
+    const installedExt = path.extname(entry.installedPath).toLowerCase()
+    const incomingExt = extensionForFormat(entry.format, resolvedFrom).toLowerCase()
+    if (!installedExt || installedExt === incomingExt) {
+      return path.resolve(entry.installedPath)
+    }
   }
   fs.mkdirSync(paths.installDir, { recursive: true })
-  const dest = path.join(paths.installDir, path.basename(resolvedFrom))
+  const ext = extensionForFormat(entry.format, resolvedFrom)
+  const dest = path.join(paths.installDir, `${path.basename(resolvedFrom, path.extname(resolvedFrom))}${ext}`)
   if (!fs.existsSync(dest) || sameFile(dest, resolvedFrom)) {
     return dest
   }
-  const ext = path.extname(dest) || '.ttf'
   const stem = path.basename(dest, ext)
   const hash = crypto.createHash('sha1').update(resolvedFrom).digest('hex').slice(0, 8)
   return path.join(paths.installDir, `${stem}-${hash}${ext}`)
@@ -151,19 +155,12 @@ function touchEntry(entry: CatalogEntry): void {
 
 async function removeInstalledCopy(entry: CatalogEntry): Promise<void> {
   if (entry.installedPath) {
-    await unregisterFont(entry.installedPath)
+    await getFontNative().unregisterFont(entry.installedPath)
     if (fs.existsSync(entry.installedPath)) {
       fs.rmSync(entry.installedPath, { force: true })
     }
   }
   entry.installedPath = undefined
-}
-
-async function removeDistinctInstalledCopy(entry: CatalogEntry): Promise<void> {
-  if (!isExternalSource(entry)) {
-    return
-  }
-  await removeInstalledCopy(entry)
 }
 
 function isProtectedSource(filePath: string, paths: AppPaths): boolean {
@@ -172,6 +169,42 @@ function isProtectedSource(filePath: string, paths: AppPaths): boolean {
     paths.computerFontsDir,
     paths.supplementalFontsDir,
   ])
+}
+
+function isComputerOrigin(filePath: string, paths: AppPaths): boolean {
+  return isUnderAnyRoot(filePath, [paths.computerFontsDir])
+}
+
+function writeUploadExclusive(dir: string, filename: string, data: Buffer): string {
+  const safe = path.basename(filename).replace(/[^\w.-]+/g, '_') || 'font.bin'
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const dest = path.join(dir, `${crypto.randomUUID()}-${safe}`)
+    try {
+      fs.writeFileSync(dest, data, { flag: 'wx' })
+      return dest
+    } catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined
+      if (code !== 'EEXIST') {
+        throw error
+      }
+    }
+  }
+  throw new Error(`Could not save ${filename}`)
+}
+
+function eligibleForInstall(entry: CatalogEntry): boolean {
+  return entry.status === 'uninstalled' || entry.status === 'deactivated' || entry.status === 'outdated'
+}
+
+function eligibleForDeactivate(entry: CatalogEntry): boolean {
+  return entry.status === 'installed' || entry.status === 'outdated'
+}
+
+function eligibleForReinstall(entry: CatalogEntry): boolean {
+  return (
+    entry.status === 'outdated' ||
+    (entry.status === 'deactivated' && Boolean(entry.installedPath && fs.existsSync(entry.installedPath)))
+  )
 }
 
 async function deleteSourceFile(filePath: string, paths: AppPaths): Promise<void> {
@@ -193,20 +226,6 @@ async function deleteSourceFile(filePath: string, paths: AppPaths): Promise<void
     throw new Error('That source path is not a file.')
   }
   await moveToTrash(resolved)
-}
-
-function copyIntoInstallDir(
-  paths: AppPaths,
-  entry: CatalogEntry,
-  fromPath: string,
-  options: { reuseInstalled?: boolean } = {},
-): string {
-  const dest = destinationForInstall(paths, entry, fromPath, options)
-  if (path.resolve(fromPath) !== dest && !sameFile(fromPath, dest)) {
-    fs.mkdirSync(path.dirname(dest), { recursive: true })
-    fs.copyFileSync(fromPath, dest)
-  }
-  return dest
 }
 
 export class FontButlerService {
@@ -241,6 +260,7 @@ export class FontButlerService {
     await this.refreshSourceStatuses()
     await this.reinstallCurrentlyOutdated()
     await syncWatchers(this.paths)
+    await reconcileWatchedSources(this.paths)
     await this.refreshUserFontsWatcher()
     await this.refreshInboxWatcher(loadSettings(this.paths).watchFolders, { importExisting: true })
   }
@@ -391,9 +411,13 @@ export class FontButlerService {
           errors.push(`${file.filename}: file exceeds ${MAX_UPLOAD_BYTES / (1024 * 1024)}MB limit`)
           continue
         }
-        const safe = path.basename(file.filename).replace(/[^\w.-]+/g, '_')
-        const dest = path.join(this.paths.uploadsDir, `${Date.now()}-${safe}`)
-        fs.writeFileSync(dest, file.data)
+        let dest: string
+        try {
+          dest = writeUploadExclusive(this.paths.uploadsDir, file.filename, file.data)
+        } catch (error) {
+          errors.push(`${file.filename}: ${error instanceof Error ? error.message : String(error)}`)
+          continue
+        }
         saved.push(dest)
       }
       const imported: CatalogEntry[] = []
@@ -402,6 +426,9 @@ export class FontButlerService {
           imported.push(this.importOneUnlocked(filePath))
         } catch (error) {
           errors.push(`${filePath}: ${error instanceof Error ? error.message : String(error)}`)
+          if (fs.existsSync(filePath)) {
+            fs.rmSync(filePath, { force: true })
+          }
         }
       }
       if (imported.length === 0 && ignored > 0 && errors.length === 0) {
@@ -475,11 +502,19 @@ export class FontButlerService {
       const catalog = loadCatalog(this.paths)
       const toInstall = ids
         .map((id) => findById(catalog, id))
-        .filter((entry): entry is CatalogEntry => Boolean(entry))
+        .filter((entry): entry is CatalogEntry => Boolean(entry) && eligibleForInstall(entry))
       assertSingleInstallableFormat(toInstall)
       const entries: CatalogEntry[] = []
-      for (const id of ids) {
-        entries.push(await this.installEntry(id, familyName, options))
+      const errors: string[] = []
+      for (const entry of toInstall) {
+        try {
+          entries.push(await this.installEntry(entry.id, familyName, options))
+        } catch (error) {
+          errors.push(error instanceof Error ? error.message : String(error))
+        }
+      }
+      if (entries.length === 0 && errors.length) {
+        throw new Error(errors.join('\n'))
       }
       await syncWatchers(this.paths)
       emitCatalog(this.paths)
@@ -519,10 +554,21 @@ export class FontButlerService {
   async deactivateMany(ids: string[]): Promise<CatalogEntry[]> {
     return runCatalogTask(async () => {
       const entries: CatalogEntry[] = []
+      const errors: string[] = []
       for (const id of ids) {
-        entries.push(await this.deactivateEntry(id))
+        const catalog = loadCatalog(this.paths)
+        const entry = findById(catalog, id)
+        if (!entry || !eligibleForDeactivate(entry)) continue
+        try {
+          entries.push(await this.deactivateEntry(id))
+        } catch (error) {
+          errors.push(error instanceof Error ? error.message : String(error))
+        }
       }
       emitCatalog(this.paths)
+      if (entries.length === 0 && errors.length) {
+        throw new Error(errors.join('\n'))
+      }
       return entries
     })
   }
@@ -562,18 +608,29 @@ export class FontButlerService {
   async reinstallMany(ids: string[]): Promise<CatalogEntry[]> {
     return runCatalogTask(async () => {
       const entries: CatalogEntry[] = []
+      const errors: string[] = []
       for (const id of ids) {
         const catalog = loadCatalog(this.paths)
         const entry = findById(catalog, id)
         if (!entry) {
-          throw new Error('Font is not in the library.')
+          errors.push('Font is not in the library.')
+          continue
         }
-        await removeDistinctInstalledCopy(entry)
-        entries.push(await this.installEntry(id, entry.customFamilyName))
+        if (!eligibleForReinstall(entry) && entry.status !== 'installed') {
+          continue
+        }
+        try {
+          entries.push(await this.reinstallEntry(id))
+        } catch (error) {
+          errors.push(error instanceof Error ? error.message : String(error))
+        }
       }
       await this.clearCachesAfterInstall()
       await syncWatchers(this.paths)
       emitCatalog(this.paths)
+      if (entries.length === 0 && errors.length) {
+        throw new Error(errors.join('\n'))
+      }
       const first = entries[0]
       if (first) {
         emitNotice({
@@ -609,7 +666,7 @@ export class FontButlerService {
   }
 
   async clearUserFontCache(): Promise<{ mac: boolean; cleared: boolean }> {
-    const result = await removeUserFontCache()
+    const result = await getFontNative().clearUserFontCache()
     emitNotice({
       kind: 'info',
       message: result.mac
@@ -623,7 +680,7 @@ export class FontButlerService {
     if (!loadSettings(this.paths).clearOfficeFontCache) {
       throw new Error('Microsoft Office cache clearing is turned off in Settings.')
     }
-    const result = await removeOfficeFontCache()
+    const result = await getFontNative().clearOfficeFontCache()
     emitNotice({
       kind: 'info',
       message: result.mac
@@ -639,7 +696,7 @@ export class FontButlerService {
     if (!loadSettings(this.paths).clearAdobeFontCache) {
       throw new Error('Adobe font cache clearing is turned off in Settings.')
     }
-    const result = await removeAdobeFontCache()
+    const result = await getFontNative().clearAdobeFontCache()
     emitNotice({
       kind: 'info',
       message: result.mac
@@ -698,7 +755,7 @@ export class FontButlerService {
       } catch {
         throw new Error('Protected system fonts cannot be removed.')
       }
-      await unregisterFont(resolved)
+      await getFontNative().unregisterFont(resolved)
       fs.rmSync(resolved, { force: true })
       emitEvent({ type: 'system', faces: scanSystemFonts(this.paths) })
     })
@@ -731,10 +788,35 @@ export class FontButlerService {
       } catch {
         throw new Error('Protected system fonts cannot be deactivated.')
       }
-      await unregisterFont(resolved)
+      await getFontNative().unregisterFont(resolved)
       fs.mkdirSync(this.paths.disabledDir, { recursive: true })
-      const dest = path.join(this.paths.disabledDir, path.basename(resolved))
+      const dest = uniquePathFromOriginal(this.paths.disabledDir, resolved)
       fs.renameSync(resolved, dest)
+      let parsed
+      try {
+        parsed = parseFontFile(dest)
+      } catch {
+        fs.renameSync(dest, resolved)
+        throw new Error('Could not read that computer font after deactivating it.')
+      }
+      const stat = readFileStat(dest)
+      const entry: CatalogEntry = {
+        id: newId(),
+        sourcePath: resolved,
+        sourceMtimeMs: stat.mtimeMs,
+        sourceSize: stat.size,
+        sourcePresent: false,
+        status: 'deactivated',
+        disabledPath: dest,
+        faces: parsed.faces,
+        format: parsed.format,
+        addedAt: now(),
+        updatedAt: now(),
+      }
+      const next = loadCatalog(this.paths)
+      upsertEntry(next, entry)
+      saveCatalog(this.paths, next)
+      emitCatalog(this.paths)
       emitEvent({ type: 'system', faces: scanSystemFonts(this.paths) })
     })
   }
@@ -817,14 +899,55 @@ export class FontButlerService {
     entry: CatalogEntry,
     catalog: CatalogEntry[],
     replace?: boolean,
-  ): Promise<void> {
+  ): Promise<CatalogEntry[]> {
     const conflicts = installedFormatConflicts(entry, catalog)
-    if (conflicts.length === 0) return
+    if (conflicts.length === 0) return []
     if (!replace) {
       throw new Error(formatConflictMessage(entry, conflicts[0]))
     }
+    return conflicts
+  }
+
+  private async snapshotAndRemoveConflicts(conflicts: CatalogEntry[]): Promise<
+    Array<{ entry: CatalogEntry; file: string }>
+  > {
+    const snapshots: Array<{ entry: CatalogEntry; file: string }> = []
+    const rollbackDir = path.join(this.paths.dataRoot, 'rollback')
+    fs.mkdirSync(rollbackDir, { recursive: true })
     for (const other of conflicts) {
-      await this.uninstallEntry(other.id)
+      const current = findById(loadCatalog(this.paths), other.id)
+      if (!current) continue
+      const installed = current.installedPath
+      if (installed && fs.existsSync(installed)) {
+        const snapshot = path.join(rollbackDir, `${crypto.randomUUID()}${path.extname(installed) || '.ttf'}`)
+        fs.copyFileSync(installed, snapshot)
+        snapshots.push({ entry: { ...current }, file: snapshot })
+      }
+      await this.uninstallEntry(current.id)
+    }
+    return snapshots
+  }
+
+  private async restoreConflictSnapshots(
+    snapshots: Array<{ entry: CatalogEntry; file: string }>,
+  ): Promise<void> {
+    for (const snapshot of snapshots) {
+      if (!fs.existsSync(snapshot.file)) continue
+      const dest = snapshot.entry.installedPath
+      if (dest) {
+        fs.mkdirSync(path.dirname(dest), { recursive: true })
+        fs.copyFileSync(snapshot.file, dest)
+        try {
+          await getFontNative().registerFont(dest)
+          await getFontNative().setFontEnabled(dest, true)
+        } catch {
+          // Restoring the previous format is best-effort.
+        }
+      }
+      const catalog = loadCatalog(this.paths)
+      upsertEntry(catalog, snapshot.entry)
+      saveCatalog(this.paths, catalog)
+      fs.rmSync(snapshot.file, { force: true })
     }
   }
 
@@ -840,57 +963,88 @@ export class FontButlerService {
     }
     const renameTo = familyName?.trim()
     const installAs = Boolean(renameTo && renameTo !== displayFamily(entry))
-    if (!installAs) {
-      await this.resolveFormatConflicts(entry, catalog.entries, options?.replace)
-      catalog = loadCatalog(this.paths)
-      entry = findById(catalog, id)
-      if (!entry) {
-        throw new Error('Font is not in the library.')
-      }
+    if (installAs && renameTo) {
+      return this.installRenamedCopy(entry, renameTo, options)
     }
     if (!sourceFileExists(entry.sourcePath)) {
       applySourcePresence(entry)
       saveCatalog(this.paths, catalog)
       throw new Error('The source file is missing.')
     }
-    if (installAs && renameTo) {
-      return this.installRenamedCopy(entry, renameTo, options)
-    }
-    if (
-      entry.status === 'installed' &&
-      entry.installedPath &&
-      fs.existsSync(entry.installedPath)
-    ) {
-      const current = readFileStat(entry.sourcePath)
+    const staged = stageFontFile(entry.sourcePath, path.join(this.paths.dataRoot, 'staging'))
+    let conflictSnapshots: Array<{ entry: CatalogEntry; file: string }> = []
+    try {
+      entry.format = staged.parsed.format
+      entry.faces = staged.parsed.faces
+      const conflicts = await this.resolveFormatConflicts(entry, catalog.entries, options?.replace)
+      catalog = loadCatalog(this.paths)
+      entry = findById(catalog, id)
+      if (!entry) {
+        throw new Error('Font is not in the library.')
+      }
       if (
-        current.mtimeMs === entry.installedSnapshotMtimeMs &&
-        current.size === entry.installedSnapshotSize
+        entry.status === 'installed' &&
+        entry.installedPath &&
+        fs.existsSync(entry.installedPath) &&
+        conflicts.length === 0
       ) {
-        entry.sourcePresent = isExternalSource(entry)
-        return entry
+        const current = readFileStat(entry.sourcePath)
+        if (
+          current.mtimeMs === entry.installedSnapshotMtimeMs &&
+          current.size === entry.installedSnapshotSize
+        ) {
+          entry.sourcePresent = isExternalSource(entry)
+          return entry
+        }
+      }
+      if (conflicts.length) {
+        conflictSnapshots = await this.snapshotAndRemoveConflicts(conflicts)
+        catalog = loadCatalog(this.paths)
+        entry = findById(catalog, id)
+        if (!entry) {
+          throw new Error('Font is not in the library.')
+        }
+      }
+      const dest = destinationForInstall(this.paths, entry, entry.sourcePath)
+      const previousInstalled =
+        entry.installedPath && path.resolve(entry.installedPath) !== dest
+          ? entry.installedPath
+          : undefined
+      await commitInstalledFile({
+        dest,
+        stagedPath: staged.stagedPath,
+        rollbackDir: path.join(this.paths.dataRoot, 'rollback'),
+        native: getFontNative(),
+      })
+      if (previousInstalled && fs.existsSync(previousInstalled)) {
+        await getFontNative().unregisterFont(previousInstalled)
+        fs.rmSync(previousInstalled, { force: true })
+      }
+      catalog = loadCatalog(this.paths)
+      entry = findById(catalog, id)
+      if (!entry) {
+        throw new Error('Font is not in the library.')
+      }
+      if (!sourceFileExists(entry.sourcePath)) {
+        entry.sourcePath = dest
+      }
+      applyInstalledMetadata(entry, dest, staged, {
+        externalSource: isExternalSource(entry),
+      })
+      touchEntry(entry)
+      saveCatalog(this.paths, catalog)
+      return entry
+    } catch (error) {
+      await this.restoreConflictSnapshots(conflictSnapshots)
+      throw error
+    } finally {
+      removeStagedFile(staged.stagedPath)
+      for (const snapshot of conflictSnapshots) {
+        if (fs.existsSync(snapshot.file)) {
+          fs.rmSync(snapshot.file, { force: true })
+        }
       }
     }
-    const dest = copyIntoInstallDir(this.paths, entry, entry.sourcePath)
-    if (entry.installedPath && path.resolve(entry.installedPath) !== dest) {
-      await removeInstalledCopy(entry)
-    }
-    await registerFont(dest)
-    await setFontEnabled(dest, true)
-    if (!sourceFileExists(entry.sourcePath)) {
-      entry.sourcePath = dest
-    }
-    const stat = readFileStat(entry.sourcePath)
-    entry.installedPath = dest
-    entry.disabledPath = undefined
-    entry.sourceMtimeMs = stat.mtimeMs
-    entry.sourceSize = stat.size
-    entry.sourcePresent = isExternalSource(entry)
-    entry.installedSnapshotMtimeMs = stat.mtimeMs
-    entry.installedSnapshotSize = stat.size
-    entry.status = 'installed'
-    touchEntry(entry)
-    saveCatalog(this.paths, catalog)
-    return entry
   }
 
   private async installRenamedCopy(
@@ -914,15 +1068,33 @@ export class FontButlerService {
         addedAt: now(),
         updatedAt: now(),
       }
-      await this.resolveFormatConflicts(draft, catalog.entries, options?.replace)
-      const dest = copyIntoInstallDir(this.paths, draft, temp, { reuseInstalled: false })
-      await registerFont(dest)
-      await setFontEnabled(dest, true)
-      bindEntryToInstalledFile(draft, dest)
-      const next = loadCatalog(this.paths)
-      upsertEntry(next, draft)
-      saveCatalog(this.paths, next)
-      return draft
+      const conflicts = await this.resolveFormatConflicts(draft, catalog.entries, options?.replace)
+      const conflictSnapshots = conflicts.length ? await this.snapshotAndRemoveConflicts(conflicts) : []
+      try {
+        const dest = destinationForInstall(this.paths, draft, temp, { reuseInstalled: false })
+        await commitInstalledFile({
+          dest,
+          stagedPath: temp,
+          rollbackDir: path.join(this.paths.dataRoot, 'rollback'),
+          native: getFontNative(),
+        })
+        bindEntryToInstalledFile(draft, dest)
+        draft.faces = parsed.faces
+        draft.format = parsed.format
+        const next = loadCatalog(this.paths)
+        upsertEntry(next, draft)
+        saveCatalog(this.paths, next)
+        return draft
+      } catch (error) {
+        await this.restoreConflictSnapshots(conflictSnapshots)
+        throw error
+      } finally {
+        for (const snapshot of conflictSnapshots) {
+          if (fs.existsSync(snapshot.file)) {
+            fs.rmSync(snapshot.file, { force: true })
+          }
+        }
+      }
     } finally {
       if (fs.existsSync(temp)) {
         fs.rmSync(temp, { force: true })
@@ -1018,12 +1190,21 @@ export class FontButlerService {
     if (!entry.installedPath || !fs.existsSync(entry.installedPath)) {
       throw new Error('This font is not installed.')
     }
-    await setFontEnabled(entry.installedPath, false)
-    entry.disabledPath = undefined
-    entry.status = 'deactivated'
-    touchEntry(entry)
-    saveCatalog(this.paths, catalog)
-    return entry
+    const installedPath = entry.installedPath
+    const result = await getFontNative().setFontEnabled(installedPath, false)
+    if (!result.ok) {
+      throw new Error(result.error || 'Could not deactivate the font.')
+    }
+    const latest = loadCatalog(this.paths)
+    const current = findById(latest, id)
+    if (!current) {
+      throw new Error('Font is not in the library.')
+    }
+    current.disabledPath = undefined
+    current.status = 'deactivated'
+    touchEntry(current)
+    saveCatalog(this.paths, latest)
+    return current
   }
 
   private async activateEntry(id: string, options?: { replace?: boolean }): Promise<CatalogEntry> {
@@ -1032,35 +1213,79 @@ export class FontButlerService {
     if (!entry) {
       throw new Error('Font is not in the library.')
     }
-    await this.resolveFormatConflicts(entry, catalog.entries, options?.replace)
+    const conflicts = await this.resolveFormatConflicts(entry, catalog.entries, options?.replace)
+    const conflictSnapshots = conflicts.length ? await this.snapshotAndRemoveConflicts(conflicts) : []
     catalog = loadCatalog(this.paths)
     entry = findById(catalog, id)
     if (!entry) {
+      await this.restoreConflictSnapshots(conflictSnapshots)
       throw new Error('Font is not in the library.')
     }
-    if (entry.disabledPath && fs.existsSync(entry.disabledPath)) {
-      const dest = destinationForInstall(this.paths, entry, entry.disabledPath)
-      if (path.resolve(entry.disabledPath) !== dest) {
-        fs.mkdirSync(path.dirname(dest), { recursive: true })
-        fs.renameSync(entry.disabledPath, dest)
+    try {
+      if (entry.disabledPath && fs.existsSync(entry.disabledPath)) {
+        const restoreToComputer =
+          isComputerOrigin(entry.sourcePath, this.paths) &&
+          !fs.existsSync(entry.sourcePath)
+        let dest = restoreToComputer
+          ? path.resolve(entry.sourcePath)
+          : destinationForInstall(this.paths, entry, entry.disabledPath)
+        if (restoreToComputer && fs.existsSync(dest) && !sameFile(dest, entry.disabledPath)) {
+          dest = uniqueSiblingPath(dest)
+        }
+        if (path.resolve(entry.disabledPath) !== dest) {
+          fs.mkdirSync(path.dirname(dest), { recursive: true })
+          fs.renameSync(entry.disabledPath, dest)
+        }
+        await getFontNative().registerFont(dest)
+        const enabled = await getFontNative().setFontEnabled(dest, true)
+        if (!enabled.ok) {
+          if (restoreToComputer && dest !== entry.disabledPath && fs.existsSync(dest)) {
+            fs.renameSync(dest, entry.disabledPath)
+          }
+          throw new Error(enabled.error || 'Could not activate the font.')
+        }
+        catalog = loadCatalog(this.paths)
+        entry = findById(catalog, id)
+        if (!entry) {
+          throw new Error('Font is not in the library.')
+        }
+        entry.installedPath = dest
+        entry.disabledPath = undefined
+        if (restoreToComputer) {
+          entry.sourcePath = dest
+        }
+        entry.status = 'installed'
+        entry.sourcePresent = isExternalSource(entry)
+        touchEntry(entry)
+        saveCatalog(this.paths, catalog)
+        return entry
       }
-      await registerFont(dest)
-      await setFontEnabled(dest, true)
-      entry.installedPath = dest
-      entry.disabledPath = undefined
-      entry.status = 'installed'
-      touchEntry(entry)
-      saveCatalog(this.paths, catalog)
-      return entry
+      if (entry.installedPath && fs.existsSync(entry.installedPath)) {
+        const enabled = await getFontNative().setFontEnabled(entry.installedPath, true)
+        if (!enabled.ok) {
+          throw new Error(enabled.error || 'Could not activate the font.')
+        }
+        catalog = loadCatalog(this.paths)
+        entry = findById(catalog, id)
+        if (!entry) {
+          throw new Error('Font is not in the library.')
+        }
+        entry.status = 'installed'
+        touchEntry(entry)
+        saveCatalog(this.paths, catalog)
+        return entry
+      }
+      return this.installEntry(id, undefined, options)
+    } catch (error) {
+      await this.restoreConflictSnapshots(conflictSnapshots)
+      throw error
+    } finally {
+      for (const snapshot of conflictSnapshots) {
+        if (fs.existsSync(snapshot.file)) {
+          fs.rmSync(snapshot.file, { force: true })
+        }
+      }
     }
-    if (entry.installedPath && fs.existsSync(entry.installedPath)) {
-      await setFontEnabled(entry.installedPath, true)
-      entry.status = 'installed'
-      touchEntry(entry)
-      saveCatalog(this.paths, catalog)
-      return entry
-    }
-    return this.installEntry(id, undefined, options)
   }
 
   private async reinstallEntry(id: string): Promise<CatalogEntry> {
@@ -1072,7 +1297,6 @@ export class FontButlerService {
     if (entry.status === 'deactivated' && entry.installedPath && fs.existsSync(entry.installedPath)) {
       return this.activateEntry(id)
     }
-    await removeDistinctInstalledCopy(entry)
     await this.clearCachesAfterInstall()
     const updated = await this.installEntry(id, entry.customFamilyName)
     emitNotice({
@@ -1140,7 +1364,6 @@ export class FontButlerService {
         continue
       }
       if (entry.status === 'outdated') {
-        await removeDistinctInstalledCopy(entry)
         await this.clearCachesAfterInstall()
       }
       await this.installEntry(entry.id, entry.customFamilyName)
@@ -1197,7 +1420,7 @@ export class FontButlerService {
     const existing =
       findByInstalledPath(catalog, resolved) ??
       findBySourcePath(catalog, resolved) ??
-      findByFaceIdentity(catalog, parsed.faces)
+      findByFaceIdentity(catalog, parsed.faces, parsed.format)
     const stat = readFileStat(resolved)
     const inUserFonts = isUnderAnyRoot(resolved, [this.paths.userFontsDir, this.paths.installDir])
     if (existing) {
@@ -1267,6 +1490,10 @@ export class FontButlerService {
   }
 
   private async refreshSourceStatuses(): Promise<void> {
+    return runCatalogTask(() => this.refreshSourceStatusesUnlocked())
+  }
+
+  private refreshSourceStatusesUnlocked(): void {
     const catalog = loadCatalog(this.paths)
     let changed = false
     for (const entry of catalog.entries) {
@@ -1356,7 +1583,7 @@ export class FontButlerService {
       if (settings.skipCacheClearOnReinstall) {
         return
       }
-      await clearFontCaches({
+      await getFontNative().clearFontCaches({
         office: settings.clearOfficeFontCache,
         adobe: settings.clearAdobeFontCache,
       })
@@ -1454,6 +1681,14 @@ export class FontButlerService {
       if (!entry.disabledPath || !fs.existsSync(entry.disabledPath)) {
         continue
       }
+      if (isComputerOrigin(entry.sourcePath, this.paths)) {
+        if (entry.status !== 'deactivated' || entry.sourcePresent !== false) {
+          entry.status = 'deactivated'
+          entry.sourcePresent = false
+          changed = true
+        }
+        continue
+      }
       const dest = destinationForInstall(this.paths, entry, entry.disabledPath, {
         reuseInstalled: false,
       })
@@ -1461,8 +1696,8 @@ export class FontButlerService {
         fs.mkdirSync(path.dirname(dest), { recursive: true })
         fs.renameSync(entry.disabledPath, dest)
       }
-      await registerFont(dest)
-      await setFontEnabled(dest, false)
+      await getFontNative().registerFont(dest)
+      await getFontNative().setFontEnabled(dest, false)
       entry.installedPath = dest
       entry.disabledPath = undefined
       entry.status = 'deactivated'
@@ -1478,7 +1713,7 @@ export class FontButlerService {
   private async adoptUserFonts(): Promise<void> {
     const files = listFontFilesInTree(this.paths.userFontsDir)
     const catalog = loadCatalog(this.paths)
-    const enabled = await fontActivationStates(files)
+    const enabled = await getFontNative().fontActivationStates(files)
     let changed = false
 
     for (const filePath of files) {
@@ -1488,7 +1723,8 @@ export class FontButlerService {
         findBySourcePath(catalog, resolved) ??
         (() => {
           try {
-            return findByFaceIdentity(catalog, parseFontFile(resolved).faces)
+            const parsed = parseFontFile(resolved)
+            return findByFaceIdentity(catalog, parsed.faces, parsed.format)
           } catch {
             return undefined
           }

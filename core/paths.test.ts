@@ -6,12 +6,31 @@ import { test } from 'node:test'
 import {
   APP_FOLDER_NAME,
   LEGACY_APP_FOLDER_NAME,
+  buildPaths,
   migrateLegacyMacAppDirs,
 } from './paths.ts'
 
 function tempHome(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-paths-'))
 }
+
+test('FONT_BUTLER_DATA isolates user, computer, system, and cache directories', () => {
+  const home = tempHome()
+  const dataRoot = path.join(home, 'isolated-data')
+  try {
+    const paths = buildPaths({ home, override: dataRoot, mac: true })
+    assert.equal(paths.dataRoot, dataRoot)
+    assert.equal(paths.userFontsDir, path.join(dataRoot, 'user-fonts'))
+    assert.equal(paths.installDir, path.join(dataRoot, 'user-fonts'))
+    assert.equal(paths.computerFontsDir, path.join(dataRoot, 'computer-fonts'))
+    assert.equal(paths.systemFontsDir, path.join(dataRoot, 'system-fonts'))
+    assert.equal(paths.officeFontCacheDir, path.join(dataRoot, 'office-cache'))
+    assert.equal(paths.atsCacheDir, path.join(dataRoot, 'ats-cache'))
+    assert.equal(paths.userFontsDir.includes('Library/Fonts'), false)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
 
 test('migrateLegacyMacAppDirs moves the old app support and fonts folders', () => {
   const home = tempHome()

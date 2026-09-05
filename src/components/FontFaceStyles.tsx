@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { catalogFontUrl, systemFontUrl } from '@/lib/preview'
 import type { CatalogEntry, SystemFace } from '@/lib/types'
 
 function cssFamily(id: string): string {
@@ -31,11 +32,11 @@ export function FontFaceStyles({
   const css = [
     ...entries.map(
       (entry) =>
-        `@font-face{font-family:"${cssFamily(entry.id)}";src:url("/api/font-file/${entry.id}");font-display:swap;}`,
+        `@font-face{font-family:"${cssFamily(entry.id)}";src:url("${catalogFontUrl(entry)}");font-display:swap;}`,
     ),
     ...systemFaces.map(
       (face) =>
-        `@font-face{font-family:"${hashPath(face.path)}";src:url("/api/system-font?path=${encodeURIComponent(face.path)}");font-display:swap;}`,
+        `@font-face{font-family:"${hashPath(face.path)}";src:url("${systemFontUrl(face.path)}");font-display:swap;}`,
     ),
   ].join('\n')
 

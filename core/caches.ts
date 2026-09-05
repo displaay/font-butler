@@ -300,9 +300,15 @@ function run(argv) {
 }
 `
 
-export async function setFontEnabled(filePath: string, enabled: boolean): Promise<void> {
+export type FontEnableResult = {
+  ok: boolean
+  native: boolean
+  error?: string
+}
+
+export async function setFontEnabled(filePath: string, enabled: boolean): Promise<FontEnableResult> {
   if (!isMac() || !filePath) {
-    return
+    return { ok: true, native: false }
   }
   const safePath = assertSafeShellPath(filePath)
   try {
@@ -311,8 +317,13 @@ export async function setFontEnabled(filePath: string, enabled: boolean): Promis
       ['-l', 'JavaScript', '-e', FONT_ENABLE_SCRIPT, 'set', safePath, enabled ? '1' : '0'],
       { timeout: 10_000 },
     )
-  } catch {
-    // Catalog status still records deactivate when Core Text cannot be reached.
+    return { ok: true, native: true }
+  } catch (error) {
+    return {
+      ok: false,
+      native: true,
+      error: error instanceof Error ? error.message : 'Could not change font activation.',
+    }
   }
 }
 

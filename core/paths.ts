@@ -120,21 +120,35 @@ export function migrateLegacyMacAppDirs(home: string): { dataRoot: string; insta
   return { dataRoot, installDir }
 }
 
-export function getPaths(): AppPaths {
-  const home = os.homedir()
-  const override = process.env.FONT_BUTLER_DATA ?? process.env.FONTCASE_DATA
+export function buildPaths(options: {
+  home?: string
+  override?: string
+  mac?: boolean
+}): AppPaths {
+  const home = options.home ?? os.homedir()
+  const override = options.override
+  const mac = options.mac ?? isMac()
   const migrated =
-    !override && isMac()
+    !override && mac
       ? migrateLegacyMacAppDirs(home)
       : {
           dataRoot: override ?? path.join(projectRoot, '.font-butler-data'),
           installDir: '',
         }
   const dataRoot = migrated.dataRoot
-  const userFontsDir = isMac()
-    ? path.join(home, 'Library/Fonts')
-    : path.join(home, '.local/share/fonts')
-  const installDir = isMac() ? userFontsDir : path.join(dataRoot, 'installed')
+  const isolated = Boolean(override)
+  const userFontsDir = isolated
+    ? path.join(dataRoot, 'user-fonts')
+    : mac
+      ? path.join(home, 'Library/Fonts')
+      : path.join(home, '.local/share/fonts')
+  const installDir = isolated
+    ? mac
+      ? userFontsDir
+      : path.join(dataRoot, 'installed')
+    : mac
+      ? userFontsDir
+      : path.join(dataRoot, 'installed')
 
   return {
     dataRoot,
@@ -148,17 +162,36 @@ export function getPaths(): AppPaths {
     systemCachePath: path.join(dataRoot, 'system-cache.json'),
     seedDir: path.join(projectRoot, 'seed-fonts'),
     userFontsDir,
-    computerFontsDir: isMac() ? '/Library/Fonts' : '/usr/local/share/fonts',
-    systemFontsDir: isMac() ? '/System/Library/Fonts' : '/usr/share/fonts',
-    supplementalFontsDir: isMac()
-      ? '/System/Library/Fonts/Supplemental'
-      : '/usr/share/fonts',
-    officeFontCacheDir: path.join(
-      home,
-      'Library/Group Containers/UBF8T346G9.Office/FontCache',
-    ),
-    atsCacheDir: path.join(home, 'Library/Caches/com.apple.ATS'),
+    computerFontsDir: isolated
+      ? path.join(dataRoot, 'computer-fonts')
+      : mac
+        ? '/Library/Fonts'
+        : '/usr/local/share/fonts',
+    systemFontsDir: isolated
+      ? path.join(dataRoot, 'system-fonts')
+      : mac
+        ? '/System/Library/Fonts'
+        : '/usr/share/fonts',
+    supplementalFontsDir: isolated
+      ? path.join(dataRoot, 'supplemental')
+      : mac
+        ? '/System/Library/Fonts/Supplemental'
+        : '/usr/share/fonts',
+    officeFontCacheDir: isolated
+      ? path.join(dataRoot, 'office-cache')
+      : path.join(home, 'Library/Group Containers/UBF8T346G9.Office/FontCache'),
+    atsCacheDir: isolated
+      ? path.join(dataRoot, 'ats-cache')
+      : path.join(home, 'Library/Caches/com.apple.ATS'),
   }
+}
+
+export function getPaths(): AppPaths {
+  return buildPaths({
+    home: os.homedir(),
+    override: process.env.FONT_BUTLER_DATA ?? process.env.FONTCASE_DATA,
+    mac: isMac(),
+  })
 }
 
 export function ensureDirs(paths: AppPaths): void {

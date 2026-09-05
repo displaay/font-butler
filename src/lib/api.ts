@@ -17,6 +17,18 @@ async function ensureToken(): Promise<string> {
   if (apiToken) {
     return apiToken
   }
+  const fromDesktop = window.fontButlerDesktop?.getApiToken
+  if (fromDesktop) {
+    try {
+      const desktopToken = await fromDesktop()
+      if (desktopToken) {
+        apiToken = desktopToken
+        return apiToken
+      }
+    } catch {
+      // Fall back to HTTP bootstrap when the preload bridge is unavailable.
+    }
+  }
   const response = await fetch('/api/bootstrap')
   const data = (await response.json()) as { token?: string; settings?: AppSettings }
   if (!response.ok || !data.token) {

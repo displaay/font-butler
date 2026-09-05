@@ -50,6 +50,7 @@ export type SystemFace = {
   protected: boolean
   writable: boolean
   managedId?: string
+  deactivated?: boolean
 }
 
 export type Notice = {

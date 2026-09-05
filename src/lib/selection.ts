@@ -66,8 +66,7 @@ export function nextSelection(
   }
   if (modifiers.toggle) {
     if (current.includes(target)) {
-      const next = current.filter((key) => key !== target)
-      return next.length > 0 ? next : [target]
+      return current.filter((key) => key !== target)
     }
     return [...current, target]
   }

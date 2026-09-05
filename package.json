@@ -15,7 +15,8 @@
     "bundle:python": "node scripts/bundle-python-runtime.mjs",
     "dist": "npm run build && npm run bundle:python && electron-builder --mac",
     "preview": "vite preview --host 127.0.0.1 --port 43181",
-    "lint": "oxlint"
+    "lint": "oxlint",
+    "test": "FONT_BUTLER_TEST=1 tsx --test --test-concurrency=1 core/**/*.test.ts src/**/*.test.ts electron/**/*.test.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.9",

@@ -2,7 +2,15 @@ import chokidar, { type FSWatcher } from 'chokidar'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { applySourcePresence, findBySourcePath, isExternalSource, loadCatalog, resolveStatusWhenSourceFound, saveCatalog } from './catalog.ts'
+import {
+  applySourcePresence,
+  findBySourcePath,
+  isExternalSource,
+  loadCatalog,
+  resolveStatusWhenSourceFound,
+  runCatalogTask,
+  saveCatalog,
+} from './catalog.ts'
 import { emitEvent } from './events.ts'
 import { countInstallableFormats, isWebFontFile } from './formats.ts'
 import { isFontFile, readFileStat } from './parse.ts'
@@ -21,7 +29,7 @@ export function setSourceStatusListener(listener?: (entry: CatalogEntry) => void
   sourceStatusListener = listener
 }
 
-function refreshStatus(paths: AppPaths, sourcePath: string): CatalogEntry | undefined {
+function refreshStatusUnlocked(paths: AppPaths, sourcePath: string): CatalogEntry | undefined {
   const catalog = loadCatalog(paths)
   const entry = findBySourcePath(catalog, sourcePath)
   if (!entry) {
@@ -58,6 +66,26 @@ function refreshStatus(paths: AppPaths, sourcePath: string): CatalogEntry | unde
   return entry
 }
 
+export function refreshSourceStatus(
+  paths: AppPaths,
+  sourcePath: string,
+): Promise<CatalogEntry | undefined> {
+  return runCatalogTask(() => refreshStatusUnlocked(paths, sourcePath))
+}
+
+export function reconcileWatchedSources(paths: AppPaths): Promise<CatalogEntry[]> {
+  return runCatalogTask(() => {
+    const catalog = loadCatalog(paths)
+    const changed: CatalogEntry[] = []
+    for (const entry of catalog.entries) {
+      if (!isExternalSource(entry) || !entry.sourcePath) continue
+      const next = refreshStatusUnlocked(paths, entry.sourcePath)
+      if (next) changed.push(next)
+    }
+    return changed
+  })
+}
+
 export async function syncWatchers(paths: AppPaths): Promise<void> {
   const catalog = loadCatalog(paths)
   const sources = catalog.entries
@@ -74,14 +102,14 @@ export async function syncWatchers(paths: AppPaths): Promise<void> {
     ignoreInitial: true,
     awaitWriteFinish: { stabilityThreshold: 250, pollInterval: 100 },
   })
-  watcher.on('change', (filePath) => {
-    const entry = refreshStatus(paths, filePath)
-    if (entry) sourceStatusListener?.(entry)
-  })
-  watcher.on('unlink', (filePath) => {
-    const entry = refreshStatus(paths, filePath)
-    if (entry) sourceStatusListener?.(entry)
-  })
+  const apply = (filePath: string) => {
+    void refreshSourceStatus(paths, filePath).then((entry) => {
+      if (entry) sourceStatusListener?.(entry)
+    })
+  }
+  watcher.on('change', apply)
+  watcher.on('unlink', apply)
+  watcher.on('add', apply)
 }
 
 export const FONT_TREE_MAX_DEPTH = 10

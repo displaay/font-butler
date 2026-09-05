@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('fontButlerDesktop', {
   },
   reveal: (filePath) => ipcRenderer.invoke('reveal', filePath),
   pickFolder: () => ipcRenderer.invoke('pick-folder'),
+  getApiToken: () => ipcRenderer.invoke('get-api-token'),
   requestNotifications: () => {
     try {
       if (typeof Notification === 'undefined') {

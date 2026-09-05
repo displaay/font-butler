@@ -1,5 +1,7 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import fs from 'node:fs'
 import path from 'node:path'
+import { normalizeFormat } from './formats.ts'
 import type { AppPaths } from './paths.ts'
 import type { CatalogEntry, CatalogFile, FontFaceInfo, FontStatus } from './types.ts'
 
@@ -18,9 +20,13 @@ export function isExternalSource(entry: CatalogEntry): boolean {
 const emptyCatalog = (): CatalogFile => ({ version: 1, entries: [] })
 
 let catalogQueue: Promise<void> = Promise.resolve()
+const catalogLock = new AsyncLocalStorage<boolean>()
 
 export function runCatalogTask<T>(task: () => Promise<T> | T): Promise<T> {
-  const run = async () => task()
+  if (catalogLock.getStore()) {
+    return Promise.resolve().then(() => task())
+  }
+  const run = async () => catalogLock.run(true, () => task())
   const result = catalogQueue.then(run, run)
   catalogQueue = result.then(
     () => undefined,
@@ -85,23 +91,31 @@ export function findByInstalledPath(
   )
 }
 
-export function faceIdentityKey(faces: FontFaceInfo[]): string | null {
+export function faceIdentityKey(faces: FontFaceInfo[], format?: string): string | null {
   const names = faces.map((face) => face.postscriptName.trim()).filter(Boolean)
   if (names.length === 0 || names.length !== faces.length) {
     return null
   }
-  return names.slice().sort().join('\0')
+  const faceKey = names.slice().sort().join('\0')
+  if (format === undefined) {
+    return faceKey
+  }
+  return `${normalizeFormat(format)}\0${faceKey}`
 }
 
 export function findByFaceIdentity(
   catalog: CatalogFile,
   faces: FontFaceInfo[],
+  format?: string,
 ): CatalogEntry | undefined {
-  const key = faceIdentityKey(faces)
+  const key = faceIdentityKey(faces, format)
   if (!key) {
     return undefined
   }
-  return catalog.entries.find((entry) => faceIdentityKey(entry.faces) === key)
+  return catalog.entries.find((entry) => {
+    const entryFormat = format === undefined ? undefined : entry.format || path.extname(entry.sourcePath)
+    return faceIdentityKey(entry.faces, entryFormat) === key
+  })
 }
 
 export function sourceFileExists(sourcePath: string): boolean {

@@ -59,6 +59,24 @@ function systemFace(familyName: string, writable: boolean): SystemFace {
   }
 }
 
+test('catalogBatchPlan uses entry-level eligibility for a mixed family', () => {
+  const groups = groupCatalog([
+    entry('on', 'Mixed', 'installed'),
+    entry('off', 'Mixed', 'uninstalled'),
+  ])
+  assert.deepEqual(catalogBatchPlan(groups), {
+    count: 1,
+    install: 1,
+    activate: 0,
+    deactivate: 1,
+    uninstall: 1,
+    uninstallAndRemove: 1,
+    reinstall: 0,
+    forget: 1,
+    deleteFiles: 1,
+  })
+})
+
 test('catalogBatchPlan counts each action by family status', () => {
   const groups = groupCatalog([
     entry('a', 'Able', 'uninstalled'),

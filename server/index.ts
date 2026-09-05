@@ -5,6 +5,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { contentDisposition } from '../core/auth.ts'
 import { onEvent } from '../core/events.ts'
+import { isFullyUnderAnyRoot } from '../core/containment.ts'
+import { denyRemoteRequest, resolveStaticAsset } from '../core/http.ts'
 import { FontButlerService } from '../core/service.ts'
 
 function mimeForStatic(filePath: string): string {
@@ -35,17 +37,18 @@ function mimeForStatic(filePath: string): string {
 function mountStatic(app: Hono, staticDir: string): void {
   const root = path.resolve(staticDir)
   app.get('*', async (c) => {
-    const urlPath = decodeURIComponent(new URL(c.req.url).pathname)
-    const rel = urlPath === '/' ? 'index.html' : urlPath.replace(/^\/+/, '')
-    const candidate = path.normalize(path.join(root, rel))
-    if (!candidate.startsWith(root)) {
+    const urlPath = new URL(c.req.url).pathname
+    const resolved = resolveStaticAsset(root, urlPath)
+    if (resolved === 'forbidden') {
       return c.body('Forbidden', 403)
     }
+    const fallback = path.join(root, 'index.html')
+    const candidate = resolved
     const target =
-      fs.existsSync(candidate) && fs.statSync(candidate).isFile()
+      candidate && fs.existsSync(candidate) && fs.statSync(candidate).isFile()
         ? candidate
-        : path.join(root, 'index.html')
-    if (!fs.existsSync(target) || !fs.statSync(target).isFile()) {
+        : fallback
+    if (!isFullyUnderAnyRoot(target, [root]) || !fs.existsSync(target) || !fs.statSync(target).isFile()) {
       return c.body('Not found', 404)
     }
     return new Response(fs.readFileSync(target), {
@@ -58,12 +61,21 @@ export async function startFontButlerServer(
   options: { staticDir?: string; port?: number } = {},
 ): Promise<{ port: number }> {
   const PORT = options.port ?? Number(process.env.FONT_BUTLER_API_PORT || process.env.FONTCASE_API_PORT || 43182)
+  const extraOrigins = [process.env.FONT_BUTLER_UI, process.env.FONTCASE_UI].filter(
+    (value): value is string => Boolean(value),
+  )
   const service = new FontButlerService()
 
   await service.init()
 
 const apiToken = service.getApiToken()
 const app = new Hono()
+
+app.use('*', async (c, next) => {
+  const denied = denyRemoteRequest(c, PORT, extraOrigins)
+  if (denied) return denied
+  return next()
+})
 
 app.use('/api/*', async (c, next) => {
   if (c.req.method === 'GET') {

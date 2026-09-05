@@ -45,6 +45,23 @@ test('faceIdentityKey sorts postscript names and ignores empty names', () => {
   assert.equal(faceIdentityKey([face('A'), face('')]), null)
 })
 
+test('findByFaceIdentity treats TTF and OTF as distinct identities', () => {
+  const catalog: CatalogFile = {
+    version: 1,
+    entries: [
+      entry({
+        id: 'ttf',
+        sourcePath: '/tmp/Face.ttf',
+        format: 'ttf',
+        faces: [face('Face-Regular')],
+      }),
+    ],
+  }
+  assert.equal(findByFaceIdentity(catalog, [face('Face-Regular')], 'ttf')?.id, 'ttf')
+  assert.equal(findByFaceIdentity(catalog, [face('Face-Regular')], 'otf'), undefined)
+  assert.notEqual(faceIdentityKey([face('Face-Regular')], 'ttf'), faceIdentityKey([face('Face-Regular')], 'otf'))
+})
+
 test('findByFaceIdentity matches the same faces from another path', () => {
   const catalog: CatalogFile = {
     version: 1,

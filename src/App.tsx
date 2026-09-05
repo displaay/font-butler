@@ -59,6 +59,13 @@ import {
   WOFF_INSTALL_ERROR,
   type FormatCount,
 } from '@/lib/formats'
+import {
+  activatableIds,
+  deactivatableIds,
+  installableIds,
+  reinstallableIds,
+  uninstallableIds,
+} from '@/lib/eligibility'
 import { familyNameOf, countLibraryFilters, deletableSourceIds, entryHasTrackedSource, entryIds, familyStatusSummary, forgettableIds, groupCatalog, groupSystem, hasSourceMissing, hasTrackedSource, isForgettableOnlyGroup, isLibraryFilter, isUninstallableGroup, matchesLibraryFilter, matchesQuery, sortFamilyGroups } from '@/lib/group'
 import { actionCopy, actionCopyFor, emptyImportError, importDoneCopy, remainingActionCopy } from '@/lib/notify'
 import { catalogInstanceRows, systemInstanceRows } from '@/lib/instances'
@@ -80,6 +87,7 @@ import {
   type Rect,
 } from '@/lib/selection'
 import { applyTheme } from '@/lib/theme'
+import { allUpdateGroups, updateGroupsForIds, visibleUpdateGroups } from '@/lib/updateInventory'
 import type { AppSettings, CatalogEntry, FamilyGroup, LibraryFilter, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { isPathUnderFolder, isWatchFolderEntry, mergeWatchFolders, watchFolderName } from '@/lib/watchFolders'
@@ -351,16 +359,8 @@ function AppShell() {
     }
     return counts
   }, [entries, watchFolders])
-  const updateGroups = useMemo(
-    () =>
-      sortFamilyGroups(
-        groupCatalog(entries.filter((entry) => entry.status === 'outdated')).filter((group) =>
-          matchesQuery(group.familyName, query),
-        ),
-        sortMode,
-      ),
-    [entries, query, sortMode],
-  )
+  const allUpdates = useMemo(() => allUpdateGroups(entries, sortMode), [entries, sortMode])
+  const updateGroups = useMemo(() => visibleUpdateGroups(allUpdates, query), [allUpdates, query])
   const systemGroups = useMemo(
     () => groupSystem(systemFaces).filter((group) => matchesQuery(group.familyName, query)),
     [systemFaces, query],
@@ -392,23 +392,25 @@ function AppShell() {
       ? shownSystemGroups.length > 0
       : tab === 'library'
         ? libraryGroupsUnfiltered.length > 0
-        : visibleGroups.length > 0
+        : allUpdates.length > 0
   const selectedGroup =
-    visibleGroups.find((group) => group.familyName === selectedFamily) ?? null
+    selectedFamily && selectedFamilyKeys.includes(selectedFamily)
+      ? (visibleGroups.find((group) => group.familyName === selectedFamily) ?? null)
+      : null
   const selectedEntry =
     selectedGroup?.entries.find((entry) => entry.id === selectedEntryId) ??
     selectedGroup?.entries[0] ??
     null
   const selectedSystemGroup =
-    tab === 'system'
+    tab === 'system' && selectedSystem && selectedSystemKeys.includes(selectedSystem)
       ? (shownSystemGroups.find((group) => group.familyName === selectedSystem) ?? null)
       : null
 
   useEffect(() => {
-    if (tab === 'updates' && updateGroups.length === 0) {
+    if (tab === 'updates' && allUpdates.length === 0) {
       setTab('library')
     }
-  }, [tab, updateGroups.length])
+  }, [tab, allUpdates.length])
 
   useEffect(() => {
     if (watchFolderFilter && !watchFolders.includes(watchFolderFilter)) {
@@ -469,11 +471,7 @@ function AppShell() {
   function handleCatalogSelect(group: FamilyGroup, event: MouseEvent) {
     if (suppressClickRef.current) return
     if (event.detail > 1) return
-    const current = selectedFamilyKeys.length
-      ? selectedFamilyKeys
-      : selectedFamily
-        ? [selectedFamily]
-        : []
+    const current = selectedFamilyKeys
     const range = event.shiftKey
     const toggle = event.metaKey || event.ctrlKey
     const keys = nextSelection(
@@ -484,9 +482,9 @@ function AppShell() {
       selectionAnchor ?? selectedFamily,
     )
     setSelectedFamilyKeys(keys)
-    setSelectedFamily(group.familyName)
-    setSelectedEntryId(group.entries[0]?.id ?? null)
-    if (!range) setSelectionAnchor(group.familyName)
+    setSelectedFamily(keys[keys.length - 1] ?? null)
+    setSelectedEntryId(keys.length ? group.entries[0]?.id ?? null : null)
+    if (!range) setSelectionAnchor(keys.length ? group.familyName : null)
     setInspectSelection(false)
   }
 
@@ -500,11 +498,7 @@ function AppShell() {
   function handleSystemSelect(group: SystemFamilyGroup, event: MouseEvent) {
     if (suppressClickRef.current) return
     if (event.detail > 1) return
-    const current = selectedSystemKeys.length
-      ? selectedSystemKeys
-      : selectedSystem
-        ? [selectedSystem]
-        : []
+    const current = selectedSystemKeys
     const range = event.shiftKey
     const toggle = event.metaKey || event.ctrlKey
     const keys = nextSelection(
@@ -515,22 +509,18 @@ function AppShell() {
       selectionAnchor ?? selectedSystem,
     )
     setSelectedSystemKeys(keys)
-    setSelectedSystem(group.familyName)
-    if (!range) setSelectionAnchor(group.familyName)
+    setSelectedSystem(keys[keys.length - 1] ?? null)
+    if (!range) setSelectionAnchor(keys.length ? group.familyName : null)
     setInspectSelection(false)
   }
 
   function selectedCatalogGroups(): FamilyGroup[] {
-    const keys = new Set(
-      selectedFamilyKeys.length ? selectedFamilyKeys : selectedFamily ? [selectedFamily] : [],
-    )
+    const keys = new Set(selectedFamilyKeys)
     return visibleGroups.filter((group) => keys.has(group.familyName))
   }
 
   function selectedSystemList(): SystemFamilyGroup[] {
-    const keys = new Set(
-      selectedSystemKeys.length ? selectedSystemKeys : selectedSystem ? [selectedSystem] : [],
-    )
+    const keys = new Set(selectedSystemKeys)
     return shownSystemGroups.filter((group) => keys.has(group.familyName))
   }
 
@@ -574,18 +564,7 @@ function AppShell() {
     if (dragging || event.button !== 0) return
     if (!canStartMarquee(event.target)) return
 
-    const currentKeys =
-      tab === 'system'
-        ? selectedSystemKeys.length
-          ? selectedSystemKeys
-          : selectedSystem
-            ? [selectedSystem]
-            : []
-        : selectedFamilyKeys.length
-          ? selectedFamilyKeys
-          : selectedFamily
-            ? [selectedFamily]
-            : []
+    const currentKeys = tab === 'system' ? selectedSystemKeys : selectedFamilyKeys
     const additive = event.metaKey || event.ctrlKey || event.shiftKey
     marqueeRef.current = {
       startX: event.clientX,
@@ -728,17 +707,20 @@ function AppShell() {
   }
 
   function uninstallGroup(group: FamilyGroup, options?: { deleteSource?: boolean }) {
-    const ids = entryIds(group)
+    const ids = uninstallableIds(group)
+    if (ids.length === 0) return Promise.resolve({ entries: [] })
     return ids.length > 1 ? api.uninstallMany(ids, options) : api.uninstall(ids[0], options)
   }
 
   function deactivateGroup(group: FamilyGroup) {
-    const ids = entryIds(group)
+    const ids = deactivatableIds(group)
+    if (ids.length === 0) return Promise.resolve({ entries: [] })
     return ids.length > 1 ? api.deactivateMany(ids) : api.deactivate(ids[0])
   }
 
   function reinstallGroup(group: FamilyGroup) {
-    const ids = entryIds(group)
+    const ids = reinstallableIds(group)
+    if (ids.length === 0) return Promise.resolve({ entries: [] })
     return ids.length > 1 ? api.reinstallMany(ids) : api.reinstall(ids[0])
   }
 
@@ -785,14 +767,14 @@ function AppShell() {
   }
 
   async function installSelected() {
-    const groups = selectedCatalogGroups().filter((group) => group.status === 'uninstalled')
+    const groups = selectedCatalogGroups().filter((group) => installableIds(group).length > 0)
     if (groups.length === 0) return
-    const prepared = await prepareInstall(groups.flatMap(entryIds))
+    const prepared = await prepareInstall(groups.flatMap(installableIds))
     if (!prepared) return
     const allowed = new Set(prepared.ids)
     await run(async () => {
       for (let index = 0; index < groups.length; index += 1) {
-        const ids = entryIds(groups[index]).filter((id) => allowed.has(id))
+        const ids = installableIds(groups[index]).filter((id) => allowed.has(id))
         if (ids.length === 0) continue
         setActionStatus(
           remainingActionCopy(
@@ -807,14 +789,14 @@ function AppShell() {
   }
 
   async function activateSelected() {
-    const groups = selectedCatalogGroups().filter((group) => group.status === 'deactivated')
+    const groups = selectedCatalogGroups().filter((group) => activatableIds(group).length > 0)
     if (groups.length === 0) return
-    const prepared = await prepareInstall(groups.flatMap(entryIds))
+    const prepared = await prepareInstall(groups.flatMap(activatableIds))
     if (!prepared) return
     const allowed = new Set(prepared.ids)
     await run(async () => {
       for (const group of groups) {
-        const ids = entryIds(group).filter((id) => allowed.has(id))
+        const ids = activatableIds(group).filter((id) => allowed.has(id))
         if (ids.length === 0) continue
         await activatePrepared(ids, prepared.replace)
       }
@@ -823,18 +805,21 @@ function AppShell() {
 
   async function installOrActivateSelected() {
     const groups = selectedCatalogGroups().filter(
-      (group) => group.status === 'uninstalled' || group.status === 'deactivated',
+      (group) => installableIds(group).length > 0 || activatableIds(group).length > 0,
     )
     if (groups.length === 0) return
-    const verb = groups.every((group) => group.status === 'deactivated') ? 'activate' : 'install'
-    const prepared = await prepareInstall(groups.flatMap(entryIds))
+    const verb = groups.every((group) => activatableIds(group).length > 0 && installableIds(group).length === 0)
+      ? 'activate'
+      : 'install'
+    const prepared = await prepareInstall(groups.flatMap((group) => [...installableIds(group), ...activatableIds(group)]))
     if (!prepared) return
     const allowed = new Set(prepared.ids)
     await run(async () => {
       for (let index = 0; index < groups.length; index += 1) {
         const group = groups[index]
-        const ids = entryIds(group).filter((id) => allowed.has(id))
-        if (ids.length === 0) continue
+        const toActivate = activatableIds(group).filter((id) => allowed.has(id))
+        const toInstall = installableIds(group).filter((id) => allowed.has(id))
+        if (toActivate.length === 0 && toInstall.length === 0) continue
         setActionStatus(
           remainingActionCopy(
             verb,
@@ -842,14 +827,14 @@ function AppShell() {
             groups.length === 1 ? groups[0].familyName : undefined,
           ),
         )
-        if (group.status === 'deactivated') await activatePrepared(ids, prepared.replace)
-        else await installPrepared(ids, undefined, prepared.replace)
+        if (toActivate.length) await activatePrepared(toActivate, prepared.replace)
+        if (toInstall.length) await installPrepared(toInstall, undefined, prepared.replace)
       }
     }, actionCopyFor(verb, groups))
   }
 
   async function installGroupGuarded(group: FamilyGroup, familyName?: string) {
-    const prepared = await prepareInstall(entryIds(group))
+    const prepared = await prepareInstall(installableIds(group).length ? installableIds(group) : entryIds(group))
     if (!prepared) return
     await run(
       () => installPrepared(prepared.ids, familyName, prepared.replace),
@@ -858,7 +843,7 @@ function AppShell() {
   }
 
   async function activateGroupGuarded(group: FamilyGroup) {
-    const prepared = await prepareInstall(entryIds(group))
+    const prepared = await prepareInstall(activatableIds(group).length ? activatableIds(group) : entryIds(group))
     if (!prepared) return
     await run(
       () => activatePrepared(prepared.ids, prepared.replace),
@@ -867,7 +852,7 @@ function AppShell() {
   }
 
   async function reinstallSelected() {
-    const groups = selectedCatalogGroups().filter((group) => group.status === 'outdated')
+    const groups = selectedCatalogGroups().filter((group) => reinstallableIds(group).length > 0)
     if (groups.length === 0) return
     await run(async () => {
       for (const group of groups) {
@@ -877,7 +862,7 @@ function AppShell() {
   }
 
   async function reinstallAllUpdates() {
-    const groups = updateGroups
+    const groups = allUpdates
     if (groups.length === 0) return
     await run(async () => {
       for (const group of groups) {
@@ -891,12 +876,19 @@ function AppShell() {
       toast.message('Wait for the current action to finish.')
       return
     }
-    const idSet = new Set(ids)
-    const groups = updateGroups.filter((group) =>
-      group.entries.some((entry) => idSet.has(entry.id)),
-    )
+    const groups = updateGroupsForIds(allUpdates, ids)
     if (groups.length === 0) {
-      toast.message('No font updates to reinstall.')
+      const leftover = ids.filter((id) => entries.some((entry) => entry.id === id && entry.status === 'outdated'))
+      if (leftover.length === 0) {
+        toast.message('No font updates to reinstall.')
+        return
+      }
+      setTab('updates')
+      setWatchFolderFilter(null)
+      void run(() => (leftover.length > 1 ? api.reinstallMany(leftover) : api.reinstall(leftover[0])), {
+        pending: 'Reinstalling fonts…',
+        done: 'Reinstalled fonts',
+      })
       return
     }
     setTab('updates')
@@ -999,9 +991,7 @@ function AppShell() {
       }, actionCopyFor('deactivate', groups))
       return
     }
-    const groups = selectedCatalogGroups().filter(
-      (group) => group.status === 'installed' || group.status === 'outdated',
-    )
+    const groups = selectedCatalogGroups().filter((group) => deactivatableIds(group).length > 0)
     if (groups.length === 0) return
     await run(async () => {
       for (const group of groups) {
@@ -1039,6 +1029,12 @@ function AppShell() {
     } catch (err) {
       setActionStatus(null)
       toast.error(err instanceof Error ? err.message : 'Something went wrong')
+      try {
+        const catalog = await api.catalog()
+        setEntries(catalog.entries)
+      } catch {
+        // Keep the last known catalog if the refresh fails.
+      }
     } finally {
       busyRef.current = false
       setBusy(false)
@@ -1417,6 +1413,10 @@ function AppShell() {
                   tab === 'library' && libraryGroupsUnfiltered.length > 0 && libraryFilters.length > 0 ? (
                     <p className="px-2 py-12 text-center text-sm text-muted-foreground">
                       No fonts match these filters.
+                    </p>
+                  ) : tab === 'updates' && allUpdates.length > 0 ? (
+                    <p className="px-2 py-12 text-center text-sm text-muted-foreground">
+                      No updates match this search.
                     </p>
                   ) : (
                     <EmptyState

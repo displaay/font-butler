@@ -1,3 +1,10 @@
+import {
+  activatableIds,
+  deactivatableIds,
+  installableIds,
+  reinstallableIds,
+  uninstallableIds,
+} from './eligibility.ts'
 import { hasTrackedSource, isUninstallableGroup } from './group.ts'
 import type { FamilyGroup, SystemFamilyGroup } from './types.ts'
 
@@ -29,14 +36,14 @@ export function catalogBatchPlan(groups: FamilyGroup[]): CatalogBatchPlan {
   let forget = 0
   let deleteFiles = 0
   for (const group of groups) {
-    if (group.status === 'uninstalled') install += 1
-    if (group.status === 'deactivated') activate += 1
-    if (group.status === 'installed' || group.status === 'outdated') deactivate += 1
-    if (isUninstallableGroup(group)) {
+    if (installableIds(group).length) install += 1
+    if (activatableIds(group).length) activate += 1
+    if (deactivatableIds(group).length) deactivate += 1
+    if (uninstallableIds(group).length || isUninstallableGroup(group)) {
       uninstall += 1
       if (hasTrackedSource(group)) uninstallAndRemove += 1
     }
-    if (group.status === 'outdated') reinstall += 1
+    if (reinstallableIds(group).length) reinstall += 1
     if (group.entries.some((entry) => entry.status === 'uninstalled' || entry.status === 'source-missing')) {
       forget += 1
     }

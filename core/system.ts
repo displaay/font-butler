@@ -130,6 +130,36 @@ export function scanSystemFonts(paths: AppPaths): SystemFace[] {
     }
   }
 
+  for (const entry of catalog.entries) {
+    if (entry.status !== 'deactivated' || !entry.disabledPath || !fs.existsSync(entry.disabledPath)) {
+      continue
+    }
+    if (!isUnderAnyRoot(entry.sourcePath, [paths.computerFontsDir])) {
+      continue
+    }
+    const already = nextFaces.some((face) => path.resolve(face.path) === path.resolve(entry.disabledPath!))
+    if (already) continue
+    for (const face of entry.faces) {
+      nextFaces.push({
+        path: entry.disabledPath,
+        familyName: face.familyName,
+        styleName: face.styleName,
+        fullName: face.fullName,
+        postscriptName: face.postscriptName,
+        isVariable: face.isVariable,
+        instanceCount: face.instanceCount,
+        instanceNames: face.instanceNames,
+        weight: face.weight,
+        italic: face.italic,
+        format: entry.format,
+        protected: false,
+        writable: true,
+        managedId: entry.id,
+        deactivated: true,
+      })
+    }
+  }
+
   fs.mkdirSync(paths.dataRoot, { recursive: true })
   fs.writeFileSync(
     paths.systemCachePath,

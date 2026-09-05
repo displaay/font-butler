@@ -1,0 +1,125 @@
+import { execFileSync } from 'node:child_process'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import type { AppPaths } from './paths.ts'
+import { setFontNative, noopFontNative, type FontNative } from './native.ts'
+import { FontButlerService } from './service.ts'
+import { closeAllWatchers } from './watch.ts'
+
+export function tempPaths(prefix = 'font-butler-'): AppPaths {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+  const userFontsDir = path.join(dataRoot, 'user-fonts')
+  return {
+    dataRoot,
+    catalogPath: path.join(dataRoot, 'catalog.json'),
+    settingsPath: path.join(dataRoot, 'settings.json'),
+    apiTokenPath: path.join(dataRoot, 'token'),
+    installDir: userFontsDir,
+    disabledDir: path.join(dataRoot, 'disabled'),
+    sourcesDir: path.join(dataRoot, 'sources'),
+    uploadsDir: path.join(dataRoot, 'uploads'),
+    systemCachePath: path.join(dataRoot, 'system.json'),
+    seedDir: path.join(dataRoot, 'seed'),
+    userFontsDir,
+    computerFontsDir: path.join(dataRoot, 'computer-fonts'),
+    systemFontsDir: path.join(dataRoot, 'system-fonts'),
+    supplementalFontsDir: path.join(dataRoot, 'supplemental'),
+    officeFontCacheDir: path.join(dataRoot, 'office-cache'),
+    atsCacheDir: path.join(dataRoot, 'ats-cache'),
+  }
+}
+
+export function writeTestFont(
+  dest: string,
+  family: string,
+  psName: string,
+  options: { style?: string; format?: 'ttf' | 'otf' } = {},
+): void {
+  fs.mkdirSync(path.dirname(dest), { recursive: true })
+  const style = options.style ?? 'Regular'
+  const format = options.format ?? 'ttf'
+  const isTtf = format === 'ttf'
+  const script = isTtf
+    ? `
+from fontTools.fontBuilder import FontBuilder
+from fontTools.pens.ttGlyphPen import TTGlyphPen
+
+fb = FontBuilder(1000, isTTF=True)
+fb.setupGlyphOrder([".notdef", "A"])
+fb.setupCharacterMap({65: "A"})
+empty = TTGlyphPen(None).glyph()
+pen = TTGlyphPen(None)
+pen.moveTo((0, 0))
+pen.lineTo((500, 0))
+pen.lineTo((250, 700))
+pen.closePath()
+fb.setupGlyf({".notdef": empty, "A": pen.glyph()})
+fb.setupHorizontalMetrics({".notdef": (500, 0), "A": (600, 0)})
+fb.setupHorizontalHeader(ascent=800, descent=-200)
+fb.setupNameTable({
+    "familyName": ${JSON.stringify(family)},
+    "styleName": ${JSON.stringify(style)},
+    "uniqueFontIdentifier": ${JSON.stringify(psName)},
+    "fullName": ${JSON.stringify(`${family} ${style}`)},
+    "psName": ${JSON.stringify(psName)},
+    "version": "Version 1.000",
+})
+fb.setupOS2()
+fb.setupPost()
+fb.save(${JSON.stringify(dest)})
+`
+    : `
+from fontTools.fontBuilder import FontBuilder
+from fontTools.pens.t2CharStringPen import T2CharStringPen
+
+fb = FontBuilder(1000, isTTF=False)
+fb.setupGlyphOrder([".notdef", "A"])
+fb.setupCharacterMap({65: "A"})
+empty_pen = T2CharStringPen(500, None)
+empty = empty_pen.getCharString()
+pen = T2CharStringPen(600, None)
+pen.moveTo((0, 0))
+pen.lineTo((500, 0))
+pen.lineTo((250, 700))
+pen.closePath()
+charstring = pen.getCharString()
+fb.setupCFF(${JSON.stringify(psName)}, {"FullName": ${JSON.stringify(`${family} ${style}`)}}, {".notdef": empty, "A": charstring}, {})
+fb.setupHorizontalMetrics({".notdef": (500, 0), "A": (600, 0)})
+fb.setupHorizontalHeader(ascent=800, descent=-200)
+fb.setupNameTable({
+    "familyName": ${JSON.stringify(family)},
+    "styleName": ${JSON.stringify(style)},
+    "uniqueFontIdentifier": ${JSON.stringify(psName)},
+    "fullName": ${JSON.stringify(`${family} ${style}`)},
+    "psName": ${JSON.stringify(psName)},
+    "version": "Version 1.000",
+})
+fb.setupOS2()
+fb.setupPost()
+fb.save(${JSON.stringify(dest)})
+`
+  execFileSync('python3', ['-c', script], { stdio: 'pipe' })
+}
+
+export async function withService<T>(
+  fn: (service: FontButlerService, paths: AppPaths) => Promise<T>,
+  options: { native?: FontNative; prefix?: string } = {},
+): Promise<T> {
+  const paths = tempPaths(options.prefix)
+  const previous = options.native
+  if (options.native) {
+    setFontNative(options.native)
+  } else {
+    setFontNative(noopFontNative())
+  }
+  const service = new FontButlerService(paths)
+  try {
+    return await fn(service, paths)
+  } finally {
+    service.dispose()
+    await closeAllWatchers()
+    setFontNative(previous ?? null)
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+}

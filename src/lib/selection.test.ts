@@ -28,10 +28,10 @@ test('nextSelection toggles extra families', () => {
   )
 })
 
-test('nextSelection keeps the last family when toggling it off', () => {
+test('nextSelection clears selection when toggling the last family off', () => {
   assert.deepEqual(
     nextSelection(['A', 'B'], ['B'], 'B', { toggle: true }, 'B'),
-    ['B'],
+    [],
   )
 })
 

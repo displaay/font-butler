@@ -1,7 +1,8 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, shell, Tray } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, nativeImage, nativeTheme, shell, Tray } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { noticeDedupeKey, shouldShowNativeNotice } from './notify.mjs'
 import { menuBarUpdateBadge, outdatedFamilies } from './updates-menu.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -34,6 +35,9 @@ let catalogEntries = []
 let menuBarIconEnabled = true
 let clearOfficeFontCacheEnabled = true
 let clearAdobeFontCacheEnabled = true
+let nativeNotificationsEnabled = false
+let lastNoticeKey = ''
+let lastNoticeAt = 0
 let isQuitting = false
 const queuedFiles = []
 
@@ -54,6 +58,7 @@ async function ensureApiToken() {
     applyOpenAtLogin(data.settings.openAtLogin)
     applyOfficeCacheSetting(data.settings.clearOfficeFontCache)
     applyAdobeCacheSetting(data.settings.clearAdobeFontCache)
+    applyNativeNotificationSetting(data.settings.nativeNotifications)
   }
   return apiToken
 }
@@ -134,7 +139,7 @@ function createWindow() {
 async function openFont(filePath) {
   try {
     const token = await ensureApiToken()
-    await fetch(`${API}/api/open`, {
+    const response = await fetch(`${API}/api/open`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -142,8 +147,22 @@ async function openFont(filePath) {
       },
       body: JSON.stringify({ path: filePath }),
     })
+    const rawBody = await response.text()
+    let data = {}
+    try {
+      data = rawBody ? JSON.parse(rawBody) : {}
+    } catch {
+      data = {}
+    }
+    if (!response.ok) {
+      throw new Error(data.error || `Could not open font (HTTP ${response.status})`)
+    }
   } catch (error) {
     console.error('Failed to open font', error)
+    dialog.showErrorBox(
+      'Could not open font',
+      error instanceof Error ? error.message : 'Could not open font',
+    )
   }
   showMainWindow()
 }
@@ -300,6 +319,39 @@ function applyOfficeCacheSetting(enabled) {
   refreshTrayMenu()
 }
 
+function applyNativeNotificationSetting(enabled) {
+  nativeNotificationsEnabled = enabled === true
+}
+
+function windowIsHidden() {
+  if (!mainWindow || mainWindow.isDestroyed()) return true
+  return !mainWindow.isVisible() || mainWindow.isMinimized()
+}
+
+function maybeNotify(notice) {
+  const now = Date.now()
+  const key = noticeDedupeKey(notice)
+  if (
+    !shouldShowNativeNotice({
+      enabled: nativeNotificationsEnabled,
+      windowHidden: windowIsHidden(),
+      kind: notice.kind,
+      key,
+      lastKey: lastNoticeKey,
+      now,
+      lastAt: lastNoticeAt,
+    })
+  ) {
+    return
+  }
+  lastNoticeKey = key
+  lastNoticeAt = now
+  new Notification({
+    title: 'Font Buttler',
+    body: notice.message,
+  }).show()
+}
+
 function applyAdobeCacheSetting(enabled) {
   const next = enabled !== false
   if (clearAdobeFontCacheEnabled === next) {
@@ -344,6 +396,10 @@ function handleApiEvent(event) {
     applyOpenAtLogin(event.settings.openAtLogin)
     applyOfficeCacheSetting(event.settings.clearOfficeFontCache)
     applyAdobeCacheSetting(event.settings.clearAdobeFontCache)
+    applyNativeNotificationSetting(event.settings.nativeNotifications)
+  }
+  if (event.type === 'notice' && event.notice) {
+    maybeNotify(event.notice)
   }
 }
 
@@ -553,6 +609,14 @@ if (!gotLock) {
     showMainWindow()
   })
 }
+
+ipcMain.handle('get-api-token', async () => {
+  try {
+    return await ensureApiToken()
+  } catch {
+    return null
+  }
+})
 
 ipcMain.handle('reveal', async (_event, filePath) => {
   shell.showItemInFolder(filePath)
