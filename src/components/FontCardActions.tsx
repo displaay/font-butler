@@ -171,7 +171,7 @@ function IconAction({
           className={cn(
             'inline-flex size-7 items-center justify-center rounded-md outline-none disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-3.5',
             destructive
-              ? 'bg-destructive text-white hover:bg-destructive/90'
+              ? 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-500/20 dark:text-red-400 dark:hover:bg-red-500/30'
               : success
                 ? 'bg-emerald-600 text-white hover:bg-emerald-600/90'
                 : 'border bg-card hover:bg-muted',
