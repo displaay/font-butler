@@ -52,7 +52,7 @@ export function loadCatalog(paths: AppPaths): CatalogFile {
 
 export function saveCatalog(paths: AppPaths, catalog: CatalogFile): void {
   fs.mkdirSync(paths.dataRoot, { recursive: true })
-  const tmp = `${paths.catalogPath}.tmp`
+  const tmp = `${paths.catalogPath}.${process.pid}.${process.hrtime.bigint()}.tmp`
   fs.writeFileSync(tmp, JSON.stringify(catalog, null, 2))
   fs.renameSync(tmp, paths.catalogPath)
 }

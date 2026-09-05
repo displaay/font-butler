@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { outdatedFamilies } from './updates-menu.mjs'
+import { menuBarUpdateBadge, outdatedFamilies } from './updates-menu.mjs'
 
 function entry(id, familyName, status, customFamilyName) {
   return {
@@ -29,4 +29,12 @@ test('outdatedFamilies uses a custom family name when present', () => {
     entry('renamed', 'Source Sans', 'outdated', 'Display'),
   ])
   assert.deepEqual(families, [{ name: 'Display', ids: ['renamed'] }])
+})
+
+test('menuBarUpdateBadge shows a compact count beside the icon', () => {
+  assert.equal(menuBarUpdateBadge(0), '')
+  assert.equal(menuBarUpdateBadge(1), '1')
+  assert.equal(menuBarUpdateBadge(12), '12')
+  assert.equal(menuBarUpdateBadge(99), '99')
+  assert.equal(menuBarUpdateBadge(100), '99+')
 })

@@ -84,6 +84,7 @@ app.get('/api/bootstrap', (c) =>
     token: apiToken,
     settings: service.getSettings(),
     officeFontCache: service.officeFontCacheInfo(),
+    adobeFontCache: service.adobeFontCacheInfo(),
   }),
 )
 
@@ -91,6 +92,7 @@ app.get('/api/settings', (c) =>
   c.json({
     settings: service.getSettings(),
     officeFontCache: service.officeFontCacheInfo(),
+    adobeFontCache: service.adobeFontCacheInfo(),
   }),
 )
 
@@ -100,14 +102,22 @@ app.post('/api/settings', async (c) => {
     defaultView?: 'list' | 'grid'
     defaultSort?: 'name' | 'added' | 'installed'
     installAfterUpload?: boolean
+    installWatchFolderFonts?: boolean
     theme?: 'light' | 'dark' | 'system'
     menuBarIcon?: boolean
     openAtLogin?: boolean
     clearOfficeFontCache?: boolean
+    clearAdobeFontCache?: boolean
+    autoReinstallOnUpdate?: boolean
+    skipCacheClearOnReinstall?: boolean
   }>()
   try {
     const settings = await service.updateSettings(body)
-    return c.json({ settings, officeFontCache: service.officeFontCacheInfo() })
+    return c.json({
+      settings,
+      officeFontCache: service.officeFontCacheInfo(),
+      adobeFontCache: service.adobeFontCacheInfo(),
+    })
   } catch (error) {
     return c.json(
       { error: error instanceof Error ? error.message : 'Could not save settings' },
@@ -119,6 +129,11 @@ app.post('/api/settings', async (c) => {
 app.get('/api/catalog', (c) => c.json({ entries: service.listCatalog() }))
 
 app.get('/api/system', (c) => c.json({ faces: service.listSystem() }))
+
+app.post('/api/drop-inspect', async (c) => {
+  const body = await c.req.json<{ paths?: string[] }>()
+  return c.json(service.inspectDrop(body.paths ?? []))
+})
 
 app.post('/api/import', async (c) => {
   const body = await c.req.json<{ paths?: string[] }>()
@@ -159,16 +174,22 @@ app.post('/api/open', async (c) => {
 })
 
 app.post('/api/install', async (c) => {
-  const body = await c.req.json<{ id?: string; ids?: string[]; familyName?: string }>()
+  const body = await c.req.json<{
+    id?: string
+    ids?: string[]
+    familyName?: string
+    replace?: boolean
+  }>()
+  const options = { replace: body.replace === true }
   try {
     if (body.ids?.length) {
-      const entries = await service.installMany(body.ids, body.familyName)
+      const entries = await service.installMany(body.ids, body.familyName, options)
       return c.json({ entries })
     }
     if (!body.id) {
       return c.json({ error: 'Missing id or ids' }, 400)
     }
-    const entry = await service.install(body.id, body.familyName)
+    const entry = await service.install(body.id, body.familyName, options)
     return c.json({ entry })
   } catch (error) {
     return c.json(
@@ -179,16 +200,17 @@ app.post('/api/install', async (c) => {
 })
 
 app.post('/api/uninstall', async (c) => {
-  const body = await c.req.json<{ id?: string; ids?: string[] }>()
+  const body = await c.req.json<{ id?: string; ids?: string[]; deleteSource?: boolean }>()
+  const options = { deleteSource: body.deleteSource === true }
   try {
     if (body.ids?.length) {
-      const entries = await service.uninstallMany(body.ids)
+      const entries = await service.uninstallMany(body.ids, options)
       return c.json({ entries })
     }
     if (!body.id) {
       return c.json({ error: 'Missing id or ids' }, 400)
     }
-    const entry = await service.uninstall(body.id)
+    const entry = await service.uninstall(body.id, options)
     return c.json({ entry })
   } catch (error) {
     return c.json(
@@ -219,16 +241,17 @@ app.post('/api/deactivate', async (c) => {
 })
 
 app.post('/api/activate', async (c) => {
-  const body = await c.req.json<{ id?: string; ids?: string[] }>()
+  const body = await c.req.json<{ id?: string; ids?: string[]; replace?: boolean }>()
+  const options = { replace: body.replace === true }
   try {
     if (body.ids?.length) {
-      const entries = await service.activateMany(body.ids)
+      const entries = await service.activateMany(body.ids, options)
       return c.json({ entries })
     }
     if (!body.id) {
       return c.json({ error: 'Missing id or ids' }, 400)
     }
-    const entry = await service.activate(body.id)
+    const entry = await service.activate(body.id, options)
     return c.json({ entry })
   } catch (error) {
     return c.json(
@@ -333,6 +356,18 @@ app.post('/api/caches/office', async (c) => {
   } catch (error) {
     return c.json(
       { error: error instanceof Error ? error.message : 'Could not remove Microsoft Office cache' },
+      400,
+    )
+  }
+})
+
+app.post('/api/caches/adobe', async (c) => {
+  try {
+    const result = await service.clearAdobeFontCache()
+    return c.json(result)
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : 'Could not remove Adobe font cache' },
       400,
     )
   }

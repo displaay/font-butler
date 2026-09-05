@@ -1,7 +1,32 @@
 import { Link2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
+import { formatLabel, normalizeFormat } from '@/lib/formats'
 import type { FontStatus } from '@/lib/types'
 import { cn } from '@/lib/utils'
+
+export function FormatBadge({ format }: { format: string }) {
+  const value = normalizeFormat(format)
+  if (!value) return null
+  return (
+    <Badge
+      tone="ink"
+      title={formatLabel(value)}
+      className="h-4 min-w-6 justify-center px-1 tracking-normal"
+    >
+      {value.toUpperCase()}
+    </Badge>
+  )
+}
+
+export function FormatBadges({ formats }: { formats: string[] }) {
+  return (
+    <>
+      {formats.map((format) => (
+        <FormatBadge key={format} format={format} />
+      ))}
+    </>
+  )
+}
 
 export function VfBadge({ show }: { show: boolean }) {
   if (!show) return null

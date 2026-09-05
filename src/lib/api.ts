@@ -1,4 +1,14 @@
-import type { AppSettings, CatalogEntry, Notice, OfficeFontCacheInfo, SortMode, SystemFace, ThemeMode, ViewLayout } from './types'
+import type {
+  AdobeFontCacheInfo,
+  AppSettings,
+  CatalogEntry,
+  Notice,
+  OfficeFontCacheInfo,
+  SortMode,
+  SystemFace,
+  ThemeMode,
+  ViewLayout,
+} from './types'
 
 let apiToken: string | null = null
 let bootstrapSettings: AppSettings | null = null
@@ -53,6 +63,13 @@ export const api = {
   },
   catalog: () => json<{ entries: CatalogEntry[] }>(fetch('/api/catalog')),
   system: () => json<{ faces: SystemFace[] }>(fetch('/api/system')),
+  inspectDrop: (paths: string[]) =>
+    json<{
+      folders: string[]
+      files: string[]
+      formats: { format: string; count: number }[]
+      skippedWeb: number
+    }>(post('/api/drop-inspect', { paths })),
   importPaths: (paths: string[]) =>
     json<{ entries: CatalogEntry[]; errors: string[]; ignored: number }>(post('/api/import', { paths })),
   importFiles: async (files: File[]) => {
@@ -64,19 +81,27 @@ export const api = {
     )
   },
   open: (path: string) => json<{ entry: CatalogEntry }>(post('/api/open', { path })),
-  install: (id: string, familyName?: string) =>
-    json<{ entry: CatalogEntry }>(post('/api/install', { id, familyName })),
-  installMany: (ids: string[], familyName?: string) =>
-    json<{ entries: CatalogEntry[] }>(post('/api/install', { ids, familyName })),
-  uninstall: (id: string) => json<{ entry: CatalogEntry }>(post('/api/uninstall', { id })),
-  uninstallMany: (ids: string[]) =>
-    json<{ entries: CatalogEntry[] }>(post('/api/uninstall', { ids })),
+  install: (id: string, familyName?: string, options?: { replace?: boolean }) =>
+    json<{ entry: CatalogEntry }>(
+      post('/api/install', { id, familyName, replace: options?.replace }),
+    ),
+  installMany: (ids: string[], familyName?: string, options?: { replace?: boolean }) =>
+    json<{ entries: CatalogEntry[] }>(
+      post('/api/install', { ids, familyName, replace: options?.replace }),
+    ),
+  uninstall: (id: string, options?: { deleteSource?: boolean }) =>
+    json<{ entry: CatalogEntry }>(post('/api/uninstall', { id, deleteSource: options?.deleteSource })),
+  uninstallMany: (ids: string[], options?: { deleteSource?: boolean }) =>
+    json<{ entries: CatalogEntry[] }>(
+      post('/api/uninstall', { ids, deleteSource: options?.deleteSource }),
+    ),
   deactivate: (id: string) => json<{ entry: CatalogEntry }>(post('/api/deactivate', { id })),
   deactivateMany: (ids: string[]) =>
     json<{ entries: CatalogEntry[] }>(post('/api/deactivate', { ids })),
-  activate: (id: string) => json<{ entry: CatalogEntry }>(post('/api/activate', { id })),
-  activateMany: (ids: string[]) =>
-    json<{ entries: CatalogEntry[] }>(post('/api/activate', { ids })),
+  activate: (id: string, options?: { replace?: boolean }) =>
+    json<{ entry: CatalogEntry }>(post('/api/activate', { id, replace: options?.replace })),
+  activateMany: (ids: string[], options?: { replace?: boolean }) =>
+    json<{ entries: CatalogEntry[] }>(post('/api/activate', { ids, replace: options?.replace })),
   reinstall: (id: string) => json<{ entry: CatalogEntry }>(post('/api/reinstall', { id })),
   reinstallMany: (ids: string[]) =>
     json<{ entries: CatalogEntry[] }>(post('/api/reinstall', { ids })),
@@ -93,23 +118,35 @@ export const api = {
   clearFontCache: () => json<{ mac: boolean; cleared: boolean }>(post('/api/caches/font', {})),
   clearOfficeCache: () =>
     json<{ mac: boolean; cleared: boolean }>(post('/api/caches/office', {})),
+  clearAdobeCache: () =>
+    json<{ mac: boolean; cleared: boolean }>(post('/api/caches/adobe', {})),
   reveal: (payload: { id?: string; path?: string; which?: 'source' | 'installed' }) =>
     json<{ path: string }>(post('/api/reveal', payload)),
   settings: () =>
-    json<{ settings: AppSettings; officeFontCache: OfficeFontCacheInfo }>(fetch('/api/settings')),
+    json<{
+      settings: AppSettings
+      officeFontCache: OfficeFontCacheInfo
+      adobeFontCache: AdobeFontCacheInfo
+    }>(fetch('/api/settings')),
   updateSettings: (patch: {
     watchFolders?: string[]
     defaultView?: ViewLayout
     defaultSort?: SortMode
     installAfterUpload?: boolean
+    installWatchFolderFonts?: boolean
     theme?: ThemeMode
     menuBarIcon?: boolean
     openAtLogin?: boolean
     clearOfficeFontCache?: boolean
+    clearAdobeFontCache?: boolean
+    autoReinstallOnUpdate?: boolean
+    skipCacheClearOnReinstall?: boolean
   }) =>
-    json<{ settings: AppSettings; officeFontCache: OfficeFontCacheInfo }>(
-      post('/api/settings', patch),
-    ),
+    json<{
+      settings: AppSettings
+      officeFontCache: OfficeFontCacheInfo
+      adobeFontCache: AdobeFontCacheInfo
+    }>(post('/api/settings', patch)),
   renamePreview: (id: string, familyName: string) =>
     json<{ fullName: string; postscriptName: string }>(
       fetch(

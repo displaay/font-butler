@@ -2,7 +2,7 @@
 
 A source-tracked font manager for macOS — a simpler stand-in for Font Book.
 
-Drop a font file into Font Buttler and it remembers the original path. When that source file changes, Font Buttler offers a reinstall. Reinstalling uninstalls the old copy, clears user font caches (including Microsoft Office’s cache when present), then installs the new file.
+Drop a font file into Font Buttler and it remembers the original path. When that source file changes, Font Buttler offers a reinstall. Reinstalling uninstalls the old copy, clears user font caches (including Microsoft Office and Adobe font caches when present), then installs the new file.
 
 ## What it does
 
@@ -29,11 +29,11 @@ Font Buttler installs copies into `~/Library/Fonts`, the same user font folder F
 
 ### Font cache menu
 
-**Font cache** in the menu bar can remove the user ATS cache or, when enabled in Settings, Microsoft Office’s `FontCache` folder. Reinstall also clears Office’s cache only when that option is on.
+**Font cache** in the menu bar can remove the user ATS cache or, when enabled in Settings, Microsoft Office’s `FontCache` folder and Adobe font list caches (`AdobeFnt*.lst`, InDesign Font Cache, Type Support). Reinstall also clears those caches only when the matching option is on. Open Adobe apps still need a relaunch.
 
 ### Optional full cache reset
 
-Font Buttler clears the **user** ATS cache and Office’s `FontCache` folder. A machine-wide wipe still needs:
+Font Buttler clears the **user** ATS cache, Office’s `FontCache` folder, and Adobe font list caches. A machine-wide wipe still needs:
 
 ```bash
 sudo atsutil databases -remove

@@ -21,7 +21,7 @@ function ContextMenuContent({
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.Content
         className={cn(
-          'z-50 min-w-44 rounded-md border bg-popover p-1 shadow-sm',
+          'app-region-no-drag z-50 min-w-44 rounded-md border bg-popover p-1 shadow-sm',
           className,
         )}
         {...props}
@@ -38,7 +38,7 @@ function ContextMenuItem({
   return (
     <ContextMenuPrimitive.Item
       className={cn(
-        'flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none data-[disabled]:opacity-40 data-[highlighted]:bg-muted [&_svg]:size-4',
+        'flex w-full cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none select-none data-[disabled]:opacity-40 data-[highlighted]:bg-muted [&_svg]:pointer-events-none [&_svg]:size-4',
         inset && 'pl-8',
         className,
       )}
@@ -68,13 +68,13 @@ function ContextMenuCheckboxItem({
   return (
     <ContextMenuPrimitive.CheckboxItem
       className={cn(
-        'flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none data-[disabled]:opacity-40 data-[highlighted]:bg-muted [&_svg]:size-4',
+        'relative flex w-full cursor-default items-center rounded-md py-1.5 pr-2 pl-8 text-sm outline-none select-none data-[disabled]:opacity-40 data-[highlighted]:bg-muted [&_svg]:pointer-events-none [&_svg]:size-4',
         className,
       )}
       checked={checked}
       {...props}
     >
-      <span className="flex size-4 items-center justify-center">
+      <span className="pointer-events-none absolute left-2 flex size-4 items-center justify-center">
         <ContextMenuPrimitive.ItemIndicator>
           <Check />
         </ContextMenuPrimitive.ItemIndicator>

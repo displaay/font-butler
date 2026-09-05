@@ -5,7 +5,7 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import { assertSafeShellPath } from './auth.ts'
 import { getPaths, isMac } from './paths.ts'
-import type { OfficeFontCacheInfo } from './types.ts'
+import type { AdobeFontCacheInfo, OfficeFontCacheInfo } from './types.ts'
 
 export function locateOfficeFontCache(home = os.homedir()): OfficeFontCacheInfo {
   const groupContainers = path.join(home, 'Library/Group Containers')
@@ -30,6 +30,131 @@ export function locateOfficeFontCache(home = os.homedir()): OfficeFontCacheInfo 
     }
   })
   return { path: found ?? known, exists: Boolean(found) }
+}
+
+const ADOBE_FONT_LIST = /^(AdobeFnt|IllustratorFnt|AcroFnt).*\.lst$/i
+const INDESIGN_FONT_CACHE_DIR = /^InDesign Font Cache$/i
+const ADOBE_TYPE_CACHE_DIR = /^(Fonts|TypeSpt|TypeSupport)$/i
+const ADOBE_SKIP_DIR =
+  /^(CoreSync|OOBE|Creative Cloud|Creative Cloud Files|Creative Cloud Libraries|Common|Camera Raw|Media Cache|Media Cache Files|Peak Files|CEP|CRLogs|Logs|AdobeGCClient|caps|SLCache|SLStore)$/i
+const ADOBE_WALK_DEPTH = 5
+
+export function adobeFontCacheSearchRoots(home = os.homedir()): string[] {
+  return [
+    path.join(home, 'Library/Caches/Adobe'),
+    path.join(home, 'Library/Caches/Adobe InDesign'),
+    path.join(home, 'Library/Application Support/Adobe/TypeSupport'),
+  ]
+}
+
+function adobeWalkTargets(home: string): Array<{ dir: string; emptyTypeCacheDirs: boolean }> {
+  const caches = path.join(home, 'Library/Caches')
+  const support = path.join(home, 'Library/Application Support/Adobe')
+  const targets: Array<{ dir: string; emptyTypeCacheDirs: boolean }> = [
+    { dir: path.join(caches, 'Adobe'), emptyTypeCacheDirs: true },
+    { dir: path.join(caches, 'Adobe InDesign'), emptyTypeCacheDirs: false },
+    { dir: path.join(caches, 'Adobe Illustrator'), emptyTypeCacheDirs: false },
+    { dir: path.join(support, 'TypeSupport'), emptyTypeCacheDirs: false },
+    { dir: path.join(support, 'TypeSpt'), emptyTypeCacheDirs: false },
+  ]
+  const seen = new Set(targets.map((item) => item.dir))
+  try {
+    if (fs.existsSync(caches)) {
+      for (const entry of fs.readdirSync(caches, { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.isSymbolicLink() || !/^Adobe/i.test(entry.name)) continue
+        const dir = path.join(caches, entry.name)
+        if (seen.has(dir)) continue
+        seen.add(dir)
+        targets.push({ dir, emptyTypeCacheDirs: entry.name === 'Adobe' })
+      }
+    }
+  } catch {
+    // Unreadable Caches is fine; keep the known roots.
+  }
+  try {
+    if (fs.existsSync(support)) {
+      for (const entry of fs.readdirSync(support, { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.isSymbolicLink()) continue
+        if (!/^Adobe (Illustrator|InDesign|Photoshop)/i.test(entry.name)) continue
+        const dir = path.join(support, entry.name)
+        if (seen.has(dir)) continue
+        seen.add(dir)
+        targets.push({ dir, emptyTypeCacheDirs: false })
+      }
+    }
+  } catch {
+    // Unreadable Adobe Application Support is fine.
+  }
+  return targets
+}
+
+function collectAdobeFontCacheItems(
+  dir: string,
+  depth: number,
+  emptyTypeCacheDirs: boolean,
+  found: string[],
+): void {
+  if (depth > ADOBE_WALK_DEPTH) {
+    return
+  }
+  let entries: fs.Dirent[]
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return
+  }
+  for (const entry of entries) {
+    if (entry.isSymbolicLink()) continue
+    const full = path.join(dir, entry.name)
+    if (entry.isDirectory()) {
+      if (ADOBE_SKIP_DIR.test(entry.name)) continue
+      if (INDESIGN_FONT_CACHE_DIR.test(entry.name)) {
+        found.push(full)
+        continue
+      }
+      if (emptyTypeCacheDirs && depth <= 1 && ADOBE_TYPE_CACHE_DIR.test(entry.name)) {
+        found.push(full)
+        continue
+      }
+      collectAdobeFontCacheItems(full, depth + 1, emptyTypeCacheDirs, found)
+      continue
+    }
+    if (entry.isFile() && ADOBE_FONT_LIST.test(entry.name)) {
+      found.push(full)
+    }
+  }
+}
+
+export function locateAdobeFontCache(home = os.homedir()): AdobeFontCacheInfo {
+  const roots = adobeFontCacheSearchRoots(home)
+  const found: string[] = []
+  for (const target of adobeWalkTargets(home)) {
+    if (!fs.existsSync(target.dir)) continue
+    collectAdobeFontCacheItems(target.dir, 0, target.emptyTypeCacheDirs, found)
+  }
+  const paths = [...new Set(found)].sort((a, b) => a.localeCompare(b))
+  return { exists: paths.length > 0, paths, roots }
+}
+
+export function applyAdobeFontCacheClear(home: string): boolean {
+  const located = locateAdobeFontCache(home)
+  if (!located.exists) {
+    return false
+  }
+  for (const item of located.paths) {
+    try {
+      if (!fs.existsSync(item)) continue
+      const stat = fs.lstatSync(item)
+      if (stat.isDirectory()) {
+        emptyDir(item)
+      } else {
+        fs.rmSync(item, { force: true })
+      }
+    } catch {
+      // ignore locked cache files
+    }
+  }
+  return true
 }
 
 const execFileAsync = promisify(execFile)
@@ -84,15 +209,24 @@ export async function clearOfficeFontCache(): Promise<{ mac: boolean; cleared: b
   return { mac: true, cleared: false }
 }
 
-export async function clearFontCaches(
-  options: { office?: boolean } = {},
-): Promise<{ mac: boolean; office: boolean }> {
-  const font = await clearUserFontCache()
-  if (options.office === false) {
-    return { mac: font.mac, office: false }
+export async function clearAdobeFontCache(home = os.homedir()): Promise<{
+  mac: boolean
+  cleared: boolean
+}> {
+  if (!isMac()) {
+    return { mac: false, cleared: false }
   }
-  const office = await clearOfficeFontCache()
-  return { mac: font.mac, office: office.cleared }
+  return { mac: true, cleared: applyAdobeFontCacheClear(home) }
+}
+
+export async function clearFontCaches(
+  options: { office?: boolean; adobe?: boolean } = {},
+): Promise<{ mac: boolean; office: boolean; adobe: boolean }> {
+  const font = await clearUserFontCache()
+  const office =
+    options.office === false ? { cleared: false } : await clearOfficeFontCache()
+  const adobe = options.adobe === false ? { cleared: false } : await clearAdobeFontCache()
+  return { mac: font.mac, office: office.cleared, adobe: adobe.cleared }
 }
 
 export async function registerFont(filePath: string): Promise<void> {

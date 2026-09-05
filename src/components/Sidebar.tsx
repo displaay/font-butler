@@ -2,6 +2,7 @@ import { useState, type ComponentType } from 'react'
 import {
   ALargeSmall,
   ChevronDown,
+  ChevronRight,
   CircleCheck,
   CircleOff,
   Folder,
@@ -99,6 +100,8 @@ function SidebarItem({
   badgeTone = 'muted',
   onReveal,
   onRemove,
+  expanded,
+  onToggleExpand,
 }: {
   active: boolean
   icon: ComponentType<{ className?: string }>
@@ -112,6 +115,8 @@ function SidebarItem({
   badgeTone?: 'muted' | 'warn'
   onReveal?: () => void
   onRemove?: () => void
+  expanded?: boolean
+  onToggleExpand?: () => void
 }) {
   return (
     <ContextMenu>
@@ -121,10 +126,41 @@ function SidebarItem({
           variant="ghost"
           title={title}
           aria-current={active ? 'page' : undefined}
-          className={navButtonClass(active, className)}
+          aria-expanded={onToggleExpand ? expanded : undefined}
+          className={navButtonClass(active, cn(onToggleExpand && 'group', className))}
           onClick={onClick}
         >
-          <Icon className="size-3.5 opacity-70" />
+          <span
+            className="relative -m-1 inline-flex size-6 shrink-0 items-center justify-center"
+            aria-hidden={!onToggleExpand}
+            aria-label={
+              onToggleExpand ? (expanded ? 'Hide watch folders' : 'Show watch folders') : undefined
+            }
+            onClick={
+              onToggleExpand
+                ? (event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    onToggleExpand()
+                  }
+                : undefined
+            }
+            onPointerDown={onToggleExpand ? (event) => event.stopPropagation() : undefined}
+          >
+            <Icon
+              className={cn(
+                'size-3.5 opacity-70 transition-opacity',
+                onToggleExpand && 'group-hover:opacity-0',
+              )}
+            />
+            {onToggleExpand ? (
+              expanded ? (
+                <ChevronDown className="pointer-events-none absolute size-3.5 opacity-0 transition-opacity group-hover:opacity-100" />
+              ) : (
+                <ChevronRight className="pointer-events-none absolute size-3.5 opacity-0 transition-opacity group-hover:opacity-100" />
+              )
+            ) : null}
+          </span>
           <span className="min-w-0 truncate">{label}</span>
           {showTotal ? (
             <Badge tone={badgeTone} className="ml-auto">
@@ -239,33 +275,20 @@ export function Sidebar({
           if (item.id === 'library') {
             return (
               <div key={item.id} className="flex w-full flex-col gap-0.5">
-                <div className="flex items-center gap-0.5">
-                  <SidebarItem
-                    active={fontsActive}
-                    icon={item.icon}
-                    label={item.label}
-                    count={counts.library}
-                    showTotal={Boolean(showTotals.library)}
-                    onShowTotalChange={(value) => changeShowTotal('library', value)}
-                    onClick={() => onSelectWatchFolder(null)}
-                    className="min-w-0 flex-1 md:flex-none md:flex-1"
-                  />
-                  {watchFolders.length > 0 && (
-                    <Button
-                      type="button"
-                      size="default"
-                      variant="ghost"
-                      className="h-8 w-8 shrink-0 px-0 text-muted-foreground"
-                      aria-expanded={fontsOpen}
-                      aria-label={fontsOpen ? 'Hide watch folders' : 'Show watch folders'}
-                      onClick={() => setFontsOpen((value) => !value)}
-                    >
-                      <ChevronDown
-                        className={cn('size-3.5 transition-transform', !fontsOpen && '-rotate-90')}
-                      />
-                    </Button>
-                  )}
-                </div>
+                <SidebarItem
+                  active={fontsActive}
+                  icon={item.icon}
+                  label={item.label}
+                  count={counts.library}
+                  showTotal={Boolean(showTotals.library)}
+                  onShowTotalChange={(value) => changeShowTotal('library', value)}
+                  onClick={() => onSelectWatchFolder(null)}
+                  className="w-full"
+                  expanded={fontsOpen}
+                  onToggleExpand={
+                    watchFolders.length > 0 ? () => setFontsOpen((value) => !value) : undefined
+                  }
+                />
                 {fontsOpen &&
                   watchFolders.map((folder) => {
                     const id = watchShowTotalId(folder)

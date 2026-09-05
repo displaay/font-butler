@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -27,6 +28,39 @@ function tempPaths(): AppPaths {
     officeFontCacheDir: path.join(dataRoot, 'office-cache'),
     atsCacheDir: path.join(dataRoot, 'ats-cache'),
   }
+}
+
+function writeTestFont(dest: string, family: string, psName: string): void {
+  fs.mkdirSync(path.dirname(dest), { recursive: true })
+  const script = `
+from fontTools.fontBuilder import FontBuilder
+from fontTools.pens.ttGlyphPen import TTGlyphPen
+
+fb = FontBuilder(1000, isTTF=True)
+fb.setupGlyphOrder([".notdef", "A"])
+fb.setupCharacterMap({65: "A"})
+empty = TTGlyphPen(None).glyph()
+pen = TTGlyphPen(None)
+pen.moveTo((0, 0))
+pen.lineTo((500, 0))
+pen.lineTo((250, 700))
+pen.closePath()
+fb.setupGlyf({".notdef": empty, "A": pen.glyph()})
+fb.setupHorizontalMetrics({".notdef": (500, 0), "A": (600, 0)})
+fb.setupHorizontalHeader(ascent=800, descent=-200)
+fb.setupNameTable({
+    "familyName": ${JSON.stringify(family)},
+    "styleName": "Regular",
+    "uniqueFontIdentifier": ${JSON.stringify(psName)},
+    "fullName": ${JSON.stringify(`${family} Regular`)},
+    "psName": ${JSON.stringify(psName)},
+    "version": "Version 1.000",
+})
+fb.setupOS2()
+fb.setupPost()
+fb.save(${JSON.stringify(dest)})
+`
+  execFileSync('python3', ['-c', script], { stdio: 'pipe' })
 }
 
 test('updateSettings accepts multiple watch folders', async () => {
@@ -63,6 +97,43 @@ test('updateSettings rejects the user fonts folder as a watch folder', async () 
   }
 })
 
+test('watch folder import installs new fonts when the setting is on', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  const font = path.join(inbox, 'WatchMe.ttf')
+  writeTestFont(font, 'WatchMe', 'WatchMe-Regular')
+  const service = new FontButlerService(paths)
+  try {
+    await service.updateSettings({ watchFolders: [inbox], installWatchFolderFonts: true })
+    const [entry] = service.listCatalog()
+    assert.ok(entry)
+    assert.equal(entry.status, 'installed')
+    assert.ok(entry.installedPath)
+    assert.notEqual(path.resolve(entry.installedPath), path.resolve(font))
+  } finally {
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('watch folder import leaves new fonts uninstalled when the setting is off', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  const font = path.join(inbox, 'LeaveMe.ttf')
+  writeTestFont(font, 'LeaveMe', 'LeaveMe-Regular')
+  const service = new FontButlerService(paths)
+  try {
+    await service.updateSettings({ watchFolders: [inbox], installWatchFolderFonts: false })
+    const [entry] = service.listCatalog()
+    assert.ok(entry)
+    assert.equal(entry.status, 'uninstalled')
+    assert.equal(entry.installedPath, undefined)
+  } finally {
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
 test('updateSettings rejects a missing watch folder', async () => {
   const paths = tempPaths()
   const service = new FontButlerService(paths)
@@ -72,6 +143,91 @@ test('updateSettings rejects a missing watch folder', async () => {
       /does not exist/,
     )
   } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('turning on auto-reinstall installs fonts that already have source updates', async () => {
+  const paths = tempPaths()
+  const font = path.join(paths.dataRoot, 'UpdateMe.ttf')
+  writeTestFont(font, 'UpdateMe', 'UpdateMe-Regular')
+  const service = new FontButlerService(paths)
+  try {
+    await service.init()
+    const imported = await service.importPaths([font])
+    const entry = imported.entries[0]
+    assert.ok(entry)
+    await service.install(entry.id)
+    const before = service.listCatalog()[0]
+    assert.ok(before)
+    assert.equal(before.status, 'installed')
+    const snapshot = before.installedSnapshotMtimeMs
+
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    writeTestFont(font, 'UpdateMe', 'UpdateMe-Regular')
+    const later = Date.now() / 1000 + 2
+    fs.utimesSync(font, later, later)
+
+    const settings = await service.updateSettings({ autoReinstallOnUpdate: true })
+    assert.equal(settings.autoReinstallOnUpdate, true)
+    const after = service.listCatalog()[0]
+    assert.ok(after)
+    assert.equal(after.status, 'installed')
+    assert.notEqual(after.installedSnapshotMtimeMs, snapshot)
+  } finally {
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('source updates stay outdated when auto-reinstall is off', async () => {
+  const paths = tempPaths()
+  const font = path.join(paths.dataRoot, 'LeaveOutdated.ttf')
+  writeTestFont(font, 'LeaveOutdated', 'LeaveOutdated-Regular')
+  const service = new FontButlerService(paths)
+  try {
+    await service.init()
+    const imported = await service.importPaths([font])
+    const entry = imported.entries[0]
+    assert.ok(entry)
+    await service.install(entry.id)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    writeTestFont(font, 'LeaveOutdated', 'LeaveOutdated-Regular')
+    const later = Date.now() / 1000 + 2
+    fs.utimesSync(font, later, later)
+
+    const again = new FontButlerService(paths)
+    await again.init()
+    const after = again.listCatalog()[0]
+    assert.ok(after)
+    assert.equal(after.status, 'outdated')
+    again.dispose()
+  } finally {
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('reinstall succeeds when cache clearing is turned off', async () => {
+  const paths = tempPaths()
+  const font = path.join(paths.dataRoot, 'SkipCache.ttf')
+  writeTestFont(font, 'SkipCache', 'SkipCache-Regular')
+  const service = new FontButlerService(paths)
+  try {
+    await service.init()
+    const imported = await service.importPaths([font])
+    const entry = imported.entries[0]
+    assert.ok(entry)
+    await service.install(entry.id)
+    const settings = await service.updateSettings({ skipCacheClearOnReinstall: true })
+    assert.equal(settings.skipCacheClearOnReinstall, true)
+    const again = await service.reinstall(entry.id)
+    assert.equal(again.status, 'installed')
+  } finally {
+    service.dispose()
+    await closeAllWatchers()
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
 })

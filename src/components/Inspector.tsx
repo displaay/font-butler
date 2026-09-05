@@ -1,11 +1,11 @@
-import { CirclePlus, FolderOpen, ListX, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
+import { CircleMinus, CirclePlus, FolderOpen, ListX, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
 import { AaPreview } from '@/components/AaPreview'
 import { CatalogBatchButtons, SystemBatchButtons } from '@/components/BatchActions'
 import { SourceBadge } from '@/components/Badges'
 import { catalogFontFamily, systemFontFamily } from '@/components/FontFaceStyles'
 import { Button } from '@/components/ui/button'
 import { formatBytes, formatRelativeTime } from '@/lib/utils'
-import { entryHasTrackedSource, familyNameOf } from '@/lib/group'
+import { entryHasTrackedSource, familyNameOf, hasTrackedSource } from '@/lib/group'
 import type { CatalogBatchPlan, SystemBatchPlan } from '@/lib/batch'
 import type { CatalogEntry, FamilyGroup, SystemFamilyGroup } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -24,6 +24,7 @@ export function Inspector({
   onInstallAs,
   onReinstall,
   onUninstall,
+  onUninstallAndRemove,
   onDeactivate,
   onActivate,
   onReveal,
@@ -45,6 +46,7 @@ export function Inspector({
   onInstallAs: () => void
   onReinstall: () => void
   onUninstall: () => void
+  onUninstallAndRemove?: () => void
   onDeactivate: () => void
   onActivate: () => void
   onReveal: (which: 'source' | 'installed') => void
@@ -62,6 +64,7 @@ export function Inspector({
     onActivate: () => void
     onDeactivate: () => void
     onUninstall: () => void
+    onUninstallAndRemove?: () => void
     onReinstall: () => void
     onForget: () => void
     onDeleteFiles?: () => void
@@ -109,6 +112,7 @@ export function Inspector({
             onActivate={multiSelect.onActivate}
             onDeactivate={multiSelect.onDeactivate}
             onUninstall={multiSelect.onUninstall}
+            onUninstallAndRemove={multiSelect.onUninstallAndRemove}
             onReinstall={multiSelect.onReinstall}
             onForget={multiSelect.onForget}
             onDeleteFiles={multiSelect.onDeleteFiles}
@@ -162,7 +166,7 @@ export function Inspector({
             disabled={!systemGroup.writable || busy}
             onClick={onUninstallSystem}
           >
-            <Trash2 /> Uninstall
+            <CircleMinus /> Uninstall
           </Button>
         </div>
         {!systemGroup.writable && (
@@ -286,8 +290,13 @@ export function Inspector({
               <PowerOff /> Deactivate
             </Button>
             <Button size="sm" variant="destructive" disabled={busy} onClick={onUninstall}>
-              <Trash2 /> Uninstall
+              <CircleMinus /> Uninstall
             </Button>
+            {hasTrackedSource(group) && onUninstallAndRemove ? (
+              <Button size="sm" variant="destructive" disabled={busy} onClick={onUninstallAndRemove}>
+                <Trash2 /> Uninstall and remove
+              </Button>
+            ) : null}
           </>
         ) : entry.status === 'deactivated' ? (
           <Button size="sm" disabled={busy} onClick={onActivate}>
@@ -311,9 +320,16 @@ export function Inspector({
             )}
           </>
         )}
-        <Button size="sm" variant="outline" onClick={() => onReveal('source')}>
-          <FolderOpen /> Show in Finder
-        </Button>
+        {(entry.installedPath || entry.disabledPath) && (
+          <Button size="sm" variant="outline" onClick={() => onReveal('installed')}>
+            <FolderOpen /> Show in Finder
+          </Button>
+        )}
+        {entryHasTrackedSource(entry) && (
+          <Button size="sm" variant="outline" onClick={() => onReveal('source')}>
+            <FolderOpen /> Show source in Finder
+          </Button>
+        )}
       </div>
     </aside>
   )

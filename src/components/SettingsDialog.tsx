@@ -13,7 +13,14 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useSetActionStatus } from '@/components/NotifyProvider'
 import { api } from '@/lib/api'
-import type { AppSettings, OfficeFontCacheInfo, SortMode, ThemeMode, ViewLayout } from '@/lib/types'
+import type {
+  AdobeFontCacheInfo,
+  AppSettings,
+  OfficeFontCacheInfo,
+  SortMode,
+  ThemeMode,
+  ViewLayout,
+} from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { mergeWatchFolders, watchFolderName } from '@/lib/watchFolders'
 
@@ -41,36 +48,46 @@ export function SettingsDialog({
   const setActionStatus = useSetActionStatus()
   const [busy, setBusy] = useState(false)
   const [officeFontCache, setOfficeFontCache] = useState<OfficeFontCacheInfo | null>(null)
+  const [adobeFontCache, setAdobeFontCache] = useState<AdobeFontCacheInfo | null>(null)
   const canPickFolder = Boolean(window.fontButlerDesktop?.pickFolder)
   const isDesktop = Boolean(window.fontButlerDesktop)
   const watchFolders = settings?.watchFolders ?? []
   const officeCacheEnabled = settings?.clearOfficeFontCache !== false
+  const adobeCacheEnabled = settings?.clearAdobeFontCache !== false
 
   useEffect(() => {
-    if (!open || !officeCacheEnabled) return
+    if (!open) return
     let cancelled = false
     void api
       .settings()
       .then((result) => {
-        if (!cancelled) setOfficeFontCache(result.officeFontCache)
+        if (cancelled) return
+        setOfficeFontCache(result.officeFontCache)
+        setAdobeFontCache(result.adobeFontCache)
       })
       .catch(() => {
-        if (!cancelled) setOfficeFontCache(null)
+        if (cancelled) return
+        setOfficeFontCache(null)
+        setAdobeFontCache(null)
       })
     return () => {
       cancelled = true
     }
-  }, [open, officeCacheEnabled])
+  }, [open])
 
   async function save(patch: {
     watchFolders?: string[]
     defaultView?: ViewLayout
     defaultSort?: SortMode
     installAfterUpload?: boolean
+    installWatchFolderFonts?: boolean
     theme?: ThemeMode
     menuBarIcon?: boolean
     openAtLogin?: boolean
     clearOfficeFontCache?: boolean
+    clearAdobeFontCache?: boolean
+    autoReinstallOnUpdate?: boolean
+    skipCacheClearOnReinstall?: boolean
   }) {
     setBusy(true)
     const watchingFolder = 'watchFolders' in patch
@@ -79,6 +96,7 @@ export function SettingsDialog({
       const result = await api.updateSettings(patch)
       onSettingsChange(result.settings)
       if (result.officeFontCache) setOfficeFontCache(result.officeFontCache)
+      if (result.adobeFontCache) setAdobeFontCache(result.adobeFontCache)
       if (watchingFolder) {
         const before = watchFolders.length
         const after = result.settings.watchFolders.length
@@ -201,6 +219,24 @@ export function SettingsDialog({
                 </Button>
               </div>
             </div>
+            <Label className="flex cursor-pointer items-start gap-2 font-normal text-foreground">
+              <input
+                type="checkbox"
+                checked={settings?.installWatchFolderFonts !== false}
+                disabled={busy || !settings}
+                onChange={(event) =>
+                  void save({ installWatchFolderFonts: event.target.checked })
+                }
+                className="mt-0.5 size-3.5 rounded border border-input accent-primary"
+              />
+              <span>
+                <span className="block text-sm">Install fonts added to watch folders</span>
+                <span className="block text-sm text-muted-foreground">
+                  When a font file appears in a watch folder, install it. Turn this off to keep
+                  those fonts in the library without installing.
+                </span>
+              </span>
+            </Label>
           </section>
 
           <section className="space-y-2">
@@ -218,8 +254,47 @@ export function SettingsDialog({
               <span>
                 <span className="block text-sm">Install after adding</span>
                 <span className="block text-sm text-muted-foreground">
-                  Dropping fonts or folders onto Font Buttler installs them and selects them in the
+                  Dropping fonts, or adding a watch folder, installs them and selects them in the
                   list. Turn this off to add fonts to the library without installing.
+                </span>
+              </span>
+            </Label>
+          </section>
+
+          <section className="space-y-2">
+            <h2 className="text-sm font-medium text-foreground">Updates</h2>
+            <Label className="flex cursor-pointer items-start gap-2 font-normal text-foreground">
+              <input
+                type="checkbox"
+                checked={settings?.autoReinstallOnUpdate === true}
+                disabled={busy || !settings}
+                onChange={(event) =>
+                  void save({ autoReinstallOnUpdate: event.target.checked })
+                }
+                className="mt-0.5 size-3.5 rounded border border-input accent-primary"
+              />
+              <span>
+                <span className="block text-sm">Automatically reinstall when an update is detected</span>
+                <span className="block text-sm text-muted-foreground">
+                  When a tracked source file changes, reinstall the installed copy. Off by default.
+                </span>
+              </span>
+            </Label>
+            <Label className="flex cursor-pointer items-start gap-2 font-normal text-foreground">
+              <input
+                type="checkbox"
+                checked={settings?.skipCacheClearOnReinstall === true}
+                disabled={busy || !settings}
+                onChange={(event) =>
+                  void save({ skipCacheClearOnReinstall: event.target.checked })
+                }
+                className="mt-0.5 size-3.5 rounded border border-input accent-primary"
+              />
+              <span>
+                <span className="block text-sm">Turn off clearing caches during reinstall</span>
+                <span className="block text-sm text-muted-foreground">
+                  Skip ATS, Office, and Adobe cache clearing when you reinstall fonts. The Font
+                  cache menu still works.
                 </span>
               </span>
             </Label>
@@ -288,6 +363,69 @@ export function SettingsDialog({
                         title={officeFontCache.path}
                       >
                         Looked in {officeFontCache.path}
+                      </div>
+                    ) : null}
+                  </>
+                )}
+              </div>
+            )}
+          </section>
+
+          <section className="space-y-2">
+            <h2 className="text-sm font-medium text-foreground">Adobe cache</h2>
+            <Label className="flex cursor-pointer items-start gap-2 font-normal text-foreground">
+              <input
+                type="checkbox"
+                checked={adobeCacheEnabled}
+                disabled={busy || !settings}
+                onChange={(event) =>
+                  void save({ clearAdobeFontCache: event.target.checked })
+                }
+                className="mt-0.5 size-3.5 rounded border border-input accent-primary"
+              />
+              <span>
+                <span className="block text-sm">Remove Adobe font cache</span>
+                <span className="block text-sm text-muted-foreground">
+                  Clear Adobe font list caches when you reinstall fonts or use the Font cache
+                  menu. Open Adobe apps still need a relaunch. Turn this off to leave Adobe
+                  alone.
+                </span>
+              </span>
+            </Label>
+            {adobeCacheEnabled && (
+              <div className="rounded-md border bg-background px-2 py-1.5">
+                {adobeFontCache?.exists ? (
+                  <>
+                    <div className="text-sm">
+                      Found {adobeFontCache.paths.length}{' '}
+                      {adobeFontCache.paths.length === 1 ? 'location' : 'locations'} on this Mac
+                    </div>
+                    {adobeFontCache.paths.slice(0, 3).map((item) => (
+                      <div
+                        key={item}
+                        className="truncate font-mono text-[11px] text-muted-foreground"
+                        title={item}
+                      >
+                        {item}
+                      </div>
+                    ))}
+                    {adobeFontCache.paths.length > 3 ? (
+                      <div className="text-[11px] text-muted-foreground">
+                        and {adobeFontCache.paths.length - 3} more
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    <div className="text-sm text-muted-foreground">
+                      No Adobe font cache was found on this Mac.
+                    </div>
+                    {adobeFontCache?.roots[0] ? (
+                      <div
+                        className="truncate font-mono text-[11px] text-muted-foreground"
+                        title={adobeFontCache.roots.join('\n')}
+                      >
+                        Looked in {adobeFontCache.roots[0]}
                       </div>
                     ) : null}
                   </>

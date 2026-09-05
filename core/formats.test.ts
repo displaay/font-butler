@@ -50,11 +50,33 @@ test('assertSingleInstallableFormat blocks mixed desktop formats', () => {
   )
 })
 
-test('installedFormatConflict finds another active format in the family', () => {
+test('installedFormatConflict finds another active format of the same instance', () => {
   const otf = entry({ id: 'a', format: 'otf', status: 'installed' })
   const ttf = entry({ id: 'b', format: 'ttf' })
   assert.equal(installedFormatConflict(ttf, [otf, ttf])?.id, 'a')
   assert.equal(installedFormatConflict(ttf, [ttf]), undefined)
+})
+
+test('installedFormatConflict ignores a different style in the same family', () => {
+  const otfRegular = entry({ id: 'a', format: 'otf', status: 'installed' })
+  const ttfBold = entry({
+    id: 'b',
+    format: 'ttf',
+    faces: [
+      {
+        familyName: 'Family',
+        styleName: 'Bold',
+        fullName: 'Family Bold',
+        postscriptName: 'Family-Bold',
+        isVariable: false,
+        instanceCount: 1,
+        instanceNames: [],
+        weight: 700,
+        italic: false,
+      },
+    ],
+  })
+  assert.equal(installedFormatConflict(ttfBold, [otfRegular, ttfBold]), undefined)
 })
 
 test('uniqueFormats normalizes extensions', () => {

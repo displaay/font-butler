@@ -1,4 +1,5 @@
-import type { FamilyGroup, SystemFamilyGroup } from './types'
+import { hasTrackedSource, isUninstallableGroup } from './group.ts'
+import type { FamilyGroup, SystemFamilyGroup } from './types.ts'
 
 export type CatalogBatchPlan = {
   count: number
@@ -6,6 +7,7 @@ export type CatalogBatchPlan = {
   activate: number
   deactivate: number
   uninstall: number
+  uninstallAndRemove: number
   reinstall: number
   forget: number
   deleteFiles: number
@@ -22,6 +24,7 @@ export function catalogBatchPlan(groups: FamilyGroup[]): CatalogBatchPlan {
   let activate = 0
   let deactivate = 0
   let uninstall = 0
+  let uninstallAndRemove = 0
   let reinstall = 0
   let forget = 0
   let deleteFiles = 0
@@ -29,12 +32,9 @@ export function catalogBatchPlan(groups: FamilyGroup[]): CatalogBatchPlan {
     if (group.status === 'uninstalled') install += 1
     if (group.status === 'deactivated') activate += 1
     if (group.status === 'installed' || group.status === 'outdated') deactivate += 1
-    if (
-      group.status === 'installed' ||
-      group.status === 'outdated' ||
-      group.status === 'deactivated'
-    ) {
+    if (isUninstallableGroup(group)) {
       uninstall += 1
+      if (hasTrackedSource(group)) uninstallAndRemove += 1
     }
     if (group.status === 'outdated') reinstall += 1
     if (group.entries.some((entry) => entry.status === 'uninstalled' || entry.status === 'source-missing')) {
@@ -48,6 +48,7 @@ export function catalogBatchPlan(groups: FamilyGroup[]): CatalogBatchPlan {
     activate,
     deactivate,
     uninstall,
+    uninstallAndRemove,
     reinstall,
     forget,
     deleteFiles,
@@ -93,6 +94,7 @@ export function hasCatalogBatchActions(plan: CatalogBatchPlan): boolean {
     plan.activate > 0 ||
     plan.deactivate > 0 ||
     plan.uninstall > 0 ||
+    plan.uninstallAndRemove > 0 ||
     plan.reinstall > 0 ||
     plan.forget > 0 ||
     plan.deleteFiles > 0

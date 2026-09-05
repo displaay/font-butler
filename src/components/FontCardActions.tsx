@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { CirclePlus, Power, PowerOff, Trash2 } from 'lucide-react'
+import { CircleMinus, CirclePlus, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { FontStatus } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils'
 type CatalogCardActionHandlers = {
   busy: boolean
   onInstall: () => void
+  onReinstall: () => void
   onDeactivate: () => void
   onUninstall: () => void
   onActivate: () => void
@@ -20,6 +21,7 @@ export function CatalogCardActions({
   offset,
   visible,
   onInstall,
+  onReinstall,
   onDeactivate,
   onUninstall,
   onActivate,
@@ -35,11 +37,16 @@ export function CatalogCardActions({
     <ActionDock offset={offset} visible={visible}>
       {installed ? (
         <>
+          {status === 'outdated' ? (
+            <IconAction label="Reinstall" disabled={busy} onClick={onReinstall}>
+              <RefreshCw />
+            </IconAction>
+          ) : null}
           <IconAction label="Deactivate" disabled={busy} onClick={onDeactivate}>
             <PowerOff />
           </IconAction>
           <IconAction label="Uninstall" disabled={busy} destructive onClick={onUninstall}>
-            <Trash2 />
+            <CircleMinus />
           </IconAction>
         </>
       ) : status === 'deactivated' ? (
@@ -47,7 +54,7 @@ export function CatalogCardActions({
           <Power />
         </IconAction>
       ) : (
-        <IconAction label="Install" disabled={busy} onClick={onInstall}>
+        <IconAction label="Install" disabled={busy} success onClick={onInstall}>
           <CirclePlus />
         </IconAction>
       )}
@@ -82,7 +89,7 @@ export function SystemCardActions({
         <PowerOff />
       </IconAction>
       <IconAction label="Uninstall" disabled={busy} destructive onClick={onUninstall}>
-        <Trash2 />
+        <CircleMinus />
       </IconAction>
     </ActionDock>
   )
@@ -117,12 +124,14 @@ function IconAction({
   label,
   disabled,
   destructive,
+  success,
   onClick,
   children,
 }: {
   label: string
   disabled?: boolean
   destructive?: boolean
+  success?: boolean
   onClick: () => void
   children: ReactNode
 }) {
@@ -137,7 +146,9 @@ function IconAction({
             'inline-flex size-7 items-center justify-center rounded-md outline-none disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-3.5',
             destructive
               ? 'bg-destructive text-white hover:bg-destructive/90'
-              : 'border bg-card hover:bg-muted',
+              : success
+                ? 'bg-emerald-600 text-white hover:bg-emerald-600/90'
+                : 'border bg-card hover:bg-muted',
           )}
           onClick={(event) => {
             event.preventDefault()

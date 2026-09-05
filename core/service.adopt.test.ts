@@ -101,6 +101,28 @@ test('uninstall removes an adopted user font from the list when it has no source
   }
 })
 
+test('uninstall deleteSource removes the installed copy and the original file', async () => {
+  const paths = tempPaths()
+  const source = path.join(paths.dataRoot, 'RemoveMe.ttf')
+  writeTestFont(source, 'RemoveFace', 'RemoveFace-Regular')
+  const service = new FontButlerService(paths)
+  try {
+    await service.init()
+    const imported = await service.importPaths([source])
+    const installed = await service.install(imported.entries[0].id)
+    assert.ok(installed.installedPath)
+    assert.equal(fs.existsSync(source), true)
+    assert.equal(fs.existsSync(installed.installedPath!), true)
+    await service.uninstall(installed.id, { deleteSource: true })
+    assert.equal(service.listCatalog().length, 0)
+    assert.equal(fs.existsSync(source), false)
+    assert.equal(fs.existsSync(installed.installedPath!), false)
+  } finally {
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
 test('uninstall keeps a catalog row when a separate source file remains', async () => {
   const paths = tempPaths()
   const source = path.join(paths.dataRoot, 'Source.ttf')

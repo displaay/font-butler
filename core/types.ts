@@ -78,15 +78,25 @@ export type AppSettings = {
   defaultView: ViewLayout
   defaultSort: SortMode
   installAfterUpload: boolean
+  installWatchFolderFonts: boolean
   theme: ThemeMode
   menuBarIcon: boolean
   openAtLogin: boolean
   clearOfficeFontCache: boolean
+  clearAdobeFontCache: boolean
+  autoReinstallOnUpdate: boolean
+  skipCacheClearOnReinstall: boolean
 }
 
 export type OfficeFontCacheInfo = {
   path: string
   exists: boolean
+}
+
+export type AdobeFontCacheInfo = {
+  exists: boolean
+  paths: string[]
+  roots: string[]
 }
 
 export type ServiceEvent =

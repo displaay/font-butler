@@ -19,8 +19,10 @@ import {
 import { getOrCreateApiToken } from './auth.ts'
 import {
   clearFontCaches,
+  clearAdobeFontCache as removeAdobeFontCache,
   clearOfficeFontCache as removeOfficeFontCache,
   clearUserFontCache as removeUserFontCache,
+  locateAdobeFontCache,
   locateOfficeFontCache,
   fontActivationStates,
   registerFont,
@@ -29,7 +31,14 @@ import {
 } from './caches.ts'
 import { MAX_UPLOAD_BYTES } from './constants.ts'
 import { emitEvent } from './events.ts'
-import { assertNotWebFont, isWebFontFile, WOFF_INSTALL_ERROR } from './formats.ts'
+import {
+  assertNotWebFont,
+  assertSingleInstallableFormat,
+  formatConflictMessage,
+  installedFormatConflicts,
+  isWebFontFile,
+  WOFF_INSTALL_ERROR,
+} from './formats.ts'
 import { isFontFile, mimeForFont, parseFontFile, readFileStat } from './parse.ts'
 import { isUnderAnyRoot } from './containment.ts'
 import { ensureDirs, getPaths, isMac, type AppPaths } from './paths.ts'
@@ -37,14 +46,27 @@ import { postscriptPreview, renameFamilyCopy } from './rename.ts'
 import { moveToTrash, revealInFileManager } from './reveal.ts'
 import { loadSettings, saveSettings } from './settings.ts'
 import { allowedFontPath, scanSystemFonts } from './system.ts'
-import type { AppSettings, CatalogEntry, Notice, OfficeFontCacheInfo, SortMode, SystemFace, ThemeMode, ViewLayout } from './types.ts'
+import type {
+  AdobeFontCacheInfo,
+  AppSettings,
+  CatalogEntry,
+  Notice,
+  OfficeFontCacheInfo,
+  SortMode,
+  SystemFace,
+  ThemeMode,
+  ViewLayout,
+} from './types.ts'
 import {
   expandImportPaths,
+  inspectDropPaths,
   listFontFilesInTree,
   listInboxFontFiles,
+  setSourceStatusListener,
   syncInboxWatcher,
   syncUserFontsWatcher,
   syncWatchers,
+  type DropInspect,
 } from './watch.ts'
 
 function now(): number {
@@ -57,6 +79,20 @@ function newId(): string {
 
 function displayFamily(entry: CatalogEntry): string {
   return entry.customFamilyName || entry.faces[0]?.familyName || 'Unknown'
+}
+
+function bindEntryToInstalledFile(entry: CatalogEntry, dest: string): void {
+  const resolved = path.resolve(dest)
+  const stat = readFileStat(resolved)
+  entry.sourcePath = resolved
+  entry.installedPath = resolved
+  entry.disabledPath = undefined
+  entry.sourceMtimeMs = stat.mtimeMs
+  entry.sourceSize = stat.size
+  entry.sourcePresent = false
+  entry.installedSnapshotMtimeMs = stat.mtimeMs
+  entry.installedSnapshotSize = stat.size
+  entry.status = 'installed'
 }
 
 function sameFile(left: string, right: string): boolean {
@@ -175,18 +211,35 @@ function copyIntoInstallDir(
 
 export class FontButlerService {
   readonly paths: AppPaths
+  private autoReinstallTimer: ReturnType<typeof setTimeout> | null = null
+  private autoReinstallPending = new Set<string>()
 
   constructor(paths: AppPaths = getPaths()) {
     this.paths = paths
     ensureDirs(paths)
+    setSourceStatusListener((entry) => {
+      if (entry.status === 'outdated') {
+        this.queueAutoReinstall(entry.id)
+      }
+    })
+  }
+
+  dispose(): void {
+    if (this.autoReinstallTimer) {
+      clearTimeout(this.autoReinstallTimer)
+      this.autoReinstallTimer = null
+    }
+    this.autoReinstallPending.clear()
   }
 
   async init(): Promise<void> {
     ensureDirs(this.paths)
     await this.restoreDisabledCopies()
     await this.adoptUserFonts()
+    await this.detachRenamedInstallSources()
     await this.seedIfEmpty()
     await this.refreshSourceStatuses()
+    await this.reinstallCurrentlyOutdated()
     await syncWatchers(this.paths)
     await this.refreshUserFontsWatcher()
     await this.refreshInboxWatcher(loadSettings(this.paths).watchFolders, { importExisting: true })
@@ -205,10 +258,14 @@ export class FontButlerService {
     defaultView?: ViewLayout
     defaultSort?: SortMode | 'installed'
     installAfterUpload?: boolean
+    installWatchFolderFonts?: boolean
     theme?: ThemeMode
     menuBarIcon?: boolean
     openAtLogin?: boolean
     clearOfficeFontCache?: boolean
+    clearAdobeFontCache?: boolean
+    autoReinstallOnUpdate?: boolean
+    skipCacheClearOnReinstall?: boolean
   }): Promise<AppSettings> {
     const current = loadSettings(this.paths)
     const next: AppSettings = { ...current }
@@ -223,6 +280,9 @@ export class FontButlerService {
     if (typeof patch.installAfterUpload === 'boolean') {
       next.installAfterUpload = patch.installAfterUpload
     }
+    if (typeof patch.installWatchFolderFonts === 'boolean') {
+      next.installWatchFolderFonts = patch.installWatchFolderFonts
+    }
     if (patch.theme === 'light' || patch.theme === 'dark' || patch.theme === 'system') {
       next.theme = patch.theme
     }
@@ -235,6 +295,15 @@ export class FontButlerService {
     if (typeof patch.clearOfficeFontCache === 'boolean') {
       next.clearOfficeFontCache = patch.clearOfficeFontCache
     }
+    if (typeof patch.clearAdobeFontCache === 'boolean') {
+      next.clearAdobeFontCache = patch.clearAdobeFontCache
+    }
+    if (typeof patch.autoReinstallOnUpdate === 'boolean') {
+      next.autoReinstallOnUpdate = patch.autoReinstallOnUpdate
+    }
+    if (typeof patch.skipCacheClearOnReinstall === 'boolean') {
+      next.skipCacheClearOnReinstall = patch.skipCacheClearOnReinstall
+    }
     if ('watchFolders' in patch) {
       next.watchFolders = this.resolveWatchFolders(patch.watchFolders ?? [])
     }
@@ -243,11 +312,19 @@ export class FontButlerService {
     if ('watchFolders' in patch) {
       await this.refreshInboxWatcher(next.watchFolders, { importExisting: true })
     }
+    if (next.autoReinstallOnUpdate && !current.autoReinstallOnUpdate) {
+      await this.refreshSourceStatuses()
+      await this.reinstallCurrentlyOutdated()
+    }
     return next
   }
 
   officeFontCacheInfo(): OfficeFontCacheInfo {
     return locateOfficeFontCache()
+  }
+
+  adobeFontCacheInfo(): AdobeFontCacheInfo {
+    return locateAdobeFontCache()
   }
 
   getApiToken(): string {
@@ -258,6 +335,10 @@ export class FontButlerService {
     const faces = scanSystemFonts(this.paths)
     emitEvent({ type: 'system', faces })
     return faces
+  }
+
+  inspectDrop(paths: string[]): DropInspect {
+    return inspectDropPaths(paths)
   }
 
   async importPaths(filePaths: string[]): Promise<{
@@ -364,20 +445,33 @@ export class FontButlerService {
     })
   }
 
-  async install(id: string, familyName?: string): Promise<CatalogEntry> {
+  async install(
+    id: string,
+    familyName?: string,
+    options?: { replace?: boolean },
+  ): Promise<CatalogEntry> {
     return runCatalogTask(async () => {
-      const entry = await this.installEntry(id, familyName)
+      const entry = await this.installEntry(id, familyName, options)
       await syncWatchers(this.paths)
       emitCatalog(this.paths)
       return entry
     })
   }
 
-  async installMany(ids: string[], familyName?: string): Promise<CatalogEntry[]> {
+  async installMany(
+    ids: string[],
+    familyName?: string,
+    options?: { replace?: boolean },
+  ): Promise<CatalogEntry[]> {
     return runCatalogTask(async () => {
+      const catalog = loadCatalog(this.paths)
+      const toInstall = ids
+        .map((id) => findById(catalog, id))
+        .filter((entry): entry is CatalogEntry => Boolean(entry))
+      assertSingleInstallableFormat(toInstall)
       const entries: CatalogEntry[] = []
       for (const id of ids) {
-        entries.push(await this.installEntry(id, familyName))
+        entries.push(await this.installEntry(id, familyName, options))
       }
       await syncWatchers(this.paths)
       emitCatalog(this.paths)
@@ -385,20 +479,20 @@ export class FontButlerService {
     })
   }
 
-  async uninstall(id: string): Promise<CatalogEntry> {
+  async uninstall(id: string, options?: { deleteSource?: boolean }): Promise<CatalogEntry> {
     return runCatalogTask(async () => {
-      const entry = await this.uninstallEntry(id)
+      const entry = await this.uninstallEntry(id, options)
       await syncWatchers(this.paths)
       emitCatalog(this.paths)
       return entry
     })
   }
 
-  async uninstallMany(ids: string[]): Promise<CatalogEntry[]> {
+  async uninstallMany(ids: string[], options?: { deleteSource?: boolean }): Promise<CatalogEntry[]> {
     return runCatalogTask(async () => {
       const entries: CatalogEntry[] = []
       for (const id of ids) {
-        entries.push(await this.uninstallEntry(id))
+        entries.push(await this.uninstallEntry(id, options))
       }
       await syncWatchers(this.paths)
       emitCatalog(this.paths)
@@ -425,19 +519,24 @@ export class FontButlerService {
     })
   }
 
-  async activate(id: string): Promise<CatalogEntry> {
+  async activate(id: string, options?: { replace?: boolean }): Promise<CatalogEntry> {
     return runCatalogTask(async () => {
-      const entry = await this.activateEntry(id)
+      const entry = await this.activateEntry(id, options)
       emitCatalog(this.paths)
       return entry
     })
   }
 
-  async activateMany(ids: string[]): Promise<CatalogEntry[]> {
+  async activateMany(ids: string[], options?: { replace?: boolean }): Promise<CatalogEntry[]> {
     return runCatalogTask(async () => {
+      const catalog = loadCatalog(this.paths)
+      const toActivate = ids
+        .map((id) => findById(catalog, id))
+        .filter((entry): entry is CatalogEntry => Boolean(entry))
+      assertSingleInstallableFormat(toActivate)
       const entries: CatalogEntry[] = []
       for (const id of ids) {
-        entries.push(await this.activateEntry(id))
+        entries.push(await this.activateEntry(id, options))
       }
       emitCatalog(this.paths)
       return entries
@@ -454,7 +553,6 @@ export class FontButlerService {
 
   async reinstallMany(ids: string[]): Promise<CatalogEntry[]> {
     return runCatalogTask(async () => {
-      await this.clearCachesAfterInstall()
       const entries: CatalogEntry[] = []
       for (const id of ids) {
         const catalog = loadCatalog(this.paths)
@@ -465,6 +563,7 @@ export class FontButlerService {
         await removeDistinctInstalledCopy(entry)
         entries.push(await this.installEntry(id, entry.customFamilyName))
       }
+      await this.clearCachesAfterInstall()
       await syncWatchers(this.paths)
       emitCatalog(this.paths)
       const first = entries[0]
@@ -524,6 +623,22 @@ export class FontButlerService {
           ? 'Removed the Microsoft Office font cache.'
           : 'No Microsoft Office font cache was found.'
         : 'Microsoft Office cache clearing is available on macOS.',
+    })
+    return result
+  }
+
+  async clearAdobeFontCache(): Promise<{ mac: boolean; cleared: boolean }> {
+    if (!loadSettings(this.paths).clearAdobeFontCache) {
+      throw new Error('Adobe font cache clearing is turned off in Settings.')
+    }
+    const result = await removeAdobeFontCache()
+    emitNotice({
+      kind: 'info',
+      message: result.mac
+        ? result.cleared
+          ? 'Removed Adobe font caches. Relaunch open Adobe apps to see updated fonts.'
+          : 'No Adobe font cache was found.'
+        : 'Adobe font cache clearing is available on macOS.',
     })
     return result
   }
@@ -690,19 +805,50 @@ export class FontButlerService {
     }
   }
 
-  private async installEntry(id: string, familyName?: string): Promise<CatalogEntry> {
-    const catalog = loadCatalog(this.paths)
-    const entry = findById(catalog, id)
+  private async resolveFormatConflicts(
+    entry: CatalogEntry,
+    catalog: CatalogEntry[],
+    replace?: boolean,
+  ): Promise<void> {
+    const conflicts = installedFormatConflicts(entry, catalog)
+    if (conflicts.length === 0) return
+    if (!replace) {
+      throw new Error(formatConflictMessage(entry, conflicts[0]))
+    }
+    for (const other of conflicts) {
+      await this.uninstallEntry(other.id)
+    }
+  }
+
+  private async installEntry(
+    id: string,
+    familyName?: string,
+    options?: { replace?: boolean },
+  ): Promise<CatalogEntry> {
+    let catalog = loadCatalog(this.paths)
+    let entry = findById(catalog, id)
     if (!entry) {
       throw new Error('Font is not in the library.')
+    }
+    const renameTo = familyName?.trim()
+    const installAs = Boolean(renameTo && renameTo !== displayFamily(entry))
+    if (!installAs) {
+      await this.resolveFormatConflicts(entry, catalog.entries, options?.replace)
+      catalog = loadCatalog(this.paths)
+      entry = findById(catalog, id)
+      if (!entry) {
+        throw new Error('Font is not in the library.')
+      }
     }
     if (!sourceFileExists(entry.sourcePath)) {
       applySourcePresence(entry)
       saveCatalog(this.paths, catalog)
       throw new Error('The source file is missing.')
     }
+    if (installAs && renameTo) {
+      return this.installRenamedCopy(entry, renameTo, options)
+    }
     if (
-      !familyName &&
       entry.status === 'installed' &&
       entry.installedPath &&
       fs.existsSync(entry.installedPath)
@@ -716,24 +862,7 @@ export class FontButlerService {
         return entry
       }
     }
-    let sourceForInstall = entry.sourcePath
-    let temp: string | undefined
-    if (familyName && familyName.trim()) {
-      entry.customFamilyName = familyName.trim()
-      temp = await renameFamilyCopy(entry.sourcePath, entry.customFamilyName)
-      sourceForInstall = temp
-      try {
-        entry.faces = parseFontFile(temp).faces
-      } catch {
-        // Keep original parsed faces if the renamed copy cannot be re-parsed.
-      }
-    }
-    const dest = copyIntoInstallDir(this.paths, entry, sourceForInstall, {
-      reuseInstalled: !temp,
-    })
-    if (temp && fs.existsSync(temp) && path.resolve(temp) !== dest) {
-      fs.rmSync(temp, { force: true })
-    }
+    const dest = copyIntoInstallDir(this.paths, entry, entry.sourcePath)
     if (entry.installedPath && path.resolve(entry.installedPath) !== dest) {
       await removeInstalledCopy(entry)
     }
@@ -756,20 +885,109 @@ export class FontButlerService {
     return entry
   }
 
-  private async uninstallEntry(id: string): Promise<CatalogEntry> {
+  private async installRenamedCopy(
+    sourceEntry: CatalogEntry,
+    familyName: string,
+    options?: { replace?: boolean },
+  ): Promise<CatalogEntry> {
+    const temp = await renameFamilyCopy(sourceEntry.sourcePath, familyName)
+    try {
+      const parsed = parseFontFile(temp)
+      const catalog = loadCatalog(this.paths)
+      const draft: CatalogEntry = {
+        id: newId(),
+        sourcePath: temp,
+        sourceMtimeMs: 0,
+        sourceSize: 0,
+        sourcePresent: false,
+        status: 'uninstalled',
+        faces: parsed.faces,
+        format: parsed.format,
+        addedAt: now(),
+        updatedAt: now(),
+      }
+      await this.resolveFormatConflicts(draft, catalog.entries, options?.replace)
+      const dest = copyIntoInstallDir(this.paths, draft, temp, { reuseInstalled: false })
+      await registerFont(dest)
+      await setFontEnabled(dest, true)
+      bindEntryToInstalledFile(draft, dest)
+      const next = loadCatalog(this.paths)
+      upsertEntry(next, draft)
+      saveCatalog(this.paths, next)
+      return draft
+    } finally {
+      if (fs.existsSync(temp)) {
+        fs.rmSync(temp, { force: true })
+      }
+    }
+  }
+
+  private detachRenamedInstallSources(): void {
+    const catalog = loadCatalog(this.paths)
+    const originals: string[] = []
+    let changed = false
+    for (const entry of catalog.entries) {
+      if (!entry.customFamilyName) continue
+      if (!entry.installedPath || !fs.existsSync(entry.installedPath)) {
+        if (sourceFileExists(entry.sourcePath)) {
+          try {
+            const parsed = parseFontFile(entry.sourcePath)
+            entry.faces = parsed.faces
+            entry.format = parsed.format
+          } catch {
+            // Keep stored names if the original file cannot be parsed.
+          }
+        }
+        delete entry.customFamilyName
+        touchEntry(entry)
+        changed = true
+        continue
+      }
+      const original = entry.sourcePath
+      const installed = path.resolve(entry.installedPath)
+      if (isExternalSource(entry) && sourceFileExists(original) && path.resolve(original) !== installed) {
+        originals.push(original)
+      }
+      bindEntryToInstalledFile(entry, installed)
+      delete entry.customFamilyName
+      touchEntry(entry)
+      changed = true
+    }
+    if (changed) {
+      saveCatalog(this.paths, catalog)
+    }
+    for (const original of originals) {
+      this.importOneUnlocked(original)
+    }
+  }
+
+  private async uninstallEntry(
+    id: string,
+    options?: { deleteSource?: boolean },
+  ): Promise<CatalogEntry> {
     const catalog = loadCatalog(this.paths)
     const entry = findById(catalog, id)
     if (!entry) {
       throw new Error('Font is not in the library.')
     }
-    const keepSource = isExternalSource(entry) && sourceFileExists(entry.sourcePath)
+    const sourcePath = entry.sourcePath
+    const hasSource = isExternalSource(entry) && sourceFileExists(sourcePath)
+    const deleteSource = Boolean(options?.deleteSource && hasSource)
     await removeInstalledCopy(entry)
     if (entry.disabledPath && fs.existsSync(entry.disabledPath)) {
       fs.rmSync(entry.disabledPath, { force: true })
     }
     entry.disabledPath = undefined
     entry.installedPath = undefined
-    if (keepSource) {
+    if (deleteSource) {
+      await deleteSourceFile(sourcePath, this.paths)
+      removeEntryById(catalog, id)
+      saveCatalog(this.paths, catalog)
+      entry.sourcePresent = false
+      entry.status = 'uninstalled'
+      return entry
+    }
+    if (hasSource) {
       entry.sourcePresent = true
       entry.status = 'uninstalled'
       touchEntry(entry)
@@ -800,9 +1018,15 @@ export class FontButlerService {
     return entry
   }
 
-  private async activateEntry(id: string): Promise<CatalogEntry> {
-    const catalog = loadCatalog(this.paths)
-    const entry = findById(catalog, id)
+  private async activateEntry(id: string, options?: { replace?: boolean }): Promise<CatalogEntry> {
+    let catalog = loadCatalog(this.paths)
+    let entry = findById(catalog, id)
+    if (!entry) {
+      throw new Error('Font is not in the library.')
+    }
+    await this.resolveFormatConflicts(entry, catalog.entries, options?.replace)
+    catalog = loadCatalog(this.paths)
+    entry = findById(catalog, id)
     if (!entry) {
       throw new Error('Font is not in the library.')
     }
@@ -828,7 +1052,7 @@ export class FontButlerService {
       saveCatalog(this.paths, catalog)
       return entry
     }
-    return this.installEntry(id)
+    return this.installEntry(id, undefined, options)
   }
 
   private async reinstallEntry(id: string): Promise<CatalogEntry> {
@@ -1073,8 +1297,64 @@ export class FontButlerService {
     }
   }
 
+  private queueAutoReinstall(id: string): void {
+    if (!loadSettings(this.paths).autoReinstallOnUpdate) {
+      return
+    }
+    this.autoReinstallPending.add(id)
+    if (this.autoReinstallTimer) {
+      clearTimeout(this.autoReinstallTimer)
+    }
+    this.autoReinstallTimer = setTimeout(() => {
+      this.autoReinstallTimer = null
+      const ids = [...this.autoReinstallPending]
+      this.autoReinstallPending.clear()
+      void this.reinstallOutdatedIds(ids)
+    }, 400)
+  }
+
+  private async reinstallCurrentlyOutdated(): Promise<void> {
+    if (!loadSettings(this.paths).autoReinstallOnUpdate) {
+      return
+    }
+    const ids = loadCatalog(this.paths)
+      .entries.filter((entry) => entry.status === 'outdated')
+      .map((entry) => entry.id)
+    await this.reinstallOutdatedIds(ids)
+  }
+
+  private async reinstallOutdatedIds(ids: string[]): Promise<void> {
+    const current = ids.filter((id) => findById(loadCatalog(this.paths), id)?.status === 'outdated')
+    if (current.length === 0) {
+      return
+    }
+    try {
+      if (current.length === 1) {
+        await this.reinstall(current[0]!)
+      } else {
+        await this.reinstallMany(current)
+      }
+    } catch (error) {
+      emitNotice({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'Could not reinstall updated fonts.',
+      })
+    }
+  }
+
   private async clearCachesAfterInstall(): Promise<void> {
-    await clearFontCaches({ office: loadSettings(this.paths).clearOfficeFontCache })
+    try {
+      const settings = loadSettings(this.paths)
+      if (settings.skipCacheClearOnReinstall) {
+        return
+      }
+      await clearFontCaches({
+        office: settings.clearOfficeFontCache,
+        adobe: settings.clearAdobeFontCache,
+      })
+    } catch {
+      // Cache clearing is best-effort; a locked cache should not fail the install.
+    }
   }
 
   private resolveWatchFolders(folders: string[]): string[] {
@@ -1120,15 +1400,35 @@ export class FontButlerService {
     const beforeIds = new Set(this.listCatalog().map((entry) => entry.id))
     const result = await this.importPaths(filePaths)
     const added = result.entries.filter((entry) => !beforeIds.has(entry.id))
-    const firstAdded = added[0]
-    if (firstAdded) {
+    const installed: CatalogEntry[] = []
+    if (loadSettings(this.paths).installWatchFolderFonts) {
+      for (const entry of added) {
+        if (entry.status === 'installed' || entry.status === 'source-missing') continue
+        try {
+          installed.push(await this.install(entry.id))
+        } catch (error) {
+          emitNotice({
+            kind: 'error',
+            message:
+              error instanceof Error
+                ? error.message
+                : `Could not install ${displayFamily(entry)}`,
+            entryId: entry.id,
+          })
+        }
+      }
+    }
+    const first = installed[0] ?? added[0]
+    if (first) {
+      const count = installed.length > 0 ? installed.length : added.length
+      const didInstall = installed.length > 0
       emitNotice({
-        kind: 'info',
+        kind: didInstall ? 'installed' : 'info',
         message:
-          added.length === 1
-            ? `Added ${displayFamily(firstAdded)} from a watch folder`
-            : `Added ${added.length} fonts from a watch folder`,
-        entryId: firstAdded.id,
+          count === 1
+            ? `${didInstall ? 'Installed' : 'Added'} ${displayFamily(first)} from a watch folder`
+            : `${didInstall ? 'Installed' : 'Added'} ${count} fonts from a watch folder`,
+        entryId: first.id,
       })
     }
     if (result.errors.length) {

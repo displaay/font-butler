@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
 import { toast } from 'sonner'
-import { ChevronDown, FolderOpen, X } from 'lucide-react'
+import { ChevronDown, FolderOpen, RefreshCw, X } from 'lucide-react'
 import { AaPreview, CyclingAaPreview } from '@/components/AaPreview'
-import { SourceBadge, StatusBadge, VfBadge } from '@/components/Badges'
+import { FormatBadges, SourceBadge, StatusBadge, VfBadge } from '@/components/Badges'
 import {
   BatchActionBar,
   CatalogBatchButtons,
@@ -15,7 +15,9 @@ import { FontFaceStyles, catalogFontFamily, systemFontFamily } from '@/component
 import { InstanceList } from '@/components/InstanceList'
 import { Inspector } from '@/components/Inspector'
 import { DropFolderDialog } from '@/components/DropFolderDialog'
+import { FormatDialog } from '@/components/FormatDialog'
 import { RenameDialog } from '@/components/RenameDialog'
+import { ReplaceFormatDialog } from '@/components/ReplaceFormatDialog'
 import { SettingsDialog } from '@/components/SettingsDialog'
 import { Sidebar, type Tab } from '@/components/Sidebar'
 import {
@@ -38,9 +40,25 @@ import { NotifyProvider, useSetActionStatus } from '@/components/NotifyProvider'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { api, isNotice, isSettingsEvent, subscribeEvents } from '@/lib/api'
-import { collectDropPayload, isDroppedFontName, isWebOnlyDrop, partitionDropPayload } from '@/lib/drop'
-import { WOFF_INSTALL_ERROR } from '@/lib/formats'
-import { familyNameOf, countLibraryFilters, deletableSourceIds, entryIds, familyStatusSummary, forgettableIds, groupCatalog, groupSystem, hasSourceMissing, hasTrackedSource, isForgettableOnlyGroup, isLibraryFilter, isUninstallableGroup, matchesLibraryFilter, matchesQuery, sortFamilyGroups } from '@/lib/group'
+import { desktopPathForFile } from '@/lib/desktop'
+import {
+  collectDropPayload,
+  commonDroppedFolder,
+  filterDropByFormat,
+  isDroppedFontName,
+  isWebOnlyDrop,
+  partitionDropPayload,
+} from '@/lib/drop'
+import {
+  conflictInstanceNames,
+  countFormats,
+  entryFormatOf,
+  listFormatConflicts,
+  uniqueEntryFormats,
+  WOFF_INSTALL_ERROR,
+  type FormatCount,
+} from '@/lib/formats'
+import { familyNameOf, countLibraryFilters, deletableSourceIds, entryHasTrackedSource, entryIds, familyStatusSummary, forgettableIds, groupCatalog, groupSystem, hasSourceMissing, hasTrackedSource, isForgettableOnlyGroup, isLibraryFilter, isUninstallableGroup, matchesLibraryFilter, matchesQuery, sortFamilyGroups } from '@/lib/group'
 import { actionCopy, actionCopyFor, emptyImportError, importDoneCopy, remainingActionCopy } from '@/lib/notify'
 import { catalogInstanceRows, systemInstanceRows } from '@/lib/instances'
 import {
@@ -119,6 +137,17 @@ function AppShell() {
     paths: string[]
     files: File[]
   } | null>(null)
+  const [formatPrompt, setFormatPrompt] = useState<{
+    formats: FormatCount[]
+    confirmVerb: 'Install' | 'Add'
+    resolve: (format: string | null) => void
+  } | null>(null)
+  const [replacePrompt, setReplacePrompt] = useState<{
+    incomingFormat: string
+    existingFormat: string
+    names: string[]
+    resolve: (choice: 'replace' | 'keep' | null) => void
+  } | null>(null)
   const [showSources, setShowSources] = useState(
     () => localStorage.getItem('font-butler-show-sources') === 'true',
   )
@@ -142,6 +171,7 @@ function AppShell() {
   } | null>(null)
   const suppressClickRef = useRef(false)
   const applyMarqueeKeysRef = useRef<(keys: string[]) => void>(() => {})
+  const reinstallFromMenuBarRef = useRef<(ids: string[]) => void>(() => {})
   const [scrollToFamily, setScrollToFamily] = useState<string | null>(null)
   const [libraryFilters, setLibraryFilters] = useState<LibraryFilter[]>(readLibraryFilters)
   const [gridPreviewSize, setGridPreviewSize] = useState(readGridPreviewSize)
@@ -261,9 +291,16 @@ function AppShell() {
     }
     window.addEventListener('keydown', onKeyDown)
     const stopDesktop = window.fontButlerDesktop?.onOpenSettings(() => setSettingsOpen(true))
+    const stopReinstall = window.fontButlerDesktop?.onReinstallFonts?.((payload) => {
+      const ids = Array.isArray(payload?.ids)
+        ? payload.ids.filter((id): id is string => typeof id === 'string' && id.length > 0)
+        : []
+      reinstallFromMenuBarRef.current(ids)
+    })
     return () => {
       window.removeEventListener('keydown', onKeyDown)
       stopDesktop?.()
+      stopReinstall?.()
     }
   }, [])
 
@@ -419,6 +456,7 @@ function AppShell() {
 
   function handleCatalogSelect(group: FamilyGroup, event: MouseEvent) {
     if (suppressClickRef.current) return
+    if (event.detail > 1) return
     const current = selectedFamilyKeys.length
       ? selectedFamilyKeys
       : selectedFamily
@@ -437,11 +475,19 @@ function AppShell() {
     setSelectedFamily(group.familyName)
     setSelectedEntryId(group.entries[0]?.id ?? null)
     if (!range) setSelectionAnchor(group.familyName)
-    setInspectSelection(keys.length === 1 && !toggle && !range)
+    setInspectSelection(false)
+  }
+
+  function inspectSystemGroup(group: SystemFamilyGroup) {
+    setSelectedSystem(group.familyName)
+    setSelectedSystemKeys([group.familyName])
+    setSelectionAnchor(group.familyName)
+    setInspectSelection(true)
   }
 
   function handleSystemSelect(group: SystemFamilyGroup, event: MouseEvent) {
     if (suppressClickRef.current) return
+    if (event.detail > 1) return
     const current = selectedSystemKeys.length
       ? selectedSystemKeys
       : selectedSystem
@@ -459,7 +505,7 @@ function AppShell() {
     setSelectedSystemKeys(keys)
     setSelectedSystem(group.familyName)
     if (!range) setSelectionAnchor(group.familyName)
-    setInspectSelection(keys.length === 1 && !toggle && !range)
+    setInspectSelection(false)
   }
 
   function selectedCatalogGroups(): FamilyGroup[] {
@@ -608,24 +654,75 @@ function AppShell() {
     setSelectionAnchor(keys[0] ?? null)
   }
 
-  function installGroup(group: FamilyGroup, familyName?: string) {
-    const ids = entryIds(group)
-    return ids.length > 1 ? api.installMany(ids, familyName) : api.install(ids[0], familyName)
+  function askFormat(formats: FormatCount[], confirmVerb: 'Install' | 'Add'): Promise<string | null> {
+    return new Promise((resolve) => {
+      setFormatPrompt({ formats, confirmVerb, resolve })
+    })
   }
 
-  function uninstallGroup(group: FamilyGroup) {
+  function askReplace(conflicts: ReturnType<typeof listFormatConflicts>): Promise<'replace' | 'keep' | null> {
+    const incomingFormat = entryFormatOf(conflicts[0].incoming)
+    const existingFormat = entryFormatOf(conflicts[0].existing)
+    return new Promise((resolve) => {
+      setReplacePrompt({
+        incomingFormat,
+        existingFormat,
+        names: conflictInstanceNames(conflicts),
+        resolve,
+      })
+    })
+  }
+
+  async function prepareInstall(
+    ids: string[],
+    catalog = entries,
+    confirmVerb: 'Install' | 'Add' = 'Install',
+  ): Promise<{ ids: string[]; replace: boolean } | null> {
+    const incoming = ids
+      .map((id) => catalog.find((entry) => entry.id === id))
+      .filter((entry): entry is CatalogEntry => Boolean(entry))
+    if (incoming.length === 0) return null
+    const formats = countFormats(incoming.map((entry) => entryFormatOf(entry)))
+    let chosen = incoming
+    if (formats.length > 1) {
+      const format = await askFormat(formats, confirmVerb)
+      if (!format) return null
+      chosen = incoming.filter((entry) => entryFormatOf(entry) === format)
+    }
+    if (chosen.length === 0) return null
+    const conflicts = listFormatConflicts(chosen, catalog)
+    if (conflicts.length === 0) {
+      return { ids: chosen.map((entry) => entry.id), replace: false }
+    }
+    const choice = await askReplace(conflicts)
+    if (choice === null) return null
+    if (choice === 'keep') {
+      const skip = new Set(conflicts.map((item) => item.incoming.id))
+      const rest = chosen.filter((entry) => !skip.has(entry.id))
+      if (rest.length === 0) return null
+      return { ids: rest.map((entry) => entry.id), replace: false }
+    }
+    return { ids: chosen.map((entry) => entry.id), replace: true }
+  }
+
+  function installPrepared(ids: string[], familyName?: string, replace?: boolean) {
+    return ids.length > 1
+      ? api.installMany(ids, familyName, { replace })
+      : api.install(ids[0], familyName, { replace })
+  }
+
+  function activatePrepared(ids: string[], replace?: boolean) {
+    return ids.length > 1 ? api.activateMany(ids, { replace }) : api.activate(ids[0], { replace })
+  }
+
+  function uninstallGroup(group: FamilyGroup, options?: { deleteSource?: boolean }) {
     const ids = entryIds(group)
-    return ids.length > 1 ? api.uninstallMany(ids) : api.uninstall(ids[0])
+    return ids.length > 1 ? api.uninstallMany(ids, options) : api.uninstall(ids[0], options)
   }
 
   function deactivateGroup(group: FamilyGroup) {
     const ids = entryIds(group)
     return ids.length > 1 ? api.deactivateMany(ids) : api.deactivate(ids[0])
-  }
-
-  function activateGroup(group: FamilyGroup) {
-    const ids = entryIds(group)
-    return ids.length > 1 ? api.activateMany(ids) : api.activate(ids[0])
   }
 
   function reinstallGroup(group: FamilyGroup) {
@@ -678,8 +775,13 @@ function AppShell() {
   async function installSelected() {
     const groups = selectedCatalogGroups().filter((group) => group.status === 'uninstalled')
     if (groups.length === 0) return
+    const prepared = await prepareInstall(groups.flatMap(entryIds))
+    if (!prepared) return
+    const allowed = new Set(prepared.ids)
     await run(async () => {
       for (let index = 0; index < groups.length; index += 1) {
+        const ids = entryIds(groups[index]).filter((id) => allowed.has(id))
+        if (ids.length === 0) continue
         setActionStatus(
           remainingActionCopy(
             'install',
@@ -687,7 +789,7 @@ function AppShell() {
             groups.length === 1 ? groups[0].familyName : undefined,
           ),
         )
-        await installGroup(groups[index])
+        await installPrepared(ids, undefined, prepared.replace)
       }
     }, actionCopyFor('install', groups))
   }
@@ -695,9 +797,14 @@ function AppShell() {
   async function activateSelected() {
     const groups = selectedCatalogGroups().filter((group) => group.status === 'deactivated')
     if (groups.length === 0) return
+    const prepared = await prepareInstall(groups.flatMap(entryIds))
+    if (!prepared) return
+    const allowed = new Set(prepared.ids)
     await run(async () => {
       for (const group of groups) {
-        await activateGroup(group)
+        const ids = entryIds(group).filter((id) => allowed.has(id))
+        if (ids.length === 0) continue
+        await activatePrepared(ids, prepared.replace)
       }
     }, actionCopyFor('activate', groups))
   }
@@ -708,8 +815,14 @@ function AppShell() {
     )
     if (groups.length === 0) return
     const verb = groups.every((group) => group.status === 'deactivated') ? 'activate' : 'install'
+    const prepared = await prepareInstall(groups.flatMap(entryIds))
+    if (!prepared) return
+    const allowed = new Set(prepared.ids)
     await run(async () => {
       for (let index = 0; index < groups.length; index += 1) {
+        const group = groups[index]
+        const ids = entryIds(group).filter((id) => allowed.has(id))
+        if (ids.length === 0) continue
         setActionStatus(
           remainingActionCopy(
             verb,
@@ -717,10 +830,28 @@ function AppShell() {
             groups.length === 1 ? groups[0].familyName : undefined,
           ),
         )
-        if (groups[index].status === 'deactivated') await activateGroup(groups[index])
-        else await installGroup(groups[index])
+        if (group.status === 'deactivated') await activatePrepared(ids, prepared.replace)
+        else await installPrepared(ids, undefined, prepared.replace)
       }
     }, actionCopyFor(verb, groups))
+  }
+
+  async function installGroupGuarded(group: FamilyGroup, familyName?: string) {
+    const prepared = await prepareInstall(entryIds(group))
+    if (!prepared) return
+    await run(
+      () => installPrepared(prepared.ids, familyName, prepared.replace),
+      actionCopy('install', group.familyName),
+    )
+  }
+
+  async function activateGroupGuarded(group: FamilyGroup) {
+    const prepared = await prepareInstall(entryIds(group))
+    if (!prepared) return
+    await run(
+      () => activatePrepared(prepared.ids, prepared.replace),
+      actionCopy('activate', group.familyName),
+    )
   }
 
   async function reinstallSelected() {
@@ -732,6 +863,39 @@ function AppShell() {
       }
     }, actionCopyFor('reinstall', groups))
   }
+
+  async function reinstallAllUpdates() {
+    const groups = updateGroups
+    if (groups.length === 0) return
+    await run(async () => {
+      for (const group of groups) {
+        await reinstallGroup(group)
+      }
+    }, actionCopyFor('reinstall', groups))
+  }
+
+  function reinstallFromMenuBar(ids: string[]) {
+    if (busyRef.current) {
+      toast.message('Wait for the current action to finish.')
+      return
+    }
+    const idSet = new Set(ids)
+    const groups = updateGroups.filter((group) =>
+      group.entries.some((entry) => idSet.has(entry.id)),
+    )
+    if (groups.length === 0) {
+      toast.message('No font updates to reinstall.')
+      return
+    }
+    setTab('updates')
+    setWatchFolderFilter(null)
+    void run(async () => {
+      for (const group of groups) {
+        await reinstallGroup(group)
+      }
+    }, actionCopyFor('reinstall', groups))
+  }
+  reinstallFromMenuBarRef.current = reinstallFromMenuBar
 
   async function forgetSelected() {
     const groups = selectedCatalogGroups().filter((group) => forgettableIds(group).length > 0)
@@ -762,6 +926,32 @@ function AppShell() {
 
   async function deleteFilesSelected() {
     await deleteFilesFor(selectedCatalogGroups())
+  }
+
+  async function uninstallAndRemoveFor(groups: FamilyGroup[]) {
+    const targets = groups.filter(
+      (group) => isUninstallableGroup(group) && hasTrackedSource(group),
+    )
+    if (targets.length === 0) return
+    const fileCount = targets.reduce(
+      (sum, group) => sum + group.entries.filter(entryHasTrackedSource).length,
+      0,
+    )
+    const confirmed = window.confirm(
+      fileCount === 1
+        ? `Uninstall ${targets[0].familyName} and move its source file to Trash?`
+        : `Uninstall ${targets.length} fonts and move ${fileCount} source files to Trash?`,
+    )
+    if (!confirmed) return
+    await run(async () => {
+      for (const group of targets) {
+        await uninstallGroup(group, { deleteSource: true })
+      }
+    }, actionCopyFor('uninstallAndRemove', targets))
+  }
+
+  async function uninstallAndRemoveSelected() {
+    await uninstallAndRemoveFor(selectedCatalogGroups())
   }
 
   async function uninstallSelected() {
@@ -847,7 +1037,7 @@ function AppShell() {
   async function handleFiles(fileList: FileList | File[]) {
     const files = Array.from(fileList)
     const paths = files
-      .map((file) => (file as File & { path?: string }).path)
+      .map((file) => desktopPathForFile(file))
       .filter((value): value is string => Boolean(value))
     await importDropped(paths, files)
   }
@@ -856,15 +1046,33 @@ function AppShell() {
     try {
       const payload = await collectDropPayload(dataTransfer)
       setDragging(false)
-      if (payload.folders.length > 0) {
-        if (isWebOnlyDrop(partitionDropPayload(payload.paths, payload.files))) {
+      let folders = payload.folders
+      let paths = payload.paths
+      const nativePaths = [...new Set([...payload.folders, ...payload.paths])]
+      if (nativePaths.length > 0) {
+        try {
+          const inspected = await api.inspectDrop(nativePaths)
+          folders = [...new Set([...folders, ...inspected.folders])]
+          if (inspected.files.length > 0) {
+            paths = inspected.files
+          }
+        } catch {
+          // Keep the renderer payload when the API cannot stat native paths.
+        }
+      }
+      if (folders.length === 0 && payload.hadDirectory && paths.length > 0) {
+        const fallback = commonDroppedFolder(paths)
+        if (fallback) folders = [fallback]
+      }
+      if (folders.length > 0) {
+        if (isWebOnlyDrop(partitionDropPayload(paths, payload.files))) {
           toast.error(WOFF_INSTALL_ERROR)
           return
         }
-        setFolderDrop(payload)
+        setFolderDrop({ folders, paths, files: payload.files })
         return
       }
-      await importDropped(payload.paths, payload.files)
+      await importDropped(paths, payload.files)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not add fonts')
       setDragging(false)
@@ -876,8 +1084,27 @@ function AppShell() {
     setWatchFolderFilter(folder)
   }
 
+  async function installPendingIds(pendingIds: string[], catalog: CatalogEntry[]): Promise<boolean> {
+    const prepared = await prepareInstall(pendingIds, catalog)
+    if (!prepared) return false
+    for (let index = 0; index < prepared.ids.length; index += 1) {
+      const remaining = prepared.ids.length - index
+      const current = catalog.find((entry) => entry.id === prepared.ids[index])
+      setActionStatus(
+        remainingActionCopy(
+          'install',
+          remaining,
+          prepared.ids.length === 1 && current ? familyNameOf(current) : undefined,
+        ),
+      )
+      await api.install(prepared.ids[index], undefined, { replace: prepared.replace })
+    }
+    return true
+  }
+
   async function watchDroppedFolders(folders: string[], leftover: { paths: string[]; files: File[] }) {
     const next = mergeWatchFolders(watchFolders, folders)
+    const shouldInstall = settings?.installAfterUpload !== false
     busyRef.current = true
     setBusy(true)
     setActionStatus(folders.length === 1 ? 'Adding watch folder…' : 'Adding watch folders…')
@@ -886,10 +1113,31 @@ function AppShell() {
       applySettings(result.settings)
       selectLibrary(folders[0] ?? null)
       setQuery('')
+      const latest = (await api.catalog()).entries
+      const pendingIds = latest
+        .filter(
+          (entry) =>
+            folders.some((folder) => isPathUnderFolder(entry.sourcePath, folder)) &&
+            entry.status !== 'installed' &&
+            entry.status !== 'source-missing',
+        )
+        .map((entry) => entry.id)
+      let installed = false
+      if (shouldInstall && pendingIds.length > 0) {
+        try {
+          installed = await installPendingIds(pendingIds, latest)
+        } catch (error) {
+          toast.error(error instanceof Error ? error.message : 'Could not install fonts')
+        }
+      }
       toast.success(
         folders.length === 1
-          ? `Watching ${watchFolderName(folders[0])}`
-          : `Watching ${folders.length} folders`,
+          ? installed
+            ? `Watching ${watchFolderName(folders[0])} and installed fonts`
+            : `Watching ${watchFolderName(folders[0])}`
+          : installed
+            ? `Watching ${folders.length} folders and installed fonts`
+            : `Watching ${folders.length} folders`,
       )
       const loosePaths = leftover.paths.filter(
         (filePath) => !folders.some((folder) => isPathUnderFolder(filePath, folder)),
@@ -911,9 +1159,23 @@ function AppShell() {
   }
 
   async function importDropped(paths: string[], files: File[]) {
-    const partitioned = partitionDropPayload(paths, files)
+    let partitioned = partitionDropPayload(paths, files)
     if (isWebOnlyDrop(partitioned)) {
       toast.error(WOFF_INSTALL_ERROR)
+      setDragging(false)
+      return
+    }
+    const shouldInstall = settings?.installAfterUpload !== false
+    if (partitioned.formats.length > 1) {
+      const format = await askFormat(partitioned.formats, shouldInstall ? 'Install' : 'Add')
+      if (!format) {
+        setDragging(false)
+        return
+      }
+      partitioned = filterDropByFormat(partitioned, format)
+    }
+    if (partitioned.paths.length === 0 && partitioned.files.length === 0) {
+      toast.error(emptyImportError([], partitioned.skippedWeb))
       setDragging(false)
       return
     }
@@ -932,26 +1194,14 @@ function AppShell() {
         return
       }
       if (visibleErrors.length) toast.error(visibleErrors.join('\n'))
-      const shouldInstall = settings?.installAfterUpload !== false
       const pendingIds = result.entries
         .filter((entry) => entry.status !== 'installed' && entry.status !== 'source-missing')
         .map((entry) => entry.id)
       let installed = false
       if (shouldInstall && pendingIds.length > 0) {
+        const latest = (await api.catalog()).entries
         try {
-          for (let index = 0; index < pendingIds.length; index += 1) {
-            const remaining = pendingIds.length - index
-            const current = result.entries.find((entry) => entry.id === pendingIds[index])
-            setActionStatus(
-              remainingActionCopy(
-                'install',
-                remaining,
-                pendingIds.length === 1 && current ? familyNameOf(current) : undefined,
-              ),
-            )
-            await api.install(pendingIds[index])
-          }
-          installed = true
+          installed = await installPendingIds(pendingIds, latest)
         } catch (error) {
           toast.error(error instanceof Error ? error.message : 'Could not install fonts')
           setEntries((await api.catalog()).entries)
@@ -987,7 +1237,7 @@ function AppShell() {
     }
   }
 
-  async function revealCatalog(entry: CatalogEntry, which: 'source' | 'installed' = 'source') {
+  async function revealCatalog(entry: CatalogEntry, which: 'source' | 'installed' = 'installed') {
     try {
       const result = await api.reveal({ id: entry.id, which })
       toast.message(`Showing ${result.path}`)
@@ -1080,7 +1330,34 @@ function AppShell() {
             onPointerDown={handleListPointerDown}
           >
             {!loading && hasCatalogList && (
-              <div className="shrink-0 space-y-3 bg-background px-4 pt-4 pb-3">
+              <div className="relative shrink-0 space-y-3 bg-background px-4 pt-4 pb-3">
+                {tabCounts.updates > 0 && tab !== 'updates' ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="app-region-no-drag absolute top-4 left-1/2 z-10 -translate-x-1/2 rounded-full border-0 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-400 dark:hover:bg-amber-900"
+                    onClick={() => {
+                      setTab('updates')
+                      setWatchFolderFilter(null)
+                    }}
+                  >
+                    <RefreshCw />
+                    {tabCounts.updates === 1
+                      ? 'Font update available'
+                      : `${tabCounts.updates} font updates available`}
+                  </Button>
+                ) : tab === 'updates' && updateGroups.length > 0 ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={busy}
+                    className="app-region-no-drag absolute top-4 left-1/2 z-10 -translate-x-1/2 rounded-full border-0 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-400 dark:hover:bg-amber-900"
+                    onClick={() => void reinstallAllUpdates()}
+                  >
+                    <RefreshCw />
+                    Reinstall all
+                  </Button>
+                ) : null}
                 <ViewOptions
                     layout={viewLayout}
                     onLayoutChange={(next) => {
@@ -1195,6 +1472,7 @@ function AppShell() {
                           busy={busy}
                           batch={systemSelection.length > 1 && inSelection ? systemPlan : null}
                           onSelect={(event) => handleSystemSelect(group, event)}
+                          onInspect={() => inspectSystemGroup(group)}
                           onEnsureSelected={() => {
                             if (!inSelection) {
                               setSelectedSystem(group.familyName)
@@ -1244,6 +1522,7 @@ function AppShell() {
                           selectedEntryId={selectedEntryId}
                           batch={useBatch ? catalogPlan : null}
                           onSelect={(event) => handleCatalogSelect(group, event)}
+                          onInspect={() => selectGroup(group)}
                           onSelectEntry={setSelectedEntryId}
                           onEnsureSelected={() => {
                             if (!inSelection) {
@@ -1256,9 +1535,7 @@ function AppShell() {
                           }}
                           busy={busy}
                           onInstall={() =>
-                            useBatch
-                              ? void installSelected()
-                              : void run(() => installGroup(group), actionCopy('install', group.familyName))
+                            useBatch ? void installSelected() : void installGroupGuarded(group)
                           }
                           onInstallAs={() => setRenameEntry(selectedEntry ?? group.entries[0])}
                           onReinstall={() =>
@@ -1271,19 +1548,32 @@ function AppShell() {
                               ? void uninstallSelected()
                               : void run(() => uninstallGroup(group), actionCopy('remove', group.familyName))
                           }
+                          onUninstallAndRemove={() => {
+                            if (useBatch) {
+                              void uninstallAndRemoveSelected()
+                              return
+                            }
+                            void uninstallAndRemoveFor([group])
+                          }}
                           onDeactivate={() =>
                             useBatch
                               ? void deactivateSelected()
                               : void run(() => deactivateGroup(group), actionCopy('deactivate', group.familyName))
                           }
                           onActivate={() =>
-                            useBatch
-                              ? void activateSelected()
-                              : void run(() => activateGroup(group), actionCopy('activate', group.familyName))
+                            useBatch ? void activateSelected() : void activateGroupGuarded(group)
                           }
                           onReveal={() => {
-                            selectGroup(group)
-                            void revealCatalog(selectedEntry ?? group.entries[0])
+                            const entry = catalogRevealEntry(
+                              group,
+                              selectedEntry,
+                              'installed',
+                            )
+                            if (entry) void revealCatalog(entry, 'installed')
+                          }}
+                          onRevealSource={() => {
+                            const entry = catalogRevealEntry(group, selectedEntry, 'source')
+                            if (entry) void revealCatalog(entry, 'source')
                           }}
                           onForget={() => {
                             if (useBatch) {
@@ -1328,6 +1618,7 @@ function AppShell() {
                       onActivate={() => void activateSelected()}
                       onDeactivate={() => void deactivateSelected()}
                       onUninstall={() => void uninstallSelected()}
+                      onUninstallAndRemove={() => void uninstallAndRemoveSelected()}
                       onReinstall={() => void reinstallSelected()}
                       onForget={() => void forgetSelected()}
                       onDeleteFiles={() => void deleteFilesSelected()}
@@ -1363,10 +1654,7 @@ function AppShell() {
               onSelectEntry={setSelectedEntryId}
               systemGroup={selectedSystemGroup}
               busy={busy}
-              onInstall={() =>
-                selectedGroup &&
-                void run(() => installGroup(selectedGroup), actionCopy('install', selectedGroup.familyName))
-              }
+              onInstall={() => selectedGroup && void installGroupGuarded(selectedGroup)}
               onInstallAs={() => setRenameEntry(selectedEntry)}
               onReinstall={() =>
                 selectedGroup &&
@@ -1376,14 +1664,15 @@ function AppShell() {
                 selectedGroup &&
                 void run(() => uninstallGroup(selectedGroup), actionCopy('remove', selectedGroup.familyName))
               }
+              onUninstallAndRemove={() => {
+                if (!selectedGroup) return
+                void uninstallAndRemoveFor([selectedGroup])
+              }}
               onDeactivate={() =>
                 selectedGroup &&
                 void run(() => deactivateGroup(selectedGroup), actionCopy('deactivate', selectedGroup.familyName))
               }
-              onActivate={() =>
-                selectedGroup &&
-                void run(() => activateGroup(selectedGroup), actionCopy('activate', selectedGroup.familyName))
-              }
+              onActivate={() => selectedGroup && void activateGroupGuarded(selectedGroup)}
               onReveal={(which) => selectedEntry && void revealCatalog(selectedEntry, which)}
               onUninstallSystem={() =>
                 selectedSystemGroup &&
@@ -1431,6 +1720,7 @@ function AppShell() {
                         onActivate: () => void activateSelected(),
                         onDeactivate: () => void deactivateSelected(),
                         onUninstall: () => void uninstallSelected(),
+                        onUninstallAndRemove: () => void uninstallAndRemoveSelected(),
                         onReinstall: () => void reinstallSelected(),
                         onForget: () => void forgetSelected(),
                         onDeleteFiles: () => void deleteFilesSelected(),
@@ -1445,6 +1735,7 @@ function AppShell() {
                         onActivate: () => void activateSelected(),
                         onDeactivate: () => void deactivateSelected(),
                         onUninstall: () => void uninstallSelected(),
+                        onUninstallAndRemove: () => void uninstallAndRemoveSelected(),
                         onReinstall: () => void reinstallSelected(),
                         onForget: () => void forgetSelected(),
                         onDeleteFiles: () => void deleteFilesSelected(),
@@ -1477,6 +1768,37 @@ function AppShell() {
             const pending = folderDrop
             setFolderDrop(null)
             if (pending) void watchDroppedFolders(pending.folders, pending)
+          }}
+        />
+        <FormatDialog
+          open={Boolean(formatPrompt)}
+          formats={formatPrompt?.formats ?? []}
+          confirmVerb={formatPrompt?.confirmVerb ?? 'Install'}
+          onCancel={() => {
+            formatPrompt?.resolve(null)
+            setFormatPrompt(null)
+          }}
+          onConfirm={(format) => {
+            formatPrompt?.resolve(format)
+            setFormatPrompt(null)
+          }}
+        />
+        <ReplaceFormatDialog
+          open={Boolean(replacePrompt)}
+          incomingFormat={replacePrompt?.incomingFormat ?? ''}
+          existingFormat={replacePrompt?.existingFormat ?? ''}
+          names={replacePrompt?.names ?? []}
+          onCancel={() => {
+            replacePrompt?.resolve(null)
+            setReplacePrompt(null)
+          }}
+          onKeep={() => {
+            replacePrompt?.resolve('keep')
+            setReplacePrompt(null)
+          }}
+          onReplace={() => {
+            replacePrompt?.resolve('replace')
+            setReplacePrompt(null)
           }}
         />
         <RenameDialog
@@ -1539,6 +1861,24 @@ function MarqueeOverlay({ rect }: { rect: Rect | null }) {
   )
 }
 
+function catalogRevealEntry(
+  group: FamilyGroup,
+  selected: CatalogEntry | undefined,
+  which: 'source' | 'installed',
+): CatalogEntry | undefined {
+  const preferred =
+    selected && group.entries.some((item) => item.id === selected.id)
+      ? selected
+      : group.entries[0]
+  if (which === 'installed') {
+    const hasInstall = (entry: CatalogEntry) => Boolean(entry.installedPath || entry.disabledPath)
+    if (preferred && hasInstall(preferred)) return preferred
+    return group.entries.find(hasInstall) ?? preferred
+  }
+  if (preferred && entryHasTrackedSource(preferred)) return preferred
+  return group.entries.find(entryHasTrackedSource) ?? preferred
+}
+
 function clickPreservesSelection(target: EventTarget | null): boolean {
   return (
     target instanceof Element &&
@@ -1558,15 +1898,18 @@ function LibraryCard({
   busy,
   batch,
   onSelect,
+  onInspect,
   onSelectEntry,
   onEnsureSelected,
   onInstall,
   onInstallAs,
   onReinstall,
   onUninstall,
+  onUninstallAndRemove,
   onDeactivate,
   onActivate,
   onReveal,
+  onRevealSource,
   onForget,
   onDeleteFiles,
 }: {
@@ -1579,15 +1922,18 @@ function LibraryCard({
   busy: boolean
   batch: CatalogBatchPlan | null
   onSelect: (event: MouseEvent) => void
+  onInspect: () => void
   onSelectEntry: (entryId: string) => void
   onEnsureSelected: () => void
   onInstall: () => void
   onInstallAs: () => void
   onReinstall: () => void
   onUninstall: () => void
+  onUninstallAndRemove: () => void
   onDeactivate: () => void
   onActivate: () => void
   onReveal: () => void
+  onRevealSource: () => void
   onForget: () => void
   onDeleteFiles: () => void
 }) {
@@ -1619,6 +1965,7 @@ function LibraryCard({
       <div className="flex flex-wrap items-center gap-2">
         <span className="truncate font-medium">{group.familyName}</span>
         <VfBadge show={group.isVariable} />
+        <FormatBadges formats={uniqueEntryFormats(group.entries)} />
         <StatusBadge status={group.status} />
       </div>
       <div className="mt-0.5 text-xs text-muted-foreground">
@@ -1661,6 +2008,7 @@ function LibraryCard({
             <button
               type="button"
               onClick={onSelect}
+              onDoubleClick={onInspect}
               className="flex w-full flex-col text-left"
             >
               <CyclingAaPreview
@@ -1685,6 +2033,7 @@ function LibraryCard({
                 <button
                   type="button"
                   onClick={onSelect}
+                  onDoubleClick={onInspect}
                   className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left"
                 >
                   <AaPreview
@@ -1729,6 +2078,7 @@ function LibraryCard({
               visible={selected}
               offset={layout === 'list' && showInstances}
               onInstall={onInstall}
+              onReinstall={onReinstall}
               onDeactivate={onDeactivate}
               onUninstall={onUninstall}
               onActivate={onActivate}
@@ -1738,8 +2088,17 @@ function LibraryCard({
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent>
-        <ContextMenuItem onSelect={onReveal}>
+        <ContextMenuItem
+          disabled={!group.entries.some((entry) => entry.installedPath || entry.disabledPath)}
+          onSelect={onReveal}
+        >
           <FolderOpen /> Show in Finder
+        </ContextMenuItem>
+        <ContextMenuItem
+          disabled={!hasTrackedSource(group)}
+          onSelect={onRevealSource}
+        >
+          <FolderOpen /> Show source in Finder
         </ContextMenuItem>
         <ContextMenuSeparator />
         <CatalogMenuItems
@@ -1751,6 +2110,7 @@ function LibraryCard({
           onReinstall={onReinstall}
           onDeactivate={onDeactivate}
           onUninstall={onUninstall}
+          onUninstallAndRemove={onUninstallAndRemove}
           onActivate={onActivate}
           onForget={onForget}
           onDeleteFiles={onDeleteFiles}
@@ -1769,6 +2129,7 @@ function SystemCard({
   busy,
   batch,
   onSelect,
+  onInspect,
   onEnsureSelected,
   onReveal,
   onUninstall,
@@ -1782,6 +2143,7 @@ function SystemCard({
   busy: boolean
   batch: SystemBatchPlan | null
   onSelect: (event: MouseEvent) => void
+  onInspect: () => void
   onEnsureSelected: () => void
   onReveal: () => void
   onUninstall: () => void
@@ -1810,6 +2172,7 @@ function SystemCard({
       <div className="flex flex-wrap items-center gap-2">
         <span className="truncate font-medium">{group.familyName}</span>
         <VfBadge show={group.isVariable} />
+        <FormatBadges formats={countFormats(group.faces.map((item) => item.format)).map((item) => item.format)} />
         {group.protected && <Badge>System</Badge>}
       </div>
       <div className="mt-0.5 text-xs text-muted-foreground">
@@ -1842,6 +2205,7 @@ function SystemCard({
             <button
               type="button"
               onClick={onSelect}
+              onDoubleClick={onInspect}
               className="flex w-full flex-col text-left"
             >
               <CyclingAaPreview
@@ -1863,6 +2227,7 @@ function SystemCard({
                 <button
                   type="button"
                   onClick={onSelect}
+                  onDoubleClick={onInspect}
                   className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left"
                 >
                   <AaPreview

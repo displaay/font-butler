@@ -1,9 +1,10 @@
 import chokidar, { type FSWatcher } from 'chokidar'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { applySourcePresence, findBySourcePath, isExternalSource, loadCatalog, resolveStatusWhenSourceFound, saveCatalog } from './catalog.ts'
 import { emitEvent } from './events.ts'
-import { isWebFontFile } from './formats.ts'
+import { countInstallableFormats, isWebFontFile } from './formats.ts'
 import { isFontFile, readFileStat } from './parse.ts'
 import type { AppPaths } from './paths.ts'
 import type { CatalogEntry } from './types.ts'
@@ -14,6 +15,11 @@ let userFontsWatcher: FSWatcher | null = null
 let userFontsTimer: ReturnType<typeof setTimeout> | null = null
 let inboxTimer: ReturnType<typeof setTimeout> | null = null
 let inboxPending: string[] = []
+let sourceStatusListener: ((entry: CatalogEntry) => void) | undefined
+
+export function setSourceStatusListener(listener?: (entry: CatalogEntry) => void): void {
+  sourceStatusListener = listener
+}
 
 function refreshStatus(paths: AppPaths, sourcePath: string): CatalogEntry | undefined {
   const catalog = loadCatalog(paths)
@@ -69,10 +75,12 @@ export async function syncWatchers(paths: AppPaths): Promise<void> {
     awaitWriteFinish: { stabilityThreshold: 250, pollInterval: 100 },
   })
   watcher.on('change', (filePath) => {
-    refreshStatus(paths, filePath)
+    const entry = refreshStatus(paths, filePath)
+    if (entry) sourceStatusListener?.(entry)
   })
   watcher.on('unlink', (filePath) => {
-    refreshStatus(paths, filePath)
+    const entry = refreshStatus(paths, filePath)
+    if (entry) sourceStatusListener?.(entry)
   })
 }
 
@@ -195,6 +203,152 @@ export function expandImportPaths(inputPaths: string[]): {
   return { files, errors, skippedWeb }
 }
 
+const WELL_KNOWN_HOME_FOLDERS = new Set([
+  'Desktop',
+  'Documents',
+  'Downloads',
+  'Library',
+  'Movies',
+  'Music',
+  'Pictures',
+  'Public',
+])
+
+function isWellKnownUserDir(dir: string): boolean {
+  const resolved = path.resolve(dir)
+  const home = path.resolve(os.homedir())
+  if (resolved === home) return true
+  const root = path.parse(resolved).root
+  if (resolved === root) return true
+  return path.dirname(resolved) === home && WELL_KNOWN_HOME_FOLDERS.has(path.basename(resolved))
+}
+
+function samePathSet(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false
+  const values = new Set(left.map(canonicalize))
+  return right.every((filePath) => values.has(canonicalize(filePath)))
+}
+
+function longestCommonDir(filePaths: string[]): string | undefined {
+  if (filePaths.length === 0) return undefined
+  const dirs = filePaths.map((filePath) => path.dirname(path.resolve(filePath)))
+  let common = dirs[0]
+  for (const dir of dirs.slice(1)) {
+    while (common !== path.parse(common).root && dir !== common && !dir.startsWith(`${common}${path.sep}`)) {
+      common = path.dirname(common)
+    }
+  }
+  return common
+}
+
+function isPathInside(filePath: string, folder: string): boolean {
+  const resolved = path.resolve(filePath)
+  const root = path.resolve(folder)
+  return resolved === root || resolved.startsWith(`${root}${path.sep}`)
+}
+
+function canonicalize(filePath: string): string {
+  const resolved = path.resolve(filePath)
+  try {
+    return fs.realpathSync(resolved)
+  } catch {
+    return resolved
+  }
+}
+
+function installableDropFiles(filePaths: string[]): string[] {
+  return [...new Set(filePaths.filter((filePath) => isFontFile(filePath)).map((filePath) => path.resolve(filePath)))]
+}
+
+export function inferExpandedFolderDrops(filePaths: string[]): string[] {
+  const files = installableDropFiles(filePaths)
+  if (files.length < 2) return []
+
+  const common = longestCommonDir(files)
+  if (common && !isWellKnownUserDir(common)) {
+    let candidate: string | undefined = common
+    const home = path.resolve(os.homedir())
+    while (candidate && candidate !== path.parse(candidate).root) {
+      if (isWellKnownUserDir(candidate)) break
+      if (samePathSet(listFontFilesInTree(candidate), files)) {
+        return [candidate]
+      }
+      if (candidate === home) break
+      candidate = path.dirname(candidate)
+    }
+  }
+
+  const parents = new Set(files.map((filePath) => path.dirname(filePath)))
+  if (parents.size > 1 && common && !isWellKnownUserDir(common)) {
+    return [common]
+  }
+
+  const byParent = new Map<string, string[]>()
+  for (const filePath of files) {
+    const parent = path.dirname(filePath)
+    const list = byParent.get(parent) ?? []
+    list.push(filePath)
+    byParent.set(parent, list)
+  }
+  const inferred: string[] = []
+  for (const [parent, group] of byParent) {
+    if (isWellKnownUserDir(parent)) continue
+    if (samePathSet(listFontFilesInTree(parent), group)) {
+      inferred.push(parent)
+    }
+  }
+  return inferred
+}
+
+export type DropInspect = {
+  folders: string[]
+  files: string[]
+  formats: Array<{ format: string; count: number }>
+  skippedWeb: number
+}
+
+export function inspectDropPaths(inputPaths: string[]): DropInspect {
+  const folders = new Set<string>()
+  const filePaths: string[] = []
+
+  for (const raw of inputPaths) {
+    const resolved = path.resolve(raw)
+    if (!fs.existsSync(resolved)) continue
+    let stat: fs.Stats
+    try {
+      stat = fs.statSync(resolved)
+    } catch {
+      continue
+    }
+    if (stat.isDirectory()) {
+      folders.add(resolved)
+      continue
+    }
+    if (stat.isFile()) {
+      filePaths.push(resolved)
+    }
+  }
+
+  if (folders.size === 0) {
+    for (const inferred of inferExpandedFolderDrops(filePaths)) {
+      folders.add(inferred)
+    }
+  }
+
+  const folderList = [...folders]
+  const toExpand =
+    folderList.length > 0
+      ? [...folderList, ...filePaths.filter((filePath) => !folderList.some((folder) => isPathInside(filePath, folder)))]
+      : filePaths
+  const expanded = expandImportPaths(toExpand)
+  return {
+    folders: folderList,
+    files: expanded.files,
+    formats: countInstallableFormats(expanded.files),
+    skippedWeb: expanded.skippedWeb,
+  }
+}
+
 function existingWatchFolders(folders: string[]): string[] {
   const existing: string[] = []
   for (const folder of folders) {
@@ -286,6 +440,7 @@ export async function syncUserFontsWatcher(
 }
 
 export async function closeAllWatchers(): Promise<void> {
+  sourceStatusListener = undefined
   if (watcher) {
     await watcher.close()
     watcher = null

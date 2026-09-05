@@ -8,6 +8,7 @@ export type ActionVerb =
   | 'reinstall'
   | 'forget'
   | 'deleteFiles'
+  | 'uninstallAndRemove'
 
 const ACTION_WORDS: Record<ActionVerb, { pending: string; done: string }> = {
   install: { pending: 'Installing', done: 'Installed' },
@@ -17,6 +18,7 @@ const ACTION_WORDS: Record<ActionVerb, { pending: string; done: string }> = {
   reinstall: { pending: 'Reinstalling', done: 'Reinstalled' },
   forget: { pending: 'Removing', done: 'Removed' },
   deleteFiles: { pending: 'Deleting', done: 'Deleted' },
+  uninstallAndRemove: { pending: 'Uninstalling and removing', done: 'Uninstalled and removed' },
 }
 
 export function actionCopy(verb: ActionVerb, subject: string): { pending: string; done: string } {

@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, sh
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { outdatedFamilies } from './updates-menu.mjs'
+import { menuBarUpdateBadge, outdatedFamilies } from './updates-menu.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DEFAULT_API_PORT = 43182
@@ -33,6 +33,7 @@ let apiToken = null
 let catalogEntries = []
 let menuBarIconEnabled = true
 let clearOfficeFontCacheEnabled = true
+let clearAdobeFontCacheEnabled = true
 let isQuitting = false
 const queuedFiles = []
 
@@ -52,6 +53,7 @@ async function ensureApiToken() {
     applyMenuBarSetting(data.settings.menuBarIcon)
     applyOpenAtLogin(data.settings.openAtLogin)
     applyOfficeCacheSetting(data.settings.clearOfficeFontCache)
+    applyAdobeCacheSetting(data.settings.clearAdobeFontCache)
   }
   return apiToken
 }
@@ -71,18 +73,28 @@ function showMainWindow() {
   win.focus()
 }
 
-function openSettings() {
+function sendWhenReady(channel, payload) {
   showMainWindow()
   const win = mainWindow
   if (!win) {
     return
   }
-  const send = () => win.webContents.send('open-settings')
+  const send = () => {
+    if (payload === undefined) {
+      win.webContents.send(channel)
+    } else {
+      win.webContents.send(channel, payload)
+    }
+  }
   if (win.webContents.isLoading()) {
     win.webContents.once('did-finish-load', send)
   } else {
     send()
   }
+}
+
+function openSettings() {
+  sendWhenReady('open-settings')
 }
 
 function createWindow() {
@@ -140,10 +152,12 @@ async function clearCacheFromMenu(kind) {
   const pathByKind = {
     font: '/api/caches/font',
     office: '/api/caches/office',
+    adobe: '/api/caches/adobe',
   }
   const titleByKind = {
     font: 'Remove font cache',
     office: 'Remove MS Office cache',
+    adobe: 'Remove Adobe cache',
   }
   try {
     const token = await ensureApiToken()
@@ -181,31 +195,11 @@ async function clearCacheFromMenu(kind) {
   }
 }
 
-async function reinstallFromTray(ids, title) {
+function reinstallFromTray(ids) {
   if (ids.length === 0) {
     return
   }
-  try {
-    const token = await ensureApiToken()
-    const body = ids.length === 1 ? { id: ids[0] } : { ids }
-    const response = await fetch(`${API}/api/reinstall`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(body),
-    })
-    const data = await response.json().catch(() => ({}))
-    if (!response.ok) {
-      throw new Error(data.error || 'Could not reinstall fonts')
-    }
-  } catch (error) {
-    dialog.showErrorBox(
-      `Reinstall ${title}`,
-      error instanceof Error ? error.message : 'Could not reinstall fonts',
-    )
-  }
+  sendWhenReady('reinstall-fonts', { ids })
 }
 
 function buildTrayMenu() {
@@ -220,7 +214,7 @@ function buildTrayMenu() {
       items.push({
         label: family.name,
         click: () => {
-          void reinstallFromTray(family.ids, family.name)
+          reinstallFromTray(family.ids)
         },
       })
     }
@@ -229,7 +223,7 @@ function buildTrayMenu() {
     label: 'Reinstall all fonts',
     enabled: allIds.length > 0,
     click: () => {
-      void reinstallFromTray(allIds, 'updated fonts')
+      reinstallFromTray(allIds)
     },
   })
   items.push({ type: 'separator' })
@@ -246,6 +240,13 @@ function buildTrayMenu() {
       void clearCacheFromMenu('office')
     },
   })
+  items.push({
+    label: 'Remove Adobe cache',
+    enabled: clearAdobeFontCacheEnabled,
+    click: () => {
+      void clearCacheFromMenu('adobe')
+    },
+  })
   items.push({ type: 'separator' })
   items.push({ role: 'quit' })
   return Menu.buildFromTemplate(items)
@@ -256,7 +257,9 @@ function refreshTrayMenu() {
     return
   }
   const families = outdatedFamilies(catalogEntries)
-  tray.setToolTip(families.length > 0 ? `Font Buttler — ${families.length} updates` : 'Font Buttler')
+  const count = families.length
+  tray.setToolTip(count > 0 ? `Font Buttler — ${count} updates` : 'Font Buttler')
+  tray.setTitle(menuBarUpdateBadge(count), { fontType: 'monospacedDigit' })
   tray.setContextMenu(buildTrayMenu())
 }
 
@@ -297,6 +300,16 @@ function applyOfficeCacheSetting(enabled) {
   refreshTrayMenu()
 }
 
+function applyAdobeCacheSetting(enabled) {
+  const next = enabled !== false
+  if (clearAdobeFontCacheEnabled === next) {
+    return
+  }
+  clearAdobeFontCacheEnabled = next
+  Menu.setApplicationMenu(buildAppMenu())
+  refreshTrayMenu()
+}
+
 function applyOpenAtLogin(enabled) {
   app.setLoginItemSettings({
     openAtLogin: enabled === true,
@@ -330,6 +343,7 @@ function handleApiEvent(event) {
     applyMenuBarSetting(event.settings.menuBarIcon)
     applyOpenAtLogin(event.settings.openAtLogin)
     applyOfficeCacheSetting(event.settings.clearOfficeFontCache)
+    applyAdobeCacheSetting(event.settings.clearAdobeFontCache)
   }
 }
 
@@ -432,6 +446,13 @@ function buildAppMenu() {
           enabled: clearOfficeFontCacheEnabled,
           click: () => {
             void clearCacheFromMenu('office')
+          },
+        },
+        {
+          label: 'Remove Adobe cache',
+          enabled: clearAdobeFontCacheEnabled,
+          click: () => {
+            void clearCacheFromMenu('adobe')
           },
         },
       ],

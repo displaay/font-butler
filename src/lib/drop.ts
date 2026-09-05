@@ -1,8 +1,10 @@
+import { desktopPathForFile } from './desktop.ts'
 import {
   countFormats,
   formatFromName,
   isInstallableFormat,
   isWebFormat,
+  normalizeFormat,
   type FormatCount,
 } from './formats.ts'
 
@@ -10,8 +12,7 @@ const FONT_NAME = /\.(ttf|otf|ttc|otc|woff2?)$/i
 const MAX_DEPTH = 10
 
 function nativePath(file: File): string | undefined {
-  const value = (file as File & { path?: string }).path
-  return value && value.trim() ? value : undefined
+  return desktopPathForFile(file)
 }
 
 export function isDroppedFontName(name: string): boolean {
@@ -147,6 +148,16 @@ async function walkEntry(
   files.push(file)
 }
 
+export function inferFolderFromRelativePath(
+  nativeFilePath: string,
+  relativePath: string,
+): string | undefined {
+  const rel = relativePath.replace(/\\/g, '/').replace(/^\/+/, '')
+  const slash = rel.indexOf('/')
+  if (slash < 0) return undefined
+  return inferDroppedFolderPath(nativeFilePath, `/${rel}`, `/${rel.slice(0, slash)}`)
+}
+
 export function inferDroppedFolderPath(
   nativeFilePath: string,
   fileFullPath: string,
@@ -217,14 +228,34 @@ function droppedFolderItems(dataTransfer: DataTransfer): Array<{
     })
 }
 
+export function commonDroppedFolder(filePaths: string[]): string | undefined {
+  if (filePaths.length === 0) return undefined
+  const dirs = filePaths.map((filePath) => {
+    const normalized = filePath.replace(/\\/g, '/')
+    const index = normalized.lastIndexOf('/')
+    return index < 0 ? normalized : normalized.slice(0, index)
+  })
+  let common = dirs[0]
+  for (const dir of dirs.slice(1)) {
+    while (common && dir !== common && !dir.startsWith(`${common}/`)) {
+      const index = common.lastIndexOf('/')
+      common = index < 0 ? '' : common.slice(0, index)
+    }
+  }
+  return common || undefined
+}
+
 export async function collectDropPayload(dataTransfer: DataTransfer): Promise<{
   paths: string[]
   files: File[]
   folders: string[]
+  hadDirectory: boolean
 }> {
   const paths = new Set<string>()
   const files: File[] = []
-  const folders = new Set(collectNativeFolderPaths(droppedFolderItems(dataTransfer)))
+  const folderItems = droppedFolderItems(dataTransfer)
+  const folders = new Set(collectNativeFolderPaths(folderItems))
+  let hadDirectory = folderItems.some((item) => item.isDirectory)
 
   for (const file of Array.from(dataTransfer.files ?? [])) {
     const filePath = nativePath(file)
@@ -233,6 +264,8 @@ export async function collectDropPayload(dataTransfer: DataTransfer): Promise<{
     if (isDroppedFolderPath(filePath, file.name)) {
       folders.add(filePath)
     }
+    const inferred = inferFolderFromRelativePath(filePath, file.webkitRelativePath ?? '')
+    if (inferred) folders.add(inferred)
   }
 
   const entries = Array.from(dataTransfer.items ?? [])
@@ -241,6 +274,7 @@ export async function collectDropPayload(dataTransfer: DataTransfer): Promise<{
     .filter((entry): entry is FileSystemEntry => Boolean(entry))
 
   for (const entry of entries) {
+    if (entry.isDirectory) hadDirectory = true
     await walkEntry(
       entry,
       paths,
@@ -259,5 +293,21 @@ export async function collectDropPayload(dataTransfer: DataTransfer): Promise<{
     }
   }
 
-  return { paths: [...paths], files, folders: [...folders] }
+  return { paths: [...paths], files, folders: [...folders], hadDirectory }
+}
+
+export function filterDropByFormat(partition: DropPartition, format: string): DropPartition {
+  const want = normalizeFormat(format)
+  const paths = partition.paths.filter((filePath) => formatFromName(filePath) === want)
+  const files = partition.files.filter((file) => formatFromName(file.name) === want)
+  const counted = [
+    ...paths.map((filePath) => formatFromName(filePath)),
+    ...files.map((file) => formatFromName(file.name)),
+  ].filter((value): value is string => Boolean(value))
+  return {
+    paths,
+    files,
+    formats: countFormats(counted),
+    skippedWeb: partition.skippedWeb,
+  }
 }

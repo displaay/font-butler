@@ -237,6 +237,9 @@ function isSelfSourced(entry: CatalogEntry): boolean {
 }
 
 export function entryHasTrackedSource(entry: CatalogEntry): boolean {
+  if (entry.customFamilyName) {
+    return false
+  }
   if (isSelfSourced(entry)) {
     return false
   }

@@ -3,7 +3,10 @@ import { test } from 'node:test'
 import {
   collectDropPayload,
   collectNativeFolderPaths,
+  commonDroppedFolder,
+  filterDropByFormat,
   inferDroppedFolderPath,
+  inferFolderFromRelativePath,
   isDroppedFolderPath,
   isDroppedFontName,
   isWebOnlyDrop,
@@ -110,6 +113,58 @@ test('collectDropPayload infers a folder from child native paths', async () => {
   } as unknown as DataTransfer)
   assert.deepEqual(payload.folders, ['/Users/you/Fonts/Inbox'])
   assert.deepEqual(payload.paths, ['/Users/you/Fonts/Inbox/Regular.otf'])
+})
+
+test('commonDroppedFolder finds the shared parent of expanded files', () => {
+  assert.equal(
+    commonDroppedFolder([
+      '/Users/you/Fonts/Inbox/OTF/Regular.otf',
+      '/Users/you/Fonts/Inbox/TTF/Regular.ttf',
+    ]),
+    '/Users/you/Fonts/Inbox',
+  )
+})
+
+test('collectDropPayload marks a directory entry even without a native folder path', async () => {
+  const payload = await collectDropPayload({
+    files: [],
+    items: [
+      {
+        kind: 'file',
+        getAsFile: () => null,
+        webkitGetAsEntry: () => ({
+          isDirectory: true,
+          isFile: false,
+          name: 'Inbox',
+          fullPath: '/Inbox',
+          createReader: () => ({
+            readEntries: (ok: (batch: FileSystemEntry[]) => void) => ok([]),
+          }),
+        }),
+      },
+    ],
+  } as unknown as DataTransfer)
+  assert.equal(payload.hadDirectory, true)
+})
+
+test('inferFolderFromRelativePath recovers a folder from webkitRelativePath', () => {
+  assert.equal(
+    inferFolderFromRelativePath('/Users/you/Fonts/Inbox/Regular.otf', 'Inbox/Regular.otf'),
+    '/Users/you/Fonts/Inbox',
+  )
+  assert.equal(inferFolderFromRelativePath('/Users/you/Fonts/Regular.otf', 'Regular.otf'), undefined)
+})
+
+test('filterDropByFormat keeps one desktop format', () => {
+  const result = filterDropByFormat(
+    partitionDropPayload(
+      ['/fonts/Family-Regular.otf', '/fonts/Family-Regular.ttf', '/fonts/Family-Bold.otf'],
+      [],
+    ),
+    'otf',
+  )
+  assert.deepEqual(result.paths, ['/fonts/Family-Regular.otf', '/fonts/Family-Bold.otf'])
+  assert.deepEqual(result.formats, [{ format: 'otf', count: 2 }])
 })
 
 test('inferDroppedFolderPath recovers the dropped folder from a child file path', () => {

@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { expandImportPaths, listFontFilesInTree } from './watch.ts'
+import { expandImportPaths, inferExpandedFolderDrops, inspectDropPaths, listFontFilesInTree } from './watch.ts'
 
 function makeTree(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-walk-'))
@@ -91,6 +91,76 @@ test('expandImportPaths skips woff files and does not treat them as errors', () 
     assert.deepEqual(fileResult.files, [])
     assert.equal(fileResult.skippedWeb, 1)
     assert.deepEqual(fileResult.errors, [])
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('inspectDropPaths reports a dropped directory', () => {
+  const root = makeTree()
+  try {
+    const result = inspectDropPaths([root])
+    assert.deepEqual(result.folders, [path.resolve(root)])
+    assert.equal(result.files.length, 3)
+    assert.deepEqual(
+      result.formats.map((item) => item.format),
+      ['otf', 'ttf'],
+    )
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('inferExpandedFolderDrops recovers a folder Electron expanded into files', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-infer-'))
+  try {
+    const nested = path.join(root, 'Inbox', 'OTF')
+    fs.mkdirSync(nested, { recursive: true })
+    const otf = path.join(nested, 'Regular.otf')
+    const ttfDir = path.join(root, 'Inbox', 'TTF')
+    fs.mkdirSync(ttfDir)
+    const ttf = path.join(ttfDir, 'Regular.ttf')
+    fs.writeFileSync(otf, 'font')
+    fs.writeFileSync(ttf, 'font')
+    const inbox = path.join(root, 'Inbox')
+    assert.deepEqual(inferExpandedFolderDrops([otf, ttf]), [inbox])
+    const inspected = inspectDropPaths([otf, ttf])
+    assert.deepEqual(inspected.folders, [inbox])
+    assert.equal(inspected.files.length, 2)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('inferExpandedFolderDrops ignores extra woff files from a folder drop', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-woff-infer-'))
+  try {
+    const inbox = path.join(root, 'Inbox')
+    const otfDir = path.join(inbox, 'OTF')
+    const webDir = path.join(inbox, 'Web')
+    fs.mkdirSync(otfDir, { recursive: true })
+    fs.mkdirSync(webDir)
+    const otf = path.join(otfDir, 'Regular.otf')
+    const ttf = path.join(inbox, 'Regular.ttf')
+    const woff = path.join(webDir, 'Regular.woff2')
+    fs.writeFileSync(otf, 'font')
+    fs.writeFileSync(ttf, 'font')
+    fs.writeFileSync(woff, 'font')
+    assert.deepEqual(inferExpandedFolderDrops([otf, ttf, woff]), [inbox])
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('inferExpandedFolderDrops ignores a partial file selection', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-partial-'))
+  try {
+    const regular = path.join(root, 'Regular.otf')
+    const bold = path.join(root, 'Bold.otf')
+    fs.writeFileSync(regular, 'font')
+    fs.writeFileSync(bold, 'font')
+    assert.deepEqual(inferExpandedFolderDrops([regular]), [])
+    assert.deepEqual(inferExpandedFolderDrops([regular, bold]), [root])
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }

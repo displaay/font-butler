@@ -36,10 +36,14 @@ function sampleSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     defaultView: 'list',
     defaultSort: 'name',
     installAfterUpload: true,
+    installWatchFolderFonts: true,
     theme: 'system',
     menuBarIcon: true,
     openAtLogin: false,
     clearOfficeFontCache: true,
+    clearAdobeFontCache: true,
+    autoReinstallOnUpdate: false,
+    skipCacheClearOnReinstall: false,
     ...overrides,
   }
 }
@@ -48,6 +52,25 @@ test('loadSettings defaults installAfterUpload to true', () => {
   const paths = tempPaths()
   try {
     assert.equal(loadSettings(paths).installAfterUpload, true)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings defaults installWatchFolderFonts to true', () => {
+  const paths = tempPaths()
+  try {
+    assert.equal(loadSettings(paths).installWatchFolderFonts, true)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings keeps a stored installWatchFolderFonts false', () => {
+  const paths = tempPaths()
+  try {
+    saveSettings(paths, sampleSettings({ installWatchFolderFonts: false }))
+    assert.equal(loadSettings(paths).installWatchFolderFonts, false)
   } finally {
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
@@ -78,12 +101,16 @@ test('loadSettings fills installAfterUpload on older settings files', () => {
     )
     const settings = loadSettings(paths)
     assert.equal(settings.installAfterUpload, true)
+    assert.equal(settings.installWatchFolderFonts, true)
     assert.equal(settings.defaultView, 'grid')
     assert.equal(settings.defaultSort, 'added')
     assert.equal(settings.theme, 'system')
     assert.equal(settings.menuBarIcon, true)
     assert.equal(settings.openAtLogin, false)
     assert.equal(settings.clearOfficeFontCache, true)
+    assert.equal(settings.clearAdobeFontCache, true)
+    assert.equal(settings.autoReinstallOnUpdate, false)
+    assert.equal(settings.skipCacheClearOnReinstall, false)
     assert.deepEqual(settings.watchFolders, [])
   } finally {
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
@@ -240,6 +267,63 @@ test('loadSettings keeps a stored clearOfficeFontCache false', () => {
   try {
     saveSettings(paths, sampleSettings({ clearOfficeFontCache: false }))
     assert.equal(loadSettings(paths).clearOfficeFontCache, false)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings defaults clearAdobeFontCache to true', () => {
+  const paths = tempPaths()
+  try {
+    assert.equal(loadSettings(paths).clearAdobeFontCache, true)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings keeps a stored clearAdobeFontCache false', () => {
+  const paths = tempPaths()
+  try {
+    saveSettings(paths, sampleSettings({ clearAdobeFontCache: false }))
+    assert.equal(loadSettings(paths).clearAdobeFontCache, false)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings defaults autoReinstallOnUpdate to false', () => {
+  const paths = tempPaths()
+  try {
+    assert.equal(loadSettings(paths).autoReinstallOnUpdate, false)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings keeps a stored autoReinstallOnUpdate true', () => {
+  const paths = tempPaths()
+  try {
+    saveSettings(paths, sampleSettings({ autoReinstallOnUpdate: true }))
+    assert.equal(loadSettings(paths).autoReinstallOnUpdate, true)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings defaults skipCacheClearOnReinstall to false', () => {
+  const paths = tempPaths()
+  try {
+    assert.equal(loadSettings(paths).skipCacheClearOnReinstall, false)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings keeps a stored skipCacheClearOnReinstall true', () => {
+  const paths = tempPaths()
+  try {
+    saveSettings(paths, sampleSettings({ skipCacheClearOnReinstall: true }))
+    assert.equal(loadSettings(paths).skipCacheClearOnReinstall, true)
   } finally {
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }

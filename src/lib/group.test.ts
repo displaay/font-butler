@@ -177,10 +177,14 @@ test('entryHasTrackedSource prefers the stored flag and falls back to status', (
   const adopted = entry('mine', 'Mine', 4, 'installed')
   adopted.installedPath = adopted.sourcePath
   adopted.sourcePresent = true
+  const renamed = entry('as', 'As', 5, 'installed')
+  renamed.customFamilyName = 'As'
+  renamed.sourcePresent = true
   assert.equal(entryHasTrackedSource(tracked), true)
   assert.equal(entryHasTrackedSource(installedMissing), false)
   assert.equal(entryHasTrackedSource(orphan), false)
   assert.equal(entryHasTrackedSource(adopted), false)
+  assert.equal(entryHasTrackedSource(renamed), false)
   assert.equal(hasTrackedSource({ entries: [tracked, installedMissing] }), true)
 })
 

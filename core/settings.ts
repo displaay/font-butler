@@ -8,10 +8,14 @@ const emptySettings = (): AppSettings => ({
   defaultView: 'list',
   defaultSort: 'name',
   installAfterUpload: true,
+  installWatchFolderFonts: true,
   theme: 'system',
   menuBarIcon: true,
   openAtLogin: false,
   clearOfficeFontCache: true,
+  clearAdobeFontCache: true,
+  autoReinstallOnUpdate: false,
+  skipCacheClearOnReinstall: false,
 })
 
 function isViewLayout(value: unknown): value is ViewLayout {
@@ -73,6 +77,10 @@ export function loadSettings(paths: AppPaths): AppSettings {
         typeof parsed.installAfterUpload === 'boolean'
           ? parsed.installAfterUpload
           : defaults.installAfterUpload,
+      installWatchFolderFonts:
+        typeof parsed.installWatchFolderFonts === 'boolean'
+          ? parsed.installWatchFolderFonts
+          : defaults.installWatchFolderFonts,
       theme: isThemeMode(parsed.theme) ? parsed.theme : defaults.theme,
       menuBarIcon:
         typeof parsed.menuBarIcon === 'boolean' ? parsed.menuBarIcon : defaults.menuBarIcon,
@@ -82,6 +90,18 @@ export function loadSettings(paths: AppPaths): AppSettings {
         typeof parsed.clearOfficeFontCache === 'boolean'
           ? parsed.clearOfficeFontCache
           : defaults.clearOfficeFontCache,
+      clearAdobeFontCache:
+        typeof parsed.clearAdobeFontCache === 'boolean'
+          ? parsed.clearAdobeFontCache
+          : defaults.clearAdobeFontCache,
+      autoReinstallOnUpdate:
+        typeof parsed.autoReinstallOnUpdate === 'boolean'
+          ? parsed.autoReinstallOnUpdate
+          : defaults.autoReinstallOnUpdate,
+      skipCacheClearOnReinstall:
+        typeof parsed.skipCacheClearOnReinstall === 'boolean'
+          ? parsed.skipCacheClearOnReinstall
+          : defaults.skipCacheClearOnReinstall,
     }
   } catch {
     return emptySettings()

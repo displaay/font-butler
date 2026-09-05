@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { CirclePlus, ListX, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
+import { CircleMinus, CirclePlus, ListX, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   ContextMenuItem,
@@ -20,6 +20,7 @@ export function CatalogBatchButtons({
   onActivate,
   onDeactivate,
   onUninstall,
+  onUninstallAndRemove,
   onReinstall,
   onForget,
   onDeleteFiles,
@@ -30,6 +31,7 @@ export function CatalogBatchButtons({
   onActivate: () => void
   onDeactivate: () => void
   onUninstall: () => void
+  onUninstallAndRemove?: () => void
   onReinstall: () => void
   onForget: () => void
   onDeleteFiles?: () => void
@@ -60,7 +62,12 @@ export function CatalogBatchButtons({
       )}
       {plan.uninstall > 0 && (
         <Button size="sm" variant="destructive" disabled={busy} onClick={onUninstall}>
-          <Trash2 /> {actionLabel('Uninstall', plan.uninstall, multi)}
+          <CircleMinus /> {actionLabel('Uninstall', plan.uninstall, multi)}
+        </Button>
+      )}
+      {plan.uninstallAndRemove > 0 && onUninstallAndRemove && (
+        <Button size="sm" variant="destructive" disabled={busy} onClick={onUninstallAndRemove}>
+          <Trash2 /> {actionLabel('Uninstall and remove', plan.uninstallAndRemove, multi)}
         </Button>
       )}
       {plan.forget > 0 && (
@@ -96,7 +103,7 @@ export function SystemBatchButtons({
         <PowerOff /> {actionLabel('Deactivate', plan.deactivate, multi)}
       </Button>
       <Button size="sm" variant="destructive" disabled={busy} onClick={onUninstall}>
-        <Trash2 /> {actionLabel('Uninstall', plan.uninstall, multi)}
+        <CircleMinus /> {actionLabel('Uninstall', plan.uninstall, multi)}
       </Button>
     </div>
   )
@@ -137,6 +144,7 @@ export function CatalogMenuItems({
   onReinstall,
   onDeactivate,
   onUninstall,
+  onUninstallAndRemove,
   onActivate,
   onForget,
   onDeleteFiles,
@@ -149,6 +157,7 @@ export function CatalogMenuItems({
   onReinstall: () => void
   onDeactivate: () => void
   onUninstall: () => void
+  onUninstallAndRemove?: () => void
   onActivate: () => void
   onForget: () => void
   onDeleteFiles?: () => void
@@ -159,7 +168,8 @@ export function CatalogMenuItems({
     plan.install > 0 ||
     plan.activate > 0 ||
     plan.deactivate > 0 ||
-    plan.uninstall > 0
+    plan.uninstall > 0 ||
+    plan.uninstallAndRemove > 0
   return (
     <>
       {plan.reinstall > 0 && (
@@ -189,7 +199,16 @@ export function CatalogMenuItems({
       )}
       {plan.uninstall > 0 && (
         <ContextMenuItem disabled={busy} onSelect={onUninstall}>
-          <Trash2 /> {actionLabel('Uninstall', plan.uninstall, multi)}
+          <CircleMinus /> {actionLabel('Uninstall', plan.uninstall, multi)}
+        </ContextMenuItem>
+      )}
+      {plan.uninstallAndRemove > 0 && onUninstallAndRemove && (
+        <ContextMenuItem
+          disabled={busy}
+          className="text-destructive focus:text-destructive"
+          onSelect={onUninstallAndRemove}
+        >
+          <Trash2 /> {actionLabel('Uninstall and remove', plan.uninstallAndRemove, multi)}
         </ContextMenuItem>
       )}
       {(plan.forget > 0 || plan.deleteFiles > 0) && (
@@ -234,7 +253,7 @@ export function SystemMenuItems({
         <PowerOff /> {actionLabel('Deactivate', Math.max(plan.deactivate, 1), multi && enabled)}
       </ContextMenuItem>
       <ContextMenuItem disabled={!enabled || busy} onSelect={onUninstall}>
-        <Trash2 /> {actionLabel('Uninstall', Math.max(plan.uninstall, 1), multi && enabled)}
+        <CircleMinus /> {actionLabel('Uninstall', Math.max(plan.uninstall, 1), multi && enabled)}
       </ContextMenuItem>
     </>
   )
