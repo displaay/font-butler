@@ -2421,7 +2421,7 @@ function LibraryCard({
           className={cn(
             'group relative overflow-hidden rounded-lg border transition-colors',
             selected ? 'border-border bg-muted/60' : 'border-border/80 hover:bg-muted/40',
-            muted && 'opacity-50',
+            muted && '[&>:not([data-no-marquee])]:opacity-50',
           )}
           onPointerEnter={() => setHovered(true)}
           onPointerLeave={() => setHovered(false)}
