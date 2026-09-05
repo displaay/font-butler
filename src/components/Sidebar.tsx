@@ -270,6 +270,7 @@ export function Sidebar({
   const [fontsOpen, setFontsOpen] = useState(true)
   const [projectsOpen, setProjectsOpen] = useState(true)
   const [projectSort, setProjectSort] = useState<ProjectSortMode>(readProjectSort)
+  const [projectSortOpen, setProjectSortOpen] = useState(false)
   const [showTotals, setShowTotals] = useState(readShowTotals)
   const sortedProjects = useMemo(
     () => sortProjects(projects ?? [], projectSort),
@@ -455,26 +456,38 @@ export function Sidebar({
                   <ChevronRight className="size-3 opacity-0 transition-opacity group-hover/projects:opacity-70" />
                 )}
               </button>
-              <div className="flex items-center md:opacity-0 md:transition-opacity md:group-hover/projects:opacity-100 md:group-focus-within/projects:opacity-100">
-                {onCreateProject ? (
-                  <Button
-                    type="button"
-                    size="icon"
-                    variant="ghost"
-                    className="size-6"
-                    aria-label="Create new project"
-                    onClick={onCreateProject}
-                  >
-                    <Plus />
-                  </Button>
-                ) : null}
+              <div
+                className={cn(
+                  'flex items-center text-muted-foreground md:transition-opacity',
+                  projectSortOpen
+                    ? 'md:opacity-100'
+                    : 'md:opacity-0 md:group-hover/projects:opacity-100',
+                )}
+              >
                 <ProjectSortMenu
                   value={projectSort}
+                  open={projectSortOpen}
+                  onOpenChange={setProjectSortOpen}
                   onChange={(next) => {
                     setProjectSort(next)
                     writeProjectSort(next)
                   }}
                 />
+                {onCreateProject ? (
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className="size-6 text-muted-foreground"
+                    aria-label="Create new project"
+                    onClick={(event) => {
+                      onCreateProject()
+                      event.currentTarget.blur()
+                    }}
+                  >
+                    <Plus />
+                  </Button>
+                ) : null}
               </div>
             </div>
             {projectsOpen ? (
@@ -674,22 +687,25 @@ export function Sidebar({
 
 function ProjectSortMenu({
   value,
+  open,
+  onOpenChange,
   onChange,
 }: {
   value: ProjectSortMode
+  open: boolean
+  onOpenChange: (open: boolean) => void
   onChange: (value: ProjectSortMode) => void
 }) {
-  const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!open) return
     function onPointerDown(event: PointerEvent) {
       if (rootRef.current?.contains(event.target as Node)) return
-      setOpen(false)
+      onOpenChange(false)
     }
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') setOpen(false)
+      if (event.key === 'Escape') onOpenChange(false)
     }
     document.addEventListener('pointerdown', onPointerDown)
     document.addEventListener('keydown', onKeyDown)
@@ -697,7 +713,7 @@ function ProjectSortMenu({
       document.removeEventListener('pointerdown', onPointerDown)
       document.removeEventListener('keydown', onKeyDown)
     }
-  }, [open])
+  }, [open, onOpenChange])
 
   return (
     <div ref={rootRef} className="relative">
@@ -705,11 +721,15 @@ function ProjectSortMenu({
         type="button"
         size="icon"
         variant="ghost"
-        className="size-6"
+        className="size-6 text-muted-foreground"
         aria-label="Sort projects"
         aria-expanded={open}
         aria-haspopup="menu"
-        onClick={() => setOpen((current) => !current)}
+        onClick={(event) => {
+          const next = !open
+          onOpenChange(next)
+          if (!next) event.currentTarget.blur()
+        }}
       >
         <Ellipsis />
       </Button>
@@ -733,7 +753,7 @@ function ProjectSortMenu({
               className="relative flex w-full cursor-default items-center rounded-md py-1.5 pr-2 pl-8 text-left text-sm outline-none hover:bg-muted"
               onClick={() => {
                 onChange(option.id)
-                setOpen(false)
+                onOpenChange(false)
               }}
             >
               {value === option.id ? (
