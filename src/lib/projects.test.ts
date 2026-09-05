@@ -4,7 +4,9 @@ import {
   defaultProjectName,
   projectContainsAll,
   readFontButlerEntries,
+  readProjectSort,
   removeMemberIds,
+  sortProjects,
   uniqueMemberIds,
 } from './projects.ts'
 
@@ -24,6 +26,24 @@ test('projectContainsAll requires every requested member', () => {
   assert.equal(projectContainsAll(project, ['a', 'b']), true)
   assert.equal(projectContainsAll(project, ['a', 'c']), false)
   assert.equal(projectContainsAll(project, []), false)
+})
+
+test('sortProjects orders by name or keeps date-added order', () => {
+  const projects = [{ name: 'Zed' }, { name: 'Able' }, { name: 'Mid' }]
+  assert.deepEqual(
+    sortProjects(projects, 'name').map((item) => item.name),
+    ['Able', 'Mid', 'Zed'],
+  )
+  assert.deepEqual(
+    sortProjects(projects, 'added').map((item) => item.name),
+    ['Zed', 'Able', 'Mid'],
+  )
+})
+
+test('readProjectSort defaults to date added', () => {
+  assert.equal(readProjectSort({ getItem: () => null }), 'added')
+  assert.equal(readProjectSort({ getItem: () => 'name' }), 'name')
+  assert.equal(readProjectSort({ getItem: () => 'nope' }), 'added')
 })
 
 test('readFontButlerEntries ignores malformed payloads', () => {

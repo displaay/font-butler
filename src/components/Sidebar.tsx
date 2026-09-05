@@ -1,15 +1,18 @@
-import { useEffect, useRef, useState, type ComponentType } from 'react'
+import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 import {
   ALargeSmall,
+  Check,
   ChevronDown,
   ChevronRight,
   CircleCheck,
   CircleOff,
+  Ellipsis,
   Folder,
   FolderMinus,
   FolderOpen,
   Laptop,
   Link2,
+  List,
   Pencil,
   Plus,
   Power,
@@ -18,7 +21,6 @@ import {
   Search,
   Settings,
   SlidersHorizontal,
-  SquareStack,
   Type,
   Unlink,
 } from 'lucide-react'
@@ -41,7 +43,14 @@ import {
 } from '@/lib/showTotals'
 import type { LibraryFilter, ProjectSet, WatchFolder } from '@/lib/types'
 import { folderAvailabilityLabel } from '@/lib/folders'
-import { hasFontButlerEntries, readFontButlerEntries } from '@/lib/projects'
+import {
+  hasFontButlerEntries,
+  readFontButlerEntries,
+  readProjectSort,
+  sortProjects,
+  writeProjectSort,
+  type ProjectSortMode,
+} from '@/lib/projects'
 import { cn } from '@/lib/utils'
 import { watchFolderLabel } from '@/lib/watchFolders'
 
@@ -83,7 +92,7 @@ const TABS: { id: Tab; label: string; icon: typeof Type }[] = [
   { id: 'library', label: 'Fonts', icon: Type },
   { id: 'system', label: 'On this Mac', icon: Laptop },
   { id: 'updates', label: 'Updates', icon: RefreshCw },
-  { id: 'activity', label: 'Activity', icon: SquareStack },
+  { id: 'activity', label: 'Activity', icon: List },
 ]
 
 function navButtonClass(active: boolean, extra?: string) {
@@ -260,7 +269,12 @@ export function Sidebar({
   const insetTrafficLights = window.fontButlerDesktop?.platform === 'darwin'
   const [fontsOpen, setFontsOpen] = useState(true)
   const [projectsOpen, setProjectsOpen] = useState(true)
+  const [projectSort, setProjectSort] = useState<ProjectSortMode>(readProjectSort)
   const [showTotals, setShowTotals] = useState(readShowTotals)
+  const sortedProjects = useMemo(
+    () => sortProjects(projects ?? [], projectSort),
+    [projects, projectSort],
+  )
   const [dropTargetId, setDropTargetId] = useState<string | null>(null)
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
@@ -424,25 +438,48 @@ export function Sidebar({
         })}
         {(onCreateProject || (projects && projects.length > 0)) && (
           <div className="flex w-full flex-col gap-0.5 md:mt-2 md:border-t md:pt-2">
-            <button
-              type="button"
-              className="group flex w-full items-center gap-1 px-2 pt-1 text-left"
-              aria-expanded={projectsOpen}
-              aria-label={projectsOpen ? 'Hide projects' : 'Show projects'}
-              onClick={() => setProjectsOpen((value) => !value)}
-            >
-              <span className="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
-                Projects
-              </span>
-              {projectsOpen ? (
-                <ChevronDown className="size-3 opacity-0 transition-opacity group-hover:opacity-70" />
-              ) : (
-                <ChevronRight className="size-3 opacity-0 transition-opacity group-hover:opacity-70" />
-              )}
-            </button>
+            <div className="group/projects flex w-full items-center gap-0.5 px-1 pt-1">
+              <button
+                type="button"
+                className="flex min-w-0 flex-1 items-center gap-1 px-1 text-left"
+                aria-expanded={projectsOpen}
+                aria-label={projectsOpen ? 'Hide projects' : 'Show projects'}
+                onClick={() => setProjectsOpen((value) => !value)}
+              >
+                <span className="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+                  Projects
+                </span>
+                {projectsOpen ? (
+                  <ChevronDown className="size-3 opacity-0 transition-opacity group-hover/projects:opacity-70" />
+                ) : (
+                  <ChevronRight className="size-3 opacity-0 transition-opacity group-hover/projects:opacity-70" />
+                )}
+              </button>
+              <div className="flex items-center md:opacity-0 md:transition-opacity md:group-hover/projects:opacity-100 md:group-focus-within/projects:opacity-100">
+                {onCreateProject ? (
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className="size-6"
+                    aria-label="Create new project"
+                    onClick={onCreateProject}
+                  >
+                    <Plus />
+                  </Button>
+                ) : null}
+                <ProjectSortMenu
+                  value={projectSort}
+                  onChange={(next) => {
+                    setProjectSort(next)
+                    writeProjectSort(next)
+                  }}
+                />
+              </div>
+            </div>
             {projectsOpen ? (
               <>
-            {(projects ?? []).map((project) => {
+            {sortedProjects.map((project) => {
               const editing = editingProjectId === project.id
               const rowClassName = navButtonClass(
                 projectFilter === project.id,
@@ -585,18 +622,6 @@ export function Sidebar({
               </ContextMenu>
               )
             })}
-            {onCreateProject ? (
-              <Button
-                type="button"
-                size="default"
-                variant="ghost"
-                className={navButtonClass(false, 'w-full')}
-                onClick={onCreateProject}
-              >
-                <Plus className="size-3.5 opacity-70" />
-                Create new project
-              </Button>
-            ) : null}
               </>
             ) : null}
           </div>
@@ -644,5 +669,81 @@ export function Sidebar({
         </Button>
       </div>
     </aside>
+  )
+}
+
+function ProjectSortMenu({
+  value,
+  onChange,
+}: {
+  value: ProjectSortMode
+  onChange: (value: ProjectSortMode) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function onPointerDown(event: PointerEvent) {
+      if (rootRef.current?.contains(event.target as Node)) return
+      setOpen(false)
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [open])
+
+  return (
+    <div ref={rootRef} className="relative">
+      <Button
+        type="button"
+        size="icon"
+        variant="ghost"
+        className="size-6"
+        aria-label="Sort projects"
+        aria-expanded={open}
+        aria-haspopup="menu"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <Ellipsis />
+      </Button>
+      {open ? (
+        <div
+          role="menu"
+          aria-label="Sort projects"
+          className="absolute top-full right-0 z-50 mt-0.5 min-w-44 rounded-md border bg-popover p-1 shadow-sm"
+        >
+          {(
+            [
+              { id: 'name', label: 'Sort by name' },
+              { id: 'added', label: 'Sort by date added' },
+            ] as const
+          ).map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              role="menuitemradio"
+              aria-checked={value === option.id}
+              className="relative flex w-full cursor-default items-center rounded-md py-1.5 pr-2 pl-8 text-left text-sm outline-none hover:bg-muted"
+              onClick={() => {
+                onChange(option.id)
+                setOpen(false)
+              }}
+            >
+              {value === option.id ? (
+                <Check className="pointer-events-none absolute left-2 size-4" />
+              ) : null}
+              {option.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
   )
 }

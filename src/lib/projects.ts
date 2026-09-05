@@ -36,6 +36,31 @@ export function defaultProjectName(familyNames: string[]): string {
   return familyNames.length === 1 ? familyNames[0]! : 'Untitled project'
 }
 
+export const PROJECT_SORT_KEY = 'font-butler-project-sort'
+
+export type ProjectSortMode = 'name' | 'added'
+
+export function readProjectSort(
+  storage: Pick<Storage, 'getItem'> = localStorage,
+): ProjectSortMode {
+  return storage.getItem(PROJECT_SORT_KEY) === 'name' ? 'name' : 'added'
+}
+
+export function writeProjectSort(
+  mode: ProjectSortMode,
+  storage: Pick<Storage, 'setItem'> = localStorage,
+): void {
+  storage.setItem(PROJECT_SORT_KEY, mode)
+}
+
+export function sortProjects<T extends { name: string }>(
+  projects: T[],
+  mode: ProjectSortMode,
+): T[] {
+  if (mode !== 'name') return projects
+  return [...projects].sort((a, b) => a.name.localeCompare(b.name))
+}
+
 export function projectContainsAll(
   project: { members: Array<{ assetId: string }> },
   entryIds: string[],
