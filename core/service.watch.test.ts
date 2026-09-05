@@ -27,11 +27,18 @@ function tempPaths(): AppPaths {
     supplementalFontsDir: path.join(dataRoot, 'supplemental'),
     officeFontCacheDir: path.join(dataRoot, 'office-cache'),
     atsCacheDir: path.join(dataRoot, 'ats-cache'),
+    adobeFontsDir: path.join(dataRoot, 'adobe-fonts'),
   }
 }
 
-function writeTestFont(dest: string, family: string, psName: string): void {
+function writeTestFont(
+  dest: string,
+  family: string,
+  psName: string,
+  options: { version?: string } = {},
+): void {
   fs.mkdirSync(path.dirname(dest), { recursive: true })
+  const version = options.version ?? 'Version 1.000'
   const script = `
 from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
@@ -54,7 +61,7 @@ fb.setupNameTable({
     "uniqueFontIdentifier": ${JSON.stringify(psName)},
     "fullName": ${JSON.stringify(`${family} Regular`)},
     "psName": ${JSON.stringify(psName)},
-    "version": "Version 1.000",
+    "version": ${JSON.stringify(version)},
 })
 fb.setupOS2()
 fb.setupPost()
@@ -164,9 +171,7 @@ test('turning on auto-reinstall installs fonts that already have source updates'
     const snapshot = before.installedSnapshotMtimeMs
 
     await new Promise((resolve) => setTimeout(resolve, 20))
-    writeTestFont(font, 'UpdateMe', 'UpdateMe-Regular')
-    const later = Date.now() / 1000 + 2
-    fs.utimesSync(font, later, later)
+    writeTestFont(font, 'UpdateMe', 'UpdateMe-Regular', { version: 'Version 2.000' })
 
     const settings = await service.updateSettings({ autoReinstallOnUpdate: true })
     assert.equal(settings.autoReinstallOnUpdate, true)
@@ -193,9 +198,7 @@ test('source updates stay outdated when auto-reinstall is off', async () => {
     assert.ok(entry)
     await service.install(entry.id)
     await new Promise((resolve) => setTimeout(resolve, 20))
-    writeTestFont(font, 'LeaveOutdated', 'LeaveOutdated-Regular')
-    const later = Date.now() / 1000 + 2
-    fs.utimesSync(font, later, later)
+    writeTestFont(font, 'LeaveOutdated', 'LeaveOutdated-Regular', { version: 'Version 2.000' })
 
     const again = new FontButlerService(paths)
     await again.init()

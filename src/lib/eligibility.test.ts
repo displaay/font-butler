@@ -6,6 +6,7 @@ import {
   familyHasAction,
   installableIds,
   reinstallableIds,
+  repairableIds,
   uninstallableIds,
 } from './eligibility.ts'
 import type { CatalogEntry, FamilyGroup, FontFaceInfo } from './types.ts'
@@ -52,6 +53,19 @@ function group(entries: CatalogEntry[]): FamilyGroup {
   }
 }
 
+test('preview-only fonts are excluded from install and update actions', () => {
+  const web = group([
+    {
+      ...entry('web', 'uninstalled'),
+      previewOnly: true,
+      format: 'woff',
+    },
+  ])
+  assert.deepEqual(installableIds(web), [])
+  assert.deepEqual(reinstallableIds(web), [])
+  assert.equal(familyHasAction(web, 'install'), false)
+})
+
 test('family actions use entry-level eligibility for mixed styles', () => {
   const mixed = group([entry('on', 'installed', 'Regular'), entry('off', 'uninstalled', 'Bold')])
   assert.deepEqual(installableIds(mixed), ['off'])
@@ -62,4 +76,33 @@ test('family actions use entry-level eligibility for mixed styles', () => {
   assert.equal(familyHasAction(mixed, 'install'), true)
   assert.equal(familyHasAction(mixed, 'deactivate'), true)
   assert.equal(familyHasAction(mixed, 'reinstall'), false)
+})
+
+test('repair is hidden unless a managed copy is missing', () => {
+  const healthy = group([
+    {
+      ...entry('ok', 'installed'),
+      installedPath: '/tmp/ok.ttf',
+      previousRevisionId: 'abc',
+    },
+  ])
+  const missing = group([
+    {
+      ...entry('gone', 'installed'),
+      previousRevisionId: 'abc',
+    },
+  ])
+  const adobeGone = group([
+    {
+      ...entry('adobe', 'installed'),
+      installedPath: '/tmp/adobe.ttf',
+      installations: [
+        { destinationId: 'macos', path: '/tmp/adobe.ttf', verification: 'file-present' },
+        { destinationId: 'adobe-shared', path: '/tmp/adobe-dest.ttf', verification: 'unavailable' },
+      ],
+    },
+  ])
+  assert.deepEqual(repairableIds(healthy), [])
+  assert.deepEqual(repairableIds(missing), ['gone'])
+  assert.deepEqual(repairableIds(adobeGone), ['adobe'])
 })

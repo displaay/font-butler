@@ -57,10 +57,11 @@ test('isWebFormat only matches woff', () => {
   assert.equal(isWebFormat('otf'), false)
 })
 
-test('countFormats ignores web formats and keeps desktop order', () => {
+test('countFormats keeps desktop order and includes web formats', () => {
   assert.deepEqual(countFormats(['ttf', 'otf', 'woff2', 'ttf', 'otf', 'otf']), [
     { format: 'otf', count: 3 },
     { format: 'ttf', count: 2 },
+    { format: 'woff2', count: 1 },
   ])
 })
 

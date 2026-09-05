@@ -67,11 +67,13 @@ test('catalogBatchPlan uses entry-level eligibility for a mixed family', () => {
   assert.deepEqual(catalogBatchPlan(groups), {
     count: 1,
     install: 1,
+    installMissing: true,
     activate: 0,
     deactivate: 1,
     uninstall: 1,
     uninstallAndRemove: 1,
     reinstall: 0,
+    repair: 0,
     forget: 1,
     deleteFiles: 1,
   })
@@ -88,11 +90,13 @@ test('catalogBatchPlan counts each action by family status', () => {
   assert.deepEqual(catalogBatchPlan(groups), {
     count: 5,
     install: 1,
+    installMissing: false,
     activate: 1,
     deactivate: 2,
     uninstall: 3,
     uninstallAndRemove: 3,
     reinstall: 1,
+    repair: 0,
     forget: 2,
     deleteFiles: 1,
   })
@@ -131,4 +135,8 @@ test('actionLabel adds a count for multi-select', () => {
   assert.equal(actionLabel('Install', 1, false), 'Install')
   assert.equal(actionLabel('Install', 1, true), 'Install 1 font')
   assert.equal(actionLabel('Uninstall', 4, true), 'Uninstall 4 fonts')
+  assert.equal(actionLabel('Install update', 1, false), 'Install update')
+  assert.equal(actionLabel('Install update', 2, true), 'Install 2 updates')
+  assert.equal(actionLabel('Install missing', 3, true), 'Install 3 missing styles')
+  assert.equal(actionLabel('Deactivate', 2, true), 'Deactivate 2 styles')
 })

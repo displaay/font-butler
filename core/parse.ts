@@ -2,11 +2,19 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { create, openSync } from 'fontkit'
 import type { Font, FontCollection } from 'fontkit'
-import { FONT_EXTENSIONS, type FontFaceInfo } from './types.ts'
+import { FONT_EXTENSIONS, WEB_FONT_EXTENSIONS, type FontAxisInfo, type FontFaceInfo, type NamedInstanceInfo } from './types.ts'
 
 export function isFontFile(filePath: string): boolean {
   return FONT_EXTENSIONS.includes(
     path.extname(filePath).toLowerCase() as (typeof FONT_EXTENSIONS)[number],
+  )
+}
+
+export function isPreviewableFontFile(filePath: string): boolean {
+  const ext = path.extname(filePath).toLowerCase()
+  return (
+    isFontFile(filePath) ||
+    WEB_FONT_EXTENSIONS.includes(ext as (typeof WEB_FONT_EXTENSIONS)[number])
   )
 }
 
@@ -84,6 +92,10 @@ function faceFromFont(font: Font): FontFaceInfo {
 export type ParsedFont = {
   faces: FontFaceInfo[]
   format: string
+  axes?: FontAxisInfo[]
+  namedInstances?: NamedInstanceInfo[]
+  features?: string[]
+  characterSet?: number[]
 }
 
 export function parseFontFile(filePath: string): ParsedFont {
@@ -98,17 +110,58 @@ export function parseFontBuffer(buffer: Buffer, formatHint = 'ttf'): ParsedFont 
 
 function parseOpened(opened: Font | FontCollection, format: string): ParsedFont {
   if (isCollection(opened)) {
+    const first = opened.fonts[0]
     return {
       format: format || 'ttc',
       faces: opened.fonts.map((font) => faceFromFont(font)),
+      ...previewMetaFromFont(first),
     }
   }
+  const detected = opened.type?.toLowerCase()
   return {
-    format: opened.type?.toLowerCase() === 'woff' || opened.type?.toLowerCase() === 'woff2'
-      ? opened.type.toLowerCase()
-      : format || 'ttf',
+    format: detected === 'woff' || detected === 'woff2' ? detected : format || 'ttf',
     faces: [faceFromFont(opened)],
+    ...previewMetaFromFont(opened),
   }
+}
+
+function previewMetaFromFont(font?: Font): Pick<ParsedFont, 'axes' | 'namedInstances' | 'features' | 'characterSet'> {
+  if (!font) return {}
+  const axes = Object.entries(font.variationAxes ?? {}).map(([tag, axis]) => ({
+    tag,
+    name: axis.name || tag,
+    min: axis.min,
+    default: axis.default,
+    max: axis.max,
+  }))
+  const named =
+    (font as Font & { namedVariations?: Record<string, Record<string, number>> }).namedVariations ??
+    {}
+  const namedInstances = Object.entries(named).map(([name, coordinates]) => ({
+    name,
+    coordinates: Object.fromEntries(
+      Object.entries(coordinates ?? {}).map(([tag, value]) => [tag, Number(value)]),
+    ),
+  }))
+  const features = [...new Set((font.availableFeatures ?? []).map((tag) => String(tag)))]
+  const characterSet = Array.isArray(font.characterSet) ? [...font.characterSet] : []
+  return { axes, namedInstances, features, characterSet }
+}
+
+export function missingCodePoints(text: string, characterSet: number[] | undefined): number[] {
+  if (!characterSet || characterSet.length === 0) return []
+  const available = new Set(characterSet)
+  const missing: number[] = []
+  const seen = new Set<number>()
+  for (const char of text) {
+    const code = char.codePointAt(0)
+    if (code === undefined) continue
+    if (code <= 32) continue
+    if (available.has(code) || seen.has(code)) continue
+    seen.add(code)
+    missing.push(code)
+  }
+  return missing
 }
 
 export function readFileStat(filePath: string): { mtimeMs: number; size: number } {

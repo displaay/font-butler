@@ -46,3 +46,31 @@ test('native activation failure does not persist a successful deactivate', async
     assert.equal(latest?.status, 'installed')
   })
 })
+
+test('Core Text success that the registry does not confirm is not persisted', async () => {
+  const { noopFontNative } = await import('./native.ts')
+  await withService(
+    async (service, paths) => {
+      await service.init()
+      const source = path.join(paths.dataRoot, 'StillOn.ttf')
+      writeTestFont(source, 'StillOn', 'StillOn-Regular')
+      const imported = await service.importPaths([source])
+      const installed = await service.install(imported.entries[0].id)
+      await assert.rejects(() => service.deactivate(installed.id), /did not deactivate/)
+      const latest = service.listCatalog().find((entry) => entry.id === installed.id)
+      assert.equal(latest?.status, 'installed')
+    },
+    {
+      native: noopFontNative({
+        async setFontEnabled() {
+          return { ok: true, native: true }
+        },
+        async fontActivationStates(filePaths) {
+          const states: Record<string, boolean> = {}
+          for (const filePath of filePaths) states[filePath] = true
+          return { ok: true, native: true, states }
+        },
+      }),
+    },
+  )
+})

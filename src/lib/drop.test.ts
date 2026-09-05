@@ -203,14 +203,21 @@ test('partitionDropPayload counts mixed desktop formats', () => {
   assert.equal(result.paths.length, 3)
 })
 
-test('partitionDropPayload skips woff and keeps a single desktop format', () => {
+test('partitionDropPayload keeps woff alongside desktop formats', () => {
   const result = partitionDropPayload(
     ['/fonts/Family.otf', '/fonts/Web/Family.woff2', '/fonts/Web/Family.woff'],
     [],
   )
-  assert.deepEqual(result.formats, [{ format: 'otf', count: 1 }])
+  assert.deepEqual(
+    result.formats.map((item) => item.format),
+    ['otf', 'woff', 'woff2'],
+  )
   assert.equal(result.skippedWeb, 2)
-  assert.deepEqual(result.paths, ['/fonts/Family.otf'])
+  assert.deepEqual(result.paths, [
+    '/fonts/Family.otf',
+    '/fonts/Web/Family.woff2',
+    '/fonts/Web/Family.woff',
+  ])
 })
 
 test('partitionDropPayload keeps folder paths when no files were expanded', () => {
@@ -224,8 +231,7 @@ test('partitionDropPayload treats woff-only drops as web-only', () => {
     ['/fonts/Web/Family.woff2', '/fonts/Web/Family.woff'],
     [],
   )
-  assert.deepEqual(result.paths, [])
-  assert.deepEqual(result.files, [])
+  assert.deepEqual(result.paths, ['/fonts/Web/Family.woff2', '/fonts/Web/Family.woff'])
   assert.equal(result.skippedWeb, 2)
   assert.equal(isWebOnlyDrop(result), true)
 })
@@ -237,7 +243,7 @@ test('partitionDropPayload does not double-count files that already have native 
     ['/fonts/Family.otf', '/fonts/Family.woff2'],
     [otf, woff],
   )
-  assert.deepEqual(result.paths, ['/fonts/Family.otf'])
+  assert.deepEqual(result.paths, ['/fonts/Family.otf', '/fonts/Family.woff2'])
   assert.equal(result.files.length, 0)
   assert.equal(result.skippedWeb, 1)
   assert.equal(isWebOnlyDrop(result), false)

@@ -20,3 +20,43 @@ export function shouldShowNativeNotice({
   }
   return true
 }
+
+export function electronNotificationPermission(NotificationCtor) {
+  if (!NotificationCtor || typeof NotificationCtor.isSupported !== 'function') {
+    return 'denied'
+  }
+  return NotificationCtor.isSupported() ? 'granted' : 'denied'
+}
+
+export function deliverNativeNotice({
+  notice,
+  enabled,
+  windowHidden,
+  lastKey,
+  lastAt,
+  now,
+  windowMs = 2000,
+  createNotification,
+}) {
+  const key = noticeDedupeKey(notice)
+  if (
+    !shouldShowNativeNotice({
+      enabled,
+      windowHidden,
+      kind: notice?.kind,
+      key,
+      lastKey,
+      now,
+      lastAt,
+      windowMs,
+    })
+  ) {
+    return { shown: false, lastKey, lastAt }
+  }
+  const notification = createNotification({
+    title: 'Font Buttler',
+    body: notice.message,
+  })
+  notification.show()
+  return { shown: true, lastKey: key, lastAt: now, notification }
+}

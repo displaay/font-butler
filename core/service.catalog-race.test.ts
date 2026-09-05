@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import path from 'node:path'
 import { test } from 'node:test'
 import { noopFontNative } from './native.ts'
@@ -27,9 +26,7 @@ test('source changes during a delayed deactivate stay outdated', async () => {
 
       const deactivate = service.deactivate(entryA.id)
       await new Promise((resolve) => setTimeout(resolve, 20))
-      writeTestFont(sourceB, 'Bravo', 'Bravo-Regular')
-      const later = Date.now() / 1000 + 2
-      fs.utimesSync(sourceB, later, later)
+      writeTestFont(sourceB, 'Bravo', 'Bravo-Regular', { version: 'Version 2.000' })
       const refresh = refreshSourceStatus(paths, sourceB)
       releaseA?.()
       await deactivate
@@ -47,7 +44,7 @@ test('source changes during a delayed deactivate stay outdated', async () => {
           if (!enabled && path.basename(filePath) === 'A.ttf') {
             await holdA
           }
-          return { ok: true, native: true }
+          return { ok: true, native: false }
         },
       }),
     },

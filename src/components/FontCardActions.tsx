@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react'
 import { CircleMinus, CirclePlus, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import type { FontStatus } from '@/lib/types'
+import type { CatalogBatchPlan } from '@/lib/batch'
+import { actionLabel } from '@/lib/batch'
 import { cn } from '@/lib/utils'
 
 type CatalogCardActionHandlers = {
@@ -15,7 +16,8 @@ type CatalogCardActionHandlers = {
 }
 
 export function CatalogCardActions({
-  status,
+  plan,
+  previewOnly,
   missingSource,
   busy,
   offset,
@@ -27,35 +29,59 @@ export function CatalogCardActions({
   onActivate,
   onForget,
 }: CatalogCardActionHandlers & {
-  status: FontStatus
+  plan: CatalogBatchPlan
+  previewOnly?: boolean
   missingSource: boolean
   offset?: boolean
   visible?: boolean
 }) {
-  const installed = status === 'installed' || status === 'outdated'
+  if (previewOnly) {
+    return (
+      <ActionDock offset={offset} visible={visible}>
+        {missingSource && (
+          <IconAction label="Remove from list" disabled={busy} destructive onClick={onForget}>
+            <Trash2 />
+          </IconAction>
+        )}
+      </ActionDock>
+    )
+  }
+  const installLabel = plan.installMissing
+    ? actionLabel('Install missing', plan.install, plan.install > 1)
+    : actionLabel('Install', plan.install, plan.install > 1)
   return (
     <ActionDock offset={offset} visible={visible}>
-      {installed ? (
-        <>
-          {status === 'outdated' ? (
-            <IconAction label="Reinstall" disabled={busy} onClick={onReinstall}>
-              <RefreshCw />
-            </IconAction>
-          ) : null}
-          <IconAction label="Deactivate" disabled={busy} onClick={onDeactivate}>
-            <PowerOff />
-          </IconAction>
-          <IconAction label="Uninstall" disabled={busy} destructive onClick={onUninstall}>
-            <CircleMinus />
-          </IconAction>
-        </>
-      ) : status === 'deactivated' ? (
+      {plan.reinstall > 0 && (
+        <IconAction
+          label={actionLabel('Install update', plan.reinstall, plan.reinstall > 1)}
+          disabled={busy}
+          onClick={onReinstall}
+        >
+          <RefreshCw />
+        </IconAction>
+      )}
+      {plan.install > 0 && (
+        <IconAction label={installLabel} disabled={busy} success onClick={onInstall}>
+          <CirclePlus />
+        </IconAction>
+      )}
+      {plan.activate > 0 && (
         <IconAction label="Activate" disabled={busy} onClick={onActivate}>
           <Power />
         </IconAction>
-      ) : (
-        <IconAction label="Install" disabled={busy} success onClick={onInstall}>
-          <CirclePlus />
+      )}
+      {plan.deactivate > 0 && (
+        <IconAction
+          label={actionLabel('Deactivate', plan.deactivate, plan.deactivate > 1)}
+          disabled={busy}
+          onClick={onDeactivate}
+        >
+          <PowerOff />
+        </IconAction>
+      )}
+      {plan.uninstall > 0 && (
+        <IconAction label="Uninstall" disabled={busy} destructive onClick={onUninstall}>
+          <CircleMinus />
         </IconAction>
       )}
       {missingSource && (

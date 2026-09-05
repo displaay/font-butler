@@ -2,12 +2,22 @@ import type {
   AdobeFontCacheInfo,
   AppSettings,
   CatalogEntry,
+  DestinationCapability,
+  DestinationId,
+  DestinationInvestigationRow,
+  FolderPolicyPreset,
+  FolderRelinkPreview,
+  ImportPlan,
   Notice,
   OfficeFontCacheInfo,
+  Operation,
+  ProjectSet,
+  RelinkPreview,
   SortMode,
   SystemFace,
   ThemeMode,
   ViewLayout,
+  WatchFolder,
 } from './types'
 
 let apiToken: string | null = null
@@ -93,13 +103,19 @@ export const api = {
     )
   },
   open: (path: string) => json<{ entry: CatalogEntry }>(post('/api/open', { path })),
-  install: (id: string, familyName?: string, options?: { replace?: boolean }) =>
+  install: (id: string, familyName?: string, options?: { replace?: boolean; destinationId?: DestinationId }) =>
     json<{ entry: CatalogEntry }>(
-      post('/api/install', { id, familyName, replace: options?.replace }),
+      post('/api/install', { id, familyName, replace: options?.replace, destinationId: options?.destinationId }),
     ),
-  installMany: (ids: string[], familyName?: string, options?: { replace?: boolean }) =>
+  installMany: (ids: string[], familyName?: string, options?: { replace?: boolean; destinationId?: DestinationId }) =>
     json<{ entries: CatalogEntry[] }>(
-      post('/api/install', { ids, familyName, replace: options?.replace }),
+      post('/api/install', { ids, familyName, replace: options?.replace, destinationId: options?.destinationId }),
+    ),
+  removeDestinationCopy: (id: string, destinationId: DestinationId) =>
+    json<{ entry: CatalogEntry }>(post('/api/install/destination-remove', { id, destinationId })),
+  destinations: () =>
+    json<{ destinations: DestinationCapability[]; investigation: DestinationInvestigationRow[] }>(
+      fetch('/api/destinations'),
     ),
   uninstall: (id: string, options?: { deleteSource?: boolean }) =>
     json<{ entry: CatalogEntry }>(post('/api/uninstall', { id, deleteSource: options?.deleteSource })),
@@ -139,6 +155,7 @@ export const api = {
       settings: AppSettings
       officeFontCache: OfficeFontCacheInfo
       adobeFontCache: AdobeFontCacheInfo
+      destinations?: { destinations: DestinationCapability[]; investigation: DestinationInvestigationRow[] }
     }>(fetch('/api/settings')),
   updateSettings: (patch: {
     watchFolders?: string[]
@@ -155,16 +172,92 @@ export const api = {
     skipCacheClearOnReinstall?: boolean
     nativeNotifications?: boolean
     onboardingCompleted?: boolean
+    folders?: WatchFolder[]
+    specimen?: AppSettings['specimen']
+    defaultDestination?: DestinationId
   }) =>
     json<{
       settings: AppSettings
       officeFontCache: OfficeFontCacheInfo
       adobeFontCache: AdobeFontCacheInfo
+      destinations?: { destinations: DestinationCapability[]; investigation: DestinationInvestigationRow[] }
     }>(post('/api/settings', patch)),
   renamePreview: (id: string, familyName: string) =>
     json<{ fullName: string; postscriptName: string }>(
       fetch(
         `/api/rename-preview?id=${encodeURIComponent(id)}&familyName=${encodeURIComponent(familyName)}`,
+      ),
+    ),
+  inspectRelink: (id: string, path: string) =>
+    json<RelinkPreview>(post('/api/relink/inspect', { id, path })),
+  applyRelink: (id: string, path: string) =>
+    json<{ entry: CatalogEntry }>(post('/api/relink', { id, path })),
+  inspectFolderRelink: (oldRoot: string, newRoot: string, search = true) =>
+    json<FolderRelinkPreview>(post('/api/relink/folder/inspect', { oldRoot, newRoot, search })),
+  applyFolderRelink: (oldRoot: string, newRoot: string, selections?: Record<string, string | undefined>) =>
+    json<{ entries: CatalogEntry[] }>(post('/api/relink/folder', { oldRoot, newRoot, selections })),
+  configureFolder: (input: {
+    root: string
+    policy?: FolderPolicyPreset
+    exclusions?: string[]
+    id?: string
+    destinationId?: DestinationId
+  }) =>
+    json<{ folder: WatchFolder; discovery: ImportPlan }>(post('/api/folders/configure', input)),
+  startWatching: (id: string) => json<{ folder: WatchFolder }>(post('/api/folders/start', { id })),
+  pauseFolder: (id: string) => json<{ folder: WatchFolder }>(post('/api/folders/pause', { id })),
+  resumeFolder: (id: string) => json<{ folder: WatchFolder }>(post('/api/folders/resume', { id })),
+  planImport: (paths: string[]) => json<ImportPlan>(post('/api/import/plan', { paths })),
+  applyPlan: (
+    planId: string,
+    choices?: Record<string, ImportPlan['items'][number]['defaultChoice']>,
+    extra?: { idempotencyKey?: string; familyName?: string },
+  ) =>
+    json<{
+      operationId: string
+      succeeded: number
+      failed: number
+      skipped: number
+      errors: string[]
+      entries: CatalogEntry[]
+      failedIds: string[]
+    }>(post('/api/import/apply', { planId, choices, ...extra })),
+  activity: () => json<{ operations: Operation[] }>(fetch('/api/activity')),
+  undo: (id: string) => json<{ operationId: string }>(post('/api/activity/undo', { id })),
+  revisions: (id: string) =>
+    json<{ revisions: Array<{ fingerprint: string; current: boolean; previous: boolean }> }>(
+      fetch(`/api/revisions/${encodeURIComponent(id)}`),
+    ),
+  restoreRevision: (id: string, fingerprint?: string) =>
+    json<{ entry: CatalogEntry }>(post('/api/revisions/restore', { id, fingerprint })),
+  resumeUpdates: (id: string) => json<{ entry: CatalogEntry }>(post('/api/updates/resume', { id })),
+  repair: (ids: string[] = [], caches = false) =>
+    json<{
+      fonts: Array<{ target: string; outcome: string; reason?: string }>
+      caches: Array<{ target: string; outcome: string; reason?: string }>
+    }>(post('/api/repair', { ids, caches })),
+  projects: () => json<{ projects: ProjectSet[] }>(fetch('/api/projects')),
+  createProject: (name: string, memberIds?: string[]) =>
+    json<{ project: ProjectSet }>(post('/api/projects', { name, memberIds })),
+  updateProject: (
+    id: string,
+    patch: { name?: string; memberIds?: string[]; pin?: { assetId: string; fingerprint?: string } },
+  ) => json<{ project: ProjectSet }>(post('/api/projects/update', { id, ...patch })),
+  deleteProject: (id: string) => json<{ ok: boolean }>(post('/api/projects/delete', { id })),
+  activateProject: (id: string) =>
+    json<{ succeeded: number; failed: number; failedIds: string[] }>(post('/api/projects/activate', { id })),
+  deactivateProject: (id: string) => json<{ ok: boolean }>(post('/api/projects/deactivate', { id })),
+  previewMeta: (id: string, which: 'source' | 'installed' | 'revision' = 'installed', revision?: string) =>
+    json<{
+      faces: CatalogEntry['faces']
+      format: string
+      axes?: Array<{ tag: string; name: string; min: number; default: number; max: number }>
+      namedInstances?: Array<{ name: string; coordinates: Record<string, number> }>
+      features?: string[]
+      characterSet?: number[]
+    }>(
+      fetch(
+        `/api/preview-meta/${encodeURIComponent(id)}?which=${which}${revision ? `&revision=${encodeURIComponent(revision)}` : ''}`,
       ),
     ),
 }
@@ -190,5 +283,21 @@ export function isSettingsEvent(
 ): value is { type: 'settings'; settings: AppSettings } {
   return Boolean(
     value && typeof value === 'object' && (value as { type?: string }).type === 'settings',
+  )
+}
+
+export function isProjectsEvent(
+  value: unknown,
+): value is { type: 'projects'; projects: ProjectSet[] } {
+  return Boolean(
+    value && typeof value === 'object' && (value as { type?: string }).type === 'projects',
+  )
+}
+
+export function isOperationsEvent(
+  value: unknown,
+): value is { type: 'operations'; operations: Operation[] } {
+  return Boolean(
+    value && typeof value === 'object' && (value as { type?: string }).type === 'operations',
   )
 }

@@ -16,7 +16,8 @@
     "dist": "npm run build && npm run bundle:python && electron-builder --mac",
     "preview": "vite preview --host 127.0.0.1 --port 43181",
     "lint": "oxlint",
-    "test": "FONT_BUTLER_TEST=1 tsx --test --test-concurrency=1 core/**/*.test.ts src/**/*.test.ts electron/**/*.test.mjs"
+    "test": "FONT_BUTLER_TEST=1 tsx --test --test-concurrency=1 core/**/*.test.ts src/**/*.test.ts electron/**/*.test.mjs",
+    "test:native": "FONT_BUTLER_TEST=1 FONT_BUTLER_NATIVE=1 tsx --test --test-concurrency=1 core/native.integration.test.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.9",

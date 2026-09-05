@@ -44,7 +44,7 @@ test('expandImportPaths collects fonts from folders and files', () => {
   try {
     const top = path.join(root, 'Top.ttf')
     const result = expandImportPaths([root, top, path.join(root, 'missing.ttf')])
-    assert.equal(result.files.length, 3)
+    assert.equal(result.files.length, 4)
     assert.equal(result.skippedWeb, 1)
     assert.equal(result.files.filter((filePath) => filePath === path.resolve(top)).length, 1)
     assert.equal(result.errors.length, 1)
@@ -68,7 +68,7 @@ test('expandImportPaths reports folders with no fonts', () => {
   }
 })
 
-test('expandImportPaths skips woff files and does not treat them as errors', () => {
+test('expandImportPaths includes woff files for preview-only import', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-woff-'))
   try {
     const webOnlyDir = path.join(root, 'web')
@@ -80,15 +80,15 @@ test('expandImportPaths skips woff files and does not treat them as errors', () 
     fs.writeFileSync(path.join(mixed, 'Regular.otf'), 'font')
     fs.writeFileSync(path.join(mixed, 'Web.woff2'), 'font')
     const webOnly = expandImportPaths([webOnlyDir])
-    assert.deepEqual(webOnly.files, [])
+    assert.equal(webOnly.files.length, 2)
     assert.equal(webOnly.skippedWeb, 2)
     assert.deepEqual(webOnly.errors, [])
     const mixedResult = expandImportPaths([mixed])
-    assert.equal(mixedResult.files.length, 1)
+    assert.equal(mixedResult.files.length, 2)
     assert.equal(mixedResult.skippedWeb, 1)
     assert.deepEqual(mixedResult.errors, [])
     const fileResult = expandImportPaths([path.join(webOnlyDir, 'Family.woff2')])
-    assert.deepEqual(fileResult.files, [])
+    assert.equal(fileResult.files.length, 1)
     assert.equal(fileResult.skippedWeb, 1)
     assert.deepEqual(fileResult.errors, [])
   } finally {
@@ -101,7 +101,7 @@ test('inspectDropPaths reports a dropped directory', () => {
   try {
     const result = inspectDropPaths([root])
     assert.deepEqual(result.folders, [path.resolve(root)])
-    assert.equal(result.files.length, 3)
+    assert.equal(result.files.length, 4)
     assert.deepEqual(
       result.formats.map((item) => item.format),
       ['otf', 'ttf'],

@@ -30,6 +30,7 @@ export type AppPaths = {
   supplementalFontsDir: string
   officeFontCacheDir: string
   atsCacheDir: string
+  adobeFontsDir: string
 }
 
 function rewritePathPrefix(value: string | undefined, from: string, to: string): string | undefined {
@@ -183,6 +184,9 @@ export function buildPaths(options: {
     atsCacheDir: isolated
       ? path.join(dataRoot, 'ats-cache')
       : path.join(home, 'Library/Caches/com.apple.ATS'),
+    adobeFontsDir: isolated
+      ? path.join(dataRoot, 'adobe-fonts')
+      : process.env.FONT_BUTLER_ADOBE_FONTS || path.join('/Library/Application Support/Adobe/Fonts'),
   }
 }
 
@@ -194,6 +198,22 @@ export function getPaths(): AppPaths {
   })
 }
 
+export function revisionsDir(paths: AppPaths): string {
+  return path.join(paths.dataRoot, 'revisions')
+}
+
+export function operationsPath(paths: AppPaths): string {
+  return path.join(paths.dataRoot, 'operations.json')
+}
+
+export function projectsPath(paths: AppPaths): string {
+  return path.join(paths.dataRoot, 'projects.json')
+}
+
+export function plansDir(paths: AppPaths): string {
+  return path.join(paths.dataRoot, 'plans')
+}
+
 export function ensureDirs(paths: AppPaths): void {
   for (const dir of [
     paths.dataRoot,
@@ -201,6 +221,8 @@ export function ensureDirs(paths: AppPaths): void {
     paths.disabledDir,
     paths.sourcesDir,
     paths.uploadsDir,
+    revisionsDir(paths),
+    plansDir(paths),
   ]) {
     fs.mkdirSync(dir, { recursive: true })
   }

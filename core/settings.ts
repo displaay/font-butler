@@ -1,10 +1,18 @@
 import fs from 'node:fs'
 import type { AppPaths } from './paths.ts'
-import type { AppSettings, SortMode, ThemeMode, ViewLayout } from './types.ts'
+import {
+  DEFAULT_ACTIVITY_MAX_OPERATIONS,
+  DEFAULT_ACTIVITY_RETENTION_DAYS,
+  DEFAULT_REVISION_BUDGET_BYTES,
+  migrateFolders,
+  syncWatchFolderPaths,
+} from './folders.ts'
+import type { AppSettings, PreviewPreferences, SortMode, ThemeMode, ViewLayout } from './types.ts'
 
 const emptySettings = (): AppSettings => ({
   version: 1,
   watchFolders: [],
+  folders: [],
   defaultView: 'list',
   defaultSort: 'name',
   installAfterUpload: true,
@@ -18,6 +26,10 @@ const emptySettings = (): AppSettings => ({
   skipCacheClearOnReinstall: false,
   nativeNotifications: false,
   onboardingCompleted: false,
+  revisionBudgetBytes: DEFAULT_REVISION_BUDGET_BYTES,
+  activityRetentionDays: DEFAULT_ACTIVITY_RETENTION_DAYS,
+  activityMaxOperations: DEFAULT_ACTIVITY_MAX_OPERATIONS,
+  defaultDestination: 'macos',
 })
 
 function isViewLayout(value: unknown): value is ViewLayout {
@@ -58,6 +70,24 @@ export function readWatchFolders(parsed: {
   return []
 }
 
+function readSpecimen(value: unknown): PreviewPreferences | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const row = value as Partial<PreviewPreferences>
+  if (typeof row.text !== 'string') return undefined
+  return {
+    text: row.text,
+    size: typeof row.size === 'number' ? row.size : 48,
+    lineHeight: typeof row.lineHeight === 'number' ? row.lineHeight : 1.2,
+    preset:
+      row.preset === 'headline' ||
+      row.preset === 'paragraph' ||
+      row.preset === 'numerals' ||
+      row.preset === 'custom'
+        ? row.preset
+        : 'custom',
+  }
+}
+
 export function loadSettings(paths: AppPaths): AppSettings {
   if (!fs.existsSync(paths.settingsPath)) {
     return emptySettings()
@@ -70,19 +100,29 @@ export function loadSettings(paths: AppPaths): AppSettings {
       return emptySettings()
     }
     const defaults = emptySettings()
-    return {
+    const watchFolders = readWatchFolders(parsed)
+    const installWatchFolderFonts =
+      typeof parsed.installWatchFolderFonts === 'boolean'
+        ? parsed.installWatchFolderFonts
+        : defaults.installWatchFolderFonts
+    const autoReinstallOnUpdate =
+      typeof parsed.autoReinstallOnUpdate === 'boolean'
+        ? parsed.autoReinstallOnUpdate
+        : defaults.autoReinstallOnUpdate
+    const settings: AppSettings = {
       version: 1,
-      watchFolders: readWatchFolders(parsed),
+      watchFolders,
+      folders: migrateFolders(watchFolders, parsed.folders, {
+        installNew: installWatchFolderFonts,
+        autoUpdate: autoReinstallOnUpdate,
+      }),
       defaultView: isViewLayout(parsed.defaultView) ? parsed.defaultView : defaults.defaultView,
       defaultSort: readSortMode(parsed.defaultSort) ?? defaults.defaultSort,
       installAfterUpload:
         typeof parsed.installAfterUpload === 'boolean'
           ? parsed.installAfterUpload
           : defaults.installAfterUpload,
-      installWatchFolderFonts:
-        typeof parsed.installWatchFolderFonts === 'boolean'
-          ? parsed.installWatchFolderFonts
-          : defaults.installWatchFolderFonts,
+      installWatchFolderFonts,
       theme: isThemeMode(parsed.theme) ? parsed.theme : defaults.theme,
       menuBarIcon:
         typeof parsed.menuBarIcon === 'boolean' ? parsed.menuBarIcon : defaults.menuBarIcon,
@@ -96,10 +136,7 @@ export function loadSettings(paths: AppPaths): AppSettings {
         typeof parsed.clearAdobeFontCache === 'boolean'
           ? parsed.clearAdobeFontCache
           : defaults.clearAdobeFontCache,
-      autoReinstallOnUpdate:
-        typeof parsed.autoReinstallOnUpdate === 'boolean'
-          ? parsed.autoReinstallOnUpdate
-          : defaults.autoReinstallOnUpdate,
+      autoReinstallOnUpdate,
       skipCacheClearOnReinstall:
         typeof parsed.skipCacheClearOnReinstall === 'boolean'
           ? parsed.skipCacheClearOnReinstall
@@ -110,7 +147,22 @@ export function loadSettings(paths: AppPaths): AppSettings {
           : defaults.nativeNotifications,
       onboardingCompleted:
         typeof parsed.onboardingCompleted === 'boolean' ? parsed.onboardingCompleted : true,
+      revisionBudgetBytes:
+        typeof parsed.revisionBudgetBytes === 'number'
+          ? parsed.revisionBudgetBytes
+          : defaults.revisionBudgetBytes,
+      activityRetentionDays:
+        typeof parsed.activityRetentionDays === 'number'
+          ? parsed.activityRetentionDays
+          : defaults.activityRetentionDays,
+      activityMaxOperations:
+        typeof parsed.activityMaxOperations === 'number'
+          ? parsed.activityMaxOperations
+          : defaults.activityMaxOperations,
+      specimen: readSpecimen(parsed.specimen),
+      defaultDestination: parsed.defaultDestination === 'adobe-shared' ? 'adobe-shared' : 'macos',
     }
+    return syncWatchFolderPaths(settings)
   } catch {
     return emptySettings()
   }
@@ -119,6 +171,6 @@ export function loadSettings(paths: AppPaths): AppSettings {
 export function saveSettings(paths: AppPaths, settings: AppSettings): void {
   fs.mkdirSync(paths.dataRoot, { recursive: true })
   const tmp = `${paths.settingsPath}.tmp`
-  fs.writeFileSync(tmp, JSON.stringify(settings, null, 2))
+  fs.writeFileSync(tmp, JSON.stringify(syncWatchFolderPaths({ ...settings }), null, 2))
   fs.renameSync(tmp, paths.settingsPath)
 }

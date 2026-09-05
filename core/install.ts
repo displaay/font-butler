@@ -5,7 +5,7 @@ import { sourceFileExists } from './catalog.ts'
 import { normalizeFormat } from './formats.ts'
 import { parseFontFile, readFileStat, type ParsedFont } from './parse.ts'
 import type { CatalogEntry } from './types.ts'
-import type { FontNative } from './native.ts'
+import { ensureFontActivation, type FontNative } from './native.ts'
 
 export type StagedFont = {
   stagedPath: string
@@ -58,11 +58,7 @@ export async function commitInstalledFile(options: {
   }
   try {
     fs.copyFileSync(stagedPath, dest)
-    await native.registerFont(dest)
-    const enabled = await native.setFontEnabled(dest, true)
-    if (!enabled.ok) {
-      throw new Error(enabled.error || 'Could not activate the font.')
-    }
+    await ensureFontActivation(native, dest, true)
     if (rollback) {
       fs.rmSync(rollback, { force: true })
       rollback = undefined
@@ -71,8 +67,9 @@ export async function commitInstalledFile(options: {
     if (rollback && fs.existsSync(rollback)) {
       fs.copyFileSync(rollback, dest)
       try {
-        await native.registerFont(dest)
-        await native.setFontEnabled(dest, true)
+        await ensureFontActivation(native, dest, true).catch(() => {
+          // Restoring the previous bytes is best-effort after a failed activation.
+        })
       } catch {
         // Restoring the previous bytes is best-effort after a failed activation.
       }
@@ -96,7 +93,7 @@ export function applyInstalledMetadata(
   entry: CatalogEntry,
   dest: string,
   staged: StagedFont,
-  options: { externalSource: boolean; sourcePath?: string },
+  options: { externalSource: boolean; sourcePath?: string; fingerprint?: string },
 ): void {
   const destStat = readFileStat(dest)
   entry.installedPath = dest
@@ -118,6 +115,12 @@ export function applyInstalledMetadata(
     entry.sourcePresent = false
   }
   entry.status = 'installed'
+  if (options.fingerprint) {
+    entry.installedFingerprint = options.fingerprint
+    if (options.externalSource) {
+      entry.sourceFingerprint = options.fingerprint
+    }
+  }
 }
 
 export function extensionForFormat(format: string, fallbackPath: string): string {

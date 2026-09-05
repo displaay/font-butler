@@ -1,9 +1,9 @@
 import { useEffect } from 'react'
-import { catalogFontUrl, systemFontUrl } from '@/lib/preview'
+import { catalogFontUrl, systemFontUrl, type PreviewWhich } from '@/lib/preview'
 import type { CatalogEntry, SystemFace } from '@/lib/types'
 
-function cssFamily(id: string): string {
-  return `fc-${id}`
+function cssFamily(id: string, which?: PreviewWhich): string {
+  return which ? `fc-${id}-${which}` : `fc-${id}`
 }
 
 function hashPath(value: string): string {
@@ -14,8 +14,8 @@ function hashPath(value: string): string {
   return `sys-${Math.abs(hash).toString(36)}`
 }
 
-export function catalogFontFamily(id: string): string {
-  return cssFamily(id)
+export function catalogFontFamily(id: string, which?: PreviewWhich): string {
+  return cssFamily(id, which)
 }
 
 export function systemFontFamily(path: string): string {
@@ -30,10 +30,18 @@ export function FontFaceStyles({
   systemFaces: SystemFace[]
 }) {
   const css = [
-    ...entries.map(
-      (entry) =>
+    ...entries.flatMap((entry) => {
+      const faces = [
         `@font-face{font-family:"${cssFamily(entry.id)}";src:url("${catalogFontUrl(entry)}");font-display:swap;}`,
-    ),
+        `@font-face{font-family:"${cssFamily(entry.id, 'installed')}";src:url("${catalogFontUrl(entry, 'installed')}");font-display:swap;}`,
+      ]
+      if (entry.sourcePath && entry.sourcePath !== entry.installedPath) {
+        faces.push(
+          `@font-face{font-family:"${cssFamily(entry.id, 'source')}";src:url("${catalogFontUrl(entry, 'source')}");font-display:swap;}`,
+        )
+      }
+      return faces
+    }),
     ...systemFaces.map(
       (face) =>
         `@font-face{font-family:"${hashPath(face.path)}";src:url("${systemFontUrl(face.path)}");font-display:swap;}`,

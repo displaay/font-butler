@@ -1,4 +1,4 @@
-import { useState, type ComponentType } from 'react'
+import { useEffect, useRef, useState, type ComponentType } from 'react'
 import {
   ALargeSmall,
   ChevronDown,
@@ -10,11 +10,15 @@ import {
   FolderOpen,
   Laptop,
   Link2,
+  Pencil,
+  Plus,
+  Power,
   PowerOff,
   RefreshCw,
   Search,
   Settings,
   SlidersHorizontal,
+  SquareStack,
   Type,
   Unlink,
 } from 'lucide-react'
@@ -35,11 +39,13 @@ import {
   watchShowTotalId,
   writeShowTotals,
 } from '@/lib/showTotals'
-import type { LibraryFilter } from '@/lib/types'
+import type { LibraryFilter, ProjectSet, WatchFolder } from '@/lib/types'
+import { folderAvailabilityLabel } from '@/lib/folders'
+import { hasFontButlerEntries, readFontButlerEntries } from '@/lib/projects'
 import { cn } from '@/lib/utils'
 import { watchFolderLabel } from '@/lib/watchFolders'
 
-export type Tab = 'library' | 'system' | 'updates'
+export type Tab = 'library' | 'system' | 'updates' | 'activity'
 
 const LIBRARY_FILTER_GROUPS: {
   heading: string
@@ -77,6 +83,7 @@ const TABS: { id: Tab; label: string; icon: typeof Type }[] = [
   { id: 'library', label: 'Fonts', icon: Type },
   { id: 'system', label: 'On this Mac', icon: Laptop },
   { id: 'updates', label: 'Updates', icon: RefreshCw },
+  { id: 'activity', label: 'Activity', icon: SquareStack },
 ]
 
 function navButtonClass(active: boolean, extra?: string) {
@@ -208,6 +215,16 @@ export function Sidebar({
   onSelectWatchFolder,
   onRevealWatchFolder,
   onRemoveWatchFolder,
+  folders,
+  projects,
+  projectFilter,
+  onSelectProject,
+  onActivateProject,
+  onDeactivateProject,
+  onRenameProject,
+  onAddFontsToProject,
+  onRemoveProject,
+  onCreateProject,
   libraryFilters,
   libraryFilterCounts,
   onLibraryFiltersChange,
@@ -224,16 +241,84 @@ export function Sidebar({
   onSelectWatchFolder: (folder: string | null) => void
   onRevealWatchFolder: (folder: string) => void
   onRemoveWatchFolder: (folder: string) => void
+  folders?: WatchFolder[]
+  projects?: ProjectSet[]
+  projectFilter?: string | null
+  onSelectProject?: (id: string | null) => void
+  onActivateProject?: (id: string) => void
+  onDeactivateProject?: (id: string) => void
+  onRenameProject?: (id: string, name: string) => void
+  onAddFontsToProject?: (id: string, entryIds: string[]) => void
+  onRemoveProject?: (id: string) => void
+  onCreateProject?: () => void
   libraryFilters: LibraryFilter[]
   libraryFilterCounts: Record<LibraryFilter, number>
   onLibraryFiltersChange: (value: LibraryFilter[]) => void
-  counts: { library: number; system: number; updates: number }
+  counts: { library: number; system: number; updates: number; activity?: number }
   onOpenSettings: () => void
 }) {
   const insetTrafficLights = window.fontButlerDesktop?.platform === 'darwin'
   const [fontsOpen, setFontsOpen] = useState(true)
+  const [projectsOpen, setProjectsOpen] = useState(true)
   const [showTotals, setShowTotals] = useState(readShowTotals)
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null)
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const renameInputRef = useRef<HTMLInputElement>(null)
+  const skipRenameCommitRef = useRef(false)
+  const renameSessionRef = useRef<{ id: string; original: string } | null>(null)
+  const deselectTimerRef = useRef<number | null>(null)
   const fontsActive = tab === 'library' && !watchFolderFilter
+
+  useEffect(() => {
+    if (!editingProjectId) return
+    const timer = window.setTimeout(() => {
+      renameInputRef.current?.focus()
+      renameInputRef.current?.select()
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [editingProjectId])
+
+  useEffect(() => {
+    if (editingProjectId && !(projects ?? []).some((item) => item.id === editingProjectId)) {
+      setEditingProjectId(null)
+    }
+  }, [editingProjectId, projects])
+
+  function clearDeselectTimer() {
+    if (deselectTimerRef.current == null) return
+    window.clearTimeout(deselectTimerRef.current)
+    deselectTimerRef.current = null
+  }
+
+  function startRename(project: ProjectSet) {
+    skipRenameCommitRef.current = false
+    clearDeselectTimer()
+    renameSessionRef.current = { id: project.id, original: project.name }
+    setRenameValue(project.name)
+    setEditingProjectId(project.id)
+  }
+
+  function cancelRename() {
+    skipRenameCommitRef.current = true
+    renameSessionRef.current = null
+    setEditingProjectId(null)
+  }
+
+  function commitRename() {
+    if (skipRenameCommitRef.current) {
+      skipRenameCommitRef.current = false
+      renameSessionRef.current = null
+      return
+    }
+    const session = renameSessionRef.current
+    if (!session) return
+    renameSessionRef.current = null
+    const next = renameValue.trim() || 'Untitled project'
+    setEditingProjectId(null)
+    if (session.original === next) return
+    onRenameProject?.(session.id, next)
+  }
 
   function changeShowTotal(id: string, value: boolean) {
     const next = setShowTotal(showTotals, id, value)
@@ -303,7 +388,11 @@ export function Sidebar({
                         onShowTotalChange={(value) => changeShowTotal(id, value)}
                         onClick={() => onSelectWatchFolder(folder)}
                         className="w-full pl-7"
-                        title={folder}
+                        title={
+                          folders?.find((item) => item.root === folder)
+                            ? `${folder} · ${folderAvailabilityLabel(folders.find((item) => item.root === folder)!)}`
+                            : folder
+                        }
                         onReveal={() => onRevealWatchFolder(folder)}
                         onRemove={() => onRemoveWatchFolder(folder)}
                       />
@@ -318,7 +407,13 @@ export function Sidebar({
               active={tab === item.id}
               icon={item.icon}
               label={item.label}
-              count={item.id === 'system' ? counts.system : counts.updates}
+              count={
+                item.id === 'system'
+                  ? counts.system
+                  : item.id === 'activity'
+                    ? counts.activity ?? 0
+                    : counts.updates
+              }
               showTotal={Boolean(showTotals[item.id])}
               onShowTotalChange={(value) => changeShowTotal(item.id, value)}
               onClick={() => onTabChange(item.id)}
@@ -327,6 +422,185 @@ export function Sidebar({
             />
           )
         })}
+        {(onCreateProject || (projects && projects.length > 0)) && (
+          <div className="flex w-full flex-col gap-0.5 md:mt-2 md:border-t md:pt-2">
+            <button
+              type="button"
+              className="group flex w-full items-center gap-1 px-2 pt-1 text-left"
+              aria-expanded={projectsOpen}
+              aria-label={projectsOpen ? 'Hide projects' : 'Show projects'}
+              onClick={() => setProjectsOpen((value) => !value)}
+            >
+              <span className="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+                Projects
+              </span>
+              {projectsOpen ? (
+                <ChevronDown className="size-3 opacity-0 transition-opacity group-hover:opacity-70" />
+              ) : (
+                <ChevronRight className="size-3 opacity-0 transition-opacity group-hover:opacity-70" />
+              )}
+            </button>
+            {projectsOpen ? (
+              <>
+            {(projects ?? []).map((project) => {
+              const editing = editingProjectId === project.id
+              const rowClassName = navButtonClass(
+                projectFilter === project.id,
+                cn('w-full', dropTargetId === project.id && 'bg-muted text-foreground'),
+              )
+              const nameField = editing ? (
+                <input
+                  ref={renameInputRef}
+                  value={renameValue}
+                  aria-label="Project name"
+                  className="min-w-0 flex-1 bg-transparent px-0 text-[13px] font-normal outline-none"
+                  onChange={(event) => setRenameValue(event.target.value)}
+                  onClick={(event) => event.stopPropagation()}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onDoubleClick={(event) => event.stopPropagation()}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      commitRename()
+                    }
+                    if (event.key === 'Escape') {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      cancelRename()
+                    }
+                  }}
+                  onBlur={commitRename}
+                />
+              ) : (
+                <span
+                  className="min-w-0 truncate"
+                  onDoubleClick={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    startRename(project)
+                  }}
+                >
+                  {project.desiredActive ? `${project.name} · active` : project.name}
+                </span>
+              )
+              const rowBody = (
+                <>
+                  <Folder className="size-3.5 opacity-70" />
+                  {nameField}
+                  <Badge className="ml-auto">{project.members.length}</Badge>
+                </>
+              )
+              return (
+              <ContextMenu key={project.id}>
+                <ContextMenuTrigger asChild>
+                  {editing ? (
+                    <div
+                      className={cn(
+                        'inline-flex items-center justify-start gap-1.5 whitespace-nowrap rounded-md px-2.5 text-[13px]',
+                        rowClassName,
+                      )}
+                      role="group"
+                      aria-label="Rename project"
+                    >
+                      {rowBody}
+                    </div>
+                  ) : (
+                  <Button
+                    type="button"
+                    size="default"
+                    variant="ghost"
+                    aria-current={projectFilter === project.id ? 'page' : undefined}
+                    className={rowClassName}
+                    onClick={(event) => {
+                      if (event.detail > 1) return
+                      if (projectFilter === project.id) {
+                        clearDeselectTimer()
+                        deselectTimerRef.current = window.setTimeout(() => {
+                          deselectTimerRef.current = null
+                          onSelectProject?.(project.id)
+                        }, 280)
+                        return
+                      }
+                      onSelectProject?.(project.id)
+                    }}
+                    onDoubleClick={(event) => {
+                      event.preventDefault()
+                      startRename(project)
+                    }}
+                    onDragEnter={(event) => {
+                      if (!hasFontButlerEntries(event.dataTransfer)) return
+                      event.preventDefault()
+                      event.stopPropagation()
+                      setDropTargetId(project.id)
+                    }}
+                    onDragOver={(event) => {
+                      if (!hasFontButlerEntries(event.dataTransfer)) return
+                      event.preventDefault()
+                      event.stopPropagation()
+                      event.dataTransfer.dropEffect = 'copy'
+                      setDropTargetId(project.id)
+                    }}
+                    onDragLeave={(event) => {
+                      if (event.currentTarget.contains(event.relatedTarget as Node)) return
+                      setDropTargetId((current) => (current === project.id ? null : current))
+                    }}
+                    onDrop={(event) => {
+                      if (!hasFontButlerEntries(event.dataTransfer)) return
+                      event.preventDefault()
+                      event.stopPropagation()
+                      setDropTargetId(null)
+                      const ids = readFontButlerEntries(event.dataTransfer)
+                      if (ids.length > 0) onAddFontsToProject?.(project.id, ids)
+                    }}
+                  >
+                    {rowBody}
+                  </Button>
+                  )}
+                </ContextMenuTrigger>
+                <ContextMenuContent>
+                  <ContextMenuItem
+                    onSelect={() => {
+                      window.setTimeout(() => startRename(project), 0)
+                    }}
+                  >
+                    <Pencil /> Rename project
+                  </ContextMenuItem>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem onSelect={() => onActivateProject?.(project.id)}>
+                    <Power /> Activate project
+                  </ContextMenuItem>
+                  <ContextMenuItem onSelect={() => onDeactivateProject?.(project.id)}>
+                    <PowerOff /> Release project
+                  </ContextMenuItem>
+                  {onRemoveProject ? (
+                    <>
+                      <ContextMenuSeparator />
+                      <ContextMenuItem onSelect={() => onRemoveProject(project.id)}>
+                        <FolderMinus /> Remove project
+                      </ContextMenuItem>
+                    </>
+                  ) : null}
+                </ContextMenuContent>
+              </ContextMenu>
+              )
+            })}
+            {onCreateProject ? (
+              <Button
+                type="button"
+                size="default"
+                variant="ghost"
+                className={navButtonClass(false, 'w-full')}
+                onClick={onCreateProject}
+              >
+                <Plus className="size-3.5 opacity-70" />
+                Create new project
+              </Button>
+            ) : null}
+              </>
+            ) : null}
+          </div>
+        )}
         {tab === 'library' && (
           <div className="flex w-full flex-wrap gap-3 md:mt-2 md:flex-col md:gap-2 md:border-t md:pt-2">
             {LIBRARY_FILTER_GROUPS.map((group) => (

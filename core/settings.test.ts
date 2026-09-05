@@ -26,6 +26,7 @@ function tempPaths(): AppPaths {
     supplementalFontsDir: path.join(dataRoot, 'supplemental'),
     officeFontCacheDir: path.join(dataRoot, 'office-cache'),
     atsCacheDir: path.join(dataRoot, 'ats-cache'),
+    adobeFontsDir: path.join(dataRoot, 'adobe-fonts'),
   }
 }
 
@@ -33,6 +34,7 @@ function sampleSettings(overrides: Partial<AppSettings> = {}): AppSettings {
   return {
     version: 1,
     watchFolders: [],
+    folders: [],
     defaultView: 'list',
     defaultSort: 'name',
     installAfterUpload: true,
@@ -46,9 +48,21 @@ function sampleSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     skipCacheClearOnReinstall: false,
     nativeNotifications: false,
     onboardingCompleted: false,
+    revisionBudgetBytes: 1024 * 1024 * 1024,
+    activityRetentionDays: 90,
+    activityMaxOperations: 10_000,
     ...overrides,
   }
 }
+
+test('loadSettings defaults defaultDestination to macos', () => {
+  const paths = tempPaths()
+  try {
+    assert.equal(loadSettings(paths).defaultDestination, 'macos')
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
 
 test('loadSettings defaults installAfterUpload to true', () => {
   const paths = tempPaths()

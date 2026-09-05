@@ -10,11 +10,15 @@ export type FormatCount = {
   count: number
 }
 
+export const WEB_FORMATS = ['woff', 'woff2'] as const
+
 const FORMAT_LABELS: Record<string, string> = {
   otf: 'OpenType',
   ttf: 'TrueType',
   ttc: 'TrueType Collection',
   otc: 'OpenType Collection',
+  woff: 'WOFF',
+  woff2: 'WOFF2',
 }
 
 export function normalizeFormat(format: string): string {
@@ -55,13 +59,15 @@ export function countFormats(formats: string[]): FormatCount[] {
   const counts = new Map<string, number>()
   for (const format of formats) {
     const value = normalizeFormat(format)
-    if (!value || isWebFormat(value)) continue
+    if (!value) continue
     counts.set(value, (counts.get(value) ?? 0) + 1)
   }
-  return INSTALLABLE_FORMATS.filter((format) => counts.has(format)).map((format) => ({
-    format,
-    count: counts.get(format) ?? 0,
-  }))
+  return [...INSTALLABLE_FORMATS, ...WEB_FORMATS]
+    .filter((format) => counts.has(format))
+    .map((format) => ({
+      format,
+      count: counts.get(format) ?? 0,
+    }))
 }
 
 export function fileCountLabel(count: number): string {

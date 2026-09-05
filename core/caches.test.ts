@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import {
+  allowRealCacheMutation,
   applyAdobeFontCacheClear,
   locateAdobeFontCache,
   locateOfficeFontCache,
@@ -108,6 +109,23 @@ test('locateAdobeFontCache reports the known roots when nothing exists', () => {
     assert.equal(found.roots[0], path.join(home, 'Library/Caches/Adobe'))
   } finally {
     fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('isolated FONT_BUTLER_DATA skips real cache mutation unless explicitly opted in', () => {
+  const previousData = process.env.FONT_BUTLER_DATA
+  const previousCaches = process.env.FONT_BUTLER_NATIVE_CACHES
+  try {
+    process.env.FONT_BUTLER_DATA = '/tmp/font-butler-isolated'
+    delete process.env.FONT_BUTLER_NATIVE_CACHES
+    assert.equal(allowRealCacheMutation(), false)
+    process.env.FONT_BUTLER_NATIVE_CACHES = '1'
+    assert.equal(allowRealCacheMutation(), true)
+  } finally {
+    if (previousData === undefined) delete process.env.FONT_BUTLER_DATA
+    else process.env.FONT_BUTLER_DATA = previousData
+    if (previousCaches === undefined) delete process.env.FONT_BUTLER_NATIVE_CACHES
+    else process.env.FONT_BUTLER_NATIVE_CACHES = previousCaches
   }
 })
 

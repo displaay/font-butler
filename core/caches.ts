@@ -181,14 +181,22 @@ function emptyDir(dir: string): void {
   }
 }
 
+export function allowRealCacheMutation(): boolean {
+  const isolated = Boolean(process.env.FONT_BUTLER_DATA ?? process.env.FONTCASE_DATA)
+  if (!isolated) return true
+  return process.env.FONT_BUTLER_NATIVE_CACHES === '1'
+}
+
 export async function clearUserFontCache(): Promise<{ mac: boolean; cleared: boolean }> {
   if (!isMac()) {
     return { mac: false, cleared: false }
   }
   const paths = getPaths()
-  await runQuiet('atsutil', ['databases', '-removeUser'])
-  await runQuiet('atsutil', ['server', '-shutdown'])
-  await runQuiet('atsutil', ['server', '-ping'])
+  if (allowRealCacheMutation()) {
+    await runQuiet('atsutil', ['databases', '-removeUser'])
+    await runQuiet('atsutil', ['server', '-shutdown'])
+    await runQuiet('atsutil', ['server', '-ping'])
+  }
   if (fs.existsSync(paths.atsCacheDir)) {
     emptyDir(paths.atsCacheDir)
   }
@@ -198,6 +206,14 @@ export async function clearUserFontCache(): Promise<{ mac: boolean; cleared: boo
 export async function clearOfficeFontCache(): Promise<{ mac: boolean; cleared: boolean }> {
   if (!isMac()) {
     return { mac: false, cleared: false }
+  }
+  if (!allowRealCacheMutation()) {
+    const fallback = getPaths().officeFontCacheDir
+    if (fs.existsSync(fallback)) {
+      emptyDir(fallback)
+      return { mac: true, cleared: true }
+    }
+    return { mac: true, cleared: false }
   }
   const located = locateOfficeFontCache()
   const fallback = getPaths().officeFontCacheDir
@@ -216,6 +232,9 @@ export async function clearAdobeFontCache(home = os.homedir()): Promise<{
   if (!isMac()) {
     return { mac: false, cleared: false }
   }
+  if (!allowRealCacheMutation()) {
+    return { mac: true, cleared: false }
+  }
   return { mac: true, cleared: applyAdobeFontCacheClear(home) }
 }
 
@@ -229,76 +248,153 @@ export async function clearFontCaches(
   return { mac: font.mac, office: office.cleared, adobe: adobe.cleared }
 }
 
-export async function registerFont(filePath: string): Promise<void> {
-  if (!isMac()) {
-    return
-  }
-  const safePath = assertSafeShellPath(filePath)
-  const posix = safePath.replaceAll("'", "\\'")
-  const script = `use framework "CoreText"
-use scripting additions
-set theURL to current application's NSURL's fileURLWithPath:"${posix}"
-current application's CTFontManagerRegisterFontsForURL(theURL, 1, missing value)`
-  try {
-    await execFileAsync('osascript', ['-l', 'AppleScript', '-e', script], {
-      timeout: 10_000,
-    })
-  } catch {
-    // Copying into ~/Library/Fonts is enough for activation on modern macOS.
-  }
-}
-
-export async function unregisterFont(filePath: string): Promise<void> {
-  if (!isMac() || !filePath) {
-    return
-  }
-  const safePath = assertSafeShellPath(filePath)
-  const posix = safePath.replaceAll("'", "\\'")
-  const script = `use framework "CoreText"
-use scripting additions
-set theURL to current application's NSURL's fileURLWithPath:"${posix}"
-current application's CTFontManagerUnregisterFontsForURL(theURL, 1, missing value)`
-  try {
-    await execFileAsync('osascript', ['-l', 'AppleScript', '-e', script], {
-      timeout: 10_000,
-    })
-  } catch {
-    // File removal still deactivates fonts living in standard folders.
-  }
-}
-
 const FONT_ENABLE_SCRIPT = `ObjC.import('CoreText')
 ObjC.import('Foundation')
 function descriptorsFor(filePath) {
   const url = $.NSURL.fileURLWithPath(filePath)
-  return $.CTFontManagerCreateFontDescriptorsFromURL(url)
-}
-function isEnabled(filePath) {
-  const descs = descriptorsFor(filePath)
-  if (!descs || Number(descs.count) === 0) return true
-  const key = $.kCTFontEnabledAttribute
-  for (let i = 0; i < Number(descs.count); i++) {
-    const value = $.CTFontDescriptorCopyAttribute(descs.objectAtIndex(i), key)
-    if (value && !ObjC.unwrap(value)) return false
+  const ref = $.CTFontManagerCreateFontDescriptorsFromURL(url)
+  if (!ref) return null
+  try {
+    return ObjC.castRefToObject(ref)
+  } catch (error) {
+    return null
   }
-  return true
+}
+function availableUrlSet() {
+  const urls = $.CTFontManagerCopyAvailableFontURLs()
+  const arr = urls ? ObjC.castRefToObject(urls) : null
+  const out = {}
+  if (!arr) return out
+  const n = Number(arr.count)
+  for (let i = 0; i < n; i++) {
+    addPathKey(out, ObjC.unwrap(arr.objectAtIndex(i).path))
+  }
+  return out
+}
+function addPathKey(out, value) {
+  if (!value) return
+  const s = String(value)
+  out[s] = true
+  if (s.startsWith('/private/var/') || s.startsWith('/private/tmp/')) {
+    out[s.replace(/^\\/private/, '')] = true
+  } else if (s.startsWith('/var/') || s.startsWith('/tmp/')) {
+    out['/private' + s] = true
+  }
+}
+function isEnabled(filePath, available) {
+  const url = $.NSURL.fileURLWithPath(filePath)
+  const candidates = [filePath, ObjC.unwrap(url.path)]
+  try {
+    candidates.push(ObjC.unwrap(url.URLByStandardizingPath.path))
+  } catch (error) {}
+  try {
+    candidates.push(ObjC.unwrap(url.URLByResolvingSymlinksInPath.path))
+  } catch (error) {}
+  for (const candidate of candidates) {
+    if (candidate && available[String(candidate)]) return true
+    if (candidate && String(candidate).startsWith('/var/') && available['/private' + String(candidate)]) return true
+    if (candidate && String(candidate).startsWith('/tmp/') && available['/private' + String(candidate)]) return true
+    if (candidate && String(candidate).startsWith('/private/var/') && available[String(candidate).replace(/^\\/private/, '')]) return true
+    if (candidate && String(candidate).startsWith('/private/tmp/') && available[String(candidate).replace(/^\\/private/, '')]) return true
+  }
+  return false
+}
+function registerUrl(filePath, register) {
+  const url = $.NSURL.fileURLWithPath(filePath)
+  const fn = register ? $.CTFontManagerRegisterFontsForURL : $.CTFontManagerUnregisterFontsForURL
+  // Prefer the user/session scope so the Electron renderer and other applications
+  // can see the registration after this helper returns. macOS rejects that scope
+  // for paths outside the user's font domain (including isolated test paths), so
+  // fall back to process scope for those locations. The ensure operation verifies
+  // the fallback registration before this helper exits.
+  if (Boolean(ObjC.unwrap(fn(url, 2, null)))) return true
+  return Boolean(ObjC.unwrap(fn(url, 1, null)))
 }
 function run(argv) {
   const mode = argv[0]
   if (mode === 'get') {
     const paths = JSON.parse(argv[1] || '[]')
+    const available = availableUrlSet()
     const out = {}
-    for (const filePath of paths) out[filePath] = isEnabled(filePath)
+    for (const filePath of paths) out[filePath] = isEnabled(filePath, available)
     return JSON.stringify(out)
   }
   if (mode === 'set') {
     const descs = descriptorsFor(argv[1])
-    if (descs) $.CTFontManagerEnableFontDescriptors(descs, argv[2] === '1')
+    if (!descs || Number(descs.count) === 0) return 'fail'
+    $.CTFontManagerEnableFontDescriptors(descs, argv[2] === '1')
     return 'ok'
+  }
+  if (mode === 'ensure') {
+    const filePath = argv[1]
+    const enabled = argv[2] === '1'
+    if (enabled) registerUrl(filePath, true)
+    const descs = descriptorsFor(filePath)
+    if (!descs || Number(descs.count) === 0) return 'fail'
+    $.CTFontManagerEnableFontDescriptors(descs, enabled)
+    const on = isEnabled(filePath, availableUrlSet())
+    return on === enabled ? 'ok' : 'fail'
+  }
+  if (mode === 'register') {
+    return registerUrl(argv[1], true) ? 'ok' : 'fail'
+  }
+  if (mode === 'unregister') {
+    return registerUrl(argv[1], false) ? 'ok' : 'fail'
   }
   return '{}'
 }
 `
+
+async function runFontManager(mode: string, filePath: string, extra: string[] = []): Promise<FontEnableResult> {
+  const safePath = assertSafeShellPath(filePath)
+  try {
+    const { stdout } = await execFileAsync(
+      'osascript',
+      ['-l', 'JavaScript', '-e', FONT_ENABLE_SCRIPT, mode, safePath, ...extra],
+      { timeout: 10_000 },
+    )
+    if (stdout.trim() !== 'ok') {
+      return {
+        ok: false,
+        native: true,
+        error:
+          mode === 'register'
+            ? 'Could not register the font.'
+            : mode === 'unregister'
+              ? 'Could not unregister the font.'
+              : 'Could not change font activation.',
+      }
+    }
+    return { ok: true, native: true }
+  } catch (error) {
+    return {
+      ok: false,
+      native: true,
+      error:
+        error instanceof Error
+          ? error.message
+          : mode === 'register'
+            ? 'Could not register the font.'
+            : mode === 'unregister'
+              ? 'Could not unregister the font.'
+              : 'Could not change font activation.',
+    }
+  }
+}
+
+export async function registerFont(filePath: string): Promise<FontEnableResult> {
+  if (!isMac() || !filePath) {
+    return { ok: true, native: false }
+  }
+  return runFontManager('register', filePath)
+}
+
+export async function unregisterFont(filePath: string): Promise<FontEnableResult> {
+  if (!isMac() || !filePath) {
+    return { ok: true, native: false }
+  }
+  return runFontManager('unregister', filePath)
+}
 
 export type FontEnableResult = {
   ok: boolean
@@ -306,34 +402,37 @@ export type FontEnableResult = {
   error?: string
 }
 
+export type ActivationQuery = {
+  ok: boolean
+  native: boolean
+  states: Record<string, boolean>
+  error?: string
+}
+
+export async function ensureFontActivationNative(
+  filePath: string,
+  enabled: boolean,
+): Promise<FontEnableResult> {
+  if (!isMac() || !filePath) {
+    return { ok: true, native: false }
+  }
+  return runFontManager('ensure', filePath, [enabled ? '1' : '0'])
+}
+
 export async function setFontEnabled(filePath: string, enabled: boolean): Promise<FontEnableResult> {
   if (!isMac() || !filePath) {
     return { ok: true, native: false }
   }
-  const safePath = assertSafeShellPath(filePath)
-  try {
-    await execFileAsync(
-      'osascript',
-      ['-l', 'JavaScript', '-e', FONT_ENABLE_SCRIPT, 'set', safePath, enabled ? '1' : '0'],
-      { timeout: 10_000 },
-    )
-    return { ok: true, native: true }
-  } catch (error) {
-    return {
-      ok: false,
-      native: true,
-      error: error instanceof Error ? error.message : 'Could not change font activation.',
-    }
-  }
+  return runFontManager('set', filePath, [enabled ? '1' : '0'])
 }
 
-export async function fontActivationStates(filePaths: string[]): Promise<Record<string, boolean>> {
-  const result: Record<string, boolean> = {}
-  for (const filePath of filePaths) {
-    result[filePath] = true
-  }
+export async function fontActivationStates(filePaths: string[]): Promise<ActivationQuery> {
+  const states: Record<string, boolean> = {}
   if (!isMac() || filePaths.length === 0) {
-    return result
+    for (const filePath of filePaths) {
+      states[filePath] = true
+    }
+    return { ok: true, native: false, states }
   }
   const safe = filePaths.map((filePath) => assertSafeShellPath(filePath))
   const chunkSize = 40
@@ -347,11 +446,16 @@ export async function fontActivationStates(filePaths: string[]): Promise<Record<
       )
       const parsed = JSON.parse(stdout.trim() || '{}') as Record<string, boolean>
       for (const [filePath, enabled] of Object.entries(parsed)) {
-        result[filePath] = Boolean(enabled)
+        states[filePath] = Boolean(enabled)
       }
-    } catch {
-      // Assume enabled when the font registry cannot be queried.
+    } catch (error) {
+      return {
+        ok: false,
+        native: true,
+        states: {},
+        error: error instanceof Error ? error.message : 'Could not read font activation.',
+      }
     }
   }
-  return result
+  return { ok: true, native: true, states }
 }

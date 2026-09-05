@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { AppPaths } from './paths.ts'
 import { setFontNative, noopFontNative, type FontNative } from './native.ts'
+import { setDesktopShell, testDesktopShell } from './reveal.ts'
 import { FontButlerService } from './service.ts'
 import { closeAllWatchers } from './watch.ts'
 
@@ -27,6 +28,7 @@ export function tempPaths(prefix = 'font-butler-'): AppPaths {
     supplementalFontsDir: path.join(dataRoot, 'supplemental'),
     officeFontCacheDir: path.join(dataRoot, 'office-cache'),
     atsCacheDir: path.join(dataRoot, 'ats-cache'),
+    adobeFontsDir: path.join(dataRoot, 'adobe-fonts'),
   }
 }
 
@@ -34,11 +36,12 @@ export function writeTestFont(
   dest: string,
   family: string,
   psName: string,
-  options: { style?: string; format?: 'ttf' | 'otf' } = {},
+  options: { style?: string; format?: 'ttf' | 'otf'; version?: string } = {},
 ): void {
   fs.mkdirSync(path.dirname(dest), { recursive: true })
   const style = options.style ?? 'Regular'
   const format = options.format ?? 'ttf'
+  const version = options.version ?? 'Version 1.000'
   const isTtf = format === 'ttf'
   const script = isTtf
     ? `
@@ -63,7 +66,7 @@ fb.setupNameTable({
     "uniqueFontIdentifier": ${JSON.stringify(psName)},
     "fullName": ${JSON.stringify(`${family} ${style}`)},
     "psName": ${JSON.stringify(psName)},
-    "version": "Version 1.000",
+    "version": ${JSON.stringify(version)},
 })
 fb.setupOS2()
 fb.setupPost()
@@ -93,13 +96,31 @@ fb.setupNameTable({
     "uniqueFontIdentifier": ${JSON.stringify(psName)},
     "fullName": ${JSON.stringify(`${family} ${style}`)},
     "psName": ${JSON.stringify(psName)},
-    "version": "Version 1.000",
+    "version": ${JSON.stringify(version)},
 })
 fb.setupOS2()
 fb.setupPost()
 fb.save(${JSON.stringify(dest)})
 `
   execFileSync('python3', ['-c', script], { stdio: 'pipe' })
+}
+
+export function writeTestWebFont(dest: string, family: string, psName: string): void {
+  const ttf = dest.replace(/\.woff2?$/i, '.ttf')
+  writeTestFont(ttf, family, psName)
+  execFileSync(
+    'python3',
+    [
+      '-c',
+      `
+from fontTools.ttLib import TTFont
+font = TTFont(${JSON.stringify(ttf)})
+font.flavor = "woff"
+font.save(${JSON.stringify(dest)})
+`,
+    ],
+    { stdio: 'pipe' },
+  )
 }
 
 export async function withService<T>(
@@ -113,6 +134,7 @@ export async function withService<T>(
   } else {
     setFontNative(noopFontNative())
   }
+  setDesktopShell(testDesktopShell())
   const service = new FontButlerService(paths)
   try {
     return await fn(service, paths)
@@ -120,6 +142,7 @@ export async function withService<T>(
     service.dispose()
     await closeAllWatchers()
     setFontNative(previous ?? null)
+    setDesktopShell(null)
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
 }

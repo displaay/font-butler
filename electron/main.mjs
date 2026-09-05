@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, nativeImage, n
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { noticeDedupeKey, shouldShowNativeNotice } from './notify.mjs'
+import { deliverNativeNotice, electronNotificationPermission } from './notify.mjs'
 import { menuBarUpdateBadge, outdatedFamilies } from './updates-menu.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -59,8 +59,28 @@ async function ensureApiToken() {
     applyOfficeCacheSetting(data.settings.clearOfficeFontCache)
     applyAdobeCacheSetting(data.settings.clearAdobeFontCache)
     applyNativeNotificationSetting(data.settings.nativeNotifications)
+    void persistDeniedNativeNotifications(data.settings.nativeNotifications)
   }
   return apiToken
+}
+
+async function persistDeniedNativeNotifications(wanted) {
+  if (!wanted) return
+  if (electronNotificationPermission(Notification) === 'granted') return
+  applyNativeNotificationSetting(false)
+  if (!apiToken) return
+  try {
+    await fetch(`${API}/api/settings`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiToken}`,
+      },
+      body: JSON.stringify({ nativeNotifications: false }),
+    })
+  } catch {
+    // Keep the in-process flag off even if the catalog write fails.
+  }
 }
 
 function showMainWindow() {
@@ -330,26 +350,23 @@ function windowIsHidden() {
 
 function maybeNotify(notice) {
   const now = Date.now()
-  const key = noticeDedupeKey(notice)
-  if (
-    !shouldShowNativeNotice({
-      enabled: nativeNotificationsEnabled,
-      windowHidden: windowIsHidden(),
-      kind: notice.kind,
-      key,
-      lastKey: lastNoticeKey,
-      now,
-      lastAt: lastNoticeAt,
-    })
-  ) {
-    return
-  }
-  lastNoticeKey = key
-  lastNoticeAt = now
-  new Notification({
-    title: 'Font Buttler',
-    body: notice.message,
-  }).show()
+  const result = deliverNativeNotice({
+    notice,
+    enabled: nativeNotificationsEnabled,
+    windowHidden: windowIsHidden(),
+    lastKey: lastNoticeKey,
+    lastAt: lastNoticeAt,
+    now,
+    createNotification(options) {
+      const n = new Notification(options)
+      n.on('click', () => {
+        showMainWindow()
+      })
+      return n
+    },
+  })
+  lastNoticeKey = result.lastKey
+  lastNoticeAt = result.lastAt
 }
 
 function applyAdobeCacheSetting(enabled) {
@@ -618,8 +635,27 @@ ipcMain.handle('get-api-token', async () => {
   }
 })
 
+ipcMain.handle('request-notifications', () => electronNotificationPermission(Notification))
+
 ipcMain.handle('reveal', async (_event, filePath) => {
   shell.showItemInFolder(filePath)
+})
+
+ipcMain.handle('pick-file', async () => {
+  const options = {
+    title: 'Locate source',
+    properties: ['openFile'],
+    filters: [
+      { name: 'Fonts', extensions: ['ttf', 'otf', 'ttc', 'otc', 'woff', 'woff2'] },
+    ],
+  }
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, options)
+    : await dialog.showOpenDialog(options)
+  if (result.canceled) {
+    return null
+  }
+  return result.filePaths[0] ?? null
 })
 
 ipcMain.handle('pick-folder', async () => {

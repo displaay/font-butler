@@ -26,6 +26,7 @@ function tempPaths(): AppPaths {
     supplementalFontsDir: path.join(dataRoot, 'supplemental'),
     officeFontCacheDir: path.join(dataRoot, 'office-cache'),
     atsCacheDir: path.join(dataRoot, 'ats-cache'),
+    adobeFontsDir: path.join(dataRoot, 'adobe-fonts'),
   }
 }
 
@@ -57,7 +58,7 @@ test('importPaths installs catalog entries from a nested folder', async (t) => {
   }
 })
 
-test('importPaths rejects woff-only folders and ignores woff next to desktop fonts', async () => {
+test('importPaths reports invalid web fonts without blocking other files', async () => {
   const paths = tempPaths()
   const webOnly = path.join(paths.dataRoot, 'web')
   const mixed = path.join(paths.dataRoot, 'mixed')
@@ -71,13 +72,14 @@ test('importPaths rejects woff-only folders and ignores woff next to desktop fon
     await service.init()
     const rejected = await service.importPaths([webOnly])
     assert.deepEqual(rejected.entries, [])
-    assert.equal(rejected.ignored, 1)
     assert.equal(rejected.errors.length, 1)
-    assert.match(rejected.errors[0], /WOFF files cannot be installed/)
 
     const mixedResult = await service.importPaths([mixed])
-    assert.equal(mixedResult.ignored, 1)
-    assert.equal(mixedResult.errors.some((message) => /WOFF files cannot be installed/.test(message)), false)
+    assert.equal(mixedResult.errors.length, 2)
+    assert.equal(
+      mixedResult.errors.some((message) => /WOFF files cannot be installed/.test(message)),
+      false,
+    )
   } finally {
     await closeAllWatchers()
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })

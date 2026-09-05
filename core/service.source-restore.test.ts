@@ -21,9 +21,7 @@ test('deleting and restoring a source recovers without restart', async () => {
     assert.notEqual(missing.status, 'source-missing')
     assert.equal(fs.existsSync(installed.installedPath), true)
 
-    writeTestFont(source, 'RestoreMe', 'RestoreMe-Regular')
-    const later = Date.now() / 1000 + 2
-    fs.utimesSync(source, later, later)
+    writeTestFont(source, 'RestoreMe', 'RestoreMe-Regular', { version: 'Version 2.000' })
     const restored = await refreshSourceStatus(paths, source)
     assert.ok(restored)
     assert.equal(restored.sourcePresent, true)

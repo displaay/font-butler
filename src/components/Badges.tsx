@@ -1,7 +1,8 @@
 import { Link2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { formatLabel, normalizeFormat } from '@/lib/formats'
-import type { FontStatus } from '@/lib/types'
+import { displayStateParts } from '@/lib/state'
+import type { CatalogEntry, FontStatus } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 export function FormatBadge({ format }: { format: string }) {
@@ -38,11 +39,47 @@ export function VfBadge({ show }: { show: boolean }) {
 }
 
 export function StatusBadge({ status }: { status: FontStatus }) {
-  if (status === 'outdated') return <Badge tone="warn">Updated source</Badge>
-  if (status === 'deactivated') return <Badge>Off</Badge>
+  if (status === 'outdated') return <Badge tone="warn">Update available</Badge>
+  if (status === 'deactivated') return <Badge>Deactivated</Badge>
   if (status === 'source-missing') return <Badge tone="accent">Source missing</Badge>
   if (status === 'uninstalled') return <Badge>Not installed</Badge>
   return null
+}
+
+export function StateBadges({
+  entry,
+  hideInstalled = false,
+}: {
+  entry: CatalogEntry
+  hideInstalled?: boolean
+}) {
+  const parts = displayStateParts(entry).filter(
+    (part) =>
+      !(
+        hideInstalled &&
+        (part === 'Installed' ||
+          part === 'This Mac and Adobe testing folder' ||
+          part === 'Adobe testing folder')
+      ),
+  )
+  if (parts.length === 0) return null
+  return (
+    <>
+      {parts.map((part) => {
+        const warn = part.includes('Update') || part.includes('Review') || part.includes('paused')
+        const accent =
+          part.includes('missing') ||
+          part.includes('offline') ||
+          part.includes('unreadable') ||
+          part.includes('Preview')
+        return (
+          <Badge key={part} tone={warn ? 'warn' : accent ? 'accent' : 'muted'} title={part}>
+            {part}
+          </Badge>
+        )
+      })}
+    </>
+  )
 }
 
 export function SourceBadge({ className }: { className?: string }) {

@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { normalizeFormat } from './formats.ts'
 import type { AppPaths } from './paths.ts'
+import { applyEntryFacts } from './state.ts'
 import type { CatalogEntry, CatalogFile, FontFaceInfo, FontStatus } from './types.ts'
 
 function resolvedPath(value: string | undefined): string | undefined {
@@ -48,6 +49,9 @@ export function loadCatalog(paths: AppPaths): CatalogFile {
     for (const entry of parsed.entries) {
       if (typeof entry.sourcePresent !== 'boolean') {
         entry.sourcePresent = entry.status !== 'source-missing'
+      }
+      if (!entry.sourceAvailability) {
+        applyEntryFacts(entry)
       }
     }
     return parsed
@@ -166,25 +170,5 @@ export function resolveStatusWhenSourceMissing(entry: CatalogEntry): FontStatus 
 }
 
 export function applySourcePresence(entry: CatalogEntry): boolean {
-  if (!isExternalSource(entry)) {
-    const changed = entry.sourcePresent !== false
-    entry.sourcePresent = false
-    return changed
-  }
-  const present = sourceFileExists(entry.sourcePath)
-  let changed = entry.sourcePresent !== present
-  entry.sourcePresent = present
-  if (!present) {
-    const next = resolveStatusWhenSourceMissing(entry)
-    if (entry.status !== next) {
-      entry.status = next
-      changed = true
-    }
-    return changed
-  }
-  if (entry.status === 'source-missing') {
-    entry.status = resolveStatusWhenSourceFound(entry)
-    changed = true
-  }
-  return changed
+  return applyEntryFacts(entry)
 }

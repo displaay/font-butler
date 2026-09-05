@@ -26,6 +26,7 @@ test('FONT_BUTLER_DATA isolates user, computer, system, and cache directories', 
     assert.equal(paths.systemFontsDir, path.join(dataRoot, 'system-fonts'))
     assert.equal(paths.officeFontCacheDir, path.join(dataRoot, 'office-cache'))
     assert.equal(paths.atsCacheDir, path.join(dataRoot, 'ats-cache'))
+    assert.equal(paths.adobeFontsDir, path.join(dataRoot, 'adobe-fonts'))
     assert.equal(paths.userFontsDir.includes('Library/Fonts'), false)
   } finally {
     fs.rmSync(home, { recursive: true, force: true })

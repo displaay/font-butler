@@ -28,6 +28,7 @@ function tempPaths(): AppPaths {
     supplementalFontsDir: path.join(dataRoot, 'supplemental'),
     officeFontCacheDir: path.join(dataRoot, 'office-cache'),
     atsCacheDir: path.join(dataRoot, 'ats-cache'),
+    adobeFontsDir: path.join(dataRoot, 'adobe-fonts'),
   }
 }
 

@@ -8,6 +8,62 @@ export type FontStatus =
   | 'source-missing'
   | 'deactivated'
 
+export type SourceAvailability = 'none' | 'present' | 'missing' | 'offline' | 'unreadable'
+
+export type SourceComparison =
+  | 'current'
+  | 'update-available'
+  | 'retained-different'
+  | 'pending'
+  | 'invalid'
+
+export type UpdatePolicy = 'inherit' | 'manual' | 'automatic' | 'paused-after-rollback' | 'pinned'
+
+export type UpdateHold = 'relink-review' | 'restore' | 'undo-install'
+
+export type FolderPolicyPreset = 'library' | 'install-new' | 'install-new-and-updates' | 'custom'
+
+export type DestinationId = 'macos' | 'adobe-shared'
+
+export type InstallationVerification = 'file-present' | 'unavailable'
+
+export type InstallationCopy = {
+  destinationId: DestinationId
+  path: string
+  fingerprint?: string
+  verification: InstallationVerification
+}
+
+export type DestinationCapability = {
+  id: DestinationId
+  label: string
+  path: string
+  exists: boolean
+  writable: boolean
+  supported: boolean
+  activationVerified: boolean
+  reason?: string
+  remedy?: string
+}
+
+export type DestinationInvestigationRow = {
+  destination: string
+  path: string
+  macos: string
+  applications: string
+  formats: string
+  refreshWhileOpen: string
+  permissions: string
+  systemConflict: string
+  cleanup: string
+  conclusion: string
+}
+
+export type InstallOptions = {
+  replace?: boolean
+  destinationId?: DestinationId
+}
+
 export type FontFaceInfo = {
   familyName: string
   styleName: string
@@ -20,12 +76,38 @@ export type FontFaceInfo = {
   italic: boolean
 }
 
+export type FontAxisInfo = {
+  tag: string
+  name: string
+  min: number
+  default: number
+  max: number
+}
+
+export type NamedInstanceInfo = {
+  name: string
+  coordinates: Record<string, number>
+}
+
 export type CatalogEntry = {
   id: string
   sourcePath: string
   sourceMtimeMs: number
   sourceSize: number
   sourcePresent?: boolean
+  sourceAvailability?: SourceAvailability
+  sourceFingerprint?: string
+  installedFingerprint?: string
+  previousRevisionId?: string
+  updatePolicy?: UpdatePolicy
+  updateHold?: UpdateHold | null
+  ownerFolderId?: string | null
+  previewOnly?: boolean
+  storageVolumeId?: string
+  sourceRoot?: string
+  activationOwners?: ActivationOwner[]
+  destinationId?: DestinationId
+  installations?: InstallationCopy[]
   installedSnapshotMtimeMs?: number
   installedSnapshotSize?: number
   status: FontStatus
@@ -65,6 +147,7 @@ export type Notice = {
   kind: 'installed' | 'reinstalled' | 'error' | 'info'
   message: string
   entryId?: string
+  operationId?: string
 }
 
 export type ViewLayout = 'list' | 'grid'
@@ -73,9 +156,32 @@ export type SortMode = 'name' | 'added'
 
 export type ThemeMode = 'light' | 'dark' | 'system'
 
+export type WatchFolder = {
+  id: string
+  root: string
+  policy: FolderPolicyPreset
+  installNew: boolean
+  autoUpdate: boolean
+  paused: boolean
+  watching: boolean
+  exclusions: string[]
+  availability: SourceAvailability
+  destinationId?: DestinationId
+}
+
+export type SpecimenPreset = 'headline' | 'paragraph' | 'numerals' | 'custom'
+
+export type PreviewPreferences = {
+  text: string
+  size: number
+  lineHeight: number
+  preset: SpecimenPreset
+}
+
 export type AppSettings = {
   version: 1
   watchFolders: string[]
+  folders: WatchFolder[]
   defaultView: ViewLayout
   defaultSort: SortMode
   installAfterUpload: boolean
@@ -89,6 +195,11 @@ export type AppSettings = {
   skipCacheClearOnReinstall: boolean
   nativeNotifications: boolean
   onboardingCompleted: boolean
+  revisionBudgetBytes: number
+  activityRetentionDays: number
+  activityMaxOperations: number
+  specimen?: PreviewPreferences
+  defaultDestination?: DestinationId
 }
 
 export type OfficeFontCacheInfo = {
@@ -102,8 +213,188 @@ export type AdobeFontCacheInfo = {
   roots: string[]
 }
 
+export type OperationTrigger =
+  | 'import'
+  | 'watch'
+  | 'menu-bar'
+  | 'project'
+  | 'repair'
+  | 'relink'
+  | 'restore'
+  | 'undo'
+  | 'manual'
+  | 'open-with'
+
+export type OperationOutcome = 'pending' | 'succeeded' | 'partial' | 'failed' | 'canceled'
+
+export type OperationItemOutcome = 'succeeded' | 'failed' | 'skipped' | 'canceled'
+
+export type OperationItem = {
+  id: string
+  entryId?: string
+  label: string
+  outcome: OperationItemOutcome
+  reason?: string
+  expectedRevision?: string
+  previousRevision?: string
+}
+
+export type Operation = {
+  id: string
+  startedAt: number
+  finishedAt?: number
+  trigger: OperationTrigger
+  action: string
+  familyName?: string
+  destination?: string
+  items: OperationItem[]
+  outcome: OperationOutcome
+  undoable: boolean
+  undone: boolean
+  idempotencyKey?: string
+}
+
+export type OperationFile = {
+  version: 1
+  operations: Operation[]
+}
+
+export type FontRevision = {
+  fingerprint: string
+  format: string
+  size: number
+  faces: FontFaceInfo[]
+  createdAt: number
+  refs: number
+}
+
+export type RevisionIndex = {
+  version: 1
+  revisions: FontRevision[]
+}
+
+export type ActivationOwner = {
+  kind: 'manual' | 'project'
+  projectId?: string
+}
+
+export type ProjectMember = {
+  assetId: string
+  pinFingerprint?: string
+  unsatisfied?: boolean
+}
+
+export type ProjectSet = {
+  id: string
+  name: string
+  members: ProjectMember[]
+  desiredActive: boolean
+}
+
+export type ProjectFile = {
+  version: 1
+  projects: ProjectSet[]
+}
+
+export type ImportClassification =
+  | 'new'
+  | 'identical'
+  | 'revision'
+  | 'alt-format'
+  | 'new-style'
+  | 'collection-overlap'
+  | 'unsupported'
+  | 'preview-only'
+
+export type ImportPlanChoice = 'keep' | 'replace' | 'install-as' | 'skip' | 'relink'
+
+export type ImportPlanItem = {
+  id: string
+  path: string
+  classification: ImportClassification
+  entryId?: string
+  familyName?: string
+  format?: string
+  fingerprint?: string
+  faces?: FontFaceInfo[]
+  affectedFaces?: string[]
+  currentFormat?: string
+  currentVersion?: string
+  incomingVersion?: string
+  reason?: string
+  defaultChoice: ImportPlanChoice
+  choices: ImportPlanChoice[]
+  previewOnly?: boolean
+}
+
+export type ImportPlan = {
+  id: string
+  createdAt: number
+  trigger: OperationTrigger
+  folderId?: string
+  expectedCatalogRevision: number
+  items: ImportPlanItem[]
+  summary: {
+    add: number
+    install: number
+    unchanged: number
+    review: number
+    preview: number
+  }
+}
+
+export type RelinkMatchKind = 'fingerprint' | 'identity' | 'ambiguous' | 'mismatch' | 'missing'
+
+export type RelinkPreview = {
+  entryId: string
+  oldPath: string
+  proposedPath: string
+  match: RelinkMatchKind
+  identityMatch: boolean
+  format: string
+  bytesDiffer: boolean
+  reason?: string
+}
+
+export type FolderRelinkRow = {
+  entryId: string
+  relativePath: string
+  oldPath: string
+  proposedPath?: string
+  status: 'matched' | 'changed' | 'ambiguous' | 'not-found'
+  candidates: string[]
+  bytesDiffer: boolean
+  selected?: string
+}
+
+export type FolderRelinkPreview = {
+  oldRoot: string
+  newRoot: string
+  rows: FolderRelinkRow[]
+}
+
+export type RepairItemResult = {
+  target: string
+  kind: 'font' | 'ats' | 'office' | 'adobe'
+  outcome: 'succeeded' | 'not-found' | 'unavailable' | 'failed'
+  reason?: string
+}
+
+export type BatchActionResult = {
+  operationId: string
+  succeeded: number
+  failed: number
+  skipped: number
+  canceled: number
+  errors: string[]
+  entries: CatalogEntry[]
+  failedIds: string[]
+}
+
 export type ServiceEvent =
   | { type: 'catalog'; entries: CatalogEntry[] }
   | { type: 'system'; faces: SystemFace[] }
   | { type: 'notice'; notice: Notice }
   | { type: 'settings'; settings: AppSettings }
+  | { type: 'operations'; operations: Operation[] }
+  | { type: 'projects'; projects: ProjectSet[] }

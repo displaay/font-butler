@@ -22,6 +22,7 @@ export function CatalogBatchButtons({
   onUninstall,
   onUninstallAndRemove,
   onReinstall,
+  onRepair,
   onForget,
   onDeleteFiles,
 }: {
@@ -33,21 +34,28 @@ export function CatalogBatchButtons({
   onUninstall: () => void
   onUninstallAndRemove?: () => void
   onReinstall: () => void
+  onRepair?: () => void
   onForget: () => void
   onDeleteFiles?: () => void
 }) {
   if (!hasCatalogBatchActions(plan)) return null
   const multi = plan.count > 1
+  const installVerb = plan.installMissing ? 'Install missing' : 'Install'
   return (
     <div className="flex flex-wrap gap-2">
       {plan.reinstall > 0 && (
         <Button size="sm" variant="accent" disabled={busy} onClick={onReinstall}>
-          <RefreshCw /> {actionLabel('Reinstall', plan.reinstall, multi)}
+          <RefreshCw /> {actionLabel('Install update', plan.reinstall, plan.reinstall > 1 || multi)}
+        </Button>
+      )}
+      {plan.repair > 0 && onRepair && (
+        <Button size="sm" variant="outline" disabled={busy} onClick={onRepair}>
+          <RefreshCw /> Reinstall installed version
         </Button>
       )}
       {plan.install > 0 && (
         <Button size="sm" disabled={busy} onClick={onInstall}>
-          <CirclePlus /> {actionLabel('Install', plan.install, multi)}
+          <CirclePlus /> {actionLabel(installVerb, plan.install, plan.install > 1 || multi)}
         </Button>
       )}
       {plan.activate > 0 && (
@@ -57,7 +65,7 @@ export function CatalogBatchButtons({
       )}
       {plan.deactivate > 0 && (
         <Button size="sm" variant="outline" disabled={busy} onClick={onDeactivate}>
-          <PowerOff /> {actionLabel('Deactivate', plan.deactivate, multi)}
+          <PowerOff /> {actionLabel('Deactivate', plan.deactivate, plan.deactivate > 1 || multi)}
         </Button>
       )}
       {plan.uninstall > 0 && (
@@ -142,6 +150,7 @@ export function CatalogMenuItems({
   onInstall,
   onInstallAs,
   onReinstall,
+  onRepair,
   onDeactivate,
   onUninstall,
   onUninstallAndRemove,
@@ -155,6 +164,7 @@ export function CatalogMenuItems({
   onInstall: () => void
   onInstallAs?: () => void
   onReinstall: () => void
+  onRepair?: () => void
   onDeactivate: () => void
   onUninstall: () => void
   onUninstallAndRemove?: () => void
@@ -163,8 +173,10 @@ export function CatalogMenuItems({
   onDeleteFiles?: () => void
 }) {
   const multi = plan.count > 1
+  const installVerb = plan.installMissing ? 'Install missing' : 'Install'
   const hasPrimary =
     plan.reinstall > 0 ||
+    plan.repair > 0 ||
     plan.install > 0 ||
     plan.activate > 0 ||
     plan.deactivate > 0 ||
@@ -174,12 +186,17 @@ export function CatalogMenuItems({
     <>
       {plan.reinstall > 0 && (
         <ContextMenuItem disabled={busy} onSelect={onReinstall}>
-          <RefreshCw /> {actionLabel('Reinstall', plan.reinstall, multi)}
+          <RefreshCw /> {actionLabel('Install update', plan.reinstall, plan.reinstall > 1 || multi)}
+        </ContextMenuItem>
+      )}
+      {plan.repair > 0 && onRepair && (
+        <ContextMenuItem disabled={busy} onSelect={onRepair}>
+          <RefreshCw /> Reinstall installed version
         </ContextMenuItem>
       )}
       {plan.install > 0 && (
         <ContextMenuItem disabled={busy} onSelect={onInstall}>
-          <CirclePlus /> {actionLabel('Install', plan.install, multi)}
+          <CirclePlus /> {actionLabel(installVerb, plan.install, plan.install > 1 || multi)}
         </ContextMenuItem>
       )}
       {showInstallAs && plan.install > 0 && onInstallAs && (
@@ -194,7 +211,7 @@ export function CatalogMenuItems({
       )}
       {plan.deactivate > 0 && (
         <ContextMenuItem disabled={busy} onSelect={onDeactivate}>
-          <PowerOff /> {actionLabel('Deactivate', plan.deactivate, multi)}
+          <PowerOff /> {actionLabel('Deactivate', plan.deactivate, plan.deactivate > 1 || multi)}
         </ContextMenuItem>
       )}
       {plan.uninstall > 0 && (

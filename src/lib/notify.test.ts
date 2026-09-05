@@ -53,6 +53,14 @@ test('importDoneCopy mentions ignored web fonts only in the success line', () =>
     importDoneCopy({ installed: false, count: 1, name: 'Inter', ignored: 2 }),
     '1 font added and 2 fonts ignored',
   )
+  assert.equal(
+    importDoneCopy({ installed: true, count: 3, preview: 1 }),
+    '2 fonts installed and 1 preview-only',
+  )
+  assert.equal(
+    importDoneCopy({ installed: false, count: 1, name: 'Web', preview: 1 }),
+    'Added preview of Web',
+  )
 })
 
 test('emptyImportError prefers real failures over skipped WOFF files', () => {

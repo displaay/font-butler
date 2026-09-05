@@ -13,7 +13,9 @@ import {
 } from './catalog.ts'
 import { emitEvent } from './events.ts'
 import { countInstallableFormats, isWebFontFile } from './formats.ts'
+import { tryFingerprintFile } from './fingerprint.ts'
 import { isFontFile, readFileStat } from './parse.ts'
+import { applyEntryFacts } from './state.ts'
 import type { AppPaths } from './paths.ts'
 import type { CatalogEntry } from './types.ts'
 
@@ -36,7 +38,8 @@ function refreshStatusUnlocked(paths: AppPaths, sourcePath: string): CatalogEntr
     return undefined
   }
   applySourcePresence(entry)
-  if (!entry.sourcePresent) {
+  applyEntryFacts(entry)
+  if (entry.sourceAvailability !== 'present') {
     entry.updatedAt = Date.now()
     saveCatalog(paths, catalog)
     emitEvent({ type: 'catalog', entries: catalog.entries })
@@ -45,19 +48,22 @@ function refreshStatusUnlocked(paths: AppPaths, sourcePath: string): CatalogEntr
   const stat = readFileStat(sourcePath)
   entry.sourceMtimeMs = stat.mtimeMs
   entry.sourceSize = stat.size
+  const fingerprint = tryFingerprintFile(sourcePath)
+  if (fingerprint) {
+    entry.sourceFingerprint = fingerprint
+  }
+  const bytesDiffer = fingerprint && entry.installedFingerprint
+    ? fingerprint !== entry.installedFingerprint
+    : stat.mtimeMs !== entry.installedSnapshotMtimeMs || stat.size !== entry.installedSnapshotSize
   if (
     (entry.status === 'installed' || entry.status === 'outdated') &&
-    (stat.mtimeMs !== entry.installedSnapshotMtimeMs ||
-      stat.size !== entry.installedSnapshotSize)
+    bytesDiffer &&
+    !entry.updateHold
   ) {
     entry.status = 'outdated'
   } else if (entry.status === 'source-missing') {
     entry.status = resolveStatusWhenSourceFound(entry)
-  } else if (
-    entry.status === 'outdated' &&
-    stat.mtimeMs === entry.installedSnapshotMtimeMs &&
-    stat.size === entry.installedSnapshotSize
-  ) {
+  } else if (entry.status === 'outdated' && !bytesDiffer) {
     entry.status = 'installed'
   }
   entry.updatedAt = Date.now()
@@ -120,6 +126,7 @@ export function shouldSkipFontWalkName(name: string): boolean {
 
 type TreeFonts = {
   files: string[]
+  previewFiles: string[]
   skippedWeb: number
 }
 
@@ -127,17 +134,19 @@ function collectTreeFonts(
   root: string,
   depth = 0,
   maxDepth = FONT_TREE_MAX_DEPTH,
+  includeWeb = false,
 ): TreeFonts {
   if (depth > maxDepth) {
-    return { files: [], skippedWeb: 0 }
+    return { files: [], previewFiles: [], skippedWeb: 0 }
   }
   let entries: fs.Dirent[]
   try {
     entries = fs.readdirSync(root, { withFileTypes: true })
   } catch {
-    return { files: [], skippedWeb: 0 }
+    return { files: [], previewFiles: [], skippedWeb: 0 }
   }
   const files: string[] = []
+  const previewFiles: string[] = []
   let skippedWeb = 0
   for (const entry of entries) {
     if (shouldSkipFontWalkName(entry.name)) {
@@ -145,18 +154,23 @@ function collectTreeFonts(
     }
     const full = path.join(root, entry.name)
     if (entry.isDirectory()) {
-      const nested = collectTreeFonts(full, depth + 1, maxDepth)
+      const nested = collectTreeFonts(full, depth + 1, maxDepth, includeWeb)
       files.push(...nested.files)
+      previewFiles.push(...nested.previewFiles)
       skippedWeb += nested.skippedWeb
     } else if (entry.isFile()) {
       if (isWebFontFile(full)) {
         skippedWeb += 1
+        previewFiles.push(path.resolve(full))
+        if (includeWeb) {
+          files.push(path.resolve(full))
+        }
       } else if (isFontFile(full)) {
         files.push(path.resolve(full))
       }
     }
   }
-  return { files, skippedWeb }
+  return { files, previewFiles, skippedWeb }
 }
 
 export function listFontFilesInTree(
@@ -164,11 +178,11 @@ export function listFontFilesInTree(
   depth = 0,
   maxDepth = FONT_TREE_MAX_DEPTH,
 ): string[] {
-  return collectTreeFonts(root, depth, maxDepth).files
+  return collectTreeFonts(root, depth, maxDepth, false).files
 }
 
 export function listInboxFontFiles(root: string, depth = 0): string[] {
-  return listFontFilesInTree(root, depth)
+  return collectTreeFonts(root, depth, FONT_TREE_MAX_DEPTH, true).files
 }
 
 export function expandImportPaths(inputPaths: string[]): {
@@ -204,12 +218,10 @@ export function expandImportPaths(inputPaths: string[]): {
       continue
     }
     if (stat.isDirectory()) {
-      const found = collectTreeFonts(resolved)
+      const found = collectTreeFonts(resolved, 0, FONT_TREE_MAX_DEPTH, true)
       skippedWeb += found.skippedWeb
       if (found.files.length === 0) {
-        if (found.skippedWeb === 0) {
-          errors.push(`${raw}: No font files in that folder.`)
-        }
+        errors.push(`${raw}: No font files in that folder.`)
         continue
       }
       for (const filePath of found.files) {
@@ -220,7 +232,6 @@ export function expandImportPaths(inputPaths: string[]): {
     if (stat.isFile()) {
       if (isWebFontFile(resolved)) {
         skippedWeb += 1
-        continue
       }
       addFile(resolved)
       continue

@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent, type PointerEvent } from 'react'
 import { toast } from 'sonner'
-import { ChevronDown, FolderOpen, RefreshCw, X } from 'lucide-react'
+import { Check, ChevronDown, FolderMinus, FolderOpen, Plus, RefreshCw, X } from 'lucide-react'
 import { AaPreview, CyclingAaPreview } from '@/components/AaPreview'
-import { FormatBadges, SourceBadge, StatusBadge, VfBadge } from '@/components/Badges'
+import { ActivityView } from '@/components/ActivityView'
+import { FormatBadges, SourceBadge, StateBadges, VfBadge } from '@/components/Badges'
 import {
   BatchActionBar,
   CatalogBatchButtons,
@@ -15,7 +16,11 @@ import { FontFaceStyles, catalogFontFamily, systemFontFamily } from '@/component
 import { InstanceList } from '@/components/InstanceList'
 import { Inspector } from '@/components/Inspector'
 import { DropFolderDialog } from '@/components/DropFolderDialog'
+import { FolderSetupDialog } from '@/components/FolderSetupDialog'
+import { FolderRelinkDialog } from '@/components/FolderRelinkDialog'
 import { FormatDialog } from '@/components/FormatDialog'
+import { ImportPlanDialog } from '@/components/ImportPlanDialog'
+import { RelinkDialog } from '@/components/RelinkDialog'
 import { RenameDialog } from '@/components/RenameDialog'
 import { ReplaceFormatDialog } from '@/components/ReplaceFormatDialog'
 import { OnboardingDialog } from '@/components/OnboardingDialog'
@@ -34,20 +39,21 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { NotifyProvider, useSetActionStatus } from '@/components/NotifyProvider'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { api, isNotice, isSettingsEvent, subscribeEvents } from '@/lib/api'
+import { api, isNotice, isOperationsEvent, isProjectsEvent, isSettingsEvent, subscribeEvents } from '@/lib/api'
 import { desktopPathForFile } from '@/lib/desktop'
 import {
   collectDropPayload,
   commonDroppedFolder,
-  filterDropByFormat,
   isDroppedFontName,
-  isWebOnlyDrop,
   partitionDropPayload,
 } from '@/lib/drop'
 import {
@@ -56,7 +62,6 @@ import {
   entryFormatOf,
   listFormatConflicts,
   uniqueEntryFormats,
-  WOFF_INSTALL_ERROR,
   type FormatCount,
 } from '@/lib/formats'
 import {
@@ -64,10 +69,24 @@ import {
   deactivatableIds,
   installableIds,
   reinstallableIds,
+  repairableIds,
   uninstallableIds,
 } from '@/lib/eligibility'
 import { familyNameOf, countLibraryFilters, deletableSourceIds, entryHasTrackedSource, entryIds, familyStatusSummary, forgettableIds, groupCatalog, groupSystem, hasSourceMissing, hasTrackedSource, isForgettableOnlyGroup, isLibraryFilter, isUninstallableGroup, matchesLibraryFilter, matchesQuery, sortFamilyGroups } from '@/lib/group'
 import { actionCopy, actionCopyFor, emptyImportError, importDoneCopy, remainingActionCopy } from '@/lib/notify'
+import { planNeedsReview } from '@/lib/planner'
+import { applyFontDragImage, clearFontDragImage } from '@/lib/dragPreview'
+import {
+  defaultProjectName,
+  hasFontButlerEntries,
+  projectContainsAll,
+  removeMemberIds,
+  uniqueMemberIds,
+  writeFontButlerEntries,
+} from '@/lib/projects'
+import { FONT_FILE_ACCEPT, batchResultCopy, type BatchOutcome } from '@/lib/results'
+import { specimenFromSettings } from '@/lib/specimen'
+import { needsLocateSource } from '@/lib/state'
 import { catalogInstanceRows, systemInstanceRows } from '@/lib/instances'
 import {
   catalogBatchPlan,
@@ -88,9 +107,9 @@ import {
 } from '@/lib/selection'
 import { applyTheme } from '@/lib/theme'
 import { allUpdateGroups, updateGroupsForIds, visibleUpdateGroups } from '@/lib/updateInventory'
-import type { AppSettings, CatalogEntry, FamilyGroup, LibraryFilter, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
+import type { AppSettings, CatalogEntry, FamilyGroup, ImportPlan, ImportPlanItem, LibraryFilter, Operation, PreviewPreferences, ProjectSet, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
 import { cn } from '@/lib/utils'
-import { isPathUnderFolder, isWatchFolderEntry, mergeWatchFolders, watchFolderName } from '@/lib/watchFolders'
+import { isPathUnderFolder, isWatchFolderEntry, watchFolderName } from '@/lib/watchFolders'
 
 const EMPTY_WATCH_FOLDERS: string[] = []
 const LIBRARY_FILTERS_KEY = 'font-butler-library-filters'
@@ -187,11 +206,28 @@ function AppShell() {
     active: boolean
   } | null>(null)
   const suppressClickRef = useRef(false)
+  const fontDragRef = useRef(false)
   const applyMarqueeKeysRef = useRef<(keys: string[]) => void>(() => {})
   const reinstallFromMenuBarRef = useRef<(ids: string[]) => void>(() => {})
   const [scrollToFamily, setScrollToFamily] = useState<string | null>(null)
   const [libraryFilters, setLibraryFilters] = useState<LibraryFilter[]>(readLibraryFilters)
   const [gridPreviewSize, setGridPreviewSize] = useState(readGridPreviewSize)
+  const [projects, setProjects] = useState<ProjectSet[]>([])
+  const [operations, setOperations] = useState<Operation[]>([])
+  const [projectFilter, setProjectFilter] = useState<string | null>(null)
+  const [importPlan, setImportPlan] = useState<ImportPlan | null>(null)
+  type ImportPlanDecision = {
+    choices: Record<string, ImportPlanItem['defaultChoice']>
+    familyName?: string
+  }
+  const [importPlanResolve, setImportPlanResolve] = useState<
+    ((decision: ImportPlanDecision | null) => void) | null
+  >(null)
+  const [relinkEntry, setRelinkEntry] = useState<CatalogEntry | null>(null)
+  const [relinkMode, setRelinkMode] = useState<'locate' | 'link'>('locate')
+  const [folderSetupRoots, setFolderSetupRoots] = useState<string[] | null>(null)
+  const [folderRelinkRoot, setFolderRelinkRoot] = useState<string | null>(null)
+  const [highlightOperation, setHighlightOperation] = useState<string | null>(null)
 
   function applySettings(next: AppSettings) {
     const current = settingsRef.current
@@ -231,9 +267,16 @@ function AppShell() {
         if (openPath) {
           await api.open(openPath)
         }
-        const [catalog, settingsResult] = await Promise.all([api.catalog(), api.settings()])
+        const [catalog, settingsResult, projectResult, activityResult] = await Promise.all([
+          api.catalog(),
+          api.settings(),
+          api.projects().catch(() => ({ projects: [] })),
+          api.activity().catch(() => ({ operations: [] })),
+        ])
         if (!cancelled) {
           applySettings(settingsResult.settings)
+          setProjects(projectResult.projects)
+          setOperations(activityResult.operations)
           if (shouldShowOnboarding(settingsResult.settings)) {
             setOnboardingOpen(true)
           }
@@ -263,12 +306,25 @@ function AppShell() {
     const stop = subscribeEvents((event) => {
       if (isNotice(event)) {
         if (event.notice.kind === 'error' || !busyRef.current) {
-          toast[event.notice.kind === 'error' ? 'error' : 'success'](event.notice.message)
+          toast[event.notice.kind === 'error' ? 'error' : 'success'](event.notice.message, {
+            action: event.notice.operationId
+              ? {
+                  label: 'Activity',
+                  onClick: () => {
+                    setHighlightOperation(event.notice.operationId ?? null)
+                    setTab('activity')
+                  },
+                }
+              : undefined,
+          })
         }
         if (event.notice.entryId) {
           setEntries((current) => {
             const match = current.find((entry) => entry.id === event.notice.entryId)
-            if (match) setSelectedFamily(familyNameOf(match))
+            if (match) {
+              setSelectedFamily(familyNameOf(match))
+              if (match.previewOnly) setInspectSelection(true)
+            }
             return current
           })
         }
@@ -276,6 +332,14 @@ function AppShell() {
       }
       if (isSettingsEvent(event)) {
         applySettings(event.settings)
+        return
+      }
+      if (isProjectsEvent(event)) {
+        setProjects(event.projects)
+        return
+      }
+      if (isOperationsEvent(event)) {
+        setOperations(event.operations)
         return
       }
       if (event && typeof event === 'object' && (event as { type?: string }).type === 'catalog') {
@@ -325,10 +389,18 @@ function AppShell() {
   }, [])
 
   const watchFolders = settings?.watchFolders ?? EMPTY_WATCH_FOLDERS
+  const projectMemberIds = useMemo(() => {
+    const project = projects.find((item) => item.id === projectFilter)
+    return new Set(project?.members.map((member) => member.assetId) ?? [])
+  }, [projects, projectFilter])
   const librarySourceEntries = useMemo(
     () =>
-      entries.filter((entry) => !watchFolderFilter || isWatchFolderEntry(entry, watchFolderFilter)),
-    [entries, watchFolderFilter],
+      entries.filter((entry) => {
+        if (watchFolderFilter && !isWatchFolderEntry(entry, watchFolderFilter)) return false
+        if (projectFilter && !projectMemberIds.has(entry.id)) return false
+        return true
+      }),
+    [entries, watchFolderFilter, projectFilter, projectMemberIds],
   )
   const libraryGroups = useMemo(
     () =>
@@ -378,21 +450,24 @@ function AppShell() {
       library: groupCatalog(entries).length,
       system: groupSystem(systemFaces).length,
       updates: groupCatalog(entries.filter((entry) => entry.status === 'outdated')).length,
+      activity: operations.length,
     }),
-    [entries, systemFaces],
+    [entries, systemFaces, operations.length],
   )
 
   const visibleGroups = useMemo(
     () =>
-      tab === 'system' ? [] : tab === 'updates' ? updateGroups : libraryGroups,
+      tab === 'system' || tab === 'activity' ? [] : tab === 'updates' ? updateGroups : libraryGroups,
     [tab, updateGroups, libraryGroups],
   )
   const hasCatalogList =
     tab === 'system'
       ? shownSystemGroups.length > 0
-      : tab === 'library'
-        ? libraryGroupsUnfiltered.length > 0
-        : allUpdates.length > 0
+      : tab === 'activity'
+        ? operations.length > 0
+        : tab === 'library'
+          ? libraryGroupsUnfiltered.length > 0
+          : allUpdates.length > 0
   const selectedGroup =
     selectedFamily && selectedFamilyKeys.includes(selectedFamily)
       ? (visibleGroups.find((group) => group.familyName === selectedFamily) ?? null)
@@ -861,6 +936,119 @@ function AppShell() {
     }, actionCopyFor('reinstall', groups))
   }
 
+  async function repairSelected() {
+    const groups = selectedCatalogGroups()
+    const ids = groups.flatMap(repairableIds)
+    if (ids.length === 0) return
+    await run(() => api.repair(ids, false), {
+      pending: 'Repairing fonts…',
+      done: 'Repaired installed versions',
+    })
+  }
+
+  async function createProjectWith(ids: string[], familyNames: string[]) {
+    try {
+      const result = await api.createProject(defaultProjectName(familyNames), ids)
+      setProjects((current) => [result.project, ...current.filter((item) => item.id !== result.project.id)])
+      setProjectFilter(result.project.id)
+      setTab('library')
+      setWatchFolderFilter(null)
+      toast.success(`Created ${result.project.name}`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not create project')
+    }
+  }
+
+  async function createProjectFromSelection() {
+    const groups = selectedCatalogGroups()
+    await createProjectWith(groups.flatMap(entryIds), groups.map((group) => group.familyName))
+  }
+
+  async function addFontsToProject(projectId: string, ids: string[]) {
+    const project = projects.find((item) => item.id === projectId)
+    if (!project || ids.length === 0) return
+    const next = uniqueMemberIds(
+      project.members.map((member) => member.assetId),
+      ids,
+    )
+    if (next.length === project.members.length) {
+      toast.message(`Already in ${project.name}`)
+      return
+    }
+    try {
+      const result = await api.updateProject(projectId, { memberIds: next })
+      setProjects((current) => current.map((item) => (item.id === result.project.id ? result.project : item)))
+      toast.success(`Added to ${result.project.name}`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not add to project')
+    }
+  }
+
+  async function removeFontsFromProject(projectId: string, ids: string[]) {
+    const project = projects.find((item) => item.id === projectId)
+    if (!project || ids.length === 0) return
+    const next = removeMemberIds(
+      project.members.map((member) => member.assetId),
+      ids,
+    )
+    if (next.length === project.members.length) return
+    try {
+      const result = await api.updateProject(projectId, { memberIds: next })
+      setProjects((current) => current.map((item) => (item.id === result.project.id ? result.project : item)))
+      toast.success(`Removed from ${result.project.name}`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not remove from project')
+    }
+  }
+
+  async function renameProject(id: string, name: string) {
+    try {
+      const result = await api.updateProject(id, { name })
+      setProjects((current) => current.map((item) => (item.id === result.project.id ? result.project : item)))
+      toast.success(`Renamed to ${result.project.name}`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not rename project')
+    }
+  }
+
+  function beginFontDrag() {
+    fontDragRef.current = true
+    marqueeRef.current = null
+    setMarqueeRect(null)
+  }
+
+  function endFontDrag() {
+    fontDragRef.current = false
+    clearFontDragImage()
+  }
+
+  async function removeProject(id: string) {
+    const project = projects.find((item) => item.id === id)
+    try {
+      await api.deleteProject(id)
+      setProjects((current) => current.filter((item) => item.id !== id))
+      setProjectFilter((current) => (current === id ? null : current))
+      toast.success(`Removed ${project?.name ?? 'project'}`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not remove project')
+    }
+  }
+
+  async function persistSpecimen(next: PreviewPreferences) {
+    const current = settingsRef.current
+    if (!current) return
+    applySettings({
+      ...current,
+      specimen: next,
+    })
+    try {
+      const result = await api.updateSettings({ specimen: next })
+      applySettings(result.settings)
+    } catch {
+      // Specimen text is remembered locally even if settings fail to persist.
+    }
+  }
+
   async function reinstallAllUpdates() {
     const groups = allUpdates
     if (groups.length === 0) return
@@ -1016,19 +1204,65 @@ function AppShell() {
     return () => window.removeEventListener('keydown', onKeyDown)
   })
 
-  async function run(action: () => Promise<unknown>, copy: { pending: string; done: string }) {
+  function showActivityToast(message: string, failedIds: string[] = [], operationId?: string) {
+    toast.success(message, {
+      action: {
+        label: failedIds.length ? 'Retry failed' : 'Activity',
+        onClick: () => {
+          if (failedIds.length) {
+            void retryFailed(failedIds)
+            return
+          }
+          setHighlightOperation(operationId ?? null)
+          setTab('activity')
+        },
+      },
+    })
+  }
+
+  async function retryFailed(ids: string[]) {
+    const current = entries.filter((entry) => ids.includes(entry.id))
+    const toUpdate = current.filter((entry) => entry.status === 'outdated' && !entry.previewOnly)
+    const toInstall = current.filter((entry) => entry.status === 'uninstalled' && !entry.previewOnly)
+    if (toUpdate.length === 0 && toInstall.length === 0) {
+      toast.message('Those items are no longer eligible to retry.')
+      return
+    }
+    await run(async () => {
+      if (toUpdate.length) {
+        await (toUpdate.length > 1 ? api.reinstallMany(toUpdate.map((entry) => entry.id)) : api.reinstall(toUpdate[0]!.id))
+      }
+      if (toInstall.length) {
+        await installPrepared(toInstall.map((entry) => entry.id))
+      }
+    }, { pending: 'Retrying failed items…', done: 'Retried failed items' })
+  }
+
+  async function run(
+    action: () => Promise<unknown>,
+    copy: { pending: string; done: string },
+  ) {
     busyRef.current = true
     setBusy(true)
     setActionStatus(copy.pending)
     try {
-      await action()
+      const result = await action()
       setActionStatus(null)
-      toast.success(copy.done)
+      const outcome = result && typeof result === 'object' ? (result as BatchOutcome) : undefined
+      const { message, failedIds } = batchResultCopy(copy.done, outcome)
+      showActivityToast(message, failedIds, (result as { operationId?: string } | undefined)?.operationId)
       const catalog = await api.catalog()
       setEntries(catalog.entries)
+      const activity = await api.activity().catch(() => ({ operations }))
+      setOperations(activity.operations)
     } catch (err) {
       setActionStatus(null)
-      toast.error(err instanceof Error ? err.message : 'Something went wrong')
+      toast.error(err instanceof Error ? err.message : 'Something went wrong', {
+        action: {
+          label: 'Activity',
+          onClick: () => setTab('activity'),
+        },
+      })
       try {
         const catalog = await api.catalog()
         setEntries(catalog.entries)
@@ -1051,6 +1285,10 @@ function AppShell() {
   }
 
   async function handleDrop(dataTransfer: DataTransfer) {
+    if (fontDragRef.current || hasFontButlerEntries(dataTransfer)) {
+      setDragging(false)
+      return
+    }
     try {
       const payload = await collectDropPayload(dataTransfer)
       setDragging(false)
@@ -1073,10 +1311,6 @@ function AppShell() {
         if (fallback) folders = [fallback]
       }
       if (folders.length > 0) {
-        if (isWebOnlyDrop(partitionDropPayload(paths, payload.files))) {
-          toast.error(WOFF_INSTALL_ERROR)
-          return
-        }
         setFolderDrop({ folders, paths, files: payload.files })
         return
       }
@@ -1090,133 +1324,40 @@ function AppShell() {
   function selectLibrary(folder: string | null) {
     setTab('library')
     setWatchFolderFilter(folder)
-  }
-
-  async function installPendingIds(pendingIds: string[], catalog: CatalogEntry[]): Promise<boolean> {
-    const prepared = await prepareInstall(pendingIds, catalog)
-    if (!prepared) return false
-    for (let index = 0; index < prepared.ids.length; index += 1) {
-      const remaining = prepared.ids.length - index
-      const current = catalog.find((entry) => entry.id === prepared.ids[index])
-      setActionStatus(
-        remainingActionCopy(
-          'install',
-          remaining,
-          prepared.ids.length === 1 && current ? familyNameOf(current) : undefined,
-        ),
-      )
-      await api.install(prepared.ids[index], undefined, { replace: prepared.replace })
-    }
-    return true
+    setProjectFilter(null)
   }
 
   async function watchDroppedFolders(folders: string[], leftover: { paths: string[]; files: File[] }) {
-    const next = mergeWatchFolders(watchFolders, folders)
-    const shouldInstall = settings?.installAfterUpload !== false
-    busyRef.current = true
-    setBusy(true)
-    setActionStatus(folders.length === 1 ? 'Adding watch folder…' : 'Adding watch folders…')
-    try {
-      const result = await api.updateSettings({ watchFolders: next })
-      applySettings(result.settings)
-      selectLibrary(folders[0] ?? null)
-      setQuery('')
-      const latest = (await api.catalog()).entries
-      const pendingIds = latest
-        .filter(
-          (entry) =>
-            folders.some((folder) => isPathUnderFolder(entry.sourcePath, folder)) &&
-            entry.status !== 'installed' &&
-            entry.status !== 'source-missing',
-        )
-        .map((entry) => entry.id)
-      let installed = false
-      if (shouldInstall && pendingIds.length > 0) {
-        try {
-          installed = await installPendingIds(pendingIds, latest)
-        } catch (error) {
-          toast.error(error instanceof Error ? error.message : 'Could not install fonts')
-        }
-      }
-      toast.success(
-        folders.length === 1
-          ? installed
-            ? `Watching ${watchFolderName(folders[0])} and installed fonts`
-            : `Watching ${watchFolderName(folders[0])}`
-          : installed
-            ? `Watching ${folders.length} folders and installed fonts`
-            : `Watching ${folders.length} folders`,
-      )
-      const loosePaths = leftover.paths.filter(
-        (filePath) => !folders.some((folder) => isPathUnderFolder(filePath, folder)),
-      )
-      if (loosePaths.length || leftover.files.length) {
-        await importDropped(loosePaths, leftover.files)
-        selectLibrary(folders[0] ?? null)
-        return
-      }
-      setEntries((await api.catalog()).entries)
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not add watch folder')
-    } finally {
-      busyRef.current = false
-      setBusy(false)
-      setActionStatus(null)
-      setDragging(false)
+    setFolderSetupRoots(folders)
+    const loosePaths = leftover.paths.filter(
+      (filePath) => !folders.some((folder) => isPathUnderFolder(filePath, folder)),
+    )
+    if (loosePaths.length || leftover.files.length) {
+      await importDropped(loosePaths, leftover.files)
     }
   }
 
-  async function importDropped(paths: string[], files: File[]) {
-    let partitioned = partitionDropPayload(paths, files)
-    if (isWebOnlyDrop(partitioned)) {
-      toast.error(WOFF_INSTALL_ERROR)
-      setDragging(false)
-      return
-    }
-    const shouldInstall = settings?.installAfterUpload !== false
-    if (partitioned.formats.length > 1) {
-      const format = await askFormat(partitioned.formats, shouldInstall ? 'Install' : 'Add')
-      if (!format) {
-        setDragging(false)
-        return
-      }
-      partitioned = filterDropByFormat(partitioned, format)
-    }
-    if (partitioned.paths.length === 0 && partitioned.files.length === 0) {
-      toast.error(emptyImportError([], partitioned.skippedWeb))
-      setDragging(false)
-      return
-    }
-    busyRef.current = true
-    setBusy(true)
-    setActionStatus('Adding fonts…')
-    try {
-      const result =
-        partitioned.paths.length
-          ? await api.importPaths(partitioned.paths)
-          : await api.importFiles(partitioned.files)
-      const ignored = partitioned.skippedWeb + (result.ignored ?? 0)
-      const visibleErrors = result.errors.filter((message) => message !== WOFF_INSTALL_ERROR)
-      if (result.entries.length === 0) {
-        toast.error(emptyImportError(visibleErrors, ignored))
-        return
-      }
-      if (visibleErrors.length) toast.error(visibleErrors.join('\n'))
-      const pendingIds = result.entries
-        .filter((entry) => entry.status !== 'installed' && entry.status !== 'source-missing')
-        .map((entry) => entry.id)
-      let installed = false
-      if (shouldInstall && pendingIds.length > 0) {
-        const latest = (await api.catalog()).entries
-        try {
-          installed = await installPendingIds(pendingIds, latest)
-        } catch (error) {
-          toast.error(error instanceof Error ? error.message : 'Could not install fonts')
-          setEntries((await api.catalog()).entries)
-          return
-        }
-      }
-      const names = [...new Set(result.entries.map(familyNameOf))]
+  function askImportPlan(plan: ImportPlan): Promise<ImportPlanDecision | null> {
+    return new Promise((resolve) => {
+      setImportPlan(plan)
+      setImportPlanResolve(() => resolve)
+    })
+  }
+
+  async function applyImportPlan(
+    plan: ImportPlan,
+    choices?: Record<string, ImportPlanItem['defaultChoice']>,
+    familyName?: string,
+  ) {
+    const result = await api.applyPlan(plan.id, choices, {
+      idempotencyKey: plan.id,
+      familyName,
+    })
+    const latest = (await api.catalog()).entries
+    setEntries(latest)
+    const preview = result.entries.filter((entry) => entry.previewOnly).length
+    const names = [...new Set(result.entries.map(familyNameOf))]
+    if (result.entries.length) {
       setQuery('')
       setWatchFolderFilter(null)
       setTab('library')
@@ -1226,12 +1367,67 @@ function AppShell() {
       setInspectSelection(names.length === 1)
       setSelectedEntryId(result.entries[0]?.id ?? null)
       setScrollToFamily(names[0] ?? null)
+    }
+    showActivityToast(
+      importDoneCopy({
+        installed: result.succeeded > 0 && preview < result.succeeded,
+        count: result.entries.length,
+        name: familyNameOf(result.entries[0]),
+        preview,
+      }),
+      result.failedIds,
+      result.operationId,
+    )
+    if (result.errors.length) toast.error(result.errors.join('\n'))
+    return result
+  }
+
+  async function importDropped(paths: string[], files: File[]) {
+    const partitioned = partitionDropPayload(paths, files)
+    if (partitioned.paths.length === 0 && partitioned.files.length === 0) {
+      toast.error(emptyImportError([], 0))
+      setDragging(false)
+      return
+    }
+    busyRef.current = true
+    setBusy(true)
+    setActionStatus('Planning import…')
+    try {
+      if (partitioned.paths.length) {
+        const plan = await api.planImport(partitioned.paths)
+        if (planNeedsReview(plan)) {
+          setActionStatus(null)
+          const decision = await askImportPlan(plan)
+          if (!decision) return
+          setActionStatus('Adding fonts…')
+          await applyImportPlan(plan, decision.choices, decision.familyName)
+          return
+        }
+        setActionStatus('Adding fonts…')
+        await applyImportPlan(plan)
+        return
+      }
+      const result = await api.importFiles(partitioned.files)
+      if (result.entries.length === 0) {
+        toast.error(emptyImportError(result.errors, 0))
+        return
+      }
+      const preview = result.entries.filter((entry) => entry.previewOnly).length
+      const names = [...new Set(result.entries.map(familyNameOf))]
+      setQuery('')
+      setWatchFolderFilter(null)
+      setTab('library')
+      setSelectedFamily(names[0] ?? null)
+      setSelectedFamilyKeys(names)
+      setInspectSelection(names.length === 1)
+      setSelectedEntryId(result.entries[0]?.id ?? null)
+      setScrollToFamily(names[0] ?? null)
       toast.success(
         importDoneCopy({
-          installed,
+          installed: settings?.installAfterUpload !== false,
           count: result.entries.length,
           name: familyNameOf(result.entries[0]),
-          ignored,
+          preview,
         }),
       )
       setEntries((await api.catalog()).entries)
@@ -1289,10 +1485,12 @@ function AppShell() {
       <div
         className="flex h-dvh min-h-0 flex-col overflow-hidden bg-background text-foreground md:flex-row"
         onDragEnter={(event) => {
+          if (fontDragRef.current || hasFontButlerEntries(event.dataTransfer)) return
           event.preventDefault()
           setDragging(true)
         }}
         onDragOver={(event) => {
+          if (fontDragRef.current || hasFontButlerEntries(event.dataTransfer)) return
           event.preventDefault()
           event.dataTransfer.dropEffect = 'copy'
         }}
@@ -1315,6 +1513,7 @@ function AppShell() {
           onTabChange={(next) => {
             setTab(next)
             if (next !== 'library') setWatchFolderFilter(null)
+            if (next === 'library') setProjectFilter(null)
           }}
           watchFolders={watchFolders}
           watchFolderFilter={watchFolderFilter}
@@ -1322,6 +1521,24 @@ function AppShell() {
           onSelectWatchFolder={selectLibrary}
           onRevealWatchFolder={(folder) => void revealWatchFolder(folder)}
           onRemoveWatchFolder={(folder) => void removeWatchFolder(folder)}
+          folders={settings?.folders}
+          projects={projects}
+          projectFilter={projectFilter}
+          onSelectProject={(id) => {
+            setProjectFilter((current) => (current === id ? null : id))
+            setTab('library')
+            setWatchFolderFilter(null)
+          }}
+          onActivateProject={(id) =>
+            void run(() => api.activateProject(id), { pending: 'Activating project…', done: 'Activated project' })
+          }
+          onDeactivateProject={(id) =>
+            void run(() => api.deactivateProject(id), { pending: 'Releasing project…', done: 'Released project' })
+          }
+          onRenameProject={(id, name) => void renameProject(id, name)}
+          onAddFontsToProject={(id, ids) => void addFontsToProject(id, ids)}
+          onRemoveProject={(id) => void removeProject(id)}
+          onCreateProject={() => void createProjectFromSelection()}
           libraryFilters={libraryFilters}
           libraryFilterCounts={libraryFilterCounts}
           onLibraryFiltersChange={(next) => {
@@ -1409,7 +1626,16 @@ function AppShell() {
                 {error && (
                   <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>
                 )}
-                {!loading && tab !== 'system' && visibleGroups.length === 0 && (
+                {!loading && tab === 'activity' && (
+                  <ActivityView
+                    operations={operations}
+                    highlightId={highlightOperation}
+                    onUndo={(id) =>
+                      void run(() => api.undo(id), { pending: 'Undoing…', done: 'Undid the last change' })
+                    }
+                  />
+                )}
+                {!loading && tab !== 'system' && tab !== 'activity' && visibleGroups.length === 0 && (
                   tab === 'library' && libraryGroupsUnfiltered.length > 0 && libraryFilters.length > 0 ? (
                     <p className="px-2 py-12 text-center text-sm text-muted-foreground">
                       No fonts match these filters.
@@ -1435,7 +1661,7 @@ function AppShell() {
                     No fonts found in the system folders.
                   </p>
                 )}
-                {!loading && missingSourceCount > 0 && tab !== 'system' && tab !== 'updates' && (
+                {!loading && missingSourceCount > 0 && tab !== 'system' && tab !== 'updates' && tab !== 'activity' && (
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-dashed bg-muted/40 px-3 py-2">
                     <p className="text-sm text-muted-foreground">
                       {missingSourceCount}{' '}
@@ -1555,6 +1781,12 @@ function AppShell() {
                               ? void reinstallSelected()
                               : void run(() => reinstallGroup(group), actionCopy('reinstall', group.familyName))
                           }
+                          onLocateSource={() => {
+                            const target = group.entries.find(needsLocateSource) ?? group.entries[0]
+                            if (!target) return
+                            setRelinkMode(target.sourceAvailability === 'none' ? 'link' : 'locate')
+                            setRelinkEntry(target)
+                          }}
                           onUninstall={() =>
                             useBatch
                               ? void uninstallSelected()
@@ -1601,6 +1833,19 @@ function AppShell() {
                             }
                             void deleteFilesFor([group])
                           }}
+                          projects={projects}
+                          projectFilter={projectFilter}
+                          dragIds={useBatch ? catalogSelection.flatMap(entryIds) : entryIds(group)}
+                          projectFamilyNames={
+                            useBatch
+                              ? catalogSelection.map((item) => item.familyName)
+                              : [group.familyName]
+                          }
+                          onAddToProject={(id, ids) => void addFontsToProject(id, ids)}
+                          onRemoveFromProject={(id, ids) => void removeFontsFromProject(id, ids)}
+                          onCreateProjectFromCard={(ids, familyNames) => void createProjectWith(ids, familyNames)}
+                          onFontDragStart={beginFontDrag}
+                          onFontDragEnd={endFontDrag}
                         />
                         )
                       })}
@@ -1632,6 +1877,7 @@ function AppShell() {
                       onUninstall={() => void uninstallSelected()}
                       onUninstallAndRemove={() => void uninstallAndRemoveSelected()}
                       onReinstall={() => void reinstallSelected()}
+                      onRepair={() => void repairSelected()}
                       onForget={() => void forgetSelected()}
                       onDeleteFiles={() => void deleteFilesSelected()}
                     />
@@ -1643,7 +1889,7 @@ function AppShell() {
           {showInspector && (
           <div
             data-keep-selection=""
-            className="absolute inset-y-0 right-0 z-20 flex w-full flex-col border-l bg-background shadow-xl md:w-80"
+            className="absolute inset-y-0 right-0 z-20 flex w-full flex-col border-l bg-background shadow-xl md:w-96"
           >
             <div className="flex shrink-0 justify-end px-2 pt-2">
               <Button
@@ -1666,12 +1912,21 @@ function AppShell() {
               onSelectEntry={setSelectedEntryId}
               systemGroup={selectedSystemGroup}
               busy={busy}
+              specimen={specimenFromSettings(settings?.specimen)}
+              onSpecimenChange={(next) => void persistSpecimen(next)}
+              projects={projects}
+              compareEntry={
+                catalogSelection.length === 2
+                  ? catalogSelection.find((group) => group.familyName !== selectedFamily)?.entries[0] ?? null
+                  : null
+              }
               onInstall={() => selectedGroup && void installGroupGuarded(selectedGroup)}
               onInstallAs={() => setRenameEntry(selectedEntry)}
               onReinstall={() =>
                 selectedGroup &&
                 void run(() => reinstallGroup(selectedGroup), actionCopy('reinstall', selectedGroup.familyName))
               }
+              onRepair={() => void repairSelected()}
               onUninstall={() =>
                 selectedGroup &&
                 void run(() => uninstallGroup(selectedGroup), actionCopy('remove', selectedGroup.familyName))
@@ -1721,6 +1976,65 @@ function AppShell() {
                 if (!selectedGroup) return
                 void deleteFilesFor([selectedGroup])
               }}
+              onLocateSource={() => {
+                if (!selectedEntry) return
+                setRelinkMode('locate')
+                setRelinkEntry(selectedEntry)
+              }}
+              onLinkSource={() => {
+                if (!selectedEntry) return
+                setRelinkMode('link')
+                setRelinkEntry(selectedEntry)
+              }}
+              onInstallToAdobe={() =>
+                selectedEntry &&
+                void run(() => api.install(selectedEntry.id, undefined, { destinationId: 'adobe-shared' }), {
+                  pending: 'Placing Adobe testing copy…',
+                  done: 'Placed Adobe testing copy',
+                })
+              }
+              onRemoveAdobeCopy={() =>
+                selectedEntry &&
+                void run(() => api.removeDestinationCopy(selectedEntry.id, 'adobe-shared'), {
+                  pending: 'Removing Adobe testing copy…',
+                  done: 'Removed Adobe testing copy',
+                })
+              }
+              onResumeUpdates={() =>
+                selectedEntry &&
+                void run(() => api.resumeUpdates(selectedEntry.id), {
+                  pending: 'Resuming updates…',
+                  done: 'Resumed updates',
+                })
+              }
+              onRestore={(fingerprint) =>
+                selectedEntry &&
+                void run(() => api.restoreRevision(selectedEntry.id, fingerprint), {
+                  pending: 'Restoring previous version…',
+                  done: 'Restored previous version',
+                })
+              }
+              onPin={(fingerprint) => {
+                if (!selectedEntry) return
+                void (async () => {
+                  try {
+                    let project = projects.find((item) => item.id === projectFilter) ?? projects[0]
+                    if (!project) {
+                      project = (await api.createProject(familyNameOf(selectedEntry), [selectedEntry.id])).project
+                    }
+                    const result = await api.updateProject(project.id, {
+                      pin: { assetId: selectedEntry.id, fingerprint },
+                    })
+                    setProjects((current) =>
+                      current.map((item) => (item.id === result.project.id ? result.project : item)),
+                    )
+                    toast.success(`Pinned for ${result.project.name}`)
+                  } catch (error) {
+                    toast.error(error instanceof Error ? error.message : 'Could not pin that revision')
+                  }
+                })()
+              }}
+              onOpenWithPreview={() => setInspectSelection(true)}
               multiSelect={
                 (tab === 'system' ? systemSelection.length : catalogSelection.length) > 1
                   ? tab === 'system'
@@ -1749,6 +2063,7 @@ function AppShell() {
                         onUninstall: () => void uninstallSelected(),
                         onUninstallAndRemove: () => void uninstallAndRemoveSelected(),
                         onReinstall: () => void reinstallSelected(),
+                        onRepair: () => void repairSelected(),
                         onForget: () => void forgetSelected(),
                         onDeleteFiles: () => void deleteFilesSelected(),
                         onDeactivateSystem: () => void deactivateSelected(),
@@ -1780,6 +2095,61 @@ function AppShell() {
             const pending = folderDrop
             setFolderDrop(null)
             if (pending) void watchDroppedFolders(pending.folders, pending)
+          }}
+        />
+        <FolderSetupDialog
+          open={Boolean(folderSetupRoots)}
+          roots={folderSetupRoots ?? undefined}
+          onOpenChange={(next) => {
+            if (!next) setFolderSetupRoots(null)
+          }}
+          onDone={(started) => {
+            if (started[0]) selectLibrary(started[0].root)
+            void api.settings().then((result) => applySettings(result.settings))
+            void api.catalog().then((result) => setEntries(result.entries))
+            toast.success(
+              started.length === 1
+                ? `Watching ${watchFolderName(started[0]!.root)}`
+                : `Watching ${started.length} folders`,
+            )
+          }}
+        />
+        <ImportPlanDialog
+          open={Boolean(importPlan)}
+          plan={importPlan}
+          onCancel={() => {
+            importPlanResolve?.(null)
+            setImportPlan(null)
+            setImportPlanResolve(null)
+          }}
+          onConfirm={(choices, familyName) => {
+            importPlanResolve?.({ choices, familyName })
+            setImportPlan(null)
+            setImportPlanResolve(null)
+          }}
+        />
+        <RelinkDialog
+          open={Boolean(relinkEntry)}
+          entry={relinkEntry}
+          mode={relinkMode}
+          onOpenChange={(next) => {
+            if (!next) setRelinkEntry(null)
+          }}
+          onDone={(entry) => {
+            setEntries((current) => current.map((item) => (item.id === entry.id ? entry : item)))
+            void api.catalog().then((result) => setEntries(result.entries))
+            toast.success(entry.updateHold === 'relink-review' ? 'Source linked · update available' : 'Source linked')
+          }}
+        />
+        <FolderRelinkDialog
+          open={Boolean(folderRelinkRoot)}
+          oldRoot={folderRelinkRoot ?? ''}
+          onOpenChange={(next) => {
+            if (!next) setFolderRelinkRoot(null)
+          }}
+          onDone={() => {
+            void api.catalog().then((result) => setEntries(result.entries))
+            toast.success('Folder relinked')
           }}
         />
         <FormatDialog
@@ -1922,6 +2292,7 @@ function LibraryCard({
   onInstall,
   onInstallAs,
   onReinstall,
+  onLocateSource,
   onUninstall,
   onUninstallAndRemove,
   onDeactivate,
@@ -1930,6 +2301,15 @@ function LibraryCard({
   onRevealSource,
   onForget,
   onDeleteFiles,
+  projects,
+  projectFilter,
+  dragIds,
+  projectFamilyNames,
+  onAddToProject,
+  onRemoveFromProject,
+  onCreateProjectFromCard,
+  onFontDragStart,
+  onFontDragEnd,
 }: {
   group: FamilyGroup
   layout: ViewLayout
@@ -1946,6 +2326,7 @@ function LibraryCard({
   onInstall: () => void
   onInstallAs: () => void
   onReinstall: () => void
+  onLocateSource?: () => void
   onUninstall: () => void
   onUninstallAndRemove: () => void
   onDeactivate: () => void
@@ -1954,6 +2335,15 @@ function LibraryCard({
   onRevealSource: () => void
   onForget: () => void
   onDeleteFiles: () => void
+  projects: ProjectSet[]
+  projectFilter: string | null
+  dragIds: string[]
+  projectFamilyNames: string[]
+  onAddToProject: (projectId: string, ids: string[]) => void
+  onRemoveFromProject: (projectId: string, ids: string[]) => void
+  onCreateProjectFromCard: (ids: string[], familyNames: string[]) => void
+  onFontDragStart: () => void
+  onFontDragEnd: () => void
 }) {
   const [expanded, setExpanded] = useState(false)
   const [hovered, setHovered] = useState(false)
@@ -1975,6 +2365,20 @@ function LibraryCard({
     [instances, previewFamily],
   )
   const plan = batch ?? catalogBatchPlan([group])
+  const inCurrentProject = Boolean(
+    projectFilter && group.entries.some((entry) =>
+      projects.find((item) => item.id === projectFilter)?.members.some((member) => member.assetId === entry.id),
+    ),
+  )
+  function startFontDrag(event: DragEvent) {
+    if (event.target instanceof Element && event.target.closest('[data-no-marquee]')) {
+      event.preventDefault()
+      return
+    }
+    writeFontButlerEntries(event.dataTransfer, dragIds)
+    applyFontDragImage(event, projectFamilyNames)
+    onFontDragStart()
+  }
 
   const muted = group.status === 'deactivated'
 
@@ -1984,7 +2388,7 @@ function LibraryCard({
         <span className="truncate font-medium">{group.familyName}</span>
         <VfBadge show={group.isVariable} />
         <FormatBadges formats={uniqueEntryFormats(group.entries)} />
-        <StatusBadge status={group.status} />
+        <StateBadges entry={preview} hideInstalled />
       </div>
       <div className="mt-0.5 text-xs text-muted-foreground">
         {group.instanceCount} {group.instanceCount === 1 ? 'instance' : 'instances'}
@@ -2011,6 +2415,9 @@ function LibraryCard({
       <ContextMenuTrigger asChild>
         <div
           data-family-key={group.familyName}
+          draggable
+          onDragStart={startFontDrag}
+          onDragEnd={onFontDragEnd}
           className={cn(
             'group relative overflow-hidden rounded-lg border transition-colors',
             selected ? 'border-border bg-muted/60' : 'border-border/80 hover:bg-muted/40',
@@ -2025,6 +2432,8 @@ function LibraryCard({
           {layout === 'grid' ? (
             <button
               type="button"
+              draggable
+              onDragStart={startFontDrag}
               onClick={onSelect}
               onDoubleClick={onInspect}
               className="flex w-full flex-col text-left"
@@ -2050,6 +2459,8 @@ function LibraryCard({
               <div className="flex items-stretch">
                 <button
                   type="button"
+                  draggable
+                  onDragStart={startFontDrag}
                   onClick={onSelect}
                   onDoubleClick={onInspect}
                   className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left"
@@ -2090,7 +2501,8 @@ function LibraryCard({
           )}
           {!batch && (
             <CatalogCardActions
-              status={group.status}
+              plan={plan}
+              previewOnly={group.entries.every((entry) => entry.previewOnly)}
               missingSource={missingSource}
               busy={busy}
               visible={selected}
@@ -2118,6 +2530,44 @@ function LibraryCard({
         >
           <FolderOpen /> Show source in Finder
         </ContextMenuItem>
+        {onLocateSource && group.entries.some(needsLocateSource) ? (
+          <ContextMenuItem onSelect={onLocateSource}>
+            <FolderOpen /> {preview.sourceAvailability === 'none' ? 'Link source…' : 'Locate source…'}
+          </ContextMenuItem>
+        ) : null}
+        <ContextMenuSeparator />
+        <ContextMenuSub>
+          <ContextMenuSubTrigger>Add to a project</ContextMenuSubTrigger>
+          <ContextMenuSubContent>
+            {projects.map((project) => {
+              const inProject = projectContainsAll(project, dragIds)
+              return (
+                <ContextMenuItem
+                  key={project.id}
+                  onSelect={() =>
+                    inProject
+                      ? onRemoveFromProject(project.id, dragIds)
+                      : onAddToProject(project.id, dragIds)
+                  }
+                >
+                  {project.name}
+                  {inProject ? <Check className="ml-auto" /> : null}
+                </ContextMenuItem>
+              )
+            })}
+            {projects.length > 0 ? <ContextMenuSeparator /> : null}
+            <ContextMenuItem onSelect={() => onCreateProjectFromCard(dragIds, projectFamilyNames)}>
+              <Plus /> New project
+            </ContextMenuItem>
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+        {inCurrentProject ? (
+          <ContextMenuItem
+            onSelect={() => projectFilter && onRemoveFromProject(projectFilter, dragIds)}
+          >
+            <FolderMinus /> Remove from project
+          </ContextMenuItem>
+        ) : null}
         <ContextMenuSeparator />
         <CatalogMenuItems
           plan={plan}
@@ -2334,7 +2784,7 @@ function EmptyState({
         </p>
         <input
           type="file"
-          accept=".ttf,.otf,.ttc,.otc"
+          accept={FONT_FILE_ACCEPT}
           multiple
           className="hidden"
           onChange={(event) => {

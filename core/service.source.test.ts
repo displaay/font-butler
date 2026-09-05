@@ -29,6 +29,7 @@ function tempPaths(): AppPaths {
     supplementalFontsDir: path.join(dataRoot, 'supplemental'),
     officeFontCacheDir: path.join(dataRoot, 'office-cache'),
     atsCacheDir: path.join(dataRoot, 'ats-cache'),
+    adobeFontsDir: path.join(dataRoot, 'adobe-fonts'),
   }
 }
 
@@ -165,7 +166,7 @@ test('importPaths reuses an uninstalled upload when the same font arrives from a
     assert.equal(imported.entries[0].status, 'uninstalled')
     const again = await service.importPaths([second])
     assert.equal(again.entries[0].id, imported.entries[0].id)
-    assert.equal(again.entries[0].sourcePath, path.resolve(second))
+    assert.equal(again.entries[0].sourcePath, path.resolve(first))
     assert.equal(again.entries[0].status, 'uninstalled')
     assert.equal(service.listCatalog().length, 1)
   } finally {

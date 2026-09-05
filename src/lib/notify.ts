@@ -53,8 +53,20 @@ export function importDoneCopy(options: {
   count: number
   name?: string
   ignored?: number
+  preview?: number
 }): string {
   const ignored = options.ignored ?? 0
+  const preview = options.preview ?? 0
+  if (preview > 0 && options.count > preview) {
+    const installed = options.count - preview
+    return `${installed} ${installed === 1 ? 'font' : 'fonts'} ${
+      options.installed ? 'installed' : 'added'
+    } and ${preview} preview-only`
+  }
+  if (preview > 0 && options.count === preview) {
+    if (options.count === 1 && options.name) return `Added preview of ${options.name}`
+    return `Added ${options.count} preview-only ${options.count === 1 ? 'font' : 'fonts'}`
+  }
   if (ignored > 0) {
     const main = `${options.count} ${options.count === 1 ? 'font' : 'fonts'} ${
       options.installed ? 'installed' : 'added'

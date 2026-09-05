@@ -55,7 +55,7 @@ test('failed format replacement restores the previous installed bytes', async ()
           if (enabled && filePath.toLowerCase().endsWith('.otf')) {
             return { ok: false, native: true, error: 'OTF refused' }
           }
-          return { ok: true, native: true }
+          return { ok: true, native: false }
         },
       }),
     )
@@ -75,7 +75,7 @@ test('activation failure during reinstall restores the previous bytes', async ()
       if (enabled && filePath.includes('FailFace')) {
         return { ok: false, native: true, error: 'Core Text refused the font.' }
       }
-      return { ok: true, native: true }
+      return { ok: true, native: false }
     },
   })
   await withService(

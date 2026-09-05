@@ -164,7 +164,7 @@ test('groupCatalog merges installed and uninstalled styles onto one Fonts card',
   assert.equal(booton.familyName, 'Booton')
   assert.equal(booton.status, 'installed')
   assert.equal(booton.instanceCount, 2)
-  assert.equal(familyStatusSummary(booton), '1/2 installed')
+  assert.equal(familyStatusSummary(booton), '1 of 2 styles active')
   assert.equal(isUninstallableGroup(booton), true)
 })
 

@@ -205,8 +205,11 @@ export function familyStatusSummary(group: { entries: CatalogEntry[] }): string 
   if (statuses.size <= 1) {
     return null
   }
-  const installed = group.entries.filter((entry) => entry.status === 'installed').length
-  return `${installed}/${group.entries.length} installed`
+  const active = group.entries.filter(
+    (entry) => entry.status === 'installed' || entry.status === 'outdated',
+  ).length
+  const noun = group.entries.length === 1 ? 'style' : 'styles'
+  return `${active} of ${group.entries.length} ${noun} active`
 }
 
 export function entryIds(group: { entries: CatalogEntry[] }): string[] {
@@ -242,6 +245,9 @@ export function entryHasTrackedSource(entry: CatalogEntry): boolean {
   }
   if (isSelfSourced(entry)) {
     return false
+  }
+  if (entry.sourceAvailability === 'offline' || entry.sourceAvailability === 'unreadable') {
+    return true
   }
   if (typeof entry.sourcePresent === 'boolean') {
     return entry.sourcePresent

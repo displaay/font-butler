@@ -45,9 +45,9 @@ export function partitionDropPayload(
     }
     if (isWebFormat(format)) {
       skippedWeb += 1
+    } else if (!isInstallableFormat(format)) {
       continue
     }
-    if (!isInstallableFormat(format)) continue
     fontPaths.push(filePath)
     counted.push(format)
   }
@@ -60,9 +60,9 @@ export function partitionDropPayload(
     if (!format) continue
     if (isWebFormat(format)) {
       skippedWeb += 1
+    } else if (!isInstallableFormat(format)) {
       continue
     }
-    if (!isInstallableFormat(format)) continue
     keptFiles.push(file)
     counted.push(format)
   }
@@ -195,10 +195,10 @@ export function isDroppedFolderPath(filePath: string, fileName = filePath): bool
 }
 
 export function isWebOnlyDrop(partition: DropPartition): boolean {
+  const hasDesktop = partition.formats.some((item) => isInstallableFormat(item.format))
   return (
-    partition.skippedWeb > 0 &&
-    partition.files.length === 0 &&
-    partition.formats.length === 0 &&
+    !hasDesktop &&
+    (partition.skippedWeb > 0 || partition.formats.some((item) => isWebFormat(item.format))) &&
     !partition.paths.some((filePath) => isDroppedFolderPath(filePath))
   )
 }
