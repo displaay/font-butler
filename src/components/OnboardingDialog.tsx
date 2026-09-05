@@ -34,7 +34,6 @@ export function OnboardingDialog({
   const folderInputRef = useRef<HTMLInputElement>(null)
   const finishedRef = useRef(false)
   const settingsRef = useRef(settings)
-  settingsRef.current = settings
   const [step, setStep] = useState<Step>('welcome')
   const [busy, setBusy] = useState(false)
   const [openAtLogin, setOpenAtLogin] = useState(false)
@@ -43,6 +42,10 @@ export function OnboardingDialog({
   const canPickFolder = Boolean(window.fontButlerDesktop?.pickFolder)
   const watchFolders = settings?.watchFolders ?? []
   const stepIndex = STEPS.indexOf(step) + 1
+
+  useEffect(() => {
+    settingsRef.current = settings
+  }, [settings])
 
   useEffect(() => {
     if (!open) return
