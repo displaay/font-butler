@@ -240,7 +240,7 @@ When users explicitly deactivate a font that active sets require, show the affec
 
 **Version pins.** Pin a retained revision by fingerprint, not its declared version label. The pin must reference retrievable bytes and protects them from history eviction. Show “Pinned for Project X” and pending source revisions without automatically replacing the pin. If two active projects need different revisions of the same conflicting face at the same destination, report the conflict. Default to preserving the active installation. Offer to change/deactivate one requirement or explicitly create a separately named derivative where supported; never silently rewrite project requirements or promise both revisions can coexist.
 
-**Saved filters.** After manual sets work, add saved library filters for source folder, installation/source state, type, and name. A live saved filter is a view. If it can be activated as a set, capture a visible member snapshot; later changes in filter results must not automatically install or deactivate additional fonts without a defined opt-in workflow.
+**Saved filters.** After manual sets work, add saved library filters for source folder, installation/source state, type, and name. A live saved filter is a view stored in `settings.json` (`savedFilters`): named snapshots of the current search, library chips, and optional source folder. Applying one restores those criteria; it does not change project membership or activation. Renaming or deleting a saved filter is grouping-only and does not install, uninstall, or deactivate fonts. Later changes in filter results must not automatically install or deactivate additional fonts. Activating a saved filter as a project set is out of scope for this increment.
 
 **Acceptance criteria.**
 
@@ -249,7 +249,7 @@ When users explicitly deactivate a font that active sets require, show the affec
 - F07-C: A pinned revision survives a new export and retention cleanup. An incompatible second pin is surfaced before any replacement.
 - F07-D: A partial activation identifies unsatisfied members and retry does not disturb satisfied ones.
 - F07-E: Explicit per-font deactivation is respected while affected project membership shows its unresolved state.
-- F07-F: Deleting a set or changing a saved filter does not unexpectedly uninstall or disable fonts.
+- F07-F: Deleting a set or renaming/deleting/changing a saved filter does not unexpectedly uninstall or disable fonts. Saved filters persist across restart and apply as a library view only.
 
 **10. F08 — WOFF/WOFF2 preview**
 
