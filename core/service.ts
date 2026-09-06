@@ -83,6 +83,7 @@ import {
 } from './operations.ts'
 import {
   isFontFile,
+  isPreviewableFontFile,
   mimeForFont,
   parseFontBuffer,
   parseFontFile,
