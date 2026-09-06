@@ -79,6 +79,16 @@ export function importDoneCopy(options: {
   return `${verb} ${options.count} ${options.count === 1 ? 'font' : 'fonts'}`
 }
 
+export function adobeInstallCopy(count: number): { pending: string; done: string } {
+  if (count <= 1) {
+    return { pending: 'Placing Adobe testing copy…', done: 'Placed Adobe testing copy' }
+  }
+  return {
+    pending: `Placing ${count} Adobe testing copies…`,
+    done: `Placed ${count} Adobe testing copies`,
+  }
+}
+
 export function emptyImportError(visibleErrors: string[], ignored = 0): string {
   if (visibleErrors.length) return visibleErrors.join('\n')
   if (ignored > 0) return WOFF_INSTALL_ERROR

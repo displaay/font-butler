@@ -37,6 +37,10 @@ export function mergeMarqueeSelection(base: string[], hit: string[], additive: b
   return next
 }
 
+export function sameKeys(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((key, index) => key === right[index])
+}
+
 export function canStartMarquee(target: EventTarget | null): boolean {
   if (typeof Element === 'undefined' || !(target instanceof Element)) return false
   if (

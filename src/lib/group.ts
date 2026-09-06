@@ -258,3 +258,25 @@ export function entryHasTrackedSource(entry: CatalogEntry): boolean {
 export function hasTrackedSource(group: { entries: CatalogEntry[] }): boolean {
   return group.entries.some(entryHasTrackedSource)
 }
+
+export function uniquePaths(faces: SystemFace[]): string[] {
+  return [...new Set(faces.map((face) => face.path))]
+}
+
+export function catalogRevealEntry(
+  group: FamilyGroup,
+  selected: CatalogEntry | undefined,
+  which: 'source' | 'installed',
+): CatalogEntry | undefined {
+  const preferred =
+    selected && group.entries.some((item) => item.id === selected.id)
+      ? selected
+      : group.entries[0]
+  if (which === 'installed') {
+    const hasInstall = (entry: CatalogEntry) => Boolean(entry.installedPath || entry.disabledPath)
+    if (preferred && hasInstall(preferred)) return preferred
+    return group.entries.find(hasInstall) ?? preferred
+  }
+  if (preferred && entryHasTrackedSource(preferred)) return preferred
+  return group.entries.find(entryHasTrackedSource) ?? preferred
+}

@@ -7,6 +7,7 @@ import {
   mergeMarqueeSelection,
   nextSelection,
   rectsIntersect,
+  sameKeys,
   shortcutAction,
 } from './selection.ts'
 
@@ -40,6 +41,13 @@ test('nextSelection ranges from the anchor', () => {
     nextSelection(['A', 'B', 'C', 'D'], ['B'], 'D', { range: true }, 'B'),
     ['B', 'C', 'D'],
   )
+})
+
+test('sameKeys compares ordered key lists', () => {
+  assert.equal(sameKeys(['A', 'B'], ['A', 'B']), true)
+  assert.equal(sameKeys(['A', 'B'], ['B', 'A']), false)
+  assert.equal(sameKeys(['A'], ['A', 'B']), false)
+  assert.equal(sameKeys([], []), true)
 })
 
 test('clientRect normalizes a drag box', () => {

@@ -85,8 +85,8 @@ import {
   renameSavedFilter,
   savedFilterMatches,
 } from '@/lib/savedFilters'
-import { familyNameOf, countLibraryFilters, deletableSourceIds, entryHasTrackedSource, entryIds, familyStatusSummary, forgettableIds, groupCatalog, groupSystem, hasSourceMissing, hasTrackedSource, isForgettableOnlyGroup, isLibraryFilter, isUninstallableGroup, matchesLibraryFilter, matchesQuery, sortFamilyGroups } from '@/lib/group'
-import { actionCopy, actionCopyFor, emptyImportError, importDoneCopy, remainingActionCopy } from '@/lib/notify'
+import { familyNameOf, catalogRevealEntry, countLibraryFilters, deletableSourceIds, entryHasTrackedSource, entryIds, familyStatusSummary, forgettableIds, groupCatalog, groupSystem, hasSourceMissing, hasTrackedSource, isForgettableOnlyGroup, isLibraryFilter, isUninstallableGroup, matchesLibraryFilter, matchesQuery, sortFamilyGroups, uniquePaths } from '@/lib/group'
+import { actionCopy, actionCopyFor, adobeInstallCopy, emptyImportError, importDoneCopy, remainingActionCopy } from '@/lib/notify'
 import { planNeedsReview } from '@/lib/planner'
 import { applyFontDragImage, clearFontDragImage } from '@/lib/dragPreview'
 import {
@@ -116,6 +116,7 @@ import {
   keysInMarquee,
   mergeMarqueeSelection,
   nextSelection,
+  sameKeys,
   shortcutAction,
   type Rect,
 } from '@/lib/selection'
@@ -2428,24 +2429,6 @@ function AppShell() {
   )
 }
 
-function uniquePaths(faces: SystemFace[]): string[] {
-  return [...new Set(faces.map((face) => face.path))]
-}
-
-function adobeInstallCopy(count: number): { pending: string; done: string } {
-  if (count <= 1) {
-    return { pending: 'Placing Adobe testing copy…', done: 'Placed Adobe testing copy' }
-  }
-  return {
-    pending: `Placing ${count} Adobe testing copies…`,
-    done: `Placed ${count} Adobe testing copies`,
-  }
-}
-
-function sameKeys(left: string[], right: string[]): boolean {
-  return left.length === right.length && left.every((key, index) => key === right[index])
-}
-
 function collectFamilyCardRects(): Array<{ key: string; rect: Rect }> {
   return Array.from(document.querySelectorAll('[data-family-key]')).flatMap((node) => {
     const key = node.getAttribute('data-family-key')
@@ -2473,24 +2456,6 @@ function MarqueeOverlay({ rect }: { rect: Rect | null }) {
       }}
     />
   )
-}
-
-function catalogRevealEntry(
-  group: FamilyGroup,
-  selected: CatalogEntry | undefined,
-  which: 'source' | 'installed',
-): CatalogEntry | undefined {
-  const preferred =
-    selected && group.entries.some((item) => item.id === selected.id)
-      ? selected
-      : group.entries[0]
-  if (which === 'installed') {
-    const hasInstall = (entry: CatalogEntry) => Boolean(entry.installedPath || entry.disabledPath)
-    if (preferred && hasInstall(preferred)) return preferred
-    return group.entries.find(hasInstall) ?? preferred
-  }
-  if (preferred && entryHasTrackedSource(preferred)) return preferred
-  return group.entries.find(entryHasTrackedSource) ?? preferred
 }
 
 function clickPreservesSelection(target: EventTarget | null): boolean {
