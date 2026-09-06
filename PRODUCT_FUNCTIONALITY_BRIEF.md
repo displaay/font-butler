@@ -23,6 +23,7 @@ The proposed defaults below resolve routine product choices so an implementation
 | F07 | Project sets | Manual sets, version pins, and activation ownership | Third increment |
 | F08 | Web-font preview | Read and compare WOFF/WOFF2 with explicit preview-only capability | Third increment |
 | F09 | Adobe testing destination | Compatibility investigation, then a bounded supported implementation | After destination and native-operation foundations |
+| F10 | Parallel same-identity copies | Park/mutex, Add inactive copy, watch Duplicates, Switch, Install as… | With F05 import planning |
 
 Keep automatic source editing, cloud synchronization, font purchasing, and background inspection of other applications' documents outside this implementation. Project sets are manually selected; document-driven activation would require a separate specification. Font collection files remain indivisible installation units unless a future feature explicitly introduces extraction.
 
@@ -166,7 +167,8 @@ Build one import planner used by drag/drop, file picker, Finder Open With, watch
 | --- | --- |
 | New, valid, installable face/file | Follow the applicable add/install policy |
 | Identical bytes at another path | Do not duplicate installation; preserve existing source ownership and offer explicit relinking if useful |
-| Same face identity and format, changed bytes | Treat as a candidate revision; replace only through the applicable update policy or review |
+| Same face identity and format, changed bytes at the **bound source path** | Treat as a candidate revision of that catalog entry; replace only through the applicable update policy or review (`keep` / `replace` / `skip`) |
+| Same face identity and format, changed bytes at a **different path** | Parallel copy. Do not auto-replace. Review: Replace active, Add inactive copy, Install as…, Skip (Switch is also available when activating a parked sibling) |
 | Same face identity, alternative format | Show a conflict decision for that face/file |
 | Same family, different style/face | Add normally; it is not a duplicate merely because the family matches |
 | Partial face overlap in a collection | Review the full file-level impact and all affected faces |
@@ -187,6 +189,7 @@ A preferred TTF/OTF format only chooses between competing alternatives for the s
 - F05-D: A TTC containing one conflicting face lists its other affected faces; the operation never claims to replace only one face while replacing the collection.
 - F05-E: A pinned revision, changed source, or modified catalog invalidates relevant stale plan items before any replacement.
 - F05-F: Finder, drop, and watched-folder entry points agree on classification and outcome; one invalid item does not erase successful unrelated items.
+- F05-G: Same-identity files at a new path offer Replace active, Add inactive copy, Install as…, and Skip; `keep` is not used to silently merge them into the active entry.
 
 **8. F06 — Action scope, results, and repair**
 
@@ -286,7 +289,61 @@ Treat same-face copies across destinations as a potential precedence conflict an
 - F09-D: A system/Adobe naming conflict is disclosed before automatic replacement or activation could create ambiguity.
 - F09-E: Permission denial or disappearance of the destination leaves existing copies and retained revisions recoverable and reports a useful error.
 
-**12. Data model and implementation architecture**
+**12. F10 — Parallel same-identity copies, park, Duplicates, and Switch**
+
+**Outcome.** A user can keep a **release** install and one or more **test/WIP** builds that share the same face identity (same family+style and/or PostScript name, typically the same format) as separate catalog entries, with **only one active per destination** at a time. Family names stay the real family name; this workflow does not require Install as…, but Install as… remains available when the user wants a simultaneously active, differently named copy.
+
+**Face identity.** Group copies with `faceIdentityKey` (PostScript names + format) and `instancesOverlap` (family+style and/or PostScript). Occupancy is physical presence of managed bytes in a live destination (`~/Library/Fonts` / Font Butler install dir, Adobe shared Fonts). Files in Font Butler’s Disabled/park vault do not occupy a destination.
+
+**Park (deactivate).** Unregister-in-place is not enough when a sibling will be installed. Deactivating a managed install **moves** its bytes out of live destination folders into the Disabled vault, unregisters, sets status deactivated/parked, and records `disabledPath` / `parkedPath` while keeping the catalog entry, fingerprints, and retained revision. Startup must not silently move parked files back into live Fonts.
+
+**Mutex.** Installing or activating entry B while another same-identity copy occupies that destination fails with a clear error unless the caller uses **Switch** (or Replace, which updates the existing active entry in place). Two same-identity managed files must never remain in live destination folders. Installation records stay `macos` | `adobe-shared` only; a dual default of `macos-and-adobe` still expands to both destinations when switching if that was the active set. Alt-format `installedFormatConflicts` applies only to **active** (`installed` / `outdated`) copies; same-format parallel copies are handled by this mutex, not by alt-format replace.
+
+**Import (manual drop, file picker, Open With).** Same identity + same format + **same bound path** + different bytes remains a bound `revision` with `keep | replace | skip`. Same identity + same format + **different path** is a parallel copy (`parallelCopy`) whose choices are:
+
+| Choice | Result |
+| --- | --- |
+| Replace active | Update/replace the existing active entry’s managed install (current replace path) |
+| Add inactive copy | New catalog entry bound to the incoming source; **do not activate**; leave the current active install untouched |
+| Install as… | Existing rename/install-as contract: derived asset with a user-chosen family name (name tables rewritten; original source file unchanged); provenance preserved; renamed copy is installed immediately and may be active alongside the release because identity no longer conflicts; renamed result is checked for a new conflict |
+| Switch | Park the active sibling, then install/activate the incoming copy into the same destination set (also exposed from Duplicates and parked-sibling actions) |
+| Skip | Leave the library unchanged |
+
+The import plan UI is required for parallel copies. Library shows both entries; inactive/parked copies are greyed like deactivated. Distinguish copies by source path and mtime until an optional label field exists.
+
+**Watch folders (Duplicates).** When a watched file matches an already **installed/active** face identity:
+
+1. Do **not** auto-install, auto-replace, or auto-switch, even if folder policy is install-new-and-updates.
+2. Queue a persistent **Duplicates** warning (badge/count). Unique/new fonts in the same folder still follow folder policy.
+3. Review lists watched path, conflicting library entries, versions/fingerprints, active vs parked, and destinations.
+4. User explicitly chooses Replace active, Add inactive copy, Install as…, Skip, or Switch.
+5. Deduplicate warnings for the same unchanged conflict (path + incoming fingerprint + occupying fingerprints). Re-notify only when incoming bytes or the active install change.
+
+This matches F05 background automation: queue conflicts for review without repeated modals.
+
+**Switch.** One atomic action, also used when Activating a parked/inactive sibling while another is active:
+
+1. Snapshot/verify currently active sibling A.
+2. Park A (move out of all managed destinations it occupies + unregister).
+3. Clear caches on the same path as reinstall (ATS / Office / Adobe per settings).
+4. Place B into the same destination set A used (macos / adobe-shared / both).
+5. Register + verify. Never leave a second same-identity live file.
+6. On failure, restore A from park/rollback.
+7. Record Activity; undo switches back via the parked sibling when the existing undo machinery allows.
+
+Expose Switch from inspector/card actions on an inactive sibling and from the Duplicates review.
+
+**Acceptance criteria.**
+
+- F10-A: Add inactive copy from import or Duplicates review leaves the release install active and creates a second catalog entry that does not occupy live Fonts.
+- F10-B: Activating or Switching to the test copy parks the release; no second same-identity file remains under the install dir or Adobe Fonts. Switching back restores the release.
+- F10-C: Activate without Switch fails clearly while a sibling occupies the destination.
+- F10-D: A watch folder adding a same-identity file raises a Duplicates warning and installs nothing until the user chooses. Unique fonts in that folder still follow policy. `autoUpdate` does not map this case to replace.
+- F10-E: Install as… from import or Duplicates review installs a renamed derived copy alongside the release; the original source file is unchanged; the renamed identity does not conflict.
+- F10-F: Crash or failure mid-Switch restores the previously active copy.
+- F10-G: Park moves managed bytes into the Disabled vault; deactivate is not unregister-in-place for managed installs.
+
+**13. Data model and implementation architecture**
 
 Use the following conceptual entities to support the workflows. Adapt names and storage layout to the current code; keep one shared API/domain contract instead of adding another independent frontend status model.
 
@@ -335,7 +392,7 @@ Keep existing loopback authentication, request-origin/host rules, protected-font
 | Setup and folder settings | [OnboardingDialog.tsx](/Users/daniel/git/font-butler/src/components/OnboardingDialog.tsx), [SettingsDialog.tsx](/Users/daniel/git/font-butler/src/components/SettingsDialog.tsx), [DropFolderDialog.tsx](/Users/daniel/git/font-butler/src/components/DropFolderDialog.tsx) |
 | API and desktop integration | [server/index.ts](/Users/daniel/git/font-butler/server/index.ts), [src/lib/api.ts](/Users/daniel/git/font-butler/src/lib/api.ts), [electron/main.mjs](/Users/daniel/git/font-butler/electron/main.mjs), [electron/preload.cjs](/Users/daniel/git/font-butler/electron/preload.cjs) |
 
-**13. Migration, delivery order, and operational requirements**
+**14. Migration, delivery order, and operational requirements**
 
 **Migration.** Take a recoverable backup before changing schema versions. Make migrations versioned, repeatable, and restart-safe. Preserve asset IDs and all existing settings, paths, custom-name relationships, and installed/deactivated intent. For ambiguous old state, verify available files/native state and mark unknown facts rather than guessing. Existing self-sourced user fonts become installations with no external source binding. Do not create a fake external source merely to satisfy a field requirement.
 
@@ -353,7 +410,7 @@ Each increment must be usable end to end. Avoid shipping controls backed by plac
 
 **Usability and responsiveness.** Keep current list/grid preferences and lightweight card browsing. Source location, revision history, and project details belong in the inspector or focused views. All new controls need accessible names, keyboard operation, visible focus, and error text associated with the affected input. Preserve selection and specimen text when an operation completes. Respect reduced motion. Large discovery jobs show progress and can stop pending work; expensive font parsing must not block interactive rendering or Electron event handling. Benchmark a representative library of at least 2,000 families and a 500-file import on a named test machine, recording UI responsiveness and peak memory before and after the changes.
 
-**14. Test matrix and completion evidence**
+**15. Test matrix and completion evidence**
 
 Use generated, redistributable fixtures and isolated directories. Read the current native adapter and test flags rather than assuming a data-directory override isolates macOS Fonts or caches. Run portable tests with injected filesystem/native failures and keep a distinct macOS integration suite. No acceptance claim about activation or Adobe behavior may be based solely on the portable no-op adapter.
 

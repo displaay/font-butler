@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { CircleMinus, CirclePlus, FolderOpen, ListX, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
+import { ArrowLeftRight, CircleMinus, CirclePlus, FolderOpen, ListX, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
 import { AaPreview } from '@/components/AaPreview'
 import { CatalogBatchButtons, SystemBatchButtons } from '@/components/BatchActions'
 import { SourceBadge, StateBadges } from '@/components/Badges'
@@ -37,6 +37,7 @@ export function Inspector({
   onUninstallAndRemove,
   onDeactivate,
   onActivate,
+  onSwitch,
   onReveal,
   onUninstallSystem,
   onDeactivateSystem,
@@ -72,6 +73,7 @@ export function Inspector({
   onUninstallAndRemove?: () => void
   onDeactivate: () => void
   onActivate: () => void
+  onSwitch?: () => void
   onReveal: (which: 'source' | 'installed') => void
   onUninstallSystem: () => void
   onDeactivateSystem: () => void
@@ -294,6 +296,7 @@ export function Inspector({
               className={cn(
                 'flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors hover:bg-muted/80',
                 selected && 'bg-muted ring-1 ring-primary/30',
+                (item.status === 'deactivated' || item.status === 'uninstalled') && 'opacity-60',
               )}
             >
               <AaPreview
@@ -307,6 +310,9 @@ export function Inspector({
                 </div>
                 <div className="truncate text-xs text-muted-foreground">
                   {item.faces[0]?.postscriptName}
+                </div>
+                <div className="truncate font-mono text-[11px] text-muted-foreground" title={item.sourcePath}>
+                  {item.sourcePath.split('/').pop()} · {formatRelativeTime(item.sourceMtimeMs)}
                 </div>
               </div>
             </button>
@@ -373,6 +379,11 @@ export function Inspector({
             {plan.install > 0 && (
               <Button size="sm" variant="outline" disabled={busy} onClick={onInstallAs}>
                 <CirclePlus /> Install as…
+              </Button>
+            )}
+            {onSwitch && (
+              <Button size="sm" disabled={busy} onClick={onSwitch}>
+                <ArrowLeftRight /> Switch
               </Button>
             )}
             {plan.activate > 0 && (

@@ -180,6 +180,9 @@ function statusForPresentCopy(entry: CatalogEntry): FontStatus | null {
   if (fileExists(entry.disabledPath)) {
     return 'deactivated'
   }
+  if (entry.installations?.some((copy) => fileExists(copy.parkedPath))) {
+    return 'deactivated'
+  }
   if (hasManagedCopy(entry, 'adobe-shared')) {
     return 'installed'
   }

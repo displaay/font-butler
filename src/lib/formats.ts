@@ -85,7 +85,7 @@ export function uniqueEntryFormats(
 }
 
 function isActiveStatus(status: CatalogEntry['status']): boolean {
-  return status === 'installed' || status === 'outdated' || status === 'deactivated'
+  return status === 'installed' || status === 'outdated'
 }
 
 function instanceKey(familyName: string, styleName: string): string {

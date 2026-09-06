@@ -7,6 +7,7 @@ import { test } from 'node:test'
 import type { AppPaths } from './paths.ts'
 import { FontButlerService } from './service.ts'
 import { closeAllWatchers } from './watch.ts'
+import { setDesktopShell, testDesktopShell } from './reveal.ts'
 
 function tempPaths(): AppPaths {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-adopt-'))
@@ -106,6 +107,7 @@ test('uninstall deleteSource removes the installed copy and the original file', 
   const paths = tempPaths()
   const source = path.join(paths.dataRoot, 'RemoveMe.ttf')
   writeTestFont(source, 'RemoveFace', 'RemoveFace-Regular')
+  setDesktopShell(testDesktopShell())
   const service = new FontButlerService(paths)
   try {
     await service.init()
@@ -120,6 +122,7 @@ test('uninstall deleteSource removes the installed copy and the original file', 
     assert.equal(fs.existsSync(installed.installedPath!), false)
   } finally {
     await closeAllWatchers()
+    setDesktopShell(null)
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
 })
@@ -148,7 +151,7 @@ test('uninstall keeps a catalog row when a separate source file remains', async 
   }
 })
 
-test('deactivate leaves the user font file in place', async () => {
+test('deactivate parks the user font file into the Disabled vault', async () => {
   const paths = tempPaths()
   const font = path.join(paths.userFontsDir, 'Off.ttf')
   writeTestFont(font, 'OffFace', 'OffFace-Regular')
@@ -160,18 +163,22 @@ test('deactivate leaves the user font file in place', async () => {
     const off = await service.deactivate(entry.id)
     assert.equal(off.status, 'deactivated')
     assert.equal(off.installedPath, font)
-    assert.equal(fs.existsSync(font), true)
+    assert.equal(fs.existsSync(font), false)
+    assert.ok(off.disabledPath)
+    assert.equal(fs.existsSync(off.disabledPath), true)
+    assert.ok(off.disabledPath.startsWith(paths.disabledDir))
     const on = await service.activate(entry.id)
     assert.equal(on.status, 'installed')
     assert.equal(on.installedPath, font)
     assert.equal(fs.existsSync(font), true)
+    assert.equal(on.disabledPath, undefined)
   } finally {
     await closeAllWatchers()
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
 })
 
-test('openWith activates a deactivated user font without deleting it', async () => {
+test('openWith activates a parked user font from its vault copy', async () => {
   const paths = tempPaths()
   const font = path.join(paths.userFontsDir, 'Open.ttf')
   writeTestFont(font, 'OpenFace', 'OpenFace-Regular')
@@ -180,8 +187,10 @@ test('openWith activates a deactivated user font without deleting it', async () 
     await service.init()
     const [entry] = service.listCatalog()
     assert.ok(entry)
-    await service.deactivate(entry.id)
-    const opened = await service.openWith(font)
+    const off = await service.deactivate(entry.id)
+    assert.equal(fs.existsSync(font), false)
+    assert.ok(off.disabledPath)
+    const opened = await service.openWith(off.disabledPath)
     assert.equal(opened.status, 'installed')
     assert.equal(opened.id, entry.id)
     assert.equal(opened.installedPath, font)
@@ -203,6 +212,7 @@ test('reinstall does not delete a deactivated user font that has no separate sou
     const [entry] = service.listCatalog()
     assert.ok(entry)
     await service.deactivate(entry.id)
+    assert.equal(fs.existsSync(font), false)
     const again = await service.reinstall(entry.id)
     assert.equal(again.status, 'installed')
     assert.equal(again.installedPath, font)

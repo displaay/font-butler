@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { CircleMinus, CirclePlus, FolderInput, ListX, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
+import { ArrowLeftRight, CircleMinus, CirclePlus, FolderInput, ListX, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   ContextMenuItem,
@@ -156,6 +156,7 @@ export function CatalogMenuItems({
   onUninstall,
   onUninstallAndRemove,
   onActivate,
+  onSwitch,
   onForget,
   onDeleteFiles,
 }: {
@@ -171,6 +172,7 @@ export function CatalogMenuItems({
   onUninstall: () => void
   onUninstallAndRemove?: () => void
   onActivate: () => void
+  onSwitch?: () => void
   onForget: () => void
   onDeleteFiles?: () => void
 }) {
@@ -210,6 +212,11 @@ export function CatalogMenuItems({
       {plan.adobeInstall > 0 && onInstallToAdobe && (
         <ContextMenuItem disabled={busy} onSelect={onInstallToAdobe}>
           <FolderInput /> {actionLabel('Install to Adobe testing folder', plan.adobeInstall, plan.adobeInstall > 1 || multi)}
+        </ContextMenuItem>
+      )}
+      {onSwitch && (
+        <ContextMenuItem disabled={busy} onSelect={onSwitch}>
+          <ArrowLeftRight /> Switch
         </ContextMenuItem>
       )}
       {plan.activate > 0 && (

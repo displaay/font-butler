@@ -7,6 +7,7 @@ import {
   CircleCheck,
   CircleOff,
   Ellipsis,
+  Copy,
   Folder,
   FolderMinus,
   FolderOpen,
@@ -238,6 +239,8 @@ export function Sidebar({
   libraryFilters,
   libraryFilterCounts,
   onLibraryFiltersChange,
+  duplicatesCount,
+  onOpenDuplicates,
   counts,
   onOpenSettings,
 }: {
@@ -265,6 +268,8 @@ export function Sidebar({
   libraryFilters: LibraryFilter[]
   libraryFilterCounts: Record<LibraryFilter, number>
   onLibraryFiltersChange: (value: LibraryFilter[]) => void
+  duplicatesCount?: number
+  onOpenDuplicates?: () => void
   counts: { library: number; system: number; updates: number; activity?: number }
   onOpenSettings: () => void
 }) {
@@ -645,6 +650,23 @@ export function Sidebar({
             ) : null}
           </div>
         )}
+        {tab === 'library' && (duplicatesCount ?? 0) > 0 && onOpenDuplicates ? (
+          <div className="flex w-full flex-col gap-0.5 md:mt-2 md:border-t md:pt-2">
+            <Button
+              type="button"
+              size="default"
+              variant="ghost"
+              className={navButtonClass(false, 'w-full text-amber-800 dark:text-amber-200')}
+              onClick={onOpenDuplicates}
+            >
+              <Copy className="size-3.5 opacity-70" />
+              <span className="min-w-0 truncate">Duplicates</span>
+              <Badge className="ml-auto bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+                {duplicatesCount}
+              </Badge>
+            </Button>
+          </div>
+        ) : null}
         {tab === 'library' && (
           <div className="flex w-full flex-wrap gap-3 md:mt-2 md:flex-col md:gap-2 md:border-t md:pt-2">
             {LIBRARY_FILTER_GROUPS.map((group) => (

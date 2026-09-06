@@ -31,6 +31,7 @@ export type InstallationVerification = 'file-present' | 'unavailable'
 export type InstallationCopy = {
   destinationId: DestinationId
   path: string
+  parkedPath?: string
   fingerprint?: string
   verification: InstallationVerification
 }
@@ -63,6 +64,8 @@ export type DestinationInvestigationRow = {
 export type InstallOptions = {
   replace?: boolean
   destinationId?: DestinationId
+  destinationIds?: DestinationId[]
+  switch?: boolean
 }
 
 export type FontFaceInfo = {
@@ -238,6 +241,7 @@ export type OperationItem = {
   reason?: string
   expectedRevision?: string
   previousRevision?: string
+  relatedEntryId?: string
 }
 
 export type Operation = {
@@ -307,7 +311,14 @@ export type ImportClassification =
   | 'unsupported'
   | 'preview-only'
 
-export type ImportPlanChoice = 'keep' | 'replace' | 'install-as' | 'skip' | 'relink'
+export type ImportPlanChoice =
+  | 'keep'
+  | 'replace'
+  | 'install-as'
+  | 'skip'
+  | 'relink'
+  | 'add-inactive'
+  | 'switch'
 
 export type ImportPlanItem = {
   id: string
@@ -326,6 +337,9 @@ export type ImportPlanItem = {
   defaultChoice: ImportPlanChoice
   choices: ImportPlanChoice[]
   previewOnly?: boolean
+  parallelCopy?: boolean
+  siblingEntryIds?: string[]
+  sourceMtimeMs?: number
 }
 
 export type ImportPlan = {
@@ -392,6 +406,22 @@ export type BatchActionResult = {
   failedIds: string[]
 }
 
+export type DuplicateWarning = {
+  id: string
+  path: string
+  fingerprint?: string
+  familyName?: string
+  format?: string
+  incomingVersion?: string
+  conflictingEntryIds: string[]
+  activeEntryId?: string
+  folderId?: string
+  notifyKey: string
+  createdAt: number
+  updatedAt: number
+  notifiedAt?: number
+}
+
 export type ServiceEvent =
   | { type: 'catalog'; entries: CatalogEntry[] }
   | { type: 'system'; faces: SystemFace[] }
@@ -399,3 +429,4 @@ export type ServiceEvent =
   | { type: 'settings'; settings: AppSettings }
   | { type: 'operations'; operations: Operation[] }
   | { type: 'projects'; projects: ProjectSet[] }
+  | { type: 'duplicates'; duplicates: DuplicateWarning[] }

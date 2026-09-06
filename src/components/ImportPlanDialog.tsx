@@ -77,6 +77,16 @@ export function ImportPlanDialog({
                     ? ` · ${item.format.toUpperCase()}`
                     : ''}
               </div>
+              <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground" title={item.path}>
+                {item.path}
+              </div>
+              {(item.currentVersion || item.incomingVersion) && (
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {item.currentVersion ? `Library: ${item.currentVersion}` : ''}
+                  {item.currentVersion && item.incomingVersion ? ' · ' : ''}
+                  {item.incomingVersion ? `Incoming: ${item.incomingVersion}` : ''}
+                </div>
+              )}
               {item.affectedFaces && item.affectedFaces.length > 0 && (
                 <p className="mt-1 text-xs text-muted-foreground">
                   This changes all {item.affectedFaces.length} faces in this collection:{' '}

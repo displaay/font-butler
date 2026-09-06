@@ -59,8 +59,8 @@ export function assertSingleInstallableFormat(
   }
 }
 
-function isActiveStatus(status: CatalogEntry['status']): boolean {
-  return status === 'installed' || status === 'outdated' || status === 'deactivated'
+function occupiesForFormatConflict(status: CatalogEntry['status']): boolean {
+  return status === 'installed' || status === 'outdated'
 }
 
 function instanceKey(familyName: string, styleName: string): string {
@@ -88,7 +88,7 @@ export function instancesOverlap(
 export function installedFormatConflicts(entry: CatalogEntry, catalog: CatalogEntry[]): CatalogEntry[] {
   const format = entryFormat(entry)
   return catalog.filter((other) => {
-    if (other.id === entry.id || !isActiveStatus(other.status)) return false
+    if (other.id === entry.id || !occupiesForFormatConflict(other.status)) return false
     if (entryFormat(other) === format) return false
     return instancesOverlap(entry, other)
   })
