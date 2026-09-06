@@ -235,6 +235,21 @@ export function isCleanupEligible(entry: CatalogEntry): boolean {
   return availability !== 'offline' && availability !== 'unreadable'
 }
 
+export function eligibleForInstall(entry: CatalogEntry): boolean {
+  return entry.status === 'uninstalled' || entry.status === 'deactivated' || entry.status === 'outdated'
+}
+
+export function eligibleForDeactivate(entry: CatalogEntry): boolean {
+  return entry.status === 'installed' || entry.status === 'outdated'
+}
+
+export function eligibleForReinstall(entry: CatalogEntry): boolean {
+  return (
+    entry.status === 'outdated' ||
+    (entry.status === 'deactivated' && Boolean(entry.installedPath && fs.existsSync(entry.installedPath)))
+  )
+}
+
 export function setUpdateHold(entry: CatalogEntry, hold: UpdateHold | null): void {
   entry.updateHold = hold
   if (hold === 'restore') {
