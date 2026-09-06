@@ -7,10 +7,12 @@ import {
   filterDropByFormat,
   inferDroppedFolderPath,
   inferFolderFromRelativePath,
+  importPathsForProjectDrop,
   isDroppedFolderPath,
   isDroppedFontName,
   isWebOnlyDrop,
   partitionDropPayload,
+  planPathsForImport,
   shouldSkipDroppedName,
 } from './drop.ts'
 
@@ -187,6 +189,28 @@ test('inferDroppedFolderPath recovers the dropped folder from a child file path'
   assert.equal(
     inferDroppedFolderPath('/Users/you/Other/Regular.otf', '/Inbox/Regular.otf', '/Inbox'),
     undefined,
+  )
+})
+
+test('importPathsForProjectDrop prefers folder roots so nested fonts are imported', () => {
+  assert.deepEqual(importPathsForProjectDrop(['/fonts/Inbox/Regular.otf'], ['/fonts/Inbox']), [
+    '/fonts/Inbox',
+  ])
+  assert.deepEqual(
+    importPathsForProjectDrop(['/fonts/Inbox/Regular.otf', '/other/Bold.otf'], ['/fonts/Inbox']),
+    ['/fonts/Inbox', '/other/Bold.otf'],
+  )
+  assert.deepEqual(importPathsForProjectDrop([], ['/fonts/Inbox']), ['/fonts/Inbox'])
+  assert.deepEqual(importPathsForProjectDrop(['/fonts/Regular.otf'], []), ['/fonts/Regular.otf'])
+})
+
+test('planPathsForImport keeps folder roots when mixed with font files', () => {
+  assert.deepEqual(
+    planPathsForImport(
+      ['/fonts/Inbox', '/other/Bold.otf'],
+      partitionDropPayload(['/fonts/Inbox', '/other/Bold.otf'], []).paths,
+    ),
+    ['/fonts/Inbox', '/other/Bold.otf'],
   )
 })
 

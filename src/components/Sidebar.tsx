@@ -44,7 +44,7 @@ import {
 import type { LibraryFilter, ProjectSet, WatchFolder } from '@/lib/types'
 import { folderAvailabilityLabel } from '@/lib/folders'
 import {
-  hasFontButlerEntries,
+  canDropOnProject,
   readFontButlerEntries,
   readProjectSort,
   sortProjects,
@@ -232,6 +232,7 @@ export function Sidebar({
   onDeactivateProject,
   onRenameProject,
   onAddFontsToProject,
+  onDropFilesOnProject,
   onRemoveProject,
   onCreateProject,
   libraryFilters,
@@ -258,6 +259,7 @@ export function Sidebar({
   onDeactivateProject?: (id: string) => void
   onRenameProject?: (id: string, name: string) => void
   onAddFontsToProject?: (id: string, entryIds: string[]) => void
+  onDropFilesOnProject?: (id: string, dataTransfer: DataTransfer) => void
   onRemoveProject?: (id: string) => void
   onCreateProject?: () => void
   libraryFilters: LibraryFilter[]
@@ -579,13 +581,13 @@ export function Sidebar({
                       startRename(project)
                     }}
                     onDragEnter={(event) => {
-                      if (!hasFontButlerEntries(event.dataTransfer)) return
+                      if (!canDropOnProject(event.dataTransfer)) return
                       event.preventDefault()
                       event.stopPropagation()
                       setDropTargetId(project.id)
                     }}
                     onDragOver={(event) => {
-                      if (!hasFontButlerEntries(event.dataTransfer)) return
+                      if (!canDropOnProject(event.dataTransfer)) return
                       event.preventDefault()
                       event.stopPropagation()
                       event.dataTransfer.dropEffect = 'copy'
@@ -596,12 +598,16 @@ export function Sidebar({
                       setDropTargetId((current) => (current === project.id ? null : current))
                     }}
                     onDrop={(event) => {
-                      if (!hasFontButlerEntries(event.dataTransfer)) return
+                      if (!canDropOnProject(event.dataTransfer)) return
                       event.preventDefault()
                       event.stopPropagation()
                       setDropTargetId(null)
                       const ids = readFontButlerEntries(event.dataTransfer)
-                      if (ids.length > 0) onAddFontsToProject?.(project.id, ids)
+                      if (ids.length > 0) {
+                        onAddFontsToProject?.(project.id, ids)
+                        return
+                      }
+                      onDropFilesOnProject?.(project.id, event.dataTransfer)
                     }}
                   >
                     {rowBody}
