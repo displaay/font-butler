@@ -2464,6 +2464,7 @@ function LibraryCard({
   onUninstallAndRemove,
   onDeactivate,
   onActivate,
+  onSwitch,
   onReveal,
   onRevealSource,
   onForget,
@@ -2545,7 +2546,7 @@ function LibraryCard({
       return
     }
     writeFontButlerEntries(event.dataTransfer, dragIds)
-    applyFontDragImage(event, projectFamilyNames)
+    applyFontDragImage(event.nativeEvent, projectFamilyNames)
     onFontDragStart()
   }
 

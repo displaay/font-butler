@@ -131,7 +131,6 @@ export function evictUnreferencedRevisions(
   const candidates = index.revisions
     .filter(
       (item) =>
-        item.refs <= 0 &&
         !options.pinned.has(item.fingerprint) &&
         !options.required.has(item.fingerprint),
     )

@@ -110,16 +110,21 @@ export function projectActivationState(
   entries: CatalogEntry[],
 ): 'active' | 'partial' | 'inactive' | 'preview' {
   if (project.members.length === 0) return 'inactive'
-  const members = project.members
-    .map((member) => entries.find((entry) => entry.id === member.assetId))
-    .filter((entry): entry is CatalogEntry => Boolean(entry))
-  if (members.length && members.every((entry) => entry.previewOnly)) {
+  const members = project.members.map((member) => ({
+    member,
+    entry: entries.find((entry) => entry.id === member.assetId),
+  }))
+  const present = members.flatMap(({ entry }) => (entry ? [entry] : []))
+  if (present.length === members.length && present.every((entry) => entry.previewOnly)) {
     return 'preview'
   }
-  const required = members.filter((entry) => !entry.previewOnly)
+  const required = members.filter(({ entry }) => !entry?.previewOnly)
   if (required.length === 0) return 'preview'
   const satisfied = required.filter(
-    (entry) => entry.status === 'installed' || entry.status === 'outdated',
+    ({ member, entry }) =>
+      entry &&
+      (entry.status === 'installed' || entry.status === 'outdated') &&
+      (!member.pinFingerprint || entry.installedFingerprint === member.pinFingerprint),
   )
   if (satisfied.length === required.length && project.desiredActive) return 'active'
   if (satisfied.length > 0 && project.desiredActive) return 'partial'

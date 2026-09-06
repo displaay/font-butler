@@ -72,7 +72,11 @@ import {
 import { ensureFontActivation, getFontNative } from './native.ts'
 import { fingerprintFile, tryFingerprintFile } from './fingerprint.ts'
 import { assertExpectedSourceFingerprint } from './comparison.ts'
-import { reconcileMutationJournals, withMutationJournal } from './journal.ts'
+import {
+  reconcileMutationJournals,
+  recordMutationDestination,
+  withMutationJournal,
+} from './journal.ts'
 import {
   applyFolderPatch,
   createWatchFolder,
@@ -393,6 +397,7 @@ export class FontButlerService {
     await reconcileWatchedSources(this.paths)
     await this.refreshUserFontsWatcher()
     await this.refreshInboxWatcher(this.watchingFolderRoots(), { importExisting: true })
+    this.revisionStorage()
   }
 
   listCatalog(): CatalogEntry[] {
@@ -606,6 +611,9 @@ export class FontButlerService {
     if (next.autoReinstallOnUpdate && !current.autoReinstallOnUpdate) {
       await this.refreshSourceStatuses()
       await this.reinstallCurrentlyOutdated()
+    }
+    if (patch.revisionBudgetBytes !== undefined) {
+      this.revisionStorage()
     }
     return next
   }
@@ -1307,6 +1315,9 @@ export class FontButlerService {
             label: displayFamily(entry),
             outcome: 'succeeded',
             previousRevision: previous,
+            expectedRevision: entry.installedFingerprint,
+            expectedStatus: entry.status,
+            expectedSourcePath: entry.sourcePath,
           },
         ],
       )
@@ -1633,13 +1644,17 @@ export class FontButlerService {
               entries.push(imported)
             }
           }
+          const appliedEntry = entries.at(-1)
           items.push({
             id: item.id,
-            entryId: entries.at(-1)?.id,
+            entryId: appliedEntry?.id,
             label: item.familyName || path.basename(item.path),
             outcome: 'succeeded',
             previousRevision:
-              entries.at(-1)?.id === item.entryId ? previousInstalledFingerprint : undefined,
+              appliedEntry?.id === item.entryId ? previousInstalledFingerprint : undefined,
+            expectedRevision: appliedEntry?.installedFingerprint,
+            expectedStatus: appliedEntry?.status,
+            expectedSourcePath: appliedEntry?.sourcePath,
           })
         } catch (error) {
           failedIds.push(item.entryId || item.id)
@@ -1653,6 +1668,15 @@ export class FontButlerService {
         }
       }
       finishOperation(operation, items)
+      if (
+        items.some((row) => {
+          if (row.outcome !== 'succeeded' || !row.entryId) return false
+          const applied = findById(loadCatalog(this.paths), row.entryId)
+          return !applied || applied.previewOnly || applied.status === 'uninstalled' || applied.status === 'source-missing'
+        })
+      ) {
+        operation.undoable = false
+      }
       upsertOperation(this.paths, operation)
       await syncWatchers(this.paths)
       emitCatalog(this.paths)
@@ -1674,6 +1698,7 @@ export class FontButlerService {
       maxAgeMs: settings.activityRetentionDays * 24 * 60 * 60 * 1000,
       maxCount: settings.activityMaxOperations,
     })
+    this.revisionStorage()
     return loadOperations(this.paths)
   }
 
@@ -1696,11 +1721,12 @@ export class FontButlerService {
 
   async restoreRevision(id: string, fingerprint?: string): Promise<CatalogEntry> {
     return runCatalogTask(async () => {
-      const catalog = loadCatalog(this.paths)
-      const entry = findById(catalog, id)
+      let catalog = loadCatalog(this.paths)
+      let entry = findById(catalog, id)
       if (!entry) throw new Error('Font is not in the library.')
       const target = fingerprint || entry.previousRevisionId
       if (!target) throw new Error('There is no retained version to restore.')
+      this.assertRevisionAllowed(id, target)
       const bytes = readRevisionBytes(this.paths, target)
       if (!bytes) throw new Error('The retained version is no longer available.')
       const revisionFormat =
@@ -1713,7 +1739,12 @@ export class FontButlerService {
         (entry.installedPath && fs.existsSync(entry.installedPath)
           ? tryFingerprintFile(entry.installedPath)
           : undefined)
-      const dest = entry.installedPath || destinationForInstall(this.paths, entry, entry.sourcePath)
+      const wasDeactivated = entry.status === 'deactivated'
+      if (!wasDeactivated) this.assertNoOccupyingSibling(entry, catalog.entries)
+      const livePath = entry.installedPath || destinationForInstall(this.paths, entry, entry.sourcePath)
+      const dest = wasDeactivated
+        ? entry.disabledPath || uniquePathFromOriginal(this.paths.disabledDir, livePath)
+        : livePath
       if (entry.installedPath && fs.existsSync(entry.installedPath)) {
         storeRevision(this.paths, entry.installedPath, { faces: entry.faces, format: entry.format })
       }
@@ -1725,36 +1756,64 @@ export class FontButlerService {
         parsed: parseFontBuffer(bytes, revisionFormat),
         stat: readFileStat(staging),
       }
-      const wasDeactivated = entry.status === 'deactivated'
-      await commitInstalledFile({
-        dest,
-        stagedPath: staging,
-        rollbackDir: path.join(this.paths.dataRoot, 'rollback'),
-        native: getFontNative(),
-      })
-      applyInstalledMetadata(entry, dest, staged, {
-        externalSource: isExternalSource(entry),
-        fingerprint: target,
-      })
-      if (previousFingerprint && previousFingerprint !== target) {
-        entry.previousRevisionId = previousFingerprint
+      try {
+        await withMutationJournal(this.paths, { kind: 'replace', entries: [entry] }, async () => {
+          recordMutationDestination(this.paths, entry!.id, dest)
+          if (wasDeactivated) {
+            fs.mkdirSync(path.dirname(dest), { recursive: true })
+            const tempDest = `${dest}.${process.pid}.${newId()}.tmp`
+            try {
+              fs.copyFileSync(staging, tempDest)
+              fs.renameSync(tempDest, dest)
+            } finally {
+              if (fs.existsSync(tempDest)) fs.rmSync(tempDest, { force: true })
+            }
+          } else {
+            await commitInstalledFile({
+              dest,
+              stagedPath: staging,
+              rollbackDir: path.join(this.paths.dataRoot, 'rollback'),
+              native: getFontNative(),
+            })
+          }
+          catalog = loadCatalog(this.paths)
+          entry = findById(catalog, id)
+          if (!entry) throw new Error('Font is not in the library.')
+          applyInstalledMetadata(entry, dest, staged, {
+            externalSource: isExternalSource(entry),
+            fingerprint: target,
+          })
+          if (wasDeactivated) {
+            entry.installedPath = livePath
+            entry.disabledPath = dest
+            entry.status = 'deactivated'
+            upsertCopy(entry, {
+              destinationId: 'macos',
+              path: livePath,
+              parkedPath: dest,
+              fingerprint: target,
+              verification: 'unavailable',
+            })
+          }
+          if (previousFingerprint && previousFingerprint !== target) {
+            entry.previousRevisionId = previousFingerprint
+          }
+          setUpdateHold(entry, 'restore')
+          applyEntryFacts(entry)
+          if (
+            entry.sourceFingerprint &&
+            entry.installedFingerprint &&
+            entry.sourceFingerprint !== entry.installedFingerprint &&
+            entry.status === 'installed'
+          ) {
+            entry.status = 'outdated'
+          }
+          touchEntry(entry)
+          saveCatalog(this.paths, catalog)
+        })
+      } finally {
+        removeStagedFile(staging)
       }
-      if (wasDeactivated) {
-        await ensureFontActivation(getFontNative(), dest, false)
-        entry.status = 'deactivated'
-      }
-      setUpdateHold(entry, 'restore')
-      applyEntryFacts(entry)
-      if (
-        entry.sourceFingerprint &&
-        entry.installedFingerprint &&
-        entry.sourceFingerprint !== entry.installedFingerprint &&
-        entry.status === 'installed'
-      ) {
-        entry.status = 'outdated'
-      }
-      touchEntry(entry)
-      saveCatalog(this.paths, catalog)
       const operation = finishOperation(
         createOperation({ trigger: 'restore', action: 'restore-revision', familyName: displayFamily(entry) }),
         [{
@@ -1763,6 +1822,8 @@ export class FontButlerService {
           label: displayFamily(entry),
           outcome: 'succeeded',
           previousRevision: previousFingerprint,
+          expectedRevision: target,
+          expectedStatus: entry.status,
         }],
       )
       upsertOperation(this.paths, operation)
@@ -1773,6 +1834,7 @@ export class FontButlerService {
   }
 
   async undoOperation(id: string): Promise<BatchActionResult> {
+    return runCatalogTask(async () => {
     const operation = loadOperations(this.paths).find((item) => item.id === id)
     if (!operation) throw new Error('That activity item was not found.')
     if (operation.undone) {
@@ -1791,6 +1853,18 @@ export class FontButlerService {
         continue
       }
       try {
+        if (
+          item.expectedRevision &&
+          entry.installedFingerprint !== item.expectedRevision
+        ) {
+          throw new Error('This font has changed since that action and can no longer be undone safely.')
+        }
+        if (item.expectedStatus && entry.status !== item.expectedStatus) {
+          throw new Error('This font state has changed since that action and can no longer be undone safely.')
+        }
+        if (item.expectedSourcePath && path.resolve(entry.sourcePath) !== path.resolve(item.expectedSourcePath)) {
+          throw new Error('This source link has changed since that action and can no longer be undone safely.')
+        }
         if (operation.action === 'relink-source' && item.previousRevision) {
           entry.sourcePath = item.previousRevision
           applyEntryFacts(entry)
@@ -1831,6 +1905,9 @@ export class FontButlerService {
         } else if (operation.action === 'uninstall' && item.previousRevision) {
           entries.push(await this.restoreRevision(entry.id, item.previousRevision))
         }
+        else {
+          throw new Error('That action does not have a safe inverse.')
+        }
         items.push({ ...item, outcome: 'succeeded' })
       } catch (error) {
         items.push({
@@ -1840,7 +1917,10 @@ export class FontButlerService {
         })
       }
     }
-    markUndone(this.paths, id)
+    const failedIds = items
+      .filter((item) => item.outcome === 'failed' && item.entryId)
+      .map((item) => item.entryId!)
+    if (failedIds.length === 0) markUndone(this.paths, id)
     emitCatalog(this.paths)
     const undo = finishOperation(
       createOperation({ trigger: 'undo', action: 'undo', idempotencyKey: `undo:${id}` }),
@@ -1848,7 +1928,14 @@ export class FontButlerService {
     )
     upsertOperation(this.paths, undo)
     emitEvent({ type: 'operations', operations: loadOperations(this.paths) })
-    return { operationId: undo.id, ...operationCounts(undo), errors: [], entries, failedIds: [] }
+    return {
+      operationId: undo.id,
+      ...operationCounts(undo),
+      errors: items.flatMap((item) => (item.reason ? [item.reason] : [])),
+      entries,
+      failedIds,
+    }
+    })
   }
 
   async repair(
@@ -1953,54 +2040,101 @@ export class FontButlerService {
   }
 
   async createProject(name: string, memberIds: string[] = []): Promise<ProjectSet> {
-    const project = upsertProject(this.paths, createProject(name, memberIds))
-    emitEvent({ type: 'projects', projects: loadProjects(this.paths) })
-    return project
+    return runCatalogTask(async () => {
+      const project = upsertProject(this.paths, createProject(name, memberIds))
+      emitEvent({ type: 'projects', projects: loadProjects(this.paths) })
+      return project
+    })
   }
 
   async updateProject(
     id: string,
     patch: { name?: string; memberIds?: string[]; pin?: { assetId: string; fingerprint?: string } },
   ): Promise<ProjectSet> {
-    const projects = loadProjects(this.paths)
-    const project = projects.find((item) => item.id === id)
-    if (!project) throw new Error('That project was not found.')
-    if (patch.name !== undefined) project.name = patch.name.trim() || 'Untitled project'
-    if (patch.memberIds) {
-      project.members = patch.memberIds.map((assetId) => {
-        return project.members.find((member) => member.assetId === assetId) ?? { assetId }
-      })
-    }
-    if (patch.pin) {
-      const conflict = pinConflict(projects, patch.pin.assetId, patch.pin.fingerprint || '')
-      if (conflict && conflict.id !== project.id && patch.pin.fingerprint) {
-        throw new Error(`Pinned for ${conflict.name}. Deactivate that project or create a separate copy.`)
+    return runCatalogTask(async () => {
+      const projects = loadProjects(this.paths)
+      const project = projects.find((item) => item.id === id)
+      if (!project) throw new Error('That project was not found.')
+      const previousIds = new Set(project.members.map((member) => member.assetId))
+      if (patch.name !== undefined) project.name = patch.name.trim() || 'Untitled project'
+      if (patch.memberIds) {
+        project.members = [...new Set(patch.memberIds)].map((assetId) => {
+          return project.members.find((member) => member.assetId === assetId) ?? { assetId }
+        })
       }
-      const member = project.members.find((item) => item.assetId === patch.pin!.assetId)
-      if (member) member.pinFingerprint = patch.pin.fingerprint
-    }
-    upsertProject(this.paths, project)
-    emitEvent({ type: 'projects', projects: loadProjects(this.paths) })
-    return project
+      if (patch.pin) {
+        const conflict = pinConflict(projects, patch.pin.assetId, patch.pin.fingerprint || '')
+        if (conflict && conflict.id !== project.id && patch.pin.fingerprint) {
+          throw new Error(`Pinned for ${conflict.name}. Deactivate that project or create a separate copy.`)
+        }
+        const member = project.members.find((item) => item.assetId === patch.pin!.assetId)
+        if (member) member.pinFingerprint = patch.pin.fingerprint
+      }
+      const nextIds = new Set(project.members.map((member) => member.assetId))
+      const catalog = loadCatalog(this.paths)
+      const toRelease: string[] = []
+      for (const assetId of previousIds) {
+        if (nextIds.has(assetId)) continue
+        const entry = findById(catalog, assetId)
+        if (!entry) continue
+        removeProjectOwner(entry, id)
+        if (!hasActivationDemand(entry) && (entry.status === 'installed' || entry.status === 'outdated')) {
+          toRelease.push(entry.id)
+        }
+      }
+      saveCatalog(this.paths, catalog)
+      upsertProject(this.paths, project)
+      for (const entryId of toRelease) {
+        await this.deactivateEntry(entryId)
+      }
+      const addedMember = [...nextIds].some((assetId) => !previousIds.has(assetId))
+      if (project.desiredActive && (addedMember || patch.pin)) {
+        await this.activateProject(id)
+      } else {
+        emitCatalog(this.paths)
+        emitEvent({ type: 'projects', projects: loadProjects(this.paths) })
+      }
+      return loadProjects(this.paths).find((item) => item.id === id) ?? project
+    })
   }
 
   async deleteProject(id: string): Promise<void> {
-    const project = removeProject(this.paths, id)
-    if (!project) return
-    const catalog = loadCatalog(this.paths)
-    for (const member of project.members) {
-      const entry = findById(catalog, member.assetId)
-      if (!entry) continue
-      removeProjectOwner(entry, id)
-    }
-    saveCatalog(this.paths, catalog)
-    emitCatalog(this.paths)
-    emitEvent({ type: 'projects', projects: loadProjects(this.paths) })
+    return runCatalogTask(async () => {
+      const project = removeProject(this.paths, id)
+      if (!project) return
+      const catalog = loadCatalog(this.paths)
+      const toRelease: string[] = []
+      for (const member of project.members) {
+        const entry = findById(catalog, member.assetId)
+        if (!entry) continue
+        removeProjectOwner(entry, id)
+        if (!hasActivationDemand(entry) && (entry.status === 'installed' || entry.status === 'outdated')) {
+          toRelease.push(entry.id)
+        }
+      }
+      saveCatalog(this.paths, catalog)
+      for (const entryId of toRelease) await this.deactivateEntry(entryId)
+      emitCatalog(this.paths)
+      emitEvent({ type: 'projects', projects: loadProjects(this.paths) })
+    })
   }
 
   async activateProject(id: string): Promise<BatchActionResult> {
-    const project = loadProjects(this.paths).find((item) => item.id === id)
+    return runCatalogTask(async () => {
+    const projects = loadProjects(this.paths)
+    const project = projects.find((item) => item.id === id)
     if (!project) throw new Error('That project was not found.')
+    for (const member of project.members) {
+      if (!member.pinFingerprint) continue
+      const conflict = pinConflict(
+        projects.filter((item) => item.id !== project.id),
+        member.assetId,
+        member.pinFingerprint,
+      )
+      if (conflict) {
+        throw new Error(`Pinned for ${conflict.name}. Deactivate that project or create a separate copy.`)
+      }
+    }
     project.desiredActive = true
     upsertProject(this.paths, project)
     const items: OperationItem[] = []
@@ -2063,10 +2197,18 @@ export class FontButlerService {
     emitCatalog(this.paths)
     emitEvent({ type: 'projects', projects: loadProjects(this.paths) })
     emitEvent({ type: 'operations', operations: loadOperations(this.paths) })
-    return { operationId: operation.id, ...operationCounts(operation), errors: [], entries, failedIds }
+    return {
+      operationId: operation.id,
+      ...operationCounts(operation),
+      errors: items.flatMap((item) => (item.reason ? [item.reason] : [])),
+      entries,
+      failedIds,
+    }
+    })
   }
 
   async deactivateProject(id: string): Promise<void> {
+    return runCatalogTask(async () => {
     const project = loadProjects(this.paths).find((item) => item.id === id)
     if (!project) throw new Error('That project was not found.')
     project.desiredActive = false
@@ -2083,10 +2225,11 @@ export class FontButlerService {
     saveCatalog(this.paths, catalog)
     upsertProject(this.paths, project)
     for (const entryId of toRelease) {
-      await this.deactivate(entryId)
+      await this.deactivateEntry(entryId)
     }
     emitCatalog(this.paths)
     emitEvent({ type: 'projects', projects: loadProjects(this.paths) })
+    })
   }
 
   previewMeta(id: string, which: 'source' | 'installed' | 'revision' = 'installed', fingerprint?: string) {
@@ -2144,6 +2287,12 @@ export class FontButlerService {
         .entries.map((entry) => entry.previousRevisionId)
         .filter((value): value is string => Boolean(value)),
     )
+    for (const operation of loadOperations(this.paths)) {
+      if (!operation.undoable || operation.undone) continue
+      for (const item of operation.items) {
+        if (item.previousRevision) required.add(item.previousRevision)
+      }
+    }
     const evict = evictUnreferencedRevisions(this.paths, {
       budgetBytes: settings.revisionBudgetBytes,
       pinned: pins,
@@ -2317,6 +2466,7 @@ export class FontButlerService {
       }
       if (installMacos) {
         const dest = destinationForInstall(this.paths, entry, entry.sourcePath)
+        recordMutationDestination(this.paths, entry.id, dest)
         const previousInstalled =
           entry.installedPath && path.resolve(entry.installedPath) !== dest
             ? entry.installedPath
@@ -2441,9 +2591,14 @@ export class FontButlerService {
       try {
         return await withMutationJournal(
           this.paths,
-          { kind: options?.replace ? 'replace' : 'install', entries: [sourceEntry] },
+          {
+            kind: options?.replace ? 'replace' : 'install',
+            entries: [draft],
+            newEntryIds: [draft.id],
+          },
           async () => {
         const dest = destinationForInstall(this.paths, draft, temp, { reuseInstalled: false })
+        recordMutationDestination(this.paths, draft.id, dest)
         await commitInstalledFile({
           dest,
           stagedPath: temp,
@@ -2556,6 +2711,7 @@ export class FontButlerService {
     const dest =
       copyAt(entry, 'adobe-shared')?.path ??
       plannedManagedPath(this.paths, 'adobe-shared', entry.sourcePath, format)
+    recordMutationDestination(this.paths, entry.id, dest)
     const leftoverParked = copyAt(entry, 'adobe-shared')?.parkedPath
     const written = writeManagedCopy({
       paths: this.paths,
@@ -3290,6 +3446,18 @@ export class FontButlerService {
     return undefined
   }
 
+  private assertRevisionAllowed(id: string, fingerprint: string): void {
+    for (const project of loadProjects(this.paths)) {
+      if (!project.desiredActive) continue
+      const member = project.members.find((item) => item.assetId === id)
+      if (member?.pinFingerprint && member.pinFingerprint !== fingerprint) {
+        throw new Error(
+          `Pinned for ${project.name}. Deactivate that project before restoring another version.`,
+        )
+      }
+    }
+  }
+
   private assertPinnedInstall(entry: CatalogEntry): void {
     const pin = this.activeProjectPin(entry.id)
     if (!pin || !entry.installedFingerprint) return
@@ -3733,6 +3901,8 @@ export class FontButlerService {
       outcome,
       reason,
       previousRevision: entry.previousRevisionId,
+      expectedRevision: entry.installedFingerprint,
+      expectedStatus: entry.status,
     }
   }
 

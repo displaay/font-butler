@@ -2,12 +2,12 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { loadCatalog, saveCatalog, upsertEntry } from './catalog.ts'
+import { loadCatalog, removeEntryById, saveCatalog, upsertEntry } from './catalog.ts'
 import { isUnderAnyRoot } from './containment.ts'
 import { copiesOf } from './destinations.ts'
 import { tryFingerprintFile } from './fingerprint.ts'
 import { uniquePathFromOriginal } from './install.ts'
-import { ensureFontActivation, type FontNative } from './native.ts'
+import { ensureFontActivation, getFontNative, type FontNative } from './native.ts'
 import { createOperation, finishOperation, upsertOperation } from './operations.ts'
 import { journalDir, journalPath, type AppPaths } from './paths.ts'
 import { applyEntryFacts } from './state.ts'
@@ -110,7 +110,7 @@ function snapshotFile(
   }
 }
 
-function intendedDestPaths(paths: AppPaths, entry: CatalogEntry): string[] {
+function intendedDestPaths(entry: CatalogEntry): string[] {
   const found = new Set<string>()
   const add = (value?: string) => {
     if (value) found.add(path.resolve(value))
@@ -118,12 +118,6 @@ function intendedDestPaths(paths: AppPaths, entry: CatalogEntry): string[] {
   add(entry.installedPath)
   for (const copy of copiesOf(entry)) {
     add(copy.path)
-  }
-  if (entry.sourcePath) {
-    const ext = path.extname(entry.sourcePath) || '.ttf'
-    const stem = path.basename(entry.sourcePath, path.extname(entry.sourcePath))
-    add(path.join(paths.installDir, `${stem}${ext}`))
-    add(path.join(paths.adobeFontsDir, `${stem}${ext}`))
   }
   return [...found]
 }
@@ -153,7 +147,7 @@ function snapshotTarget(paths: AppPaths, entry: CatalogEntry, snapshotRoot: stri
     entryId: entry.id,
     familyName: familyNameOf(entry),
     entryBefore: cloneEntry(entry),
-    destPaths: intendedDestPaths(paths, entry),
+    destPaths: intendedDestPaths(entry),
     files,
   }
 }
@@ -173,15 +167,40 @@ export function currentMutationJournal(): MutationJournal | undefined {
   return openJournal.getStore()
 }
 
+export function recordMutationDestination(
+  paths: AppPaths,
+  entryId: string,
+  filePath: string,
+  journalId?: string,
+): void {
+  const journal =
+    openJournal.getStore() ??
+    (journalId
+      ? readJournalFile(paths).journals.find((item) => item.id === journalId)
+      : undefined)
+  if (!journal) return
+  const target = journal.targets.find((item) => item.entryId === entryId)
+  if (!target) return
+  const resolved = path.resolve(filePath)
+  if (!target.destPaths.some((item) => path.resolve(item) === resolved)) {
+    target.destPaths.push(resolved)
+    upsertJournal(paths, journal)
+  }
+}
+
 export function loadIncompleteJournals(paths: AppPaths): MutationJournal[] {
   return readJournalFile(paths).journals.filter(
-    (item) => item.phase === 'prepared' || item.phase === 'mutating' || item.phase === 'catalog',
+    (item) =>
+      item.phase === 'prepared' ||
+      item.phase === 'mutating' ||
+      item.phase === 'catalog' ||
+      item.phase === 'failed',
   )
 }
 
 export function beginJournal(
   paths: AppPaths,
-  input: { kind: MutationJournalKind; entries: CatalogEntry[] },
+  input: { kind: MutationJournalKind; entries: CatalogEntry[]; newEntryIds?: string[] },
 ): MutationJournal {
   const id = crypto.randomUUID()
   const snapshotRoot = path.join(journalDir(paths), id)
@@ -191,7 +210,9 @@ export function beginJournal(
   for (const entry of input.entries) {
     if (seen.has(entry.id)) continue
     seen.add(entry.id)
-    targets.push(snapshotTarget(paths, entry, path.join(snapshotRoot, entry.id)))
+    const target = snapshotTarget(paths, entry, path.join(snapshotRoot, entry.id))
+    if (input.newEntryIds?.includes(entry.id)) target.entryBefore = null
+    targets.push(target)
   }
   const journal: MutationJournal = {
     version: 1,
@@ -240,7 +261,7 @@ export function completeJournal(paths: AppPaths, journalId: string): void {
 
 export async function withMutationJournal<T>(
   paths: AppPaths,
-  input: { kind: MutationJournalKind; entries: CatalogEntry[] },
+  input: { kind: MutationJournalKind; entries: CatalogEntry[]; newEntryIds?: string[] },
   work: () => Promise<T>,
 ): Promise<T> {
   if (openJournal.getStore()) {
@@ -250,9 +271,28 @@ export async function withMutationJournal<T>(
   return openJournal.run(journal, async () => {
     try {
       markJournalPhase(paths, journal.id, 'mutating')
-      return await work()
-    } finally {
+      const result = await work()
       completeJournal(paths, journal.id)
+      return result
+    } catch (error) {
+      markJournalPhase(
+        paths,
+        journal.id,
+        'failed',
+        error instanceof Error ? error.message : String(error),
+      )
+      try {
+        await restoreJournal(paths, journal, getFontNative())
+        completeJournal(paths, journal.id)
+      } catch (rollbackError) {
+        markJournalPhase(
+          paths,
+          journal.id,
+          'failed',
+          rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
+        )
+      }
+      throw error
     }
   })
 }
@@ -326,6 +366,8 @@ async function restoreJournal(
       const restored = cloneEntry(target.entryBefore)
       applyEntryFacts(restored)
       upsertEntry(catalog, restored)
+    } else {
+      removeEntryById(catalog, target.entryId)
     }
 
     const before = target.entryBefore
@@ -425,7 +467,6 @@ export async function reconcileMutationJournals(
       const message = error instanceof Error ? error.message : String(error)
       markJournalPhase(paths, journal.id, 'failed', message)
       recordRecovery(paths, journal, 'failed', message)
-      completeJournal(paths, journal.id)
       processed.push(journal)
     }
   }

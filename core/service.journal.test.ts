@@ -8,6 +8,7 @@ import { uniquePathFromOriginal } from './install.ts'
 import {
   beginJournal,
   loadIncompleteJournals,
+  recordMutationDestination,
 } from './journal.ts'
 import { noopFontNative } from './native.ts'
 import { loadOperations } from './operations.ts'
@@ -170,7 +171,7 @@ test('startup reconcile restores the previous working copy after a crash mid-swi
 
     const catalogA = findById(loadCatalog(paths), first.id)!
     const catalogB = findById(loadCatalog(paths), inactive.id)!
-    beginJournal(paths, { kind: 'switch', entries: [catalogA, catalogB] })
+    const journal = beginJournal(paths, { kind: 'switch', entries: [catalogA, catalogB] })
 
     const vault = uniquePathFromOriginal(paths.disabledDir, dest)
     fs.mkdirSync(paths.disabledDir, { recursive: true })
@@ -181,6 +182,7 @@ test('startup reconcile restores the previous working copy after a crash mid-swi
     parked.disabledPath = vault
     saveCatalog(paths, catalog)
     const incomingDest = path.join(paths.installDir, path.basename(wip))
+    recordMutationDestination(paths, inactive.id, incomingDest, journal.id)
     fs.copyFileSync(wip, incomingDest)
 
     service.dispose()

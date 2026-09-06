@@ -248,6 +248,8 @@ export type OperationItem = {
   outcome: OperationItemOutcome
   reason?: string
   expectedRevision?: string
+  expectedStatus?: FontStatus
+  expectedSourcePath?: string
   previousRevision?: string
   relatedEntryId?: string
 }

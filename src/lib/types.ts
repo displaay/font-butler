@@ -185,6 +185,10 @@ export type OperationItem = {
   label: string
   outcome: 'succeeded' | 'failed' | 'skipped' | 'canceled'
   reason?: string
+  previousRevision?: string
+  expectedRevision?: string
+  expectedStatus?: FontStatus
+  expectedSourcePath?: string
   relatedEntryId?: string
 }
 

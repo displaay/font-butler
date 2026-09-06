@@ -35,6 +35,8 @@ const FEATURE_LABELS: Record<string, string> = {
   ss02: 'Stylistic set 2',
 }
 
+const DEFAULT_ON_FEATURES = new Set(['calt', 'kern', 'liga'])
+
 export function SpecimenWorkspace({
   entry,
   specimen,
@@ -133,7 +135,11 @@ export function SpecimenWorkspace({
         const next: Record<string, number> = {}
         for (const axis of result.axes ?? []) next[axis.tag] = axis.default
         setAxes(next)
-        setFeatures({})
+        setFeatures(
+          Object.fromEntries(
+            (result.features ?? []).map((tag) => [tag, DEFAULT_ON_FEATURES.has(tag)]),
+          ),
+        )
         setInstanceName('Default')
       })
       .catch(() => {
@@ -204,8 +210,7 @@ export function SpecimenWorkspace({
     .map(([tag, value]) => `'${tag}' ${value}`)
     .join(', ')
   const featureSettings = Object.entries(features)
-    .filter(([, on]) => on)
-    .map(([tag]) => `'${tag}' 1`)
+    .map(([tag, on]) => `'${tag}' ${on ? 1 : 0}`)
     .join(', ')
 
   function applyPreset(preset: PreviewPreferences['preset']) {

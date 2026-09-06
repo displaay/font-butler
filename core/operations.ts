@@ -18,7 +18,17 @@ export function loadOperations(paths: AppPaths): Operation[] {
     if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.operations)) {
       return []
     }
-    return parsed.operations
+    return parsed.operations.map((operation) => {
+      if (
+        operation.undoable &&
+        operation.items.some(
+          (item) => item.outcome === 'succeeded' && item.entryId && !item.expectedStatus,
+        )
+      ) {
+        return { ...operation, undoable: false }
+      }
+      return operation
+    })
   } catch {
     return []
   }
@@ -88,13 +98,19 @@ export function finishOperation(
   } else {
     operation.outcome = 'succeeded'
   }
-  operation.undoable =
-    succeeded > 0 &&
-    operation.action !== 'clear-caches' &&
-    operation.action !== 'trash-source' &&
-    operation.action !== 'repair' &&
-    operation.action !== 'undo' &&
-    operation.action !== 'recover-journal'
+  const reversible = new Set([
+    'activate',
+    'apply-plan',
+    'deactivate',
+    'install',
+    'install-update',
+    'reinstall',
+    'relink-source',
+    'restore-revision',
+    'switch',
+    'uninstall',
+  ])
+  operation.undoable = succeeded > 0 && reversible.has(operation.action)
   return operation
 }
 

@@ -1,5 +1,10 @@
 import { useEffect } from 'react'
-import { catalogFontUrl, catalogFontFaceRules, type PreviewWhich } from '@/lib/preview'
+import {
+  catalogFontFaceRules,
+  catalogFontUrl,
+  systemFontUrl,
+  type PreviewWhich,
+} from '@/lib/preview'
 import type { CatalogEntry, SystemFace } from '@/lib/types'
 
 function cssFamily(id: string, which?: PreviewWhich): string {

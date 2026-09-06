@@ -53,7 +53,6 @@ export function classifyImportFile(
   const samePath =
     findByInstalledPath(catalog, resolved) ?? findBySourcePath(catalog, resolved)
   const identityMatches = findAllByFaceIdentity(catalog, parsed.faces, parsed.format)
-  const sameIdentity = identityMatches[0]
   const sameFaceAnyFormat = findAllByFaceIdentity(catalog, parsed.faces)[0]
   const sameBytes = fingerprint
     ? catalog.entries.find((entry) => entry.sourceFingerprint === fingerprint || entry.installedFingerprint === fingerprint)
