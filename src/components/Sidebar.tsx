@@ -14,6 +14,7 @@ import {
   Laptop,
   Link2,
   List,
+  Filter,
   Pencil,
   Plus,
   Power,
@@ -42,7 +43,7 @@ import {
   watchShowTotalId,
   writeShowTotals,
 } from '@/lib/showTotals'
-import type { LibraryFilter, ProjectSet, WatchFolder } from '@/lib/types'
+import type { LibraryFilter, ProjectSet, SavedLibraryFilter, WatchFolder } from '@/lib/types'
 import { folderAvailabilityLabel } from '@/lib/folders'
 import {
   canDropOnProject,
@@ -52,6 +53,7 @@ import {
   writeProjectSort,
   type ProjectSortMode,
 } from '@/lib/projects'
+import { savedFilterMatches } from '@/lib/savedFilters'
 import { cn } from '@/lib/utils'
 import { watchFolderLabel } from '@/lib/watchFolders'
 
@@ -236,6 +238,11 @@ export function Sidebar({
   onDropFilesOnProject,
   onRemoveProject,
   onCreateProject,
+  savedFilters,
+  onSelectSavedFilter,
+  onCreateSavedFilter,
+  onRenameSavedFilter,
+  onRemoveSavedFilter,
   libraryFilters,
   libraryFilterCounts,
   onLibraryFiltersChange,
@@ -265,6 +272,11 @@ export function Sidebar({
   onDropFilesOnProject?: (id: string, dataTransfer: DataTransfer) => void
   onRemoveProject?: (id: string) => void
   onCreateProject?: () => void
+  savedFilters?: SavedLibraryFilter[]
+  onSelectSavedFilter?: (filter: SavedLibraryFilter) => void
+  onCreateSavedFilter?: () => void
+  onRenameSavedFilter?: (id: string, name: string) => void
+  onRemoveSavedFilter?: (id: string) => void
   libraryFilters: LibraryFilter[]
   libraryFilterCounts: Record<LibraryFilter, number>
   onLibraryFiltersChange: (value: LibraryFilter[]) => void
@@ -289,7 +301,18 @@ export function Sidebar({
   const renameInputRef = useRef<HTMLInputElement>(null)
   const skipRenameCommitRef = useRef(false)
   const renameSessionRef = useRef<{ id: string; original: string } | null>(null)
+  const [savedFiltersOpen, setSavedFiltersOpen] = useState(true)
+  const [editingFilterId, setEditingFilterId] = useState<string | null>(null)
+  const [filterRenameValue, setFilterRenameValue] = useState('')
+  const filterRenameInputRef = useRef<HTMLInputElement>(null)
+  const skipFilterRenameCommitRef = useRef(false)
+  const filterRenameSessionRef = useRef<{ id: string; original: string } | null>(null)
   const deselectTimerRef = useRef<number | null>(null)
+  const currentCriteria = {
+    query,
+    libraryFilters,
+    watchFolder: watchFolderFilter,
+  }
   const fontsActive = tab === 'library' && !watchFolderFilter
 
   useEffect(() => {
@@ -306,6 +329,21 @@ export function Sidebar({
       setEditingProjectId(null)
     }
   }, [editingProjectId, projects])
+
+  useEffect(() => {
+    if (!editingFilterId) return
+    const timer = window.setTimeout(() => {
+      filterRenameInputRef.current?.focus()
+      filterRenameInputRef.current?.select()
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [editingFilterId])
+
+  useEffect(() => {
+    if (editingFilterId && !(savedFilters ?? []).some((item) => item.id === editingFilterId)) {
+      setEditingFilterId(null)
+    }
+  }, [editingFilterId, savedFilters])
 
   function clearDeselectTimer() {
     if (deselectTimerRef.current == null) return
@@ -340,6 +378,34 @@ export function Sidebar({
     setEditingProjectId(null)
     if (session.original === next) return
     onRenameProject?.(session.id, next)
+  }
+
+  function startFilterRename(filter: SavedLibraryFilter) {
+    skipFilterRenameCommitRef.current = false
+    filterRenameSessionRef.current = { id: filter.id, original: filter.name }
+    setFilterRenameValue(filter.name)
+    setEditingFilterId(filter.id)
+  }
+
+  function cancelFilterRename() {
+    skipFilterRenameCommitRef.current = true
+    filterRenameSessionRef.current = null
+    setEditingFilterId(null)
+  }
+
+  function commitFilterRename() {
+    if (skipFilterRenameCommitRef.current) {
+      skipFilterRenameCommitRef.current = false
+      filterRenameSessionRef.current = null
+      return
+    }
+    const session = filterRenameSessionRef.current
+    if (!session) return
+    filterRenameSessionRef.current = null
+    const next = filterRenameValue.trim() || 'Untitled filter'
+    setEditingFilterId(null)
+    if (session.original === next) return
+    onRenameSavedFilter?.(session.id, next)
   }
 
   function changeShowTotal(id: string, value: boolean) {
@@ -648,6 +714,145 @@ export function Sidebar({
             })}
               </>
             ) : null}
+          </div>
+        )}
+        {(onCreateSavedFilter || (savedFilters && savedFilters.length > 0)) && (
+          <div className="flex w-full flex-col gap-0.5 md:mt-2 md:border-t md:pt-2">
+            <div className="group/filters flex w-full items-center gap-0.5 px-1 pt-1">
+              <button
+                type="button"
+                className="flex min-w-0 flex-1 items-center gap-1 px-1 text-left"
+                aria-expanded={savedFiltersOpen}
+                aria-label={savedFiltersOpen ? 'Hide saved filters' : 'Show saved filters'}
+                onClick={() => setSavedFiltersOpen((value) => !value)}
+              >
+                <span className="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+                  Saved filters
+                </span>
+                {savedFiltersOpen ? (
+                  <ChevronDown className="size-3 opacity-0 transition-opacity group-hover/filters:opacity-70" />
+                ) : (
+                  <ChevronRight className="size-3 opacity-0 transition-opacity group-hover/filters:opacity-70" />
+                )}
+              </button>
+              {onCreateSavedFilter ? (
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className="size-6 text-muted-foreground md:opacity-0 md:transition-opacity md:group-hover/filters:opacity-100"
+                  aria-label="Save current filter"
+                  onClick={(event) => {
+                    onCreateSavedFilter()
+                    event.currentTarget.blur()
+                  }}
+                >
+                  <Plus />
+                </Button>
+              ) : null}
+            </div>
+            {savedFiltersOpen
+              ? (savedFilters ?? []).map((filter) => {
+                  const editing = editingFilterId === filter.id
+                  const active =
+                    tab === 'library' && savedFilterMatches(filter, currentCriteria)
+                  const nameField = editing ? (
+                    <input
+                      ref={filterRenameInputRef}
+                      value={filterRenameValue}
+                      aria-label="Saved filter name"
+                      className="min-w-0 flex-1 bg-transparent px-0 text-[13px] font-normal outline-none"
+                      onChange={(event) => setFilterRenameValue(event.target.value)}
+                      onClick={(event) => event.stopPropagation()}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onDoubleClick={(event) => event.stopPropagation()}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault()
+                          event.stopPropagation()
+                          commitFilterRename()
+                        }
+                        if (event.key === 'Escape') {
+                          event.preventDefault()
+                          event.stopPropagation()
+                          cancelFilterRename()
+                        }
+                      }}
+                      onBlur={commitFilterRename}
+                    />
+                  ) : (
+                    <span
+                      className="min-w-0 truncate"
+                      onDoubleClick={(event) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        startFilterRename(filter)
+                      }}
+                    >
+                      {filter.name}
+                    </span>
+                  )
+                  const rowBody = (
+                    <>
+                      <Filter className="size-3.5 opacity-70" />
+                      {nameField}
+                    </>
+                  )
+                  return (
+                    <ContextMenu key={filter.id}>
+                      <ContextMenuTrigger asChild>
+                        {editing ? (
+                          <div
+                            className={cn(
+                              'inline-flex items-center justify-start gap-1.5 whitespace-nowrap rounded-md px-2.5 text-[13px]',
+                              navButtonClass(active, 'w-full'),
+                            )}
+                            role="group"
+                            aria-label="Rename saved filter"
+                          >
+                            {rowBody}
+                          </div>
+                        ) : (
+                          <Button
+                            type="button"
+                            size="default"
+                            variant="ghost"
+                            aria-current={active ? 'page' : undefined}
+                            className={navButtonClass(active, 'w-full')}
+                            onClick={(event) => {
+                              if (event.detail > 1) return
+                              onSelectSavedFilter?.(filter)
+                            }}
+                            onDoubleClick={(event) => {
+                              event.preventDefault()
+                              startFilterRename(filter)
+                            }}
+                          >
+                            {rowBody}
+                          </Button>
+                        )}
+                      </ContextMenuTrigger>
+                      <ContextMenuContent>
+                        <ContextMenuItem
+                          onSelect={() => {
+                            window.setTimeout(() => startFilterRename(filter), 0)
+                          }}
+                        >
+                          <Pencil /> Rename filter
+                        </ContextMenuItem>
+                        {onRemoveSavedFilter ? (
+                          <>
+                            <ContextMenuSeparator />
+                            <ContextMenuItem onSelect={() => onRemoveSavedFilter(filter.id)}>
+                              <FolderMinus /> Remove saved filter
+                            </ContextMenuItem>
+                          </>
+                        ) : null}
+                      </ContextMenuContent>
+                    </ContextMenu>
+                  )
+                })
+              : null}
           </div>
         )}
         {tab === 'library' && (duplicatesCount ?? 0) > 0 && onOpenDuplicates ? (

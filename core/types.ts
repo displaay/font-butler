@@ -167,6 +167,24 @@ export type SortMode = 'name' | 'added'
 
 export type ThemeMode = 'light' | 'dark' | 'system'
 
+export type LibraryFilter =
+  | 'installed'
+  | 'deactivated'
+  | 'uninstalled'
+  | 'vf'
+  | 'static'
+  | 'source'
+  | 'no-source'
+
+export type SavedLibraryFilter = {
+  id: string
+  name: string
+  query: string
+  libraryFilters: LibraryFilter[]
+  watchFolder: string | null
+  createdAt: number
+}
+
 export type WatchFolder = {
   id: string
   root: string
@@ -211,6 +229,7 @@ export type AppSettings = {
   activityMaxOperations: number
   specimen?: PreviewPreferences
   defaultDestination?: DefaultDestinationId
+  savedFilters: SavedLibraryFilter[]
 }
 
 export type OfficeFontCacheInfo = {

@@ -8,6 +8,7 @@ import {
   syncWatchFolderPaths,
 } from './folders.ts'
 import { parseDefaultDestination } from './destinations.ts'
+import { normalizeSavedFilters } from './saved-filters.ts'
 import type { AppSettings, PreviewPreferences, SortMode, ThemeMode, ViewLayout } from './types.ts'
 
 const emptySettings = (): AppSettings => ({
@@ -31,6 +32,7 @@ const emptySettings = (): AppSettings => ({
   activityRetentionDays: DEFAULT_ACTIVITY_RETENTION_DAYS,
   activityMaxOperations: DEFAULT_ACTIVITY_MAX_OPERATIONS,
   defaultDestination: 'macos',
+  savedFilters: [],
 })
 
 function isViewLayout(value: unknown): value is ViewLayout {
@@ -162,6 +164,7 @@ export function loadSettings(paths: AppPaths): AppSettings {
           : defaults.activityMaxOperations,
       specimen: readSpecimen(parsed.specimen),
       defaultDestination: parseDefaultDestination(parsed.defaultDestination),
+      savedFilters: normalizeSavedFilters(parsed.savedFilters),
     }
     return syncWatchFolderPaths(settings)
   } catch {

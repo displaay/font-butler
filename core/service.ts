@@ -148,6 +148,7 @@ import {
 import { postscriptPreview, renameFamilyCopy } from './rename.ts'
 import { moveToTrash, revealInFileManager } from './reveal.ts'
 import { loadSettings, saveSettings } from './settings.ts'
+import { normalizeSavedFilters } from './saved-filters.ts'
 import { allowedFontPath, scanSystemFonts } from './system.ts'
 import type {
   AdobeFontCacheInfo,
@@ -513,6 +514,7 @@ export class FontButlerService {
     activityMaxOperations?: number
     specimen?: AppSettings['specimen']
     defaultDestination?: DefaultDestinationId
+    savedFilters?: AppSettings['savedFilters']
   }): Promise<AppSettings> {
     const current = loadSettings(this.paths)
     const next: AppSettings = { ...current }
@@ -601,6 +603,9 @@ export class FontButlerService {
     }
     if (isDefaultDestinationId(patch.defaultDestination)) {
       next.defaultDestination = patch.defaultDestination
+    }
+    if (patch.savedFilters) {
+      next.savedFilters = normalizeSavedFilters(patch.savedFilters)
     }
     syncWatchFolderPaths(next)
     saveSettings(this.paths, next)

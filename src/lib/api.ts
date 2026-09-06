@@ -203,6 +203,7 @@ export const api = {
     folders?: WatchFolder[]
     specimen?: AppSettings['specimen']
     defaultDestination?: DefaultDestinationId
+    savedFilters?: AppSettings['savedFilters']
   }) =>
     json<{
       settings: AppSettings
