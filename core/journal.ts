@@ -1,0 +1,433 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
+import crypto from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
+import { loadCatalog, saveCatalog, upsertEntry } from './catalog.ts'
+import { isUnderAnyRoot } from './containment.ts'
+import { copiesOf } from './destinations.ts'
+import { tryFingerprintFile } from './fingerprint.ts'
+import { uniquePathFromOriginal } from './install.ts'
+import { ensureFontActivation, type FontNative } from './native.ts'
+import { createOperation, finishOperation, upsertOperation } from './operations.ts'
+import { journalDir, journalPath, type AppPaths } from './paths.ts'
+import { applyEntryFacts } from './state.ts'
+import type { CatalogEntry } from './types.ts'
+
+export type MutationJournalKind = 'install' | 'replace' | 'park' | 'switch'
+export type MutationJournalPhase = 'prepared' | 'mutating' | 'catalog' | 'failed'
+export type JournalFileRole = 'macos-live' | 'adobe-live' | 'macos-parked' | 'adobe-parked'
+
+export type JournalFileSnapshot = {
+  role: JournalFileRole
+  originalPath: string
+  snapshotPath: string
+  fingerprint?: string
+}
+
+export type JournalTarget = {
+  entryId: string
+  familyName: string
+  entryBefore: CatalogEntry | null
+  destPaths: string[]
+  files: JournalFileSnapshot[]
+}
+
+export type MutationJournal = {
+  version: 1
+  id: string
+  kind: MutationJournalKind
+  phase: MutationJournalPhase
+  startedAt: number
+  lastError?: string
+  targets: JournalTarget[]
+}
+
+type MutationJournalFile = {
+  version: 1
+  journals: MutationJournal[]
+}
+
+const openJournal = new AsyncLocalStorage<MutationJournal>()
+
+function cloneEntry(entry: CatalogEntry): CatalogEntry {
+  return JSON.parse(JSON.stringify(entry)) as CatalogEntry
+}
+
+function familyNameOf(entry: CatalogEntry): string {
+  return entry.customFamilyName || entry.faces[0]?.familyName || 'Unknown'
+}
+
+function isParkedPath(filePath: string, paths: AppPaths): boolean {
+  return isUnderAnyRoot(filePath, [paths.disabledDir])
+}
+
+function isMacosLivePath(filePath: string, paths: AppPaths): boolean {
+  if (isParkedPath(filePath, paths)) return false
+  return isUnderAnyRoot(filePath, [paths.installDir, paths.userFontsDir])
+}
+
+function emptyJournalFile(): MutationJournalFile {
+  return { version: 1, journals: [] }
+}
+
+function readJournalFile(paths: AppPaths): MutationJournalFile {
+  const file = journalPath(paths)
+  if (!fs.existsSync(file)) return emptyJournalFile()
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as MutationJournalFile
+    if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.journals)) {
+      return emptyJournalFile()
+    }
+    return parsed
+  } catch {
+    return emptyJournalFile()
+  }
+}
+
+function writeJournalFile(paths: AppPaths, data: MutationJournalFile): void {
+  fs.mkdirSync(paths.dataRoot, { recursive: true })
+  const dest = journalPath(paths)
+  const tmp = `${dest}.${process.pid}.${process.hrtime.bigint()}.tmp`
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2))
+  fs.renameSync(tmp, dest)
+}
+
+function snapshotFile(
+  snapshotRoot: string,
+  originalPath: string,
+  role: JournalFileRole,
+): JournalFileSnapshot | undefined {
+  if (!fs.existsSync(originalPath) || !fs.statSync(originalPath).isFile()) return undefined
+  const ext = path.extname(originalPath) || '.ttf'
+  const snapshotPath = path.join(snapshotRoot, `${role}${ext}`)
+  fs.mkdirSync(path.dirname(snapshotPath), { recursive: true })
+  fs.copyFileSync(originalPath, snapshotPath)
+  return {
+    role,
+    originalPath: path.resolve(originalPath),
+    snapshotPath,
+    fingerprint: tryFingerprintFile(snapshotPath),
+  }
+}
+
+function intendedDestPaths(paths: AppPaths, entry: CatalogEntry): string[] {
+  const found = new Set<string>()
+  const add = (value?: string) => {
+    if (value) found.add(path.resolve(value))
+  }
+  add(entry.installedPath)
+  for (const copy of copiesOf(entry)) {
+    add(copy.path)
+  }
+  if (entry.sourcePath) {
+    const ext = path.extname(entry.sourcePath) || '.ttf'
+    const stem = path.basename(entry.sourcePath, path.extname(entry.sourcePath))
+    add(path.join(paths.installDir, `${stem}${ext}`))
+    add(path.join(paths.adobeFontsDir, `${stem}${ext}`))
+  }
+  return [...found]
+}
+
+function snapshotTarget(paths: AppPaths, entry: CatalogEntry, snapshotRoot: string): JournalTarget {
+  const files: JournalFileSnapshot[] = []
+  const macosLive = entry.installedPath
+  if (macosLive && !isParkedPath(macosLive, paths)) {
+    const snap = snapshotFile(snapshotRoot, macosLive, 'macos-live')
+    if (snap) files.push(snap)
+  }
+  const macosParked = entry.disabledPath
+  if (macosParked) {
+    const snap = snapshotFile(snapshotRoot, macosParked, 'macos-parked')
+    if (snap) files.push(snap)
+  }
+  const adobe = copiesOf(entry).find((copy) => copy.destinationId === 'adobe-shared')
+  if (adobe?.path && !adobe.parkedPath && !isParkedPath(adobe.path, paths)) {
+    const snap = snapshotFile(snapshotRoot, adobe.path, 'adobe-live')
+    if (snap) files.push(snap)
+  }
+  if (adobe?.parkedPath) {
+    const snap = snapshotFile(snapshotRoot, adobe.parkedPath, 'adobe-parked')
+    if (snap) files.push(snap)
+  }
+  return {
+    entryId: entry.id,
+    familyName: familyNameOf(entry),
+    entryBefore: cloneEntry(entry),
+    destPaths: intendedDestPaths(paths, entry),
+    files,
+  }
+}
+
+function upsertJournal(paths: AppPaths, journal: MutationJournal): void {
+  const data = readJournalFile(paths)
+  const index = data.journals.findIndex((item) => item.id === journal.id)
+  if (index === -1) {
+    data.journals.push(journal)
+  } else {
+    data.journals[index] = journal
+  }
+  writeJournalFile(paths, data)
+}
+
+export function currentMutationJournal(): MutationJournal | undefined {
+  return openJournal.getStore()
+}
+
+export function loadIncompleteJournals(paths: AppPaths): MutationJournal[] {
+  return readJournalFile(paths).journals.filter(
+    (item) => item.phase === 'prepared' || item.phase === 'mutating' || item.phase === 'catalog',
+  )
+}
+
+export function beginJournal(
+  paths: AppPaths,
+  input: { kind: MutationJournalKind; entries: CatalogEntry[] },
+): MutationJournal {
+  const id = crypto.randomUUID()
+  const snapshotRoot = path.join(journalDir(paths), id)
+  fs.mkdirSync(snapshotRoot, { recursive: true })
+  const seen = new Set<string>()
+  const targets: JournalTarget[] = []
+  for (const entry of input.entries) {
+    if (seen.has(entry.id)) continue
+    seen.add(entry.id)
+    targets.push(snapshotTarget(paths, entry, path.join(snapshotRoot, entry.id)))
+  }
+  const journal: MutationJournal = {
+    version: 1,
+    id,
+    kind: input.kind,
+    phase: 'prepared',
+    startedAt: Date.now(),
+    targets,
+  }
+  upsertJournal(paths, journal)
+  return journal
+}
+
+export function markJournalPhase(
+  paths: AppPaths,
+  journalId: string,
+  phase: MutationJournalPhase,
+  lastError?: string,
+): void {
+  const data = readJournalFile(paths)
+  const journal = data.journals.find((item) => item.id === journalId)
+  if (!journal) return
+  journal.phase = phase
+  if (lastError) journal.lastError = lastError
+  writeJournalFile(paths, data)
+  const current = openJournal.getStore()
+  if (current?.id === journalId) {
+    current.phase = phase
+    if (lastError) current.lastError = lastError
+  }
+}
+
+export function completeJournal(paths: AppPaths, journalId: string): void {
+  const data = readJournalFile(paths)
+  data.journals = data.journals.filter((item) => item.id !== journalId)
+  if (data.journals.length === 0 && fs.existsSync(journalPath(paths))) {
+    fs.rmSync(journalPath(paths), { force: true })
+  } else {
+    writeJournalFile(paths, data)
+  }
+  const snapshotRoot = path.join(journalDir(paths), journalId)
+  if (fs.existsSync(snapshotRoot)) {
+    fs.rmSync(snapshotRoot, { recursive: true, force: true })
+  }
+}
+
+export async function withMutationJournal<T>(
+  paths: AppPaths,
+  input: { kind: MutationJournalKind; entries: CatalogEntry[] },
+  work: () => Promise<T>,
+): Promise<T> {
+  if (openJournal.getStore()) {
+    return work()
+  }
+  const journal = beginJournal(paths, input)
+  return openJournal.run(journal, async () => {
+    try {
+      markJournalPhase(paths, journal.id, 'mutating')
+      return await work()
+    } finally {
+      completeJournal(paths, journal.id)
+    }
+  })
+}
+
+function snapshottedLivePaths(target: JournalTarget): Set<string> {
+  return new Set(
+    target.files
+      .filter((file) => file.role.endsWith('-live'))
+      .map((file) => path.resolve(file.originalPath)),
+  )
+}
+
+async function restoreSnapshotFile(
+  paths: AppPaths,
+  native: FontNative,
+  file: JournalFileSnapshot,
+): Promise<void> {
+  if (!fs.existsSync(file.snapshotPath)) return
+  fs.mkdirSync(path.dirname(file.originalPath), { recursive: true })
+  fs.copyFileSync(file.snapshotPath, file.originalPath)
+  if (file.role === 'macos-live' && isMacosLivePath(file.originalPath, paths)) {
+    try {
+      await ensureFontActivation(native, file.originalPath, true)
+    } catch {
+      // Restoring bytes is the priority; native activation is best-effort on startup.
+    }
+  }
+}
+
+async function removeLivePath(native: FontNative, filePath: string): Promise<void> {
+  if (!fs.existsSync(filePath)) return
+  try {
+    await native.unregisterFont(filePath)
+  } catch {
+    // Removing an incomplete dest must not fail the rest of reconcile.
+  }
+  fs.rmSync(filePath, { force: true })
+}
+
+function referencedParkedPaths(entry: CatalogEntry): Set<string> {
+  const parked = new Set<string>()
+  if (entry.disabledPath) parked.add(path.resolve(entry.disabledPath))
+  for (const copy of copiesOf(entry)) {
+    if (copy.parkedPath) parked.add(path.resolve(copy.parkedPath))
+  }
+  return parked
+}
+
+function removeStrayParkedCopy(paths: AppPaths, livePath: string, allowed: Set<string>): void {
+  const vault = uniquePathFromOriginal(paths.disabledDir, livePath)
+  if (!fs.existsSync(vault)) return
+  if (allowed.has(path.resolve(vault))) return
+  const liveFp = tryFingerprintFile(livePath)
+  const vaultFp = tryFingerprintFile(vault)
+  if (liveFp && vaultFp && liveFp === vaultFp) {
+    fs.rmSync(vault, { force: true })
+  }
+}
+
+async function restoreJournal(
+  paths: AppPaths,
+  journal: MutationJournal,
+  native: FontNative,
+): Promise<void> {
+  const catalog = fs.existsSync(paths.catalogPath) ? loadCatalog(paths) : { version: 1 as const, entries: [] }
+  for (const target of journal.targets) {
+    for (const file of target.files) {
+      await restoreSnapshotFile(paths, native, file)
+    }
+    if (target.entryBefore) {
+      const restored = cloneEntry(target.entryBefore)
+      applyEntryFacts(restored)
+      upsertEntry(catalog, restored)
+    }
+
+    const before = target.entryBefore
+    const liveSnapshots = snapshottedLivePaths(target)
+    const allowedParked = before ? referencedParkedPaths(before) : new Set<string>()
+
+    if (before && (before.status === 'installed' || before.status === 'outdated')) {
+      for (const livePath of liveSnapshots) {
+        removeStrayParkedCopy(paths, livePath, allowedParked)
+      }
+    }
+
+    if (before && before.status === 'deactivated') {
+      for (const destPath of target.destPaths) {
+        if (liveSnapshots.has(path.resolve(destPath))) continue
+        if (isParkedPath(destPath, paths)) continue
+        if (fs.existsSync(destPath) && isMacosLivePath(destPath, paths)) {
+          await removeLivePath(native, destPath)
+        }
+      }
+    }
+
+    if (!before || before.status === 'uninstalled') {
+      for (const destPath of target.destPaths) {
+        if (liveSnapshots.has(path.resolve(destPath))) continue
+        if (isParkedPath(destPath, paths)) continue
+        if (fs.existsSync(destPath)) {
+          await removeLivePath(native, destPath)
+        }
+      }
+    }
+  }
+  saveCatalog(paths, catalog)
+}
+
+function recoveryReason(kind: MutationJournalKind): string {
+  switch (kind) {
+    case 'replace':
+      return 'Rolled back an incomplete replace.'
+    case 'park':
+      return 'Restored the previous working install after an incomplete park.'
+    case 'switch':
+      return 'Restored the previous working fonts after an incomplete switch.'
+    default:
+      return 'Rolled back an incomplete install.'
+  }
+}
+
+function recordRecovery(
+  paths: AppPaths,
+  journal: MutationJournal,
+  outcome: 'succeeded' | 'failed',
+  reason: string,
+): void {
+  const familyName = [...new Set(journal.targets.map((target) => target.familyName))].join(', ')
+  const items = journal.targets.map((target) => ({
+    id: crypto.randomUUID(),
+    entryId: target.entryId,
+    label: target.familyName,
+    outcome,
+    reason,
+  }))
+  if (items.length === 0) {
+    items.push({
+      id: crypto.randomUUID(),
+      entryId: undefined,
+      label: familyName || journal.kind,
+      outcome,
+      reason,
+    })
+  }
+  const operation = finishOperation(
+    createOperation({
+      trigger: 'startup',
+      action: 'recover-journal',
+      familyName: familyName || undefined,
+    }),
+    items,
+  )
+  operation.undoable = false
+  upsertOperation(paths, operation)
+}
+
+export async function reconcileMutationJournals(
+  paths: AppPaths,
+  native: FontNative,
+): Promise<MutationJournal[]> {
+  const journals = loadIncompleteJournals(paths).sort((left, right) => left.startedAt - right.startedAt)
+  const processed: MutationJournal[] = []
+  for (const journal of journals) {
+    try {
+      await restoreJournal(paths, journal, native)
+      recordRecovery(paths, journal, 'succeeded', recoveryReason(journal.kind))
+      completeJournal(paths, journal.id)
+      processed.push(journal)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      markJournalPhase(paths, journal.id, 'failed', message)
+      recordRecovery(paths, journal, 'failed', message)
+      completeJournal(paths, journal.id)
+      processed.push(journal)
+    }
+  }
+  return processed
+}

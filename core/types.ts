@@ -228,6 +228,7 @@ export type OperationTrigger =
   | 'undo'
   | 'manual'
   | 'open-with'
+  | 'startup'
 
 export type OperationOutcome = 'pending' | 'succeeded' | 'partial' | 'failed' | 'canceled'
 
