@@ -53,3 +53,21 @@ test('catalogFontFaceRules emit one descriptor per collection face', () => {
   assert.match(rules[0]!, /src:url\("\/api\/font-file\/pack"\)/)
   assert.equal(rules[0] === rules[1], false)
 })
+
+test('captured revision preview URLs stay pinned when the live source fingerprint changes', () => {
+  const captured = 'a'.repeat(64)
+  const opened = entry({ sourceFingerprint: captured, installedFingerprint: 'b'.repeat(64) })
+  const later = entry({
+    sourceFingerprint: 'c'.repeat(64),
+    sourceMtimeMs: 99,
+    sourceSize: 999,
+    updatedAt: 9,
+    installedFingerprint: 'b'.repeat(64),
+  })
+  const openedUrl = catalogFontUrl(opened, 'revision', captured)
+  const laterUrl = catalogFontUrl(later, 'revision', captured)
+  assert.equal(openedUrl, laterUrl)
+  assert.match(openedUrl, /which=revision/)
+  assert.match(openedUrl, new RegExp(`revision=${captured}`))
+  assert.notEqual(catalogFontUrl(opened, 'source'), catalogFontUrl(later, 'source'))
+})

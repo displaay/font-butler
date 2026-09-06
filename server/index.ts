@@ -242,10 +242,12 @@ app.post('/api/install', async (c) => {
     familyName?: string
     replace?: boolean
     destinationId?: 'macos' | 'adobe-shared'
+    expectedSourceFingerprint?: string
   }>()
   const options = {
     replace: body.replace === true,
     destinationId: body.destinationId,
+    expectedSourceFingerprint: body.expectedSourceFingerprint,
   }
   try {
     if (body.ids?.length) {
@@ -343,16 +345,21 @@ app.post('/api/activate', async (c) => {
 })
 
 app.post('/api/reinstall', async (c) => {
-  const body = await c.req.json<{ id?: string; ids?: string[] }>()
+  const body = await c.req.json<{
+    id?: string
+    ids?: string[]
+    expectedSourceFingerprint?: string
+  }>()
+  const options = { expectedSourceFingerprint: body.expectedSourceFingerprint }
   try {
     if (body.ids?.length) {
-      const entries = await service.reinstallMany(body.ids)
+      const entries = await service.reinstallMany(body.ids, options)
       return c.json({ entries })
     }
     if (!body.id) {
       return c.json({ error: 'Missing id or ids' }, 400)
     }
-    const entry = await service.reinstall(body.id)
+    const entry = await service.reinstall(body.id, options)
     return c.json({ entry })
   } catch (error) {
     return c.json(
@@ -673,6 +680,18 @@ app.post('/api/projects/deactivate', async (c) => {
     return c.json({ ok: true })
   } catch (error) {
     return c.json(fail(error, 'Could not deactivate project'), 400)
+  }
+})
+
+app.post('/api/comparison/capture', async (c) => {
+  const body = await c.req.json<{ id?: string }>()
+  if (!body.id) {
+    return c.json({ error: 'Missing id' }, 400)
+  }
+  try {
+    return c.json(await service.captureComparison(body.id))
+  } catch (error) {
+    return c.json(fail(error, 'Could not capture comparison'), 400)
   }
 })
 

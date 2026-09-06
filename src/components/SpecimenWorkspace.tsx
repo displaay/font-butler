@@ -1,12 +1,18 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { catalogFontFamily } from '@/components/FontFaceStyles'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { api } from '@/lib/api'
+import {
+  canCompareInstalledVsSource,
+  capturedFontFamily,
+  isComparisonSourceStale,
+} from '@/lib/comparison'
 import { formatMissingCharacters, missingCodePoints } from '@/lib/coverage'
+import { catalogFontFaceRules, catalogFontUrl } from '@/lib/preview'
 import { DEFAULT_SPECIMEN, SPECIMEN_PRESETS, specimenFromSettings } from '@/lib/specimen'
-import type { CatalogEntry, FontAxisInfo, PreviewPreferences } from '@/lib/types'
+import type { CatalogEntry, ComparisonCapture, FontAxisInfo, PreviewPreferences } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 type PreviewMeta = {
@@ -35,25 +41,89 @@ export function SpecimenWorkspace({
   onSpecimenChange,
   compare,
   compareEntry,
+  onCaptureChange,
 }: {
   entry: CatalogEntry
   specimen: PreviewPreferences
   onSpecimenChange: (next: PreviewPreferences) => void
   compare?: 'source' | 'families'
   compareEntry?: CatalogEntry | null
+  onCaptureChange?: (capture: ComparisonCapture | null) => void
 }) {
   const [meta, setMeta] = useState<PreviewMeta | null>(null)
   const [sourceMeta, setSourceMeta] = useState<PreviewMeta | null>(null)
   const [axes, setAxes] = useState<Record<string, number>>({})
   const [features, setFeatures] = useState<Record<string, boolean>>({})
   const [instanceName, setInstanceName] = useState<string>('Default')
-  const [newerSource, setNewerSource] = useState(false)
+  const [capture, setCapture] = useState<ComparisonCapture | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
+  const onCaptureChangeRef = useRef(onCaptureChange)
+  onCaptureChangeRef.current = onCaptureChange
 
-  const installedFamily = catalogFontFamily(entry.id, 'installed')
-  const sourceFamily = catalogFontFamily(entry.id, 'source')
+  const canCompareSource = compare !== 'families' && canCompareInstalledVsSource(entry)
+  const freezeComparison = canCompareSource
+  const newerSource = isComparisonSourceStale(capture, entry.sourceFingerprint)
+
+  const liveInstalledFamily = catalogFontFamily(entry.id, 'installed')
+  const liveSourceFamily = catalogFontFamily(entry.id, 'source')
   const otherFamily = compareEntry ? catalogFontFamily(compareEntry.id, 'installed') : ''
+  const installedFamily =
+    freezeComparison && capture?.installedFingerprint
+      ? capturedFontFamily(entry.id, 'installed')
+      : liveInstalledFamily
+  const sourceFamily =
+    freezeComparison && capture?.sourceFingerprint
+      ? capturedFontFamily(entry.id, 'source')
+      : liveSourceFamily
 
   useEffect(() => {
+    if (!freezeComparison) {
+      setCapture(null)
+      onCaptureChangeRef.current?.(null)
+      return
+    }
+    let cancelled = false
+    void api
+      .captureComparison(entry.id)
+      .then((result) => {
+        if (cancelled) return
+        setCapture(result)
+        onCaptureChangeRef.current?.(result)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setCapture(null)
+        onCaptureChangeRef.current?.(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [freezeComparison, entry.id])
+
+  useEffect(() => {
+    if (!freezeComparison || !capture?.installedFingerprint || !capture.sourceFingerprint) return
+    const rules = [
+      ...catalogFontFaceRules(
+        capturedFontFamily(entry.id, 'installed'),
+        catalogFontUrl(entry, 'revision', capture.installedFingerprint),
+        entry.faces,
+      ),
+      ...catalogFontFaceRules(
+        capturedFontFamily(entry.id, 'source'),
+        catalogFontUrl(entry, 'revision', capture.sourceFingerprint),
+        entry.faces,
+      ),
+    ].join('\n')
+    const style = document.createElement('style')
+    style.setAttribute('data-font-butler-comparison', entry.id)
+    style.textContent = rules
+    document.head.append(style)
+    return () => style.remove()
+    // Pin captured @font-face URLs; do not recreate when catalog sourceFingerprint changes.
+  }, [freezeComparison, capture?.installedFingerprint, capture?.sourceFingerprint, entry.id])
+
+  useEffect(() => {
+    if (freezeComparison) return
     let cancelled = false
     void api
       .previewMeta(entry.id, entry.installedPath ? 'installed' : 'source')
@@ -84,11 +154,46 @@ export function SpecimenWorkspace({
     return () => {
       cancelled = true
     }
-  }, [entry.id, entry.installedPath, entry.sourcePath, entry.sourceAvailability, entry.sourceFingerprint])
+  }, [
+    freezeComparison,
+    entry.id,
+    entry.installedPath,
+    entry.sourcePath,
+    entry.sourceAvailability,
+    entry.sourceFingerprint,
+  ])
 
   useEffect(() => {
-    setNewerSource(Boolean(entry.status === 'outdated' || entry.updateHold === 'relink-review'))
-  }, [entry.status, entry.updateHold, entry.sourceFingerprint])
+    if (!freezeComparison || !capture || capture.id !== entry.id) return
+    let cancelled = false
+    const installedRevision = capture.installedFingerprint
+    const sourceRevision = capture.sourceFingerprint
+    void api
+      .previewMeta(entry.id, installedRevision ? 'revision' : 'installed', installedRevision ?? undefined)
+      .then((result) => {
+        if (cancelled) return
+        setMeta(result)
+        const next: Record<string, number> = {}
+        for (const axis of result.axes ?? []) next[axis.tag] = axis.default
+        setAxes(next)
+        setFeatures({})
+        setInstanceName('Default')
+      })
+      .catch(() => {
+        if (!cancelled) setMeta(null)
+      })
+    void api
+      .previewMeta(entry.id, 'revision', sourceRevision)
+      .then((result) => {
+        if (!cancelled) setSourceMeta(result)
+      })
+      .catch(() => {
+        if (!cancelled) setSourceMeta(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [freezeComparison, capture, entry.id])
 
   const missing = useMemo(
     () => missingCodePoints(specimen.text, meta?.characterSet),
@@ -125,10 +230,16 @@ export function SpecimenWorkspace({
     setInstanceName(name)
   }
 
-  const canCompareSource =
-    Boolean(entry.installedPath) &&
-    entry.sourceAvailability === 'present' &&
-    !isSameSource(entry)
+  function refreshComparison() {
+    setRefreshing(true)
+    void api
+      .captureComparison(entry.id)
+      .then((result) => {
+        setCapture(result)
+        onCaptureChangeRef.current?.(result)
+      })
+      .finally(() => setRefreshing(false))
+  }
 
   return (
     <div className="space-y-3">
@@ -227,7 +338,7 @@ export function SpecimenWorkspace({
       ) : (
         <SpecimenPane
           label={entry.previewOnly ? 'Preview only' : entry.installedPath ? 'Installed' : 'Source'}
-          family={entry.installedPath ? installedFamily : sourceFamily}
+          family={entry.installedPath ? liveInstalledFamily : liveSourceFamily}
           text={specimen.text}
           size={specimen.size}
           lineHeight={specimen.lineHeight}
@@ -237,10 +348,21 @@ export function SpecimenWorkspace({
         />
       )}
       {newerSource && canCompareSource && (
-        <p className="text-xs text-amber-800 dark:text-amber-300">
-          A newer source is available. Refresh comparison after reviewing it; Install update uses
-          the revision you are looking at.
-        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-xs text-amber-800 dark:text-amber-300">
+            A newer source is available. Refresh comparison after reviewing it; Install update uses
+            the revision you are looking at.
+          </p>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={refreshing}
+            onClick={refreshComparison}
+          >
+            Refresh comparison
+          </Button>
+        </div>
       )}
       {(meta?.axes?.length ?? 0) > 0 && (
         <div className="space-y-2">
@@ -319,10 +441,6 @@ export function SpecimenWorkspace({
       )}
     </div>
   )
-}
-
-function isSameSource(entry: CatalogEntry): boolean {
-  return Boolean(entry.installedPath && entry.sourcePath === entry.installedPath)
 }
 
 function SpecimenPane({

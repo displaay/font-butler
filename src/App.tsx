@@ -77,6 +77,7 @@ import {
   uninstallableIds,
 } from '@/lib/eligibility'
 import { canSwitchTo } from '@/lib/identity'
+import { canCompareInstalledVsSource, isComparisonSourceStale } from '@/lib/comparison'
 import { familyNameOf, countLibraryFilters, deletableSourceIds, entryHasTrackedSource, entryIds, familyStatusSummary, forgettableIds, groupCatalog, groupSystem, hasSourceMissing, hasTrackedSource, isForgettableOnlyGroup, isLibraryFilter, isUninstallableGroup, matchesLibraryFilter, matchesQuery, sortFamilyGroups } from '@/lib/group'
 import { actionCopy, actionCopyFor, emptyImportError, importDoneCopy, remainingActionCopy } from '@/lib/notify'
 import { planNeedsReview } from '@/lib/planner'
@@ -113,7 +114,7 @@ import {
 } from '@/lib/selection'
 import { applyTheme } from '@/lib/theme'
 import { allUpdateGroups, updateGroupsForIds, visibleUpdateGroups } from '@/lib/updateInventory'
-import type { AppSettings, CatalogEntry, DuplicateWarning, FamilyGroup, ImportPlan, ImportPlanItem, LibraryFilter, Operation, PreviewPreferences, ProjectSet, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
+import type { AppSettings, CatalogEntry, ComparisonCapture, DuplicateWarning, FamilyGroup, ImportPlan, ImportPlanItem, LibraryFilter, Operation, PreviewPreferences, ProjectSet, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { isPathUnderFolder, isWatchFolderEntry, watchFolderName } from '@/lib/watchFolders'
 
@@ -168,6 +169,7 @@ function AppShell() {
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null)
+  const [comparisonCapture, setComparisonCapture] = useState<ComparisonCapture | null>(null)
   const [renameEntry, setRenameEntry] = useState<CatalogEntry | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [onboardingOpen, setOnboardingOpen] = useState(false)
@@ -490,6 +492,11 @@ function AppShell() {
     selectedGroup?.entries.find((entry) => entry.id === selectedEntryId) ??
     selectedGroup?.entries[0] ??
     null
+  const comparisonInstallBlocked = Boolean(
+    canCompareInstalledVsSource(selectedEntry) &&
+      (comparisonCapture?.id !== selectedEntry?.id ||
+        isComparisonSourceStale(comparisonCapture, selectedEntry?.sourceFingerprint)),
+  )
   const selectedSystemGroup =
     tab === 'system' && selectedSystem && selectedSystemKeys.includes(selectedSystem)
       ? (shownSystemGroups.find((group) => group.familyName === selectedSystem) ?? null)
@@ -785,10 +792,17 @@ function AppShell() {
     return { ids: chosen.map((entry) => entry.id), replace: true }
   }
 
+  function comparisonFingerprintFor(ids: string[]): string | undefined {
+    if (ids.length !== 1) return undefined
+    if (comparisonCapture?.id !== ids[0]) return undefined
+    return comparisonCapture.sourceFingerprint
+  }
+
   function installPrepared(ids: string[], familyName?: string, replace?: boolean) {
+    const expectedSourceFingerprint = comparisonFingerprintFor(ids)
     return ids.length > 1
-      ? api.installMany(ids, familyName, { replace })
-      : api.install(ids[0], familyName, { replace })
+      ? api.installMany(ids, familyName, { replace, expectedSourceFingerprint })
+      : api.install(ids[0], familyName, { replace, expectedSourceFingerprint })
   }
 
   function activatePrepared(ids: string[], replace?: boolean) {
@@ -815,7 +829,10 @@ function AppShell() {
   function reinstallGroup(group: FamilyGroup) {
     const ids = reinstallableIds(group)
     if (ids.length === 0) return Promise.resolve({ entries: [] })
-    return ids.length > 1 ? api.reinstallMany(ids) : api.reinstall(ids[0])
+    const expectedSourceFingerprint = comparisonFingerprintFor(ids)
+    return ids.length > 1
+      ? api.reinstallMany(ids, { expectedSourceFingerprint })
+      : api.reinstall(ids[0], { expectedSourceFingerprint })
   }
 
   function forgetGroup(group: FamilyGroup, options?: { deleteFiles?: boolean }) {
@@ -2013,6 +2030,8 @@ function AppShell() {
                   ? catalogSelection.find((group) => group.familyName !== selectedFamily)?.entries[0] ?? null
                   : null
               }
+              comparisonInstallBlocked={comparisonInstallBlocked}
+              onComparisonCapture={setComparisonCapture}
               onInstall={() => selectedGroup && void installGroupGuarded(selectedGroup)}
               onInstallAs={() => setRenameEntry(selectedEntry)}
               onReinstall={() =>

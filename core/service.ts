@@ -70,7 +70,8 @@ import {
   uniqueSiblingPath,
 } from './install.ts'
 import { ensureFontActivation, getFontNative } from './native.ts'
-import { tryFingerprintFile } from './fingerprint.ts'
+import { fingerprintFile, tryFingerprintFile } from './fingerprint.ts'
+import { assertExpectedSourceFingerprint } from './comparison.ts'
 import { reconcileMutationJournals, withMutationJournal } from './journal.ts'
 import {
   applyFolderPatch,
@@ -149,6 +150,7 @@ import type {
   AppSettings,
   BatchActionResult,
   CatalogEntry,
+  ComparisonCapture,
   DefaultDestinationId,
   DestinationId,
   DuplicateWarning,
@@ -752,6 +754,24 @@ export class FontButlerService {
     })
   }
 
+  async captureComparison(id: string): Promise<ComparisonCapture> {
+    const entry = findById(loadCatalog(this.paths), id)
+    if (!entry) {
+      throw new Error('Font is not in the library.')
+    }
+    if (!sourceFileExists(entry.sourcePath)) {
+      throw new Error('The source file is missing.')
+    }
+    const sourceFingerprint = fingerprintFile(entry.sourcePath)
+    storeRevision(this.paths, entry.sourcePath, { faces: entry.faces, format: entry.format })
+    let installedFingerprint: string | null = null
+    if (entry.installedPath && fs.existsSync(entry.installedPath)) {
+      installedFingerprint = fingerprintFile(entry.installedPath)
+      storeRevision(this.paths, entry.installedPath, { faces: entry.faces, format: entry.format })
+    }
+    return { id: entry.id, installedFingerprint, sourceFingerprint }
+  }
+
   async install(
     id: string,
     familyName?: string,
@@ -951,16 +971,16 @@ export class FontButlerService {
     })
   }
 
-  async reinstall(id: string): Promise<CatalogEntry> {
+  async reinstall(id: string, options?: InstallOptions): Promise<CatalogEntry> {
     return runCatalogTask(async () => {
-      const entry = await this.reinstallEntry(id)
+      const entry = await this.reinstallEntry(id, options)
       this.commitManualOperation('reinstall', [this.operationItem(entry, 'succeeded')], displayFamily(entry))
       emitCatalog(this.paths)
       return entry
     })
   }
 
-  async reinstallMany(ids: string[]): Promise<CatalogEntry[]> {
+  async reinstallMany(ids: string[], options?: InstallOptions): Promise<CatalogEntry[]> {
     return runCatalogTask(async () => {
       const entries: CatalogEntry[] = []
       const errors: string[] = []
@@ -975,7 +995,7 @@ export class FontButlerService {
           continue
         }
         try {
-          entries.push(await this.reinstallEntry(id))
+          entries.push(await this.reinstallEntry(id, options))
         } catch (error) {
           errors.push(error instanceof Error ? error.message : String(error))
         }
@@ -2227,15 +2247,16 @@ export class FontButlerService {
       throw new Error(WOFF_INSTALL_ERROR)
     }
     this.assertPinnedInstall(entry)
-    const renameTo = familyName?.trim()
-    const installAs = Boolean(renameTo && renameTo !== displayFamily(entry))
-    if (installAs && renameTo) {
-      return this.installRenamedCopy(entry, renameTo, options)
-    }
     if (!sourceFileExists(entry.sourcePath)) {
       applySourcePresence(entry)
       saveCatalog(this.paths, catalog)
       throw new Error('The source file is missing.')
+    }
+    assertExpectedSourceFingerprint(tryFingerprintFile(entry.sourcePath), options?.expectedSourceFingerprint)
+    const renameTo = familyName?.trim()
+    const installAs = Boolean(renameTo && renameTo !== displayFamily(entry))
+    if (installAs && renameTo) {
+      return this.installRenamedCopy(entry, renameTo, options)
     }
     const staged = stageFontFile(entry.sourcePath, path.join(this.paths.dataRoot, 'staging'))
     const targets = this.installTargets(entry, options)
@@ -2992,7 +3013,7 @@ export class FontButlerService {
     }
   }
 
-  private async reinstallEntry(id: string): Promise<CatalogEntry> {
+  private async reinstallEntry(id: string, options?: InstallOptions): Promise<CatalogEntry> {
     const catalog = loadCatalog(this.paths)
     const entry = findById(catalog, id)
     if (!entry) {
@@ -3002,7 +3023,7 @@ export class FontButlerService {
       return this.activateEntry(id, { owner: 'manual' })
     }
     await this.clearCachesAfterInstall()
-    const updated = await this.installEntry(id, entry.customFamilyName)
+    const updated = await this.installEntry(id, entry.customFamilyName, options)
     emitNotice({
       kind: 'reinstalled',
       message: `Reinstalled ${displayFamily(updated)}`,

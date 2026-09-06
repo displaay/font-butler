@@ -20,6 +20,7 @@ import type {
   ThemeMode,
   ViewLayout,
   WatchFolder,
+  ComparisonCapture,
 } from './types'
 
 let apiToken: string | null = null
@@ -105,13 +106,33 @@ export const api = {
     )
   },
   open: (path: string) => json<{ entry: CatalogEntry }>(post('/api/open', { path })),
-  install: (id: string, familyName?: string, options?: { replace?: boolean; destinationId?: DestinationId }) =>
+  install: (
+    id: string,
+    familyName?: string,
+    options?: { replace?: boolean; destinationId?: DestinationId; expectedSourceFingerprint?: string },
+  ) =>
     json<{ entry: CatalogEntry }>(
-      post('/api/install', { id, familyName, replace: options?.replace, destinationId: options?.destinationId }),
+      post('/api/install', {
+        id,
+        familyName,
+        replace: options?.replace,
+        destinationId: options?.destinationId,
+        expectedSourceFingerprint: options?.expectedSourceFingerprint,
+      }),
     ),
-  installMany: (ids: string[], familyName?: string, options?: { replace?: boolean; destinationId?: DestinationId }) =>
+  installMany: (
+    ids: string[],
+    familyName?: string,
+    options?: { replace?: boolean; destinationId?: DestinationId; expectedSourceFingerprint?: string },
+  ) =>
     json<{ entries: CatalogEntry[] }>(
-      post('/api/install', { ids, familyName, replace: options?.replace, destinationId: options?.destinationId }),
+      post('/api/install', {
+        ids,
+        familyName,
+        replace: options?.replace,
+        destinationId: options?.destinationId,
+        expectedSourceFingerprint: options?.expectedSourceFingerprint,
+      }),
     ),
   removeDestinationCopy: (id: string, destinationId: DestinationId) =>
     json<{ entry: CatalogEntry }>(post('/api/install/destination-remove', { id, destinationId })),
@@ -132,9 +153,14 @@ export const api = {
     json<{ entry: CatalogEntry }>(post('/api/activate', { id, replace: options?.replace, switch: options?.switch })),
   activateMany: (ids: string[], options?: { replace?: boolean; switch?: boolean }) =>
     json<{ entries: CatalogEntry[] }>(post('/api/activate', { ids, replace: options?.replace, switch: options?.switch })),
-  reinstall: (id: string) => json<{ entry: CatalogEntry }>(post('/api/reinstall', { id })),
-  reinstallMany: (ids: string[]) =>
-    json<{ entries: CatalogEntry[] }>(post('/api/reinstall', { ids })),
+  reinstall: (id: string, options?: { expectedSourceFingerprint?: string }) =>
+    json<{ entry: CatalogEntry }>(
+      post('/api/reinstall', { id, expectedSourceFingerprint: options?.expectedSourceFingerprint }),
+    ),
+  reinstallMany: (ids: string[], options?: { expectedSourceFingerprint?: string }) =>
+    json<{ entries: CatalogEntry[] }>(
+      post('/api/reinstall', { ids, expectedSourceFingerprint: options?.expectedSourceFingerprint }),
+    ),
   forget: (id: string, options?: { deleteFiles?: boolean }) =>
     json<{ removed: number }>(post('/api/forget', { id, deleteFiles: options?.deleteFiles })),
   forgetMany: (ids: string[], options?: { deleteFiles?: boolean }) =>
@@ -267,11 +293,13 @@ export const api = {
       namedInstances?: Array<{ name: string; coordinates: Record<string, number> }>
       features?: string[]
       characterSet?: number[]
+      fingerprint?: string
     }>(
       fetch(
         `/api/preview-meta/${encodeURIComponent(id)}?which=${which}${revision ? `&revision=${encodeURIComponent(revision)}` : ''}`,
       ),
     ),
+  captureComparison: (id: string) => json<ComparisonCapture>(post('/api/comparison/capture', { id })),
 }
 
 export function subscribeEvents(onEvent: (event: unknown) => void): () => void {

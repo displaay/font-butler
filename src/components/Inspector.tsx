@@ -12,7 +12,7 @@ import { collectionScopeLabel, displayStateLabel, needsLocateSource } from '@/li
 import { formatBytes, formatRelativeTime } from '@/lib/utils'
 import { entryHasTrackedSource, familyNameOf, hasTrackedSource } from '@/lib/group'
 import type { CatalogBatchPlan, SystemBatchPlan } from '@/lib/batch'
-import type { CatalogEntry, FamilyGroup, PreviewPreferences, ProjectSet, SystemFamilyGroup } from '@/lib/types'
+import type { CatalogEntry, ComparisonCapture, FamilyGroup, PreviewPreferences, ProjectSet, SystemFamilyGroup } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 const SAMPLE = 'The quick brown fox jumps over the lazy type.'
@@ -29,6 +29,8 @@ export function Inspector({
   onSpecimenChange,
   projects,
   compareEntry,
+  comparisonInstallBlocked,
+  onComparisonCapture,
   onInstall,
   onInstallAs,
   onReinstall,
@@ -65,6 +67,8 @@ export function Inspector({
   onSpecimenChange?: (next: PreviewPreferences) => void
   projects?: ProjectSet[]
   compareEntry?: CatalogEntry | null
+  comparisonInstallBlocked?: boolean
+  onComparisonCapture?: (capture: ComparisonCapture | null) => void
   onInstall: () => void
   onInstallAs: () => void
   onReinstall: () => void
@@ -325,6 +329,7 @@ export function Inspector({
           specimen={specimen}
           onSpecimenChange={onSpecimenChange}
           compareEntry={compareEntry}
+          onCaptureChange={onComparisonCapture}
         />
       ) : null}
       <VersionsSection
@@ -362,7 +367,12 @@ export function Inspector({
         ) : (
           <>
             {plan.reinstall > 0 && (
-              <Button size="sm" variant="accent" disabled={busy} onClick={onReinstall}>
+              <Button
+                size="sm"
+                variant="accent"
+                disabled={busy || comparisonInstallBlocked}
+                onClick={onReinstall}
+              >
                 <RefreshCw /> Install update
               </Button>
             )}
@@ -372,12 +382,17 @@ export function Inspector({
               </Button>
             )}
             {plan.install > 0 && (
-              <Button size="sm" disabled={busy} onClick={onInstall}>
+              <Button size="sm" disabled={busy || comparisonInstallBlocked} onClick={onInstall}>
                 <CirclePlus /> {plan.installMissing ? 'Install missing styles' : 'Install'}
               </Button>
             )}
             {plan.install > 0 && (
-              <Button size="sm" variant="outline" disabled={busy} onClick={onInstallAs}>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy || comparisonInstallBlocked}
+                onClick={onInstallAs}
+              >
                 <CirclePlus /> Install as…
               </Button>
             )}
