@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   activatableIds,
+  adobeInstallableIds,
   deactivatableIds,
   familyHasAction,
   installableIds,
@@ -105,4 +106,35 @@ test('repair is hidden unless a managed copy is missing', () => {
   assert.deepEqual(repairableIds(healthy), [])
   assert.deepEqual(repairableIds(missing), ['gone'])
   assert.deepEqual(repairableIds(adobeGone), ['adobe'])
+})
+
+test('Adobe install is offered until a testing-folder copy is present', () => {
+  const missing = group([entry('plain', 'installed')])
+  const placed = group([
+    {
+      ...entry('placed', 'installed'),
+      installations: [
+        { destinationId: 'adobe-shared', path: '/tmp/adobe-dest.ttf', verification: 'file-present' },
+      ],
+    },
+  ])
+  const unavailable = group([
+    {
+      ...entry('gone', 'installed'),
+      installations: [
+        { destinationId: 'adobe-shared', path: '/tmp/adobe-dest.ttf', verification: 'unavailable' },
+      ],
+    },
+  ])
+  const web = group([
+    {
+      ...entry('web', 'uninstalled'),
+      previewOnly: true,
+      format: 'woff',
+    },
+  ])
+  assert.deepEqual(adobeInstallableIds(missing), ['plain'])
+  assert.deepEqual(adobeInstallableIds(placed), [])
+  assert.deepEqual(adobeInstallableIds(unavailable), ['gone'])
+  assert.deepEqual(adobeInstallableIds(web), [])
 })

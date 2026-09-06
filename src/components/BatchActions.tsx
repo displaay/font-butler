@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { CircleMinus, CirclePlus, ListX, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
+import { CircleMinus, CirclePlus, FolderInput, ListX, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   ContextMenuItem,
@@ -149,6 +149,7 @@ export function CatalogMenuItems({
   showInstallAs,
   onInstall,
   onInstallAs,
+  onInstallToAdobe,
   onReinstall,
   onRepair,
   onDeactivate,
@@ -163,6 +164,7 @@ export function CatalogMenuItems({
   showInstallAs?: boolean
   onInstall: () => void
   onInstallAs?: () => void
+  onInstallToAdobe?: () => void
   onReinstall: () => void
   onRepair?: () => void
   onDeactivate: () => void
@@ -178,6 +180,7 @@ export function CatalogMenuItems({
     plan.reinstall > 0 ||
     plan.repair > 0 ||
     plan.install > 0 ||
+    plan.adobeInstall > 0 ||
     plan.activate > 0 ||
     plan.deactivate > 0 ||
     plan.uninstall > 0 ||
@@ -202,6 +205,11 @@ export function CatalogMenuItems({
       {showInstallAs && plan.install > 0 && onInstallAs && (
         <ContextMenuItem disabled={busy} onSelect={onInstallAs}>
           <CirclePlus /> Install as…
+        </ContextMenuItem>
+      )}
+      {plan.adobeInstall > 0 && onInstallToAdobe && (
+        <ContextMenuItem disabled={busy} onSelect={onInstallToAdobe}>
+          <FolderInput /> {actionLabel('Install to Adobe testing folder', plan.adobeInstall, plan.adobeInstall > 1 || multi)}
         </ContextMenuItem>
       )}
       {plan.activate > 0 && (

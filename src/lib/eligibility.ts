@@ -76,6 +76,20 @@ export function repairableIds(group: { entries: CatalogEntry[] }): string[] {
   return repairableEntries(group).map((entry) => entry.id)
 }
 
+function adobeCopyPresent(entry: CatalogEntry): boolean {
+  return (entry.installations ?? []).some(
+    (copy) => copy.destinationId === 'adobe-shared' && copy.verification === 'file-present',
+  )
+}
+
+export function adobeInstallableEntries(group: { entries: CatalogEntry[] }): CatalogEntry[] {
+  return group.entries.filter((entry) => !entry.previewOnly && !adobeCopyPresent(entry))
+}
+
+export function adobeInstallableIds(group: { entries: CatalogEntry[] }): string[] {
+  return adobeInstallableEntries(group).map((entry) => entry.id)
+}
+
 export function familyHasAction(
   group: FamilyGroup,
   action: 'install' | 'activate' | 'deactivate' | 'reinstall' | 'uninstall',
