@@ -22,25 +22,18 @@ import {
   copyAt,
   dropCopy,
   entryHasParkedBytes,
-  findUnmanagedConflicts,
   inspectDestination,
   isDefaultDestinationId,
   listDestinations,
-  plannedManagedPath,
   recordedDestinationIds,
-  removeManagedCopy,
-  targetsForDefaultDestination,
   upsertCopy,
   verifyManagedCopy,
-  writeManagedCopy,
 } from './destinations.ts'
 import { MAX_UPLOAD_BYTES } from './constants.ts'
 import {
-  duplicateNotifyKey,
   loadDuplicates,
   pruneStaleDuplicates,
   removeDuplicateWarning,
-  upsertDuplicateWarning,
 } from './duplicates.ts'
 import { emitEvent } from './events.ts'
 import {
@@ -52,26 +45,20 @@ import {
   occupyingSiblingsForIncoming,
 } from './identity.ts'
 import {
-  assertNotWebFont,
   assertSingleInstallableFormat,
   formatConflictMessage,
   installedFormatConflicts,
-  isWebFontFile,
-  isWebFontFormat,
   WOFF_INSTALL_ERROR,
 } from './formats.ts'
 import {
   applyInstalledMetadata,
   commitInstalledFile,
-  extensionForFormat,
   removeStagedFile,
-  stageFontFile,
   uniquePathFromOriginal,
   uniqueSiblingPath,
 } from './install.ts'
 import { ensureFontActivation, getFontNative } from './native.ts'
 import { fingerprintFile, tryFingerprintFile } from './fingerprint.ts'
-import { assertExpectedSourceFingerprint } from './comparison.ts'
 import {
   reconcileMutationJournals,
   recordMutationDestination,
@@ -80,10 +67,8 @@ import {
 import {
   applyFolderPatch,
   createWatchFolder,
-  folderForPath,
   inspectFolderAvailability,
   isExcluded,
-  mostSpecificOwner,
   syncWatchFolderPaths,
 } from './folders.ts'
 import {
@@ -108,8 +93,6 @@ import { isUnderAnyRoot } from './containment.ts'
 import {
   buildImportPlan,
   catalogRevision,
-  classifyImportFile,
-  isWatchIdentityDuplicate,
   loadPlan,
   rememberedDecisionKey,
   savePlan,
@@ -123,7 +106,6 @@ import {
   pinConflict,
   pinnedFingerprints,
   projectActivationState,
-  removeManualOwner,
   removeProject,
   removeProjectOwner,
   setMemberUnsatisfied,
@@ -142,11 +124,14 @@ import { ensureDirs, getPaths, isMac, type AppPaths } from './paths.ts'
 import {
   applyEntryFacts,
   canAutomateUpdates,
+  eligibleForDeactivate,
+  eligibleForInstall,
+  eligibleForReinstall,
   isCleanupEligible,
   setUpdateHold,
 } from './state.ts'
-import { postscriptPreview, renameFamilyCopy } from './rename.ts'
-import { moveToTrash, revealInFileManager } from './reveal.ts'
+import { postscriptPreview } from './rename.ts'
+import { revealInFileManager } from './reveal.ts'
 import { loadSettings, saveSettings } from './settings.ts'
 import { normalizeSavedFilters } from './saved-filters.ts'
 import { allowedFontPath, scanSystemFonts } from './system.ts'
@@ -164,7 +149,6 @@ import type {
   FolderRelinkPreview,
   ImportPlan,
   ImportPlanChoice,
-  Notice,
   OfficeFontCacheInfo,
   Operation,
   OperationItem,
@@ -191,114 +175,32 @@ import {
   syncWatchers,
   type DropInspect,
 } from './watch.ts'
-
-function now(): number {
-  return Date.now()
-}
-
-function newId(): string {
-  return crypto.randomUUID()
-}
-
-function displayFamily(entry: CatalogEntry): string {
-  return entry.customFamilyName || entry.faces[0]?.familyName || 'Unknown'
-}
-
-function bindEntryToInstalledFile(entry: CatalogEntry, dest: string): void {
-  const resolved = path.resolve(dest)
-  const stat = readFileStat(resolved)
-  entry.sourcePath = resolved
-  entry.installedPath = resolved
-  entry.disabledPath = undefined
-  entry.sourceMtimeMs = stat.mtimeMs
-  entry.sourceSize = stat.size
-  entry.sourcePresent = false
-  entry.installedSnapshotMtimeMs = stat.mtimeMs
-  entry.installedSnapshotSize = stat.size
-  entry.status = 'installed'
-}
-
-function sameFile(left: string, right: string): boolean {
-  try {
-    const a = fs.statSync(left)
-    const b = fs.statSync(right)
-    return a.dev === b.dev && a.ino === b.ino
-  } catch {
-    return path.resolve(left) === path.resolve(right)
-  }
-}
-
-function destinationForInstall(
-  paths: AppPaths,
-  entry: CatalogEntry,
-  fromPath: string,
-  options: { reuseInstalled?: boolean } = {},
-): string {
-  const resolvedFrom = path.resolve(fromPath)
-  const reuseInstalled = options.reuseInstalled !== false
-  if (reuseInstalled && isUnderAnyRoot(resolvedFrom, [paths.installDir, paths.userFontsDir])) {
-    return resolvedFrom
-  }
-  if (
-    reuseInstalled &&
-    entry.installedPath &&
-    fs.existsSync(entry.installedPath) &&
-    isUnderAnyRoot(entry.installedPath, [paths.installDir, paths.userFontsDir])
-  ) {
-    const installedExt = path.extname(entry.installedPath).toLowerCase()
-    const incomingExt = extensionForFormat(entry.format, resolvedFrom).toLowerCase()
-    if (!installedExt || installedExt === incomingExt) {
-      return path.resolve(entry.installedPath)
-    }
-  }
-  fs.mkdirSync(paths.installDir, { recursive: true })
-  const ext = extensionForFormat(entry.format, resolvedFrom)
-  const dest = path.join(paths.installDir, `${path.basename(resolvedFrom, path.extname(resolvedFrom))}${ext}`)
-  if (!fs.existsSync(dest) || sameFile(dest, resolvedFrom)) {
-    return dest
-  }
-  const stem = path.basename(dest, ext)
-  const hash = crypto.createHash('sha1').update(resolvedFrom).digest('hex').slice(0, 8)
-  return path.join(paths.installDir, `${stem}-${hash}${ext}`)
-}
-
-function emitCatalog(paths: AppPaths): CatalogEntry[] {
-  const catalog = loadCatalog(paths)
-  emitEvent({ type: 'catalog', entries: catalog.entries })
-  return catalog.entries
-}
-
-function emitDuplicates(paths: AppPaths): DuplicateWarning[] {
-  const duplicates = pruneStaleDuplicates(paths)
-  emitEvent({ type: 'duplicates', duplicates })
-  return duplicates
-}
-
-function emitNotice(notice: Notice): void {
-  emitEvent({ type: 'notice', notice })
-}
-
-function touchEntry(entry: CatalogEntry): void {
-  entry.updatedAt = now()
-}
-
-async function removeInstalledCopy(entry: CatalogEntry): Promise<void> {
-  if (entry.installedPath) {
-    await getFontNative().unregisterFont(entry.installedPath)
-    if (fs.existsSync(entry.installedPath)) {
-      fs.rmSync(entry.installedPath, { force: true })
-    }
-  }
-  entry.installedPath = undefined
-}
-
-function isProtectedSource(filePath: string, paths: AppPaths): boolean {
-  return isUnderAnyRoot(filePath, [
-    paths.systemFontsDir,
-    paths.computerFontsDir,
-    paths.supplementalFontsDir,
-  ])
-}
+import {
+  bindEntryToInstalledFile,
+  deleteSourceFile,
+  displayFamily,
+  emitCatalog,
+  emitDuplicates,
+  emitNotice,
+  newId,
+  now,
+  removeInstalledCopy,
+  touchEntry,
+} from './service-helpers.ts'
+import {
+  destinationForInstall,
+  removeAdobeCopy as removeAdobeCopyFn,
+  sameFile,
+} from './service-destinations.ts'
+import { importInboxFiles as importInboxFilesFn, importOneUnlocked as importOneUnlockedFn } from './service-import.ts'
+import {
+  activateEntry as activateEntryFn,
+  deactivateEntry as deactivateEntryFn,
+  installEntry as installEntryFn,
+  reinstallEntry as reinstallEntryFn,
+  type ServiceLifecycleHost,
+  uninstallEntry as uninstallEntryFn,
+} from './service-lifecycle.ts'
 
 function isComputerOrigin(filePath: string, paths: AppPaths): boolean {
   return isUnderAnyRoot(filePath, [paths.computerFontsDir])
@@ -319,42 +221,6 @@ function writeUploadExclusive(dir: string, filename: string, data: Buffer): stri
     }
   }
   throw new Error(`Could not save ${filename}`)
-}
-
-function eligibleForInstall(entry: CatalogEntry): boolean {
-  return entry.status === 'uninstalled' || entry.status === 'deactivated' || entry.status === 'outdated'
-}
-
-function eligibleForDeactivate(entry: CatalogEntry): boolean {
-  return entry.status === 'installed' || entry.status === 'outdated'
-}
-
-function eligibleForReinstall(entry: CatalogEntry): boolean {
-  return (
-    entry.status === 'outdated' ||
-    (entry.status === 'deactivated' && Boolean(entry.installedPath && fs.existsSync(entry.installedPath)))
-  )
-}
-
-async function deleteSourceFile(filePath: string, paths: AppPaths): Promise<void> {
-  const resolved = path.resolve(filePath)
-  if (isProtectedSource(resolved, paths)) {
-    throw new Error('System font files cannot be deleted.')
-  }
-  let stat: fs.Stats
-  try {
-    stat = fs.lstatSync(resolved)
-  } catch {
-    return
-  }
-  if (stat.isSymbolicLink()) {
-    fs.unlinkSync(resolved)
-    return
-  }
-  if (!stat.isFile()) {
-    throw new Error('That source path is not a file.')
-  }
-  await moveToTrash(resolved)
 }
 
 export class FontButlerService {
@@ -2387,253 +2253,27 @@ export class FontButlerService {
     }
   }
 
+  private asLifecycleHost(): ServiceLifecycleHost {
+    return {
+      paths: this.paths,
+      assertPinnedInstall: (entry) => this.assertPinnedInstall(entry),
+      assertNoOccupyingSibling: (entry, catalog, dests) => this.assertNoOccupyingSibling(entry, catalog, dests),
+      resolveFormatConflicts: (entry, catalog, replace) => this.resolveFormatConflicts(entry, catalog, replace),
+      snapshotAndRemoveConflicts: (conflicts) => this.snapshotAndRemoveConflicts(conflicts),
+      restoreConflictSnapshots: (snapshots) => this.restoreConflictSnapshots(snapshots),
+      parkManagedCopies: (entry) => this.parkManagedCopies(entry),
+      unparkManagedCopies: (entry, dests) => this.unparkManagedCopies(entry, dests),
+      clearCachesAfterInstall: () => this.clearCachesAfterInstall(),
+      isLiveDestPath: (filePath) => this.isLiveDestPath(filePath),
+    }
+  }
+
   private async installEntry(
     id: string,
     familyName?: string,
     options?: InstallOptions,
   ): Promise<CatalogEntry> {
-    let catalog = loadCatalog(this.paths)
-    let entry = findById(catalog, id)
-    if (!entry) {
-      throw new Error('Font is not in the library.')
-    }
-    if (entry.previewOnly || isWebFontFormat(entry.format) || isWebFontFile(entry.sourcePath)) {
-      throw new Error(WOFF_INSTALL_ERROR)
-    }
-    this.assertPinnedInstall(entry)
-    if (!sourceFileExists(entry.sourcePath)) {
-      applySourcePresence(entry)
-      saveCatalog(this.paths, catalog)
-      throw new Error('The source file is missing.')
-    }
-    assertExpectedSourceFingerprint(tryFingerprintFile(entry.sourcePath), options?.expectedSourceFingerprint)
-    const renameTo = familyName?.trim()
-    const installAs = Boolean(renameTo && renameTo !== displayFamily(entry))
-    if (installAs && renameTo) {
-      return this.installRenamedCopy(entry, renameTo, options)
-    }
-    const staged = stageFontFile(entry.sourcePath, path.join(this.paths.dataRoot, 'staging'))
-    const targets = this.installTargets(entry, options)
-    if (!options?.switch) {
-      const siblings = occupyingSiblings(catalog.entries, entry, this.paths, targets)
-      if (siblings[0]) {
-        throw new Error(identityMutexMessage(siblings[0]))
-      }
-    }
-    const installMacos = targets.includes('macos')
-    let conflictSnapshots: Array<{ entry: CatalogEntry; file: string }> = []
-    try {
-      entry.format = staged.parsed.format
-      entry.faces = staged.parsed.faces
-      const conflicts = installMacos
-        ? await this.resolveFormatConflicts(entry, catalog.entries, options?.replace)
-        : []
-      catalog = loadCatalog(this.paths)
-      entry = findById(catalog, id)
-      if (!entry) {
-        throw new Error('Font is not in the library.')
-      }
-      entry.format = staged.parsed.format
-      entry.faces = staged.parsed.faces
-      if (
-        installMacos &&
-        entry.status === 'installed' &&
-        entry.installedPath &&
-        fs.existsSync(entry.installedPath) &&
-        conflicts.length === 0 &&
-        !targets.includes('adobe-shared')
-      ) {
-        const current = readFileStat(entry.sourcePath)
-        if (
-          current.mtimeMs === entry.installedSnapshotMtimeMs &&
-          current.size === entry.installedSnapshotSize
-        ) {
-          entry.sourcePresent = isExternalSource(entry)
-          return entry
-        }
-      }
-      return await withMutationJournal(
-        this.paths,
-        {
-          kind: options?.replace ? 'replace' : 'install',
-          entries: [entry],
-        },
-        async () => {
-      if (conflicts.length) {
-        conflictSnapshots = await this.snapshotAndRemoveConflicts(conflicts)
-        catalog = loadCatalog(this.paths)
-        entry = findById(catalog, id)
-        if (!entry) {
-          throw new Error('Font is not in the library.')
-        }
-        entry.format = staged.parsed.format
-        entry.faces = staged.parsed.faces
-      }
-      if (installMacos) {
-        const dest = destinationForInstall(this.paths, entry, entry.sourcePath)
-        recordMutationDestination(this.paths, entry.id, dest)
-        const previousInstalled =
-          entry.installedPath && path.resolve(entry.installedPath) !== dest
-            ? entry.installedPath
-            : undefined
-        let retainedFingerprint: string | undefined
-        if (entry.installedPath && fs.existsSync(entry.installedPath)) {
-          const retained = storeRevision(this.paths, entry.installedPath, {
-            faces: entry.faces,
-            format: entry.format,
-          })
-          retainedFingerprint = retained?.fingerprint
-        }
-        await commitInstalledFile({
-          dest,
-          stagedPath: staged.stagedPath,
-          rollbackDir: path.join(this.paths.dataRoot, 'rollback'),
-          native: getFontNative(),
-        })
-        if (previousInstalled && fs.existsSync(previousInstalled)) {
-          await getFontNative().unregisterFont(previousInstalled)
-          fs.rmSync(previousInstalled, { force: true })
-        }
-        catalog = loadCatalog(this.paths)
-        entry = findById(catalog, id)
-        if (!entry) {
-          throw new Error('Font is not in the library.')
-        }
-        if (retainedFingerprint) {
-          entry.previousRevisionId = retainedFingerprint
-        }
-        if (!sourceFileExists(entry.sourcePath)) {
-          entry.sourcePath = dest
-        }
-        const leftoverVault = entry.disabledPath
-        const fingerprint = tryFingerprintFile(dest) ?? tryFingerprintFile(staged.stagedPath)
-        applyInstalledMetadata(entry, dest, staged, {
-          externalSource: isExternalSource(entry),
-          fingerprint,
-        })
-        upsertCopy(entry, {
-          destinationId: 'macos',
-          path: dest,
-          fingerprint,
-          verification: 'file-present',
-        })
-        if (
-          leftoverVault &&
-          fs.existsSync(leftoverVault) &&
-          path.resolve(leftoverVault) !== path.resolve(dest)
-        ) {
-          fs.rmSync(leftoverVault, { force: true })
-        }
-      }
-      if (targets.includes('adobe-shared')) {
-        try {
-          this.placeAdobeCopy(entry, staged.stagedPath, staged.parsed.format, staged.parsed.faces)
-        } catch (error) {
-          if (!installMacos) throw error
-          const existing = copyAt(entry, 'adobe-shared')
-          if (existing) existing.verification = 'unavailable'
-        }
-      }
-      if (!installMacos) {
-        entry.faces = staged.parsed.faces
-        entry.format = staged.parsed.format
-        entry.status = 'installed'
-        const fingerprint = tryFingerprintFile(staged.stagedPath)
-        if (fingerprint) entry.installedFingerprint = fingerprint
-        if (isExternalSource(entry)) {
-          entry.sourceMtimeMs = staged.stat.mtimeMs
-          entry.sourceSize = staged.stat.size
-          entry.sourcePresent = true
-          if (fingerprint) entry.sourceFingerprint = fingerprint
-        }
-      }
-      if (entry.updateHold === 'relink-review') {
-        entry.updateHold = null
-      }
-      applyEntryFacts(entry)
-      touchEntry(entry)
-      saveCatalog(this.paths, catalog)
-      return entry
-        },
-      )
-    } catch (error) {
-      await this.restoreConflictSnapshots(conflictSnapshots)
-      throw error
-    } finally {
-      removeStagedFile(staged.stagedPath)
-      for (const snapshot of conflictSnapshots) {
-        if (fs.existsSync(snapshot.file)) {
-          fs.rmSync(snapshot.file, { force: true })
-        }
-      }
-    }
-  }
-
-  private async installRenamedCopy(
-    sourceEntry: CatalogEntry,
-    familyName: string,
-    options?: { replace?: boolean },
-  ): Promise<CatalogEntry> {
-    const temp = await renameFamilyCopy(sourceEntry.sourcePath, familyName)
-    try {
-      const parsed = parseFontFile(temp)
-      const catalog = loadCatalog(this.paths)
-      const draft: CatalogEntry = {
-        id: newId(),
-        sourcePath: temp,
-        sourceMtimeMs: 0,
-        sourceSize: 0,
-        sourcePresent: false,
-        status: 'uninstalled',
-        faces: parsed.faces,
-        format: parsed.format,
-        addedAt: now(),
-        updatedAt: now(),
-      }
-      this.assertNoOccupyingSibling(draft, catalog.entries)
-      const conflicts = await this.resolveFormatConflicts(draft, catalog.entries, options?.replace)
-      const conflictSnapshots = conflicts.length ? await this.snapshotAndRemoveConflicts(conflicts) : []
-      try {
-        return await withMutationJournal(
-          this.paths,
-          {
-            kind: options?.replace ? 'replace' : 'install',
-            entries: [draft],
-            newEntryIds: [draft.id],
-          },
-          async () => {
-        const dest = destinationForInstall(this.paths, draft, temp, { reuseInstalled: false })
-        recordMutationDestination(this.paths, draft.id, dest)
-        await commitInstalledFile({
-          dest,
-          stagedPath: temp,
-          rollbackDir: path.join(this.paths.dataRoot, 'rollback'),
-          native: getFontNative(),
-        })
-        bindEntryToInstalledFile(draft, dest)
-        draft.faces = parsed.faces
-        draft.format = parsed.format
-        const next = loadCatalog(this.paths)
-        upsertEntry(next, draft)
-        saveCatalog(this.paths, next)
-        return draft
-          },
-        )
-      } catch (error) {
-        await this.restoreConflictSnapshots(conflictSnapshots)
-        throw error
-      } finally {
-        for (const snapshot of conflictSnapshots) {
-          if (fs.existsSync(snapshot.file)) {
-            fs.rmSync(snapshot.file, { force: true })
-          }
-        }
-      }
-    } finally {
-      if (fs.existsSync(temp)) {
-        fs.rmSync(temp, { force: true })
-      }
-    }
+    return installEntryFn(this.asLifecycleHost(), id, familyName, options)
   }
 
   private detachRenamedInstallSources(): void {
@@ -2675,80 +2315,8 @@ export class FontButlerService {
     }
   }
 
-  private defaultDestinationFor(entry: CatalogEntry): DefaultDestinationId {
-    const settings = loadSettings(this.paths)
-    const folder = settings.folders.find((item) => item.id === entry.ownerFolderId)
-    if (folder?.destinationId && folder.destinationId !== 'macos') {
-      return folder.destinationId
-    }
-    return isDefaultDestinationId(settings.defaultDestination) ? settings.defaultDestination : 'macos'
-  }
-
-  private installTargets(entry: CatalogEntry, options?: InstallOptions): DestinationId[] {
-    if (options?.destinationIds?.length) {
-      return [...new Set(options.destinationIds)]
-    }
-    if (options?.destinationId) return [options.destinationId]
-    const existing = (entry.installations ?? [])
-      .map((item) => item.destinationId)
-      .filter((item, index, all) => all.indexOf(item) === index)
-    if (existing.length) return existing
-    return targetsForDefaultDestination(this.defaultDestinationFor(entry))
-  }
-
-  private placeAdobeCopy(
-    entry: CatalogEntry,
-    stagedPath: string,
-    format: string,
-    faces: CatalogEntry['faces'],
-  ): void {
-    const capability = inspectDestination(this.paths, 'adobe-shared')
-    if (!capability.supported) {
-      throw new Error(capability.remedy || capability.reason || 'The Adobe testing folder is not available.')
-    }
-    const managed = (entry.installations ?? [])
-      .filter((item) => item.destinationId === 'adobe-shared')
-      .map((item) => item.path)
-    const conflicts = findUnmanagedConflicts(this.paths, 'adobe-shared', faces, managed)
-    if (conflicts[0]) {
-      throw new Error(conflicts[0].reason)
-    }
-    const dest =
-      copyAt(entry, 'adobe-shared')?.path ??
-      plannedManagedPath(this.paths, 'adobe-shared', entry.sourcePath, format)
-    recordMutationDestination(this.paths, entry.id, dest)
-    const leftoverParked = copyAt(entry, 'adobe-shared')?.parkedPath
-    const written = writeManagedCopy({
-      paths: this.paths,
-      destinationId: 'adobe-shared',
-      stagedPath,
-      dest,
-      rollbackDir: path.join(this.paths.dataRoot, 'rollback'),
-    })
-    upsertCopy(entry, {
-      destinationId: 'adobe-shared',
-      path: written,
-      fingerprint: tryFingerprintFile(written),
-      verification: 'file-present',
-    })
-    if (
-      leftoverParked &&
-      fs.existsSync(leftoverParked) &&
-      path.resolve(leftoverParked) !== path.resolve(written)
-    ) {
-      fs.rmSync(leftoverParked, { force: true })
-    }
-  }
-
   private removeAdobeCopy(entry: CatalogEntry): void {
-    const existing = copyAt(entry, 'adobe-shared')
-    if (!existing) return
-    try {
-      removeManagedCopy(this.paths, 'adobe-shared', existing.path)
-    } catch {
-      // The destination may already be gone; keep the catalog recoverable.
-    }
-    dropCopy(entry, 'adobe-shared')
+    removeAdobeCopyFn(this.paths, entry)
   }
 
   async removeDestinationCopy(id: string, destinationId: DestinationId): Promise<CatalogEntry> {
@@ -2796,45 +2364,7 @@ export class FontButlerService {
     id: string,
     options?: { deleteSource?: boolean },
   ): Promise<CatalogEntry> {
-    const catalog = loadCatalog(this.paths)
-    const entry = findById(catalog, id)
-    if (!entry) {
-      throw new Error('Font is not in the library.')
-    }
-    this.assertPinnedInstall(entry)
-    const sourcePath = entry.sourcePath
-    const hasSource = isExternalSource(entry) && sourceFileExists(sourcePath)
-    const deleteSource = Boolean(options?.deleteSource && hasSource)
-    await removeInstalledCopy(entry)
-    this.removeAdobeCopy(entry)
-    entry.installations = []
-    entry.destinationId = undefined
-    removeManualOwner(entry)
-    if (entry.disabledPath && fs.existsSync(entry.disabledPath)) {
-      fs.rmSync(entry.disabledPath, { force: true })
-    }
-    entry.disabledPath = undefined
-    entry.installedPath = undefined
-    if (deleteSource) {
-      await deleteSourceFile(sourcePath, this.paths)
-      removeEntryById(catalog, id)
-      saveCatalog(this.paths, catalog)
-      entry.sourcePresent = false
-      entry.status = 'uninstalled'
-      return entry
-    }
-    if (hasSource) {
-      entry.sourcePresent = true
-      entry.status = 'uninstalled'
-      touchEntry(entry)
-      saveCatalog(this.paths, catalog)
-      return entry
-    }
-    removeEntryById(catalog, id)
-    saveCatalog(this.paths, catalog)
-    entry.sourcePresent = false
-    entry.status = 'uninstalled'
-    return entry
+    return uninstallEntryFn(this.asLifecycleHost(), id, options)
   }
 
   private isLiveDestPath(filePath: string): boolean {
@@ -3083,115 +2613,18 @@ export class FontButlerService {
     id: string,
     options: { removeManualOwner?: boolean } = {},
   ): Promise<CatalogEntry> {
-    const catalog = loadCatalog(this.paths)
-    const entry = findById(catalog, id)
-    if (!entry) {
-      throw new Error('Font is not in the library.')
-    }
-    const live =
-      occupiedDestinations(entry, this.paths).length > 0 ||
-      Boolean(entry.installedPath && fs.existsSync(entry.installedPath) && this.isLiveDestPath(entry.installedPath)) ||
-      Boolean(
-        copyAt(entry, 'adobe-shared')?.path &&
-          fs.existsSync(copyAt(entry, 'adobe-shared')!.path) &&
-          this.isLiveDestPath(copyAt(entry, 'adobe-shared')!.path),
-      )
-    if (!live) {
-      throw new Error('This font is not installed.')
-    }
-    return withMutationJournal(this.paths, { kind: 'park', entries: [entry] }, async () => {
-    await this.parkManagedCopies(entry)
-    if (options.removeManualOwner) {
-      entry.activationOwners = (entry.activationOwners ?? []).filter(
-        (owner) => owner.kind !== 'manual',
-      )
-    }
-    touchEntry(entry)
-    saveCatalog(this.paths, catalog)
-    return entry
-    })
+    return deactivateEntryFn(this.asLifecycleHost(), id, options)
   }
 
   private async activateEntry(
     id: string,
     options: { replace?: boolean; owner?: 'manual' | 'project'; switch?: boolean } = {},
   ): Promise<CatalogEntry> {
-    let catalog = loadCatalog(this.paths)
-    let entry = findById(catalog, id)
-    if (!entry) {
-      throw new Error('Font is not in the library.')
-    }
-    if (!options.switch) {
-      this.assertNoOccupyingSibling(entry, catalog.entries)
-    }
-    const conflicts = await this.resolveFormatConflicts(entry, catalog.entries, options?.replace)
-    const conflictSnapshots = conflicts.length ? await this.snapshotAndRemoveConflicts(conflicts) : []
-    catalog = loadCatalog(this.paths)
-    entry = findById(catalog, id)
-    if (!entry) {
-      await this.restoreConflictSnapshots(conflictSnapshots)
-      throw new Error('Font is not in the library.')
-    }
-    try {
-      const parked =
-        Boolean(entry.disabledPath && fs.existsSync(entry.disabledPath)) ||
-        Boolean(copyAt(entry, 'adobe-shared')?.parkedPath && fs.existsSync(copyAt(entry, 'adobe-shared')!.parkedPath))
-      if (parked) {
-        await this.unparkManagedCopies(entry)
-        if (options.owner === 'manual') {
-          addManualOwner(entry)
-        }
-        entry.status = 'installed'
-        entry.sourcePresent = isExternalSource(entry)
-        touchEntry(entry)
-        saveCatalog(this.paths, catalog)
-        return entry
-      }
-      if (entry.installedPath && fs.existsSync(entry.installedPath) && this.isLiveDestPath(entry.installedPath)) {
-        await ensureFontActivation(getFontNative(), entry.installedPath, true)
-        catalog = loadCatalog(this.paths)
-        entry = findById(catalog, id)
-        if (!entry) {
-          throw new Error('Font is not in the library.')
-        }
-        if (options.owner === 'manual') {
-          addManualOwner(entry)
-        }
-        entry.status = 'installed'
-        touchEntry(entry)
-        saveCatalog(this.paths, catalog)
-        return entry
-      }
-      return this.installEntry(id, undefined, options)
-    } catch (error) {
-      await this.restoreConflictSnapshots(conflictSnapshots)
-      throw error
-    } finally {
-      for (const snapshot of conflictSnapshots) {
-        if (fs.existsSync(snapshot.file)) {
-          fs.rmSync(snapshot.file, { force: true })
-        }
-      }
-    }
+    return activateEntryFn(this.asLifecycleHost(), id, options)
   }
 
   private async reinstallEntry(id: string, options?: InstallOptions): Promise<CatalogEntry> {
-    const catalog = loadCatalog(this.paths)
-    const entry = findById(catalog, id)
-    if (!entry) {
-      throw new Error('Font is not in the library.')
-    }
-    if (entry.status === 'deactivated') {
-      return this.activateEntry(id, { owner: 'manual' })
-    }
-    await this.clearCachesAfterInstall()
-    const updated = await this.installEntry(id, entry.customFamilyName, options)
-    emitNotice({
-      kind: 'reinstalled',
-      message: `Reinstalled ${displayFamily(updated)}`,
-      entryId: updated.id,
-    })
-    return updated
+    return reinstallEntryFn(this.asLifecycleHost(), id, options)
   }
 
   private async forgetEntry(
@@ -3303,95 +2736,7 @@ export class FontButlerService {
     filePath: string,
     options: { forceNew?: boolean } = {},
   ): CatalogEntry {
-    const resolved = path.resolve(filePath)
-    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
-      throw new Error('Not a file.')
-    }
-    const previewOnly = isWebFontFile(resolved)
-    if (!previewOnly) {
-      assertNotWebFont(resolved)
-    }
-    if (!isFontFile(resolved) && !isPreviewableFontFile(resolved)) {
-      throw new Error('Not a font file.')
-    }
-    const parsed = parseFontFile(resolved)
-    if (parsed.faces.length === 0) {
-      throw new Error('Could not read any faces in that font.')
-    }
-    if (isWebFontFormat(parsed.format)) {
-      // Parsed content wins over a misleading extension.
-    }
-    const catalog = loadCatalog(this.paths)
-    const fingerprint = tryFingerprintFile(resolved)
-    const samePath =
-      findByInstalledPath(catalog, resolved) ?? findBySourcePath(catalog, resolved)
-    const sameBytes = fingerprint
-      ? catalog.entries.find(
-          (item) => item.sourceFingerprint === fingerprint || item.installedFingerprint === fingerprint,
-        )
-      : undefined
-    const existing = options.forceNew ? samePath : (samePath ?? sameBytes)
-    const stat = readFileStat(resolved)
-    const inUserFonts = isUnderAnyRoot(resolved, [this.paths.userFontsDir, this.paths.installDir])
-    const settings = loadSettings(this.paths)
-    const owner = mostSpecificOwner(settings.folders, resolved)
-    if (existing) {
-      if (samePath && inUserFonts && !existing.installedPath) {
-        existing.installedPath = resolved
-        existing.status = 'installed'
-      }
-      existing.faces = parsed.faces
-      existing.format = parsed.format
-      if (fingerprint) existing.sourceFingerprint = existing.sourceFingerprint ?? fingerprint
-      if (!inUserFonts || isExternalSource(existing)) {
-        existing.sourceMtimeMs = stat.mtimeMs
-        existing.sourceSize = stat.size
-      }
-      if (
-        samePath &&
-        existing.status === 'installed' &&
-        isExternalSource(existing) &&
-        fingerprint &&
-        existing.installedFingerprint &&
-        fingerprint !== existing.installedFingerprint
-      ) {
-        existing.status = 'outdated'
-      } else if (
-        samePath &&
-        existing.status === 'installed' &&
-        isExternalSource(existing) &&
-        (stat.mtimeMs !== existing.installedSnapshotMtimeMs ||
-          stat.size !== existing.installedSnapshotSize)
-      ) {
-        existing.status = 'outdated'
-      }
-      applyEntryFacts(existing)
-      touchEntry(existing)
-      saveCatalog(this.paths, catalog)
-      return existing
-    }
-    const web = previewOnly || isWebFontFormat(parsed.format)
-    const entry: CatalogEntry = {
-      id: newId(),
-      sourcePath: resolved,
-      sourceMtimeMs: stat.mtimeMs,
-      sourceSize: stat.size,
-      sourcePresent: !inUserFonts,
-      sourceFingerprint: fingerprint,
-      installedFingerprint: inUserFonts ? fingerprint : undefined,
-      ownerFolderId: owner?.id ?? null,
-      previewOnly: web,
-      status: web ? 'uninstalled' : inUserFonts ? 'installed' : 'uninstalled',
-      installedPath: web ? undefined : inUserFonts ? resolved : undefined,
-      faces: parsed.faces,
-      format: parsed.format,
-      addedAt: now(),
-      updatedAt: now(),
-    }
-    applyEntryFacts(entry)
-    upsertEntry(catalog, entry)
-    saveCatalog(this.paths, catalog)
-    return entry
+    return importOneUnlockedFn(this.paths, filePath, options)
   }
 
   private async refreshSourceStatuses(): Promise<void> {
@@ -3590,110 +2935,7 @@ export class FontButlerService {
   }
 
   private async importInboxFiles(filePaths: string[]): Promise<void> {
-    const settings = loadSettings(this.paths)
-    const allowed = filePaths.filter((filePath) => {
-      const folder = folderForPath(settings.folders, filePath)
-      if (!folder) return true
-      if (!folder.watching) return false
-      return true
-    })
-    const catalog = loadCatalog(this.paths)
-    const auto: string[] = []
-    let notified = 0
-    for (const filePath of allowed) {
-      const item = classifyImportFile(filePath, catalog, { paths: this.paths })
-      if (isWatchIdentityDuplicate(item)) {
-        const occupying = occupyingSiblingsForIncoming(
-          catalog.entries,
-          item.faces ?? [],
-          item.format,
-          this.paths,
-        )
-        const { notify } = upsertDuplicateWarning(this.paths, {
-          path: item.path,
-          fingerprint: item.fingerprint,
-          familyName: item.familyName,
-          format: item.format,
-          incomingVersion: item.incomingVersion,
-          conflictingEntryIds: [
-            ...new Set([
-              ...occupying.map((entry) => entry.id),
-              ...(item.siblingEntryIds ?? []),
-              ...(item.entryId ? [item.entryId] : []),
-            ]),
-          ],
-          activeEntryId: occupying[0]?.id ?? item.entryId,
-          folderId: folderForPath(settings.folders, filePath)?.id,
-          notifyKey: duplicateNotifyKey(
-            item.path,
-            item.fingerprint,
-            occupying.map((entry) => entry.installedFingerprint ?? entry.sourceFingerprint ?? '').filter(Boolean),
-          ),
-        })
-        if (notify) notified += 1
-        continue
-      }
-      auto.push(filePath)
-    }
-    emitDuplicates(this.paths)
-    if (notified > 0) {
-      emitNotice({
-        kind: 'info',
-        message:
-          notified === 1
-            ? 'A watch-folder duplicate needs review before anything is installed.'
-            : `${notified} watch-folder duplicates need review before anything is installed.`,
-      })
-    }
-    if (auto.length === 0) {
-      return
-    }
-    const beforeIds = new Set(this.listCatalog().map((entry) => entry.id))
-    const result = await this.importPaths(auto)
-    const added = result.entries.filter((entry) => !beforeIds.has(entry.id))
-    const installed: CatalogEntry[] = []
-    for (const entry of added) {
-      if (entry.previewOnly || entry.status === 'installed' || entry.status === 'source-missing') {
-        continue
-      }
-      const folder = settings.folders.find((item) => item.id === entry.ownerFolderId)
-      if (folder && (folder.paused || isExcluded(folder, entry.sourcePath))) {
-        continue
-      }
-      const installNew = folder ? folder.installNew : settings.installWatchFolderFonts
-      if (!installNew) continue
-      try {
-        installed.push(await this.install(entry.id))
-      } catch (error) {
-        emitNotice({
-          kind: 'error',
-          message:
-            error instanceof Error
-              ? error.message
-              : `Could not install ${displayFamily(entry)}`,
-          entryId: entry.id,
-        })
-      }
-    }
-    const first = installed[0] ?? added[0]
-    if (first) {
-      const count = installed.length > 0 ? installed.length : added.length
-      const didInstall = installed.length > 0
-      emitNotice({
-        kind: didInstall ? 'installed' : 'info',
-        message:
-          count === 1
-            ? `${didInstall ? 'Installed' : 'Added'} ${displayFamily(first)} from a watch folder`
-            : `${didInstall ? 'Installed' : 'Added'} ${count} fonts from a watch folder`,
-        entryId: first.id,
-      })
-    }
-    if (result.errors.length) {
-      emitNotice({
-        kind: 'error',
-        message: result.errors.join('\n'),
-      })
-    }
+    return importInboxFilesFn(this, filePaths)
   }
 
   private async restoreDisabledCopies(): Promise<void> {
