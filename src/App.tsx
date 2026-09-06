@@ -1,30 +1,27 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent, type PointerEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
 import { toast } from 'sonner'
-import { Check, ChevronDown, FolderMinus, FolderOpen, Plus, RefreshCw, X } from 'lucide-react'
-import { AaPreview, CyclingAaPreview } from '@/components/AaPreview'
+import { RefreshCw, X } from 'lucide-react'
 import { ActivityView } from '@/components/ActivityView'
-import { FormatBadges, SourceBadge, StateBadges, VfBadge } from '@/components/Badges'
 import {
   BatchActionBar,
   CatalogBatchButtons,
-  CatalogMenuItems,
   SystemBatchButtons,
 } from '@/components/BatchActions'
-import { CatalogCardActions } from '@/components/FontCardActions'
-import { FontFaceStyles, catalogFontFamily } from '@/components/FontFaceStyles'
-import { InstanceList } from '@/components/InstanceList'
-import { MarqueeOverlay } from '@/components/MarqueeOverlay'
 import { DropFolderDialog } from '@/components/DropFolderDialog'
-import { FolderSetupDialog } from '@/components/FolderSetupDialog'
-import { FolderRelinkDialog } from '@/components/FolderRelinkDialog'
-import { FormatDialog } from '@/components/FormatDialog'
 import { DuplicatesDialog } from '@/components/DuplicatesDialog'
 import { EmptyState } from '@/components/EmptyState'
+import { FolderRelinkDialog } from '@/components/FolderRelinkDialog'
+import { FolderSetupDialog } from '@/components/FolderSetupDialog'
+import { FontFaceStyles } from '@/components/FontFaceStyles'
+import { FormatDialog } from '@/components/FormatDialog'
 import { ImportPlanDialog } from '@/components/ImportPlanDialog'
+import { Inspector } from '@/components/Inspector'
+import { LibraryCard } from '@/components/LibraryCard'
+import { MarqueeOverlay } from '@/components/MarqueeOverlay'
+import { OnboardingDialog } from '@/components/OnboardingDialog'
 import { RelinkDialog } from '@/components/RelinkDialog'
 import { RenameDialog } from '@/components/RenameDialog'
 import { ReplaceFormatDialog } from '@/components/ReplaceFormatDialog'
-import { OnboardingDialog } from '@/components/OnboardingDialog'
 import { SettingsDialog } from '@/components/SettingsDialog'
 import { Sidebar, type Tab } from '@/components/Sidebar'
 import { SystemCard } from '@/components/SystemCard'
@@ -35,16 +32,6 @@ import {
   readGridPreviewSize,
 } from '@/components/ViewOptions'
 import { Button } from '@/components/ui/button'
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuSub,
-  ContextMenuSubContent,
-  ContextMenuSubTrigger,
-  ContextMenuTrigger,
-} from '@/components/ui/context-menu'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { NotifyProvider, useSetActionStatus } from '@/components/NotifyProvider'
 import { Toaster } from '@/components/ui/sonner'
@@ -63,7 +50,6 @@ import {
   countFormats,
   entryFormatOf,
   listFormatConflicts,
-  uniqueEntryFormats,
   type FormatCount,
 } from '@/lib/formats'
 import {
@@ -84,7 +70,7 @@ import {
   renameSavedFilter,
   savedFilterMatches,
 } from '@/lib/savedFilters'
-import { familyNameOf, catalogRevealEntry, countLibraryFilters, deletableSourceIds, entryHasTrackedSource, entryIds, familyStatusSummary, forgettableIds, groupCatalog, groupSystem, hasSourceMissing, hasTrackedSource, isForgettableOnlyGroup, isUninstallableGroup, matchesLibraryFilter, matchesQuery, sortFamilyGroups, uniquePaths } from '@/lib/group'
+import { familyNameOf, catalogRevealEntry, countLibraryFilters, deletableSourceIds, entryHasTrackedSource, entryIds, familyStatusSummary, forgettableIds, groupCatalog, groupSystem, hasTrackedSource, isForgettableOnlyGroup, isUninstallableGroup, matchesLibraryFilter, matchesQuery, sortFamilyGroups, uniquePaths } from '@/lib/group'
 import {
   LIBRARY_FILTERS_KEY,
   readLibraryFilters,
@@ -93,26 +79,22 @@ import {
 } from '@/lib/preferences'
 import { actionCopy, actionCopyFor, adobeInstallCopy, emptyImportError, importDoneCopy, remainingActionCopy } from '@/lib/notify'
 import { planNeedsReview } from '@/lib/planner'
-import { applyFontDragImage, clearFontDragImage } from '@/lib/dragPreview'
+import { clearFontDragImage } from '@/lib/dragPreview'
 import {
   defaultProjectName,
   hasFontButlerEntries,
   memberIdsForProjectImport,
-  projectContainsAll,
   removeMemberIds,
   uniqueMemberIds,
-  writeFontButlerEntries,
 } from '@/lib/projects'
 import { batchResultCopy, type BatchOutcome } from '@/lib/results'
 import { specimenFromSettings } from '@/lib/specimen'
 import { needsLocateSource } from '@/lib/state'
-import { catalogInstanceRows } from '@/lib/instances'
 import {
   catalogBatchPlan,
   catalogBatchSummary,
   systemBatchPlan,
   systemBatchSummary,
-  type CatalogBatchPlan,
 } from '@/lib/batch'
 import {
   canStartMarquee,
@@ -2407,327 +2389,5 @@ function AppShell() {
         <MarqueeOverlay rect={marqueeRect} />
         <Toaster theme={settings?.theme ?? 'system'} />
       </div>
-  )
-}
-
-function LibraryCard({
-  group,
-  layout,
-  previewSize,
-  showSourcePath,
-  selected,
-  selectedEntryId,
-  busy,
-  batch,
-  onSelect,
-  onInspect,
-  onSelectEntry,
-  onEnsureSelected,
-  onInstall,
-  onInstallAs,
-  onInstallToAdobe,
-  onReinstall,
-  onLocateSource,
-  onUninstall,
-  onUninstallAndRemove,
-  onDeactivate,
-  onActivate,
-  onSwitch,
-  onReveal,
-  onRevealSource,
-  onForget,
-  onDeleteFiles,
-  projects,
-  projectFilter,
-  dragIds,
-  projectFamilyNames,
-  onAddToProject,
-  onRemoveFromProject,
-  onCreateProjectFromCard,
-  onFontDragStart,
-  onFontDragEnd,
-}: {
-  group: FamilyGroup
-  layout: ViewLayout
-  previewSize: number
-  showSourcePath?: boolean
-  selected: boolean
-  selectedEntryId: string | null
-  busy: boolean
-  batch: CatalogBatchPlan | null
-  onSelect: (event: MouseEvent) => void
-  onInspect: () => void
-  onSelectEntry: (entryId: string) => void
-  onEnsureSelected: () => void
-  onInstall: () => void
-  onInstallAs: () => void
-  onInstallToAdobe: () => void
-  onReinstall: () => void
-  onLocateSource?: () => void
-  onUninstall: () => void
-  onUninstallAndRemove: () => void
-  onDeactivate: () => void
-  onActivate: () => void
-  onSwitch?: () => void
-  onReveal: () => void
-  onRevealSource: () => void
-  onForget: () => void
-  onDeleteFiles: () => void
-  projects: ProjectSet[]
-  projectFilter: string | null
-  dragIds: string[]
-  projectFamilyNames: string[]
-  onAddToProject: (projectId: string, ids: string[]) => void
-  onRemoveFromProject: (projectId: string, ids: string[]) => void
-  onCreateProjectFromCard: (ids: string[], familyNames: string[]) => void
-  onFontDragStart: () => void
-  onFontDragEnd: () => void
-}) {
-  const [expanded, setExpanded] = useState(false)
-  const [hovered, setHovered] = useState(false)
-  const preview = group.entries.find((entry) => entry.id === group.previewEntryId) ?? group.entries[0]
-  const missingSource = hasSourceMissing(group)
-  const instances = useMemo(() => catalogInstanceRows(group), [group])
-  const showInstances = instances.length > 0 && layout === 'list'
-  const previewFamily = catalogFontFamily(group.previewEntryId)
-  const previewWeight = preview.faces[0]?.weight
-  const previewItalic = preview.faces[0]?.italic
-  const previewFaces = useMemo(
-    () =>
-      instances.map((row) => ({
-        family: row.catalogEntryId ? catalogFontFamily(row.catalogEntryId) : previewFamily,
-        weight: row.weight,
-        italic: row.italic,
-        label: row.label,
-      })),
-    [instances, previewFamily],
-  )
-  const plan = batch ?? catalogBatchPlan([group])
-  const inCurrentProject = Boolean(
-    projectFilter && group.entries.some((entry) =>
-      projects.find((item) => item.id === projectFilter)?.members.some((member) => member.assetId === entry.id),
-    ),
-  )
-  function startFontDrag(event: DragEvent) {
-    if (event.target instanceof Element && event.target.closest('[data-no-marquee]')) {
-      event.preventDefault()
-      return
-    }
-    writeFontButlerEntries(event.dataTransfer, dragIds)
-    applyFontDragImage(event.nativeEvent, projectFamilyNames)
-    onFontDragStart()
-  }
-
-  const muted = group.status === 'deactivated'
-
-  const metadata = (
-    <>
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="truncate font-medium">{group.familyName}</span>
-        <VfBadge show={group.isVariable} />
-        <FormatBadges formats={uniqueEntryFormats(group.entries)} />
-        <StateBadges entry={preview} hideInstalled />
-      </div>
-      <div className="mt-0.5 text-xs text-muted-foreground">
-        {group.instanceCount} {group.instanceCount === 1 ? 'instance' : 'instances'}
-        {group.entries.length > 1 ? ` · ${group.entries.length} files` : ''}
-      </div>
-      {showSourcePath && (
-        <div className="mt-1 space-y-0.5">
-          {group.entries.map((item) => (
-            <div
-              key={item.id}
-              className={cn(
-                'truncate font-mono text-[11px] text-muted-foreground/90',
-                (item.status === 'deactivated' || item.status === 'uninstalled') && 'opacity-60',
-              )}
-              title={item.sourcePath}
-            >
-              {item.sourcePath}
-            </div>
-          ))}
-        </div>
-      )}
-    </>
-  )
-
-  return (
-    <ContextMenu onOpenChange={(open) => { if (open) onEnsureSelected() }}>
-      <ContextMenuTrigger asChild>
-        <div
-          data-family-key={group.familyName}
-          draggable
-          onDragStart={startFontDrag}
-          onDragEnd={onFontDragEnd}
-          className={cn(
-            'group relative overflow-hidden rounded-lg border transition-colors',
-            selected ? 'border-border bg-muted/60' : 'border-border/80 hover:bg-muted/40',
-            muted && '[&>:not([data-no-marquee])]:opacity-50',
-          )}
-          onPointerEnter={() => setHovered(true)}
-          onPointerLeave={() => setHovered(false)}
-        >
-          {hasTrackedSource(group) ? (
-            <SourceBadge className="pointer-events-none absolute top-1.5 left-1.5 z-10" />
-          ) : null}
-          {layout === 'grid' ? (
-            <button
-              type="button"
-              draggable
-              onDragStart={startFontDrag}
-              onClick={onSelect}
-              onDoubleClick={onInspect}
-              className="flex w-full flex-col text-left"
-            >
-              <CyclingAaPreview
-                faces={previewFaces}
-                rest={
-                  previewFaces.find((face) => face.family === previewFamily && !face.italic) ??
-                  previewFaces.find((face) => face.family === previewFamily) ?? {
-                    family: previewFamily,
-                    weight: previewWeight,
-                    italic: previewItalic,
-                    label: preview.faces[0]?.styleName ?? 'Regular',
-                  }
-                }
-                active={hovered && !selected}
-                size={previewSize}
-              />
-              <div className={previewSize < 3.25 ? 'p-2' : 'p-3'}>{metadata}</div>
-            </button>
-          ) : (
-            <>
-              <div className="flex items-stretch">
-                <button
-                  type="button"
-                  draggable
-                  onDragStart={startFontDrag}
-                  onClick={onSelect}
-                  onDoubleClick={onInspect}
-                  className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left"
-                >
-                  <AaPreview
-                    family={previewFamily}
-                    weight={previewWeight}
-                    italic={previewItalic}
-                  />
-                  <div className="min-w-0 flex-1">{metadata}</div>
-                </button>
-                {showInstances && (
-                  <button
-                    type="button"
-                    data-no-marquee=""
-                    aria-expanded={expanded}
-                    aria-label={expanded ? 'Hide instances' : 'Show instances'}
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      setExpanded((value) => !value)
-                    }}
-                    className="flex w-10 shrink-0 items-center justify-center text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-                  >
-                    <ChevronDown
-                      className={cn('size-4 transition-transform', expanded && 'rotate-180')}
-                    />
-                  </button>
-                )}
-              </div>
-              {expanded && showInstances && (
-                <InstanceList
-                  rows={instances}
-                  selectedEntryId={selectedEntryId}
-                  onSelectEntry={onSelectEntry}
-                />
-              )}
-            </>
-          )}
-          {!batch && (
-            <CatalogCardActions
-              plan={plan}
-              previewOnly={group.entries.every((entry) => entry.previewOnly)}
-              missingSource={missingSource}
-              busy={busy}
-              visible={selected}
-              offset={layout === 'list' && showInstances}
-              onInstall={onInstall}
-              onReinstall={onReinstall}
-              onDeactivate={onDeactivate}
-              onUninstall={onUninstall}
-              onActivate={onActivate}
-              onSwitch={onSwitch}
-              onForget={onForget}
-            />
-          )}
-        </div>
-      </ContextMenuTrigger>
-      <ContextMenuContent>
-        <ContextMenuItem
-          disabled={!group.entries.some((entry) => entry.installedPath || entry.disabledPath)}
-          onSelect={onReveal}
-        >
-          <FolderOpen /> Show in Finder
-        </ContextMenuItem>
-        <ContextMenuItem
-          disabled={!hasTrackedSource(group)}
-          onSelect={onRevealSource}
-        >
-          <FolderOpen /> Show source in Finder
-        </ContextMenuItem>
-        {onLocateSource && group.entries.some(needsLocateSource) ? (
-          <ContextMenuItem onSelect={onLocateSource}>
-            <FolderOpen /> {preview.sourceAvailability === 'none' ? 'Link source…' : 'Locate source…'}
-          </ContextMenuItem>
-        ) : null}
-        <ContextMenuSeparator />
-        <ContextMenuSub>
-          <ContextMenuSubTrigger>Add to a project</ContextMenuSubTrigger>
-          <ContextMenuSubContent>
-            {projects.map((project) => {
-              const inProject = projectContainsAll(project, dragIds)
-              return (
-                <ContextMenuItem
-                  key={project.id}
-                  onSelect={() =>
-                    inProject
-                      ? onRemoveFromProject(project.id, dragIds)
-                      : onAddToProject(project.id, dragIds)
-                  }
-                >
-                  {project.name}
-                  {inProject ? <Check className="ml-auto" /> : null}
-                </ContextMenuItem>
-              )
-            })}
-            {projects.length > 0 ? <ContextMenuSeparator /> : null}
-            <ContextMenuItem onSelect={() => onCreateProjectFromCard(dragIds, projectFamilyNames)}>
-              <Plus /> New project
-            </ContextMenuItem>
-          </ContextMenuSubContent>
-        </ContextMenuSub>
-        {inCurrentProject ? (
-          <ContextMenuItem
-            onSelect={() => projectFilter && onRemoveFromProject(projectFilter, dragIds)}
-          >
-            <FolderMinus /> Remove from project
-          </ContextMenuItem>
-        ) : null}
-        <ContextMenuSeparator />
-        <CatalogMenuItems
-          plan={plan}
-          busy={busy}
-          showInstallAs={!batch}
-          onInstall={onInstall}
-          onInstallAs={onInstallAs}
-          onInstallToAdobe={onInstallToAdobe}
-          onReinstall={onReinstall}
-          onDeactivate={onDeactivate}
-          onUninstall={onUninstall}
-          onUninstallAndRemove={onUninstallAndRemove}
-          onActivate={onActivate}
-          onSwitch={onSwitch}
-          onForget={onForget}
-          onDeleteFiles={onDeleteFiles}
-        />
-      </ContextMenuContent>
-    </ContextMenu>
   )
 }
