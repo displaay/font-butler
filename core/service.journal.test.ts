@@ -45,6 +45,7 @@ test('replace writes a journal before dest mutation and clears it on success', a
   const hold = new Promise<void>((resolve) => {
     release = resolve
   })
+  let enableCount = 0
   await withService(
     async (service, paths) => {
       await service.init()
@@ -70,7 +71,8 @@ test('replace writes a journal before dest mutation and clears it on success', a
       native: noopFontNative({
         async setFontEnabled(filePath, enabled) {
           if (enabled && path.basename(filePath).includes('JournalFace')) {
-            await hold
+            enableCount += 1
+            if (enableCount > 1) await hold
           }
           return { ok: true, native: false }
         },
