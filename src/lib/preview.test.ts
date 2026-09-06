@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { catalogFontUrl, catalogFontFaceRules, catalogPreviewRevision } from './preview.ts'
+import { catalogFontUrl, catalogFontFaceRules, catalogPreviewRevision, signedCatalogFontUrl } from './preview.ts'
+import { verifyFontPreviewQuery } from '../../core/font-access.ts'
 import type { CatalogEntry, FontFaceInfo } from './types.ts'
 
 function entry(partial: Partial<CatalogEntry> = {}): CatalogEntry {
@@ -70,4 +71,27 @@ test('captured revision preview URLs stay pinned when the live source fingerprin
   assert.match(openedUrl, /which=revision/)
   assert.match(openedUrl, new RegExp(`revision=${captured}`))
   assert.notEqual(catalogFontUrl(opened, 'source'), catalogFontUrl(later, 'source'))
+})
+
+test('signed catalog preview URLs carry exp/sig that the API verifier accepts', async () => {
+  const opened = entry()
+  const now = 1_700_000_000_000
+  const secret = 'local-secret-token'
+  const url = await signedCatalogFontUrl(opened, 'installed', secret, undefined, now)
+  assert.match(url, /[?&]exp=/)
+  assert.match(url, /[?&]sig=/)
+  const parsed = new URL(url, 'http://127.0.0.1')
+  assert.equal(
+    verifyFontPreviewQuery(
+      secret,
+      parsed.pathname,
+      Object.fromEntries(parsed.searchParams),
+      now,
+    ),
+    true,
+  )
+  assert.equal(
+    verifyFontPreviewQuery(secret, parsed.pathname, Object.fromEntries(parsed.searchParams), now + 3 * 60 * 60 * 1000),
+    false,
+  )
 })

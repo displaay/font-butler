@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import path from 'node:path'
 import { isFullyUnderAnyRoot } from './containment.ts'
+import { verifyFontPreviewQuery, type FontAccessQuery } from './font-access.ts'
 
 export const DEV_UI_ORIGINS = [
   'http://127.0.0.1:43181',
@@ -66,10 +67,7 @@ export function requestAuthorityError(
 }
 
 export function isPublicApiGet(pathname: string): boolean {
-  if (pathname === '/api/health' || pathname === '/api/bootstrap' || pathname === '/api/system-font') {
-    return true
-  }
-  return pathname.startsWith('/api/font-file/')
+  return pathname === '/api/health' || pathname === '/api/bootstrap'
 }
 
 export function bearerToken(authorization: string | undefined): string | null {
@@ -82,13 +80,21 @@ export function isAuthorizedApiRequest(options: {
   pathname: string
   authorization?: string
   token: string
+  query?: FontAccessQuery
+  now?: number
 }): boolean {
   const method = options.method.toUpperCase()
   if ((method === 'GET' || method === 'HEAD') && isPublicApiGet(options.pathname)) {
     return true
   }
   const bearer = bearerToken(options.authorization)
-  return Boolean(bearer) && bearer === options.token
+  if (bearer && bearer === options.token) {
+    return true
+  }
+  if (method === 'GET' || method === 'HEAD') {
+    return verifyFontPreviewQuery(options.token, options.pathname, options.query ?? {}, options.now)
+  }
+  return false
 }
 
 export function denyRemoteRequest(

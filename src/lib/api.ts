@@ -27,6 +27,10 @@ import { consumeSseBuffer } from './sse'
 let apiToken: string | null = null
 let bootstrapSettings: AppSettings | null = null
 
+export async function getApiToken(): Promise<string> {
+  return ensureToken()
+}
+
 async function ensureToken(): Promise<string> {
   if (apiToken) {
     return apiToken

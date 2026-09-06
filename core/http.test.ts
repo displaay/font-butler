@@ -14,6 +14,7 @@ import {
   resolveStaticAsset,
 } from './http.ts'
 import { shouldIncludeBootstrapToken } from './auth.ts'
+import { signFontAccess } from './font-access.ts'
 
 test('loopback hosts are accepted and untrusted hosts are not', () => {
   assert.equal(isAllowedHost('127.0.0.1:43182', 43182), true)
@@ -97,8 +98,8 @@ test('public GET routes stay unauthenticated; catalog and mutations need a beare
   const token = 'local-secret-token'
   assert.equal(isPublicApiGet('/api/health'), true)
   assert.equal(isPublicApiGet('/api/bootstrap'), true)
-  assert.equal(isPublicApiGet('/api/system-font'), true)
-  assert.equal(isPublicApiGet('/api/font-file/abc'), true)
+  assert.equal(isPublicApiGet('/api/system-font'), false)
+  assert.equal(isPublicApiGet('/api/font-file/abc'), false)
   assert.equal(isPublicApiGet('/api/catalog'), false)
   assert.equal(isPublicApiGet('/api/events'), false)
   assert.equal(isPublicApiGet('/api/settings'), false)
@@ -117,6 +118,30 @@ test('public GET routes stay unauthenticated; catalog and mutations need a beare
   )
   assert.equal(
     isAuthorizedApiRequest({ method: 'GET', pathname: '/api/font-file/id', token }),
+    false,
+  )
+  assert.equal(
+    isAuthorizedApiRequest({
+      method: 'GET',
+      pathname: '/api/font-file/id',
+      authorization: `Bearer ${token}`,
+      token,
+    }),
+    true,
+  )
+  const access = signFontAccess(token, {
+    kind: 'font-file',
+    id: 'id',
+    which: 'installed',
+    revision: '',
+  })
+  assert.equal(
+    isAuthorizedApiRequest({
+      method: 'GET',
+      pathname: '/api/font-file/id',
+      token,
+      query: { ...access, which: 'installed' },
+    }),
     true,
   )
   assert.equal(
@@ -144,6 +169,13 @@ test('API auth middleware rejects unauthenticated catalog reads', async () => {
         pathname: c.req.path,
         authorization: c.req.header('Authorization'),
         token,
+        query: {
+          exp: c.req.query('exp'),
+          sig: c.req.query('sig'),
+          which: c.req.query('which'),
+          revision: c.req.query('revision'),
+          path: c.req.query('path'),
+        },
       })
     ) {
       return next()
@@ -172,7 +204,19 @@ test('API auth middleware rejects unauthenticated catalog reads', async () => {
   const fontBytes = await app.request('/api/font-file/id', {
     headers: { host: '127.0.0.1:43182' },
   })
-  assert.equal(fontBytes.status, 200)
+  assert.equal(fontBytes.status, 401)
+
+  const signed = signFontAccess(token, {
+    kind: 'font-file',
+    id: 'id',
+    which: 'installed',
+    revision: '',
+  })
+  const signedBytes = await app.request(
+    `/api/font-file/id?which=installed&exp=${signed.exp}&sig=${signed.sig}`,
+    { headers: { host: '127.0.0.1:43182' } },
+  )
+  assert.equal(signedBytes.status, 200)
 })
 
 test('bootstrap token is only included in test or local-dev server env', () => {
