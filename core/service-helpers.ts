@@ -5,6 +5,7 @@ import { loadCatalog } from './catalog.ts'
 import { isUnderAnyRoot } from './containment.ts'
 import { pruneStaleDuplicates } from './duplicates.ts'
 import { emitEvent } from './events.ts'
+import { withOccupiedDestinations } from './identity.ts'
 import { getFontNative } from './native.ts'
 import { readFileStat } from './parse.ts'
 import type { AppPaths } from './paths.ts'
@@ -38,9 +39,9 @@ export function bindEntryToInstalledFile(entry: CatalogEntry, dest: string): voi
 }
 
 export function emitCatalog(paths: AppPaths): CatalogEntry[] {
-  const catalog = loadCatalog(paths)
-  emitEvent({ type: 'catalog', entries: catalog.entries })
-  return catalog.entries
+  const entries = withOccupiedDestinations(loadCatalog(paths).entries, paths)
+  emitEvent({ type: 'catalog', entries })
+  return entries
 }
 
 export function emitDuplicates(paths: AppPaths): DuplicateWarning[] {

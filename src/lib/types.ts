@@ -100,6 +100,7 @@ export type CatalogEntry = {
   customFamilyName?: string
   faces: FontFaceInfo[]
   format: string
+  occupiedDestinations?: DestinationId[]
   addedAt: number
   updatedAt: number
 }

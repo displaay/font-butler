@@ -80,6 +80,13 @@ export function occupiedDestinations(entry: CatalogEntry, paths: AppPaths): Dest
   return dests
 }
 
+export function withOccupiedDestinations(entries: CatalogEntry[], paths: AppPaths): CatalogEntry[] {
+  return entries.map((entry) => ({
+    ...entry,
+    occupiedDestinations: occupiedDestinations(entry, paths),
+  }))
+}
+
 export function occupyingSiblings(
   catalog: CatalogEntry[],
   entry: Pick<CatalogEntry, 'id' | 'faces' | 'format' | 'sourcePath'>,

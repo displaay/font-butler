@@ -43,6 +43,7 @@ import {
   occupiesDestination,
   occupyingSiblings,
   occupyingSiblingsForIncoming,
+  withOccupiedDestinations,
 } from './identity.ts'
 import {
   assertSingleInstallableFormat,
@@ -268,7 +269,7 @@ export class FontButlerService {
   }
 
   listCatalog(): CatalogEntry[] {
-    return loadCatalog(this.paths).entries
+    return withOccupiedDestinations(loadCatalog(this.paths).entries, this.paths)
   }
 
   listDuplicates(): DuplicateWarning[] {
