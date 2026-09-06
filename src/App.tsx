@@ -85,7 +85,13 @@ import {
   renameSavedFilter,
   savedFilterMatches,
 } from '@/lib/savedFilters'
-import { familyNameOf, catalogRevealEntry, countLibraryFilters, deletableSourceIds, entryHasTrackedSource, entryIds, familyStatusSummary, forgettableIds, groupCatalog, groupSystem, hasSourceMissing, hasTrackedSource, isForgettableOnlyGroup, isLibraryFilter, isUninstallableGroup, matchesLibraryFilter, matchesQuery, sortFamilyGroups, uniquePaths } from '@/lib/group'
+import { familyNameOf, catalogRevealEntry, countLibraryFilters, deletableSourceIds, entryHasTrackedSource, entryIds, familyStatusSummary, forgettableIds, groupCatalog, groupSystem, hasSourceMissing, hasTrackedSource, isForgettableOnlyGroup, isUninstallableGroup, matchesLibraryFilter, matchesQuery, sortFamilyGroups, uniquePaths } from '@/lib/group'
+import {
+  LIBRARY_FILTERS_KEY,
+  readLibraryFilters,
+  readSortMode,
+  shouldShowOnboarding,
+} from '@/lib/preferences'
 import { actionCopy, actionCopyFor, adobeInstallCopy, emptyImportError, importDoneCopy, remainingActionCopy } from '@/lib/notify'
 import { planNeedsReview } from '@/lib/planner'
 import { applyFontDragImage, clearFontDragImage } from '@/lib/dragPreview'
@@ -129,31 +135,6 @@ import { cn } from '@/lib/utils'
 import { isPathUnderFolder, isWatchFolderEntry, watchFolderName } from '@/lib/watchFolders'
 
 const EMPTY_WATCH_FOLDERS: string[] = []
-const LIBRARY_FILTERS_KEY = 'font-butler-library-filters'
-
-function shouldShowOnboarding(settings: AppSettings) {
-  return (
-    new URLSearchParams(window.location.search).get('onboarding') === '1' ||
-    settings.onboardingCompleted === false
-  )
-}
-
-function readSortMode(): SortMode {
-  const stored = localStorage.getItem('font-butler-sort')
-  return stored === 'added' || stored === 'installed' ? 'added' : 'name'
-}
-
-function readLibraryFilters(): LibraryFilter[] {
-  const raw = localStorage.getItem(LIBRARY_FILTERS_KEY)
-  if (!raw) return []
-  try {
-    const parsed = JSON.parse(raw) as unknown
-    if (!Array.isArray(parsed)) return []
-    return parsed.filter(isLibraryFilter)
-  } catch {
-    return []
-  }
-}
 
 export default function App() {
   return (
