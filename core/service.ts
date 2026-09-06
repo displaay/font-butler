@@ -3007,6 +3007,7 @@ export class FontButlerService {
         throw new Error('Font is not in the library.')
       }
       const incomingDests = recordedDestinationIds(entry)
+      // Place B on B's recorded dests only; do not inherit A's occupancy.
       const macosParked = Boolean(entry.disabledPath && fs.existsSync(entry.disabledPath))
       const adobeParked = Boolean(
         copyAt(entry, 'adobe-shared')?.parkedPath &&

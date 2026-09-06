@@ -297,7 +297,7 @@ Treat same-face copies across destinations as a potential precedence conflict an
 
 **Park (deactivate).** Unregister-in-place is not enough when a sibling will be installed. Deactivating a managed install **moves** its bytes out of live destination folders into the Disabled vault, unregisters, sets status deactivated/parked, and records `disabledPath` / `parkedPath` while keeping the catalog entry, fingerprints, and retained revision. Startup must not silently move parked files back into live Fonts.
 
-**Mutex.** Installing or activating entry B while another same-identity copy occupies that destination fails with a clear error unless the caller uses **Switch** (or Replace, which updates the existing active entry in place). Two same-identity managed files must never remain in live destination folders. Installation records stay `macos` | `adobe-shared` only; a dual default of `macos-and-adobe` still expands to both destinations when switching if that was the active set. Alt-format `installedFormatConflicts` applies only to **active** (`installed` / `outdated`) copies; same-format parallel copies are handled by this mutex, not by alt-format replace.
+**Mutex.** Installing or activating entry B while another same-identity copy occupies that destination fails with a clear error unless the caller uses **Switch** (or Replace, which updates the existing active entry in place). Two same-identity managed files must never remain in live destination folders. Installation records stay `macos` | `adobe-shared` only. A dual default of `macos-and-adobe` expands when **installing** that entry, not when switching: Switch never copies a sibling’s destination occupancy onto the incoming copy. Alt-format `installedFormatConflicts` applies only to **active** (`installed` / `outdated`) copies; same-format parallel copies are handled by this mutex, not by alt-format replace.
 
 **Import (manual drop, file picker, Open With).** Same identity + same format + **same bound path** + different bytes remains a bound `revision` with `keep | replace | skip`. Same identity + same format + **different path** is a parallel copy (`parallelCopy`) whose choices are:
 
@@ -306,7 +306,7 @@ Treat same-face copies across destinations as a potential precedence conflict an
 | Replace active | Update/replace the existing active entry’s managed install (current replace path) |
 | Add inactive copy | New catalog entry bound to the incoming source; **do not activate**; leave the current active install untouched |
 | Install as… | Existing rename/install-as contract: derived asset with a user-chosen family name (name tables rewritten; original source file unchanged); provenance preserved; renamed copy is installed immediately and may be active alongside the release because identity no longer conflicts; renamed result is checked for a new conflict |
-| Switch | Park the active sibling, then install/activate the incoming copy into the same destination set (also exposed from Duplicates and parked-sibling actions) |
+| Switch | Park the active sibling on every destination it occupies, then install/activate the incoming copy only on that copy’s recorded destinations (or an explicit dest choice for B). Do not inherit A’s dest set. Also exposed from Duplicates and parked-sibling actions |
 | Skip | Leave the library unchanged |
 
 The import plan UI is required for parallel copies. Library shows both entries; inactive/parked copies are greyed like deactivated. Distinguish copies by source path and mtime until an optional label field exists.
@@ -321,22 +321,24 @@ The import plan UI is required for parallel copies. Library shows both entries; 
 
 This matches F05 background automation: queue conflicts for review without repeated modals.
 
-**Switch.** One atomic action, also used when Activating a parked/inactive sibling while another is active:
+**Switch.** One atomic action, also used when Activating a parked/inactive sibling while another is active. Destination occupancy is per catalog entry. An earlier draft said “place B wherever A was”; that is destination bleed and is not the product rule.
 
 1. Snapshot/verify currently active sibling A.
-2. Park A (move out of all managed destinations it occupies + unregister).
+2. Park A on every destination A occupies (macos, adobe-shared, or both) and unregister those copies.
 3. Clear caches on the same path as reinstall (ATS / Office / Adobe per settings).
-4. Place B into the same destination set A used (macos / adobe-shared / both).
+4. Activate/place B only on B’s recorded destinations (`recordedDestinationIds`), or on an explicit destination choice the user made for B. Do not copy A’s dest occupancy onto B.
 5. Register + verify. Never leave a second same-identity live file.
-6. On failure, restore A from park/rollback.
+6. On failure, restore A from park/rollback on every destination A occupied.
 7. Record Activity; undo switches back via the parked sibling when the existing undo machinery allows.
+
+If B was Mac-only and A was Mac+Adobe, Adobe is empty after Switch until the user installs B there. A future “match A’s destinations” option is out of scope. Switching back to A restores A’s own recorded destinations (including Adobe if A had been installed there).
 
 Expose Switch from inspector/card actions on an inactive sibling and from the Duplicates review.
 
 **Acceptance criteria.**
 
 - F10-A: Add inactive copy from import or Duplicates review leaves the release install active and creates a second catalog entry that does not occupy live Fonts.
-- F10-B: Activating or Switching to the test copy parks the release; no second same-identity file remains under the install dir or Adobe Fonts. Switching back restores the release.
+- F10-B: Activating or Switching to the test copy parks the release on every destination the release occupied; no second same-identity file remains under the install dir or Adobe Fonts. The incoming copy is placed only on its own recorded destinations (Mac-only WIP does not inherit a Mac+Adobe release’s Adobe occupancy). Switching back restores the release, including destinations that release had recorded.
 - F10-C: Activate without Switch fails clearly while a sibling occupies the destination.
 - F10-D: A watch folder adding a same-identity file raises a Duplicates warning and installs nothing until the user chooses. Unique fonts in that folder still follow policy. `autoUpdate` does not map this case to replace.
 - F10-E: Install as… from import or Duplicates review installs a renamed derived copy alongside the release; the original source file is unchanged; the renamed identity does not conflict.
