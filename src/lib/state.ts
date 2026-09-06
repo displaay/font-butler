@@ -39,6 +39,10 @@ export function displayStateLabel(entry: CatalogEntry): string {
   return displayStateParts(entry).join(' · ')
 }
 
+export function isNotInstalledLabel(entry: CatalogEntry): boolean {
+  return displayStateParts(entry).includes('Not installed')
+}
+
 export function needsLocateSource(entry: CatalogEntry): boolean {
   if (entry.previewOnly) return entry.sourceAvailability === 'missing' || entry.status === 'source-missing'
   return (

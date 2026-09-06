@@ -31,6 +31,7 @@ import {
 import { canSwitchTo } from '@/lib/identity'
 import { actionCopy, actionCopyFor, adobeInstallCopy, remainingActionCopy } from '@/lib/notify'
 import { batchResultCopy, type BatchOutcome } from '@/lib/results'
+import { doneToastAction, latestUndoableOperationId } from '@/lib/toastAction'
 import { updateGroupsForIds } from '@/lib/updateInventory'
 import type { CatalogEntry, ComparisonCapture, FamilyGroup, Operation, SystemFace, SystemFamilyGroup } from '@/lib/types'
 
@@ -214,14 +215,23 @@ export function useFontActions({
     if (toUninstall.length === 0 && toForget.length === 0) return
     const copyGroups = [...toUninstall, ...toForget]
     const verb = toUninstall.length === 0 ? 'forget' : 'remove'
-    await run(async () => {
-      for (const group of toUninstall) {
-        await uninstallGroup(group)
-      }
-      for (const group of toForget) {
-        await forgetGroup(group)
-      }
-    }, actionCopyFor(verb, copyGroups))
+    const uninstallIds = toUninstall.flatMap((group) => uninstallableIds(group))
+    await run(
+      async () => {
+        let last: unknown
+        if (uninstallIds.length > 1) {
+          last = await api.uninstallMany(uninstallIds)
+        } else if (uninstallIds.length === 1) {
+          last = await api.uninstall(uninstallIds[0]!)
+        }
+        for (const group of toForget) {
+          await forgetGroup(group)
+        }
+        return last
+      },
+      actionCopyFor(verb, copyGroups),
+      uninstallIds.length > 0 && toForget.length === 0 ? { undo: 'uninstall' } : undefined,
+    )
   }
 
   async function installSelected() {
@@ -447,11 +457,13 @@ export function useFontActions({
         group.status === 'deactivated',
     )
     if (groups.length === 0) return
-    await run(async () => {
-      for (const group of groups) {
-        await uninstallGroup(group)
-      }
-    }, actionCopyFor('remove', groups))
+    const ids = groups.flatMap((group) => uninstallableIds(group))
+    if (ids.length === 0) return
+    await run(
+      () => (ids.length > 1 ? api.uninstallMany(ids) : api.uninstall(ids[0]!)),
+      actionCopyFor('remove', groups),
+      { undo: 'uninstall' },
+    )
   }
 
   async function deactivateSelected() {
@@ -477,16 +489,32 @@ export function useFontActions({
     }, actionCopyFor('deactivate', groups))
   }
 
-  function showActivityToast(message: string, failedIds: string[] = [], operationId?: string) {
+  function showDoneToast(
+    message: string,
+    failedIds: string[] = [],
+    options?: { operationId?: string; undo?: 'uninstall' },
+  ) {
+    const action = doneToastAction({
+      failedIds,
+      operationId: options?.operationId,
+      undo: options?.undo === 'uninstall',
+    })
     toast.success(message, {
       action: {
-        label: failedIds.length ? 'Retry failed' : 'Activity',
+        label: action.label,
         onClick: () => {
-          if (failedIds.length) {
+          if (action.kind === 'retry') {
             void retryFailed(failedIds)
             return
           }
-          setHighlightOperation(operationId ?? null)
+          if (action.kind === 'undo') {
+            void run(() => api.undo(action.operationId), {
+              pending: 'Undoing…',
+              done: 'Undid the last change',
+            })
+            return
+          }
+          setHighlightOperation(action.operationId ?? null)
           setTab('activity')
         },
       },
@@ -514,6 +542,7 @@ export function useFontActions({
   async function run(
     action: () => Promise<unknown>,
     copy: { pending: string; done: string },
+    options?: { undo?: 'uninstall' },
   ) {
     busyRef.current = true
     setBusy(true)
@@ -523,11 +552,22 @@ export function useFontActions({
       setActionStatus(null)
       const outcome = result && typeof result === 'object' ? (result as BatchOutcome) : undefined
       const { message, failedIds } = batchResultCopy(copy.done, outcome)
-      showActivityToast(message, failedIds, (result as { operationId?: string } | undefined)?.operationId)
       const catalog = await api.catalog()
       setEntries(catalog.entries)
       const activity = await api.activity().catch(() => ({ operations }))
       setOperations(activity.operations)
+      const operationId =
+        (result as { operationId?: string } | undefined)?.operationId ??
+        (options?.undo === 'uninstall'
+          ? latestUndoableOperationId(activity.operations, 'uninstall')
+          : undefined)
+      const undoable =
+        (result as { undoable?: boolean } | undefined)?.undoable ??
+        Boolean(options?.undo && operationId)
+      showDoneToast(message, failedIds, {
+        operationId,
+        undo: undoable ? options?.undo : undefined,
+      })
     } catch (err) {
       setActionStatus(null)
       toast.error(err instanceof Error ? err.message : 'Something went wrong', {
@@ -573,7 +613,7 @@ export function useFontActions({
     uninstallAndRemoveSelected,
     uninstallSelected,
     deactivateSelected,
-    showActivityToast,
+    showDoneToast,
     run,
   }
 }

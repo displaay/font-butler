@@ -2,6 +2,7 @@ import { useMemo, useState, type DragEvent, type MouseEvent } from 'react'
 import { Check, ChevronDown, FolderMinus, FolderOpen, Plus } from 'lucide-react'
 import { AaPreview, CyclingAaPreview } from '@/components/AaPreview'
 import { FormatBadges, SourceBadge, StateBadges, VfBadge } from '@/components/Badges'
+import { Badge } from '@/components/ui/badge'
 import { CatalogMenuItems } from '@/components/BatchActions'
 import { CatalogCardActions } from '@/components/FontCardActions'
 import { catalogFontFamily } from '@/components/FontFaceStyles'
@@ -16,13 +17,13 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
-import { catalogBatchPlan, type CatalogBatchPlan } from '@/lib/batch'
+import { familyCardPlan, type CatalogBatchPlan } from '@/lib/batch'
 import { applyFontDragImage } from '@/lib/dragPreview'
 import { uniqueEntryFormats } from '@/lib/formats'
-import { hasSourceMissing, hasTrackedSource } from '@/lib/group'
+import { familyBadgeEntry, familyStatusSummary, hasSourceMissing, hasTrackedSource } from '@/lib/group'
 import { catalogInstanceRows } from '@/lib/instances'
 import { projectContainsAll, writeFontButlerEntries } from '@/lib/projects'
-import { needsLocateSource } from '@/lib/state'
+import { isNotInstalledLabel, needsLocateSource } from '@/lib/state'
 import type { FamilyGroup, ProjectSet, ViewLayout } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
@@ -102,6 +103,9 @@ export function LibraryCard({
   const [expanded, setExpanded] = useState(false)
   const [hovered, setHovered] = useState(false)
   const preview = group.entries.find((entry) => entry.id === group.previewEntryId) ?? group.entries[0]
+  const badgeEntry = familyBadgeEntry(group)
+  const mixedSummary = familyStatusSummary(group)
+  const notInstalled = isNotInstalledLabel(badgeEntry)
   const missingSource = hasSourceMissing(group)
   const instances = useMemo(() => catalogInstanceRows(group), [group])
   const showInstances = instances.length > 0 && layout === 'list'
@@ -115,10 +119,11 @@ export function LibraryCard({
         weight: row.weight,
         italic: row.italic,
         label: row.label,
+        variation: row.variation,
       })),
     [instances, previewFamily],
   )
-  const plan = batch ?? catalogBatchPlan([group])
+  const plan = batch ?? familyCardPlan(group)
   const inCurrentProject = Boolean(
     projectFilter && group.entries.some((entry) =>
       projects.find((item) => item.id === projectFilter)?.members.some((member) => member.assetId === entry.id),
@@ -142,7 +147,12 @@ export function LibraryCard({
         <span className="truncate font-medium">{group.familyName}</span>
         <VfBadge show={group.isVariable} />
         <FormatBadges formats={uniqueEntryFormats(group.entries)} />
-        <StateBadges entry={preview} hideInstalled />
+        <StateBadges entry={badgeEntry} hideInstalled hideNotInstalled />
+        {mixedSummary ? (
+          <Badge tone="muted" title={mixedSummary}>
+            {mixedSummary}
+          </Badge>
+        ) : null}
       </div>
       <div className="mt-0.5 text-xs text-muted-foreground">
         {group.instanceCount} {group.instanceCount === 1 ? 'instance' : 'instances'}
@@ -183,9 +193,14 @@ export function LibraryCard({
           onPointerEnter={() => setHovered(true)}
           onPointerLeave={() => setHovered(false)}
         >
-          {hasTrackedSource(group) ? (
-            <SourceBadge className="pointer-events-none absolute top-1.5 left-1.5 z-10" />
-          ) : null}
+          <div className="pointer-events-none absolute top-1.5 left-1.5 z-10 flex items-center gap-1">
+            {hasTrackedSource(group) ? <SourceBadge /> : null}
+            {notInstalled ? (
+              <Badge tone="muted" title="Not installed">
+                Not installed
+              </Badge>
+            ) : null}
+          </div>
           {layout === 'grid' ? (
             <button
               type="button"
@@ -206,7 +221,7 @@ export function LibraryCard({
                     label: preview.faces[0]?.styleName ?? 'Regular',
                   }
                 }
-                active={hovered && !selected}
+                active={hovered}
                 size={previewSize}
               />
               <div className={previewSize < 3.25 ? 'p-2' : 'p-3'}>{metadata}</div>

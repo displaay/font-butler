@@ -22,10 +22,20 @@ function isCollection(font: Font | FontCollection): font is FontCollection {
   return 'fonts' in font && Array.isArray((font as FontCollection).fonts)
 }
 
+function namedInstancesOf(font: Font): NamedInstanceInfo[] {
+  const named =
+    (font as Font & { namedVariations?: Record<string, Record<string, number>> }).namedVariations ??
+    {}
+  return Object.entries(named).map(([name, coordinates]) => ({
+    name,
+    coordinates: Object.fromEntries(
+      Object.entries(coordinates ?? {}).map(([tag, value]) => [tag, Number(value)]),
+    ),
+  }))
+}
+
 function namedInstanceCount(font: Font): { count: number; names: string[] } {
-  const named = (font as Font & { namedVariations?: Record<string, unknown> })
-    .namedVariations
-  const names = named ? Object.keys(named) : []
+  const names = namedInstancesOf(font).map((item) => item.name)
   return { count: Math.max(names.length, 1), names }
 }
 
@@ -84,6 +94,7 @@ function faceFromFont(font: Font): FontFaceInfo {
     isVariable,
     instanceCount: isVariable ? instances.count : 1,
     instanceNames: instances.names,
+    namedInstances: isVariable ? namedInstancesOf(font) : undefined,
     weight: os2?.usWeightClass ?? 400,
     italic: Math.abs(italicAngle) > 1 || /italic|oblique/i.test(styleName),
   }
@@ -134,15 +145,7 @@ function previewMetaFromFont(font?: Font): Pick<ParsedFont, 'axes' | 'namedInsta
     default: axis.default,
     max: axis.max,
   }))
-  const named =
-    (font as Font & { namedVariations?: Record<string, Record<string, number>> }).namedVariations ??
-    {}
-  const namedInstances = Object.entries(named).map(([name, coordinates]) => ({
-    name,
-    coordinates: Object.fromEntries(
-      Object.entries(coordinates ?? {}).map(([tag, value]) => [tag, Number(value)]),
-    ),
-  }))
+  const namedInstances = namedInstancesOf(font)
   const features = [...new Set((font.availableFeatures ?? []).map((tag) => String(tag)))]
   const characterSet = Array.isArray(font.characterSet) ? [...font.characterSet] : []
   return { axes, namedInstances, features, characterSet }

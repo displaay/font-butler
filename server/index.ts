@@ -299,13 +299,23 @@ app.post('/api/uninstall', async (c) => {
   try {
     if (body.ids?.length) {
       const entries = await service.uninstallMany(body.ids, options)
-      return c.json({ entries })
+      const operation = service.listActivity()[0]
+      return c.json({
+        entries,
+        operationId: operation?.action === 'uninstall' ? operation.id : undefined,
+        undoable: operation?.action === 'uninstall' && operation.undoable && !operation.undone,
+      })
     }
     if (!body.id) {
       return c.json({ error: 'Missing id or ids' }, 400)
     }
     const entry = await service.uninstall(body.id, options)
-    return c.json({ entry })
+    const operation = service.listActivity()[0]
+    return c.json({
+      entry,
+      operationId: operation?.action === 'uninstall' ? operation.id : undefined,
+      undoable: operation?.action === 'uninstall' && operation.undoable && !operation.undone,
+    })
   } catch (error) {
     return c.json(
       { error: error instanceof Error ? error.message : 'Uninstall failed' },

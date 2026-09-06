@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { collectionScopeLabel, displayStateLabel, needsLocateSource } from './state.ts'
+import { collectionScopeLabel, displayStateLabel, isNotInstalledLabel, needsLocateSource } from './state.ts'
 import type { CatalogEntry, FontFaceInfo } from './types.ts'
 
 function face(): FontFaceInfo {
@@ -31,6 +31,15 @@ function entry(partial: Partial<CatalogEntry> = {}): CatalogEntry {
     ...partial,
   }
 }
+
+test('isNotInstalledLabel is only true for library-only uninstalled fonts', () => {
+  assert.equal(isNotInstalledLabel(entry({ status: 'uninstalled' })), true)
+  assert.equal(isNotInstalledLabel(entry({ status: 'installed' })), false)
+  assert.equal(
+    isNotInstalledLabel(entry({ status: 'uninstalled', disabledPath: '/tmp/parked/State.otf' })),
+    false,
+  )
+})
 
 test('displayStateLabel compounds installation and source facts', () => {
   assert.equal(

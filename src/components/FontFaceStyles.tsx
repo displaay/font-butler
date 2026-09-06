@@ -1,7 +1,8 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { getApiToken } from '@/lib/api'
 import {
   catalogFontFaceRules,
+  catalogPreviewWhich,
   signedCatalogFontUrl,
   signedSystemFontUrl,
   type PreviewWhich,
@@ -33,7 +34,8 @@ export function systemFontFamily(path: string): string {
 async function previewCss(entries: CatalogEntry[], systemFaces: SystemFace[], secret: string): Promise<string> {
   const catalogRules = await Promise.all(
     entries.map(async (entry) => {
-      const defaultUrl = await signedCatalogFontUrl(entry, 'installed', secret)
+      const which = catalogPreviewWhich(entry)
+      const defaultUrl = await signedCatalogFontUrl(entry, which, secret)
       const installedUrl = await signedCatalogFontUrl(entry, 'installed', secret)
       const faces = [
         ...catalogFontFaceRules(cssFamily(entry.id), defaultUrl, entry.faces),
@@ -49,7 +51,8 @@ async function previewCss(entries: CatalogEntry[], systemFaces: SystemFace[], se
   const systemRules = await Promise.all(
     systemFaces.map(async (face) => {
       const url = await signedSystemFontUrl(face.path, secret)
-      return `@font-face{font-family:"${hashPath(face.path)}";src:url("${url}");font-display:swap;}`
+      const weight = face.isVariable ? '1 1000' : face.weight ? String(face.weight) : '400'
+      return `@font-face{font-family:"${hashPath(face.path)}";src:url("${url}");font-weight:${weight};font-display:swap;}`
     }),
   )
   return [...catalogRules.flat(), ...systemRules].join('\n')
@@ -62,10 +65,16 @@ export function FontFaceStyles({
   entries: CatalogEntry[]
   systemFaces: SystemFace[]
 }) {
+  const styleRef = useRef<HTMLStyleElement | null>(null)
+
   useEffect(() => {
-    const style = document.createElement('style')
-    style.setAttribute('data-font-butler-faces', 'true')
-    document.head.append(style)
+    if (!styleRef.current) {
+      const style = document.createElement('style')
+      style.setAttribute('data-font-butler-faces', 'true')
+      document.head.append(style)
+      styleRef.current = style
+    }
+    const style = styleRef.current
     let cancelled = false
 
     async function apply() {
@@ -83,9 +92,15 @@ export function FontFaceStyles({
     return () => {
       cancelled = true
       window.clearInterval(timer)
-      style.remove()
     }
   }, [entries, systemFaces])
+
+  useEffect(() => {
+    return () => {
+      styleRef.current?.remove()
+      styleRef.current = null
+    }
+  }, [])
 
   return null
 }

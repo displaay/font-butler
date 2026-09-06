@@ -712,7 +712,7 @@ function AppShell() {
     uninstallAndRemoveSelected,
     uninstallSelected,
     deactivateSelected,
-    showActivityToast,
+    showDoneToast,
     run,
   } = useFontActions({
     entries,
@@ -1004,7 +1004,7 @@ function AppShell() {
       setSelectedEntryId(result.entries[0]?.id ?? null)
       setScrollToFamily(names[0] ?? null)
     }
-    showActivityToast(
+    showDoneToast(
       importDoneCopy({
         installed: result.succeeded > 0 && preview < result.succeeded,
         count: result.entries.length,
@@ -1012,7 +1012,7 @@ function AppShell() {
         preview,
       }),
       result.failedIds,
-      result.operationId,
+      { operationId: result.operationId },
     )
     if (result.errors.length) toast.error(result.errors.join('\n'))
     return result
@@ -1471,7 +1471,9 @@ function AppShell() {
                           onUninstall={() =>
                             useBatch
                               ? void uninstallSelected()
-                              : void run(() => uninstallGroup(group), actionCopy('remove', group.familyName))
+                              : void run(() => uninstallGroup(group), actionCopy('remove', group.familyName), {
+                                  undo: 'uninstall',
+                                })
                           }
                           onUninstallAndRemove={() => {
                             if (useBatch) {
@@ -1627,7 +1629,9 @@ function AppShell() {
               onRepair={() => void repairSelected()}
               onUninstall={() =>
                 selectedGroup &&
-                void run(() => uninstallGroup(selectedGroup), actionCopy('remove', selectedGroup.familyName))
+                void run(() => uninstallGroup(selectedGroup), actionCopy('remove', selectedGroup.familyName), {
+                  undo: 'uninstall',
+                })
               }
               onUninstallAndRemove={() => {
                 if (!selectedGroup) return

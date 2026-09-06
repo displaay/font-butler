@@ -7,7 +7,8 @@ import {
   repairableIds,
   uninstallableIds,
 } from './eligibility.ts'
-import { hasTrackedSource, isUninstallableGroup } from './group.ts'
+import { familyBadgeEntry, hasTrackedSource, isUninstallableGroup } from './group.ts'
+import { displayStateParts } from './state.ts'
 import type { FamilyGroup, SystemFamilyGroup } from './types.ts'
 
 export type CatalogBatchPlan = {
@@ -85,6 +86,33 @@ export function catalogBatchPlan(groups: FamilyGroup[]): CatalogBatchPlan {
     repair,
     forget,
     deleteFiles,
+  }
+}
+
+/**
+ * Hover/context actions for one family card. Mixed families keep honest
+ * Install-missing + Deactivate-installed counts; a Not installed badge never
+ * offers Deactivate / Uninstall / Activate / Update.
+ */
+export function familyCardPlan(group: FamilyGroup): CatalogBatchPlan {
+  const plan = catalogBatchPlan([group])
+  if (!displayStateParts(familyBadgeEntry(group)).includes('Not installed')) {
+    return plan
+  }
+  if (
+    plan.deactivate === 0 &&
+    plan.uninstall === 0 &&
+    plan.activate === 0 &&
+    plan.reinstall === 0
+  ) {
+    return plan
+  }
+  return {
+    ...plan,
+    deactivate: 0,
+    uninstall: 0,
+    activate: 0,
+    reinstall: 0,
   }
 }
 
