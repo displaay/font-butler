@@ -68,6 +68,7 @@ test('catalogBatchPlan uses entry-level eligibility for a mixed family', () => {
     count: 1,
     install: 1,
     installMissing: true,
+    adobeInstall: 2,
     activate: 0,
     deactivate: 1,
     uninstall: 1,
@@ -91,6 +92,7 @@ test('catalogBatchPlan counts each action by family status', () => {
     count: 5,
     install: 1,
     installMissing: false,
+    adobeInstall: 5,
     activate: 1,
     deactivate: 2,
     uninstall: 3,
@@ -131,6 +133,21 @@ test('hasCatalogBatchActions is false for an empty selection', () => {
   assert.equal(hasCatalogBatchActions(catalogBatchPlan([])), false)
 })
 
+test('catalogBatchPlan counts Adobe installs only when a copy is not present', () => {
+  const groups = groupCatalog([
+    {
+      ...entry('a', 'Able', 'installed'),
+      installations: [
+        { destinationId: 'adobe-shared', path: '/tmp/able-adobe.otf', verification: 'file-present' },
+      ],
+    },
+    entry('b', 'Baker', 'installed'),
+  ])
+  const plan = catalogBatchPlan(groups)
+  assert.equal(plan.adobeInstall, 1)
+  assert.equal(hasCatalogBatchActions(plan), true)
+})
+
 test('actionLabel adds a count for multi-select', () => {
   assert.equal(actionLabel('Install', 1, false), 'Install')
   assert.equal(actionLabel('Install', 1, true), 'Install 1 font')
@@ -139,4 +156,6 @@ test('actionLabel adds a count for multi-select', () => {
   assert.equal(actionLabel('Install update', 2, true), 'Install 2 updates')
   assert.equal(actionLabel('Install missing', 3, true), 'Install 3 missing styles')
   assert.equal(actionLabel('Deactivate', 2, true), 'Deactivate 2 styles')
+  assert.equal(actionLabel('Install to Adobe testing folder', 1, false), 'Install to Adobe testing folder')
+  assert.equal(actionLabel('Install to Adobe testing folder', 3, true), 'Install 3 to Adobe testing folder')
 })

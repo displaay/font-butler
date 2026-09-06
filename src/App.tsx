@@ -68,6 +68,7 @@ import {
 } from '@/lib/formats'
 import {
   activatableIds,
+  adobeInstallableIds,
   deactivatableIds,
   installableIds,
   reinstallableIds,
@@ -918,6 +919,16 @@ function AppShell() {
       () => installPrepared(prepared.ids, familyName, prepared.replace),
       actionCopy('install', group.familyName),
     )
+  }
+
+  async function installToAdobeFor(groups: FamilyGroup[]) {
+    const ids = groups.flatMap(adobeInstallableIds)
+    if (ids.length === 0) return
+    await run(async () => {
+      for (const id of ids) {
+        await api.install(id, undefined, { destinationId: 'adobe-shared' })
+      }
+    }, adobeInstallCopy(ids.length))
   }
 
   async function activateGroupGuarded(group: FamilyGroup) {
@@ -1821,6 +1832,11 @@ function AppShell() {
                             useBatch ? void installSelected() : void installGroupGuarded(group)
                           }
                           onInstallAs={() => setRenameEntry(selectedEntry ?? group.entries[0])}
+                          onInstallToAdobe={() =>
+                            useBatch
+                              ? void installToAdobeFor(catalogSelection)
+                              : void installToAdobeFor([group])
+                          }
                           onReinstall={() =>
                             useBatch
                               ? void reinstallSelected()
@@ -2033,10 +2049,10 @@ function AppShell() {
               }}
               onInstallToAdobe={() =>
                 selectedEntry &&
-                void run(() => api.install(selectedEntry.id, undefined, { destinationId: 'adobe-shared' }), {
-                  pending: 'Placing Adobe testing copy…',
-                  done: 'Placed Adobe testing copy',
-                })
+                void run(
+                  () => api.install(selectedEntry.id, undefined, { destinationId: 'adobe-shared' }),
+                  adobeInstallCopy(1),
+                )
               }
               onRemoveAdobeCopy={() =>
                 selectedEntry &&
@@ -2267,6 +2283,16 @@ function uniquePaths(faces: SystemFace[]): string[] {
   return [...new Set(faces.map((face) => face.path))]
 }
 
+function adobeInstallCopy(count: number): { pending: string; done: string } {
+  if (count <= 1) {
+    return { pending: 'Placing Adobe testing copy…', done: 'Placed Adobe testing copy' }
+  }
+  return {
+    pending: `Placing ${count} Adobe testing copies…`,
+    done: `Placed ${count} Adobe testing copies`,
+  }
+}
+
 function sameKeys(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((key, index) => key === right[index])
 }
@@ -2342,6 +2368,7 @@ function LibraryCard({
   onEnsureSelected,
   onInstall,
   onInstallAs,
+  onInstallToAdobe,
   onReinstall,
   onLocateSource,
   onUninstall,
@@ -2376,6 +2403,7 @@ function LibraryCard({
   onEnsureSelected: () => void
   onInstall: () => void
   onInstallAs: () => void
+  onInstallToAdobe: () => void
   onReinstall: () => void
   onLocateSource?: () => void
   onUninstall: () => void
@@ -2626,6 +2654,7 @@ function LibraryCard({
           showInstallAs={!batch}
           onInstall={onInstall}
           onInstallAs={onInstallAs}
+          onInstallToAdobe={onInstallToAdobe}
           onReinstall={onReinstall}
           onDeactivate={onDeactivate}
           onUninstall={onUninstall}
