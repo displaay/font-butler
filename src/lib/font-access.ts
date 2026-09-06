@@ -2,7 +2,6 @@ import {
   FONT_ACCESS_TTL_MS,
   fontAccessMessage,
   type FontAccessPayload,
-  withFontAccessQuery,
 } from '../../shared/font-access.ts'
 
 export { FONT_ACCESS_TTL_MS, withFontAccessQuery } from '../../shared/font-access.ts'
