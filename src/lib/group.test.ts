@@ -4,6 +4,7 @@ import {
   catalogRevealEntry,
   countLibraryFilters,
   entryHasTrackedSource,
+  familyBadgeEntry,
   familyStatusSummary,
   groupCatalog,
   hasTrackedSource,
@@ -13,6 +14,7 @@ import {
   sortFamilyGroups,
   uniquePaths,
 } from './group.ts'
+import { displayStateParts } from './state.ts'
 import type { CatalogEntry, FontFaceInfo, SystemFace } from './types.ts'
 
 function face(
@@ -168,6 +170,33 @@ test('groupCatalog merges installed and uninstalled styles onto one Fonts card',
   assert.equal(booton.instanceCount, 2)
   assert.equal(familyStatusSummary(booton), '1 of 2 styles active')
   assert.equal(isUninstallableGroup(booton), true)
+})
+
+test('familyBadgeEntry follows family status, not an uninstalled preview face', () => {
+  const groups = groupCatalog([
+    entry('light', 'Gellix', 1, 'uninstalled', 'Light', false),
+    entry('bold', 'Gellix', 2, 'installed', 'Bold', false),
+  ])
+  const gellix = groups[0]
+  assert.ok(gellix)
+  assert.equal(gellix.previewEntryId, 'light')
+  assert.equal(gellix.status, 'installed')
+  assert.equal(familyBadgeEntry(gellix).id, 'bold')
+  assert.equal(familyStatusSummary(gellix), '1 of 2 styles active')
+  assert.equal(displayStateParts(familyBadgeEntry(gellix)).includes('Not installed'), false)
+  assert.equal(displayStateParts(gellix.entries[0]!).includes('Not installed'), true)
+})
+
+test('familyBadgeEntry stays on the preview when the family is not installed', () => {
+  const groups = groupCatalog([
+    entry('light', 'Gellix', 1, 'uninstalled', 'Light', false),
+    entry('bold', 'Gellix', 2, 'uninstalled', 'Bold', false),
+  ])
+  const gellix = groups[0]
+  assert.ok(gellix)
+  assert.equal(gellix.status, 'uninstalled')
+  assert.equal(familyBadgeEntry(gellix).id, 'light')
+  assert.equal(familyStatusSummary(gellix), null)
 })
 
 test('entryHasTrackedSource prefers the stored flag and falls back to status', () => {

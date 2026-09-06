@@ -49,19 +49,24 @@ export function StatusBadge({ status }: { status: FontStatus }) {
 export function StateBadges({
   entry,
   hideInstalled = false,
+  hideNotInstalled = false,
 }: {
   entry: CatalogEntry
   hideInstalled?: boolean
+  hideNotInstalled?: boolean
 }) {
-  const parts = displayStateParts(entry).filter(
-    (part) =>
-      !(
-        hideInstalled &&
-        (part === 'Installed' ||
-          part === 'This Mac and Adobe testing folder' ||
-          part === 'Adobe testing folder')
-      ),
-  )
+  const parts = displayStateParts(entry).filter((part) => {
+    if (
+      hideInstalled &&
+      (part === 'Installed' ||
+        part === 'This Mac and Adobe testing folder' ||
+        part === 'Adobe testing folder')
+    ) {
+      return false
+    }
+    if (hideNotInstalled && part === 'Not installed') return false
+    return true
+  })
   if (parts.length === 0) return null
   return (
     <>

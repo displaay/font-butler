@@ -95,6 +95,15 @@ test('family actions use entry-level eligibility for mixed styles', () => {
   assert.equal(familyHasAction(mixed, 'reinstall'), false)
 })
 
+test('an all-uninstalled family is installable and never deactivatable', () => {
+  const off = group([entry('light', 'uninstalled', 'Light'), entry('bold', 'uninstalled', 'Bold')])
+  assert.deepEqual(installableIds(off), ['light', 'bold'])
+  assert.deepEqual(deactivatableIds(off), [])
+  assert.deepEqual(uninstallableIds(off), [])
+  assert.equal(familyHasAction(off, 'install'), true)
+  assert.equal(familyHasAction(off, 'deactivate'), false)
+})
+
 test('repair is hidden unless a managed copy is missing', () => {
   const healthy = group([
     {

@@ -4,12 +4,14 @@ import {
   actionLabel,
   catalogBatchPlan,
   catalogBatchSummary,
+  familyCardPlan,
   hasCatalogBatchActions,
   hasSystemBatchActions,
   systemBatchPlan,
   systemBatchSummary,
 } from './batch.ts'
-import { groupCatalog, groupSystem } from './group.ts'
+import { displayStateParts, isNotInstalledLabel } from './state.ts'
+import { groupCatalog, groupSystem, familyBadgeEntry } from './group.ts'
 import type { CatalogEntry, FontFaceInfo, SystemFace } from './types.ts'
 
 function face(familyName: string): FontFaceInfo {
@@ -78,6 +80,43 @@ test('catalogBatchPlan uses entry-level eligibility for a mixed family', () => {
     forget: 1,
     deleteFiles: 1,
   })
+})
+
+test('familyCardPlan keeps honest mixed actions when the family is partly installed', () => {
+  const groups = groupCatalog([
+    entry('light', 'Gellix', 'uninstalled'),
+    entry('bold', 'Gellix', 'installed'),
+  ])
+  const gellix = groups[0]!
+  const plan = familyCardPlan(gellix)
+  assert.equal(gellix.previewEntryId, 'light')
+  assert.equal(displayStateParts(gellix.entries[0]!).includes('Not installed'), true)
+  assert.equal(displayStateParts(familyBadgeEntry(gellix)).includes('Not installed'), false)
+  assert.equal(plan.install, 1)
+  assert.equal(plan.installMissing, true)
+  assert.equal(plan.deactivate, 1)
+})
+
+test('familyCardPlan never offers Deactivate on a not-installed family card', () => {
+  const groups = groupCatalog([
+    entry('light', 'Gellix', 'uninstalled'),
+    entry('bold', 'Gellix', 'uninstalled'),
+  ])
+  const gellix = groups[0]!
+  const plan = familyCardPlan(gellix)
+  assert.equal(isNotInstalledLabel(familyBadgeEntry(gellix)), true)
+  assert.equal(plan.install, 2)
+  assert.equal(plan.deactivate, 0)
+  assert.equal(plan.uninstall, 0)
+  assert.equal(plan.activate, 0)
+  assert.equal(plan.reinstall, 0)
+})
+
+test('familyCardPlan still deactivates an installed family', () => {
+  const groups = groupCatalog([entry('a', 'Able', 'installed')])
+  const plan = familyCardPlan(groups[0]!)
+  assert.equal(plan.install, 0)
+  assert.equal(plan.deactivate, 1)
 })
 
 test('catalogBatchPlan counts each action by family status', () => {

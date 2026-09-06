@@ -212,6 +212,14 @@ export function familyStatusSummary(group: { entries: CatalogEntry[] }): string 
   return `${active} of ${group.entries.length} ${noun} active`
 }
 
+/** Status badge representative: family status, not the Aa preview face. */
+export function familyBadgeEntry(group: FamilyGroup): CatalogEntry {
+  const preview =
+    group.entries.find((entry) => entry.id === group.previewEntryId) ?? group.entries[0]
+  if (preview.status === group.status) return preview
+  return group.entries.find((entry) => entry.status === group.status) ?? preview
+}
+
 export function entryIds(group: { entries: CatalogEntry[] }): string[] {
   return group.entries.map((entry) => entry.id)
 }
