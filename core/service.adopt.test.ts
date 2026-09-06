@@ -260,3 +260,44 @@ test('install copies an external source into the user fonts folder', async () =>
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
 })
+
+test('init does not delete a parked adopted user font', async () => {
+  const paths = tempPaths()
+  const font = path.join(paths.userFontsDir, 'ParkedAdopt.ttf')
+  writeTestFont(font, 'ParkedAdopt', 'ParkedAdopt-Regular')
+  const first = new FontButlerService(paths)
+  try {
+    await first.init()
+    const [entry] = first.listCatalog()
+    assert.ok(entry)
+    const parked = await first.deactivate(entry.id)
+    assert.equal(parked.status, 'deactivated')
+    assert.equal(fs.existsSync(font), false)
+    assert.ok(parked.disabledPath && fs.existsSync(parked.disabledPath))
+    const vaultBytes = fs.readFileSync(parked.disabledPath)
+    first.dispose()
+    await closeAllWatchers()
+
+    const restarted = new FontButlerService(paths)
+    try {
+      await restarted.init()
+      const after = restarted.listCatalog()
+      assert.equal(after.length, 1)
+      assert.equal(after[0]?.id, entry.id)
+      assert.equal(after[0]?.status, 'deactivated')
+      assert.ok(after[0]?.disabledPath && fs.existsSync(after[0].disabledPath))
+      assert.deepEqual(fs.readFileSync(after[0].disabledPath), vaultBytes)
+      const on = await restarted.activate(entry.id)
+      assert.equal(on.status, 'installed')
+      assert.equal(fs.existsSync(font), true)
+      assert.deepEqual(fs.readFileSync(font), vaultBytes)
+    } finally {
+      restarted.dispose()
+      await closeAllWatchers()
+    }
+  } finally {
+    first.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})

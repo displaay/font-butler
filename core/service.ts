@@ -21,11 +21,13 @@ import {
   adobeInvestigation,
   copyAt,
   dropCopy,
+  entryHasParkedBytes,
   findUnmanagedConflicts,
   inspectDestination,
   isDefaultDestinationId,
   listDestinations,
   plannedManagedPath,
+  recordedDestinationIds,
   removeManagedCopy,
   targetsForDefaultDestination,
   upsertCopy,
@@ -2749,6 +2751,9 @@ export class FontButlerService {
         const dest = adobe.path
         fs.mkdirSync(path.dirname(dest), { recursive: true })
         if (path.resolve(adobe.parkedPath) !== path.resolve(dest)) {
+          if (fs.existsSync(dest) && !sameFile(dest, adobe.parkedPath)) {
+            throw new Error(IDENTITY_MUTEX_MESSAGE)
+          }
           fs.renameSync(adobe.parkedPath, dest)
         }
         upsertCopy(entry, {
@@ -2795,6 +2800,7 @@ export class FontButlerService {
       if (!entry) {
         throw new Error('Font is not in the library.')
       }
+      const incomingDests = recordedDestinationIds(entry)
       const macosParked = Boolean(entry.disabledPath && fs.existsSync(entry.disabledPath))
       const adobeParked = Boolean(
         copyAt(entry, 'adobe-shared')?.parkedPath &&
@@ -2802,8 +2808,8 @@ export class FontButlerService {
       )
       let installed: CatalogEntry
       if (macosParked || adobeParked) {
-        await this.unparkManagedCopies(entry, destSet.length ? destSet : undefined)
-        const missing = destSet.filter((dest) => !occupiesDestination(entry, dest, this.paths))
+        await this.unparkManagedCopies(entry, incomingDests)
+        const missing = incomingDests.filter((dest) => !occupiesDestination(entry, dest, this.paths))
         if (missing.length && sourceFileExists(entry.sourcePath)) {
           installed = await this.installEntry(id, undefined, {
             switch: true,
@@ -2818,7 +2824,7 @@ export class FontButlerService {
       } else {
         installed = await this.installEntry(id, undefined, {
           switch: true,
-          destinationIds: destSet.length ? destSet : undefined,
+          destinationIds: incomingDests,
         })
       }
       catalog = loadCatalog(this.paths)
@@ -3508,7 +3514,7 @@ export class FontButlerService {
             )
             if (owner) return owner
             return findAllByFaceIdentity(catalog, parsed.faces, parsed.format).find(
-              (entry) => !entry.disabledPath,
+              (entry) => !entryHasParkedBytes(entry),
             )
           } catch {
             return undefined
@@ -3519,11 +3525,7 @@ export class FontButlerService {
         : undefined
       const isOn = queriedOn ?? (existing ? existing.status !== 'deactivated' : true)
       if (existing) {
-        if (
-          existing.disabledPath &&
-          fs.existsSync(existing.disabledPath) &&
-          path.resolve(existing.installedPath || '') !== resolved
-        ) {
+        if (entryHasParkedBytes(existing)) {
           continue
         }
         if (!existing.installedPath || !fs.existsSync(existing.installedPath)) {
@@ -3576,6 +3578,9 @@ export class FontButlerService {
     }
 
     for (const entry of [...catalog.entries]) {
+      if (entryHasParkedBytes(entry)) {
+        continue
+      }
       if (
         !entry.installedPath ||
         !isUnderAnyRoot(entry.installedPath, [this.paths.userFontsDir]) ||
