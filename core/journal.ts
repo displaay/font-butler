@@ -135,7 +135,10 @@ function snapshotTarget(paths: AppPaths, entry: CatalogEntry, snapshotRoot: stri
     if (snap) files.push(snap)
   }
   const adobe = copiesOf(entry).find((copy) => copy.destinationId === 'adobe-shared')
-  if (adobe?.path && !adobe.parkedPath && !isParkedPath(adobe.path, paths)) {
+  // A parked Adobe copy retains its nominal live path. If another file is
+  // already there, it predates this transaction and must be preserved on a
+  // failed unpark rather than being mistaken for a newly-created copy.
+  if (adobe?.path && !isParkedPath(adobe.path, paths)) {
     const snap = snapshotFile(snapshotRoot, adobe.path, 'adobe-live')
     if (snap) files.push(snap)
   }
@@ -380,23 +383,18 @@ async function restoreJournal(
       }
     }
 
-    if (before && before.status === 'deactivated') {
-      for (const destPath of target.destPaths) {
-        if (liveSnapshots.has(path.resolve(destPath))) continue
-        if (isParkedPath(destPath, paths)) continue
-        if (fs.existsSync(destPath) && isMacosLivePath(destPath, paths)) {
-          await removeLivePath(native, destPath)
-        }
-      }
-    }
-
-    if (!before || before.status === 'uninstalled') {
-      for (const destPath of target.destPaths) {
-        if (liveSnapshots.has(path.resolve(destPath))) continue
-        if (isParkedPath(destPath, paths)) continue
-        if (fs.existsSync(destPath)) {
-          await removeLivePath(native, destPath)
-        }
+    // A mutation may write a second extension or destination before the
+    // catalog commit. Restore exactly the prior live set; status alone is not
+    // enough because an installed entry can gain a new destination.
+    // A live destination belongs to the prior state only if we actually
+    // snapshotted bytes from it. Deactivated records intentionally retain the
+    // nominal live path in their catalog row while the file is parked.
+    const expectedLive = liveSnapshots
+    for (const destPath of target.destPaths) {
+      const resolved = path.resolve(destPath)
+      if (expectedLive.has(resolved) || isParkedPath(resolved, paths)) continue
+      if (fs.existsSync(resolved)) {
+        await removeLivePath(native, resolved)
       }
     }
   }

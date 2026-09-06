@@ -195,6 +195,7 @@ export type OperationItem = {
   outcome: 'succeeded' | 'failed' | 'skipped' | 'canceled'
   reason?: string
   previousRevision?: string
+  previousSourcePath?: string
   expectedRevision?: string
   expectedStatus?: FontStatus
   expectedSourcePath?: string

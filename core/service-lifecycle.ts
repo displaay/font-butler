@@ -136,7 +136,10 @@ export async function installEntry(
       host.paths,
       {
         kind: options?.replace ? 'replace' : 'install',
-        entries: [entry],
+        // Conflicting installed entries are removed inside this transaction.
+        // Snapshot them in the durable journal before any file is touched so a
+        // process crash can restore both sides of a replacement.
+        entries: [entry, ...conflicts],
       },
       async () => {
     if (conflicts.length) {
@@ -273,16 +276,19 @@ async function installRenamedCopy(
     }
     host.assertNoOccupyingSibling(draft, catalog.entries)
     const conflicts = await host.resolveFormatConflicts(draft, catalog.entries, options?.replace)
-    const conflictSnapshots = conflicts.length ? await host.snapshotAndRemoveConflicts(conflicts) : []
+    const conflictSnapshots: Array<{ entry: CatalogEntry; file: string }> = []
     try {
       return await withMutationJournal(
         host.paths,
         {
           kind: options?.replace ? 'replace' : 'install',
-          entries: [draft],
+          entries: [draft, ...conflicts],
           newEntryIds: [draft.id],
         },
         async () => {
+      if (conflicts.length) {
+        conflictSnapshots.push(...await host.snapshotAndRemoveConflicts(conflicts))
+      }
       const dest = destinationForInstall(host.paths, draft, temp, { reuseInstalled: false })
       recordMutationDestination(host.paths, draft.id, dest)
       await commitInstalledFile({
@@ -411,7 +417,7 @@ export async function activateEntry(
     host.assertNoOccupyingSibling(entry, catalog.entries)
   }
   const conflicts = await host.resolveFormatConflicts(entry, catalog.entries, options?.replace)
-  const conflictSnapshots = conflicts.length ? await host.snapshotAndRemoveConflicts(conflicts) : []
+  const conflictSnapshots: Array<{ entry: CatalogEntry; file: string }> = []
   catalog = loadCatalog(host.paths)
   entry = findById(catalog, id)
   if (!entry) {
@@ -419,6 +425,16 @@ export async function activateEntry(
     throw new Error('Font is not in the library.')
   }
   try {
+    return await withMutationJournal(
+      host.paths,
+      { kind: 'install', entries: [entry, ...conflicts] },
+      async () => {
+    if (conflicts.length) {
+      conflictSnapshots.push(...await host.snapshotAndRemoveConflicts(conflicts))
+      catalog = loadCatalog(host.paths)
+      entry = findById(catalog, id)
+      if (!entry) throw new Error('Font is not in the library.')
+    }
     const parked =
       Boolean(entry.disabledPath && fs.existsSync(entry.disabledPath)) ||
       Boolean(copyAt(entry, 'adobe-shared')?.parkedPath && fs.existsSync(copyAt(entry, 'adobe-shared')!.parkedPath))
@@ -449,6 +465,8 @@ export async function activateEntry(
       return entry
     }
     return installEntry(host, id, undefined, options)
+      },
+    )
   } catch (error) {
     await host.restoreConflictSnapshots(conflictSnapshots)
     throw error

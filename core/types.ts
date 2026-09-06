@@ -270,6 +270,7 @@ export type OperationItem = {
   expectedStatus?: FontStatus
   expectedSourcePath?: string
   previousRevision?: string
+  previousSourcePath?: string
   relatedEntryId?: string
 }
 

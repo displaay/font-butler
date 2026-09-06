@@ -9,7 +9,8 @@ import {
   reconcileMutationJournals,
   withMutationJournal,
 } from './journal.ts'
-import { noopFontNative } from './native.ts'
+import { noopFontNative, setFontNative } from './native.ts'
+import { readRevisionBytes, storeRevision } from './revisions.ts'
 import { withService, writeTestFont } from './test-util.ts'
 
 async function importFont(
@@ -205,5 +206,136 @@ test('concurrent project activation cannot install two copies of one identity', 
       service.listCatalog().filter((entry) => entry.status === 'installed').length,
       1,
     )
+  })
+})
+
+test('relink records a source path separately from revision retention', async () => {
+  await withService(async (service, paths) => {
+    const entry = await importFont(service, paths, 'source/Regular.ttf')
+    await service.install(entry.id)
+    const relinked = path.join(paths.dataRoot, 'relinked/Regular.ttf')
+    fs.mkdirSync(path.dirname(relinked), { recursive: true })
+    fs.copyFileSync(entry.sourcePath, relinked)
+    await service.applyRelink(entry.id, relinked)
+    assert.doesNotThrow(() => service.listActivity())
+    await service.init()
+  })
+})
+
+test('failed activation restores a parked font without a stray live copy', async () => {
+  await withService(async (service, paths) => {
+    const entry = await importFont(service, paths, 'source/Regular.ttf')
+    await service.install(entry.id)
+    const parked = await service.deactivate(entry.id)
+    setFontNative(noopFontNative({
+      ensureActivation: async () => ({ ok: false, native: true, error: 'Injected activation failure' }),
+    }))
+    await assert.rejects(service.activate(entry.id), /Injected activation failure/)
+    assert.equal(fs.existsSync(parked.installedPath!), false)
+    assert.equal(fs.existsSync(parked.disabledPath!), true)
+  })
+})
+
+test('revision restore keeps Adobe-only installs at the Adobe destination', async () => {
+  await withService(async (service, paths) => {
+    const entry = await importFont(service, paths, 'source/Regular.ttf')
+    const first = await service.install(entry.id, undefined, { destinationId: 'adobe-shared' })
+    storeRevision(paths, entry.sourcePath)
+    writeTestFont(entry.sourcePath, 'Audit', 'Audit-Regular', { version: 'Version 2.000' })
+    await service.reinstall(entry.id)
+    const restored = await service.restoreRevision(entry.id, first.installedFingerprint)
+    const adobe = restored.installations?.find((copy) => copy.destinationId === 'adobe-shared')
+    assert.equal(restored.installedPath, undefined)
+    assert.ok(adobe)
+    assert.equal(fingerprintFile(adobe.path), first.installedFingerprint)
+  })
+})
+
+test('restoring a parked revision retains the bytes it overwrites', async () => {
+  await withService(async (service, paths) => {
+    const entry = await importFont(service, paths, 'source/Regular.ttf')
+    await service.install(entry.id)
+    writeTestFont(entry.sourcePath, 'Audit', 'Audit-Regular', { version: 'Version 2.000' })
+    const newer = await service.reinstall(entry.id)
+    await service.deactivate(entry.id)
+    fs.unlinkSync(entry.sourcePath)
+    await service.restoreRevision(entry.id)
+    assert.ok(readRevisionBytes(paths, newer.installedFingerprint!))
+  })
+})
+
+test('pinned project activation restores and activates a parked member', async () => {
+  await withService(async (service, paths) => {
+    const entry = await importFont(service, paths, 'source/Regular.ttf')
+    const original = await service.install(entry.id)
+    writeTestFont(entry.sourcePath, 'Audit', 'Audit-Regular', { version: 'Version 2.000' })
+    await service.reinstall(entry.id)
+    await service.deactivate(entry.id)
+    const project = await service.createProject('Pinned', [entry.id])
+    await service.updateProject(project.id, {
+      pin: { assetId: entry.id, fingerprint: original.installedFingerprint },
+    })
+    assert.equal((await service.activateProject(project.id)).failed, 0)
+    assert.equal(service.projectState(project.id), 'active')
+  })
+})
+
+test('a no-op reinstall is never offered as an Undo action', async () => {
+  await withService(async (service, paths) => {
+    const entry = await importFont(service, paths, 'source/Regular.ttf')
+    await service.install(entry.id)
+    writeTestFont(entry.sourcePath, 'Audit', 'Audit-Regular', { version: 'Version 2.000' })
+    const current = await service.reinstall(entry.id)
+    await service.reinstall(entry.id)
+    const operation = service.listActivity().find((item) => item.action === 'reinstall')!
+    assert.equal(operation.undoable, false)
+    assert.equal(service.listCatalog().find((item) => item.id === entry.id)?.installedFingerprint, current.installedFingerprint)
+  })
+})
+
+test('removing an inactive project does not park an independently installed font', async () => {
+  await withService(async (service, paths) => {
+    const source = path.join(paths.dataRoot, 'source/Automatic.ttf')
+    writeTestFont(source, 'Automatic', 'Automatic-Regular')
+    await service.updateSettings({ installAfterUpload: true })
+    const plan = service.planImport([source])
+    const entry = (await service.applyPlan(plan.id)).entries[0]!
+    const project = await service.createProject('Inactive', [entry.id])
+    await service.deleteProject(project.id)
+    assert.equal(service.listCatalog().find((item) => item.id === entry.id)?.status, 'installed')
+  })
+})
+
+test('removing the final Adobe destination marks the entry uninstalled', async () => {
+  await withService(async (service, paths) => {
+    const entry = await importFont(service, paths, 'source/Regular.ttf')
+    await service.install(entry.id, undefined, { destinationId: 'adobe-shared' })
+    const removed = await service.removeDestinationCopy(entry.id, 'adobe-shared')
+    assert.equal(removed.status, 'uninstalled')
+  })
+})
+
+test('matching import idempotency keys share one queued operation', async () => {
+  await withService(async (service, paths) => {
+    const source = path.join(paths.dataRoot, 'source/Concurrent.ttf')
+    writeTestFont(source, 'Concurrent', 'Concurrent-Regular')
+    const plan = service.planImport([source])
+    const [first, second] = await Promise.all([
+      service.applyPlan(plan.id, {}, { idempotencyKey: 'same-request' }),
+      service.applyPlan(plan.id, {}, { idempotencyKey: 'same-request' }),
+    ])
+    assert.equal(first.operationId, second.operationId)
+  })
+})
+
+test('revision restore retains facts about the actual external source', async () => {
+  await withService(async (service, paths) => {
+    const entry = await importFont(service, paths, 'source/Regular.ttf')
+    await service.install(entry.id)
+    writeTestFont(entry.sourcePath, 'Audit', 'Audit-Regular', { version: 'Version 2.000' })
+    await service.reinstall(entry.id)
+    const sourceFingerprint = fingerprintFile(entry.sourcePath)
+    const restored = await service.restoreRevision(entry.id)
+    assert.equal(restored.sourceFingerprint, sourceFingerprint)
   })
 })

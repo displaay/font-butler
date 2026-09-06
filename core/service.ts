@@ -51,7 +51,6 @@ import {
   WOFF_INSTALL_ERROR,
 } from './formats.ts'
 import {
-  applyInstalledMetadata,
   commitInstalledFile,
   removeStagedFile,
   uniquePathFromOriginal,
@@ -114,6 +113,7 @@ import {
 import { inspectFolderRelink as previewFolderRelink, inspectRelinkCandidate } from './relink.ts'
 import {
   evictUnreferencedRevisions,
+  isRevisionFingerprint,
   loadRevisionIndex,
   readRevisionBytes,
   revisionFilePath,
@@ -189,6 +189,7 @@ import {
 } from './service-helpers.ts'
 import {
   destinationForInstall,
+  placeAdobeCopy,
   removeAdobeCopy as removeAdobeCopyFn,
   sameFile,
 } from './service-destinations.ts'
@@ -852,8 +853,14 @@ export class FontButlerService {
 
   async reinstall(id: string, options?: InstallOptions): Promise<CatalogEntry> {
     return runCatalogTask(async () => {
+      const before = findById(loadCatalog(this.paths), id)?.installedFingerprint
       const entry = await this.reinstallEntry(id, options)
-      this.commitManualOperation('reinstall', [this.operationItem(entry, 'succeeded')], displayFamily(entry))
+      this.commitManualOperation(
+        'reinstall',
+        [this.operationItem(entry, 'succeeded')],
+        displayFamily(entry),
+        before !== entry.installedFingerprint,
+      )
       emitCatalog(this.paths)
       return entry
     })
@@ -862,6 +869,7 @@ export class FontButlerService {
   async reinstallMany(ids: string[], options?: InstallOptions): Promise<CatalogEntry[]> {
     return runCatalogTask(async () => {
       const entries: CatalogEntry[] = []
+      const beforeRevisions = new Map<string, string | undefined>()
       const errors: string[] = []
       for (const id of ids) {
         const catalog = loadCatalog(this.paths)
@@ -874,6 +882,7 @@ export class FontButlerService {
           continue
         }
         try {
+          beforeRevisions.set(id, entry.installedFingerprint)
           entries.push(await this.reinstallEntry(id, options))
         } catch (error) {
           errors.push(error instanceof Error ? error.message : String(error))
@@ -895,8 +904,11 @@ export class FontButlerService {
       }
       this.commitManualOperation(
         'reinstall',
-        entries.map((entry) => this.operationItem(entry, 'succeeded')),
+        entries
+          .filter((entry) => beforeRevisions.get(entry.id) !== entry.installedFingerprint)
+          .map((entry) => this.operationItem(entry, 'succeeded')),
         first ? displayFamily(first) : undefined,
+        entries.some((entry) => beforeRevisions.get(entry.id) !== entry.installedFingerprint),
       )
       return entries
     })
@@ -1185,7 +1197,7 @@ export class FontButlerService {
             entryId: entry.id,
             label: displayFamily(entry),
             outcome: 'succeeded',
-            previousRevision: previous,
+            previousSourcePath: previous,
             expectedRevision: entry.installedFingerprint,
             expectedStatus: entry.status,
             expectedSourcePath: entry.sourcePath,
@@ -1412,17 +1424,17 @@ export class FontButlerService {
     choices: Record<string, ImportPlanChoice> = {},
     options: { idempotencyKey?: string; familyName?: string } = {},
   ): Promise<BatchActionResult> {
-    const existing = findOperationByIdempotency(this.paths, options.idempotencyKey)
-    if (existing) {
-      return this.batchFromOperation(existing)
-    }
-    const plan = loadPlan(this.paths, planId)
-    if (!plan) throw new Error('That import plan is no longer available.')
-    const catalog = loadCatalog(this.paths)
-    if (plan.expectedCatalogRevision !== catalogRevision(catalog)) {
-      throw new Error('The library changed. Review the import again.')
-    }
     return runCatalogTask(async () => {
+      const existing = findOperationByIdempotency(this.paths, options.idempotencyKey)
+      if (existing) {
+        return this.batchFromOperation(existing)
+      }
+      const plan = loadPlan(this.paths, planId)
+      if (!plan) throw new Error('That import plan is no longer available.')
+      const catalog = loadCatalog(this.paths)
+      if (plan.expectedCatalogRevision !== catalogRevision(catalog)) {
+        throw new Error('The library changed. Review the import again.')
+      }
       const operation = createOperation({
         trigger: plan.trigger,
         action: 'apply-plan',
@@ -1510,7 +1522,16 @@ export class FontButlerService {
                 ? settings.installAfterUpload
                 : Boolean(folder?.installNew || (!folder && settings.installWatchFolderFonts)))
             if (shouldInstall && imported.status !== 'installed') {
-              entries.push(await this.installEntry(imported.id))
+              const installed = await this.installEntry(imported.id)
+              const latest = findById(loadCatalog(this.paths), installed.id)
+              if (latest) {
+                addManualOwner(latest)
+                touchEntry(latest)
+                const catalog = loadCatalog(this.paths)
+                upsertEntry(catalog, latest)
+                saveCatalog(this.paths, catalog)
+              }
+              entries.push(latest ?? installed)
             } else {
               entries.push(imported)
             }
@@ -1605,20 +1626,17 @@ export class FontButlerService {
         entry.format ||
         path.extname(entry.sourcePath).slice(1) ||
         'ttf'
-      const previousFingerprint =
-        entry.installedFingerprint ||
-        (entry.installedPath && fs.existsSync(entry.installedPath)
-          ? tryFingerprintFile(entry.installedPath)
-          : undefined)
+      // The active version may be in the disabled vault. Retain those actual
+      // bytes before overwriting them so restore and Undo never destroy the
+      // only copy of the current version.
+      const previousFingerprint = this.retainInstalledRevision(id) ?? entry.installedFingerprint
       const wasDeactivated = entry.status === 'deactivated'
       if (!wasDeactivated) this.assertNoOccupyingSibling(entry, catalog.entries)
-      const livePath = entry.installedPath || destinationForInstall(this.paths, entry, entry.sourcePath)
-      const dest = wasDeactivated
-        ? entry.disabledPath || uniquePathFromOriginal(this.paths.disabledDir, livePath)
-        : livePath
-      if (entry.installedPath && fs.existsSync(entry.installedPath)) {
-        storeRevision(this.paths, entry.installedPath, { faces: entry.faces, format: entry.format })
-      }
+      const macos = copyAt(entry, 'macos')
+      const adobe = copyAt(entry, 'adobe-shared')
+      const hasMacosDestination = Boolean(macos || entry.installedPath || entry.disabledPath)
+      const liveMacosPath = entry.installedPath || macos?.path || destinationForInstall(this.paths, entry, entry.sourcePath)
+      const parkedMacosPath = entry.disabledPath || macos?.parkedPath
       const staging = path.join(this.paths.dataRoot, 'staging', `${newId()}.bin`)
       fs.mkdirSync(path.dirname(staging), { recursive: true })
       fs.writeFileSync(staging, bytes)
@@ -1629,43 +1647,76 @@ export class FontButlerService {
       }
       try {
         await withMutationJournal(this.paths, { kind: 'replace', entries: [entry] }, async () => {
-          recordMutationDestination(this.paths, entry!.id, dest)
-          if (wasDeactivated) {
-            fs.mkdirSync(path.dirname(dest), { recursive: true })
-            const tempDest = `${dest}.${process.pid}.${newId()}.tmp`
-            try {
-              fs.copyFileSync(staging, tempDest)
-              fs.renameSync(tempDest, dest)
-            } finally {
-              if (fs.existsSync(tempDest)) fs.rmSync(tempDest, { force: true })
+          if (hasMacosDestination || !adobe) {
+            const dest = wasDeactivated
+              ? parkedMacosPath || uniquePathFromOriginal(this.paths.disabledDir, liveMacosPath)
+              : liveMacosPath
+            recordMutationDestination(this.paths, entry!.id, dest)
+            if (wasDeactivated) {
+              fs.mkdirSync(path.dirname(dest), { recursive: true })
+              const tempDest = `${dest}.${process.pid}.${newId()}.tmp`
+              try {
+                fs.copyFileSync(staging, tempDest)
+                fs.renameSync(tempDest, dest)
+              } finally {
+                if (fs.existsSync(tempDest)) fs.rmSync(tempDest, { force: true })
+              }
+            } else {
+              await commitInstalledFile({
+                dest,
+                stagedPath: staging,
+                rollbackDir: path.join(this.paths.dataRoot, 'rollback'),
+                native: getFontNative(),
+              })
             }
-          } else {
-            await commitInstalledFile({
-              dest,
-              stagedPath: staging,
-              rollbackDir: path.join(this.paths.dataRoot, 'rollback'),
-              native: getFontNative(),
-            })
+          }
+          if (adobe) {
+            const adobeDest = wasDeactivated && adobe.parkedPath ? adobe.parkedPath : adobe.path
+            recordMutationDestination(this.paths, entry!.id, adobeDest)
+            if (wasDeactivated && adobe.parkedPath) {
+              const tempDest = `${adobeDest}.${process.pid}.${newId()}.tmp`
+              try {
+                fs.copyFileSync(staging, tempDest)
+                fs.renameSync(tempDest, adobeDest)
+              } finally {
+                if (fs.existsSync(tempDest)) fs.rmSync(tempDest, { force: true })
+              }
+            } else {
+              placeAdobeCopy(this.paths, entry!, staging, revisionFormat, staged.parsed.faces)
+            }
           }
           catalog = loadCatalog(this.paths)
           entry = findById(catalog, id)
           if (!entry) throw new Error('Font is not in the library.')
-          applyInstalledMetadata(entry, dest, staged, {
-            externalSource: isExternalSource(entry),
-            fingerprint: target,
-          })
-          if (wasDeactivated) {
-            entry.installedPath = livePath
-            entry.disabledPath = dest
-            entry.status = 'deactivated'
+          entry.faces = staged.parsed.faces
+          entry.format = staged.parsed.format
+          entry.installedFingerprint = target
+          entry.installedSnapshotMtimeMs = staged.stat.mtimeMs
+          entry.installedSnapshotSize = staged.stat.size
+          if (hasMacosDestination || !adobe) {
+            const parked = wasDeactivated
+              ? parkedMacosPath || uniquePathFromOriginal(this.paths.disabledDir, liveMacosPath)
+              : undefined
+            entry.installedPath = liveMacosPath
+            entry.disabledPath = parked
             upsertCopy(entry, {
               destinationId: 'macos',
-              path: livePath,
-              parkedPath: dest,
+              path: liveMacosPath,
+              parkedPath: parked,
               fingerprint: target,
-              verification: 'unavailable',
+              verification: parked ? 'unavailable' : 'file-present',
             })
           }
+          if (adobe) {
+            upsertCopy(entry, {
+              destinationId: 'adobe-shared',
+              path: adobe.path,
+              parkedPath: wasDeactivated ? adobe.parkedPath : undefined,
+              fingerprint: target,
+              verification: wasDeactivated && adobe.parkedPath ? 'unavailable' : 'file-present',
+            })
+          }
+          entry.status = wasDeactivated ? 'deactivated' : 'installed'
           if (previousFingerprint && previousFingerprint !== target) {
             entry.previousRevisionId = previousFingerprint
           }
@@ -1736,8 +1787,10 @@ export class FontButlerService {
         if (item.expectedSourcePath && path.resolve(entry.sourcePath) !== path.resolve(item.expectedSourcePath)) {
           throw new Error('This source link has changed since that action and can no longer be undone safely.')
         }
-        if (operation.action === 'relink-source' && item.previousRevision) {
-          entry.sourcePath = item.previousRevision
+        if (operation.action === 'relink-source' && (item.previousSourcePath || item.previousRevision)) {
+          // Older relink records stored this path in previousRevision. Preserve
+          // their Undo behavior while keeping paths out of revision storage.
+          entry.sourcePath = item.previousSourcePath || item.previousRevision!
           applyEntryFacts(entry)
           saveCatalog(this.paths, (() => {
             const catalog = loadCatalog(this.paths)
@@ -1948,8 +2001,11 @@ export class FontButlerService {
         if (nextIds.has(assetId)) continue
         const entry = findById(catalog, assetId)
         if (!entry) continue
+        const wasOwned = entry.activationOwners?.some(
+          (owner) => owner.kind === 'project' && owner.projectId === id,
+        )
         removeProjectOwner(entry, id)
-        if (!hasActivationDemand(entry) && (entry.status === 'installed' || entry.status === 'outdated')) {
+        if (wasOwned && !hasActivationDemand(entry) && (entry.status === 'installed' || entry.status === 'outdated')) {
           toRelease.push(entry.id)
         }
       }
@@ -1978,8 +2034,11 @@ export class FontButlerService {
       for (const member of project.members) {
         const entry = findById(catalog, member.assetId)
         if (!entry) continue
+        const wasOwned = entry.activationOwners?.some(
+          (owner) => owner.kind === 'project' && owner.projectId === id,
+        )
         removeProjectOwner(entry, id)
-        if (!hasActivationDemand(entry) && (entry.status === 'installed' || entry.status === 'outdated')) {
+        if (wasOwned && !hasActivationDemand(entry) && (entry.status === 'installed' || entry.status === 'outdated')) {
           toRelease.push(entry.id)
         }
       }
@@ -2030,12 +2089,18 @@ export class FontButlerService {
       try {
         if (member.pinFingerprint && entry.installedFingerprint !== member.pinFingerprint) {
           await this.restoreRevision(entry.id, member.pinFingerprint)
-        } else if (entry.status === 'uninstalled' || entry.status === 'source-missing') {
-          await this.installEntry(entry.id)
-        } else if (entry.status === 'deactivated') {
-          await this.activateEntry(entry.id, { owner: 'project' })
         }
-        const latest = findById(loadCatalog(this.paths), entry.id)
+        let latest = findById(loadCatalog(this.paths), entry.id)
+        if (!latest) throw new Error('Font is no longer in the library.')
+        if (latest.status === 'uninstalled' || latest.status === 'source-missing') {
+          await this.installEntry(latest.id)
+        } else if (latest.status === 'deactivated') {
+          await this.activateEntry(latest.id, { owner: 'project' })
+        }
+        latest = findById(loadCatalog(this.paths), entry.id)
+        if (member.pinFingerprint && latest?.installedFingerprint !== member.pinFingerprint) {
+          throw new Error('The pinned revision could not be activated.')
+        }
         if (latest) {
           addProjectOwner(latest, project.id)
           saveCatalog(this.paths, (() => {
@@ -2088,8 +2153,11 @@ export class FontButlerService {
     for (const member of project.members) {
       const entry = findById(catalog, member.assetId)
       if (!entry) continue
+      const wasOwned = entry.activationOwners?.some(
+        (owner) => owner.kind === 'project' && owner.projectId === id,
+      )
       removeProjectOwner(entry, id)
-      if (!hasActivationDemand(entry) && (entry.status === 'installed' || entry.status === 'outdated')) {
+      if (wasOwned && !hasActivationDemand(entry) && (entry.status === 'installed' || entry.status === 'outdated')) {
         toRelease.push(entry.id)
       }
     }
@@ -2161,7 +2229,9 @@ export class FontButlerService {
     for (const operation of loadOperations(this.paths)) {
       if (!operation.undoable || operation.undone) continue
       for (const item of operation.items) {
-        if (item.previousRevision) required.add(item.previousRevision)
+        if (item.previousRevision && isRevisionFingerprint(item.previousRevision)) {
+          required.add(item.previousRevision)
+        }
       }
     }
     const evict = evictUnreferencedRevisions(this.paths, {
@@ -2334,6 +2404,11 @@ export class FontButlerService {
         this.removeAdobeCopy(entry)
       }
       applyEntryFacts(entry)
+      if (!copyAt(entry, 'macos') && !copyAt(entry, 'adobe-shared') && !entry.disabledPath) {
+        entry.status = sourceFileExists(entry.sourcePath) && isExternalSource(entry)
+          ? 'uninstalled'
+          : 'source-missing'
+      }
       touchEntry(entry)
       if (findById(catalog, entry.id)) {
         saveCatalog(this.paths, catalog)
@@ -2811,7 +2886,11 @@ export class FontButlerService {
 
   private assertPinnedInstall(entry: CatalogEntry): void {
     const pin = this.activeProjectPin(entry.id)
-    if (!pin || !entry.installedFingerprint) return
+    if (!pin) return
+    const sourceFingerprint = sourceFileExists(entry.sourcePath)
+      ? tryFingerprintFile(entry.sourcePath)
+      : undefined
+    if (sourceFingerprint === pin.fingerprint) return
     throw new Error(`Pinned for ${pin.project.name}. Deactivate that project before installing an update.`)
   }
 
@@ -3160,11 +3239,16 @@ export class FontButlerService {
     if (entry.installedFingerprint && readRevisionBytes(this.paths, entry.installedFingerprint)) {
       return entry.installedFingerprint
     }
-    if (!entry.installedPath || !fs.existsSync(entry.installedPath)) return undefined
-    return storeRevision(this.paths, entry.installedPath, {
-      faces: entry.faces,
-      format: entry.format,
-    })?.fingerprint
+    const adobe = copyAt(entry, 'adobe-shared')
+    const candidates = [
+      entry.installedPath,
+      entry.disabledPath,
+      adobe?.path,
+      adobe?.parkedPath,
+    ]
+    const current = candidates.find((filePath) => Boolean(filePath && fs.existsSync(filePath)))
+    if (!current) return undefined
+    return storeRevision(this.paths, current, { faces: entry.faces, format: entry.format })?.fingerprint
   }
 
   private commitManualOperation(
