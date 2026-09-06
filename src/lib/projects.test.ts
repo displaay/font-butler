@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
+  FONT_BUTLER_ENTRIES_TYPE,
+  canDropOnProject,
   defaultProjectName,
+  memberIdsForProjectImport,
   projectContainsAll,
   readFontButlerEntries,
   readProjectSort,
@@ -44,6 +47,29 @@ test('readProjectSort defaults to date added', () => {
   assert.equal(readProjectSort({ getItem: () => null }), 'added')
   assert.equal(readProjectSort({ getItem: () => 'name' }), 'name')
   assert.equal(readProjectSort({ getItem: () => 'nope' }), 'added')
+})
+
+test('canDropOnProject accepts catalog entries and filesystem files', () => {
+  assert.equal(canDropOnProject({ types: ['Files'] } as DataTransfer), true)
+  assert.equal(canDropOnProject({ types: [FONT_BUTLER_ENTRIES_TYPE] } as DataTransfer), true)
+  assert.equal(canDropOnProject({ types: ['text/plain'] } as DataTransfer), false)
+})
+
+test('memberIdsForProjectImport unions imported fonts with existing plan matches', () => {
+  assert.deepEqual(
+    memberIdsForProjectImport(
+      {
+        items: [
+          { classification: 'identical', entryId: 'existing' },
+          { classification: 'new' },
+          { classification: 'unsupported', entryId: 'bad' },
+          { classification: 'preview-only', entryId: 'web' },
+        ],
+      },
+      [{ id: 'fresh' }],
+    ),
+    ['fresh', 'existing', 'web'],
+  )
 })
 
 test('readFontButlerEntries ignores malformed payloads', () => {

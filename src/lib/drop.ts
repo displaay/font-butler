@@ -194,6 +194,26 @@ export function isDroppedFolderPath(filePath: string, fileName = filePath): bool
   return !isDroppedFontName(fileName) && !isDroppedFontName(filePath)
 }
 
+export function importPathsForProjectDrop(paths: string[], folders: string[]): string[] {
+  if (folders.length === 0) return [...new Set(paths)]
+  const extra = paths.filter(
+    (filePath) =>
+      !folders.some((folder) => {
+        const sep = filePath.includes('\\') ? '\\' : '/'
+        return (
+          filePath === folder ||
+          filePath.startsWith(folder.endsWith(sep) ? folder : `${folder}${sep}`)
+        )
+      }),
+  )
+  return [...new Set([...folders, ...extra])]
+}
+
+export function planPathsForImport(inputPaths: string[], partitionedPaths: string[]): string[] {
+  const folders = inputPaths.filter((filePath) => isDroppedFolderPath(filePath))
+  return [...new Set([...folders, ...partitionedPaths])]
+}
+
 export function isWebOnlyDrop(partition: DropPartition): boolean {
   const hasDesktop = partition.formats.some((item) => isInstallableFormat(item.format))
   return (

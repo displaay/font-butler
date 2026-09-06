@@ -53,8 +53,10 @@ import { desktopPathForFile } from '@/lib/desktop'
 import {
   collectDropPayload,
   commonDroppedFolder,
+  importPathsForProjectDrop,
   isDroppedFontName,
   partitionDropPayload,
+  planPathsForImport,
 } from '@/lib/drop'
 import {
   conflictInstanceNames,
@@ -79,6 +81,7 @@ import { applyFontDragImage, clearFontDragImage } from '@/lib/dragPreview'
 import {
   defaultProjectName,
   hasFontButlerEntries,
+  memberIdsForProjectImport,
   projectContainsAll,
   removeMemberIds,
   uniqueMemberIds,
@@ -1281,14 +1284,19 @@ function AppShell() {
     const paths = files
       .map((file) => desktopPathForFile(file))
       .filter((value): value is string => Boolean(value))
-    await importDropped(paths, files)
+    await importDropped(paths, files, libraryProjectTarget())
   }
 
-  async function handleDrop(dataTransfer: DataTransfer) {
+  function libraryProjectTarget(): string | undefined {
+    return tab === 'library' ? projectFilter ?? undefined : undefined
+  }
+
+  async function handleDrop(dataTransfer: DataTransfer, projectId?: string) {
     if (fontDragRef.current || hasFontButlerEntries(dataTransfer)) {
       setDragging(false)
       return
     }
+    const targetProjectId = projectId ?? libraryProjectTarget()
     try {
       const payload = await collectDropPayload(dataTransfer)
       setDragging(false)
@@ -1309,6 +1317,14 @@ function AppShell() {
       if (folders.length === 0 && payload.hadDirectory && paths.length > 0) {
         const fallback = commonDroppedFolder(paths)
         if (fallback) folders = [fallback]
+      }
+      if (targetProjectId) {
+        await importDropped(
+          importPathsForProjectDrop(paths, folders),
+          payload.files,
+          targetProjectId,
+        )
+        return
       }
       if (folders.length > 0) {
         setFolderDrop({ folders, paths, files: payload.files })
@@ -1382,9 +1398,10 @@ function AppShell() {
     return result
   }
 
-  async function importDropped(paths: string[], files: File[]) {
+  async function importDropped(paths: string[], files: File[], projectId?: string) {
     const partitioned = partitionDropPayload(paths, files)
-    if (partitioned.paths.length === 0 && partitioned.files.length === 0) {
+    const planPaths = planPathsForImport(paths, partitioned.paths)
+    if (planPaths.length === 0 && partitioned.files.length === 0) {
       toast.error(emptyImportError([], 0))
       setDragging(false)
       return
@@ -1393,18 +1410,27 @@ function AppShell() {
     setBusy(true)
     setActionStatus('Planning import…')
     try {
-      if (partitioned.paths.length) {
-        const plan = await api.planImport(partitioned.paths)
+      if (planPaths.length) {
+        const plan = await api.planImport(planPaths)
+        let imported: CatalogEntry[] = []
         if (planNeedsReview(plan)) {
           setActionStatus(null)
           const decision = await askImportPlan(plan)
           if (!decision) return
           setActionStatus('Adding fonts…')
-          await applyImportPlan(plan, decision.choices, decision.familyName)
-          return
+          imported = (await applyImportPlan(plan, decision.choices, decision.familyName)).entries
+        } else if (!projectId || plan.items.some((item) => item.defaultChoice !== 'skip')) {
+          setActionStatus('Adding fonts…')
+          imported = (await applyImportPlan(plan)).entries
         }
-        setActionStatus('Adding fonts…')
-        await applyImportPlan(plan)
+        if (projectId) {
+          const ids = memberIdsForProjectImport(plan, imported)
+          if (ids.length === 0) {
+            toast.error(emptyImportError([], partitioned.skippedWeb))
+            return
+          }
+          await addImportedFontsToProject(projectId, ids)
+        }
         return
       }
       const result = await api.importFiles(partitioned.files)
@@ -1431,6 +1457,12 @@ function AppShell() {
         }),
       )
       setEntries((await api.catalog()).entries)
+      if (projectId) {
+        await addImportedFontsToProject(
+          projectId,
+          result.entries.map((entry) => entry.id),
+        )
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not add fonts')
     } finally {
@@ -1439,6 +1471,13 @@ function AppShell() {
       setActionStatus(null)
       setDragging(false)
     }
+  }
+
+  async function addImportedFontsToProject(projectId: string, ids: string[]) {
+    await addFontsToProject(projectId, ids)
+    setProjectFilter(projectId)
+    setWatchFolderFilter(null)
+    setTab('library')
   }
 
   async function revealCatalog(entry: CatalogEntry, which: 'source' | 'installed' = 'installed') {
@@ -1537,6 +1576,7 @@ function AppShell() {
           }
           onRenameProject={(id, name) => void renameProject(id, name)}
           onAddFontsToProject={(id, ids) => void addFontsToProject(id, ids)}
+          onDropFilesOnProject={(id, dataTransfer) => void handleDrop(dataTransfer, id)}
           onRemoveProject={(id) => void removeProject(id)}
           onCreateProject={() => void createProjectFromSelection()}
           libraryFilters={libraryFilters}
@@ -1650,6 +1690,11 @@ function AppShell() {
                       watchFolderName={
                         tab === 'library' && watchFolderFilter
                           ? watchFolderName(watchFolderFilter)
+                          : null
+                      }
+                      projectName={
+                        tab === 'library' && projectFilter
+                          ? projects.find((item) => item.id === projectFilter)?.name
                           : null
                       }
                       onPickFiles={(files) => void handleFiles(files)}
@@ -2078,8 +2123,14 @@ function AppShell() {
         </div>
 
         {dragging && (
-          <div className="pointer-events-none fixed inset-3 z-40 flex items-center justify-center rounded-lg border border-dashed border-foreground/20 bg-background/80">
-            <p className="text-base font-medium tracking-tight">Drop fonts or folders to add them</p>
+          <div className="pointer-events-none fixed inset-3 z-40 flex items-center justify-center rounded-lg border border-dashed border-foreground/20 bg-background/80 md:left-[14.75rem]">
+            <p className="text-base font-medium tracking-tight">
+              {tab === 'library' && projectFilter
+                ? `Drop fonts or folders to add them to ${
+                    projects.find((item) => item.id === projectFilter)?.name ?? 'this project'
+                  }`
+                : 'Drop fonts or folders to add them'}
+            </p>
           </div>
         )}
         <DropFolderDialog
@@ -2757,10 +2808,12 @@ function SystemCard({
 function EmptyState({
   tab,
   watchFolderName,
+  projectName,
   onPickFiles,
 }: {
   tab: Tab
   watchFolderName?: string | null
+  projectName?: string | null
   onPickFiles: (files: FileList | File[]) => void
 }) {
   const folderInputRef = useRef<HTMLInputElement>(null)
@@ -2769,18 +2822,22 @@ function EmptyState({
     <div className="flex flex-col items-center justify-center rounded-lg border border-dashed px-6 py-16 text-center">
       <label className="flex cursor-pointer flex-col items-center">
         <p className="text-base font-medium tracking-tight">
-          {watchFolderName
-            ? `No fonts in ${watchFolderName}`
-            : tab === 'updates'
-              ? 'No source updates'
-              : 'Drop font files or folders here'}
+          {projectName
+            ? `No fonts in ${projectName}`
+            : watchFolderName
+              ? `No fonts in ${watchFolderName}`
+              : tab === 'updates'
+                ? 'No source updates'
+                : 'Drop font files or folders here'}
         </p>
         <p className="mt-2 max-w-sm text-sm text-muted-foreground">
-          {watchFolderName
-            ? 'Drop fonts into this folder in Finder, or drop them here to add them.'
-            : tab === 'library'
-              ? 'Fonts already in My Fonts appear here. Drop a folder to add every TrueType and OpenType file inside it, including collections and subfolders. You can also watch a folder so new fonts are imported automatically. Uninstalling keeps a family here only when a separate source file is still on disk.'
-              : 'Uninstalling keeps a family here only when a separate source file is still on disk.'}
+          {projectName
+            ? `Drop font files or a folder here to add them to ${projectName}.`
+            : watchFolderName
+              ? 'Drop fonts into this folder in Finder, or drop them here to add them.'
+              : tab === 'library'
+                ? 'Fonts already in My Fonts appear here. Drop a folder to add every TrueType and OpenType file inside it, including collections and subfolders. You can also watch a folder so new fonts are imported automatically. Uninstalling keeps a family here only when a separate source file is still on disk.'
+                : 'Uninstalling keeps a family here only when a separate source file is still on disk.'}
         </p>
         <input
           type="file"

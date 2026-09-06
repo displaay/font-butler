@@ -11,6 +11,23 @@ export function hasFontButlerEntries(dataTransfer: DataTransfer): boolean {
   return Array.from(dataTransfer.types).includes(FONT_BUTLER_ENTRIES_TYPE)
 }
 
+export function canDropOnProject(dataTransfer: DataTransfer): boolean {
+  const types = Array.from(dataTransfer.types)
+  return types.includes(FONT_BUTLER_ENTRIES_TYPE) || types.includes('Files')
+}
+
+export function memberIdsForProjectImport(
+  plan: { items: Array<{ classification: string; entryId?: string }> },
+  imported: Array<{ id: string }> = [],
+): string[] {
+  const ids = new Set(imported.map((entry) => entry.id))
+  for (const item of plan.items) {
+    if (item.classification === 'unsupported') continue
+    if (item.entryId) ids.add(item.entryId)
+  }
+  return [...ids]
+}
+
 export function readFontButlerEntries(dataTransfer: DataTransfer): string[] {
   const raw = dataTransfer.getData(FONT_BUTLER_ENTRIES_TYPE)
   if (!raw) return []
