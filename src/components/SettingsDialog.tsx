@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { FolderRelinkDialog } from '@/components/FolderRelinkDialog'
 import { FolderSetupDialog } from '@/components/FolderSetupDialog'
+import { SettingsRow, SettingsSection } from '@/components/SettingsRow'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -24,7 +25,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { useSetActionStatus } from '@/components/NotifyProvider'
 import { api } from '@/lib/api'
 import { persistNativeNotificationsEnabled, requestNotificationPermission } from '@/lib/notifications'
@@ -44,7 +44,9 @@ import { watchFolderName } from '@/lib/watchFolders'
 import type { FolderPolicyPreset, WatchFolder } from '@/lib/types'
 
 const selectClass =
-  'h-8 w-full rounded-md border bg-background px-2 text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring/30'
+  'h-8 w-auto min-w-[9.5rem] max-w-full rounded-md border bg-background px-2 text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring/30'
+
+const checkboxClass = 'size-4 shrink-0 cursor-pointer rounded border border-input accent-primary'
 
 const THEME_OPTIONS: { id: ThemeMode; label: string; icon: typeof Sun }[] = [
   { id: 'light', label: 'Light', icon: Sun },
@@ -387,48 +389,49 @@ function GeneralPane({
   onSave: (patch: SettingsPatch) => Promise<void>
 }) {
   return (
-    <div className="space-y-5">
-      <section className="space-y-2">
-        <h3 className="text-sm font-medium text-foreground">Appearance</h3>
-        <p className="text-sm text-muted-foreground">
-          Light and dark apply immediately. System follows your macOS appearance.
-        </p>
-        <div
-          role="radiogroup"
-          aria-label="Appearance"
-          className="flex items-center gap-0.5 rounded-md border bg-background p-0.5"
+    <div>
+      <SettingsSection title="Appearance">
+        <SettingsRow
+          label="Theme"
+          description="Light and dark apply immediately. System follows your macOS appearance."
         >
-          {THEME_OPTIONS.map((option) => {
-            const Icon = option.icon
-            const selected = (settings?.theme ?? 'system') === option.id
-            return (
-              <Button
-                key={option.id}
-                type="button"
-                size="sm"
-                variant="ghost"
-                role="radio"
-                aria-checked={selected}
-                disabled={busy || !settings}
-                className={cn(
-                  'h-8 flex-1 gap-1.5',
-                  selected ? 'bg-muted font-medium' : 'text-muted-foreground',
-                )}
-                onClick={() => {
-                  if (!selected) void onSave({ theme: option.id })
-                }}
-              >
-                <Icon className="size-3.5" />
-                {option.label}
-              </Button>
-            )
-          })}
-        </div>
-      </section>
-
-      <section className="grid gap-3 sm:grid-cols-2">
-        <div className="space-y-1.5">
-          <Label htmlFor="default-view">Default view</Label>
+          <div
+            role="radiogroup"
+            aria-label="Theme"
+            className="inline-flex items-center gap-0.5 rounded-md border bg-background p-0.5"
+          >
+            {THEME_OPTIONS.map((option) => {
+              const Icon = option.icon
+              const selected = (settings?.theme ?? 'system') === option.id
+              return (
+                <Button
+                  key={option.id}
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  role="radio"
+                  aria-checked={selected}
+                  disabled={busy || !settings}
+                  className={cn(
+                    'h-8 gap-1.5 px-2.5',
+                    selected ? 'bg-muted font-medium' : 'text-muted-foreground',
+                  )}
+                  onClick={() => {
+                    if (!selected) void onSave({ theme: option.id })
+                  }}
+                >
+                  <Icon className="size-3.5" />
+                  {option.label}
+                </Button>
+              )
+            })}
+          </div>
+        </SettingsRow>
+        <SettingsRow
+          label="Default view"
+          description="List or grid when you open the library."
+          htmlFor="default-view"
+        >
           <select
             id="default-view"
             className={selectClass}
@@ -441,9 +444,12 @@ function GeneralPane({
             <option value="list">List</option>
             <option value="grid">Grid</option>
           </select>
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="default-sort">Default sort</Label>
+        </SettingsRow>
+        <SettingsRow
+          label="Default sort"
+          description="How fonts are ordered when you open the library."
+          htmlFor="default-sort"
+        >
           <select
             id="default-sort"
             className={selectClass}
@@ -456,54 +462,47 @@ function GeneralPane({
             <option value="name">A–Z</option>
             <option value="added">Added</option>
           </select>
-        </div>
-      </section>
+        </SettingsRow>
+      </SettingsSection>
 
-      <section className="space-y-2">
-        <h3 className="text-sm font-medium text-foreground">Menu bar</h3>
-        <Label className="flex cursor-pointer items-start gap-2 font-normal text-foreground">
+      <SettingsSection title="App">
+        <SettingsRow
+          label="Icon in menu bar"
+          description="Keep Font Buttler running in the menu bar after you close the window. Click the icon to reinstall updated fonts, clear caches, or quit."
+          htmlFor="menu-bar-icon"
+        >
           <input
+            id="menu-bar-icon"
             type="checkbox"
             checked={settings?.menuBarIcon !== false}
             disabled={busy || !settings}
             onChange={(event) => void onSave({ menuBarIcon: event.target.checked })}
-            className="mt-0.5 size-3.5 rounded border border-input accent-primary"
+            className={checkboxClass}
           />
-          <span>
-            <span className="block text-sm">Icon in menu bar</span>
-            <span className="block text-sm text-muted-foreground">
-              Keep Font Buttler running in the menu bar after you close the window. Click the
-              icon to reinstall updated fonts, clear caches, or quit.
-            </span>
-          </span>
-        </Label>
-      </section>
-
-      {isDesktop && (
-        <section className="space-y-2">
-          <h3 className="text-sm font-medium text-foreground">Startup</h3>
-          <Label className="flex cursor-pointer items-start gap-2 font-normal text-foreground">
+        </SettingsRow>
+        {isDesktop ? (
+          <SettingsRow
+            label="Open at login"
+            description="Start Font Buttler when you turn on this computer."
+            htmlFor="open-at-login"
+          >
             <input
+              id="open-at-login"
               type="checkbox"
               checked={settings?.openAtLogin === true}
               disabled={busy || !settings}
               onChange={(event) => void onSave({ openAtLogin: event.target.checked })}
-              className="mt-0.5 size-3.5 rounded border border-input accent-primary"
+              className={checkboxClass}
             />
-            <span>
-              <span className="block text-sm">Open at login</span>
-              <span className="block text-sm text-muted-foreground">
-                Start Font Buttler when you turn on this computer.
-              </span>
-            </span>
-          </Label>
-        </section>
-      )}
-
-      <section className="space-y-2">
-        <h3 className="text-sm font-medium text-foreground">Notifications</h3>
-        <Label className="flex cursor-pointer items-start gap-2 font-normal text-foreground">
+          </SettingsRow>
+        ) : null}
+        <SettingsRow
+          label="Allow notifications"
+          description="Font Buttler can notify you when fonts are installed or updated."
+          htmlFor="native-notifications"
+        >
           <input
+            id="native-notifications"
             type="checkbox"
             checked={settings?.nativeNotifications === true}
             disabled={busy || !settings}
@@ -524,16 +523,10 @@ function GeneralPane({
                 }
               })()
             }}
-            className="mt-0.5 size-3.5 rounded border border-input accent-primary"
+            className={checkboxClass}
           />
-          <span>
-            <span className="block text-sm">Allow notifications</span>
-            <span className="block text-sm text-muted-foreground">
-              Font Buttler can notify you when fonts are installed or updated.
-            </span>
-          </span>
-        </Label>
-      </section>
+        </SettingsRow>
+      </SettingsSection>
     </div>
   )
 }
@@ -558,67 +551,62 @@ function FoldersPane({
   onSettingsChange: (settings: AppSettings) => void
 }) {
   return (
-    <div className="space-y-2">
-      <p className="text-sm text-muted-foreground">
-        Each folder has its own policy. Pause stops automatic imports and updates for that
-        folder. Adding a folder previews a scan before watching starts.
-      </p>
-      {folders.length > 0 && (
-        <ul className="space-y-1.5">
-          {folders.map((folder) => (
-            <SettingsFolderRow
-              key={folder.id}
-              folder={folder}
-              busy={busy}
-              onPause={() =>
-                void (folder.paused ? api.resumeFolder(folder.id) : api.pauseFolder(folder.id))
-                  .then(async () => onSettingsChange((await api.settings()).settings))
-                  .catch((error) =>
-                    toast.error(error instanceof Error ? error.message : 'Could not update folder'),
-                  )
-              }
-              onPolicy={(policy) =>
-                void api
-                  .configureFolder({ id: folder.id, root: folder.root, policy })
-                  .then(async () => onSettingsChange((await api.settings()).settings))
-                  .catch((error) =>
-                    toast.error(error instanceof Error ? error.message : 'Could not update folder'),
-                  )
-              }
-              onRelink={() => onRelink(folder.root)}
-              onRemove={() =>
-                void onSave({
-                  watchFolders: watchFolders.filter((item) => item !== folder.root),
-                })
-              }
-            />
-          ))}
-        </ul>
-      )}
-      <div className="flex flex-wrap gap-2">
-        <Button type="button" variant="outline" disabled={busy} onClick={onAddFolder}>
-          <FolderOpen className="size-4" />
-          Add folder
-        </Button>
-      </div>
-      <Label className="flex cursor-pointer items-start gap-2 font-normal text-foreground">
-        <input
-          type="checkbox"
-          checked={settings?.installWatchFolderFonts !== false}
-          disabled={busy || !settings}
-          onChange={(event) =>
-            void onSave({ installWatchFolderFonts: event.target.checked })
-          }
-          className="mt-0.5 size-3.5 rounded border border-input accent-primary"
-        />
-        <span>
-          <span className="block text-sm">Install fonts added to watch folders</span>
-          <span className="block text-sm text-muted-foreground">
-            When a font file appears in a watch folder, install it. Turn this off to keep
-            those fonts in the library without installing.
-          </span>
-        </span>
-      </Label>
+    <div>
+      <SettingsSection>
+        {folders.map((folder) => (
+          <SettingsFolderRow
+            key={folder.id}
+            folder={folder}
+            busy={busy}
+            onPause={() =>
+              void (folder.paused ? api.resumeFolder(folder.id) : api.pauseFolder(folder.id))
+                .then(async () => onSettingsChange((await api.settings()).settings))
+                .catch((error) =>
+                  toast.error(error instanceof Error ? error.message : 'Could not update folder'),
+                )
+            }
+            onPolicy={(policy) =>
+              void api
+                .configureFolder({ id: folder.id, root: folder.root, policy })
+                .then(async () => onSettingsChange((await api.settings()).settings))
+                .catch((error) =>
+                  toast.error(error instanceof Error ? error.message : 'Could not update folder'),
+                )
+            }
+            onRelink={() => onRelink(folder.root)}
+            onRemove={() =>
+              void onSave({
+                watchFolders: watchFolders.filter((item) => item !== folder.root),
+              })
+            }
+          />
+        ))}
+        <SettingsRow
+          label="Add a watch folder"
+          description="Each folder has its own policy. Pause stops automatic imports and updates. Adding a folder previews a scan before watching starts."
+        >
+          <Button type="button" variant="outline" size="sm" disabled={busy} onClick={onAddFolder}>
+            <FolderOpen className="size-4" />
+            Add folder
+          </Button>
+        </SettingsRow>
+        <SettingsRow
+          label="Install fonts added to watch folders"
+          description="When a font file appears in a watch folder, install it. Turn this off to keep those fonts in the library without installing."
+          htmlFor="install-watch-folder-fonts"
+        >
+          <input
+            id="install-watch-folder-fonts"
+            type="checkbox"
+            checked={settings?.installWatchFolderFonts !== false}
+            disabled={busy || !settings}
+            onChange={(event) =>
+              void onSave({ installWatchFolderFonts: event.target.checked })
+            }
+            className={checkboxClass}
+          />
+        </SettingsRow>
+      </SettingsSection>
     </div>
   )
 }
@@ -633,43 +621,40 @@ function FontsPane({
   onSave: (patch: SettingsPatch) => Promise<void>
 }) {
   return (
-    <div className="space-y-2">
-      <Label className="flex cursor-pointer items-start gap-2 font-normal text-foreground">
+    <SettingsSection>
+      <SettingsRow
+        label="Install after adding"
+        description="Dropping fonts, or adding a watch folder, installs them and selects them in the list. Turn this off to add fonts to the library without installing."
+        htmlFor="install-after-upload"
+      >
         <input
+          id="install-after-upload"
           type="checkbox"
           checked={settings?.installAfterUpload !== false}
           disabled={busy || !settings}
           onChange={(event) =>
             void onSave({ installAfterUpload: event.target.checked })
           }
-          className="mt-0.5 size-3.5 rounded border border-input accent-primary"
+          className={checkboxClass}
         />
-        <span>
-          <span className="block text-sm">Install after adding</span>
-          <span className="block text-sm text-muted-foreground">
-            Dropping fonts, or adding a watch folder, installs them and selects them in the
-            list. Turn this off to add fonts to the library without installing.
-          </span>
-        </span>
-      </Label>
-      <Label className="flex cursor-pointer items-start gap-2 font-normal text-foreground">
+      </SettingsRow>
+      <SettingsRow
+        label="Automatically reinstall when an update is detected"
+        description="When a tracked source file changes, reinstall the installed copy. Off by default."
+        htmlFor="auto-reinstall-on-update"
+      >
         <input
+          id="auto-reinstall-on-update"
           type="checkbox"
           checked={settings?.autoReinstallOnUpdate === true}
           disabled={busy || !settings}
           onChange={(event) =>
             void onSave({ autoReinstallOnUpdate: event.target.checked })
           }
-          className="mt-0.5 size-3.5 rounded border border-input accent-primary"
+          className={checkboxClass}
         />
-        <span>
-          <span className="block text-sm">Automatically reinstall when an update is detected</span>
-          <span className="block text-sm text-muted-foreground">
-            When a tracked source file changes, reinstall the installed copy. Off by default.
-          </span>
-        </span>
-      </Label>
-    </div>
+      </SettingsRow>
+    </SettingsSection>
   )
 }
 
@@ -688,26 +673,14 @@ function DestinationsPane({
 }) {
   const adobe = destinations.find((item) => item.id === 'adobe-shared')
   return (
-    <div className="space-y-2">
-      <p className="text-sm text-muted-foreground">
-        Fonts placed here are for Adobe apps to pick up. This is not the same as installing
-        for macOS, and Font Buttler does not claim a font is active in InDesign or Photoshop.
-      </p>
-      <div className="rounded-md border bg-background px-2 py-1.5 text-sm">
-        <div>{adobe?.supported ? 'Available for file placement' : 'Unavailable on this Mac'}</div>
-        <div className="truncate font-mono text-[11px] text-muted-foreground" title={adobe?.path}>
-          {adobe?.path}
-        </div>
-        {adobe?.reason ? (
-          <div className="mt-1 text-xs text-muted-foreground">{adobe.reason}</div>
-        ) : null}
-        {adobe?.remedy ? (
-          <div className="mt-1 text-xs text-muted-foreground">{adobe.remedy}</div>
-        ) : null}
-      </div>
-      <Label className="block space-y-1 font-normal">
-        <span className="text-sm">Default install destination</span>
+    <SettingsSection>
+      <SettingsRow
+        label="Default install destination"
+        description="Choose where new installs go. Adobe is a testing folder for apps to pick up — not the same as installing for macOS, and Font Buttler does not claim a font is active in InDesign or Photoshop."
+        htmlFor="default-destination"
+      >
         <select
+          id="default-destination"
           className={selectClass}
           aria-label="Default install destination"
           disabled={busy || !settings}
@@ -726,22 +699,43 @@ function DestinationsPane({
             </option>
           ))}
         </select>
-      </Label>
-      {investigation[0] ? (
-        <details className="rounded-md border px-2 py-1.5 text-xs text-muted-foreground">
-          <summary className="cursor-pointer text-sm text-foreground">Compatibility notes</summary>
-          <div className="mt-2 space-y-2">
-            {investigation.map((row) => (
-              <div key={row.path}>
-                <div className="font-medium text-foreground">{row.destination}</div>
-                <div>{row.applications}</div>
-                <div>{row.conclusion}</div>
-              </div>
-            ))}
+      </SettingsRow>
+      <SettingsRow
+        label="Adobe testing folder"
+        description={
+          adobe?.supported
+            ? 'Available for file placement on this Mac.'
+            : 'Unavailable on this Mac.'
+        }
+        extra={
+          <div className="rounded-md border bg-background px-2.5 py-2 text-sm">
+            <div className="truncate font-mono text-[11px] text-muted-foreground" title={adobe?.path}>
+              {adobe?.path}
+            </div>
+            {adobe?.reason ? (
+              <div className="mt-1 text-xs text-muted-foreground">{adobe.reason}</div>
+            ) : null}
+            {adobe?.remedy ? (
+              <div className="mt-1 text-xs text-muted-foreground">{adobe.remedy}</div>
+            ) : null}
+            {investigation[0] ? (
+              <details className="mt-2 text-xs text-muted-foreground">
+                <summary className="cursor-pointer text-sm text-foreground">Compatibility notes</summary>
+                <div className="mt-2 space-y-2">
+                  {investigation.map((row) => (
+                    <div key={row.path}>
+                      <div className="font-medium text-foreground">{row.destination}</div>
+                      <div>{row.applications}</div>
+                      <div>{row.conclusion}</div>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            ) : null}
           </div>
-        </details>
-      ) : null}
-    </div>
+        }
+      />
+    </SettingsSection>
   )
 }
 
@@ -763,142 +757,136 @@ function CachesPane({
   onSave: (patch: SettingsPatch) => Promise<void>
 }) {
   return (
-    <div className="space-y-5">
-      <section className="space-y-2">
-        <h3 className="text-sm font-medium text-foreground">Microsoft Office cache</h3>
-        <Label className="flex cursor-pointer items-start gap-2 font-normal text-foreground">
+    <div>
+      <SettingsSection title="Microsoft Office">
+        <SettingsRow
+          label="Remove MS Office cache"
+          description="Clear Office’s FontCache when you reinstall fonts or use the Font cache menu. Turn this off to leave Office alone."
+          htmlFor="clear-office-font-cache"
+          extra={
+            officeCacheEnabled ? (
+              <div className="rounded-md border bg-background px-2.5 py-2">
+                {officeFontCache?.exists ? (
+                  <>
+                    <div className="text-sm">Found on this Mac</div>
+                    <div
+                      className="truncate font-mono text-[11px] text-muted-foreground"
+                      title={officeFontCache.path}
+                    >
+                      {officeFontCache.path}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-sm text-muted-foreground">
+                      No Microsoft Office font cache was found on this Mac.
+                    </div>
+                    {officeFontCache?.path ? (
+                      <div
+                        className="truncate font-mono text-[11px] text-muted-foreground"
+                        title={officeFontCache.path}
+                      >
+                        Looked in {officeFontCache.path}
+                      </div>
+                    ) : null}
+                  </>
+                )}
+              </div>
+            ) : null
+          }
+        >
           <input
+            id="clear-office-font-cache"
             type="checkbox"
             checked={officeCacheEnabled}
             disabled={busy || !settings}
             onChange={(event) =>
               void onSave({ clearOfficeFontCache: event.target.checked })
             }
-            className="mt-0.5 size-3.5 rounded border border-input accent-primary"
+            className={checkboxClass}
           />
-          <span>
-            <span className="block text-sm">Remove MS Office cache</span>
-            <span className="block text-sm text-muted-foreground">
-              Clear Office’s FontCache when you reinstall fonts or use the Font cache menu.
-              Turn this off to leave Office alone.
-            </span>
-          </span>
-        </Label>
-        {officeCacheEnabled && (
-          <div className="rounded-md border bg-background px-2 py-1.5">
-            {officeFontCache?.exists ? (
-              <>
-                <div className="text-sm">Found on this Mac</div>
-                <div
-                  className="truncate font-mono text-[11px] text-muted-foreground"
-                  title={officeFontCache.path}
-                >
-                  {officeFontCache.path}
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="text-sm text-muted-foreground">
-                  No Microsoft Office font cache was found on this Mac.
-                </div>
-                {officeFontCache?.path ? (
-                  <div
-                    className="truncate font-mono text-[11px] text-muted-foreground"
-                    title={officeFontCache.path}
-                  >
-                    Looked in {officeFontCache.path}
-                  </div>
-                ) : null}
-              </>
-            )}
-          </div>
-        )}
-      </section>
+        </SettingsRow>
+      </SettingsSection>
 
-      <section className="space-y-2">
-        <h3 className="text-sm font-medium text-foreground">Adobe cache</h3>
-        <Label className="flex cursor-pointer items-start gap-2 font-normal text-foreground">
+      <SettingsSection title="Adobe">
+        <SettingsRow
+          label="Remove Adobe font cache"
+          description="Clear Adobe font list caches when you reinstall fonts or use the Font cache menu. Open Adobe apps still need a relaunch. Turn this off to leave Adobe alone."
+          htmlFor="clear-adobe-font-cache"
+          extra={
+            adobeCacheEnabled ? (
+              <div className="rounded-md border bg-background px-2.5 py-2">
+                {adobeFontCache?.exists ? (
+                  <>
+                    <div className="text-sm">
+                      Found {adobeFontCache.paths.length}{' '}
+                      {adobeFontCache.paths.length === 1 ? 'location' : 'locations'} on this Mac
+                    </div>
+                    {adobeFontCache.paths.slice(0, 3).map((item) => (
+                      <div
+                        key={item}
+                        className="truncate font-mono text-[11px] text-muted-foreground"
+                        title={item}
+                      >
+                        {item}
+                      </div>
+                    ))}
+                    {adobeFontCache.paths.length > 3 ? (
+                      <div className="text-[11px] text-muted-foreground">
+                        and {adobeFontCache.paths.length - 3} more
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    <div className="text-sm text-muted-foreground">
+                      No Adobe font cache was found on this Mac.
+                    </div>
+                    {adobeFontCache?.roots[0] ? (
+                      <div
+                        className="truncate font-mono text-[11px] text-muted-foreground"
+                        title={adobeFontCache.roots.join('\n')}
+                      >
+                        Looked in {adobeFontCache.roots[0]}
+                      </div>
+                    ) : null}
+                  </>
+                )}
+              </div>
+            ) : null
+          }
+        >
           <input
+            id="clear-adobe-font-cache"
             type="checkbox"
             checked={adobeCacheEnabled}
             disabled={busy || !settings}
             onChange={(event) =>
               void onSave({ clearAdobeFontCache: event.target.checked })
             }
-            className="mt-0.5 size-3.5 rounded border border-input accent-primary"
+            className={checkboxClass}
           />
-          <span>
-            <span className="block text-sm">Remove Adobe font cache</span>
-            <span className="block text-sm text-muted-foreground">
-              Clear Adobe font list caches when you reinstall fonts or use the Font cache
-              menu. Open Adobe apps still need a relaunch. Turn this off to leave Adobe
-              alone.
-            </span>
-          </span>
-        </Label>
-        {adobeCacheEnabled && (
-          <div className="rounded-md border bg-background px-2 py-1.5">
-            {adobeFontCache?.exists ? (
-              <>
-                <div className="text-sm">
-                  Found {adobeFontCache.paths.length}{' '}
-                  {adobeFontCache.paths.length === 1 ? 'location' : 'locations'} on this Mac
-                </div>
-                {adobeFontCache.paths.slice(0, 3).map((item) => (
-                  <div
-                    key={item}
-                    className="truncate font-mono text-[11px] text-muted-foreground"
-                    title={item}
-                  >
-                    {item}
-                  </div>
-                ))}
-                {adobeFontCache.paths.length > 3 ? (
-                  <div className="text-[11px] text-muted-foreground">
-                    and {adobeFontCache.paths.length - 3} more
-                  </div>
-                ) : null}
-              </>
-            ) : (
-              <>
-                <div className="text-sm text-muted-foreground">
-                  No Adobe font cache was found on this Mac.
-                </div>
-                {adobeFontCache?.roots[0] ? (
-                  <div
-                    className="truncate font-mono text-[11px] text-muted-foreground"
-                    title={adobeFontCache.roots.join('\n')}
-                  >
-                    Looked in {adobeFontCache.roots[0]}
-                  </div>
-                ) : null}
-              </>
-            )}
-          </div>
-        )}
-      </section>
+        </SettingsRow>
+      </SettingsSection>
 
-      <section className="space-y-2">
-        <h3 className="text-sm font-medium text-foreground">Reinstall</h3>
-        <Label className="flex cursor-pointer items-start gap-2 font-normal text-foreground">
+      <SettingsSection title="Reinstall">
+        <SettingsRow
+          label="Clear caches during reinstall"
+          description="Clear ATS, Office, and Adobe caches when you reinstall fonts. Turn this off to skip that step. The Font cache menu still works."
+          htmlFor="clear-caches-on-reinstall"
+        >
           <input
+            id="clear-caches-on-reinstall"
             type="checkbox"
             checked={settings?.skipCacheClearOnReinstall !== true}
             disabled={busy || !settings}
             onChange={(event) =>
               void onSave({ skipCacheClearOnReinstall: !event.target.checked })
             }
-            className="mt-0.5 size-3.5 rounded border border-input accent-primary"
+            className={checkboxClass}
           />
-          <span>
-            <span className="block text-sm">Clear caches during reinstall</span>
-            <span className="block text-sm text-muted-foreground">
-              Clear ATS, Office, and Adobe caches when you reinstall fonts. Turn this off to
-              skip that step. The Font cache menu still works.
-            </span>
-          </span>
-        </Label>
-      </section>
+        </SettingsRow>
+      </SettingsSection>
     </div>
   )
 }
@@ -913,38 +901,50 @@ function HistoryPane({
   onSave: (patch: SettingsPatch) => Promise<void>
 }) {
   return (
-    <div className="space-y-2">
-      <p className="text-sm text-muted-foreground">
-        Retained versions and activity stay on this Mac. Required rollback and pinned copies
-        are kept even if older extras are removed.
-      </p>
-      <Label className="space-y-1 font-normal">
-        <span className="text-sm">Revision budget (MB)</span>
-        <Input
-          type="number"
-          min={64}
-          value={Math.round((settings?.revisionBudgetBytes ?? 1073741824) / 1024 / 1024)}
-          disabled={busy || !settings}
-          onBlur={(event) =>
-            void onSave({
-              revisionBudgetBytes: Math.max(64, Number(event.target.value) || 1024) * 1024 * 1024,
-            })
-          }
-        />
-      </Label>
-      <Label className="space-y-1 font-normal">
-        <span className="text-sm">Activity retention (days)</span>
-        <Input
-          type="number"
-          min={7}
-          value={settings?.activityRetentionDays ?? 90}
-          disabled={busy || !settings}
-          onBlur={(event) =>
-            void onSave({ activityRetentionDays: Math.max(7, Number(event.target.value) || 90) })
-          }
-        />
-      </Label>
-    </div>
+    <SettingsSection>
+      <SettingsRow
+        label="Revision budget"
+        description="How much disk retained versions may use. Required rollback and pinned copies are kept even if older extras are removed."
+        htmlFor="revision-budget"
+      >
+        <div className="flex items-center gap-2">
+          <Input
+            id="revision-budget"
+            type="number"
+            min={64}
+            className="w-[7.5rem]"
+            value={Math.round((settings?.revisionBudgetBytes ?? 1073741824) / 1024 / 1024)}
+            disabled={busy || !settings}
+            onBlur={(event) =>
+              void onSave({
+                revisionBudgetBytes: Math.max(64, Number(event.target.value) || 1024) * 1024 * 1024,
+              })
+            }
+          />
+          <span className="text-[13px] text-muted-foreground">MB</span>
+        </div>
+      </SettingsRow>
+      <SettingsRow
+        label="Activity retention"
+        description="How long activity stays on this Mac."
+        htmlFor="activity-retention"
+      >
+        <div className="flex items-center gap-2">
+          <Input
+            id="activity-retention"
+            type="number"
+            min={7}
+            className="w-[7.5rem]"
+            value={settings?.activityRetentionDays ?? 90}
+            disabled={busy || !settings}
+            onBlur={(event) =>
+              void onSave({ activityRetentionDays: Math.max(7, Number(event.target.value) || 90) })
+            }
+          />
+          <span className="text-[13px] text-muted-foreground">days</span>
+        </div>
+      </SettingsRow>
+    </SettingsSection>
   )
 }
 
@@ -966,24 +966,26 @@ function SettingsFolderRow({
   const policyOptions = FOLDER_POLICIES.filter(
     (item) => item.id !== 'custom' || folder.policy === 'custom',
   )
+  const name = watchFolderName(folder.root)
   return (
-    <li className="flex items-center gap-2 rounded-md border bg-background px-2 py-1.5">
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-sm">{watchFolderName(folder.root)}</div>
-        <div className="truncate text-xs text-muted-foreground">
+    <SettingsRow
+      label={<span className="block truncate" title={name}>{name}</span>}
+      description={
+        <span className="block">
           {folderPolicyLabel(folder.policy)} · {folderAvailabilityLabel(folder)} ·{' '}
           {destinationLabel(folder.destinationId)}
-        </div>
-        <div className="truncate font-mono text-[11px] text-muted-foreground" title={folder.root}>
-          {folder.root}
-        </div>
-        <label className="mt-1.5 block">
-          <span className="sr-only">Folder policy</span>
+          <span className="mt-0.5 block truncate font-mono text-[11px]" title={folder.root}>
+            {folder.root}
+          </span>
+        </span>
+      }
+    >
+        <div className="flex max-w-[min(100%,22rem)] flex-wrap items-center justify-end gap-1.5">
           <select
             className={selectClass}
             value={folder.policy}
             disabled={busy}
-            aria-label={`Policy for ${watchFolderName(folder.root)}`}
+            aria-label={`Policy for ${name}`}
             onChange={(event) => onPolicy(event.target.value as FolderPolicyPreset)}
           >
             {policyOptions.map((option) => (
@@ -992,32 +994,25 @@ function SettingsFolderRow({
               </option>
             ))}
           </select>
-        </label>
-      </div>
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        disabled={busy}
-        onClick={onPause}
-      >
-        {folder.paused ? <Play className="size-3.5" /> : <Pause className="size-3.5" />}
-        {folder.paused ? 'Resume' : 'Pause'}
-      </Button>
-      <Button type="button" size="sm" variant="outline" disabled={busy} onClick={onRelink}>
-        Relink
-      </Button>
-      <Button
-        type="button"
-        size="sm"
-        variant="ghost"
-        className="h-7 w-7 px-0"
-        disabled={busy}
-        aria-label={`Stop watching ${watchFolderName(folder.root)}`}
-        onClick={onRemove}
-      >
-        <X className="size-3.5" />
-      </Button>
-    </li>
+          <Button type="button" size="sm" variant="outline" disabled={busy} onClick={onPause}>
+            {folder.paused ? <Play className="size-3.5" /> : <Pause className="size-3.5" />}
+            {folder.paused ? 'Resume' : 'Pause'}
+          </Button>
+          <Button type="button" size="sm" variant="outline" disabled={busy} onClick={onRelink}>
+            Relink
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-7 w-7 px-0"
+            disabled={busy}
+            aria-label={`Stop watching ${name}`}
+            onClick={onRemove}
+          >
+            <X className="size-3.5" />
+          </Button>
+        </div>
+    </SettingsRow>
   )
 }
