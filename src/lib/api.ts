@@ -155,9 +155,11 @@ export const api = {
       '/api/destinations',
     ),
   uninstall: (id: string, options?: { deleteSource?: boolean }) =>
-    json<{ entry: CatalogEntry }>(post('/api/uninstall', { id, deleteSource: options?.deleteSource })),
+    json<{ entry: CatalogEntry; operationId?: string; undoable?: boolean }>(
+      post('/api/uninstall', { id, deleteSource: options?.deleteSource }),
+    ),
   uninstallMany: (ids: string[], options?: { deleteSource?: boolean }) =>
-    json<{ entries: CatalogEntry[] }>(
+    json<{ entries: CatalogEntry[]; operationId?: string; undoable?: boolean }>(
       post('/api/uninstall', { ids, deleteSource: options?.deleteSource }),
     ),
   deactivate: (id: string) => json<{ entry: CatalogEntry }>(post('/api/deactivate', { id })),
