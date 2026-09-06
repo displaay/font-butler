@@ -78,6 +78,13 @@ import {
 } from '@/lib/eligibility'
 import { canSwitchTo } from '@/lib/identity'
 import { canCompareInstalledVsSource, isComparisonSourceStale } from '@/lib/comparison'
+import {
+  createSavedFilter,
+  deleteSavedFilter,
+  emptyLibraryCriteria,
+  renameSavedFilter,
+  savedFilterMatches,
+} from '@/lib/savedFilters'
 import { familyNameOf, countLibraryFilters, deletableSourceIds, entryHasTrackedSource, entryIds, familyStatusSummary, forgettableIds, groupCatalog, groupSystem, hasSourceMissing, hasTrackedSource, isForgettableOnlyGroup, isLibraryFilter, isUninstallableGroup, matchesLibraryFilter, matchesQuery, sortFamilyGroups } from '@/lib/group'
 import { actionCopy, actionCopyFor, emptyImportError, importDoneCopy, remainingActionCopy } from '@/lib/notify'
 import { planNeedsReview } from '@/lib/planner'
@@ -114,7 +121,7 @@ import {
 } from '@/lib/selection'
 import { applyTheme } from '@/lib/theme'
 import { allUpdateGroups, updateGroupsForIds, visibleUpdateGroups } from '@/lib/updateInventory'
-import type { AppSettings, CatalogEntry, ComparisonCapture, DuplicateWarning, FamilyGroup, ImportPlan, ImportPlanItem, LibraryFilter, Operation, PreviewPreferences, ProjectSet, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
+import type { AppSettings, CatalogEntry, ComparisonCapture, DuplicateWarning, FamilyGroup, ImportPlan, ImportPlanItem, LibraryFilter, Operation, PreviewPreferences, ProjectSet, SavedLibraryFilter, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { isPathUnderFolder, isWatchFolderEntry, watchFolderName } from '@/lib/watchFolders'
 
@@ -1080,6 +1087,50 @@ function AppShell() {
     }
   }
 
+  const savedFilters = settings?.savedFilters ?? []
+
+  function persistLibraryFilters(next: LibraryFilter[]) {
+    setLibraryFilters(next)
+    localStorage.setItem(LIBRARY_FILTERS_KEY, JSON.stringify(next))
+  }
+
+  async function persistSavedFilters(next: SavedLibraryFilter[], done?: string) {
+    try {
+      const result = await api.updateSettings({ savedFilters: next })
+      applySettings(result.settings)
+      if (done) toast.success(done)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not update saved filters')
+    }
+  }
+
+  function createSavedFilterFromView() {
+    void persistSavedFilters(
+      createSavedFilter(savedFilters, {
+        query,
+        libraryFilters,
+        watchFolder: watchFolderFilter,
+      }),
+      'Saved filter',
+    )
+  }
+
+  function applySavedFilter(filter: SavedLibraryFilter) {
+    const current = { query, libraryFilters, watchFolder: watchFolderFilter }
+    setTab('library')
+    setProjectFilter(null)
+    if (savedFilterMatches(filter, current)) {
+      const empty = emptyLibraryCriteria()
+      setQuery(empty.query)
+      persistLibraryFilters([...empty.libraryFilters])
+      setWatchFolderFilter(empty.watchFolder)
+      return
+    }
+    setQuery(filter.query)
+    persistLibraryFilters(filter.libraryFilters)
+    setWatchFolderFilter(filter.watchFolder)
+  }
+
   async function persistSpecimen(next: PreviewPreferences) {
     const current = settingsRef.current
     if (!current) return
@@ -1622,11 +1673,20 @@ function AppShell() {
           onDropFilesOnProject={(id, dataTransfer) => void handleDrop(dataTransfer, id)}
           onRemoveProject={(id) => void removeProject(id)}
           onCreateProject={() => void createProjectFromSelection()}
+          savedFilters={savedFilters}
+          onSelectSavedFilter={applySavedFilter}
+          onCreateSavedFilter={createSavedFilterFromView}
+          onRenameSavedFilter={(id, name) =>
+            void persistSavedFilters(renameSavedFilter(savedFilters, id, name), `Renamed to ${name}`)
+          }
+          onRemoveSavedFilter={(id) => {
+            const name = savedFilters.find((item) => item.id === id)?.name
+            void persistSavedFilters(deleteSavedFilter(savedFilters, id), `Removed ${name ?? 'saved filter'}`)
+          }}
           libraryFilters={libraryFilters}
           libraryFilterCounts={libraryFilterCounts}
           onLibraryFiltersChange={(next) => {
-            setLibraryFilters(next)
-            localStorage.setItem(LIBRARY_FILTERS_KEY, JSON.stringify(next))
+            persistLibraryFilters(next)
           }}
           duplicatesCount={duplicates.length}
           onOpenDuplicates={() => setDuplicatesOpen(true)}

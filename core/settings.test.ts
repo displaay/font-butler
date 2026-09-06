@@ -51,6 +51,7 @@ function sampleSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     revisionBudgetBytes: 1024 * 1024 * 1024,
     activityRetentionDays: 90,
     activityMaxOperations: 10_000,
+    savedFilters: [],
     ...overrides,
   }
 }
@@ -455,3 +456,72 @@ test('readWatchFolders ignores blanks and dedupes', () => {
   assert.deepEqual(readWatchFolders({ watchFolder: '  /legacy  ' }), ['/legacy'])
   assert.deepEqual(readWatchFolders({}), [])
 })
+
+test('loadSettings defaults savedFilters to an empty list', () => {
+  const paths = tempPaths()
+  try {
+    assert.deepEqual(loadSettings(paths).savedFilters, [])
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('savedFilters persist across saveSettings and loadSettings', () => {
+  const paths = tempPaths()
+  try {
+    saveSettings(
+      paths,
+      sampleSettings({
+        savedFilters: [
+          {
+            id: 'keep-me',
+            name: 'Installed VF',
+            query: 'Review',
+            libraryFilters: ['installed', 'vf'],
+            watchFolder: '/Fonts/Client',
+            createdAt: 99,
+          },
+        ],
+      }),
+    )
+    assert.deepEqual(loadSettings(paths).savedFilters, [
+      {
+        id: 'keep-me',
+        name: 'Installed VF',
+        query: 'Review',
+        libraryFilters: ['installed', 'vf'],
+        watchFolder: '/Fonts/Client',
+        createdAt: 99,
+      },
+    ])
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings drops invalid savedFilters entries', () => {
+  const paths = tempPaths()
+  try {
+    fs.mkdirSync(paths.dataRoot, { recursive: true })
+    fs.writeFileSync(
+      paths.settingsPath,
+      JSON.stringify({
+        version: 1,
+        savedFilters: [{ id: 'bad' }, { id: 'ok', name: 'OK', libraryFilters: ['vf', 'nope'] }],
+      }),
+    )
+    assert.deepEqual(loadSettings(paths).savedFilters, [
+      {
+        id: 'ok',
+        name: 'OK',
+        query: '',
+        libraryFilters: ['vf'],
+        watchFolder: null,
+        createdAt: 0,
+      },
+    ])
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+

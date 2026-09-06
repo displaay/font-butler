@@ -135,6 +135,7 @@ app.post('/api/settings', async (c) => {
     folders?: AppSettings['folders']
     specimen?: AppSettings['specimen']
     defaultDestination?: AppSettings['defaultDestination']
+    savedFilters?: AppSettings['savedFilters']
   }>()
   try {
     const settings = await service.updateSettings(body)

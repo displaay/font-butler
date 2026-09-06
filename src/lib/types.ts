@@ -156,6 +156,15 @@ export type LibraryFilter =
   | 'source'
   | 'no-source'
 
+export type SavedLibraryFilter = {
+  id: string
+  name: string
+  query: string
+  libraryFilters: LibraryFilter[]
+  watchFolder: string | null
+  createdAt: number
+}
+
 export type FamilyGroup = {
   key: string
   familyName: string
@@ -304,6 +313,7 @@ export type AppSettings = {
   activityMaxOperations?: number
   specimen?: PreviewPreferences
   defaultDestination?: DefaultDestinationId
+  savedFilters?: SavedLibraryFilter[]
 }
 
 export type OfficeFontCacheInfo = {
