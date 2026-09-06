@@ -27,6 +27,7 @@ export type DefaultDestinationId = DestinationId | 'macos-and-adobe'
 export type InstallationCopy = {
   destinationId: DestinationId
   path: string
+  parkedPath?: string
   fingerprint?: string
   verification: 'file-present' | 'unavailable'
 }
@@ -128,6 +129,22 @@ export type Notice = {
   operationId?: string
 }
 
+export type DuplicateWarning = {
+  id: string
+  path: string
+  fingerprint?: string
+  familyName?: string
+  format?: string
+  incomingVersion?: string
+  conflictingEntryIds: string[]
+  activeEntryId?: string
+  folderId?: string
+  notifyKey: string
+  createdAt: number
+  updatedAt: number
+  notifiedAt?: number
+}
+
 export type SortMode = 'name' | 'added'
 
 export type LibraryFilter =
@@ -168,6 +185,7 @@ export type OperationItem = {
   label: string
   outcome: 'succeeded' | 'failed' | 'skipped' | 'canceled'
   reason?: string
+  relatedEntryId?: string
 }
 
 export type Operation = {
@@ -190,12 +208,18 @@ export type ImportPlanItem = {
   entryId?: string
   familyName?: string
   format?: string
+  fingerprint?: string
   affectedFaces?: string[]
   currentFormat?: string
+  currentVersion?: string
+  incomingVersion?: string
   reason?: string
-  defaultChoice: 'keep' | 'replace' | 'install-as' | 'skip' | 'relink'
-  choices: Array<'keep' | 'replace' | 'install-as' | 'skip' | 'relink'>
+  defaultChoice: 'keep' | 'replace' | 'install-as' | 'skip' | 'relink' | 'add-inactive' | 'switch'
+  choices: Array<'keep' | 'replace' | 'install-as' | 'skip' | 'relink' | 'add-inactive' | 'switch'>
   previewOnly?: boolean
+  parallelCopy?: boolean
+  siblingEntryIds?: string[]
+  sourceMtimeMs?: number
 }
 
 export type ImportPlan = {

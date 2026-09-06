@@ -19,6 +19,7 @@ import { DropFolderDialog } from '@/components/DropFolderDialog'
 import { FolderSetupDialog } from '@/components/FolderSetupDialog'
 import { FolderRelinkDialog } from '@/components/FolderRelinkDialog'
 import { FormatDialog } from '@/components/FormatDialog'
+import { DuplicatesDialog } from '@/components/DuplicatesDialog'
 import { ImportPlanDialog } from '@/components/ImportPlanDialog'
 import { RelinkDialog } from '@/components/RelinkDialog'
 import { RenameDialog } from '@/components/RenameDialog'
@@ -48,7 +49,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { NotifyProvider, useSetActionStatus } from '@/components/NotifyProvider'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { api, isNotice, isOperationsEvent, isProjectsEvent, isSettingsEvent, subscribeEvents } from '@/lib/api'
+import { api, isDuplicatesEvent, isNotice, isOperationsEvent, isProjectsEvent, isSettingsEvent, subscribeEvents } from '@/lib/api'
 import { desktopPathForFile } from '@/lib/desktop'
 import {
   collectDropPayload,
@@ -75,6 +76,7 @@ import {
   repairableIds,
   uninstallableIds,
 } from '@/lib/eligibility'
+import { canSwitchTo } from '@/lib/identity'
 import { familyNameOf, countLibraryFilters, deletableSourceIds, entryHasTrackedSource, entryIds, familyStatusSummary, forgettableIds, groupCatalog, groupSystem, hasSourceMissing, hasTrackedSource, isForgettableOnlyGroup, isLibraryFilter, isUninstallableGroup, matchesLibraryFilter, matchesQuery, sortFamilyGroups } from '@/lib/group'
 import { actionCopy, actionCopyFor, emptyImportError, importDoneCopy, remainingActionCopy } from '@/lib/notify'
 import { planNeedsReview } from '@/lib/planner'
@@ -111,7 +113,7 @@ import {
 } from '@/lib/selection'
 import { applyTheme } from '@/lib/theme'
 import { allUpdateGroups, updateGroupsForIds, visibleUpdateGroups } from '@/lib/updateInventory'
-import type { AppSettings, CatalogEntry, FamilyGroup, ImportPlan, ImportPlanItem, LibraryFilter, Operation, PreviewPreferences, ProjectSet, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
+import type { AppSettings, CatalogEntry, DuplicateWarning, FamilyGroup, ImportPlan, ImportPlanItem, LibraryFilter, Operation, PreviewPreferences, ProjectSet, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { isPathUnderFolder, isWatchFolderEntry, watchFolderName } from '@/lib/watchFolders'
 
@@ -232,6 +234,8 @@ function AppShell() {
   const [folderSetupRoots, setFolderSetupRoots] = useState<string[] | null>(null)
   const [folderRelinkRoot, setFolderRelinkRoot] = useState<string | null>(null)
   const [highlightOperation, setHighlightOperation] = useState<string | null>(null)
+  const [duplicates, setDuplicates] = useState<DuplicateWarning[]>([])
+  const [duplicatesOpen, setDuplicatesOpen] = useState(false)
 
   function applySettings(next: AppSettings) {
     const current = settingsRef.current
@@ -271,16 +275,18 @@ function AppShell() {
         if (openPath) {
           await api.open(openPath)
         }
-        const [catalog, settingsResult, projectResult, activityResult] = await Promise.all([
+        const [catalog, settingsResult, projectResult, activityResult, duplicatesResult] = await Promise.all([
           api.catalog(),
           api.settings(),
           api.projects().catch(() => ({ projects: [] })),
           api.activity().catch(() => ({ operations: [] })),
+          api.duplicates().catch(() => ({ duplicates: [] })),
         ])
         if (!cancelled) {
           applySettings(settingsResult.settings)
           setProjects(projectResult.projects)
           setOperations(activityResult.operations)
+          setDuplicates(duplicatesResult.duplicates)
           if (shouldShowOnboarding(settingsResult.settings)) {
             setOnboardingOpen(true)
           }
@@ -340,6 +346,10 @@ function AppShell() {
       }
       if (isProjectsEvent(event)) {
         setProjects(event.projects)
+        return
+      }
+      if (isDuplicatesEvent(event)) {
+        setDuplicates(event.duplicates)
         return
       }
       if (isOperationsEvent(event)) {
@@ -782,7 +792,12 @@ function AppShell() {
   }
 
   function activatePrepared(ids: string[], replace?: boolean) {
-    return ids.length > 1 ? api.activateMany(ids, { replace }) : api.activate(ids[0], { replace })
+    const needsSwitch = ids.some((id) => {
+      const entry = entries.find((item) => item.id === id)
+      return entry ? canSwitchTo(entry, entries) : false
+    })
+    const options = { replace, switch: needsSwitch }
+    return ids.length > 1 ? api.activateMany(ids, options) : api.activate(ids[0], options)
   }
 
   function uninstallGroup(group: FamilyGroup, options?: { deleteSource?: boolean }) {
@@ -1596,6 +1611,8 @@ function AppShell() {
             setLibraryFilters(next)
             localStorage.setItem(LIBRARY_FILTERS_KEY, JSON.stringify(next))
           }}
+          duplicatesCount={duplicates.length}
+          onOpenDuplicates={() => setDuplicatesOpen(true)}
           counts={tabCounts}
           onOpenSettings={() => setSettingsOpen(true)}
         />
@@ -1868,6 +1885,21 @@ function AppShell() {
                           onActivate={() =>
                             useBatch ? void activateSelected() : void activateGroupGuarded(group)
                           }
+                          onSwitch={
+                            group.entries.some((entry) => canSwitchTo(entry, entries))
+                              ? () => {
+                                  const target =
+                                    group.entries.find(
+                                      (entry) => entry.id === selectedEntryId && canSwitchTo(entry, entries),
+                                    ) ?? group.entries.find((entry) => canSwitchTo(entry, entries))
+                                  if (!target) return
+                                  void run(
+                                    () => api.switchTo(target.id),
+                                    { pending: 'Switching…', done: 'Switched active copy' },
+                                  )
+                                }
+                              : undefined
+                          }
                           onReveal={() => {
                             const entry = catalogRevealEntry(
                               group,
@@ -2001,6 +2033,15 @@ function AppShell() {
                 void run(() => deactivateGroup(selectedGroup), actionCopy('deactivate', selectedGroup.familyName))
               }
               onActivate={() => selectedGroup && void activateGroupGuarded(selectedGroup)}
+              onSwitch={
+                selectedEntry && canSwitchTo(selectedEntry, entries)
+                  ? () =>
+                      void run(
+                        () => api.switchTo(selectedEntry.id),
+                        { pending: 'Switching…', done: 'Switched active copy' },
+                      )
+                  : undefined
+              }
               onReveal={(which) => selectedEntry && void revealCatalog(selectedEntry, which)}
               onUninstallSystem={() =>
                 selectedSystemGroup &&
@@ -2193,6 +2234,35 @@ function AppShell() {
             importPlanResolve?.({ choices, familyName })
             setImportPlan(null)
             setImportPlanResolve(null)
+          }}
+        />
+        <DuplicatesDialog
+          open={duplicatesOpen}
+          warnings={duplicates}
+          entries={entries}
+          busy={busy}
+          onClose={() => setDuplicatesOpen(false)}
+          onResolve={(id, choice, familyName) => {
+            void run(
+              async () => {
+                const result = await api.resolveDuplicate(id, choice, familyName)
+                setDuplicates(result.duplicates)
+                setEntries((await api.catalog()).entries)
+              },
+              {
+                pending: 'Resolving duplicate…',
+                done:
+                  choice === 'skip'
+                    ? 'Skipped duplicate'
+                    : choice === 'replace'
+                      ? 'Replaced active copy'
+                      : choice === 'switch'
+                        ? 'Switched active copy'
+                        : choice === 'install-as'
+                          ? `Installed as ${familyName ?? 'a different name'}`
+                          : 'Added inactive copy',
+              },
+            )
           }}
         />
         <RelinkDialog
@@ -2410,6 +2480,7 @@ function LibraryCard({
   onUninstallAndRemove: () => void
   onDeactivate: () => void
   onActivate: () => void
+  onSwitch?: () => void
   onReveal: () => void
   onRevealSource: () => void
   onForget: () => void
@@ -2478,7 +2549,10 @@ function LibraryCard({
           {group.entries.map((item) => (
             <div
               key={item.id}
-              className="truncate font-mono text-[11px] text-muted-foreground/90"
+              className={cn(
+                'truncate font-mono text-[11px] text-muted-foreground/90',
+                (item.status === 'deactivated' || item.status === 'uninstalled') && 'opacity-60',
+              )}
               title={item.sourcePath}
             >
               {item.sourcePath}
@@ -2591,6 +2665,7 @@ function LibraryCard({
               onDeactivate={onDeactivate}
               onUninstall={onUninstall}
               onActivate={onActivate}
+              onSwitch={onSwitch}
               onForget={onForget}
             />
           )}
@@ -2660,6 +2735,7 @@ function LibraryCard({
           onUninstall={onUninstall}
           onUninstallAndRemove={onUninstallAndRemove}
           onActivate={onActivate}
+          onSwitch={onSwitch}
           onForget={onForget}
           onDeleteFiles={onDeleteFiles}
         />

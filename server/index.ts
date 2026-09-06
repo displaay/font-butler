@@ -154,6 +154,42 @@ app.post('/api/settings', async (c) => {
 
 app.get('/api/catalog', (c) => c.json({ entries: service.listCatalog() }))
 
+app.get('/api/duplicates', (c) => c.json({ duplicates: service.listDuplicates() }))
+
+app.post('/api/duplicates/resolve', async (c) => {
+  const body = await c.req.json<{
+    id?: string
+    choice?: 'replace' | 'add-inactive' | 'skip' | 'switch' | 'install-as'
+    familyName?: string
+  }>()
+  if (!body.id || !body.choice) {
+    return c.json({ error: 'Missing id or choice' }, 400)
+  }
+  try {
+    return c.json(await service.resolveDuplicate(body.id, body.choice, { familyName: body.familyName }))
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : 'Could not resolve that duplicate' },
+      400,
+    )
+  }
+})
+
+app.post('/api/switch', async (c) => {
+  const body = await c.req.json<{ id?: string }>()
+  if (!body.id) {
+    return c.json({ error: 'Missing id' }, 400)
+  }
+  try {
+    return c.json({ entry: await service.switchTo(body.id) })
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : 'Switch failed' },
+      400,
+    )
+  }
+})
+
 app.get('/api/system', (c) => c.json({ faces: service.listSystem() }))
 
 app.post('/api/drop-inspect', async (c) => {
@@ -286,8 +322,8 @@ app.post('/api/deactivate', async (c) => {
 })
 
 app.post('/api/activate', async (c) => {
-  const body = await c.req.json<{ id?: string; ids?: string[]; replace?: boolean }>()
-  const options = { replace: body.replace === true }
+  const body = await c.req.json<{ id?: string; ids?: string[]; replace?: boolean; switch?: boolean }>()
+  const options = { replace: body.replace === true, switch: body.switch === true }
   try {
     if (body.ids?.length) {
       const entries = await service.activateMany(body.ids, options)
@@ -537,7 +573,7 @@ app.post('/api/import/plan', async (c) => {
 app.post('/api/import/apply', async (c) => {
   const body = await c.req.json<{
     planId: string
-    choices?: Record<string, 'keep' | 'replace' | 'install-as' | 'skip' | 'relink'>
+    choices?: Record<string, 'keep' | 'replace' | 'install-as' | 'skip' | 'relink' | 'add-inactive' | 'switch'>
     idempotencyKey?: string
     familyName?: string
   }>()

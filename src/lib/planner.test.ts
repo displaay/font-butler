@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { classificationLabel, planNeedsReview } from './planner.ts'
+import { classificationLabel, planChoiceLabel, planNeedsReview } from './planner.ts'
 import type { ImportPlan } from './types.ts'
 
 function plan(items: ImportPlan['items']): ImportPlan {
@@ -42,6 +42,24 @@ test('planNeedsReview is true for format conflicts and collection overlap', () =
   )
 })
 
+test('planNeedsReview is true for same-identity add-inactive copies', () => {
+  assert.equal(
+    planNeedsReview(
+      plan([
+        {
+          id: 'c',
+          path: '/tmp/C.ttf',
+          classification: 'revision',
+          parallelCopy: true,
+          defaultChoice: 'skip',
+          choices: ['replace', 'add-inactive', 'install-as', 'skip'],
+        },
+      ]),
+    ),
+    true,
+  )
+})
+
 test('classificationLabel names preview-only web fonts', () => {
   assert.equal(
     classificationLabel({
@@ -54,4 +72,11 @@ test('classificationLabel names preview-only web fonts', () => {
     }),
     'Web font · Preview only',
   )
+})
+
+test('planChoiceLabel names duplicate resolutions', () => {
+  assert.equal(planChoiceLabel('replace'), 'Replace active')
+  assert.equal(planChoiceLabel('add-inactive'), 'Add inactive copy')
+  assert.equal(planChoiceLabel('install-as'), 'Install as…')
+  assert.equal(planChoiceLabel('switch'), 'Switch')
 })

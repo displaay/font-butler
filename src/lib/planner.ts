@@ -5,7 +5,9 @@ export function planNeedsReview(plan: ImportPlan): boolean {
     (item) =>
       item.classification === 'alt-format' ||
       item.classification === 'collection-overlap' ||
-      item.classification === 'unsupported',
+      item.classification === 'unsupported' ||
+      item.parallelCopy === true ||
+      (item.classification === 'revision' && item.choices.includes('add-inactive')),
   )
 }
 
@@ -14,7 +16,11 @@ export function planChoiceLabel(choice: ImportPlanItem['defaultChoice']): string
     case 'keep':
       return 'Keep installed'
     case 'replace':
-      return 'Replace'
+      return 'Replace active'
+    case 'add-inactive':
+      return 'Add inactive copy'
+    case 'switch':
+      return 'Switch'
     case 'install-as':
       return 'Install as…'
     case 'relink':
@@ -33,7 +39,7 @@ export function classificationLabel(item: ImportPlanItem): string {
     case 'identical':
       return 'Identical copy'
     case 'revision':
-      return 'Changed version'
+      return item.parallelCopy ? 'Same-identity copy' : 'Changed version'
     case 'alt-format':
       return 'Alternative format'
     case 'collection-overlap':

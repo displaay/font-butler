@@ -57,6 +57,12 @@ test('installedFormatConflict finds another active format of the same instance',
   assert.equal(installedFormatConflict(ttf, [ttf]), undefined)
 })
 
+test('installedFormatConflict ignores deactivated copies of the same instance', () => {
+  const otf = entry({ id: 'a', format: 'otf', status: 'deactivated' })
+  const ttf = entry({ id: 'b', format: 'ttf' })
+  assert.equal(installedFormatConflict(ttf, [otf, ttf]), undefined)
+})
+
 test('installedFormatConflict ignores a different style in the same family', () => {
   const otfRegular = entry({ id: 'a', format: 'otf', status: 'installed' })
   const ttfBold = entry({

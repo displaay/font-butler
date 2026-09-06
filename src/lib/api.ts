@@ -2,6 +2,7 @@ import type {
   AdobeFontCacheInfo,
   AppSettings,
   CatalogEntry,
+  DuplicateWarning,
   DestinationCapability,
   DestinationId,
   DefaultDestinationId,
@@ -127,10 +128,10 @@ export const api = {
   deactivate: (id: string) => json<{ entry: CatalogEntry }>(post('/api/deactivate', { id })),
   deactivateMany: (ids: string[]) =>
     json<{ entries: CatalogEntry[] }>(post('/api/deactivate', { ids })),
-  activate: (id: string, options?: { replace?: boolean }) =>
-    json<{ entry: CatalogEntry }>(post('/api/activate', { id, replace: options?.replace })),
-  activateMany: (ids: string[], options?: { replace?: boolean }) =>
-    json<{ entries: CatalogEntry[] }>(post('/api/activate', { ids, replace: options?.replace })),
+  activate: (id: string, options?: { replace?: boolean; switch?: boolean }) =>
+    json<{ entry: CatalogEntry }>(post('/api/activate', { id, replace: options?.replace, switch: options?.switch })),
+  activateMany: (ids: string[], options?: { replace?: boolean; switch?: boolean }) =>
+    json<{ entries: CatalogEntry[] }>(post('/api/activate', { ids, replace: options?.replace, switch: options?.switch })),
   reinstall: (id: string) => json<{ entry: CatalogEntry }>(post('/api/reinstall', { id })),
   reinstallMany: (ids: string[]) =>
     json<{ entries: CatalogEntry[] }>(post('/api/reinstall', { ids })),
@@ -223,6 +224,16 @@ export const api = {
       entries: CatalogEntry[]
       failedIds: string[]
     }>(post('/api/import/apply', { planId, choices, ...extra })),
+  duplicates: () => json<{ duplicates: DuplicateWarning[] }>(fetch('/api/duplicates')),
+  resolveDuplicate: (
+    id: string,
+    choice: 'replace' | 'add-inactive' | 'skip' | 'switch' | 'install-as',
+    familyName?: string,
+  ) =>
+    json<{ entries: CatalogEntry[]; duplicates: DuplicateWarning[] }>(
+      post('/api/duplicates/resolve', { id, choice, familyName }),
+    ),
+  switchTo: (id: string) => json<{ entry: CatalogEntry }>(post('/api/switch', { id })),
   activity: () => json<{ operations: Operation[] }>(fetch('/api/activity')),
   undo: (id: string) => json<{ operationId: string }>(post('/api/activity/undo', { id })),
   revisions: (id: string) =>
@@ -300,5 +311,13 @@ export function isOperationsEvent(
 ): value is { type: 'operations'; operations: Operation[] } {
   return Boolean(
     value && typeof value === 'object' && (value as { type?: string }).type === 'operations',
+  )
+}
+
+export function isDuplicatesEvent(
+  value: unknown,
+): value is { type: 'duplicates'; duplicates: DuplicateWarning[] } {
+  return Boolean(
+    value && typeof value === 'object' && (value as { type?: string }).type === 'duplicates',
   )
 }

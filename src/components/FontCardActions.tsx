@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { CircleMinus, CirclePlus, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
+import { ArrowLeftRight, CircleMinus, CirclePlus, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { CatalogBatchPlan } from '@/lib/batch'
 import { actionLabel } from '@/lib/batch'
@@ -12,6 +12,7 @@ type CatalogCardActionHandlers = {
   onDeactivate: () => void
   onUninstall: () => void
   onActivate: () => void
+  onSwitch?: () => void
   onForget: () => void
 }
 
@@ -27,6 +28,7 @@ export function CatalogCardActions({
   onDeactivate,
   onUninstall,
   onActivate,
+  onSwitch,
   onForget,
 }: CatalogCardActionHandlers & {
   plan: CatalogBatchPlan
@@ -63,6 +65,11 @@ export function CatalogCardActions({
       {plan.install > 0 && (
         <IconAction label={installLabel} disabled={busy} success onClick={onInstall}>
           <CirclePlus />
+        </IconAction>
+      )}
+      {onSwitch && (
+        <IconAction label="Switch" disabled={busy} onClick={onSwitch}>
+          <ArrowLeftRight />
         </IconAction>
       )}
       {plan.activate > 0 && (

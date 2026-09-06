@@ -112,11 +112,19 @@ export function findByFaceIdentity(
   faces: FontFaceInfo[],
   format?: string,
 ): CatalogEntry | undefined {
+  return findAllByFaceIdentity(catalog, faces, format)[0]
+}
+
+export function findAllByFaceIdentity(
+  catalog: CatalogFile,
+  faces: FontFaceInfo[],
+  format?: string,
+): CatalogEntry[] {
   const key = faceIdentityKey(faces, format)
   if (!key) {
-    return undefined
+    return []
   }
-  return catalog.entries.find((entry) => {
+  return catalog.entries.filter((entry) => {
     const entryFormat = format === undefined ? undefined : entry.format || path.extname(entry.sourcePath)
     return faceIdentityKey(entry.faces, entryFormat) === key
   })
@@ -156,6 +164,9 @@ function statusForPresentCopy(entry: CatalogEntry): FontStatus | null {
     return entry.status === 'deactivated' ? 'deactivated' : 'installed'
   }
   if (entry.disabledPath && fs.existsSync(entry.disabledPath)) {
+    return 'deactivated'
+  }
+  if (entry.installations?.some((copy) => copy.parkedPath && fs.existsSync(copy.parkedPath))) {
     return 'deactivated'
   }
   return null

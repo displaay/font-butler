@@ -1,7 +1,8 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { faceIdentityKey, findByFaceIdentity, findByInstalledPath, findBySourcePath } from './catalog.ts'
+import { faceIdentityKey, findByInstalledPath, findBySourcePath } from './catalog.ts'
+import { occupyingSiblingsForIncoming, isBoundSourcePath, findAllByFaceIdentity } from './identity.ts'
 import { tryFingerprintFile } from './fingerprint.ts'
 import { isWebFontFormat, normalizeFormat } from './formats.ts'
 import { isFontFile, isPreviewableFontFile, parseFontFile } from './parse.ts'
@@ -21,6 +22,7 @@ const PLAN_TTL_MS = 60 * 60 * 1000
 export function classifyImportFile(
   filePath: string,
   catalog: CatalogFile,
+  options: { paths?: AppPaths } = {},
 ): ImportPlanItem {
   const resolved = path.resolve(filePath)
   const id = crypto.randomUUID()
@@ -50,20 +52,22 @@ export function classifyImportFile(
   const previewOnly = isWebFontFormat(parsed.format)
   const samePath =
     findByInstalledPath(catalog, resolved) ?? findBySourcePath(catalog, resolved)
-  const sameIdentity = findByFaceIdentity(catalog, parsed.faces, parsed.format)
-  const sameFaceAnyFormat = findByFaceIdentity(catalog, parsed.faces)
+  const identityMatches = findAllByFaceIdentity(catalog, parsed.faces, parsed.format)
+  const sameIdentity = identityMatches[0]
+  const sameFaceAnyFormat = findAllByFaceIdentity(catalog, parsed.faces)[0]
   const sameBytes = fingerprint
     ? catalog.entries.find((entry) => entry.sourceFingerprint === fingerprint || entry.installedFingerprint === fingerprint)
     : undefined
   const family = parsed.faces[0]?.familyName
   const sameFamilyDifferentFace = catalog.entries.find((entry) => {
-    if (entry.id === sameIdentity?.id) return false
+    if (identityMatches.some((match) => match.id === entry.id)) return false
     const entryFamily = entry.customFamilyName || entry.faces[0]?.familyName
     if (!family || !entryFamily || entryFamily !== family) return false
     const key = faceIdentityKey(parsed.faces, parsed.format)
     const other = faceIdentityKey(entry.faces, entry.format)
     return Boolean(key && other && key !== other)
   })
+  const stat = fs.statSync(resolved)
 
   const item: ImportPlanItem = {
     ...base,
@@ -73,6 +77,7 @@ export function classifyImportFile(
     faces: parsed.faces,
     previewOnly,
     affectedFaces: parsed.faces.map((face) => `${face.familyName} ${face.styleName}`.trim()),
+    sourceMtimeMs: stat.mtimeMs,
   }
 
   if (previewOnly) {
@@ -99,7 +104,7 @@ export function classifyImportFile(
       ((samePath.sourceFingerprint && samePath.sourceFingerprint !== fingerprint) ||
         (samePath.installedFingerprint && samePath.installedFingerprint !== fingerprint))
     if (bytesDiffer && samePath.status !== 'uninstalled' && samePath.status !== 'source-missing') {
-      return finishRevision(item, samePath)
+      return finishRevision(item, samePath, identityMatches, { parallelCopy: false })
     }
     return {
       ...item,
@@ -121,8 +126,14 @@ export function classifyImportFile(
     }
   }
 
-  if (sameIdentity) {
-    return finishRevision(item, sameIdentity)
+  if (identityMatches.length) {
+    const occupying = options.paths
+      ? occupyingSiblingsForIncoming(catalog.entries, parsed.faces, parsed.format, options.paths)
+      : identityMatches.filter((entry) => entry.status === 'installed' || entry.status === 'outdated')
+    const bound = identityMatches.find((entry) => isBoundSourcePath(entry, resolved))
+    const parallelCopy = !bound
+    const preferred = occupying[0] ?? identityMatches[0]!
+    return finishRevision(item, preferred, identityMatches, { parallelCopy })
   }
 
   if (sameFaceAnyFormat && normalizeFormat(sameFaceAnyFormat.format) !== normalizeFormat(parsed.format)) {
@@ -161,7 +172,29 @@ export function classifyImportFile(
   }
 }
 
-function finishRevision(item: ImportPlanItem, existing: CatalogEntry): ImportPlanItem {
+function finishRevision(
+  item: ImportPlanItem,
+  existing: CatalogEntry,
+  siblings: CatalogEntry[] = [existing],
+  options: { parallelCopy: boolean },
+): ImportPlanItem {
+  const siblingIds = [...new Set(siblings.map((entry) => entry.id))]
+  if (options.parallelCopy) {
+    return {
+      ...item,
+      classification: 'revision',
+      entryId: existing.id,
+      currentFormat: existing.format,
+      currentVersion: existing.faces[0]?.fullName,
+      incomingVersion: item.faces?.[0]?.fullName,
+      parallelCopy: true,
+      siblingEntryIds: siblingIds,
+      defaultChoice: 'skip',
+      choices: ['replace', 'add-inactive', 'install-as', 'switch', 'skip'],
+      reason:
+        'Another copy of this font is already active. Add an inactive copy under the real family name, Install as… a different name, replace, or skip.',
+    }
+  }
   return {
     ...item,
     classification: 'revision',
@@ -169,6 +202,8 @@ function finishRevision(item: ImportPlanItem, existing: CatalogEntry): ImportPla
     currentFormat: existing.format,
     currentVersion: existing.faces[0]?.fullName,
     incomingVersion: item.faces?.[0]?.fullName,
+    parallelCopy: false,
+    siblingEntryIds: siblingIds,
     defaultChoice: 'keep',
     choices: ['keep', 'replace', 'skip'],
   }
@@ -177,9 +212,9 @@ function finishRevision(item: ImportPlanItem, existing: CatalogEntry): ImportPla
 export function buildImportPlan(
   filePaths: string[],
   catalog: CatalogFile,
-  options: { trigger?: OperationTrigger; folderId?: string } = {},
+  options: { trigger?: OperationTrigger; folderId?: string; paths?: AppPaths } = {},
 ): ImportPlan {
-  const items = filePaths.map((filePath) => classifyImportFile(filePath, catalog))
+  const items = filePaths.map((filePath) => classifyImportFile(filePath, catalog, { paths: options.paths }))
   const review = items.filter((item) =>
     item.classification === 'alt-format' ||
     item.classification === 'collection-overlap' ||
@@ -212,8 +247,14 @@ export function planNeedsReview(plan: ImportPlan): boolean {
     (item) =>
       item.classification === 'alt-format' ||
       item.classification === 'collection-overlap' ||
-      item.classification === 'unsupported',
+      item.classification === 'unsupported' ||
+      item.parallelCopy === true ||
+      (item.classification === 'revision' && item.choices.includes('add-inactive')),
   )
+}
+
+export function isWatchIdentityDuplicate(item: ImportPlanItem): boolean {
+  return item.classification === 'revision' && item.parallelCopy === true
 }
 
 export function savePlan(paths: AppPaths, plan: ImportPlan): ImportPlan {
@@ -264,6 +305,7 @@ export function defaultChoiceForPolicy(
   if (item.classification === 'unsupported') return 'skip'
   if (item.classification === 'identical') return 'skip'
   if (item.classification === 'preview-only') return 'keep'
+  if (item.classification === 'revision' && item.parallelCopy) return 'skip'
   if (item.classification === 'revision') return policy.autoUpdate ? 'replace' : 'keep'
   if (item.classification === 'new' || item.classification === 'new-style') {
     return policy.installNew ? 'keep' : 'keep'
