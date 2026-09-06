@@ -214,6 +214,14 @@ export function plansDir(paths: AppPaths): string {
   return path.join(paths.dataRoot, 'plans')
 }
 
+export function journalPath(paths: AppPaths): string {
+  return path.join(paths.dataRoot, 'mutation-journal.json')
+}
+
+export function journalDir(paths: AppPaths): string {
+  return path.join(paths.dataRoot, 'journal')
+}
+
 export function ensureDirs(paths: AppPaths): void {
   for (const dir of [
     paths.dataRoot,
@@ -223,6 +231,7 @@ export function ensureDirs(paths: AppPaths): void {
     paths.uploadsDir,
     revisionsDir(paths),
     plansDir(paths),
+    journalDir(paths),
   ]) {
     fs.mkdirSync(dir, { recursive: true })
   }

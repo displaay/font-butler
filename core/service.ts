@@ -71,6 +71,7 @@ import {
 } from './install.ts'
 import { ensureFontActivation, getFontNative } from './native.ts'
 import { tryFingerprintFile } from './fingerprint.ts'
+import { reconcileMutationJournals, withMutationJournal } from './journal.ts'
 import {
   applyFolderPatch,
   createWatchFolder,
@@ -375,6 +376,11 @@ export class FontButlerService {
 
   async init(): Promise<void> {
     ensureDirs(this.paths)
+    const recovered = await reconcileMutationJournals(this.paths, getFontNative())
+    if (recovered.length) {
+      emitCatalog(this.paths)
+      emitEvent({ type: 'operations', operations: loadOperations(this.paths) })
+    }
     await this.restoreDisabledCopies()
     await this.adoptUserFonts()
     await this.detachRenamedInstallSources()
@@ -2269,6 +2275,13 @@ export class FontButlerService {
           return entry
         }
       }
+      return await withMutationJournal(
+        this.paths,
+        {
+          kind: options?.replace ? 'replace' : 'install',
+          entries: [entry],
+        },
+        async () => {
       if (conflicts.length) {
         conflictSnapshots = await this.snapshotAndRemoveConflicts(conflicts)
         catalog = loadCatalog(this.paths)
@@ -2361,6 +2374,8 @@ export class FontButlerService {
       touchEntry(entry)
       saveCatalog(this.paths, catalog)
       return entry
+        },
+      )
     } catch (error) {
       await this.restoreConflictSnapshots(conflictSnapshots)
       throw error
@@ -2399,6 +2414,10 @@ export class FontButlerService {
       const conflicts = await this.resolveFormatConflicts(draft, catalog.entries, options?.replace)
       const conflictSnapshots = conflicts.length ? await this.snapshotAndRemoveConflicts(conflicts) : []
       try {
+        return await withMutationJournal(
+          this.paths,
+          { kind: options?.replace ? 'replace' : 'install', entries: [sourceEntry] },
+          async () => {
         const dest = destinationForInstall(this.paths, draft, temp, { reuseInstalled: false })
         await commitInstalledFile({
           dest,
@@ -2413,6 +2432,8 @@ export class FontButlerService {
         upsertEntry(next, draft)
         saveCatalog(this.paths, next)
         return draft
+          },
+        )
       } catch (error) {
         await this.restoreConflictSnapshots(conflictSnapshots)
         throw error
@@ -2783,6 +2804,10 @@ export class FontButlerService {
     const destSet = [
       ...new Set(siblings.flatMap((sibling) => occupiedDestinations(sibling, this.paths))),
     ]
+    return withMutationJournal(
+      this.paths,
+      { kind: 'switch', entries: [entry, ...siblings] },
+      async () => {
     const parkedIds: string[] = []
     try {
       for (const sibling of siblings) {
@@ -2863,6 +2888,8 @@ export class FontButlerService {
       }
       throw error
     }
+      },
+    )
   }
 
   private async deactivateEntry(
@@ -2885,6 +2912,7 @@ export class FontButlerService {
     if (!live) {
       throw new Error('This font is not installed.')
     }
+    return withMutationJournal(this.paths, { kind: 'park', entries: [entry] }, async () => {
     await this.parkManagedCopies(entry)
     if (options.removeManualOwner) {
       entry.activationOwners = (entry.activationOwners ?? []).filter(
@@ -2894,6 +2922,7 @@ export class FontButlerService {
     touchEntry(entry)
     saveCatalog(this.paths, catalog)
     return entry
+    })
   }
 
   private async activateEntry(

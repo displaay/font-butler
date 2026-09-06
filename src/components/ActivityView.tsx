@@ -20,6 +20,7 @@ const ACTION_LABELS: Record<string, string> = {
   'restore-revision': 'Restore version',
   'activate-project': 'Activate project',
   undo: 'Undo',
+  'recover-journal': 'Recovered after interruption',
 }
 
 function actionLabel(action: string): string {

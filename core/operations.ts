@@ -93,7 +93,8 @@ export function finishOperation(
     operation.action !== 'clear-caches' &&
     operation.action !== 'trash-source' &&
     operation.action !== 'repair' &&
-    operation.action !== 'undo'
+    operation.action !== 'undo' &&
+    operation.action !== 'recover-journal'
   return operation
 }
 
