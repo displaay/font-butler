@@ -14,7 +14,7 @@ import {
 import { CatalogCardActions, SystemCardActions } from '@/components/FontCardActions'
 import { FontFaceStyles, catalogFontFamily, systemFontFamily } from '@/components/FontFaceStyles'
 import { InstanceList } from '@/components/InstanceList'
-import { Inspector } from '@/components/Inspector'
+import { MarqueeOverlay } from '@/components/MarqueeOverlay'
 import { DropFolderDialog } from '@/components/DropFolderDialog'
 import { FolderSetupDialog } from '@/components/FolderSetupDialog'
 import { FolderRelinkDialog } from '@/components/FolderRelinkDialog'
@@ -112,7 +112,9 @@ import {
 } from '@/lib/batch'
 import {
   canStartMarquee,
+  clickPreservesSelection,
   clientRect,
+  collectFamilyCardRects,
   keysInMarquee,
   mergeMarqueeSelection,
   nextSelection,
@@ -2426,44 +2428,6 @@ function AppShell() {
         <MarqueeOverlay rect={marqueeRect} />
         <Toaster theme={settings?.theme ?? 'system'} />
       </div>
-  )
-}
-
-function collectFamilyCardRects(): Array<{ key: string; rect: Rect }> {
-  return Array.from(document.querySelectorAll('[data-family-key]')).flatMap((node) => {
-    const key = node.getAttribute('data-family-key')
-    if (!key) return []
-    const box = node.getBoundingClientRect()
-    return [
-      {
-        key,
-        rect: { left: box.left, top: box.top, right: box.right, bottom: box.bottom },
-      },
-    ]
-  })
-}
-
-function MarqueeOverlay({ rect }: { rect: Rect | null }) {
-  if (!rect) return null
-  return (
-    <div
-      className="pointer-events-none fixed z-50 border border-foreground/30 bg-foreground/10"
-      style={{
-        left: rect.left,
-        top: rect.top,
-        width: rect.right - rect.left,
-        height: rect.bottom - rect.top,
-      }}
-    />
-  )
-}
-
-function clickPreservesSelection(target: EventTarget | null): boolean {
-  return (
-    target instanceof Element &&
-    target.closest(
-      '[data-family-key], [data-keep-selection], [data-radix-scroll-area-scrollbar]',
-    ) != null
   )
 }
 
