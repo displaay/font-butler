@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
 import { toast } from 'sonner'
-import { RefreshCw, X } from 'lucide-react'
+import { ChevronsLeft, ChevronsRight, Maximize2, RefreshCw, X } from 'lucide-react'
 import { ActivityView } from '@/components/ActivityView'
 import {
   BatchActionBar,
@@ -35,7 +35,7 @@ import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { NotifyProvider, useSetActionStatus } from '@/components/NotifyProvider'
 import { Toaster } from '@/components/ui/sonner'
-import { TooltipProvider } from '@/components/ui/tooltip'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useFontActions, type FormatPrompt, type ReplacePrompt } from '@/hooks/useFontActions'
 import { api, isDuplicatesEvent, isNotice, isOperationsEvent, isProjectsEvent, isSettingsEvent, subscribeEvents } from '@/lib/api'
 import { desktopPathForFile } from '@/lib/desktop'
@@ -92,6 +92,16 @@ import {
   shortcutAction,
   type Rect,
 } from '@/lib/selection'
+import {
+  clickOpensInspector,
+  collapseInspector,
+  DEFAULT_INSPECTOR_DENSITY,
+  expandInspector,
+  inspectorPaneClass,
+  inspectorRailClass,
+  inspectorUsesCardRail,
+  type InspectorDensity,
+} from '@/lib/inspector'
 import { applyTheme } from '@/lib/theme'
 import { allUpdateGroups, visibleUpdateGroups } from '@/lib/updateInventory'
 import type { AppSettings, CatalogEntry, ComparisonCapture, DuplicateWarning, FamilyGroup, ImportPlan, ImportPlanItem, LibraryFilter, Operation, PreviewPreferences, ProjectSet, SavedLibraryFilter, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
@@ -149,6 +159,7 @@ function AppShell() {
   const [selectedSystemKeys, setSelectedSystemKeys] = useState<string[]>([])
   const [selectionAnchor, setSelectionAnchor] = useState<string | null>(null)
   const [inspectSelection, setInspectSelection] = useState(false)
+  const [inspectorDensity, setInspectorDensity] = useState<InspectorDensity>(DEFAULT_INSPECTOR_DENSITY)
   const [marqueeRect, setMarqueeRect] = useState<Rect | null>(null)
   const marqueeRef = useRef<{
     startX: number
@@ -281,7 +292,10 @@ function AppShell() {
             const match = current.find((entry) => entry.id === event.notice.entryId)
             if (match) {
               setSelectedFamily(familyNameOf(match))
-              if (match.previewOnly) setInspectSelection(true)
+              if (match.previewOnly) {
+                setInspectorDensity(DEFAULT_INSPECTOR_DENSITY)
+                setInspectSelection(true)
+              }
             }
             return current
           })
@@ -508,6 +522,7 @@ function AppShell() {
     setSelectionAnchor(group.familyName)
     setSelectedEntryId(group.entries[0]?.id ?? null)
     setInspectSelection(true)
+    setInspectorDensity(DEFAULT_INSPECTOR_DENSITY)
   }
 
   function handleCatalogSelect(group: FamilyGroup, event: MouseEvent) {
@@ -516,6 +531,15 @@ function AppShell() {
     const current = selectedFamilyKeys
     const range = event.shiftKey
     const toggle = event.metaKey || event.ctrlKey
+    if (clickOpensInspector(current, group.familyName, { toggle, range })) {
+      if (inspectSelection) {
+        setInspectorDensity((density) => expandInspector(density))
+      } else {
+        setInspectorDensity(DEFAULT_INSPECTOR_DENSITY)
+        setInspectSelection(true)
+      }
+      return
+    }
     const keys = nextSelection(
       visibleGroups.map((item) => item.familyName),
       current,
@@ -527,7 +551,7 @@ function AppShell() {
     setSelectedFamily(keys[keys.length - 1] ?? null)
     setSelectedEntryId(keys.length ? group.entries[0]?.id ?? null : null)
     if (!range) setSelectionAnchor(keys.length ? group.familyName : null)
-    setInspectSelection(false)
+    if (range || toggle || keys.length !== 1) setInspectSelection(false)
   }
 
   function inspectSystemGroup(group: SystemFamilyGroup) {
@@ -535,6 +559,7 @@ function AppShell() {
     setSelectedSystemKeys([group.familyName])
     setSelectionAnchor(group.familyName)
     setInspectSelection(true)
+    setInspectorDensity(DEFAULT_INSPECTOR_DENSITY)
   }
 
   function handleSystemSelect(group: SystemFamilyGroup, event: MouseEvent) {
@@ -543,6 +568,15 @@ function AppShell() {
     const current = selectedSystemKeys
     const range = event.shiftKey
     const toggle = event.metaKey || event.ctrlKey
+    if (clickOpensInspector(current, group.familyName, { toggle, range })) {
+      if (inspectSelection) {
+        setInspectorDensity((density) => expandInspector(density))
+      } else {
+        setInspectorDensity(DEFAULT_INSPECTOR_DENSITY)
+        setInspectSelection(true)
+      }
+      return
+    }
     const keys = nextSelection(
       shownSystemGroups.map((item) => item.familyName),
       current,
@@ -553,7 +587,7 @@ function AppShell() {
     setSelectedSystemKeys(keys)
     setSelectedSystem(keys[keys.length - 1] ?? null)
     if (!range) setSelectionAnchor(keys.length ? group.familyName : null)
-    setInspectSelection(false)
+    if (range || toggle || keys.length !== 1) setInspectSelection(false)
   }
 
   function selectedCatalogGroups(): FamilyGroup[] {
@@ -575,6 +609,20 @@ function AppShell() {
   const selectionCount = tab === 'system' ? systemSelection.length : catalogSelection.length
   const showInspector = selectionCount === 1 && inspectSelection
   const showBatchBar = selectionCount > 1 || (selectionCount === 1 && !inspectSelection)
+  const cardLayout = showInspector && inspectorUsesCardRail(inspectorDensity) ? 'list' : viewLayout
+
+  function closeInspector() {
+    setInspectSelection(false)
+  }
+
+  function collapseInspectorPane() {
+    const next = collapseInspector(inspectorDensity)
+    if (next == null) {
+      closeInspector()
+      return
+    }
+    setInspectorDensity(next)
+  }
 
   function clearSelection() {
     setSelectedFamily(null)
@@ -889,6 +937,30 @@ function AppShell() {
       if (document.querySelector('[role="dialog"]')) return
       const action = shortcutAction(event)
       if (!action) return
+      if (action === 'collapse') {
+        if (!inspectSelection) return
+        if (document.querySelector('[data-radix-popper-content-wrapper], [role="menu"]')) return
+        event.preventDefault()
+        closeInspector()
+        return
+      }
+      if (action === 'inspect') {
+        if (selectionCount !== 1) return
+        event.preventDefault()
+        if (inspectSelection) {
+          setInspectorDensity((density) => expandInspector(density))
+        } else {
+          setInspectorDensity(DEFAULT_INSPECTOR_DENSITY)
+          setInspectSelection(true)
+        }
+        return
+      }
+      if (action === 'specimen') {
+        if (!inspectSelection) return
+        event.preventDefault()
+        setInspectorDensity('specimen')
+        return
+      }
       event.preventDefault()
       if (action === 'remove') void removeSelected()
       if (action === 'install') void installOrActivateSelected()
@@ -1220,7 +1292,13 @@ function AppShell() {
           onOpenSettings={() => setSettingsOpen(true)}
         />
 
-        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="relative flex min-h-0 min-w-0 flex-1">
+          <div
+            className={cn(
+              'relative flex min-h-0 flex-col',
+              showInspector ? inspectorRailClass(inspectorDensity) : 'min-w-0 flex-1',
+            )}
+          >
           <section
             className={cn('flex min-h-0 min-w-0 flex-1 flex-col', marqueeRect && 'select-none')}
             onPointerDown={handleListPointerDown}
@@ -1362,9 +1440,9 @@ function AppShell() {
                   </div>
                 )}
                 <div
-                  className={cn(viewLayout === 'grid' ? 'grid' : 'grid gap-2')}
+                  className={cn(cardLayout === 'grid' ? 'grid' : 'grid gap-2')}
                   style={
-                    viewLayout === 'grid'
+                    cardLayout === 'grid'
                       ? {
                           gridTemplateColumns: `repeat(auto-fill, minmax(${gridCardMinWidthRem(gridPreviewSize)}rem, 1fr))`,
                           gap: `${Math.max(0.5, gridPreviewSize * 0.18)}rem`,
@@ -1378,7 +1456,7 @@ function AppShell() {
                         return (
                         <SystemCard
                           key={group.key}
-                          layout={viewLayout}
+                          layout={cardLayout}
                           previewSize={gridPreviewSize}
                           group={group}
                           showSourcePath={showSources}
@@ -1428,7 +1506,7 @@ function AppShell() {
                         return (
                         <LibraryCard
                           key={group.key}
-                          layout={viewLayout}
+                          layout={cardLayout}
                           previewSize={gridPreviewSize}
                           group={group}
                           showSourcePath={showSources}
@@ -1584,12 +1662,66 @@ function AppShell() {
               </div>
             </div>
           )}
+          </div>
           {showInspector && (
           <div
             data-keep-selection=""
-            className="absolute inset-y-0 right-0 z-20 flex w-full flex-col border-l bg-background shadow-xl md:w-96"
+            className={cn(
+              'z-20 flex min-h-0 flex-col border-l bg-background',
+              inspectorPaneClass(inspectorDensity),
+            )}
+            role="complementary"
+            aria-label="Font details"
           >
-            <div className="flex shrink-0 justify-end px-2 pt-2">
+            <div className="flex shrink-0 items-center justify-between gap-1 px-2 pt-2">
+              <div className="flex items-center gap-0.5">
+                {inspectorDensity !== 'specimen' && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 w-7 px-0"
+                        aria-label={inspectorDensity === 'compact' ? 'Expand details' : 'Specimen view'}
+                        onClick={() => setInspectorDensity((density) => expandInspector(density))}
+                      >
+                        {inspectorDensity === 'compact' ? <ChevronsLeft /> : <Maximize2 />}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      {inspectorDensity === 'compact' ? 'Expand details' : 'Specimen view'}
+                    </TooltipContent>
+                  </Tooltip>
+                )}
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 w-7 px-0"
+                      aria-label={
+                        inspectorDensity === 'compact'
+                          ? 'Back to grid'
+                          : inspectorDensity === 'specimen'
+                            ? 'Show details'
+                            : 'Collapse details'
+                      }
+                      onClick={collapseInspectorPane}
+                    >
+                      <ChevronsRight />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {inspectorDensity === 'compact'
+                      ? 'Back to grid'
+                      : inspectorDensity === 'specimen'
+                        ? 'Show details'
+                        : 'Collapse details'}
+                  </TooltipContent>
+                </Tooltip>
+              </div>
               <Button
                 type="button"
                 size="sm"
@@ -1601,8 +1733,9 @@ function AppShell() {
                 <X />
               </Button>
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto">
+            <div className="min-h-0 flex-1 overflow-hidden">
             <Inspector
+              density={inspectorDensity}
               group={tab === 'system' ? null : selectedGroup}
               entry={tab === 'system' ? null : selectedEntry}
               statusSummary={selectedGroup ? familyStatusSummary(selectedGroup) : null}
@@ -1745,7 +1878,10 @@ function AppShell() {
                   }
                 })()
               }}
-              onOpenWithPreview={() => setInspectSelection(true)}
+              onOpenWithPreview={() => {
+                setInspectSelection(true)
+                setInspectorDensity('specimen')
+              }}
               multiSelect={
                 (tab === 'system' ? systemSelection.length : catalogSelection.length) > 1
                   ? tab === 'system'
