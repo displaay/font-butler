@@ -22,6 +22,7 @@ import type {
   WatchFolder,
   ComparisonCapture,
 } from './types'
+import { consumeSseBuffer } from './sse'
 
 let apiToken: string | null = null
 let bootstrapSettings: AppSettings | null = null
@@ -62,14 +63,23 @@ function authHeaders(extra?: HeadersInit): HeadersInit {
   return headers
 }
 
-async function json<T>(input: Promise<Response>): Promise<T> {
-  await ensureToken()
+async function parseJson<T>(input: Promise<Response>): Promise<T> {
   const response = await input
   const data = (await response.json()) as T & { error?: string }
   if (!response.ok) {
     throw new Error(data.error || response.statusText)
   }
   return data
+}
+
+async function json<T>(input: Promise<Response>): Promise<T> {
+  await ensureToken()
+  return parseJson(input)
+}
+
+async function get<T>(url: string): Promise<T> {
+  await ensureToken()
+  return parseJson(fetch(url, { headers: authHeaders() }))
 }
 
 async function post(url: string, body: unknown): Promise<Response> {
@@ -86,8 +96,8 @@ export const api = {
     await ensureToken()
     return { settings: bootstrapSettings }
   },
-  catalog: () => json<{ entries: CatalogEntry[] }>(fetch('/api/catalog')),
-  system: () => json<{ faces: SystemFace[] }>(fetch('/api/system')),
+  catalog: () => get<{ entries: CatalogEntry[] }>('/api/catalog'),
+  system: () => get<{ faces: SystemFace[] }>('/api/system'),
   inspectDrop: (paths: string[]) =>
     json<{
       folders: string[]
@@ -137,8 +147,8 @@ export const api = {
   removeDestinationCopy: (id: string, destinationId: DestinationId) =>
     json<{ entry: CatalogEntry }>(post('/api/install/destination-remove', { id, destinationId })),
   destinations: () =>
-    json<{ destinations: DestinationCapability[]; investigation: DestinationInvestigationRow[] }>(
-      fetch('/api/destinations'),
+    get<{ destinations: DestinationCapability[]; investigation: DestinationInvestigationRow[] }>(
+      '/api/destinations',
     ),
   uninstall: (id: string, options?: { deleteSource?: boolean }) =>
     json<{ entry: CatalogEntry }>(post('/api/uninstall', { id, deleteSource: options?.deleteSource })),
@@ -179,12 +189,12 @@ export const api = {
   reveal: (payload: { id?: string; path?: string; which?: 'source' | 'installed' }) =>
     json<{ path: string }>(post('/api/reveal', payload)),
   settings: () =>
-    json<{
+    get<{
       settings: AppSettings
       officeFontCache: OfficeFontCacheInfo
       adobeFontCache: AdobeFontCacheInfo
       destinations?: { destinations: DestinationCapability[]; investigation: DestinationInvestigationRow[] }
-    }>(fetch('/api/settings')),
+    }>('/api/settings'),
   updateSettings: (patch: {
     watchFolders?: string[]
     defaultView?: ViewLayout
@@ -212,10 +222,8 @@ export const api = {
       destinations?: { destinations: DestinationCapability[]; investigation: DestinationInvestigationRow[] }
     }>(post('/api/settings', patch)),
   renamePreview: (id: string, familyName: string) =>
-    json<{ fullName: string; postscriptName: string }>(
-      fetch(
-        `/api/rename-preview?id=${encodeURIComponent(id)}&familyName=${encodeURIComponent(familyName)}`,
-      ),
+    get<{ fullName: string; postscriptName: string }>(
+      `/api/rename-preview?id=${encodeURIComponent(id)}&familyName=${encodeURIComponent(familyName)}`,
     ),
   inspectRelink: (id: string, path: string) =>
     json<RelinkPreview>(post('/api/relink/inspect', { id, path })),
@@ -251,7 +259,7 @@ export const api = {
       entries: CatalogEntry[]
       failedIds: string[]
     }>(post('/api/import/apply', { planId, choices, ...extra })),
-  duplicates: () => json<{ duplicates: DuplicateWarning[] }>(fetch('/api/duplicates')),
+  duplicates: () => get<{ duplicates: DuplicateWarning[] }>('/api/duplicates'),
   resolveDuplicate: (
     id: string,
     choice: 'replace' | 'add-inactive' | 'skip' | 'switch' | 'install-as',
@@ -261,11 +269,11 @@ export const api = {
       post('/api/duplicates/resolve', { id, choice, familyName }),
     ),
   switchTo: (id: string) => json<{ entry: CatalogEntry }>(post('/api/switch', { id })),
-  activity: () => json<{ operations: Operation[] }>(fetch('/api/activity')),
+  activity: () => get<{ operations: Operation[] }>('/api/activity'),
   undo: (id: string) => json<{ operationId: string }>(post('/api/activity/undo', { id })),
   revisions: (id: string) =>
-    json<{ revisions: Array<{ fingerprint: string; current: boolean; previous: boolean }> }>(
-      fetch(`/api/revisions/${encodeURIComponent(id)}`),
+    get<{ revisions: Array<{ fingerprint: string; current: boolean; previous: boolean }> }>(
+      `/api/revisions/${encodeURIComponent(id)}`,
     ),
   restoreRevision: (id: string, fingerprint?: string) =>
     json<{ entry: CatalogEntry }>(post('/api/revisions/restore', { id, fingerprint })),
@@ -275,7 +283,7 @@ export const api = {
       fonts: Array<{ target: string; outcome: string; reason?: string }>
       caches: Array<{ target: string; outcome: string; reason?: string }>
     }>(post('/api/repair', { ids, caches })),
-  projects: () => json<{ projects: ProjectSet[] }>(fetch('/api/projects')),
+  projects: () => get<{ projects: ProjectSet[] }>('/api/projects'),
   createProject: (name: string, memberIds?: string[]) =>
     json<{ project: ProjectSet }>(post('/api/projects', { name, memberIds })),
   updateProject: (
@@ -287,7 +295,7 @@ export const api = {
     json<{ succeeded: number; failed: number; failedIds: string[] }>(post('/api/projects/activate', { id })),
   deactivateProject: (id: string) => json<{ ok: boolean }>(post('/api/projects/deactivate', { id })),
   previewMeta: (id: string, which: 'source' | 'installed' | 'revision' = 'installed', revision?: string) =>
-    json<{
+    get<{
       faces: CatalogEntry['faces']
       format: string
       axes?: Array<{ tag: string; name: string; min: number; default: number; max: number }>
@@ -296,23 +304,49 @@ export const api = {
       characterSet?: number[]
       fingerprint?: string
     }>(
-      fetch(
-        `/api/preview-meta/${encodeURIComponent(id)}?which=${which}${revision ? `&revision=${encodeURIComponent(revision)}` : ''}`,
-      ),
+      `/api/preview-meta/${encodeURIComponent(id)}?which=${which}${revision ? `&revision=${encodeURIComponent(revision)}` : ''}`,
     ),
   captureComparison: (id: string) => json<ComparisonCapture>(post('/api/comparison/capture', { id })),
 }
 
 export function subscribeEvents(onEvent: (event: unknown) => void): () => void {
-  const source = new EventSource('/api/events')
-  source.onmessage = (message) => {
-    try {
-      onEvent(JSON.parse(message.data))
-    } catch {
-      // ignore malformed SSE
+  const abort = new AbortController()
+  void (async () => {
+    await ensureToken()
+    while (!abort.signal.aborted) {
+      try {
+        const response = await fetch('/api/events', {
+          headers: authHeaders(),
+          signal: abort.signal,
+        })
+        if (!response.ok || !response.body) {
+          throw new Error('events unavailable')
+        }
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+        while (!abort.signal.aborted) {
+          const { done, value } = await reader.read()
+          if (done) {
+            break
+          }
+          buffer = consumeSseBuffer(buffer + decoder.decode(value, { stream: true }), (raw) => {
+            try {
+              onEvent(JSON.parse(raw))
+            } catch {
+              // ignore malformed SSE
+            }
+          })
+        }
+      } catch {
+        if (abort.signal.aborted) {
+          return
+        }
+        await new Promise((resolve) => setTimeout(resolve, 2000))
+      }
     }
-  }
-  return () => source.close()
+  })()
+  return () => abort.abort()
 }
 
 export function isNotice(value: unknown): value is { type: 'notice'; notice: Notice } {

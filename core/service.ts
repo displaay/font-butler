@@ -1261,10 +1261,10 @@ export class FontButlerService {
 
   fontBytesForPath(filePath: string): { buffer: Buffer; mime: string; filename: string } {
     const resolved = path.resolve(filePath)
-    if (!allowedFontPath(resolved, this.paths)) {
+    if (!isPreviewableFontFile(resolved) || !allowedFontPath(resolved, this.paths)) {
       throw new Error('That font path is not readable.')
     }
-    if (!fs.existsSync(resolved)) {
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
       throw new Error('Font file is missing.')
     }
     return {

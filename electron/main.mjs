@@ -1,7 +1,8 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, nativeImage, nativeTheme, shell, Tray } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, nativeImage, nativeTheme, Tray } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { readApiTokenFile } from './api-token.mjs'
 import { deliverNativeNotice, electronNotificationPermission } from './notify.mjs'
 import { menuBarUpdateBadge, outdatedFamilies } from './updates-menu.mjs'
 
@@ -41,25 +42,56 @@ let lastNoticeAt = 0
 let isQuitting = false
 const queuedFiles = []
 
-async function ensureApiToken() {
+function apiHeaders(extra = {}) {
+  const headers = { ...extra }
   if (apiToken) {
-    return apiToken
+    headers.Authorization = `Bearer ${apiToken}`
   }
-  const response = await fetch(`${API}/api/bootstrap`)
-  const bootstrapBody = await response.text()
-  const data = bootstrapBody ? JSON.parse(bootstrapBody) : {}
-  if (!response.ok || !data.token) {
+  return headers
+}
+
+function applyBootstrapSettings(settings) {
+  if (!settings) {
+    return
+  }
+  applyThemeSetting(settings.theme)
+  applyMenuBarSetting(settings.menuBarIcon)
+  applyOpenAtLogin(settings.openAtLogin)
+  applyOfficeCacheSetting(settings.clearOfficeFontCache)
+  applyAdobeCacheSetting(settings.clearAdobeFontCache)
+  applyNativeNotificationSetting(settings.nativeNotifications)
+  void persistDeniedNativeNotifications(settings.nativeNotifications)
+}
+
+async function ensureApiToken() {
+  if (!apiToken) {
+    apiToken = readApiTokenFile()
+  }
+  if (!apiToken) {
+    const response = await fetch(`${API}/api/bootstrap`)
+    const bootstrapBody = await response.text()
+    const data = bootstrapBody ? JSON.parse(bootstrapBody) : {}
+    if (data.token) {
+      apiToken = data.token
+    }
+    if (data.settings) {
+      applyBootstrapSettings(data.settings)
+    }
+  }
+  if (!apiToken) {
     throw new Error('Could not connect to Font Buttler API.')
   }
-  apiToken = data.token
-  if (data.settings) {
-    applyThemeSetting(data.settings.theme)
-    applyMenuBarSetting(data.settings.menuBarIcon)
-    applyOpenAtLogin(data.settings.openAtLogin)
-    applyOfficeCacheSetting(data.settings.clearOfficeFontCache)
-    applyAdobeCacheSetting(data.settings.clearAdobeFontCache)
-    applyNativeNotificationSetting(data.settings.nativeNotifications)
-    void persistDeniedNativeNotifications(data.settings.nativeNotifications)
+  try {
+    const response = await fetch(`${API}/api/bootstrap`, {
+      headers: apiHeaders(),
+    })
+    const bootstrapBody = await response.text()
+    const data = bootstrapBody ? JSON.parse(bootstrapBody) : {}
+    if (response.ok && data.settings) {
+      applyBootstrapSettings(data.settings)
+    }
+  } catch {
+    // Token is still usable even if settings refresh fails.
   }
   return apiToken
 }
@@ -422,7 +454,10 @@ function handleApiEvent(event) {
 
 async function loadCatalog() {
   try {
-    const response = await fetch(`${API}/api/catalog`)
+    const token = await ensureApiToken()
+    const response = await fetch(`${API}/api/catalog`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
     const data = await response.json()
     if (Array.isArray(data.entries)) {
       catalogEntries = data.entries
@@ -436,7 +471,10 @@ async function loadCatalog() {
 async function listenForApiEvents() {
   while (!isQuitting) {
     try {
-      const response = await fetch(`${API}/api/events`)
+      const token = await ensureApiToken()
+      const response = await fetch(`${API}/api/events`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
       if (!response.ok || !response.body) {
         throw new Error('events unavailable')
       }
@@ -571,6 +609,9 @@ if (!gotLock) {
       try {
         const info = await startFontButlerServer({ staticDir, port })
         API = `http://127.0.0.1:${info.port}`
+        if (info.token) {
+          apiToken = info.token
+        }
         if (!process.env.FONT_BUTLER_UI && !process.env.FONTCASE_UI) {
           UI = API
         }
@@ -636,10 +677,6 @@ ipcMain.handle('get-api-token', async () => {
 })
 
 ipcMain.handle('request-notifications', () => electronNotificationPermission(Notification))
-
-ipcMain.handle('reveal', async (_event, filePath) => {
-  shell.showItemInFolder(filePath)
-})
 
 ipcMain.handle('pick-file', async () => {
   const options = {

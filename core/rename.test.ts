@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { resolveRenameRuntime } from './rename.ts'
+import { renamePythonArgv, resolveRenameRuntime } from './rename.ts'
 
 function tempRoot(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-rename-'))
@@ -61,4 +61,18 @@ test('resolveRenameRuntime falls back to system python3 and the project script',
     script,
     source: 'system',
   })
+})
+
+test('rename Python argv uses -I for bundled runtimes and a -- separator before paths', () => {
+  const script = '/tmp/rename_family.py'
+  const source = '/tmp/Source.ttf'
+  const dest = '/tmp/Dest.ttf'
+  assert.deepEqual(
+    renamePythonArgv({ command: '/runtime/python3', script, source: 'bundled' }, source, dest, 'New Family'),
+    ['-I', script, '--', source, dest, 'New Family'],
+  )
+  assert.deepEqual(
+    renamePythonArgv({ command: 'python3', script, source: 'system' }, source, dest, 'New Family'),
+    [script, '--', source, dest, 'New Family'],
+  )
 })

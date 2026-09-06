@@ -10,7 +10,6 @@ contextBridge.exposeInMainWorld('fontButlerDesktop', {
       return undefined
     }
   },
-  reveal: (filePath) => ipcRenderer.invoke('reveal', filePath),
   pickFolder: () => ipcRenderer.invoke('pick-folder'),
   pickFile: () => ipcRenderer.invoke('pick-file'),
   getApiToken: () => ipcRenderer.invoke('get-api-token'),

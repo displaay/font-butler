@@ -94,8 +94,10 @@ def rename_path(src: Path, dest: Path, family: str) -> None:
 
 
 def main(argv: list[str]) -> int:
+    if argv and argv[0] == "--":
+        argv = argv[1:]
     if len(argv) != 3:
-        sys.stderr.write("Usage: rename_family.py <input> <output> <family-name>\n")
+        sys.stderr.write("Usage: rename_family.py [--] <input> <output> <family-name>\n")
         return 1
     src, dest, family = Path(argv[0]), Path(argv[1]), argv[2]
     if not src.is_file():

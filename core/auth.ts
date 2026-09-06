@@ -15,6 +15,10 @@ export function assertSafeShellPath(filePath: string): string {
   return resolved
 }
 
+export function shouldIncludeBootstrapToken(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.FONT_BUTLER_TEST === '1' || env.FONT_BUTLER_DEV_BOOTSTRAP === '1'
+}
+
 export function getOrCreateApiToken(tokenPath: string): string {
   if (fs.existsSync(tokenPath)) {
     const token = fs.readFileSync(tokenPath, 'utf8').trim()

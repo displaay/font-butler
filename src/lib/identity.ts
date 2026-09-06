@@ -40,8 +40,3 @@ export function canSwitchTo(entry: CatalogEntry, catalog: CatalogEntry[]): boole
   if (entry.status !== 'deactivated' && entry.status !== 'uninstalled') return false
   return occupyingSiblings(entry, catalog).length > 0
 }
-
-export function copyLabel(entry: CatalogEntry): string {
-  const source = entry.sourcePath.split(/[/\\]/).pop() || entry.sourcePath
-  return source
-}

@@ -65,6 +65,32 @@ export function requestAuthorityError(
   return null
 }
 
+export function isPublicApiGet(pathname: string): boolean {
+  if (pathname === '/api/health' || pathname === '/api/bootstrap' || pathname === '/api/system-font') {
+    return true
+  }
+  return pathname.startsWith('/api/font-file/')
+}
+
+export function bearerToken(authorization: string | undefined): string | null {
+  const value = authorization ?? ''
+  return value.startsWith('Bearer ') ? value.slice(7) : null
+}
+
+export function isAuthorizedApiRequest(options: {
+  method: string
+  pathname: string
+  authorization?: string
+  token: string
+}): boolean {
+  const method = options.method.toUpperCase()
+  if ((method === 'GET' || method === 'HEAD') && isPublicApiGet(options.pathname)) {
+    return true
+  }
+  const bearer = bearerToken(options.authorization)
+  return Boolean(bearer) && bearer === options.token
+}
+
 export function denyRemoteRequest(
   c: Context,
   port: number,
