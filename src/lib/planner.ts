@@ -52,3 +52,12 @@ export function classificationLabel(item: ImportPlanItem): string {
       return item.classification
   }
 }
+
+export function collectionImportScope(item: ImportPlanItem): string | null {
+  const names = item.affectedFaces?.length
+    ? item.affectedFaces
+    : (item.faces ?? []).map((face) => `${face.familyName} ${face.styleName}`.trim())
+  const collection = item.classification === 'collection-overlap' || (item.faces?.length ?? 0) > 1
+  if (!collection || names.length === 0) return null
+  return `This changes all ${names.length} faces in this collection: ${names.join(', ')}`
+}

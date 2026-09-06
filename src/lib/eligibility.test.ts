@@ -54,6 +54,22 @@ function group(entries: CatalogEntry[]): FamilyGroup {
   }
 }
 
+test('a collection file is one eligible install/deactivate target', () => {
+  const collection = group([
+    {
+      ...entry('pack', 'installed'),
+      format: 'ttc',
+      faces: [face('Pack', 'Regular'), face('Pack', 'Bold')],
+    },
+  ])
+  collection.faces = collection.entries[0]!.faces
+  collection.instanceCount = 2
+  assert.deepEqual(deactivatableIds(collection), ['pack'])
+  assert.deepEqual(uninstallableIds(collection), ['pack'])
+  assert.deepEqual(installableIds(collection), [])
+  assert.equal(familyHasAction(collection, 'deactivate'), true)
+})
+
 test('preview-only fonts are excluded from install and update actions', () => {
   const web = group([
     {

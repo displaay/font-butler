@@ -31,6 +31,18 @@ export function catalogFontUrl(
   return `/api/font-file/${entry.id}?${query.toString()}`
 }
 
+export function catalogFontFaceRules(
+  family: string,
+  url: string,
+  faces: Array<{ weight?: number; italic?: boolean }>,
+): string[] {
+  const descriptors = faces.length > 0 ? faces : [{ weight: 400, italic: false }]
+  return descriptors.map(
+    (face) =>
+      `@font-face{font-family:"${family}";src:url("${url}");font-weight:${face.weight ?? 400};font-style:${face.italic ? 'italic' : 'normal'};font-display:swap;}`,
+  )
+}
+
 export function systemFontUrl(filePath: string, revision?: string | number): string {
   const query = new URLSearchParams({ path: filePath })
   if (revision !== undefined) {

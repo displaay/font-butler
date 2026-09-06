@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { catalogFontUrl, catalogPreviewRevision } from './preview.ts'
+import { catalogFontUrl, catalogFontFaceRules, catalogPreviewRevision } from './preview.ts'
 import type { CatalogEntry, FontFaceInfo } from './types.ts'
 
 function entry(partial: Partial<CatalogEntry> = {}): CatalogEntry {
@@ -40,4 +40,16 @@ test('installed preview URLs version from the installed revision, not the source
   const reinstalled = entry({ installedSnapshotMtimeMs: 2, updatedAt: 5 })
   assert.notEqual(catalogFontUrl(installed), catalogFontUrl(reinstalled))
   assert.match(catalogFontUrl(reinstalled), /[?&]v=/)
+})
+
+test('catalogFontFaceRules emit one descriptor per collection face', () => {
+  const rules = catalogFontFaceRules('fc-pack', '/api/font-file/pack', [
+    { weight: 400, italic: false },
+    { weight: 700, italic: false },
+  ])
+  assert.equal(rules.length, 2)
+  assert.match(rules[0]!, /font-weight:400/)
+  assert.match(rules[1]!, /font-weight:700/)
+  assert.match(rules[0]!, /src:url\("\/api\/font-file\/pack"\)/)
+  assert.equal(rules[0] === rules[1], false)
 })
