@@ -66,6 +66,13 @@ export type InstallOptions = {
   destinationId?: DestinationId
   destinationIds?: DestinationId[]
   switch?: boolean
+  expectedSourceFingerprint?: string
+}
+
+export type ComparisonCapture = {
+  id: string
+  installedFingerprint: string | null
+  sourceFingerprint: string
 }
 
 export type FontFaceInfo = {

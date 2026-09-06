@@ -322,3 +322,9 @@ export type SystemFamilyGroup = {
   protected: boolean
   writable: boolean
 }
+
+export type ComparisonCapture = {
+  id: string
+  installedFingerprint: string | null
+  sourceFingerprint: string
+}
