@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { catalogFontUrl, catalogFontFaceRules, catalogPreviewRevision, signedCatalogFontUrl } from './preview.ts'
+import { catalogFontUrl, catalogFontFaceRules, catalogPreviewRevision, catalogPreviewWhich, signedCatalogFontUrl } from './preview.ts'
 import { verifyFontPreviewQuery } from '../../core/font-access.ts'
 import type { CatalogEntry, FontFaceInfo } from './types.ts'
 
@@ -33,6 +33,20 @@ function entry(partial: Partial<CatalogEntry> = {}): CatalogEntry {
   }
 }
 
+test('uninstalled previews use the source file, not a stale installed fingerprint', () => {
+  const gone = entry({
+    status: 'uninstalled',
+    installedPath: undefined,
+    disabledPath: undefined,
+    installedFingerprint: 'b'.repeat(64),
+    sourceFingerprint: 'a'.repeat(64),
+    updatedAt: 9,
+  })
+  assert.equal(catalogPreviewWhich(gone), 'source')
+  assert.equal(catalogPreviewRevision(gone, 'installed'), catalogPreviewRevision(gone, 'source'))
+  assert.match(catalogFontUrl(gone, catalogPreviewWhich(gone)), /which=source/)
+})
+
 test('installed preview URLs version from the installed revision, not the source mtime', () => {
   const installed = entry()
   const sourceChanged = entry({ sourceMtimeMs: 99, sourceSize: 999 })
@@ -53,6 +67,14 @@ test('catalogFontFaceRules emit one descriptor per collection face', () => {
   assert.match(rules[1]!, /font-weight:700/)
   assert.match(rules[0]!, /src:url\("\/api\/font-file\/pack"\)/)
   assert.equal(rules[0] === rules[1], false)
+})
+
+test('variable faces register a weight range so instance hover can interpolate', () => {
+  const rules = catalogFontFaceRules('fc-vf', '/api/font-file/vf', [
+    { weight: 400, italic: false, isVariable: true },
+  ])
+  assert.equal(rules.length, 1)
+  assert.match(rules[0]!, /font-weight:1 1000/)
 })
 
 test('captured revision preview URLs stay pinned when the live source fingerprint changes', () => {

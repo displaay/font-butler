@@ -3,13 +3,19 @@ import type { CatalogEntry } from './types'
 
 export type PreviewWhich = 'source' | 'installed' | 'revision'
 
+export function catalogPreviewWhich(entry: CatalogEntry): PreviewWhich {
+  if (entry.installedPath || entry.disabledPath) return 'installed'
+  return 'source'
+}
+
 export function catalogPreviewRevision(
   entry: CatalogEntry,
   which: PreviewWhich = 'installed',
   revision?: string,
 ): string {
   if (which === 'revision' && revision) return revision
-  if (which === 'source') {
+  const liveInstall = Boolean(entry.installedPath || entry.disabledPath)
+  if (which === 'source' || (which === 'installed' && !liveInstall)) {
     return `${entry.sourceFingerprint ?? `${entry.sourceMtimeMs}-${entry.sourceSize}`}-${entry.updatedAt}`
   }
   if (entry.installedFingerprint) return `${entry.installedFingerprint}-${entry.updatedAt}`
@@ -35,13 +41,14 @@ export function catalogFontUrl(
 export function catalogFontFaceRules(
   family: string,
   url: string,
-  faces: Array<{ weight?: number; italic?: boolean }>,
+  faces: Array<{ weight?: number; italic?: boolean; isVariable?: boolean }>,
 ): string[] {
   const descriptors = faces.length > 0 ? faces : [{ weight: 400, italic: false }]
-  return descriptors.map(
-    (face) =>
-      `@font-face{font-family:"${family}";src:url("${url}");font-weight:${face.weight ?? 400};font-style:${face.italic ? 'italic' : 'normal'};font-display:swap;}`,
-  )
+  return descriptors.map((face) => {
+    const weight = face.isVariable ? '1 1000' : String(face.weight ?? 400)
+    const style = face.italic ? 'italic' : 'normal'
+    return `@font-face{font-family:"${family}";src:url("${url}");font-weight:${weight};font-style:${style};font-display:swap;}`
+  })
 }
 
 export function systemFontUrl(filePath: string, revision?: string | number): string {
