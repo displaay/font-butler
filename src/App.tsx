@@ -292,7 +292,10 @@ function AppShell() {
             const match = current.find((entry) => entry.id === event.notice.entryId)
             if (match) {
               setSelectedFamily(familyNameOf(match))
-              if (match.previewOnly) setInspectSelection(true)
+              if (match.previewOnly) {
+                setInspectorDensity(DEFAULT_INSPECTOR_DENSITY)
+                setInspectSelection(true)
+              }
             }
             return current
           })
