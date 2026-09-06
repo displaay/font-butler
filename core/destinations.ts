@@ -254,6 +254,22 @@ export function hasManagedCopy(entry: CatalogEntry, id?: DestinationId): boolean
   return copiesOf(entry).some((copy) => copy.path && fs.existsSync(copy.path))
 }
 
+export function entryHasParkedBytes(entry: CatalogEntry): boolean {
+  if (entry.disabledPath && fs.existsSync(entry.disabledPath)) return true
+  return copiesOf(entry).some((copy) => Boolean(copy.parkedPath && fs.existsSync(copy.parkedPath)))
+}
+
+export function recordedDestinationIds(entry: CatalogEntry): DestinationId[] {
+  const dests: DestinationId[] = []
+  if (entry.installedPath || entry.disabledPath || copyAt(entry, 'macos')) {
+    dests.push('macos')
+  }
+  if (copyAt(entry, 'adobe-shared')) {
+    dests.push('adobe-shared')
+  }
+  return dests.length ? dests : ['macos']
+}
+
 export function destinationSummary(entry: CatalogEntry): string | undefined {
   const present = copiesOf(entry).filter((copy) => copy.verification === 'file-present' || (copy.path && fs.existsSync(copy.path)))
   if (present.length === 0) return undefined

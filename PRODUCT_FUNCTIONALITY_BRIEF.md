@@ -4,7 +4,7 @@ Prepared 2026-09-05. Audience: the agent implementing the next product iteration
 
 Specify and deliver a font manager that makes changing font files predictable: users can reconnect moved sources, control automation, inspect an incoming version, and recover a working installation. This document covers all functionality suggestions from the product review, including WOFF/WOFF2 preview and an Adobe testing destination.
 
-This is a separate product brief. The existing [audit brief](/Users/daniel/git/font-butler/AGENT_AUDIT_BRIEF.md) remains the record of the earlier audit. The checked-out commit at preparation was `76e243a00fef77f0be792c54e4b33eb2bba2a243`, with ongoing, uncommitted audit fixes already present. Reconcile the current implementation before starting; earlier audit findings and line numbers are historical, and new helper modules are not evidence that every regression has been resolved. This brief does not claim to validate those changes.
+This is a separate product brief. The 2026-09-05 file-safety audit checklist (P1/P2) has been verified closed with regression tests. The checked-out commit at preparation was `76e243a00fef77f0be792c54e4b33eb2bba2a243`; historical line numbers in older notes are not current.
 
 **1. Product intent and scope**
 

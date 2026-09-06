@@ -5,11 +5,15 @@ import path from 'node:path'
 import { test } from 'node:test'
 import {
   applySourcePresence,
+  CatalogCorruptError,
   faceIdentityKey,
   findByFaceIdentity,
   isExternalSource,
+  loadCatalog,
   resolveStatusWhenSourceMissing,
+  saveCatalog,
 } from './catalog.ts'
+import { tempPaths } from './test-util.ts'
 import type { CatalogEntry, CatalogFile, FontFaceInfo } from './types.ts'
 
 function face(postscriptName: string, familyName = 'Test'): FontFaceInfo {
@@ -159,5 +163,48 @@ test('applySourcePresence does not uninstall a font when the source file disappe
     assert.equal(row.sourcePresent, false)
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('loadCatalog returns empty only when the catalog file is missing', () => {
+  const paths = tempPaths('font-butler-catalog-missing-')
+  try {
+    const catalog = loadCatalog(paths)
+    assert.equal(catalog.version, 1)
+    assert.deepEqual(catalog.entries, [])
+    assert.equal(fs.existsSync(paths.catalogPath), false)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('corrupt catalog JSON is not treated as empty and is not overwritten', () => {
+  const paths = tempPaths('font-butler-catalog-corrupt-')
+  try {
+    fs.mkdirSync(paths.dataRoot, { recursive: true })
+    const garbage = '{not json'
+    fs.writeFileSync(paths.catalogPath, garbage)
+    assert.throws(() => loadCatalog(paths), CatalogCorruptError)
+    assert.equal(fs.readFileSync(paths.catalogPath, 'utf8'), garbage)
+    assert.throws(
+      () => saveCatalog(paths, { version: 1, entries: [] }),
+      CatalogCorruptError,
+    )
+    assert.equal(fs.readFileSync(paths.catalogPath, 'utf8'), garbage)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('unsupported catalog version is not wiped', () => {
+  const paths = tempPaths('font-butler-catalog-version-')
+  try {
+    fs.mkdirSync(paths.dataRoot, { recursive: true })
+    const raw = JSON.stringify({ version: 2, entries: [{ id: 'keep-me' }] })
+    fs.writeFileSync(paths.catalogPath, raw)
+    assert.throws(() => loadCatalog(paths), CatalogCorruptError)
+    assert.equal(fs.readFileSync(paths.catalogPath, 'utf8'), raw)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
 })

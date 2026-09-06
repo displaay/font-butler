@@ -20,6 +20,42 @@ export function isExternalSource(entry: CatalogEntry): boolean {
 
 const emptyCatalog = (): CatalogFile => ({ version: 1, entries: [] })
 
+export class CatalogCorruptError extends Error {
+  readonly catalogPath: string
+
+  constructor(catalogPath: string, reason: string) {
+    super(`The font catalog is unreadable (${reason}). The existing file was left unchanged.`)
+    this.name = 'CatalogCorruptError'
+    this.catalogPath = catalogPath
+  }
+}
+
+function readCatalogFile(catalogPath: string): CatalogFile {
+  let raw: string
+  try {
+    raw = fs.readFileSync(catalogPath, 'utf8')
+  } catch (error) {
+    throw new CatalogCorruptError(
+      catalogPath,
+      error instanceof Error ? error.message : 'unreadable',
+    )
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    throw new CatalogCorruptError(catalogPath, 'invalid JSON')
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    throw new CatalogCorruptError(catalogPath, 'not an object')
+  }
+  const catalog = parsed as CatalogFile
+  if (catalog.version !== 1 || !Array.isArray(catalog.entries)) {
+    throw new CatalogCorruptError(catalogPath, 'unsupported or incomplete catalog')
+  }
+  return catalog
+}
+
 let catalogQueue: Promise<void> = Promise.resolve()
 const catalogLock = new AsyncLocalStorage<boolean>()
 
@@ -40,28 +76,23 @@ export function loadCatalog(paths: AppPaths): CatalogFile {
   if (!fs.existsSync(paths.catalogPath)) {
     return emptyCatalog()
   }
-  try {
-    const raw = fs.readFileSync(paths.catalogPath, 'utf8')
-    const parsed = JSON.parse(raw) as CatalogFile
-    if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.entries)) {
-      return emptyCatalog()
+  const parsed = readCatalogFile(paths.catalogPath)
+  for (const entry of parsed.entries) {
+    if (typeof entry.sourcePresent !== 'boolean') {
+      entry.sourcePresent = entry.status !== 'source-missing'
     }
-    for (const entry of parsed.entries) {
-      if (typeof entry.sourcePresent !== 'boolean') {
-        entry.sourcePresent = entry.status !== 'source-missing'
-      }
-      if (!entry.sourceAvailability) {
-        applyEntryFacts(entry)
-      }
+    if (!entry.sourceAvailability) {
+      applyEntryFacts(entry)
     }
-    return parsed
-  } catch {
-    return emptyCatalog()
   }
+  return parsed
 }
 
 export function saveCatalog(paths: AppPaths, catalog: CatalogFile): void {
   fs.mkdirSync(paths.dataRoot, { recursive: true })
+  if (fs.existsSync(paths.catalogPath)) {
+    readCatalogFile(paths.catalogPath)
+  }
   const tmp = `${paths.catalogPath}.${process.pid}.${process.hrtime.bigint()}.tmp`
   fs.writeFileSync(tmp, JSON.stringify(catalog, null, 2))
   fs.renameSync(tmp, paths.catalogPath)

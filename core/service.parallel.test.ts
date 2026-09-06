@@ -289,3 +289,68 @@ test('bound-path source updates stay keep/replace, not add-inactive', async () =
     assert.deepEqual(item.choices, ['keep', 'replace', 'skip'])
   })
 })
+
+test('switch does not copy sibling Adobe destinations onto a Mac-only WIP copy', async () => {
+  await withService(async (service, paths) => {
+    await service.init()
+    await service.updateSettings({ defaultDestination: 'macos-and-adobe' })
+    const release = path.join(paths.dataRoot, 'Release.ttf')
+    const wip = path.join(paths.dataRoot, 'WIP.ttf')
+    writeTestFont(release, 'Release', 'Release-Regular', { version: 'Version 1.000' })
+    writeTestFont(wip, 'Release', 'Release-Regular', { version: 'Version 2.000' })
+    const first = (await service.importPaths([release])).entries[0]!
+    const installed = await service.install(first.id)
+    assert.ok(installed.installations?.some((item) => item.destinationId === 'macos'))
+    assert.ok(installed.installations?.some((item) => item.destinationId === 'adobe-shared'))
+    const adobePath = installed.installations?.find((item) => item.destinationId === 'adobe-shared')?.path
+    assert.ok(adobePath)
+
+    const plan = service.planImport([wip])
+    await service.applyPlan(plan.id, { [plan.items[0]!.id]: 'add-inactive' })
+    const inactive = service.listCatalog().find((entry) => entry.id !== first.id)!
+
+    const switched = await service.switchTo(inactive.id)
+    assert.equal(switched.status, 'installed')
+    assert.ok(switched.installations?.some((item) => item.destinationId === 'macos'))
+    assert.equal(
+      switched.installations?.some((item) => item.destinationId === 'adobe-shared'),
+      false,
+    )
+    assert.equal(liveFonts(paths.adobeFontsDir).length, 0)
+    assert.equal(liveFonts(paths.installDir).length, 1)
+    assert.equal(fingerprintFile(liveFonts(paths.installDir)[0]!), fingerprintFile(wip))
+    const parked = service.listCatalog().find((entry) => entry.id === first.id)!
+    assert.equal(parked.status, 'deactivated')
+    const adobeParked = parked.installations?.find((item) => item.destinationId === 'adobe-shared')
+    assert.ok(adobeParked?.parkedPath && fs.existsSync(adobeParked.parkedPath))
+  })
+})
+
+test('unparking an Adobe copy does not overwrite a file already at the destination', async () => {
+  await withService(async (service, paths) => {
+    await service.init()
+    const source = path.join(paths.dataRoot, 'AdobeOnly.ttf')
+    writeTestFont(source, 'AdobeOnly', 'AdobeOnly-Regular')
+    const imported = await service.importPaths([source])
+    const installed = await service.install(imported.entries[0]!.id, undefined, {
+      destinationId: 'adobe-shared',
+    })
+    const adobe = installed.installations?.find((item) => item.destinationId === 'adobe-shared')
+    assert.ok(adobe?.path)
+    const dest = adobe.path
+    await service.deactivate(installed.id)
+    assert.equal(fs.existsSync(dest), false)
+    const parked = service.listCatalog().find((entry) => entry.id === installed.id)!
+    const vault = parked.installations?.find((item) => item.destinationId === 'adobe-shared')?.parkedPath
+    assert.ok(vault && fs.existsSync(vault))
+    const vaultBytes = fs.readFileSync(vault)
+    writeTestFont(dest, 'Unmanaged', 'Unmanaged-Regular')
+    const unmanagedBytes = fs.readFileSync(dest)
+
+    await assert.rejects(() => service.activate(installed.id), /already active/)
+    assert.deepEqual(fs.readFileSync(dest), unmanagedBytes)
+    assert.equal(fs.existsSync(vault), true)
+    assert.deepEqual(fs.readFileSync(vault), vaultBytes)
+    assert.equal(service.listCatalog().find((entry) => entry.id === installed.id)?.status, 'deactivated')
+  })
+})
