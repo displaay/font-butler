@@ -5,6 +5,7 @@ import { test } from 'node:test'
 import { createWatchFolder } from './folders.ts'
 import { fingerprintFile } from './fingerprint.ts'
 import { IDENTITY_MUTEX_MESSAGE } from './identity.ts'
+import { recordedDestinationIds } from './destinations.ts'
 import { noopFontNative } from './native.ts'
 import { isFontFile, parseFontFile } from './parse.ts'
 import {
@@ -290,7 +291,7 @@ test('bound-path source updates stay keep/replace, not add-inactive', async () =
   })
 })
 
-test('switch does not copy sibling Adobe destinations onto a Mac-only WIP copy', async () => {
+test('switch parks a Mac+Adobe release without placing a Mac-only WIP on Adobe', async () => {
   await withService(async (service, paths) => {
     await service.init()
     await service.updateSettings({ defaultDestination: 'macos-and-adobe' })
@@ -308,9 +309,11 @@ test('switch does not copy sibling Adobe destinations onto a Mac-only WIP copy',
     const plan = service.planImport([wip])
     await service.applyPlan(plan.id, { [plan.items[0]!.id]: 'add-inactive' })
     const inactive = service.listCatalog().find((entry) => entry.id !== first.id)!
+    assert.deepEqual(recordedDestinationIds(inactive), ['macos'])
 
     const switched = await service.switchTo(inactive.id)
     assert.equal(switched.status, 'installed')
+    assert.deepEqual(recordedDestinationIds(switched), ['macos'])
     assert.ok(switched.installations?.some((item) => item.destinationId === 'macos'))
     assert.equal(
       switched.installations?.some((item) => item.destinationId === 'adobe-shared'),
@@ -323,6 +326,22 @@ test('switch does not copy sibling Adobe destinations onto a Mac-only WIP copy',
     assert.equal(parked.status, 'deactivated')
     const adobeParked = parked.installations?.find((item) => item.destinationId === 'adobe-shared')
     assert.ok(adobeParked?.parkedPath && fs.existsSync(adobeParked.parkedPath))
+    assert.deepEqual(recordedDestinationIds(parked), ['macos', 'adobe-shared'])
+
+    const restored = await service.switchTo(first.id)
+    assert.equal(restored.id, first.id)
+    assert.ok(restored.installations?.some((item) => item.destinationId === 'adobe-shared'))
+    const restoredAdobe = restored.installations?.find((item) => item.destinationId === 'adobe-shared')?.path
+    assert.ok(restoredAdobe && fs.existsSync(restoredAdobe))
+    assert.equal(liveFonts(paths.adobeFontsDir).length, 1)
+    assert.equal(fingerprintFile(liveFonts(paths.adobeFontsDir)[0]!), fingerprintFile(release))
+    assert.equal(liveFonts(paths.installDir).length, 1)
+    assert.equal(
+      service.listCatalog().find((entry) => entry.id === inactive.id)?.installations?.some(
+        (item) => item.destinationId === 'adobe-shared',
+      ),
+      false,
+    )
   })
 })
 
