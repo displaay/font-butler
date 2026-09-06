@@ -109,7 +109,20 @@ export function isTypingTarget(target: EventTarget | null): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
 }
 
-export type ShortcutAction = 'remove' | 'install' | 'deactivate' | 'selectAll'
+export type ShortcutAction =
+  | 'remove'
+  | 'install'
+  | 'deactivate'
+  | 'selectAll'
+  | 'inspect'
+  | 'collapse'
+  | 'specimen'
+
+function isActivateTarget(target: EventTarget | null): boolean {
+  if (typeof HTMLElement === 'undefined' || !(target instanceof HTMLElement)) return false
+  const tag = target.tagName
+  return tag === 'BUTTON' || tag === 'A' || tag === 'SUMMARY' || target.getAttribute('role') === 'button'
+}
 
 export function shortcutAction(event: KeyboardEvent): ShortcutAction | null {
   if (event.defaultPrevented) return null
@@ -118,6 +131,9 @@ export function shortcutAction(event: KeyboardEvent): ShortcutAction | null {
     return 'selectAll'
   }
   if (event.metaKey || event.ctrlKey || event.altKey) return null
+  if (event.key === 'Escape') return 'collapse'
+  if (event.key === 'Enter' && !isActivateTarget(event.target)) return 'inspect'
+  if (event.key === 'f' || event.key === 'F') return 'specimen'
   if (event.key === 'Backspace' || event.key === 'Delete') return 'remove'
   if (event.key === 'i' || event.key === 'I') return 'install'
   if (event.key === 'd' || event.key === 'D') return 'deactivate'

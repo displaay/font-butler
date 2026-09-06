@@ -44,6 +44,7 @@ export function SpecimenWorkspace({
   compare,
   compareEntry,
   onCaptureChange,
+  size = 'default',
 }: {
   entry: CatalogEntry
   specimen: PreviewPreferences
@@ -51,6 +52,7 @@ export function SpecimenWorkspace({
   compare?: 'source' | 'families'
   compareEntry?: CatalogEntry | null
   onCaptureChange?: (capture: ComparisonCapture | null) => void
+  size?: 'default' | 'large'
 }) {
   const [meta, setMeta] = useState<PreviewMeta | null>(null)
   const [sourceMeta, setSourceMeta] = useState<PreviewMeta | null>(null)
@@ -334,6 +336,7 @@ export function SpecimenWorkspace({
             features={featureSettings}
             format={entry.format}
             version={entry.faces[0]?.fullName}
+            large={size === 'large'}
           />
           <SpecimenPane
             label={
@@ -351,6 +354,7 @@ export function SpecimenWorkspace({
             features={featureSettings}
             format={compare === 'families' ? compareEntry?.format : entry.format}
             version={compareEntry?.faces[0]?.fullName}
+            large={size === 'large'}
           />
         </div>
       ) : (
@@ -363,6 +367,7 @@ export function SpecimenWorkspace({
           variation={variation}
           features={featureSettings}
           format={entry.format}
+          large={size === 'large'}
         />
       )}
       {newerSource && canCompareSource && (
@@ -471,6 +476,7 @@ function SpecimenPane({
   features,
   format,
   version,
+  large,
 }: {
   label: string
   family: string
@@ -481,16 +487,17 @@ function SpecimenPane({
   features: string
   format?: string
   version?: string
+  large?: boolean
 }) {
   return (
-    <div className="rounded-lg border bg-muted/30 p-3">
+    <div className={cn('rounded-lg border bg-muted/30 p-3', large && 'min-h-[20rem] p-5')}>
       <div className="mb-2 text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
         {label}
         {format ? ` · ${format}` : ''}
         {version ? ` · ${version}` : ''}
       </div>
       <div
-        className={cn('font-preview break-words whitespace-pre-wrap')}
+        className={cn('font-preview break-words whitespace-pre-wrap', large && 'min-h-[16rem]')}
         style={{
           fontFamily: `"${family}", ui-sans-serif`,
           fontSize: size,

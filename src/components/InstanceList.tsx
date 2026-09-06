@@ -7,13 +7,15 @@ export function InstanceList({
   rows,
   selectedEntryId,
   onSelectEntry,
+  className,
 }: {
   rows: InstanceRow[]
   selectedEntryId?: string | null
   onSelectEntry?: (entryId: string) => void
+  className?: string
 }) {
   return (
-    <ul className="space-y-1 border-t px-3 py-2">
+    <ul className={cn('space-y-1 border-t px-3 py-2', className)}>
       {rows.map((row) => {
         const family = row.catalogEntryId
           ? catalogFontFamily(row.catalogEntryId)

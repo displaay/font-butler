@@ -1,13 +1,16 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { ArrowLeftRight, CircleMinus, CirclePlus, FolderOpen, ListX, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
 import { AaPreview } from '@/components/AaPreview'
 import { CatalogBatchButtons, SystemBatchButtons } from '@/components/BatchActions'
 import { SourceBadge, StateBadges } from '@/components/Badges'
 import { catalogFontFamily, systemFontFamily } from '@/components/FontFaceStyles'
+import { InstanceList } from '@/components/InstanceList'
 import { SpecimenWorkspace } from '@/components/SpecimenWorkspace'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { catalogBatchPlan } from '@/lib/batch'
+import type { InspectorDensity } from '@/lib/inspector'
+import { catalogInstanceRows, systemInstanceRows } from '@/lib/instances'
 import { collectionScopeLabel, displayStateLabel, needsLocateSource } from '@/lib/state'
 import { formatBytes, formatRelativeTime } from '@/lib/utils'
 import { entryHasTrackedSource, familyNameOf, hasTrackedSource } from '@/lib/group'
@@ -55,6 +58,7 @@ export function Inspector({
   onPin,
   onOpenWithPreview,
   multiSelect,
+  density = 'compact',
 }: {
   group: FamilyGroup | null
   entry: CatalogEntry | null
@@ -92,6 +96,7 @@ export function Inspector({
   onRestore?: (fingerprint?: string) => void
   onPin?: (fingerprint: string) => void
   onOpenWithPreview?: () => void
+  density?: InspectorDensity
   multiSelect?: {
     names: string[]
     summary: string
@@ -112,7 +117,7 @@ export function Inspector({
 }) {
   if (multiSelect && multiSelect.names.length > 1) {
     return (
-      <aside className="flex w-full flex-col gap-4 p-5 md:w-96">
+      <aside className={inspectorShellClass(density)}>
         <div>
           <h2 className="text-base font-semibold tracking-tight">
             {multiSelect.names.length} selected
@@ -173,62 +178,23 @@ export function Inspector({
   if (systemGroup) {
     const face = systemGroup.faces[0]
     return (
-      <aside className="flex w-full flex-col gap-4 p-5 md:w-96">
-        <div
-          className="font-preview rounded-lg border bg-muted/40 px-4 py-6 text-3xl leading-tight"
-          style={{ fontFamily: `"${face ? systemFontFamily(face.path) : ''}", ui-sans-serif` }}
-        >
-          {SAMPLE}
-        </div>
-        <div>
-          <h2 className="text-base font-semibold tracking-tight">{systemGroup.familyName}</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {systemGroup.instanceCount} {systemGroup.instanceCount === 1 ? 'instance' : 'instances'}
-            {systemGroup.protected ? ' · system font' : ''}
-          </p>
-        </div>
-        <ul className="space-y-1 text-sm">
-          {systemGroup.faces.map((item) => (
-            <li key={`${item.path}-${item.styleName}`} className="flex justify-between gap-3">
-              <span>{item.styleName}</span>
-              <span className="truncate text-muted-foreground">{item.postscriptName}</span>
-            </li>
-          ))}
-        </ul>
-        <p className="break-all text-xs text-muted-foreground">{face?.path}</p>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" onClick={onRevealSystem}>
-            <FolderOpen /> Show in Finder
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={!systemGroup.writable || busy}
-            onClick={onDeactivateSystem}
-          >
-            <PowerOff /> Deactivate
-          </Button>
-          <Button
-            variant="destructive"
-            size="sm"
-            disabled={!systemGroup.writable || busy}
-            onClick={onUninstallSystem}
-          >
-            <CircleMinus /> Uninstall
-          </Button>
-        </div>
-        {!systemGroup.writable && (
-          <p className="text-xs text-muted-foreground">
-            Protected fonts stay on the Mac. Font Buttler can only remove fonts you installed.
-          </p>
-        )}
+      <aside className={inspectorShellClass(density)}>
+        <SystemInspectorBody
+          density={density}
+          systemGroup={systemGroup}
+          face={face}
+          busy={busy}
+          onRevealSystem={onRevealSystem}
+          onDeactivateSystem={onDeactivateSystem}
+          onUninstallSystem={onUninstallSystem}
+        />
       </aside>
     )
   }
 
   if (!group || !entry) {
     return (
-      <aside className="flex w-full items-center justify-center p-8 text-sm text-muted-foreground md:w-96">
+      <aside className={cn(inspectorShellClass(density), 'items-center justify-center p-8 text-sm text-muted-foreground')}>
         Select a family to inspect it.
       </aside>
     )
@@ -242,20 +208,23 @@ export function Inspector({
     project.members.some((member) => member.assetId === entry.id && member.pinFingerprint),
   )
 
-  return (
-    <aside className="flex w-full flex-col gap-4 overflow-y-auto p-5 md:w-96">
-      <div>
-        <h2 className="text-base font-semibold tracking-tight">{familyNameOf(entry)}</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {group.instanceCount} {group.instanceCount === 1 ? 'instance' : 'instances'}
-          {group.isVariable ? ' · variable' : ''}
-          {group.entries.length > 1 ? ` · ${group.entries.length} files` : ''}
-          {statusSummary ? ` · ${statusSummary}` : ''}
-        </p>
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          <StateBadges entry={entry} />
-        </div>
+  const instances = catalogInstanceRows(group)
+  const header = (
+    <div>
+      <h2 className="text-base font-semibold tracking-tight">{familyNameOf(entry)}</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
+        {group.instanceCount} {group.instanceCount === 1 ? 'instance' : 'instances'}
+        {group.isVariable ? ' · variable' : ''}
+        {group.entries.length > 1 ? ` · ${group.entries.length} files` : ''}
+        {statusSummary ? ` · ${statusSummary}` : ''}
+      </p>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        <StateBadges entry={entry} />
       </div>
+    </div>
+  )
+  const notices = (
+    <>
       <SourceStateCopy entry={entry} />
       {scope && <p className="text-xs text-muted-foreground">{scope}</p>}
       {pinnedFor.length > 0 && (
@@ -263,6 +232,10 @@ export function Inspector({
           Pinned for {pinnedFor.map((project) => project.name).join(', ')}
         </p>
       )}
+    </>
+  )
+  const meta = (
+    <>
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
         <dt className="text-muted-foreground">Source</dt>
         <dd className="flex min-w-0 items-center gap-2">
@@ -289,8 +262,19 @@ export function Inspector({
         onInstallToAdobe={onInstallToAdobe}
         onRemoveAdobeCopy={onRemoveAdobeCopy}
       />
-      <div className="space-y-2">
-        {group.entries.map((item) => {
+    </>
+  )
+  const files = (
+    <div className="space-y-2">
+      {density !== 'compact' ? (
+        <InstanceList
+          rows={instances}
+          selectedEntryId={selectedEntryId}
+          onSelectEntry={onSelectEntry}
+          className="border-t-0 px-0 py-0"
+        />
+      ) : (
+        group.entries.map((item) => {
           const selected = item.id === selectedEntryId
           return (
             <button
@@ -321,23 +305,30 @@ export function Inspector({
               </div>
             </button>
           )
-        })}
-      </div>
-      {specimen && onSpecimenChange ? (
-        <SpecimenWorkspace
-          entry={entry}
-          specimen={specimen}
-          onSpecimenChange={onSpecimenChange}
-          compareEntry={compareEntry}
-          onCaptureChange={onComparisonCapture}
-        />
-      ) : null}
-      <VersionsSection
+        })
+      )}
+    </div>
+  )
+  const specimenBlock =
+    specimen && onSpecimenChange ? (
+      <SpecimenWorkspace
         entry={entry}
-        onRestore={onRestore}
-        onPin={onPin}
-        onResumeUpdates={onResumeUpdates}
+        specimen={specimen}
+        onSpecimenChange={onSpecimenChange}
+        compareEntry={compareEntry}
+        onCaptureChange={onComparisonCapture}
+        size={density === 'compact' ? 'default' : 'large'}
       />
+    ) : null
+  const versions = (
+    <VersionsSection
+      entry={entry}
+      onRestore={onRestore}
+      onPin={onPin}
+      onResumeUpdates={onResumeUpdates}
+    />
+  )
+  const actions = (
       <div className="flex flex-wrap gap-2">
         {previewOnly ? (
           <>
@@ -454,7 +445,204 @@ export function Inspector({
           </Button>
         )}
       </div>
+  )
+
+  return (
+    <aside className={inspectorShellClass(density)}>
+      <InspectorLayout
+        density={density}
+        header={
+          <>
+            {header}
+            {notices}
+          </>
+        }
+        primary={specimenBlock}
+        secondary={
+          density === 'compact' ? (
+            <>
+              {meta}
+              {files}
+            </>
+          ) : (
+            <>
+              {meta}
+              <div>
+                <h3 className="mb-2 text-sm font-medium">Instances</h3>
+                {files}
+              </div>
+              {versions}
+            </>
+          )
+        }
+        afterPrimary={density === 'compact' ? versions : null}
+        actions={actions}
+      />
     </aside>
+  )
+}
+
+function inspectorShellClass(density: InspectorDensity) {
+  return cn(
+    'flex h-full min-h-0 w-full flex-col',
+    density === 'compact' ? 'gap-4 overflow-y-auto p-5' : 'overflow-hidden',
+  )
+}
+
+function InspectorLayout({
+  density,
+  header,
+  primary,
+  secondary,
+  afterPrimary,
+  actions,
+}: {
+  density: InspectorDensity
+  header: ReactNode
+  primary: ReactNode
+  secondary: ReactNode
+  afterPrimary?: ReactNode
+  actions: ReactNode
+}) {
+  if (density === 'specimen') {
+    return (
+      <>
+        <div className="shrink-0 space-y-2 border-b px-5 py-3">{header}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-5">{primary}</div>
+      </>
+    )
+  }
+  if (density === 'expanded') {
+    return (
+      <div className="flex min-h-0 flex-1">
+        <div className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto p-5">
+          {header}
+          {primary}
+          {actions}
+        </div>
+        <div className="flex w-[22rem] shrink-0 flex-col gap-4 overflow-y-auto border-l p-5">
+          {secondary}
+        </div>
+      </div>
+    )
+  }
+  return (
+    <>
+      {header}
+      {secondary}
+      {primary}
+      {afterPrimary}
+      {actions}
+    </>
+  )
+}
+
+function SystemInspectorBody({
+  density,
+  systemGroup,
+  face,
+  busy,
+  onRevealSystem,
+  onDeactivateSystem,
+  onUninstallSystem,
+}: {
+  density: InspectorDensity
+  systemGroup: SystemFamilyGroup
+  face: SystemFamilyGroup['faces'][number] | undefined
+  busy: boolean
+  onRevealSystem: () => void
+  onDeactivateSystem: () => void
+  onUninstallSystem: () => void
+}) {
+  const instances = useMemo(() => systemInstanceRows(systemGroup), [systemGroup])
+  const header = (
+    <div>
+      <h2 className="text-base font-semibold tracking-tight">{systemGroup.familyName}</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
+        {systemGroup.instanceCount} {systemGroup.instanceCount === 1 ? 'instance' : 'instances'}
+        {systemGroup.protected ? ' · system font' : ''}
+      </p>
+    </div>
+  )
+  const preview = (
+    <div
+      className={cn(
+        'font-preview rounded-lg border bg-muted/40 px-4 py-6 text-3xl leading-tight',
+        density !== 'compact' && 'min-h-[16rem] p-6 text-5xl',
+      )}
+      style={{ fontFamily: `"${face ? systemFontFamily(face.path) : ''}", ui-sans-serif` }}
+    >
+      {SAMPLE}
+    </div>
+  )
+  const secondary = (
+    <>
+      {density === 'compact' ? (
+        <ul className="space-y-1 text-sm">
+          {systemGroup.faces.map((item) => (
+            <li key={`${item.path}-${item.styleName}`} className="flex justify-between gap-3">
+              <span>{item.styleName}</span>
+              <span className="truncate text-muted-foreground">{item.postscriptName}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div>
+          <h3 className="mb-2 text-sm font-medium">Instances</h3>
+          <InstanceList rows={instances} className="border-t-0 px-0 py-0" />
+        </div>
+      )}
+      <p className="break-all text-xs text-muted-foreground">{face?.path}</p>
+    </>
+  )
+  const actions = (
+    <>
+      <div className="flex flex-wrap gap-2">
+        <Button variant="outline" size="sm" onClick={onRevealSystem}>
+          <FolderOpen /> Show in Finder
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={!systemGroup.writable || busy}
+          onClick={onDeactivateSystem}
+        >
+          <PowerOff /> Deactivate
+        </Button>
+        <Button
+          variant="destructive"
+          size="sm"
+          disabled={!systemGroup.writable || busy}
+          onClick={onUninstallSystem}
+        >
+          <CircleMinus /> Uninstall
+        </Button>
+      </div>
+      {!systemGroup.writable && (
+        <p className="text-xs text-muted-foreground">
+          Protected fonts stay on the Mac. Font Buttler can only remove fonts you installed.
+        </p>
+      )}
+    </>
+  )
+  if (density === 'compact') {
+    return (
+      <>
+        {preview}
+        {header}
+        {secondary}
+        {actions}
+      </>
+    )
+  }
+  return (
+    <InspectorLayout
+      density={density}
+      header={header}
+      primary={preview}
+      secondary={secondary}
+      actions={actions}
+    />
   )
 }
 
