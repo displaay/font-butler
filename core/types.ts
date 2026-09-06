@@ -24,6 +24,7 @@ export type UpdateHold = 'relink-review' | 'restore' | 'undo-install'
 export type FolderPolicyPreset = 'library' | 'install-new' | 'install-new-and-updates' | 'custom'
 
 export type DestinationId = 'macos' | 'adobe-shared'
+export type DefaultDestinationId = DestinationId | 'macos-and-adobe'
 
 export type InstallationVerification = 'file-present' | 'unavailable'
 
@@ -166,7 +167,7 @@ export type WatchFolder = {
   watching: boolean
   exclusions: string[]
   availability: SourceAvailability
-  destinationId?: DestinationId
+  destinationId?: DefaultDestinationId
 }
 
 export type SpecimenPreset = 'headline' | 'paragraph' | 'numerals' | 'custom'
@@ -199,7 +200,7 @@ export type AppSettings = {
   activityRetentionDays: number
   activityMaxOperations: number
   specimen?: PreviewPreferences
-  defaultDestination?: DestinationId
+  defaultDestination?: DefaultDestinationId
 }
 
 export type OfficeFontCacheInfo = {

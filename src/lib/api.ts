@@ -4,6 +4,7 @@ import type {
   CatalogEntry,
   DestinationCapability,
   DestinationId,
+  DefaultDestinationId,
   DestinationInvestigationRow,
   FolderPolicyPreset,
   FolderRelinkPreview,
@@ -174,7 +175,7 @@ export const api = {
     onboardingCompleted?: boolean
     folders?: WatchFolder[]
     specimen?: AppSettings['specimen']
-    defaultDestination?: DestinationId
+    defaultDestination?: DefaultDestinationId
   }) =>
     json<{
       settings: AppSettings
@@ -201,7 +202,7 @@ export const api = {
     policy?: FolderPolicyPreset
     exclusions?: string[]
     id?: string
-    destinationId?: DestinationId
+    destinationId?: DefaultDestinationId
   }) =>
     json<{ folder: WatchFolder; discovery: ImportPlan }>(post('/api/folders/configure', input)),
   startWatching: (id: string) => json<{ folder: WatchFolder }>(post('/api/folders/start', { id })),

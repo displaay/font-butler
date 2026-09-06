@@ -1,10 +1,11 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { parseDefaultDestination } from './destinations.ts'
 import { inspectSourceAvailability } from './state.ts'
 import type {
   AppSettings,
-  DestinationId,
+  DefaultDestinationId,
   FolderPolicyPreset,
   SourceAvailability,
   WatchFolder,
@@ -57,7 +58,7 @@ export function createWatchFolder(
     watching?: boolean
     exclusions?: string[]
     id?: string
-    destinationId?: DestinationId
+    destinationId?: DefaultDestinationId
   } = {},
 ): WatchFolder {
   const resolved = path.resolve(root)
@@ -74,7 +75,7 @@ export function createWatchFolder(
     watching: options.watching === true,
     exclusions: options.exclusions ?? [],
     availability: inspectFolderAvailability(resolved),
-    destinationId: options.destinationId === 'adobe-shared' ? 'adobe-shared' : 'macos',
+    destinationId: parseDefaultDestination(options.destinationId),
   }
 }
 
@@ -131,7 +132,7 @@ function normalizeFolder(value: unknown, flags: { installNew: boolean; autoUpdat
     exclusions: Array.isArray(row.exclusions)
       ? row.exclusions.filter((item): item is string => typeof item === 'string')
       : [],
-    destinationId: row.destinationId === 'adobe-shared' ? 'adobe-shared' : 'macos',
+    destinationId: parseDefaultDestination(row.destinationId),
   })
 }
 
@@ -201,8 +202,8 @@ export function applyFolderPatch(
   if (typeof patch.paused === 'boolean') next.paused = patch.paused
   if (typeof patch.watching === 'boolean') next.watching = patch.watching
   if (patch.exclusions) next.exclusions = patch.exclusions
-  if (patch.destinationId === 'adobe-shared' || patch.destinationId === 'macos') {
-    next.destinationId = patch.destinationId
+  if (patch.destinationId !== undefined) {
+    next.destinationId = parseDefaultDestination(patch.destinationId)
   }
   next.availability = inspectFolderAvailability(next.root)
   return next

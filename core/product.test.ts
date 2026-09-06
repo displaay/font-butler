@@ -342,6 +342,67 @@ test('F09 Adobe destination writes managed copies without touching macOS install
   })
 })
 
+test('Mac+Adobe default install writes both managed copies', async () => {
+  await withService(async (service, paths) => {
+    await service.updateSettings({ defaultDestination: 'macos-and-adobe' })
+    const source = path.join(paths.dataRoot, 'BothFace.ttf')
+    writeTestFont(source, 'BothFace', 'BothFace-Regular')
+    const imported = await service.importPaths([source])
+    const entry = await service.install(imported.entries[0]!.id)
+    const macos = entry.installations?.find((item) => item.destinationId === 'macos')
+    const adobe = entry.installations?.find((item) => item.destinationId === 'adobe-shared')
+    assert.ok(macos)
+    assert.equal(macos.verification, 'file-present')
+    assert.ok(entry.installedPath?.startsWith(paths.installDir))
+    assert.ok(adobe)
+    assert.equal(adobe.verification, 'file-present')
+    assert.ok(adobe.path.startsWith(paths.adobeFontsDir))
+    assert.equal(
+      entry.installations?.some((item) => (item.destinationId as string) === 'macos-and-adobe'),
+      false,
+    )
+  })
+})
+
+test('Mac+Adobe default keeps the Mac copy when Adobe is unavailable', async () => {
+  await withService(async (service, paths) => {
+    await service.updateSettings({ defaultDestination: 'macos-and-adobe' })
+    paths.adobeFontsDir = '/Library/Application Support/Adobe/Fonts'
+    const source = path.join(paths.dataRoot, 'MacKept.ttf')
+    writeTestFont(source, 'MacKept', 'MacKept-Regular')
+    const imported = await service.importPaths([source])
+    const entry = await service.install(imported.entries[0]!.id)
+    assert.ok(entry.installedPath?.startsWith(paths.installDir))
+    assert.equal(
+      entry.installations?.some(
+        (item) => item.destinationId === 'macos' && item.verification === 'file-present',
+      ),
+      true,
+    )
+    assert.equal(
+      entry.installations?.some(
+        (item) => item.destinationId === 'adobe-shared' && item.verification === 'file-present',
+      ),
+      false,
+    )
+  })
+})
+
+test('explicit destinationId stays one-target when default is Mac+Adobe', async () => {
+  await withService(async (service, paths) => {
+    await service.updateSettings({ defaultDestination: 'macos-and-adobe' })
+    const source = path.join(paths.dataRoot, 'OneTarget.ttf')
+    writeTestFont(source, 'OneTarget', 'OneTarget-Regular')
+    const imported = await service.importPaths([source])
+    const entry = await service.install(imported.entries[0]!.id, undefined, { destinationId: 'macos' })
+    assert.ok(entry.installations?.some((item) => item.destinationId === 'macos'))
+    assert.equal(
+      entry.installations?.some((item) => item.destinationId === 'adobe-shared'),
+      false,
+    )
+  })
+})
+
 test('F08 web fonts are preview-only and rejected for native install', async () => {
   await withService(async (service, paths) => {
     const woff = path.join(paths.dataRoot, 'Web.woff')

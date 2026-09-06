@@ -7,6 +7,7 @@ import {
   migrateFolders,
   syncWatchFolderPaths,
 } from './folders.ts'
+import { parseDefaultDestination } from './destinations.ts'
 import type { AppSettings, PreviewPreferences, SortMode, ThemeMode, ViewLayout } from './types.ts'
 
 const emptySettings = (): AppSettings => ({
@@ -160,7 +161,7 @@ export function loadSettings(paths: AppPaths): AppSettings {
           ? parsed.activityMaxOperations
           : defaults.activityMaxOperations,
       specimen: readSpecimen(parsed.specimen),
-      defaultDestination: parsed.defaultDestination === 'adobe-shared' ? 'adobe-shared' : 'macos',
+      defaultDestination: parseDefaultDestination(parsed.defaultDestination),
     }
     return syncWatchFolderPaths(settings)
   } catch {

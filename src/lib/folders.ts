@@ -1,6 +1,6 @@
-import type { DestinationId, FolderPolicyPreset, WatchFolder } from './types'
+import type { DefaultDestinationId, DestinationId, FolderPolicyPreset, WatchFolder } from './types'
 
-export const DESTINATIONS: { id: DestinationId; label: string; detail: string }[] = [
+export const DESTINATIONS: { id: DefaultDestinationId; label: string; detail: string }[] = [
   {
     id: 'macos',
     label: 'This Mac',
@@ -11,9 +11,18 @@ export const DESTINATIONS: { id: DestinationId; label: string; detail: string }[
     label: 'Adobe testing folder',
     detail: 'Place a managed copy for Adobe apps. This is not a verified activation in Photoshop or InDesign.',
   },
+  {
+    id: 'macos-and-adobe',
+    label: 'This Mac and Adobe testing folder',
+    detail: 'Install a managed copy for macOS and place one in the Adobe testing folder.',
+  },
 ]
 
-export function destinationLabel(id: DestinationId | undefined): string {
+export function destinationNeedsAdobe(id: DefaultDestinationId | undefined): boolean {
+  return id === 'adobe-shared' || id === 'macos-and-adobe'
+}
+
+export function destinationLabel(id: DefaultDestinationId | DestinationId | undefined): string {
   return DESTINATIONS.find((item) => item.id === id)?.label ?? 'This Mac'
 }
 

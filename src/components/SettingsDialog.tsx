@@ -39,7 +39,7 @@ import type {
   ViewLayout,
 } from '@/lib/types'
 import { cn } from '@/lib/utils'
-import { DESTINATIONS, FOLDER_POLICIES, destinationLabel, folderAvailabilityLabel, folderPolicyLabel } from '@/lib/folders'
+import { DESTINATIONS, FOLDER_POLICIES, destinationLabel, destinationNeedsAdobe, folderAvailabilityLabel, folderPolicyLabel } from '@/lib/folders'
 import { watchFolderName } from '@/lib/watchFolders'
 import type { FolderPolicyPreset, WatchFolder } from '@/lib/types'
 
@@ -122,7 +122,7 @@ type SettingsPatch = {
   revisionBudgetBytes?: number
   activityRetentionDays?: number
   activityMaxOperations?: number
-  defaultDestination?: 'macos' | 'adobe-shared'
+  defaultDestination?: AppSettings['defaultDestination']
 }
 
 function navButtonClass(active: boolean) {
@@ -713,17 +713,18 @@ function DestinationsPane({
           disabled={busy || !settings}
           value={settings?.defaultDestination ?? 'macos'}
           onChange={(event) =>
-            void onSave({ defaultDestination: event.target.value as 'macos' | 'adobe-shared' })
+            void onSave({ defaultDestination: event.target.value as AppSettings['defaultDestination'] })
           }
         >
-          {DESTINATIONS.map((option) => {
-            const dest = destinations.find((item) => item.id === option.id)
-            return (
-              <option key={option.id} value={option.id} disabled={option.id === 'adobe-shared' && dest && !dest.supported}>
-                {option.label}
-              </option>
-            )
-          })}
+          {DESTINATIONS.map((option) => (
+            <option
+              key={option.id}
+              value={option.id}
+              disabled={destinationNeedsAdobe(option.id) && Boolean(adobe) && !adobe.supported}
+            >
+              {option.label}
+            </option>
+          ))}
         </select>
       </Label>
       {investigation[0] ? (
