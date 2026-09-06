@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
+import { assertSafeShellPath } from './auth.ts'
 import { projectRoot } from './paths.ts'
 
 const execFileAsync = promisify(execFile)
@@ -246,6 +247,23 @@ export function resolveRenameRuntime({
   return null
 }
 
+export function renamePythonArgv(
+  runtime: RenameRuntime,
+  sourcePath: string,
+  destPath: string,
+  family: string,
+): string[] {
+  const isolated = runtime.source === 'bundled' ? ['-I'] : []
+  return [
+    ...isolated,
+    runtime.script,
+    '--',
+    assertSafeShellPath(sourcePath),
+    assertSafeShellPath(destPath),
+    family,
+  ]
+}
+
 async function renameWithPython(
   sourcePath: string,
   destPath: string,
@@ -256,12 +274,9 @@ async function renameWithPython(
     return { ok: false, reason: 'Bundled fonttools runtime was not found.' }
   }
   try {
-    const isolated = runtime.source === 'bundled' ? ['-I'] : []
-    await execFileAsync(
-      runtime.command,
-      [...isolated, runtime.script, sourcePath, destPath, family],
-      { timeout: 30_000 },
-    )
+    await execFileAsync(runtime.command, renamePythonArgv(runtime, sourcePath, destPath, family), {
+      timeout: 30_000,
+    })
     if (!fs.existsSync(destPath)) {
       return { ok: false, reason: 'Python rename finished but no output file was written.' }
     }

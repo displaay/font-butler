@@ -3,10 +3,10 @@ import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import fs from 'node:fs'
 import path from 'node:path'
-import { contentDisposition } from '../core/auth.ts'
+import { contentDisposition, shouldIncludeBootstrapToken } from '../core/auth.ts'
 import { onEvent } from '../core/events.ts'
 import { isFullyUnderAnyRoot } from '../core/containment.ts'
-import { denyRemoteRequest, resolveStaticAsset } from '../core/http.ts'
+import { denyRemoteRequest, isAuthorizedApiRequest, resolveStaticAsset } from '../core/http.ts'
 import { FontButlerService } from '../core/service.ts'
 import type { AppSettings } from '../core/types.ts'
 
@@ -60,7 +60,7 @@ function mountStatic(app: Hono, staticDir: string): void {
 
 export async function startFontButlerServer(
   options: { staticDir?: string; port?: number } = {},
-): Promise<{ port: number }> {
+): Promise<{ port: number; token: string }> {
   const PORT = options.port ?? Number(process.env.FONT_BUTLER_API_PORT || process.env.FONTCASE_API_PORT || 43182)
   const extraOrigins = [process.env.FONT_BUTLER_UI, process.env.FONTCASE_UI].filter(
     (value): value is string => Boolean(value),
@@ -79,28 +79,31 @@ app.use('*', async (c, next) => {
 })
 
 app.use('/api/*', async (c, next) => {
-  if (c.req.method === 'GET') {
+  if (
+    isAuthorizedApiRequest({
+      method: c.req.method,
+      pathname: c.req.path,
+      authorization: c.req.header('Authorization'),
+      token: apiToken,
+    })
+  ) {
     return next()
   }
-  const auth = c.req.header('Authorization')
-  const bearer = auth?.startsWith('Bearer ') ? auth.slice(7) : null
-  if (bearer !== apiToken) {
-    return c.json({ error: 'Unauthorized' }, 401)
-  }
-  return next()
+  return c.json({ error: 'Unauthorized' }, 401)
 })
 
 app.get('/api/health', (c) => c.json({ ok: true, platform: process.platform }))
 
-app.get('/api/bootstrap', (c) =>
-  c.json({
-    token: apiToken,
+app.get('/api/bootstrap', (c) => {
+  const payload = {
     settings: service.getSettings(),
     officeFontCache: service.officeFontCacheInfo(),
     adobeFontCache: service.adobeFontCacheInfo(),
     destinations: service.listDestinations(),
-  }),
-)
+    ...(shouldIncludeBootstrapToken() ? { token: apiToken } : {}),
+  }
+  return c.json(payload)
+})
 
 app.get('/api/settings', (c) =>
   c.json({
@@ -774,10 +777,10 @@ app.get('/api/events', (c) => {
     mountStatic(app, options.staticDir)
   }
 
-  return new Promise<{ port: number }>((resolve, reject) => {
+  return new Promise<{ port: number; token: string }>((resolve, reject) => {
     const server = serve({ fetch: app.fetch, port: PORT, hostname: '127.0.0.1' }, (info) => {
       console.log(`Font Buttler API on http://127.0.0.1:${info.port}`)
-      resolve({ port: info.port })
+      resolve({ port: info.port, token: apiToken })
     })
     server.once('error', reject)
   })

@@ -8,9 +8,12 @@ import {
   denyRemoteRequest,
   isAllowedHost,
   isAllowedOrigin,
+  isAuthorizedApiRequest,
+  isPublicApiGet,
   requestAuthorityError,
   resolveStaticAsset,
 } from './http.ts'
+import { shouldIncludeBootstrapToken } from './auth.ts'
 
 test('loopback hosts are accepted and untrusted hosts are not', () => {
   assert.equal(isAllowedHost('127.0.0.1:43182', 43182), true)
@@ -88,4 +91,93 @@ test('resolveStaticAsset rejects prefix-sharing siblings and traversals', () => 
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
+})
+
+test('public GET routes stay unauthenticated; catalog and mutations need a bearer token', () => {
+  const token = 'local-secret-token'
+  assert.equal(isPublicApiGet('/api/health'), true)
+  assert.equal(isPublicApiGet('/api/bootstrap'), true)
+  assert.equal(isPublicApiGet('/api/system-font'), true)
+  assert.equal(isPublicApiGet('/api/font-file/abc'), true)
+  assert.equal(isPublicApiGet('/api/catalog'), false)
+  assert.equal(isPublicApiGet('/api/events'), false)
+  assert.equal(isPublicApiGet('/api/settings'), false)
+  assert.equal(
+    isAuthorizedApiRequest({ method: 'GET', pathname: '/api/catalog', token }),
+    false,
+  )
+  assert.equal(
+    isAuthorizedApiRequest({
+      method: 'GET',
+      pathname: '/api/catalog',
+      authorization: `Bearer ${token}`,
+      token,
+    }),
+    true,
+  )
+  assert.equal(
+    isAuthorizedApiRequest({ method: 'GET', pathname: '/api/font-file/id', token }),
+    true,
+  )
+  assert.equal(
+    isAuthorizedApiRequest({ method: 'POST', pathname: '/api/install', token }),
+    false,
+  )
+  assert.equal(
+    isAuthorizedApiRequest({
+      method: 'POST',
+      pathname: '/api/install',
+      authorization: `Bearer ${token}`,
+      token,
+    }),
+    true,
+  )
+})
+
+test('API auth middleware rejects unauthenticated catalog reads', async () => {
+  const token = 'local-secret-token'
+  const app = new Hono()
+  app.use('/api/*', async (c, next) => {
+    if (
+      isAuthorizedApiRequest({
+        method: c.req.method,
+        pathname: c.req.path,
+        authorization: c.req.header('Authorization'),
+        token,
+      })
+    ) {
+      return next()
+    }
+    return c.json({ error: 'Unauthorized' }, 401)
+  })
+  app.get('/api/bootstrap', (c) => c.json({ ok: true }))
+  app.get('/api/catalog', (c) => c.json({ entries: [] }))
+  app.get('/api/font-file/id', (c) => c.body('font'))
+
+  const openBootstrap = await app.request('/api/bootstrap', {
+    headers: { host: '127.0.0.1:43182' },
+  })
+  assert.equal(openBootstrap.status, 200)
+
+  const blocked = await app.request('/api/catalog', {
+    headers: { host: '127.0.0.1:43182' },
+  })
+  assert.equal(blocked.status, 401)
+
+  const allowed = await app.request('/api/catalog', {
+    headers: { host: '127.0.0.1:43182', authorization: `Bearer ${token}` },
+  })
+  assert.equal(allowed.status, 200)
+
+  const fontBytes = await app.request('/api/font-file/id', {
+    headers: { host: '127.0.0.1:43182' },
+  })
+  assert.equal(fontBytes.status, 200)
+})
+
+test('bootstrap token is only included in test or local-dev server env', () => {
+  assert.equal(shouldIncludeBootstrapToken({}), false)
+  assert.equal(shouldIncludeBootstrapToken({ FONT_BUTLER_TEST: '1' }), true)
+  assert.equal(shouldIncludeBootstrapToken({ FONT_BUTLER_DEV_BOOTSTRAP: '1' }), true)
+  assert.equal(shouldIncludeBootstrapToken({ FONT_BUTLER_TEST: '0' }), false)
 })
