@@ -37,6 +37,33 @@ export function mergeMarqueeSelection(base: string[], hit: string[], additive: b
   return next
 }
 
+export function sameKeys(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((key, index) => key === right[index])
+}
+
+export function collectFamilyCardRects(): Array<{ key: string; rect: Rect }> {
+  return Array.from(document.querySelectorAll('[data-family-key]')).flatMap((node) => {
+    const key = node.getAttribute('data-family-key')
+    if (!key) return []
+    const box = node.getBoundingClientRect()
+    return [
+      {
+        key,
+        rect: { left: box.left, top: box.top, right: box.right, bottom: box.bottom },
+      },
+    ]
+  })
+}
+
+export function clickPreservesSelection(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element &&
+    target.closest(
+      '[data-family-key], [data-keep-selection], [data-radix-scroll-area-scrollbar]',
+    ) != null
+  )
+}
+
 export function canStartMarquee(target: EventTarget | null): boolean {
   if (typeof Element === 'undefined' || !(target instanceof Element)) return false
   if (

@@ -4,6 +4,7 @@ import { WOFF_INSTALL_ERROR } from './formats.ts'
 import {
   actionCopy,
   actionCopyFor,
+  adobeInstallCopy,
   emptyImportError,
   importDoneCopy,
   remainingActionCopy,
@@ -61,6 +62,21 @@ test('importDoneCopy mentions ignored web fonts only in the success line', () =>
     importDoneCopy({ installed: false, count: 1, name: 'Web', preview: 1 }),
     'Added preview of Web',
   )
+})
+
+test('adobeInstallCopy singularizes a single placement', () => {
+  assert.deepEqual(adobeInstallCopy(1), {
+    pending: 'Placing Adobe testing copy…',
+    done: 'Placed Adobe testing copy',
+  })
+  assert.deepEqual(adobeInstallCopy(0), {
+    pending: 'Placing Adobe testing copy…',
+    done: 'Placed Adobe testing copy',
+  })
+  assert.deepEqual(adobeInstallCopy(3), {
+    pending: 'Placing 3 Adobe testing copies…',
+    done: 'Placed 3 Adobe testing copies',
+  })
 })
 
 test('emptyImportError prefers real failures over skipped WOFF files', () => {

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
+  catalogRevealEntry,
   countLibraryFilters,
   entryHasTrackedSource,
   familyStatusSummary,
@@ -10,8 +11,9 @@ import {
   isUninstallableGroup,
   matchesLibraryFilter,
   sortFamilyGroups,
+  uniquePaths,
 } from './group.ts'
-import type { CatalogEntry, FontFaceInfo } from './types.ts'
+import type { CatalogEntry, FontFaceInfo, SystemFace } from './types.ts'
 
 function face(
   familyName: string,
@@ -186,6 +188,27 @@ test('entryHasTrackedSource prefers the stored flag and falls back to status', (
   assert.equal(entryHasTrackedSource(adopted), false)
   assert.equal(entryHasTrackedSource(renamed), false)
   assert.equal(hasTrackedSource({ entries: [tracked, installedMissing] }), true)
+})
+
+test('uniquePaths dedupes system face paths in first-seen order', () => {
+  const faces = (paths: string[]) => paths.map((path) => ({ path }) as SystemFace)
+  assert.deepEqual(uniquePaths(faces(['/A.otf', '/B.otf', '/A.otf'])), ['/A.otf', '/B.otf'])
+})
+
+test('catalogRevealEntry prefers selected install, else any install or tracked source', () => {
+  const installed = entry('in', 'Booton', 1, 'installed')
+  installed.installedPath = '/Library/Fonts/Booton.otf'
+  const parked = entry('off', 'Booton', 2, 'deactivated')
+  parked.disabledPath = '/Library/Fonts/Booton-Italic.otf'
+  const sourceOnly = entry('src', 'Booton', 3, 'uninstalled')
+  sourceOnly.sourcePresent = true
+  const selfSourced = entry('self', 'Booton', 4, 'installed')
+  selfSourced.installedPath = selfSourced.sourcePath
+  const group = groupCatalog([sourceOnly, installed, parked, selfSourced])[0]!
+  assert.equal(catalogRevealEntry(group, parked, 'installed')?.id, 'off')
+  assert.equal(catalogRevealEntry(group, sourceOnly, 'installed')?.id, 'in')
+  assert.equal(catalogRevealEntry(group, sourceOnly, 'source')?.id, 'src')
+  assert.equal(catalogRevealEntry(group, selfSourced, 'source')?.id, 'src')
 })
 
 test('groupCatalog keeps typographic family styles on one card', () => {
