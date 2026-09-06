@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { catalogFontUrl, systemFontUrl, type PreviewWhich } from '@/lib/preview'
+import { catalogFontUrl, catalogFontFaceRules, type PreviewWhich } from '@/lib/preview'
 import type { CatalogEntry, SystemFace } from '@/lib/types'
 
 function cssFamily(id: string, which?: PreviewWhich): string {
@@ -32,12 +32,20 @@ export function FontFaceStyles({
   const css = [
     ...entries.flatMap((entry) => {
       const faces = [
-        `@font-face{font-family:"${cssFamily(entry.id)}";src:url("${catalogFontUrl(entry)}");font-display:swap;}`,
-        `@font-face{font-family:"${cssFamily(entry.id, 'installed')}";src:url("${catalogFontUrl(entry, 'installed')}");font-display:swap;}`,
+        ...catalogFontFaceRules(cssFamily(entry.id), catalogFontUrl(entry), entry.faces),
+        ...catalogFontFaceRules(
+          cssFamily(entry.id, 'installed'),
+          catalogFontUrl(entry, 'installed'),
+          entry.faces,
+        ),
       ]
       if (entry.sourcePath && entry.sourcePath !== entry.installedPath) {
         faces.push(
-          `@font-face{font-family:"${cssFamily(entry.id, 'source')}";src:url("${catalogFontUrl(entry, 'source')}");font-display:swap;}`,
+          ...catalogFontFaceRules(
+            cssFamily(entry.id, 'source'),
+            catalogFontUrl(entry, 'source'),
+            entry.faces,
+          ),
         )
       }
       return faces

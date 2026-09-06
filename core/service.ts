@@ -2258,6 +2258,8 @@ export class FontButlerService {
       if (!entry) {
         throw new Error('Font is not in the library.')
       }
+      entry.format = staged.parsed.format
+      entry.faces = staged.parsed.faces
       if (
         installMacos &&
         entry.status === 'installed' &&
@@ -2289,6 +2291,8 @@ export class FontButlerService {
         if (!entry) {
           throw new Error('Font is not in the library.')
         }
+        entry.format = staged.parsed.format
+        entry.faces = staged.parsed.faces
       }
       if (installMacos) {
         const dest = destinationForInstall(this.paths, entry, entry.sourcePath)

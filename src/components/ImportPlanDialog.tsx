@@ -8,7 +8,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { classificationLabel, planChoiceLabel } from '@/lib/planner'
+import { classificationLabel, collectionImportScope, planChoiceLabel } from '@/lib/planner'
 import type { ImportPlan, ImportPlanItem } from '@/lib/types'
 
 export function ImportPlanDialog({
@@ -66,7 +66,9 @@ export function ImportPlanDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
-          {reviewItems.map((item) => (
+          {reviewItems.map((item) => {
+            const scope = collectionImportScope(item)
+            return (
             <div key={item.id} className="rounded-lg border px-3 py-2">
               <div className="text-sm font-medium">{item.familyName || item.path.split('/').pop()}</div>
               <div className="text-xs text-muted-foreground">
@@ -87,12 +89,7 @@ export function ImportPlanDialog({
                   {item.incomingVersion ? `Incoming: ${item.incomingVersion}` : ''}
                 </div>
               )}
-              {item.affectedFaces && item.affectedFaces.length > 0 && (
-                <p className="mt-1 text-xs text-muted-foreground">
-                  This changes all {item.affectedFaces.length} faces in this collection:{' '}
-                  {item.affectedFaces.join(', ')}
-                </p>
-              )}
+              {scope ? <p className="mt-1 text-xs text-muted-foreground">{scope}</p> : null}
               {item.reason ? <p className="mt-1 text-xs text-muted-foreground">{item.reason}</p> : null}
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {item.choices.map((choice) => {
@@ -111,7 +108,8 @@ export function ImportPlanDialog({
                 })}
               </div>
             </div>
-          ))}
+            )
+          })}
         </div>
         {installAsSelected && (
           <div className="space-y-1 pt-2">

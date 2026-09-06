@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { displayStateLabel, needsLocateSource } from './state.ts'
+import { collectionScopeLabel, displayStateLabel, needsLocateSource } from './state.ts'
 import type { CatalogEntry, FontFaceInfo } from './types.ts'
 
 function face(): FontFaceInfo {
@@ -84,4 +84,25 @@ test('needsLocateSource covers missing and unlinked installed fonts', () => {
     true,
   )
   assert.equal(needsLocateSource(entry({ sourceAvailability: 'present' })), false)
+})
+
+test('collectionScopeLabel names every face in a collection file', () => {
+  assert.equal(collectionScopeLabel(entry()), null)
+  assert.equal(
+    collectionScopeLabel(
+      entry({
+        faces: [
+          face(),
+          {
+            ...face(),
+            styleName: 'Bold',
+            fullName: 'State Bold',
+            postscriptName: 'State-Bold',
+            weight: 700,
+          },
+        ],
+      }),
+    ),
+    'This changes all 2 faces in this collection.',
+  )
 })

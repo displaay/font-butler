@@ -4,7 +4,7 @@ import path from 'node:path'
 import { faceIdentityKey, findByInstalledPath, findBySourcePath } from './catalog.ts'
 import { occupyingSiblingsForIncoming, isBoundSourcePath, findAllByFaceIdentity } from './identity.ts'
 import { tryFingerprintFile } from './fingerprint.ts'
-import { isWebFontFormat, normalizeFormat } from './formats.ts'
+import { instancesOverlap, isWebFontFormat, normalizeFormat } from './formats.ts'
 import { isFontFile, isPreviewableFontFile, parseFontFile } from './parse.ts'
 import { plansDir } from './paths.ts'
 import type { AppPaths } from './paths.ts'
@@ -76,7 +76,7 @@ export function classifyImportFile(
     fingerprint,
     faces: parsed.faces,
     previewOnly,
-    affectedFaces: parsed.faces.map((face) => `${face.familyName} ${face.styleName}`.trim()),
+    affectedFaces: uniqueFaceLabels(parsed.faces),
     sourceMtimeMs: stat.mtimeMs,
   }
 
@@ -133,22 +133,23 @@ export function classifyImportFile(
     const bound = identityMatches.find((entry) => isBoundSourcePath(entry, resolved))
     const parallelCopy = !bound
     const preferred = occupying[0] ?? identityMatches[0]!
+    if (isCollectionOverlap(parsed.faces, preferred.faces)) {
+      return collectionOverlapItem(item, preferred, parsed.faces)
+    }
     return finishRevision(item, preferred, identityMatches, { parallelCopy })
   }
 
   if (sameFaceAnyFormat && normalizeFormat(sameFaceAnyFormat.format) !== normalizeFormat(parsed.format)) {
-    const collection = parsed.faces.length > 1
+    if (isCollectionOverlap(parsed.faces, sameFaceAnyFormat.faces)) {
+      return collectionOverlapItem(item, sameFaceAnyFormat, parsed.faces)
+    }
     return {
       ...item,
-      classification: collection ? 'collection-overlap' : 'alt-format',
+      classification: 'alt-format',
       entryId: sameFaceAnyFormat.id,
       currentFormat: sameFaceAnyFormat.format,
       incomingVersion: parsed.faces[0]?.fullName,
       currentVersion: sameFaceAnyFormat.faces[0]?.fullName,
-      affectedFaces: [
-        ...parsed.faces.map((face) => `${face.familyName} ${face.styleName}`.trim()),
-        ...sameFaceAnyFormat.faces.map((face) => `${face.familyName} ${face.styleName}`.trim()),
-      ],
       defaultChoice: 'keep',
       choices: ['keep', 'replace', 'install-as', 'skip'],
     }
@@ -169,6 +170,60 @@ export function classifyImportFile(
     classification: 'new',
     defaultChoice: 'keep',
     choices: ['keep', 'skip'],
+  }
+}
+
+function faceLabel(face: { familyName: string; styleName: string }): string {
+  return `${face.familyName} ${face.styleName}`.trim()
+}
+
+function uniqueFaceLabels(...groups: Array<Array<{ familyName: string; styleName: string }>>): string[] {
+  const seen = new Set<string>()
+  const labels: string[] = []
+  for (const group of groups) {
+    for (const face of group) {
+      const label = faceLabel(face)
+      if (seen.has(label)) continue
+      seen.add(label)
+      labels.push(label)
+    }
+  }
+  return labels
+}
+
+function facesFullyMatch(
+  left: CatalogEntry['faces'],
+  right: CatalogEntry['faces'],
+): boolean {
+  const leftKey = faceIdentityKey(left)
+  const rightKey = faceIdentityKey(right)
+  return Boolean(leftKey && rightKey && leftKey === rightKey)
+}
+
+function isCollectionOverlap(incoming: CatalogEntry['faces'], existing: CatalogEntry['faces']): boolean {
+  if (incoming.length <= 1 && existing.length <= 1) return false
+  if (!instancesOverlap({ faces: incoming }, { faces: existing })) return false
+  if (facesFullyMatch(incoming, existing)) return false
+  return true
+}
+
+function collectionOverlapItem(
+  item: ImportPlanItem,
+  existing: CatalogEntry,
+  incomingFaces: CatalogEntry['faces'],
+): ImportPlanItem {
+  return {
+    ...item,
+    classification: 'collection-overlap',
+    entryId: existing.id,
+    currentFormat: existing.format,
+    incomingVersion: incomingFaces[0]?.fullName,
+    currentVersion: existing.faces[0]?.fullName,
+    affectedFaces: uniqueFaceLabels(incomingFaces, existing.faces),
+    reason:
+      'This collection is one file. Replacing it changes every face it contains, not only the overlapping face.',
+    defaultChoice: 'keep',
+    choices: ['keep', 'replace', 'install-as', 'skip'],
   }
 }
 

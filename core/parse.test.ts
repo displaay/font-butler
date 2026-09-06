@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { parseFontFile, resolveFamilyNames } from './parse.ts'
+import { writeTestCollection } from './test-util.ts'
 
 test('resolveFamilyNames prefers typographic family and style', () => {
   assert.deepEqual(
@@ -24,6 +26,37 @@ test('resolveFamilyNames falls back to name ID 1/2', () => {
     }),
     { familyName: 'Booton', styleName: 'Bold' },
   )
+})
+
+test('parseFontFile reads every face from a synthetic TTC and OTC', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-ttc-parse-'))
+  try {
+    const ttc = path.join(dir, 'Pack.ttc')
+    writeTestCollection(ttc, [
+      { family: 'Pack', psName: 'Pack-Regular', style: 'Regular' },
+      { family: 'Pack', psName: 'Pack-Bold', style: 'Bold' },
+    ])
+    const parsedTtc = parseFontFile(ttc)
+    assert.equal(parsedTtc.format, 'ttc')
+    assert.equal(parsedTtc.faces.length, 2)
+    assert.deepEqual(
+      parsedTtc.faces.map((face) => face.postscriptName).sort(),
+      ['Pack-Bold', 'Pack-Regular'],
+    )
+    assert.equal(parsedTtc.faces.find((face) => face.styleName === 'Bold')?.weight, 700)
+
+    const otc = path.join(dir, 'Pack.otc')
+    writeTestCollection(otc, [
+      { family: 'Pack', psName: 'Pack-Regular', style: 'Regular', format: 'otf' },
+      { family: 'Pack', psName: 'Pack-Bold', style: 'Bold', format: 'otf' },
+    ])
+    const parsedOtc = parseFontFile(otc)
+    assert.equal(parsedOtc.format, 'otc')
+    assert.equal(parsedOtc.faces.length, 2)
+    assert.ok(parsedOtc.characterSet?.includes(65))
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('parseFontFile groups Booton OTFs under the typographic family', (t) => {

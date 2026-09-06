@@ -32,16 +32,26 @@ export function tempPaths(prefix = 'font-butler-'): AppPaths {
   }
 }
 
+export type TestFontFaceSpec = {
+  family: string
+  psName: string
+  style?: string
+  format?: 'ttf' | 'otf'
+  version?: string
+  weight?: number
+}
+
 export function writeTestFont(
   dest: string,
   family: string,
   psName: string,
-  options: { style?: string; format?: 'ttf' | 'otf'; version?: string } = {},
+  options: { style?: string; format?: 'ttf' | 'otf'; version?: string; weight?: number } = {},
 ): void {
   fs.mkdirSync(path.dirname(dest), { recursive: true })
   const style = options.style ?? 'Regular'
   const format = options.format ?? 'ttf'
   const version = options.version ?? 'Version 1.000'
+  const weight = options.weight ?? (/bold/i.test(style) ? 700 : 400)
   const isTtf = format === 'ttf'
   const script = isTtf
     ? `
@@ -68,7 +78,7 @@ fb.setupNameTable({
     "psName": ${JSON.stringify(psName)},
     "version": ${JSON.stringify(version)},
 })
-fb.setupOS2()
+fb.setupOS2(usWeightClass=${weight})
 fb.setupPost()
 fb.save(${JSON.stringify(dest)})
 `
@@ -98,11 +108,48 @@ fb.setupNameTable({
     "psName": ${JSON.stringify(psName)},
     "version": ${JSON.stringify(version)},
 })
-fb.setupOS2()
+fb.setupOS2(usWeightClass=${weight})
 fb.setupPost()
 fb.save(${JSON.stringify(dest)})
 `
   execFileSync('python3', ['-c', script], { stdio: 'pipe' })
+}
+
+export function writeTestCollection(dest: string, faces: TestFontFaceSpec[]): void {
+  if (faces.length < 2) {
+    throw new Error('A collection fixture needs at least two faces.')
+  }
+  const collectionFormat = dest.toLowerCase().endsWith('.otc') ? 'otf' : 'ttf'
+  fs.mkdirSync(path.dirname(dest), { recursive: true })
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-collection-'))
+  try {
+    const parts = faces.map((face, index) => {
+      const format = face.format ?? collectionFormat
+      const part = path.join(dir, `face-${index}.${format}`)
+      writeTestFont(part, face.family, face.psName, {
+        style: face.style,
+        format,
+        version: face.version,
+        weight: face.weight,
+      })
+      return part
+    })
+    execFileSync(
+      'python3',
+      [
+        '-c',
+        `
+from fontTools.ttLib import TTCollection, TTFont
+ttc = TTCollection()
+ttc.fonts = [${parts.map((part) => `TTFont(${JSON.stringify(part)})`).join(', ')}]
+ttc.save(${JSON.stringify(dest)})
+`,
+      ],
+      { stdio: 'pipe' },
+    )
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
 }
 
 export function writeTestWebFont(dest: string, family: string, psName: string): void {

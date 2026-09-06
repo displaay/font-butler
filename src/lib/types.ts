@@ -209,6 +209,7 @@ export type ImportPlanItem = {
   familyName?: string
   format?: string
   fingerprint?: string
+  faces?: FontFaceInfo[]
   affectedFaces?: string[]
   currentFormat?: string
   currentVersion?: string
