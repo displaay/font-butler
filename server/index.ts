@@ -85,6 +85,13 @@ app.use('/api/*', async (c, next) => {
       pathname: c.req.path,
       authorization: c.req.header('Authorization'),
       token: apiToken,
+      query: {
+        exp: c.req.query('exp'),
+        sig: c.req.query('sig'),
+        which: c.req.query('which'),
+        revision: c.req.query('revision'),
+        path: c.req.query('path'),
+      },
     })
   ) {
     return next()

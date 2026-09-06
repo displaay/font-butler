@@ -1,3 +1,4 @@
+import { signFontAccess, withFontAccessQuery } from './font-access'
 import type { CatalogEntry } from './types'
 
 export type PreviewWhich = 'source' | 'installed' | 'revision'
@@ -49,4 +50,34 @@ export function systemFontUrl(filePath: string, revision?: string | number): str
     query.set('v', String(revision))
   }
   return `/api/system-font?${query.toString()}`
+}
+
+export async function signedCatalogFontUrl(
+  entry: CatalogEntry,
+  which: PreviewWhich,
+  secret: string,
+  revision?: string,
+  now = Date.now(),
+): Promise<string> {
+  const access = await signFontAccess(
+    secret,
+    {
+      kind: 'font-file',
+      id: entry.id,
+      which,
+      revision: which === 'revision' && revision ? revision : '',
+    },
+    now,
+  )
+  return withFontAccessQuery(catalogFontUrl(entry, which, revision), access)
+}
+
+export async function signedSystemFontUrl(
+  filePath: string,
+  secret: string,
+  revision?: string | number,
+  now = Date.now(),
+): Promise<string> {
+  const access = await signFontAccess(secret, { kind: 'system-font', path: filePath }, now)
+  return withFontAccessQuery(systemFontUrl(filePath, revision), access)
 }

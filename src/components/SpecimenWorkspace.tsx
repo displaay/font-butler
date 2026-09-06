@@ -3,14 +3,14 @@ import { catalogFontFamily } from '@/components/FontFaceStyles'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { api } from '@/lib/api'
+import { api, getApiToken } from '@/lib/api'
 import {
   canCompareInstalledVsSource,
   capturedFontFamily,
   isComparisonSourceStale,
 } from '@/lib/comparison'
 import { formatMissingCharacters, missingCodePoints } from '@/lib/coverage'
-import { catalogFontFaceRules, catalogFontUrl } from '@/lib/preview'
+import { catalogFontFaceRules, signedCatalogFontUrl } from '@/lib/preview'
 import { DEFAULT_SPECIMEN, SPECIMEN_PRESETS, specimenFromSettings } from '@/lib/specimen'
 import type { CatalogEntry, ComparisonCapture, FontAxisInfo, PreviewPreferences } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -104,23 +104,36 @@ export function SpecimenWorkspace({
 
   useEffect(() => {
     if (!freezeComparison || !capture?.installedFingerprint || !capture.sourceFingerprint) return
-    const rules = [
-      ...catalogFontFaceRules(
-        capturedFontFamily(entry.id, 'installed'),
-        catalogFontUrl(entry, 'revision', capture.installedFingerprint),
-        entry.faces,
-      ),
-      ...catalogFontFaceRules(
-        capturedFontFamily(entry.id, 'source'),
-        catalogFontUrl(entry, 'revision', capture.sourceFingerprint),
-        entry.faces,
-      ),
-    ].join('\n')
     const style = document.createElement('style')
     style.setAttribute('data-font-butler-comparison', entry.id)
-    style.textContent = rules
     document.head.append(style)
-    return () => style.remove()
+    let cancelled = false
+    const installedFingerprint = capture.installedFingerprint
+    const sourceFingerprint = capture.sourceFingerprint
+    void (async () => {
+      try {
+        const secret = await getApiToken()
+        const rules = [
+          ...catalogFontFaceRules(
+            capturedFontFamily(entry.id, 'installed'),
+            await signedCatalogFontUrl(entry, 'revision', secret, installedFingerprint),
+            entry.faces,
+          ),
+          ...catalogFontFaceRules(
+            capturedFontFamily(entry.id, 'source'),
+            await signedCatalogFontUrl(entry, 'revision', secret, sourceFingerprint),
+            entry.faces,
+          ),
+        ].join('\n')
+        if (!cancelled) style.textContent = rules
+      } catch {
+        if (!cancelled) style.textContent = ''
+      }
+    })()
+    return () => {
+      cancelled = true
+      style.remove()
+    }
     // Pin captured @font-face URLs; do not recreate when catalog sourceFingerprint changes.
   }, [freezeComparison, capture?.installedFingerprint, capture?.sourceFingerprint, entry.id])
 
