@@ -8,6 +8,7 @@ export type PreviewFace = {
   weight?: number
   italic?: boolean
   label: string
+  variation?: string
 }
 
 function useHoverCycle(length: number, active: boolean, restIndex: number) {
@@ -40,10 +41,12 @@ function AaGlyph({
   family,
   weight = 400,
   italic = false,
+  variation,
 }: {
   family: string
   weight?: number
   italic?: boolean
+  variation?: string
 }) {
   return (
     <span
@@ -53,6 +56,7 @@ function AaGlyph({
         fontWeight: weight,
         fontStyle: italic ? 'italic' : 'normal',
         fontSynthesis: 'none',
+        fontVariationSettings: variation || undefined,
       }}
     >
       Aa
@@ -130,7 +134,12 @@ export function CyclingAaPreview({
           )}
           aria-hidden={faceIndex !== visibleIndex}
         >
-          <AaGlyph family={face.family} weight={face.weight} italic={face.italic} />
+          <AaGlyph
+            family={face.family}
+            weight={face.weight}
+            italic={face.italic}
+            variation={face.variation}
+          />
           {cycling ? <PreviewLabel>{face.label}</PreviewLabel> : null}
         </div>
       ))}

@@ -13,6 +13,7 @@ export type FontFaceInfo = {
   isVariable: boolean
   instanceCount: number
   instanceNames: string[]
+  namedInstances?: Array<{ name: string; coordinates: Record<string, number> }>
   weight: number
   italic: boolean
 }

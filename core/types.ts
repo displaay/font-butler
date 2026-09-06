@@ -75,6 +75,11 @@ export type ComparisonCapture = {
   sourceFingerprint: string
 }
 
+export type NamedInstanceInfo = {
+  name: string
+  coordinates: Record<string, number>
+}
+
 export type FontFaceInfo = {
   familyName: string
   styleName: string
@@ -83,6 +88,7 @@ export type FontFaceInfo = {
   isVariable: boolean
   instanceCount: number
   instanceNames: string[]
+  namedInstances?: NamedInstanceInfo[]
   weight: number
   italic: boolean
 }
@@ -93,11 +99,6 @@ export type FontAxisInfo = {
   min: number
   default: number
   max: number
-}
-
-export type NamedInstanceInfo = {
-  name: string
-  coordinates: Record<string, number>
 }
 
 export type CatalogEntry = {

@@ -13,6 +13,15 @@ export type InstanceRow = {
   systemPath?: string
   weight?: number
   italic?: boolean
+  variation?: string
+}
+
+export function variationSettings(coordinates?: Record<string, number>): string | undefined {
+  if (!coordinates) return undefined
+  const parts = Object.entries(coordinates)
+    .filter(([, value]) => Number.isFinite(value))
+    .map(([tag, value]) => `'${tag}' ${value}`)
+  return parts.length > 0 ? parts.join(', ') : undefined
 }
 
 function weightFromStyleName(name: string, fallback = 400): number {
@@ -40,14 +49,18 @@ function rowsFromFace(
   entryId: string,
 ): InstanceRow[] {
   if (face.isVariable && face.instanceNames.length > 0) {
-    return face.instanceNames.map((name) => ({
-      key: `${entryId}-${face.postscriptName}-${name}`,
-      label: name,
-      sublabel: face.postscriptName,
-      catalogEntryId: entryId,
-      weight: weightFromStyleName(name, face.weight),
-      italic: italicFromStyleName(name, face.italic),
-    }))
+    return face.instanceNames.map((name) => {
+      const named = face.namedInstances?.find((item) => item.name === name)
+      return {
+        key: `${entryId}-${face.postscriptName}-${name}`,
+        label: name,
+        sublabel: face.postscriptName,
+        catalogEntryId: entryId,
+        weight: weightFromStyleName(name, face.weight),
+        italic: italicFromStyleName(name, face.italic),
+        variation: variationSettings(named?.coordinates),
+      }
+    })
   }
   return [
     {

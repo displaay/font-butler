@@ -116,7 +116,7 @@ export function SystemCard({
                   italic: face.italic,
                   label: face.styleName,
                 }}
-                active={hovered && !selected}
+                active={hovered}
                 size={previewSize}
               />
               <div className={previewSize < 3.25 ? 'p-2' : 'p-3'}>{metadata}</div>
