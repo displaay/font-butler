@@ -12,8 +12,8 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { api } from '@/lib/api'
-import { DESTINATIONS, FOLDER_POLICIES } from '@/lib/folders'
-import type { DestinationId, FolderPolicyPreset, ImportPlan, WatchFolder } from '@/lib/types'
+import { DESTINATIONS, FOLDER_POLICIES, destinationNeedsAdobe } from '@/lib/folders'
+import type { DefaultDestinationId, FolderPolicyPreset, ImportPlan, WatchFolder } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 export function FolderSetupDialog({
@@ -30,11 +30,12 @@ export function FolderSetupDialog({
   const [root, setRoot] = useState(roots?.[0] ?? '')
   const extraRoots = roots?.slice(1) ?? []
   const [policy, setPolicy] = useState<FolderPolicyPreset>('library')
-  const [destinationId, setDestinationId] = useState<DestinationId>('macos')
+  const [destinationId, setDestinationId] = useState<DefaultDestinationId>('macos')
   const [exclusions, setExclusions] = useState('')
   const [discovery, setDiscovery] = useState<ImportPlan | null>(null)
   const [folder, setFolder] = useState<WatchFolder | null>(null)
   const [busy, setBusy] = useState(false)
+  const [adobeSupported, setAdobeSupported] = useState(true)
 
   useEffect(() => {
     if (!open) return
@@ -44,6 +45,13 @@ export function FolderSetupDialog({
     setExclusions('')
     setDiscovery(null)
     setFolder(null)
+    void api
+      .destinations()
+      .then((result) => {
+        const adobe = result.destinations.find((item) => item.id === 'adobe-shared')
+        setAdobeSupported(adobe?.supported !== false)
+      })
+      .catch(() => setAdobeSupported(true))
   }, [open, roots])
 
   const parsedExclusions = exclusions
@@ -169,13 +177,17 @@ export function FolderSetupDialog({
               aria-label="Install destination"
               value={destinationId}
               onChange={(event) => {
-                const next = event.target.value as DestinationId
+                const next = event.target.value as DefaultDestinationId
                 setDestinationId(next)
                 if (root.trim()) void configure(root, policy, next)
               }}
             >
               {DESTINATIONS.map((option) => (
-                <option key={option.id} value={option.id}>
+                <option
+                  key={option.id}
+                  value={option.id}
+                  disabled={destinationNeedsAdobe(option.id) && !adobeSupported}
+                >
                   {option.label}
                 </option>
               ))}

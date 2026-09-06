@@ -10,6 +10,7 @@ import { isFontFile, parseFontFile } from './parse.ts'
 import type { AppPaths } from './paths.ts'
 import type {
   CatalogEntry,
+  DefaultDestinationId,
   DestinationCapability,
   DestinationId,
   DestinationInvestigationRow,
@@ -20,12 +21,36 @@ import type {
 export const ADOBE_SHARED_FONTS = '/Library/Application Support/Adobe/Fonts'
 
 export const DESTINATION_IDS: DestinationId[] = ['macos', 'adobe-shared']
+export const DEFAULT_DESTINATION_IDS: DefaultDestinationId[] = [
+  'macos',
+  'adobe-shared',
+  'macos-and-adobe',
+]
 
 export function isDestinationId(value: unknown): value is DestinationId {
   return value === 'macos' || value === 'adobe-shared'
 }
 
-export function destinationLabel(id: DestinationId): string {
+export function isDefaultDestinationId(value: unknown): value is DefaultDestinationId {
+  return isDestinationId(value) || value === 'macos-and-adobe'
+}
+
+export function parseDefaultDestination(value: unknown): DefaultDestinationId {
+  return isDefaultDestinationId(value) ? value : 'macos'
+}
+
+export function destinationNeedsAdobe(id: DefaultDestinationId | undefined): boolean {
+  return id === 'adobe-shared' || id === 'macos-and-adobe'
+}
+
+export function targetsForDefaultDestination(id: DefaultDestinationId | undefined): DestinationId[] {
+  if (id === 'macos-and-adobe') return ['macos', 'adobe-shared']
+  if (id === 'adobe-shared') return ['adobe-shared']
+  return ['macos']
+}
+
+export function destinationLabel(id: DestinationId | DefaultDestinationId | undefined): string {
+  if (id === 'macos-and-adobe') return 'This Mac and Adobe testing folder'
   return id === 'adobe-shared' ? 'Adobe testing folder' : 'This Mac'
 }
 

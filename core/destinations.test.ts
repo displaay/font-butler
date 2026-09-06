@@ -7,6 +7,7 @@ import {
   findUnmanagedConflicts,
   inspectDestination,
   removeManagedCopy,
+  targetsForDefaultDestination,
   writeManagedCopy,
 } from './destinations.ts'
 import { tempPaths, writeTestFont } from './test-util.ts'
@@ -83,4 +84,11 @@ test('F09-E a missing Adobe destination stays unsupported', () => {
   const capability = inspectDestination(paths, 'adobe-shared')
   assert.equal(capability.supported, false)
   assert.ok(capability.remedy)
+})
+
+test('Mac+Adobe default expands to both destination IDs', () => {
+  assert.deepEqual(targetsForDefaultDestination('macos-and-adobe'), ['macos', 'adobe-shared'])
+  assert.deepEqual(targetsForDefaultDestination('macos'), ['macos'])
+  assert.deepEqual(targetsForDefaultDestination('adobe-shared'), ['adobe-shared'])
+  assert.deepEqual(targetsForDefaultDestination(undefined), ['macos'])
 })

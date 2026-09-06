@@ -134,7 +134,7 @@ app.post('/api/settings', async (c) => {
     activityMaxOperations?: number
     folders?: AppSettings['folders']
     specimen?: AppSettings['specimen']
-    defaultDestination?: 'macos' | 'adobe-shared'
+    defaultDestination?: AppSettings['defaultDestination']
   }>()
   try {
     const settings = await service.updateSettings(body)
@@ -493,7 +493,7 @@ app.post('/api/folders/configure', async (c) => {
     autoUpdate?: boolean
     exclusions?: string[]
     id?: string
-    destinationId?: 'macos' | 'adobe-shared'
+    destinationId?: 'macos' | 'adobe-shared' | 'macos-and-adobe'
   }>()
   try {
     return c.json(await service.configureFolder(body))

@@ -64,6 +64,33 @@ test('loadSettings defaults defaultDestination to macos', () => {
   }
 })
 
+test('loadSettings keeps a stored macos-and-adobe defaultDestination', () => {
+  const paths = tempPaths()
+  try {
+    saveSettings(paths, sampleSettings({ defaultDestination: 'macos-and-adobe' }))
+    assert.equal(loadSettings(paths).defaultDestination, 'macos-and-adobe')
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings ignores an unknown defaultDestination', () => {
+  const paths = tempPaths()
+  try {
+    fs.mkdirSync(paths.dataRoot, { recursive: true })
+    fs.writeFileSync(
+      paths.settingsPath,
+      JSON.stringify({
+        version: 1,
+        defaultDestination: 'indesign',
+      }),
+    )
+    assert.equal(loadSettings(paths).defaultDestination, 'macos')
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
 test('loadSettings defaults installAfterUpload to true', () => {
   const paths = tempPaths()
   try {

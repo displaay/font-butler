@@ -23,9 +23,11 @@ import {
   dropCopy,
   findUnmanagedConflicts,
   inspectDestination,
+  isDefaultDestinationId,
   listDestinations,
   plannedManagedPath,
   removeManagedCopy,
+  targetsForDefaultDestination,
   upsertCopy,
   verifyManagedCopy,
   writeManagedCopy,
@@ -127,6 +129,7 @@ import type {
   AppSettings,
   BatchActionResult,
   CatalogEntry,
+  DefaultDestinationId,
   DestinationId,
   FolderPolicyPreset,
   InstallOptions,
@@ -386,7 +389,7 @@ export class FontButlerService {
     activityRetentionDays?: number
     activityMaxOperations?: number
     specimen?: AppSettings['specimen']
-    defaultDestination?: DestinationId
+    defaultDestination?: DefaultDestinationId
   }): Promise<AppSettings> {
     const current = loadSettings(this.paths)
     const next: AppSettings = { ...current }
@@ -473,7 +476,7 @@ export class FontButlerService {
     if (patch.specimen) {
       next.specimen = patch.specimen
     }
-    if (patch.defaultDestination === 'adobe-shared' || patch.defaultDestination === 'macos') {
+    if (isDefaultDestinationId(patch.defaultDestination)) {
       next.defaultDestination = patch.defaultDestination
     }
     syncWatchFolderPaths(next)
@@ -1253,7 +1256,7 @@ export class FontButlerService {
     autoUpdate?: boolean
     exclusions?: string[]
     id?: string
-    destinationId?: DestinationId
+    destinationId?: DefaultDestinationId
   }): Promise<{ folder: WatchFolder; discovery: ImportPlan }> {
     const settings = loadSettings(this.paths)
     const root = this.resolveWatchFolders([input.root])[0]!
@@ -1448,11 +1451,7 @@ export class FontButlerService {
                 ? settings.installAfterUpload
                 : Boolean(folder?.installNew || (!folder && settings.installWatchFolderFonts)))
             if (shouldInstall && imported.status !== 'installed') {
-              entries.push(
-                await this.installEntry(imported.id, undefined, {
-                  destinationId: this.defaultDestinationFor(imported),
-                }),
-              )
+              entries.push(await this.installEntry(imported.id))
             } else {
               entries.push(imported)
             }
@@ -2298,12 +2297,13 @@ export class FontButlerService {
     }
   }
 
-  private defaultDestinationFor(entry: CatalogEntry): DestinationId {
+  private defaultDestinationFor(entry: CatalogEntry): DefaultDestinationId {
     const settings = loadSettings(this.paths)
     const folder = settings.folders.find((item) => item.id === entry.ownerFolderId)
-    return folder?.destinationId === 'adobe-shared' || settings.defaultDestination === 'adobe-shared'
-      ? 'adobe-shared'
-      : 'macos'
+    if (folder?.destinationId && folder.destinationId !== 'macos') {
+      return folder.destinationId
+    }
+    return isDefaultDestinationId(settings.defaultDestination) ? settings.defaultDestination : 'macos'
   }
 
   private installTargets(entry: CatalogEntry, options?: InstallOptions): DestinationId[] {
@@ -2312,7 +2312,7 @@ export class FontButlerService {
       .map((item) => item.destinationId)
       .filter((item, index, all) => all.indexOf(item) === index)
     if (existing.length) return existing
-    return [this.defaultDestinationFor(entry)]
+    return targetsForDefaultDestination(this.defaultDestinationFor(entry))
   }
 
   private placeAdobeCopy(
