@@ -37,22 +37,26 @@ test('foreground busy operations stay read', () => {
       next: [op('install-1', { trigger: 'manual' })],
       foregroundBusy: true,
       windowHidden: false,
-      markVisibleBackground: true,
+      markVisibleBackground: false,
     }),
     [],
   )
 })
 
-test('visible background operations are unread when the user is not busy', () => {
+test('idle visible manual operations stay read after busy clears', () => {
   assert.deepEqual(
     unreadOperationIdsToMark({
       previous: [],
-      next: [op('install-1', { trigger: 'manual', action: 'install' })],
+      next: [
+        op('install-1', { trigger: 'manual', action: 'install' }),
+        op('activate-1', { trigger: 'manual', action: 'activate' }),
+        op('import-1', { trigger: 'import', action: 'apply-plan' }),
+      ],
       foregroundBusy: false,
       windowHidden: false,
-      markVisibleBackground: true,
+      markVisibleBackground: false,
     }),
-    ['install-1'],
+    [],
   )
 })
 
@@ -109,7 +113,7 @@ test('already unread or pending operations are not marked again', () => {
       ],
       foregroundBusy: false,
       windowHidden: true,
-      markVisibleBackground: true,
+      markVisibleBackground: false,
     }),
     ['same'],
   )

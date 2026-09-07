@@ -325,7 +325,7 @@ function AppShell() {
           next: event.operations,
           foregroundBusy: busyRef.current,
           windowHidden: document.visibilityState !== 'visible',
-          markVisibleBackground: true,
+          markVisibleBackground: false,
         })
         const next = mergeUnreadFlags(event.operations, ids)
         operationsRef.current = next
