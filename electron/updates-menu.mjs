@@ -49,12 +49,19 @@ export function unreadActivityCount(operations) {
   return (operations ?? []).filter((operation) => operation.unread).length
 }
 
-export function menuBarUpdateBadge(input) {
-  const hasAttention =
-    typeof input === 'number'
-      ? input > 0
-      : Boolean(input?.hasUnread || input?.hasUpdates)
-  return hasAttention ? '•' : ''
+export function menuBarNeedsAttention(input) {
+  if (typeof input === 'number') {
+    return input > 0
+  }
+  return Boolean(input?.hasUnread || input?.hasUpdates)
+}
+
+export function menuBarUpdateBadge(_input) {
+  return ''
+}
+
+export function menuBarTrayIconPath(input, { quiet, attention }) {
+  return menuBarNeedsAttention(input) ? attention : quiet
 }
 
 export function unreadOperationIdsToMark({

@@ -7,6 +7,7 @@ import { deliverNativeNotice, electronNotificationPermission } from './notify.mj
 import {
   buildTrayMenuModel,
   menuBarUpdateBadge,
+  menuBarTrayIconPath,
   outdatedFamilies,
   unreadOperationIdsToMark,
 } from './updates-menu.mjs'
@@ -20,7 +21,10 @@ let UI =
   (app.isPackaged ? API : 'http://127.0.0.1:43181')
 const ICON_PATH = path.join(__dirname, '../build/icon.png')
 const MENUBAR_ICON_PATH = path.join(__dirname, '../build/menubarTemplate.png')
+const MENUBAR_ATTENTION_ICON_PATH = path.join(__dirname, '../build/menubarNotificationTemplate.svg')
 const APP_ICON = fs.existsSync(ICON_PATH) ? nativeImage.createFromPath(ICON_PATH) : undefined
+const TRAY_ICON_PATHS = { quiet: MENUBAR_ICON_PATH, attention: MENUBAR_ATTENTION_ICON_PATH }
+const trayTemplateIcons = new Map()
 const LIGHT_BACKGROUND = '#ffffff'
 const DARK_BACKGROUND = '#0a0a0a'
 
@@ -447,6 +451,10 @@ function refreshTrayMenu() {
       ? `Font Buttler — ${families.length} updates`
       : 'Font Buttler'
   tray.setToolTip(tooltip)
+  const icon = trayTemplateIcon({ hasUnread: model.hasUnread, hasUpdates: model.hasUpdates })
+  if (icon) {
+    tray.setImage(icon)
+  }
   tray.setTitle(menuBarUpdateBadge({ hasUnread: model.hasUnread, hasUpdates: model.hasUpdates }))
   tray.setContextMenu(buildTrayMenu())
 }
@@ -454,6 +462,34 @@ function refreshTrayMenu() {
 function destroyTray() {
   tray?.destroy()
   tray = null
+}
+
+function loadTrayTemplateIcon(iconPath) {
+  const cached = trayTemplateIcons.get(iconPath)
+  if (cached) {
+    return cached
+  }
+  if (!fs.existsSync(iconPath)) {
+    return null
+  }
+  let image = nativeImage.createFromPath(iconPath)
+  if (image.isEmpty() && iconPath.endsWith('.svg')) {
+    const svg = fs.readFileSync(iconPath, 'utf8')
+    image = nativeImage.createFromDataURL(
+      `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`,
+    )
+  }
+  if (image.isEmpty()) {
+    return null
+  }
+  image.setTemplateImage(true)
+  trayTemplateIcons.set(iconPath, image)
+  return image
+}
+
+function trayTemplateIcon(attention) {
+  const iconPath = menuBarTrayIconPath(attention, TRAY_ICON_PATHS)
+  return loadTrayTemplateIcon(iconPath) ?? loadTrayTemplateIcon(MENUBAR_ICON_PATH)
 }
 
 function ensureTray() {
@@ -465,14 +501,13 @@ function ensureTray() {
     refreshTrayMenu()
     return
   }
-  if (!fs.existsSync(MENUBAR_ICON_PATH)) {
+  const icon = trayTemplateIcon({
+    hasUnread: activityOperations.some((operation) => operation.unread),
+    hasUpdates: outdatedFamilies(catalogEntries).length > 0,
+  })
+  if (!icon) {
     return
   }
-  const icon = nativeImage.createFromPath(MENUBAR_ICON_PATH)
-  if (icon.isEmpty()) {
-    return
-  }
-  icon.setTemplateImage(true)
   tray = new Tray(icon)
   tray.setIgnoreDoubleClickEvents(true)
   refreshTrayMenu()
