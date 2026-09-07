@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
 import { toast } from 'sonner'
-import { ChevronsLeft, ChevronsRight, Maximize2, RefreshCw, X } from 'lucide-react'
+import { ArrowLeft, Maximize2, Minimize2, RefreshCw, X } from 'lucide-react'
 import { ActivityView } from '@/components/ActivityView'
 import {
   BatchActionBar,
@@ -94,12 +94,9 @@ import {
 } from '@/lib/selection'
 import {
   clickOpensInspector,
-  collapseInspector,
   DEFAULT_INSPECTOR_DENSITY,
   expandInspector,
-  inspectorPaneClass,
-  inspectorRailClass,
-  inspectorUsesCardRail,
+  inspectorHidesBrowseGrid,
   type InspectorDensity,
 } from '@/lib/inspector'
 import { applyTheme } from '@/lib/theme'
@@ -609,19 +606,11 @@ function AppShell() {
   const selectionCount = tab === 'system' ? systemSelection.length : catalogSelection.length
   const showInspector = selectionCount === 1 && inspectSelection
   const showBatchBar = selectionCount > 1 || (selectionCount === 1 && !inspectSelection)
-  const cardLayout = showInspector && inspectorUsesCardRail(inspectorDensity) ? 'list' : viewLayout
+  const hideBrowseGrid = inspectorHidesBrowseGrid(showInspector)
 
   function closeInspector() {
     setInspectSelection(false)
-  }
-
-  function collapseInspectorPane() {
-    const next = collapseInspector(inspectorDensity)
-    if (next == null) {
-      closeInspector()
-      return
-    }
-    setInspectorDensity(next)
+    setInspectorDensity(DEFAULT_INSPECTOR_DENSITY)
   }
 
   function clearSelection() {
@@ -631,7 +620,7 @@ function AppShell() {
     setSelectedSystem(null)
     setSelectedSystemKeys([])
     setSelectionAnchor(null)
-    setInspectSelection(false)
+    closeInspector()
   }
 
   applyMarqueeKeysRef.current = (keys: string[]) => {
@@ -1295,8 +1284,8 @@ function AppShell() {
         <div className="relative flex min-h-0 min-w-0 flex-1">
           <div
             className={cn(
-              'relative flex min-h-0 flex-col',
-              showInspector ? inspectorRailClass(inspectorDensity) : 'min-w-0 flex-1',
+              'relative flex min-h-0 min-w-0 flex-1 flex-col',
+              hideBrowseGrid && 'hidden',
             )}
           >
           <section
@@ -1440,9 +1429,9 @@ function AppShell() {
                   </div>
                 )}
                 <div
-                  className={cn(cardLayout === 'grid' ? 'grid' : 'grid gap-2')}
+                  className={cn(viewLayout === 'grid' ? 'grid' : 'grid gap-2')}
                   style={
-                    cardLayout === 'grid'
+                    viewLayout === 'grid'
                       ? {
                           gridTemplateColumns: `repeat(auto-fill, minmax(${gridCardMinWidthRem(gridPreviewSize)}rem, 1fr))`,
                           gap: `${Math.max(0.5, gridPreviewSize * 0.18)}rem`,
@@ -1456,7 +1445,7 @@ function AppShell() {
                         return (
                         <SystemCard
                           key={group.key}
-                          layout={cardLayout}
+                          layout={viewLayout}
                           previewSize={gridPreviewSize}
                           group={group}
                           showSourcePath={showSources}
@@ -1506,7 +1495,7 @@ function AppShell() {
                         return (
                         <LibraryCard
                           key={group.key}
-                          layout={cardLayout}
+                          layout={viewLayout}
                           previewSize={gridPreviewSize}
                           group={group}
                           showSourcePath={showSources}
@@ -1666,34 +1655,12 @@ function AppShell() {
           {showInspector && (
           <div
             data-keep-selection=""
-            className={cn(
-              'z-20 flex min-h-0 flex-col border-l bg-background',
-              inspectorPaneClass(inspectorDensity),
-            )}
-            role="complementary"
+            className="z-20 flex min-h-0 min-w-0 flex-1 flex-col bg-background"
+            role="region"
             aria-label="Font details"
           >
             <div className="flex shrink-0 items-center justify-between gap-1 px-2 pt-2">
               <div className="flex items-center gap-0.5">
-                {inspectorDensity !== 'specimen' && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        className="h-7 w-7 px-0"
-                        aria-label={inspectorDensity === 'compact' ? 'Expand details' : 'Specimen view'}
-                        onClick={() => setInspectorDensity((density) => expandInspector(density))}
-                      >
-                        {inspectorDensity === 'compact' ? <ChevronsLeft /> : <Maximize2 />}
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      {inspectorDensity === 'compact' ? 'Expand details' : 'Specimen view'}
-                    </TooltipContent>
-                  </Tooltip>
-                )}
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
@@ -1701,24 +1668,33 @@ function AppShell() {
                       size="sm"
                       variant="ghost"
                       className="h-7 w-7 px-0"
-                      aria-label={
-                        inspectorDensity === 'compact'
-                          ? 'Back to grid'
-                          : inspectorDensity === 'specimen'
-                            ? 'Show details'
-                            : 'Collapse details'
-                      }
-                      onClick={collapseInspectorPane}
+                      aria-label="Back to grid"
+                      onClick={closeInspector}
                     >
-                      <ChevronsRight />
+                      <ArrowLeft />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Back to grid</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 w-7 px-0"
+                      aria-label={inspectorDensity === 'specimen' ? 'Show details' : 'Specimen view'}
+                      onClick={() =>
+                        setInspectorDensity((density) =>
+                          density === 'specimen' ? DEFAULT_INSPECTOR_DENSITY : expandInspector(density),
+                        )
+                      }
+                    >
+                      {inspectorDensity === 'specimen' ? <Minimize2 /> : <Maximize2 />}
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>
-                    {inspectorDensity === 'compact'
-                      ? 'Back to grid'
-                      : inspectorDensity === 'specimen'
-                        ? 'Show details'
-                        : 'Collapse details'}
+                    {inspectorDensity === 'specimen' ? 'Show details' : 'Specimen view'}
                   </TooltipContent>
                 </Tooltip>
               </div>

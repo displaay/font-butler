@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { ArrowLeftRight, CircleMinus, CirclePlus, FolderOpen, ListX, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
-import { AaPreview } from '@/components/AaPreview'
 import { CatalogBatchButtons, SystemBatchButtons } from '@/components/BatchActions'
 import { SourceBadge, StateBadges } from '@/components/Badges'
-import { catalogFontFamily, systemFontFamily } from '@/components/FontFaceStyles'
+import { systemFontFamily } from '@/components/FontFaceStyles'
 import { InstanceList } from '@/components/InstanceList'
 import { SpecimenWorkspace } from '@/components/SpecimenWorkspace'
 import { Button } from '@/components/ui/button'
@@ -58,7 +57,7 @@ export function Inspector({
   onPin,
   onOpenWithPreview,
   multiSelect,
-  density = 'compact',
+  density = 'expanded',
 }: {
   group: FamilyGroup | null
   entry: CatalogEntry | null
@@ -117,7 +116,7 @@ export function Inspector({
 }) {
   if (multiSelect && multiSelect.names.length > 1) {
     return (
-      <aside className={inspectorShellClass(density)}>
+      <aside className={cn(inspectorShellClass(), 'gap-4 overflow-y-auto p-5')}>
         <div>
           <h2 className="text-base font-semibold tracking-tight">
             {multiSelect.names.length} selected
@@ -178,7 +177,7 @@ export function Inspector({
   if (systemGroup) {
     const face = systemGroup.faces[0]
     return (
-      <aside className={inspectorShellClass(density)}>
+      <aside className={inspectorShellClass()}>
         <SystemInspectorBody
           density={density}
           systemGroup={systemGroup}
@@ -194,7 +193,7 @@ export function Inspector({
 
   if (!group || !entry) {
     return (
-      <aside className={cn(inspectorShellClass(density), 'items-center justify-center p-8 text-sm text-muted-foreground')}>
+      <aside className={cn(inspectorShellClass(), 'items-center justify-center p-8 text-sm text-muted-foreground')}>
         Select a family to inspect it.
       </aside>
     )
@@ -266,47 +265,13 @@ export function Inspector({
   )
   const files = (
     <div className="space-y-2">
-      {density !== 'compact' ? (
-        <InstanceList
-          rows={instances}
-          selectedEntryId={selectedEntryId}
-          onSelectEntry={onSelectEntry}
-          className="border-t-0 px-0 py-0"
-        />
-      ) : (
-        group.entries.map((item) => {
-          const selected = item.id === selectedEntryId
-          return (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => onSelectEntry(item.id)}
-              className={cn(
-                'flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors hover:bg-muted/80',
-                selected && 'bg-muted ring-1 ring-primary/30',
-                (item.status === 'deactivated' || item.status === 'uninstalled') && 'opacity-60',
-              )}
-            >
-              <AaPreview
-                family={catalogFontFamily(item.id)}
-                weight={item.faces[0]?.weight}
-                italic={item.faces[0]?.italic}
-              />
-              <div className="min-w-0">
-                <div className="truncate text-sm font-medium">
-                  {item.faces.map((face) => face.styleName).join(', ')}
-                </div>
-                <div className="truncate text-xs text-muted-foreground">
-                  {item.faces[0]?.postscriptName}
-                </div>
-                <div className="truncate font-mono text-[11px] text-muted-foreground" title={item.sourcePath}>
-                  {item.sourcePath.split('/').pop()} · {formatRelativeTime(item.sourceMtimeMs)}
-                </div>
-              </div>
-            </button>
-          )
-        })
-      )}
+      <h3 className="mb-2 text-sm font-medium">Instances</h3>
+      <InstanceList
+        rows={instances}
+        selectedEntryId={selectedEntryId}
+        onSelectEntry={onSelectEntry}
+        className="border-t-0 px-0 py-0"
+      />
     </div>
   )
   const specimenBlock =
@@ -317,7 +282,7 @@ export function Inspector({
         onSpecimenChange={onSpecimenChange}
         compareEntry={compareEntry}
         onCaptureChange={onComparisonCapture}
-        size={density === 'compact' ? 'default' : 'large'}
+        size="large"
       />
     ) : null
   const versions = (
@@ -448,7 +413,7 @@ export function Inspector({
   )
 
   return (
-    <aside className={inspectorShellClass(density)}>
+    <aside className={inspectorShellClass()}>
       <InspectorLayout
         density={density}
         header={
@@ -459,34 +424,20 @@ export function Inspector({
         }
         primary={specimenBlock}
         secondary={
-          density === 'compact' ? (
-            <>
-              {meta}
-              {files}
-            </>
-          ) : (
-            <>
-              {meta}
-              <div>
-                <h3 className="mb-2 text-sm font-medium">Instances</h3>
-                {files}
-              </div>
-              {versions}
-            </>
-          )
+          <>
+            {meta}
+            {files}
+            {versions}
+          </>
         }
-        afterPrimary={density === 'compact' ? versions : null}
         actions={actions}
       />
     </aside>
   )
 }
 
-function inspectorShellClass(density: InspectorDensity) {
-  return cn(
-    'flex h-full min-h-0 w-full flex-col',
-    density === 'compact' ? 'gap-4 overflow-y-auto p-5' : 'overflow-hidden',
-  )
+function inspectorShellClass() {
+  return 'flex h-full min-h-0 w-full flex-col overflow-hidden'
 }
 
 function InspectorLayout({
@@ -494,14 +445,12 @@ function InspectorLayout({
   header,
   primary,
   secondary,
-  afterPrimary,
   actions,
 }: {
   density: InspectorDensity
   header: ReactNode
   primary: ReactNode
   secondary: ReactNode
-  afterPrimary?: ReactNode
   actions: ReactNode
 }) {
   if (density === 'specimen') {
@@ -512,28 +461,13 @@ function InspectorLayout({
       </>
     )
   }
-  if (density === 'expanded') {
-    return (
-      <div className="flex min-h-0 flex-1">
-        <div className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto p-5">
-          {header}
-          {primary}
-          {actions}
-        </div>
-        <div className="flex w-[22rem] shrink-0 flex-col gap-4 overflow-y-auto border-l p-5">
-          {secondary}
-        </div>
-      </div>
-    )
-  }
   return (
-    <>
+    <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-5">
       {header}
-      {secondary}
       {primary}
-      {afterPrimary}
       {actions}
-    </>
+      {secondary}
+    </div>
   )
 }
 
@@ -566,10 +500,7 @@ function SystemInspectorBody({
   )
   const preview = (
     <div
-      className={cn(
-        'font-preview rounded-lg border bg-muted/40 px-4 py-6 text-3xl leading-tight',
-        density !== 'compact' && 'min-h-[16rem] p-6 text-5xl',
-      )}
+      className="font-preview min-h-[16rem] rounded-lg border bg-muted/40 p-6 text-5xl leading-tight"
       style={{ fontFamily: `"${face ? systemFontFamily(face.path) : ''}", ui-sans-serif` }}
     >
       {SAMPLE}
@@ -577,21 +508,10 @@ function SystemInspectorBody({
   )
   const secondary = (
     <>
-      {density === 'compact' ? (
-        <ul className="space-y-1 text-sm">
-          {systemGroup.faces.map((item) => (
-            <li key={`${item.path}-${item.styleName}`} className="flex justify-between gap-3">
-              <span>{item.styleName}</span>
-              <span className="truncate text-muted-foreground">{item.postscriptName}</span>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <div>
-          <h3 className="mb-2 text-sm font-medium">Instances</h3>
-          <InstanceList rows={instances} className="border-t-0 px-0 py-0" />
-        </div>
-      )}
+      <div>
+        <h3 className="mb-2 text-sm font-medium">Instances</h3>
+        <InstanceList rows={instances} className="border-t-0 px-0 py-0" />
+      </div>
       <p className="break-all text-xs text-muted-foreground">{face?.path}</p>
     </>
   )
@@ -625,16 +545,6 @@ function SystemInspectorBody({
       )}
     </>
   )
-  if (density === 'compact') {
-    return (
-      <>
-        {preview}
-        {header}
-        {secondary}
-        {actions}
-      </>
-    )
-  }
   return (
     <InspectorLayout
       density={density}
