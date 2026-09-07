@@ -46,6 +46,7 @@ import {
   partitionDropPayload,
   planPathsForImport,
 } from '@/lib/drop'
+import { familyHasSwitch, switchableEntries } from '@/lib/eligibility'
 import { canSwitchTo } from '@/lib/identity'
 import { canCompareInstalledVsSource, isComparisonSourceStale } from '@/lib/comparison'
 import {
@@ -1558,12 +1559,11 @@ function AppShell() {
                             useBatch ? void activateSelected() : void activateGroupGuarded(group)
                           }
                           onSwitch={
-                            group.entries.some((entry) => canSwitchTo(entry, entries))
+                            familyHasSwitch(group, entries)
                               ? () => {
+                                  const switchable = switchableEntries(group, entries)
                                   const target =
-                                    group.entries.find(
-                                      (entry) => entry.id === selectedEntryId && canSwitchTo(entry, entries),
-                                    ) ?? group.entries.find((entry) => canSwitchTo(entry, entries))
+                                    switchable.find((entry) => entry.id === selectedEntryId) ?? switchable[0]
                                   if (!target) return
                                   void run(
                                     () => api.switchTo(target.id),

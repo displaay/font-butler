@@ -172,6 +172,7 @@ export function CatalogMenuItems({
   onUninstall: () => void
   onUninstallAndRemove?: () => void
   onActivate: () => void
+  /** Passed only when a same-format occupying sibling exists (`canSwitchTo`). */
   onSwitch?: () => void
   onForget: () => void
   onDeleteFiles?: () => void

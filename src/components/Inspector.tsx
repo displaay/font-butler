@@ -80,6 +80,7 @@ export function Inspector({
   onUninstallAndRemove?: () => void
   onDeactivate: () => void
   onActivate: () => void
+  /** Passed only when a same-format occupying sibling exists (`canSwitchTo`). */
   onSwitch?: () => void
   onReveal: (which: 'source' | 'installed') => void
   onUninstallSystem: () => void

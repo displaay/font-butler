@@ -5,6 +5,7 @@ import {
   adobeInstallableIds,
   deactivatableIds,
   familyHasAction,
+  familyHasSwitch,
   installableIds,
   reinstallableIds,
   repairableIds,
@@ -162,4 +163,18 @@ test('Adobe install is offered until a testing-folder copy is present', () => {
   assert.deepEqual(adobeInstallableIds(placed), [])
   assert.deepEqual(adobeInstallableIds(unavailable), ['gone'])
   assert.deepEqual(adobeInstallableIds(web), [])
+})
+
+test('family Switch is hidden for a kept alt-format sibling', () => {
+  const otf = { ...entry('otf', 'installed'), format: 'otf' as const, sourcePath: '/tmp/otf.otf' }
+  const ttf = { ...entry('ttf', 'uninstalled'), format: 'ttf' as const, sourcePath: '/tmp/ttf.ttf' }
+  const mixed = group([otf, ttf])
+  assert.equal(familyHasSwitch(mixed, mixed.entries), false)
+})
+
+test('family Switch is offered for a kept same-format sibling', () => {
+  const live = entry('live', 'installed')
+  const kept = entry('kept', 'uninstalled')
+  const copies = group([live, kept])
+  assert.equal(familyHasSwitch(copies, copies.entries), true)
 })

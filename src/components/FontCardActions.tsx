@@ -12,6 +12,7 @@ type CatalogCardActionHandlers = {
   onDeactivate: () => void
   onUninstall: () => void
   onActivate: () => void
+  /** Passed only when a same-format occupying sibling exists (`canSwitchTo`). */
   onSwitch?: () => void
   onForget: () => void
 }
