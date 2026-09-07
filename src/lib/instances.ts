@@ -1,3 +1,4 @@
+import { instanceInstallState, type InstanceInstallState } from './state'
 import type {
   FamilyGroup,
   FontFaceInfo,
@@ -14,6 +15,7 @@ export type InstanceRow = {
   weight?: number
   italic?: boolean
   variation?: string
+  installState?: InstanceInstallState
 }
 
 export function variationSettings(coordinates?: Record<string, number>): string | undefined {
@@ -47,6 +49,7 @@ function italicFromStyleName(name: string, fallback = false): boolean {
 function rowsFromFace(
   face: FontFaceInfo,
   entryId: string,
+  installState: InstanceInstallState,
 ): InstanceRow[] {
   if (face.isVariable && face.instanceNames.length > 0) {
     return face.instanceNames.map((name) => {
@@ -59,6 +62,7 @@ function rowsFromFace(
         weight: weightFromStyleName(name, face.weight),
         italic: italicFromStyleName(name, face.italic),
         variation: variationSettings(named?.coordinates),
+        installState,
       }
     })
   }
@@ -70,6 +74,7 @@ function rowsFromFace(
       catalogEntryId: entryId,
       weight: face.weight,
       italic: face.italic,
+      installState,
     },
   ]
 }
@@ -77,8 +82,9 @@ function rowsFromFace(
 export function catalogInstanceRows(group: FamilyGroup): InstanceRow[] {
   const rows: InstanceRow[] = []
   for (const entry of group.entries) {
+    const installState = instanceInstallState(entry)
     for (const face of entry.faces) {
-      rows.push(...rowsFromFace(face, entry.id))
+      rows.push(...rowsFromFace(face, entry.id, installState))
     }
   }
   return rows
@@ -86,6 +92,7 @@ export function catalogInstanceRows(group: FamilyGroup): InstanceRow[] {
 
 function rowsFromSystemFace(face: SystemFace): InstanceRow[] {
   const names = face.instanceNames ?? []
+  const installState: InstanceInstallState = face.deactivated ? 'deactivated' : 'installed'
   if (face.isVariable && names.length > 0) {
     return names.map((name) => ({
       key: `${face.path}-${name}`,
@@ -94,6 +101,7 @@ function rowsFromSystemFace(face: SystemFace): InstanceRow[] {
       systemPath: face.path,
       weight: weightFromStyleName(name, face.weight),
       italic: italicFromStyleName(name, face.italic),
+      installState,
     }))
   }
   return [
@@ -104,6 +112,7 @@ function rowsFromSystemFace(face: SystemFace): InstanceRow[] {
       systemPath: face.path,
       weight: face.weight,
       italic: face.italic,
+      installState,
     },
   ]
 }

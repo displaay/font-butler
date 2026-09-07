@@ -141,13 +141,17 @@ export function LibraryCard({
 
   const muted = group.status === 'deactivated'
 
-  const metadata = (
+  const identity = (
     <>
       <div className="flex flex-wrap items-center gap-2">
         <span className="truncate font-medium">{group.familyName}</span>
         <VfBadge show={group.isVariable} />
         <FormatBadges formats={uniqueEntryFormats(group.entries)} />
-        <StateBadges entry={badgeEntry} hideInstalled hideNotInstalled />
+        <StateBadges
+          entry={badgeEntry}
+          hideInstalled
+          hideNotInstalled={layout === 'grid'}
+        />
         {mixedSummary ? (
           <Badge tone="muted" title={mixedSummary}>
             {mixedSummary}
@@ -193,14 +197,16 @@ export function LibraryCard({
           onPointerEnter={() => setHovered(true)}
           onPointerLeave={() => setHovered(false)}
         >
-          <div className="pointer-events-none absolute top-1.5 left-1.5 z-10 flex items-center gap-1">
-            {hasTrackedSource(group) ? <SourceBadge /> : null}
-            {notInstalled ? (
-              <Badge tone="muted" title="Not installed">
-                Not installed
-              </Badge>
-            ) : null}
-          </div>
+          {hasTrackedSource(group) || (layout === 'grid' && notInstalled) ? (
+            <div className="pointer-events-none absolute top-1.5 left-1.5 z-10 flex items-center gap-1">
+              {hasTrackedSource(group) ? <SourceBadge /> : null}
+              {layout === 'grid' && notInstalled ? (
+                <Badge tone="muted" title="Not installed">
+                  Not installed
+                </Badge>
+              ) : null}
+            </div>
+          ) : null}
           {layout === 'grid' ? (
             <button
               type="button"
@@ -224,7 +230,7 @@ export function LibraryCard({
                 active={hovered}
                 size={previewSize}
               />
-              <div className={previewSize < 3.25 ? 'p-2' : 'p-3'}>{metadata}</div>
+              <div className={previewSize < 3.25 ? 'p-2' : 'p-3'}>{identity}</div>
             </button>
           ) : (
             <>
@@ -242,7 +248,7 @@ export function LibraryCard({
                     weight={previewWeight}
                     italic={previewItalic}
                   />
-                  <div className="min-w-0 flex-1">{metadata}</div>
+                  <div className="min-w-0 flex-1">{identity}</div>
                 </button>
                 {showInstances && (
                   <button

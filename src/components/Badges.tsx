@@ -1,7 +1,7 @@
 import { Link2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { formatLabel, normalizeFormat } from '@/lib/formats'
-import { displayStateParts } from '@/lib/state'
+import { displayStateParts, instanceInstallLabel, type InstanceInstallState } from '@/lib/state'
 import type { CatalogEntry, FontStatus } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
@@ -46,6 +46,16 @@ export function StatusBadge({ status }: { status: FontStatus }) {
   return null
 }
 
+export function InstanceInstallBadge({ state }: { state: InstanceInstallState }) {
+  const tone = state === 'installed' ? 'ink' : state === 'deactivated' ? 'muted' : 'accent'
+  const label = instanceInstallLabel(state)
+  return (
+    <Badge tone={tone} title={label} className="shrink-0">
+      {label}
+    </Badge>
+  )
+}
+
 export function StateBadges({
   entry,
   hideInstalled = false,
@@ -73,6 +83,7 @@ export function StateBadges({
       {parts.map((part) => {
         const warn = part.includes('Update') || part.includes('Review') || part.includes('paused')
         const accent =
+          part === 'Not installed' ||
           part.includes('missing') ||
           part.includes('offline') ||
           part.includes('unreadable') ||

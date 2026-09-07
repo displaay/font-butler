@@ -1,4 +1,5 @@
 import { AaPreview } from '@/components/AaPreview'
+import { InstanceInstallBadge } from '@/components/Badges'
 import { catalogFontFamily, systemFontFamily } from '@/components/FontFaceStyles'
 import type { InstanceRow } from '@/lib/instances'
 import { cn } from '@/lib/utils'
@@ -35,6 +36,7 @@ export function InstanceList({
                 clickable && 'hover:bg-muted/80',
                 selected && 'bg-muted ring-1 ring-primary/30',
                 !clickable && 'cursor-default',
+                row.installState && row.installState !== 'installed' && 'opacity-80',
               )}
             >
               <AaPreview
@@ -43,12 +45,13 @@ export function InstanceList({
                 weight={row.weight}
                 italic={row.italic}
               />
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-medium">{row.label}</div>
                 {row.sublabel && (
                   <div className="truncate text-xs text-muted-foreground">{row.sublabel}</div>
                 )}
               </div>
+              {row.installState ? <InstanceInstallBadge state={row.installState} /> : null}
             </button>
           </li>
         )

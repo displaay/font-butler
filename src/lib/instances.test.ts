@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { catalogInstanceRows, variationSettings } from './instances.ts'
-import type { CatalogEntry, FamilyGroup, FontFaceInfo } from './types.ts'
+import { catalogInstanceRows, systemInstanceRows, variationSettings } from './instances.ts'
+import { groupCatalog } from './group.ts'
+import type { CatalogEntry, FamilyGroup, FontFaceInfo, SystemFace } from './types.ts'
 
 function vfFace(): FontFaceInfo {
   return {
@@ -62,5 +63,96 @@ test('variable-font instance rows carry named-instance variation settings', () =
   assert.deepEqual(
     rows.map((row) => row.weight),
     [300, 400, 700],
+  )
+  assert.deepEqual(
+    rows.map((row) => row.installState),
+    ['uninstalled', 'uninstalled', 'uninstalled'],
+  )
+})
+
+function staticFace(familyName: string, styleName: string, italic = false): FontFaceInfo {
+  return {
+    familyName,
+    styleName,
+    fullName: `${familyName} ${styleName}`,
+    postscriptName: `${familyName}-${styleName.replace(/\s+/g, '')}`,
+    isVariable: false,
+    instanceCount: 1,
+    instanceNames: [],
+    weight: italic ? 400 : styleName.toLowerCase().includes('bold') ? 700 : 400,
+    italic,
+  }
+}
+
+function staticEntry(
+  id: string,
+  styleName: string,
+  status: CatalogEntry['status'],
+  extra: Partial<CatalogEntry> = {},
+): CatalogEntry {
+  const italic = /italic/i.test(styleName)
+  return {
+    id,
+    sourcePath: `/tmp/${id}.otf`,
+    sourceMtimeMs: 1,
+    sourceSize: 1,
+    status,
+    faces: [staticFace('Plex', styleName, italic)],
+    format: 'otf',
+    addedAt: 1,
+    updatedAt: 1,
+    ...extra,
+  }
+}
+
+test('catalog instance rows keep live vs inactive styles when the source is missing', () => {
+  const groups = groupCatalog([
+    staticEntry('on', 'Regular', 'installed', { sourceAvailability: 'missing' }),
+    staticEntry('off', 'Italic', 'deactivated', { sourceAvailability: 'missing' }),
+    staticEntry('gone', 'Bold', 'source-missing', { sourceAvailability: 'missing' }),
+  ])
+  assert.equal(groups.length, 1)
+  const rows = catalogInstanceRows(groups[0]!)
+  assert.deepEqual(
+    rows.map((row) => [row.label, row.installState]),
+    [
+      ['Regular', 'installed'],
+      ['Italic', 'deactivated'],
+      ['Bold', 'uninstalled'],
+    ],
+  )
+})
+
+test('system instance rows mark deactivated faces separately from live ones', () => {
+  const face = (styleName: string, deactivated = false): SystemFace => ({
+    path: `/System/${styleName}.otf`,
+    familyName: 'System Sans',
+    styleName,
+    fullName: `System Sans ${styleName}`,
+    postscriptName: `SystemSans-${styleName}`,
+    isVariable: false,
+    instanceCount: 1,
+    weight: 400,
+    italic: false,
+    format: 'otf',
+    protected: false,
+    writable: true,
+    deactivated,
+  })
+  const rows = systemInstanceRows({
+    key: 'System Sans',
+    familyName: 'System Sans',
+    faces: [face('Regular'), face('Light', true)],
+    isVariable: false,
+    instanceCount: 2,
+    protected: false,
+    writable: true,
+  })
+  assert.deepEqual(
+    rows.map((row) => [row.label, row.installState]),
+    [
+      ['Regular', 'installed'],
+      ['Light', 'deactivated'],
+    ],
   )
 })
