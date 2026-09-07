@@ -84,7 +84,23 @@
       "icon": "build/icon.icns",
       "category": "public.app-category.utilities",
       "extendInfo": {
-        "NSUserNotificationsUsageDescription": "Font Buttler can notify you when fonts are installed or updated."
+        "NSUserNotificationsUsageDescription": "Font Buttler can notify you when fonts are installed or updated.",
+        "CFBundleDocumentTypes": [
+          {
+            "CFBundleTypeName": "TrueType Font",
+            "CFBundleTypeRole": "Editor",
+            "LSHandlerRank": "Default",
+            "LSItemContentTypes": ["public.truetype-ttf-font"],
+            "CFBundleTypeIconFile": "finderDocIcon.icns"
+          },
+          {
+            "CFBundleTypeName": "OpenType Font",
+            "CFBundleTypeRole": "Editor",
+            "LSHandlerRank": "Default",
+            "LSItemContentTypes": ["public.opentype-font"],
+            "CFBundleTypeIconFile": "finderDocIcon.icns"
+          }
+        ]
       },
       "target": [
         "dmg",
@@ -96,37 +112,43 @@
         "ext": "ttf",
         "name": "TrueType Font",
         "role": "Editor",
-        "description": "TrueType font"
+        "description": "TrueType font",
+        "icon": "finderDocIcon"
       },
       {
         "ext": "otf",
         "name": "OpenType Font",
         "role": "Editor",
-        "description": "OpenType font"
+        "description": "OpenType font",
+        "icon": "finderDocIcon"
       },
       {
         "ext": "ttc",
         "name": "TrueType Collection",
         "role": "Editor",
-        "description": "TrueType font collection"
+        "description": "TrueType font collection",
+        "icon": "finderDocIcon"
       },
       {
         "ext": "otc",
         "name": "OpenType Collection",
         "role": "Editor",
-        "description": "OpenType font collection"
+        "description": "OpenType font collection",
+        "icon": "finderDocIcon"
       },
       {
         "ext": "woff",
         "name": "WOFF Font",
         "role": "Editor",
-        "description": "Web Open Font Format"
+        "description": "Web Open Font Format",
+        "icon": "finderDocIcon"
       },
       {
         "ext": "woff2",
         "name": "WOFF2 Font",
         "role": "Editor",
-        "description": "Web Open Font Format 2"
+        "description": "Web Open Font Format 2",
+        "icon": "finderDocIcon"
       }
     ]
   }
