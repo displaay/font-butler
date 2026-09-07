@@ -68,6 +68,7 @@
       "build/icon.png",
       "build/menubarTemplate.png",
       "build/menubarTemplate@2x.png",
+      "build/menubarNotificationTemplate.svg",
       "package.json"
     ],
     "extraResources": [

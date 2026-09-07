@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
+import { fileURLToPath } from 'node:url'
 import {
   activityRowLabel,
   buildTrayMenuModel,
+  menuBarNeedsAttention,
+  menuBarTrayIconPath,
   menuBarUpdateBadge,
   outdatedFamilies,
   TRAY_SECTION_LIMIT,
@@ -42,14 +46,29 @@ test('outdatedFamilies uses a custom family name when present', () => {
   assert.deepEqual(families, [{ name: 'Display', ids: ['renamed'] }])
 })
 
-test('menuBarUpdateBadge is a dot when unread or updates exist, never a count', () => {
+test('menuBarUpdateBadge stays empty because attention lives on the template icon', () => {
   assert.equal(menuBarUpdateBadge(0), '')
-  assert.equal(menuBarUpdateBadge(1), '•')
-  assert.equal(menuBarUpdateBadge(12), '•')
-  assert.equal(menuBarUpdateBadge(100), '•')
+  assert.equal(menuBarUpdateBadge(1), '')
+  assert.equal(menuBarUpdateBadge(12), '')
   assert.equal(menuBarUpdateBadge({ hasUnread: false, hasUpdates: false }), '')
-  assert.equal(menuBarUpdateBadge({ hasUnread: true, hasUpdates: false }), '•')
-  assert.equal(menuBarUpdateBadge({ hasUnread: false, hasUpdates: true }), '•')
+  assert.equal(menuBarUpdateBadge({ hasUnread: true, hasUpdates: false }), '')
+  assert.equal(menuBarUpdateBadge({ hasUnread: false, hasUpdates: true }), '')
+})
+
+test('menuBarNeedsAttention is true for unread activity or outdated updates', () => {
+  assert.equal(menuBarNeedsAttention(0), false)
+  assert.equal(menuBarNeedsAttention(1), true)
+  assert.equal(menuBarNeedsAttention({ hasUnread: false, hasUpdates: false }), false)
+  assert.equal(menuBarNeedsAttention({ hasUnread: true, hasUpdates: false }), true)
+  assert.equal(menuBarNeedsAttention({ hasUnread: false, hasUpdates: true }), true)
+})
+
+test('menuBarTrayIconPath uses the notification SVG only when attention is needed', () => {
+  const paths = { quiet: 'quiet.png', attention: 'menubarNotificationTemplate.svg' }
+  assert.equal(menuBarTrayIconPath({ hasUnread: false, hasUpdates: false }, paths), paths.quiet)
+  assert.equal(menuBarTrayIconPath({ hasUnread: true, hasUpdates: false }, paths), paths.attention)
+  assert.equal(menuBarTrayIconPath({ hasUnread: false, hasUpdates: true }, paths), paths.attention)
+  assert.equal(menuBarTrayIconPath({ hasUnread: true, hasUpdates: true }, paths), paths.attention)
 })
 
 test('buildTrayMenuModel orders Activity then Updates with headlines and a 5-row cap', () => {
@@ -88,6 +107,21 @@ test('buildTrayMenuModel hides Mark all as read and Show all when they are not n
 
 test('activityRowLabel maps apply-plan to Import', () => {
   assert.equal(activityRowLabel({ action: 'apply-plan', familyName: 'News' }), 'Import · News')
+})
+
+test('attention tray SVG is a black 60×59 template asset', () => {
+  const svgPath = fileURLToPath(new URL('../build/menubarNotificationTemplate.svg', import.meta.url))
+  const svg = readFileSync(svgPath, 'utf8')
+  assert.match(svg, /viewBox="0 0 60 59"/)
+  assert.match(svg, /fill="#000"/)
+  assert.equal((svg.match(/#[0-9a-fA-F]{3,8}/g) ?? []).every((color) => color === '#000'), true)
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+  assert.ok(pkg.build.files.includes('build/menubarNotificationTemplate.svg'))
+  const main = readFileSync(new URL('./main.mjs', import.meta.url), 'utf8')
+  assert.match(main, /nativeImage\.createFromPath\(iconPath\)/)
+  assert.match(main, /image\.setTemplateImage\(true\)/)
+  assert.match(main, /menubarNotificationTemplate\.svg/)
+  assert.match(main, /tray\.setImage\(icon\)/)
 })
 
 test('unreadOperationIdsToMark badges hidden-window ops and skips visible foreground', () => {
