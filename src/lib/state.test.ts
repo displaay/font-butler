@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { collectionScopeLabel, displayStateLabel, isNotInstalledLabel, needsLocateSource } from './state.ts'
+import {
+  collectionScopeLabel,
+  displayStateLabel,
+  instanceInstallLabel,
+  instanceInstallState,
+  isNotInstalledLabel,
+  needsLocateSource,
+} from './state.ts'
 import type { CatalogEntry, FontFaceInfo } from './types.ts'
 
 function face(): FontFaceInfo {
@@ -31,6 +38,27 @@ function entry(partial: Partial<CatalogEntry> = {}): CatalogEntry {
     ...partial,
   }
 }
+
+test('instanceInstallState maps live, inactive, and missing copies', () => {
+  assert.equal(instanceInstallState(entry({ status: 'installed' })), 'installed')
+  assert.equal(instanceInstallState(entry({ status: 'outdated' })), 'installed')
+  assert.equal(instanceInstallState(entry({ status: 'deactivated' })), 'deactivated')
+  assert.equal(instanceInstallState(entry({ status: 'uninstalled' })), 'uninstalled')
+  assert.equal(instanceInstallState(entry({ status: 'source-missing' })), 'uninstalled')
+  assert.equal(
+    instanceInstallState(entry({ status: 'source-missing', installedPath: '/tmp/State.otf' })),
+    'deactivated',
+  )
+  assert.equal(
+    instanceInstallState(entry({ status: 'uninstalled', disabledPath: '/tmp/parked/State.otf' })),
+    'deactivated',
+  )
+  assert.equal(instanceInstallState(entry({ previewOnly: true, status: 'uninstalled' })), 'uninstalled')
+  assert.deepEqual(
+    (['installed', 'deactivated', 'uninstalled'] as const).map(instanceInstallLabel),
+    ['Installed', 'Deactivated', 'Not installed'],
+  )
+})
 
 test('isNotInstalledLabel is only true for library-only uninstalled fonts', () => {
   assert.equal(isNotInstalledLabel(entry({ status: 'uninstalled' })), true)

@@ -1,5 +1,23 @@
 import type { CatalogEntry } from './types'
 
+/** Per-instance install state shown in list expand and inspector Instances. */
+export type InstanceInstallState = 'installed' | 'deactivated' | 'uninstalled'
+
+export function instanceInstallState(entry: CatalogEntry): InstanceInstallState {
+  if (entry.previewOnly) return 'uninstalled'
+  if (entry.status === 'deactivated') return 'deactivated'
+  if (entry.status === 'uninstalled' || entry.status === 'source-missing') {
+    return entry.installedPath || entry.disabledPath ? 'deactivated' : 'uninstalled'
+  }
+  return 'installed'
+}
+
+export function instanceInstallLabel(state: InstanceInstallState): string {
+  if (state === 'installed') return 'Installed'
+  if (state === 'deactivated') return 'Deactivated'
+  return 'Not installed'
+}
+
 export function displayStateParts(entry: CatalogEntry): string[] {
   const parts: string[] = []
   if (entry.previewOnly) {
