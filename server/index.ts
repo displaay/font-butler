@@ -614,6 +614,23 @@ app.post('/api/import/apply', async (c) => {
 
 app.get('/api/activity', (c) => c.json({ operations: service.listActivity() }))
 
+app.post('/api/activity/read', async (c) => {
+  try {
+    return c.json({ operations: service.markAllActivityRead() })
+  } catch (error) {
+    return c.json(fail(error, 'Could not mark activity as read'), 400)
+  }
+})
+
+app.post('/api/activity/unread', async (c) => {
+  const body = await c.req.json<{ ids?: string[] }>()
+  try {
+    return c.json({ operations: service.markActivityUnread(body.ids ?? []) })
+  } catch (error) {
+    return c.json(fail(error, 'Could not mark activity as unread'), 400)
+  }
+})
+
 app.post('/api/activity/undo', async (c) => {
   const body = await c.req.json<{ id: string }>()
   try {

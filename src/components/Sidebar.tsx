@@ -117,6 +117,7 @@ function SidebarItem({
   className,
   title,
   badgeTone = 'muted',
+  unreadCount = 0,
   onReveal,
   onRemove,
   expanded,
@@ -132,6 +133,7 @@ function SidebarItem({
   className?: string
   title?: string
   badgeTone?: 'muted' | 'warn'
+  unreadCount?: number
   onReveal?: () => void
   onRemove?: () => void
   expanded?: boolean
@@ -181,7 +183,11 @@ function SidebarItem({
             ) : null}
           </span>
           <span className="min-w-0 truncate">{label}</span>
-          {showTotal ? (
+          {unreadCount > 0 ? (
+            <Badge tone="accent" className="ml-auto" aria-label={`${unreadCount} unread`}>
+              {unreadCount}
+            </Badge>
+          ) : showTotal ? (
             <Badge tone={badgeTone} className="ml-auto">
               {count}
             </Badge>
@@ -249,6 +255,7 @@ export function Sidebar({
   duplicatesCount,
   onOpenDuplicates,
   counts,
+  activityUnread = 0,
   onOpenSettings,
 }: {
   query: string
@@ -283,6 +290,7 @@ export function Sidebar({
   duplicatesCount?: number
   onOpenDuplicates?: () => void
   counts: { library: number; system: number; updates: number; activity?: number }
+  activityUnread?: number
   onOpenSettings: () => void
 }) {
   const insetTrafficLights = window.fontButlerDesktop?.platform === 'darwin'
@@ -507,6 +515,12 @@ export function Sidebar({
               onClick={() => onTabChange(item.id)}
               className="flex-1 md:flex-none"
               badgeTone={item.id === 'updates' ? 'warn' : 'muted'}
+              unreadCount={item.id === 'activity' ? activityUnread : 0}
+              title={
+                item.id === 'activity' && activityUnread > 0
+                  ? `${activityUnread} unread`
+                  : undefined
+              }
             />
           )
         })}

@@ -287,6 +287,7 @@ export type Operation = {
   outcome: OperationOutcome
   undoable: boolean
   undone: boolean
+  unread?: boolean
   idempotencyKey?: string
 }
 

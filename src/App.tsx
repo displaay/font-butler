@@ -38,6 +38,11 @@ import { Toaster } from '@/components/ui/sonner'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useFontActions, type FormatPrompt, type ReplacePrompt } from '@/hooks/useFontActions'
 import { api, isDuplicatesEvent, isNotice, isOperationsEvent, isProjectsEvent, isSettingsEvent, subscribeEvents } from '@/lib/api'
+import {
+  mergeUnreadFlags,
+  unreadActivityCount,
+  unreadOperationIdsToMark,
+} from '@/lib/activityInbox'
 import { desktopPathForFile } from '@/lib/desktop'
 import {
   collectDropPayload,
@@ -177,6 +182,7 @@ function AppShell() {
   const [gridPreviewSize, setGridPreviewSize] = useState(readGridPreviewSize)
   const [projects, setProjects] = useState<ProjectSet[]>([])
   const [operations, setOperations] = useState<Operation[]>([])
+  const operationsRef = useRef<Operation[]>([])
   const [projectFilter, setProjectFilter] = useState<string | null>(null)
   const [importPlan, setImportPlan] = useState<ImportPlan | null>(null)
   type ImportPlanDecision = {
@@ -243,6 +249,7 @@ function AppShell() {
           applySettings(settingsResult.settings)
           setProjects(projectResult.projects)
           setOperations(activityResult.operations)
+          operationsRef.current = activityResult.operations
           setDuplicates(duplicatesResult.duplicates)
           if (shouldShowOnboarding(settingsResult.settings)) {
             setOnboardingOpen(true)
@@ -313,7 +320,27 @@ function AppShell() {
         return
       }
       if (isOperationsEvent(event)) {
-        setOperations(event.operations)
+        const ids = unreadOperationIdsToMark({
+          previous: operationsRef.current,
+          next: event.operations,
+          foregroundBusy: busyRef.current,
+          windowHidden: document.visibilityState !== 'visible',
+          markVisibleBackground: true,
+        })
+        const next = mergeUnreadFlags(event.operations, ids)
+        operationsRef.current = next
+        setOperations(next)
+        if (ids.length > 0) {
+          void api
+            .markActivityUnread(ids)
+            .then((result) => {
+              operationsRef.current = result.operations
+              setOperations(result.operations)
+            })
+            .catch(() => {
+              // Keep the optimistic unread flags if the persist call fails.
+            })
+        }
         return
       }
       if (event && typeof event === 'object' && (event as { type?: string }).type === 'catalog') {
@@ -328,6 +355,10 @@ function AppShell() {
       stop()
     }
   }, [])
+
+  useEffect(() => {
+    operationsRef.current = operations
+  }, [operations])
 
   useEffect(() => {
     const mode = settings?.theme
@@ -355,10 +386,22 @@ function AppShell() {
         : []
       reinstallFromMenuBarRef.current(ids)
     })
+    const stopOpenTab = window.fontButlerDesktop?.onOpenTab?.((payload) => {
+      const next = payload?.tab
+      if (next !== 'library' && next !== 'system' && next !== 'updates' && next !== 'activity') {
+        return
+      }
+      setTab(next)
+      if (next !== 'library') setWatchFolderFilter(null)
+      if (next === 'activity' && payload.operationId) {
+        setHighlightOperation(payload.operationId)
+      }
+    })
     return () => {
       window.removeEventListener('keydown', onKeyDown)
       stopDesktop?.()
       stopReinstall?.()
+      stopOpenTab?.()
     }
   }, [])
 
@@ -428,6 +471,7 @@ function AppShell() {
     }),
     [entries, systemFaces, operations.length],
   )
+  const activityUnread = useMemo(() => unreadActivityCount(operations), [operations])
 
   const visibleGroups = useMemo(
     () =>
@@ -773,6 +817,16 @@ function AppShell() {
     setReplacePrompt,
   })
   reinstallFromMenuBarRef.current = reinstallFromMenuBar
+
+  async function markAllActivityRead() {
+    try {
+      const result = await api.markActivityRead()
+      operationsRef.current = result.operations
+      setOperations(result.operations)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not mark activity as read')
+    }
+  }
 
   async function createProjectWith(ids: string[], familyNames: string[]) {
     try {
@@ -1279,6 +1333,7 @@ function AppShell() {
           duplicatesCount={duplicates.length}
           onOpenDuplicates={() => setDuplicatesOpen(true)}
           counts={tabCounts}
+          activityUnread={activityUnread}
           onOpenSettings={() => setSettingsOpen(true)}
         />
 
@@ -1372,6 +1427,7 @@ function AppShell() {
                     onUndo={(id) =>
                       void run(() => api.undo(id), { pending: 'Undoing…', done: 'Undid the last change' })
                     }
+                    onMarkAllRead={() => void markAllActivityRead()}
                   />
                 )}
                 {!loading && tab !== 'system' && tab !== 'activity' && visibleGroups.length === 0 && (

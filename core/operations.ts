@@ -59,8 +59,13 @@ export function createOperation(input: {
     outcome: 'pending',
     undoable: false,
     undone: false,
+    unread: false,
     idempotencyKey: input.idempotencyKey,
   }
+}
+
+export function isBackgroundActivityTrigger(trigger: OperationTrigger | string): boolean {
+  return trigger === 'watch' || trigger === 'startup'
 }
 
 export function findOperationByIdempotency(paths: AppPaths, key: string | undefined): Operation | undefined {
@@ -111,7 +116,32 @@ export function finishOperation(
     'uninstall',
   ])
   operation.undoable = succeeded > 0 && reversible.has(operation.action)
+  operation.unread = isBackgroundActivityTrigger(operation.trigger)
   return operation
+}
+
+export function unreadOperationCount(operations: Operation[]): number {
+  return operations.filter((operation) => operation.unread).length
+}
+
+export function markAllOperationsRead(paths: AppPaths): Operation[] {
+  const operations = loadOperations(paths).map((operation) =>
+    operation.unread ? { ...operation, unread: false } : operation,
+  )
+  saveOperations(paths, operations)
+  return operations
+}
+
+export function markOperationsUnread(paths: AppPaths, ids: string[]): Operation[] {
+  const wanted = new Set(ids.filter(Boolean))
+  if (wanted.size === 0) {
+    return loadOperations(paths)
+  }
+  const operations = loadOperations(paths).map((operation) =>
+    wanted.has(operation.id) ? { ...operation, unread: true } : operation,
+  )
+  saveOperations(paths, operations)
+  return operations
 }
 
 export function operationCounts(operation: Operation): {

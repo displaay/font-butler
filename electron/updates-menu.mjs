@@ -16,8 +16,97 @@ export function outdatedFamilies(entries) {
     .map(([name, ids]) => ({ name, ids }))
 }
 
-export function menuBarUpdateBadge(count) {
-  if (count <= 0) return ''
-  if (count > 99) return '99+'
-  return String(count)
+export const TRAY_SECTION_LIMIT = 5
+
+const ACTIVITY_ACTION_LABELS = {
+  deactivate: 'Deactivate',
+  activate: 'Activate',
+  install: 'Install',
+  'install-update': 'Install update',
+  uninstall: 'Uninstall',
+  reinstall: 'Reinstall',
+  repair: 'Repair',
+  'apply-plan': 'Import',
+  'relink-source': 'Link source',
+  'relink-folder': 'Relink folder',
+  'restore-revision': 'Restore version',
+  'activate-project': 'Activate project',
+  undo: 'Undo',
+  'recover-journal': 'Recovered after interruption',
+  switch: 'Switch',
+}
+
+export function activityRowLabel(operation) {
+  const action = ACTIVITY_ACTION_LABELS[operation?.action] ?? operation?.action ?? 'Activity'
+  return operation?.familyName ? `${action} · ${operation.familyName}` : action
+}
+
+export function isBackgroundActivityTrigger(trigger) {
+  return trigger === 'watch' || trigger === 'startup'
+}
+
+export function unreadActivityCount(operations) {
+  return (operations ?? []).filter((operation) => operation.unread).length
+}
+
+export function menuBarUpdateBadge(input) {
+  const hasAttention =
+    typeof input === 'number'
+      ? input > 0
+      : Boolean(input?.hasUnread || input?.hasUpdates)
+  return hasAttention ? '•' : ''
+}
+
+export function unreadOperationIdsToMark({
+  previous = [],
+  next = [],
+  foregroundBusy = false,
+  windowHidden = false,
+  markVisibleBackground = false,
+} = {}) {
+  const previousById = new Map(previous.map((operation) => [operation.id, operation]))
+  const ids = []
+  for (const operation of next) {
+    if (operation.unread) continue
+    if (operation.outcome === 'pending') continue
+    const prior = previousById.get(operation.id)
+    const isNew = !prior
+    const newlyFinished = Boolean(prior && prior.outcome === 'pending' && operation.outcome !== 'pending')
+    if (!isNew && !newlyFinished) continue
+    if (isBackgroundActivityTrigger(operation.trigger)) {
+      ids.push(operation.id)
+      continue
+    }
+    if (foregroundBusy) continue
+    if (windowHidden || markVisibleBackground) {
+      ids.push(operation.id)
+    }
+  }
+  return ids
+}
+
+export function buildTrayMenuModel({
+  operations = [],
+  families = [],
+  limit = TRAY_SECTION_LIMIT,
+} = {}) {
+  const unreadCount = unreadActivityCount(operations)
+  return {
+    activityHeadline: 'Activity',
+    activityRows: operations.slice(0, limit).map((operation) => ({
+      id: operation.id,
+      label: activityRowLabel(operation),
+      unread: Boolean(operation.unread),
+    })),
+    activityEmpty: operations.length === 0,
+    activityShowAll: operations.length > limit,
+    markAllAsRead: unreadCount > 0,
+    updatesHeadline: 'Updates',
+    updateRows: families.slice(0, limit),
+    updatesEmpty: families.length === 0,
+    updatesShowAll: families.length > limit,
+    reinstallAll: families.length > 0,
+    hasUnread: unreadCount > 0,
+    hasUpdates: families.length > 0,
+  }
 }
