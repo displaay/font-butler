@@ -1,3 +1,4 @@
+import { canSwitchTo } from './identity.ts'
 import type { CatalogEntry, FamilyGroup } from './types'
 
 export function installableEntries(group: { entries: CatalogEntry[] }): CatalogEntry[] {
@@ -88,6 +89,14 @@ export function adobeInstallableEntries(group: { entries: CatalogEntry[] }): Cat
 
 export function adobeInstallableIds(group: { entries: CatalogEntry[] }): string[] {
   return adobeInstallableEntries(group).map((entry) => entry.id)
+}
+
+export function switchableEntries(group: { entries: CatalogEntry[] }, catalog: CatalogEntry[]): CatalogEntry[] {
+  return group.entries.filter((entry) => canSwitchTo(entry, catalog))
+}
+
+export function familyHasSwitch(group: { entries: CatalogEntry[] }, catalog: CatalogEntry[]): boolean {
+  return switchableEntries(group, catalog).length > 0
 }
 
 export function familyHasAction(

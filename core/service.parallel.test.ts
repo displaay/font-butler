@@ -65,6 +65,7 @@ test('two active same-identity installs are impossible and activate without swit
     assert.ok(item.choices.includes('add-inactive'))
     assert.ok(item.choices.includes('install-as'))
     assert.ok(item.choices.includes('replace'))
+    assert.ok(item.choices.includes('switch'))
     assert.ok(item.choices.includes('skip'))
     assert.equal(planNeedsReview(plan), true)
     assert.equal(

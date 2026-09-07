@@ -8,6 +8,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { canSwitchToConflicts } from '@/lib/identity'
 import { formatRelativeTime } from '@/lib/utils'
 import type { CatalogEntry, DuplicateWarning } from '@/lib/types'
 
@@ -56,6 +57,7 @@ export function DuplicatesDialog({
                 .map((id) => entries.find((entry) => entry.id === id))
                 .filter((entry): entry is CatalogEntry => Boolean(entry))
               const familyName = (names[warning.id] ?? '').trim()
+              const switchAvailable = canSwitchToConflicts(warning.format, conflicts)
               return (
                 <div key={warning.id} className="space-y-2 rounded-lg border px-3 py-3">
                   <div className="text-sm font-medium">{warning.familyName || warning.path.split('/').pop()}</div>
@@ -129,14 +131,16 @@ export function DuplicatesDialog({
                     >
                       Install as…
                     </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={busy}
-                      onClick={() => onResolve(warning.id, 'switch')}
-                    >
-                      Switch
-                    </Button>
+                    {switchAvailable ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={busy}
+                        onClick={() => onResolve(warning.id, 'switch')}
+                      >
+                        Switch
+                      </Button>
+                    ) : null}
                     <Button
                       size="sm"
                       variant="ghost"
