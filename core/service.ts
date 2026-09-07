@@ -75,6 +75,8 @@ import {
   findOperationByIdempotency,
   finishOperation,
   loadOperations,
+  markAllOperationsRead,
+  markOperationsUnread,
   markUndone,
   operationCounts,
   pruneOperations,
@@ -1592,6 +1594,18 @@ export class FontButlerService {
     })
     this.revisionStorage()
     return loadOperations(this.paths)
+  }
+
+  markAllActivityRead(): Operation[] {
+    const operations = markAllOperationsRead(this.paths)
+    emitEvent({ type: 'operations', operations })
+    return operations
+  }
+
+  markActivityUnread(ids: string[]): Operation[] {
+    const operations = markOperationsUnread(this.paths, ids)
+    emitEvent({ type: 'operations', operations })
+    return operations
   }
 
   listRevisions(id: string): Array<{ fingerprint: string; current: boolean; previous: boolean }> {

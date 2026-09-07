@@ -24,4 +24,9 @@ contextBridge.exposeInMainWorld('fontButlerDesktop', {
     ipcRenderer.on('reinstall-fonts', listener)
     return () => ipcRenderer.removeListener('reinstall-fonts', listener)
   },
+  onOpenTab: (callback) => {
+    const listener = (_event, payload) => callback(payload)
+    ipcRenderer.on('open-tab', listener)
+    return () => ipcRenderer.removeListener('open-tab', listener)
+  },
 })

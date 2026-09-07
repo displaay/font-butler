@@ -276,6 +276,9 @@ export const api = {
     ),
   switchTo: (id: string) => json<{ entry: CatalogEntry }>(post('/api/switch', { id })),
   activity: () => get<{ operations: Operation[] }>('/api/activity'),
+  markActivityRead: () => json<{ operations: Operation[] }>(post('/api/activity/read', {})),
+  markActivityUnread: (ids: string[]) =>
+    json<{ operations: Operation[] }>(post('/api/activity/unread', { ids })),
   undo: (id: string) => json<{ operationId: string }>(post('/api/activity/undo', { id })),
   revisions: (id: string) =>
     get<{ revisions: Array<{ fingerprint: string; current: boolean; previous: boolean }> }>(

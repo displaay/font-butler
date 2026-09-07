@@ -13,6 +13,7 @@ declare global {
       requestNotifications: () => Promise<'granted' | 'denied' | 'default'>
       onOpenSettings: (callback: () => void) => () => void
       onReinstallFonts: (callback: (payload: { ids?: string[] }) => void) => () => void
+      onOpenTab: (callback: (payload: { tab?: string; operationId?: string }) => void) => () => void
     }
   }
 }

@@ -4,7 +4,12 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readApiTokenFile } from './api-token.mjs'
 import { deliverNativeNotice, electronNotificationPermission } from './notify.mjs'
-import { menuBarUpdateBadge, outdatedFamilies } from './updates-menu.mjs'
+import {
+  buildTrayMenuModel,
+  menuBarUpdateBadge,
+  outdatedFamilies,
+  unreadOperationIdsToMark,
+} from './updates-menu.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DEFAULT_API_PORT = 43182
@@ -33,6 +38,7 @@ let mainWindow = null
 let tray = null
 let apiToken = null
 let catalogEntries = []
+let activityOperations = []
 let menuBarIconEnabled = true
 let clearOfficeFontCacheEnabled = true
 let clearAdobeFontCacheEnabled = true
@@ -273,15 +279,109 @@ function reinstallFromTray(ids) {
   sendWhenReady('reinstall-fonts', { ids })
 }
 
+function openTab(tab, operationId) {
+  sendWhenReady('open-tab', operationId ? { tab, operationId } : { tab })
+}
+
+function menuActionIcon(kind) {
+  const svg =
+    kind === 'mark-read'
+      ? '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path fill="#000" d="M6.2 11.4 2.8 8l1.1-1.1 2.3 2.3 5.9-5.9 1.1 1.1z"/></svg>'
+      : '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path fill="#000" d="M2.5 3.5h11v1.4h-11zm0 3.8h11v1.4h-11zm0 3.8h7.5V12H2.5z"/></svg>'
+  const image = nativeImage.createFromDataURL(
+    `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`,
+  )
+  image.setTemplateImage(true)
+  return image
+}
+
+async function markAllActivityReadFromTray() {
+  try {
+    const token = await ensureApiToken()
+    const response = await fetch(`${API}/api/activity/read`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: '{}',
+    })
+    const data = await response.json()
+    if (Array.isArray(data.operations)) {
+      activityOperations = data.operations
+      refreshTrayMenu()
+    }
+  } catch (error) {
+    console.error('Failed to mark activity as read', error)
+  }
+}
+
+async function markActivityUnreadFromMain(ids) {
+  if (ids.length === 0) {
+    return
+  }
+  try {
+    const token = await ensureApiToken()
+    const response = await fetch(`${API}/api/activity/unread`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ ids }),
+    })
+    const data = await response.json()
+    if (Array.isArray(data.operations)) {
+      activityOperations = data.operations
+      refreshTrayMenu()
+    }
+  } catch (error) {
+    console.error('Failed to mark activity as unread', error)
+  }
+}
+
 function buildTrayMenu() {
   const families = outdatedFamilies(catalogEntries)
-  const allIds = families.flatMap((family) => family.ids)
+  const model = buildTrayMenuModel({ operations: activityOperations, families })
   /** @type {import('electron').MenuItemConstructorOptions[]} */
   const items = []
-  if (families.length === 0) {
+  items.push({ label: model.activityHeadline, enabled: false })
+  if (model.activityEmpty) {
+    items.push({ label: 'No activity', enabled: false })
+  } else {
+    for (const row of model.activityRows) {
+      items.push({
+        label: row.unread ? `• ${row.label}` : row.label,
+        click: () => {
+          openTab('activity', row.id)
+        },
+      })
+    }
+  }
+  if (model.activityShowAll) {
+    items.push({
+      label: 'Show all',
+      icon: menuActionIcon('show-all'),
+      click: () => {
+        openTab('activity')
+      },
+    })
+  }
+  if (model.markAllAsRead) {
+    items.push({
+      label: 'Mark all as read',
+      icon: menuActionIcon('mark-read'),
+      click: () => {
+        void markAllActivityReadFromTray()
+      },
+    })
+  }
+  items.push({ type: 'separator' })
+  items.push({ label: model.updatesHeadline, enabled: false })
+  if (model.updatesEmpty) {
     items.push({ label: 'No source updates', enabled: false })
   } else {
-    for (const family of families) {
+    for (const family of model.updateRows) {
       items.push({
         label: family.name,
         click: () => {
@@ -290,6 +390,16 @@ function buildTrayMenu() {
       })
     }
   }
+  if (model.updatesShowAll) {
+    items.push({
+      label: 'Show all',
+      icon: menuActionIcon('show-all'),
+      click: () => {
+        openTab('updates')
+      },
+    })
+  }
+  const allIds = families.flatMap((family) => family.ids)
   items.push({
     label: 'Reinstall all fonts',
     enabled: allIds.length > 0,
@@ -328,9 +438,16 @@ function refreshTrayMenu() {
     return
   }
   const families = outdatedFamilies(catalogEntries)
-  const count = families.length
-  tray.setToolTip(count > 0 ? `Font Buttler — ${count} updates` : 'Font Buttler')
-  tray.setTitle(menuBarUpdateBadge(count), { fontType: 'monospacedDigit' })
+  const model = buildTrayMenuModel({ operations: activityOperations, families })
+  const tooltip = model.hasUnread
+    ? model.hasUpdates
+      ? 'Font Buttler — unread activity and updates'
+      : 'Font Buttler — unread activity'
+    : model.hasUpdates
+      ? `Font Buttler — ${families.length} updates`
+      : 'Font Buttler'
+  tray.setToolTip(tooltip)
+  tray.setTitle(menuBarUpdateBadge({ hasUnread: model.hasUnread, hasUpdates: model.hasUpdates }))
   tray.setContextMenu(buildTrayMenu())
 }
 
@@ -439,6 +556,24 @@ function handleApiEvent(event) {
     catalogEntries = event.entries
     refreshTrayMenu()
   }
+  if (event.type === 'operations' && Array.isArray(event.operations)) {
+    const previous = activityOperations
+    activityOperations = event.operations
+    const ids = unreadOperationIdsToMark({
+      previous,
+      next: event.operations,
+      foregroundBusy: false,
+      windowHidden: windowIsHidden(),
+      markVisibleBackground: false,
+    })
+    if (ids.length > 0) {
+      activityOperations = activityOperations.map((operation) =>
+        ids.includes(operation.id) ? { ...operation, unread: true } : operation,
+      )
+      void markActivityUnreadFromMain(ids)
+    }
+    refreshTrayMenu()
+  }
   if (event.type === 'settings' && event.settings) {
     applyThemeSetting(event.settings.theme)
     applyMenuBarSetting(event.settings.menuBarIcon)
@@ -465,6 +600,22 @@ async function loadCatalog() {
     }
   } catch (error) {
     console.error('Failed to load catalog for menu bar', error)
+  }
+}
+
+async function loadActivity() {
+  try {
+    const token = await ensureApiToken()
+    const response = await fetch(`${API}/api/activity`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    const data = await response.json()
+    if (Array.isArray(data.operations)) {
+      activityOperations = data.operations
+      refreshTrayMenu()
+    }
+  } catch (error) {
+    console.error('Failed to load activity for menu bar', error)
   }
 }
 
@@ -644,6 +795,7 @@ if (!gotLock) {
     ensureTray()
     createWindow()
     void loadCatalog()
+    void loadActivity()
     void listenForApiEvents()
     const fromArgv = process.argv.filter((arg) =>
       /\.(ttf|otf|ttc|otc|woff2?)$/i.test(arg),

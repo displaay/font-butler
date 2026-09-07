@@ -214,6 +214,7 @@ export type Operation = {
   outcome: string
   undoable: boolean
   undone: boolean
+  unread?: boolean
 }
 
 export type ImportPlanItem = {
