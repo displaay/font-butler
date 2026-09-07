@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { catalogFontUrl, catalogFontFaceRules, catalogPreviewRevision, catalogPreviewWhich, signedCatalogFontUrl } from './preview.ts'
+import { catalogFontUrl, catalogFontFaceRules, catalogPreviewFingerprint, catalogPreviewFingerprintSet, catalogPreviewRevision, catalogPreviewWhich, cachedSignedCatalogFontUrl, previewStylesFingerprint, signedCatalogFontUrl, systemPreviewFingerprintSet } from './preview.ts'
 import { verifyFontPreviewQuery } from '../../core/font-access.ts'
 import type { CatalogEntry, FontFaceInfo } from './types.ts'
 
@@ -116,4 +116,71 @@ test('signed catalog preview URLs carry exp/sig that the API verifier accepts', 
     verifyFontPreviewQuery(secret, parsed.pathname, Object.fromEntries(parsed.searchParams), now + 3 * 60 * 60 * 1000),
     false,
   )
+})
+
+test('preview stylesheet fingerprint is stable for a new catalog array with the same files', () => {
+  const installed = entry()
+  const copy = entry()
+  assert.equal(catalogPreviewFingerprintSet([installed]), catalogPreviewFingerprintSet([copy]))
+  assert.equal(
+    previewStylesFingerprint([installed], []),
+    previewStylesFingerprint([copy], []),
+  )
+})
+
+test('preview stylesheet fingerprint ignores selection-only system-face array identity', () => {
+  const installed = entry()
+  const emptyA: [] = []
+  const emptyB: [] = []
+  assert.equal(
+    previewStylesFingerprint([installed], emptyA),
+    previewStylesFingerprint([installed], emptyB),
+  )
+  assert.equal(systemPreviewFingerprintSet(emptyA), systemPreviewFingerprintSet(emptyB))
+})
+
+test('preview stylesheet fingerprint changes when the live file revision changes', () => {
+  const installed = entry()
+  const reinstalled = entry({ installedSnapshotMtimeMs: 2, updatedAt: 5, installedFingerprint: 'c'.repeat(64) })
+  assert.notEqual(catalogPreviewFingerprintSet([installed]), catalogPreviewFingerprintSet([reinstalled]))
+})
+
+test('cached signed preview URLs are reused until the unsigned catalog URL changes', async () => {
+  const installed = entry()
+  const secret = 'local-secret-token'
+  const cache = new Map<string, string>()
+  const first = await cachedSignedCatalogFontUrl(cache, installed, 'installed', secret, { now: 1_700_000_000_000 })
+  const laterTick = await cachedSignedCatalogFontUrl(cache, installed, 'installed', secret, { now: 1_700_000_060_000 })
+  assert.equal(first, laterTick)
+  const refreshed = await cachedSignedCatalogFontUrl(cache, installed, 'installed', secret, {
+    now: 1_700_000_120_000,
+    refresh: true,
+  })
+  assert.notEqual(first, refreshed)
+  const sibling = entry({ id: 'other' })
+  const other = await cachedSignedCatalogFontUrl(cache, sibling, 'installed', secret, { now: 1_700_000_180_000 })
+  const stillFirst = await cachedSignedCatalogFontUrl(cache, installed, 'installed', secret, { now: 1_700_000_240_000 })
+  assert.equal(stillFirst, refreshed)
+  assert.notEqual(other, refreshed)
+})
+
+test('uninstalling one catalog entry does not change a sibling preview fingerprint', () => {
+  const kept = entry({ id: 'kept' })
+  const removed = entry({
+    id: 'removed',
+    status: 'installed',
+    installedPath: '/tmp/installed/Removed.ttf',
+  })
+  const after = entry({
+    id: 'removed',
+    status: 'uninstalled',
+    installedPath: undefined,
+    disabledPath: undefined,
+    installedFingerprint: 'b'.repeat(64),
+    sourceFingerprint: 'a'.repeat(64),
+    updatedAt: 9,
+  })
+  assert.equal(catalogPreviewFingerprint(kept), catalogPreviewFingerprint(entry({ id: 'kept' })))
+  assert.notEqual(catalogPreviewFingerprint(removed), catalogPreviewFingerprint(after))
+  assert.equal(catalogPreviewWhich(after), 'source')
 })

@@ -112,6 +112,7 @@ import { cn } from '@/lib/utils'
 import { isPathUnderFolder, isWatchFolderEntry, watchFolderName } from '@/lib/watchFolders'
 
 const EMPTY_WATCH_FOLDERS: string[] = []
+const EMPTY_SYSTEM_FACES: SystemFace[] = []
 
 export default function App() {
   return (
@@ -457,6 +458,10 @@ function AppShell() {
   const shownSystemGroups = useMemo(
     () => (query.trim() ? systemGroups : systemGroups.slice(0, 80)),
     [query, systemGroups],
+  )
+  const previewSystemFaces = useMemo(
+    () => (tab === 'system' ? shownSystemGroups.flatMap((group) => group.faces) : EMPTY_SYSTEM_FACES),
+    [tab, shownSystemGroups],
   )
   const missingSourceCount = useMemo(
     () => entries.filter((entry) => entry.status === 'source-missing').length,
@@ -1279,7 +1284,7 @@ function AppShell() {
       >
         <FontFaceStyles
           entries={entries}
-          systemFaces={tab === 'system' ? shownSystemGroups.flatMap((group) => group.faces) : []}
+          systemFaces={previewSystemFaces}
         />
         <Sidebar
           query={query}
