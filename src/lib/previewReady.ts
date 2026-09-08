@@ -48,6 +48,17 @@ export function isGenericPreviewFamily(family: string): boolean {
   return !name || GENERIC_FAMILIES.has(name)
 }
 
+function hasMatchingPreviewFace(name: string): boolean {
+  const expected = name.toLowerCase()
+  let found = false
+  document.fonts.forEach((face) => {
+    if (!found && normalizePreviewFamily(face.family).toLowerCase() === expected) {
+      found = true
+    }
+  })
+  return found
+}
+
 export function isPreviewFontReady(
   family: string,
   weight = 400,
@@ -58,7 +69,9 @@ export function isPreviewFontReady(
   const name = normalizePreviewFamily(family)
   const spec = `${italic ? 'italic' : 'normal'} ${weight} 24px "${name}"`
   try {
-    if (document.fonts.check(spec)) return true
+    // FontFaceSet.check() is true when nothing matching is pending, including when
+    // no @font-face has been registered yet. That would paint fallback text.
+    if (hasMatchingPreviewFace(name) && document.fonts.check(spec)) return true
   } catch {
     // Fall through to load() when FontFaceSet.check rejects the descriptor.
   }

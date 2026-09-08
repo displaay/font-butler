@@ -112,16 +112,24 @@ export function catalogPreviewFingerprint(entry: CatalogEntry): string {
   return `${entry.id}\t${faceDescriptorKey(entry.faces)}\t${catalogEntryPreviewUrls(entry).join(' ')}`
 }
 
-export function systemPreviewFingerprint(
-  face: Pick<SystemFace, 'path' | 'weight' | 'isVariable'>,
-): string {
-  const weight = face.isVariable ? '1 1000' : face.weight ? String(face.weight) : '400'
-  return `${systemFontUrl(face.path)}\t${weight}`
+export type SystemPreviewFace = Pick<SystemFace, 'path' | 'weight' | 'italic' | 'isVariable'>
+
+export function systemPreviewFingerprint(face: SystemPreviewFace): string {
+  return `${systemFontUrl(face.path)}\t${faceDescriptorKey([face])}`
+}
+
+export function systemPathPreviewFingerprint(faces: SystemPreviewFace[]): string {
+  const filePath = faces[0]?.path ?? ''
+  const descriptors = faces
+    .map((face) => faceDescriptorKey([face]))
+    .sort()
+    .join(',')
+  return `${systemFontUrl(filePath)}\t${descriptors}`
 }
 
 export function previewStylesFingerprint(
   entries: CatalogEntry[],
-  systemFaces: Array<Pick<SystemFace, 'path' | 'weight' | 'isVariable'>>,
+  systemFaces: SystemPreviewFace[],
 ): string {
   const catalog = entries.map(catalogPreviewFingerprint)
   const system = systemFaces.map(systemPreviewFingerprint)
@@ -132,9 +140,7 @@ export function catalogPreviewFingerprintSet(entries: CatalogEntry[]): string {
   return entries.map(catalogPreviewFingerprint).join('\n')
 }
 
-export function systemPreviewFingerprintSet(
-  systemFaces: Array<Pick<SystemFace, 'path' | 'weight' | 'isVariable'>>,
-): string {
+export function systemPreviewFingerprintSet(systemFaces: SystemPreviewFace[]): string {
   return systemFaces.map(systemPreviewFingerprint).join('\n')
 }
 
@@ -204,28 +210,39 @@ export function catalogEntriesNeedingPreviewCss(
   return { keep, changed, fingerprints }
 }
 
-export function systemFacesNeedingPreviewCss(
-  faces: Array<Pick<SystemFace, 'path' | 'weight' | 'isVariable'>>,
+export type SystemPathPreviewGroup<T extends SystemPreviewFace = SystemPreviewFace> = {
+  path: string
+  faces: T[]
+}
+
+export function systemFacesNeedingPreviewCss<T extends SystemPreviewFace>(
+  faces: T[],
   previousFingerprints: ReadonlyMap<string, string>,
   options: { refresh?: boolean; mounted?: ReadonlySet<string> } = {},
-): { keep: Set<string>; changed: typeof faces; fingerprints: Map<string, string> } {
+): { keep: Set<string>; changed: Array<SystemPathPreviewGroup<T>>; fingerprints: Map<string, string> } {
+  const groups = new Map<string, T[]>()
+  for (const face of faces) {
+    const group = groups.get(face.path)
+    if (group) group.push(face)
+    else groups.set(face.path, [face])
+  }
   const keep = new Set<string>()
   const fingerprints = new Map<string, string>()
-  const changed: typeof faces = []
+  const changed: Array<SystemPathPreviewGroup<T>> = []
   const refresh = Boolean(options.refresh)
   const mounted = options.mounted
-  for (const face of faces) {
-    keep.add(face.path)
-    const fingerprint = systemPreviewFingerprint(face)
-    fingerprints.set(face.path, fingerprint)
+  for (const [filePath, group] of groups) {
+    keep.add(filePath)
+    const fingerprint = systemPathPreviewFingerprint(group)
+    fingerprints.set(filePath, fingerprint)
     if (
       !refresh &&
-      previousFingerprints.get(face.path) === fingerprint &&
-      (!mounted || mounted.has(face.path))
+      previousFingerprints.get(filePath) === fingerprint &&
+      (!mounted || mounted.has(filePath))
     ) {
       continue
     }
-    changed.push(face)
+    changed.push({ path: filePath, faces: group })
   }
   return { keep, changed, fingerprints }
 }
