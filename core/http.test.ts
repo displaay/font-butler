@@ -103,6 +103,7 @@ test('public GET routes stay unauthenticated; catalog and mutations need a beare
   assert.equal(isPublicApiGet('/api/catalog'), false)
   assert.equal(isPublicApiGet('/api/events'), false)
   assert.equal(isPublicApiGet('/api/settings'), false)
+  assert.equal(isPublicApiGet('/api/app-update'), false)
   assert.equal(
     isAuthorizedApiRequest({ method: 'GET', pathname: '/api/catalog', token }),
     false,

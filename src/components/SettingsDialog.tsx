@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { FolderRelinkDialog } from '@/components/FolderRelinkDialog'
 import { FolderSetupDialog } from '@/components/FolderSetupDialog'
+import { AppUpdateCard } from '@/components/AppUpdateCard'
 import { SettingsRow, SettingsSection } from '@/components/SettingsRow'
 import { Button } from '@/components/ui/button'
 import {
@@ -31,6 +32,7 @@ import { persistNativeNotificationsEnabled, requestNotificationPermission } from
 import type {
   AdobeFontCacheInfo,
   AppSettings,
+  AppUpdateStatus,
   DestinationCapability,
   DestinationInvestigationRow,
   OfficeFontCacheInfo,
@@ -140,12 +142,20 @@ export function SettingsDialog({
   settings,
   onSettingsChange,
   onDestinationsChange,
+  appUpdate = null,
+  checkingAppUpdate = false,
+  onCheckAppUpdate,
+  highlightAppUpdate = false,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   settings: AppSettings | null
   onSettingsChange: (settings: AppSettings) => void
   onDestinationsChange?: (destinations: DestinationCapability[]) => void
+  appUpdate?: AppUpdateStatus | null
+  checkingAppUpdate?: boolean
+  onCheckAppUpdate?: (refresh?: boolean) => void
+  highlightAppUpdate?: boolean
 }) {
   const setActionStatus = useSetActionStatus()
   const tablistId = useId()
@@ -169,6 +179,11 @@ export function SettingsDialog({
     if (open) return
     setCategory('general')
   }, [open])
+
+  useEffect(() => {
+    if (!open || !highlightAppUpdate) return
+    setCategory('general')
+  }, [open, highlightAppUpdate])
 
   useEffect(() => {
     if (!open) return
@@ -328,6 +343,10 @@ export function SettingsDialog({
                   busy={busy}
                   isDesktop={isDesktop}
                   onSave={save}
+                  appUpdate={appUpdate}
+                  checkingAppUpdate={checkingAppUpdate}
+                  onCheckAppUpdate={onCheckAppUpdate}
+                  highlightAppUpdate={highlightAppUpdate}
                 />
               )}
               {category === 'folders' && (
@@ -401,11 +420,19 @@ function GeneralPane({
   busy,
   isDesktop,
   onSave,
+  appUpdate,
+  checkingAppUpdate,
+  onCheckAppUpdate,
+  highlightAppUpdate,
 }: {
   settings: AppSettings | null
   busy: boolean
   isDesktop: boolean
   onSave: (patch: SettingsPatch) => Promise<void>
+  appUpdate: AppUpdateStatus | null
+  checkingAppUpdate: boolean
+  onCheckAppUpdate?: (refresh?: boolean) => void
+  highlightAppUpdate: boolean
 }) {
   return (
     <div>
@@ -545,6 +572,21 @@ function GeneralPane({
             className={checkboxClass}
           />
         </SettingsRow>
+      </SettingsSection>
+
+      <SettingsSection title="App updates">
+        <div
+          className={cn(
+            'py-3.5',
+            highlightAppUpdate && 'rounded-md ring-2 ring-ring/40 ring-offset-2 ring-offset-background',
+          )}
+        >
+          <AppUpdateCard
+            status={appUpdate}
+            checking={checkingAppUpdate}
+            onCheck={onCheckAppUpdate ? () => onCheckAppUpdate(true) : undefined}
+          />
+        </div>
       </SettingsSection>
     </div>
   )

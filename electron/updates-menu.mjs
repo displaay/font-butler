@@ -58,7 +58,7 @@ export function menuBarNeedsAttention(input) {
   if (typeof input === 'number') {
     return input > 0
   }
-  return Boolean(input?.hasUnread || input?.hasUpdates)
+  return Boolean(input?.hasUnread || input?.hasUpdates || input?.hasAppUpdate)
 }
 
 export function menuBarUpdateBadge(_input) {
@@ -100,9 +100,13 @@ export function unreadOperationIdsToMark({
 export function buildTrayMenuModel({
   operations = [],
   families = [],
+  appUpdate = null,
   limit = TRAY_SECTION_LIMIT,
 } = {}) {
   const unreadCount = unreadActivityCount(operations)
+  const appUpdateAvailable = Boolean(appUpdate?.updateAvailable)
+  const appLabel =
+    appUpdateAvailable && appUpdate?.latestVersion ? `Font Buttler ${appUpdate.latestVersion}` : ''
   return {
     activityHeadline: 'Activity',
     activityRows: operations.slice(0, limit).map((operation) => ({
@@ -114,11 +118,19 @@ export function buildTrayMenuModel({
     activityShowAll: operations.length > limit,
     markAllAsRead: unreadCount > 0,
     updatesHeadline: 'Updates',
+    appUpdateRow: appUpdateAvailable
+      ? {
+          label: appLabel || 'Font Buttler update',
+          htmlUrl: appUpdate.htmlUrl ?? null,
+          notes: typeof appUpdate.releaseNotes === 'string' ? appUpdate.releaseNotes : null,
+        }
+      : null,
     updateRows: families.slice(0, limit),
-    updatesEmpty: families.length === 0,
+    updatesEmpty: families.length === 0 && !appUpdateAvailable,
     updatesShowAll: families.length > limit,
     reinstallAll: families.length > 0,
     hasUnread: unreadCount > 0,
     hasUpdates: families.length > 0,
+    hasAppUpdate: appUpdateAvailable,
   }
 }

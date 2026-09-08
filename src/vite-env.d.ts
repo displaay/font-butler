@@ -11,7 +11,8 @@ declare global {
       pickFile?: () => Promise<string | null>
       getApiToken?: () => Promise<string | null>
       requestNotifications: () => Promise<'granted' | 'denied' | 'default'>
-      onOpenSettings: (callback: () => void) => () => void
+      onOpenSettings: (callback: (payload?: { focus?: string }) => void) => () => void
+      openExternal?: (url: string) => Promise<boolean>
       onReinstallFonts: (callback: (payload: { ids?: string[] }) => void) => () => void
       onOpenTab: (callback: (payload: { tab?: string; operationId?: string }) => void) => () => void
     }
