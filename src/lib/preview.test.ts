@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { catalogFontUrl, catalogFontFaceRules, catalogPreviewFingerprint, catalogPreviewFingerprintSet, catalogPreviewRevision, catalogPreviewWhich, cachedSignedCatalogFontUrl, previewStylesFingerprint, signedCatalogFontUrl, systemPreviewFingerprintSet } from './preview.ts'
+import { catalogFontUrl, catalogFontFaceRules, catalogPreviewFingerprint, catalogPreviewFingerprintSet, catalogPreviewRevision, catalogPreviewWhich, cachedSignedCatalogFontUrl, catalogEntriesNeedingPreviewCss, previewStylesFingerprint, signedCatalogFontUrl, systemPreviewFingerprintSet } from './preview.ts'
 import { verifyFontPreviewQuery } from '../../core/font-access.ts'
 import type { CatalogEntry, FontFaceInfo } from './types.ts'
 
@@ -183,4 +183,23 @@ test('uninstalling one catalog entry does not change a sibling preview fingerpri
   assert.equal(catalogPreviewFingerprint(kept), catalogPreviewFingerprint(entry({ id: 'kept' })))
   assert.notEqual(catalogPreviewFingerprint(removed), catalogPreviewFingerprint(after))
   assert.equal(catalogPreviewWhich(after), 'source')
+})
+
+test('catalogEntriesNeedingPreviewCss skips unchanged fingerprints until refresh', () => {
+  const kept = entry({ id: 'kept' })
+  const other = entry({ id: 'other' })
+  const first = catalogEntriesNeedingPreviewCss([kept, other], new Map())
+  assert.deepEqual(first.changed.map((item) => item.id).sort(), ['kept', 'other'])
+  const second = catalogEntriesNeedingPreviewCss([kept, other], first.fingerprints, {
+    mounted: first.keep,
+  })
+  assert.deepEqual(second.changed, [])
+  const refreshed = catalogEntriesNeedingPreviewCss([kept, other], first.fingerprints, {
+    refresh: true,
+    mounted: first.keep,
+  })
+  assert.equal(refreshed.changed.length, 2)
+  const removed = catalogEntriesNeedingPreviewCss([kept], first.fingerprints, { mounted: first.keep })
+  assert.deepEqual([...removed.keep], ['kept'])
+  assert.deepEqual(removed.changed, [])
 })

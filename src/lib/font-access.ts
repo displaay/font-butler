@@ -7,7 +7,13 @@ import {
 export { FONT_ACCESS_TTL_MS, withFontAccessQuery } from '../../shared/font-access.ts'
 export type { FontAccessPayload } from '../../shared/font-access.ts'
 
-async function hmacHex(secret: string, message: string): Promise<string> {
+const HEX = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'))
+
+let cachedSecret: string | undefined
+let cachedKey: CryptoKey | undefined
+
+async function hmacKey(secret: string): Promise<CryptoKey> {
+  if (cachedSecret === secret && cachedKey) return cachedKey
   const key = await crypto.subtle.importKey(
     'raw',
     new TextEncoder().encode(secret),
@@ -15,8 +21,22 @@ async function hmacHex(secret: string, message: string): Promise<string> {
     false,
     ['sign'],
   )
+  cachedSecret = secret
+  cachedKey = key
+  return key
+}
+
+function bytesToHex(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf)
+  let out = ''
+  for (let i = 0; i < bytes.length; i++) out += HEX[bytes[i]!]
+  return out
+}
+
+async function hmacHex(secret: string, message: string): Promise<string> {
+  const key = await hmacKey(secret)
   const buf = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message))
-  return [...new Uint8Array(buf)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+  return bytesToHex(buf)
 }
 
 export async function signFontAccess(

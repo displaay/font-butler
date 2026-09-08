@@ -2227,7 +2227,7 @@ export class FontButlerService {
     if (!filePath || !fs.existsSync(filePath)) {
       throw new Error('No font file is available to preview.')
     }
-    const parsed = parseFontFile(filePath)
+    const parsed = parseFontFile(filePath, { previewMeta: true })
     return {
       ...parsed,
       entryId: id,
@@ -2902,22 +2902,33 @@ export class FontButlerService {
         continue
       }
       const stat = readFileStat(entry.sourcePath)
-      entry.sourceMtimeMs = stat.mtimeMs
-      entry.sourceSize = stat.size
-      const fingerprint = tryFingerprintFile(entry.sourcePath)
-      if (fingerprint) {
-        entry.sourceFingerprint = fingerprint
-      }
-      try {
-        const parsed = parseFontFile(entry.sourcePath)
-        if (JSON.stringify(entry.faces) !== JSON.stringify(parsed.faces)) {
-          entry.faces = parsed.faces
-          entry.format = parsed.format
+      const stampUnchanged =
+        stat.mtimeMs === entry.sourceMtimeMs &&
+        stat.size === entry.sourceSize &&
+        Boolean(entry.sourceFingerprint)
+      if (!stampUnchanged) {
+        if (entry.sourceMtimeMs !== stat.mtimeMs || entry.sourceSize !== stat.size) {
+          entry.sourceMtimeMs = stat.mtimeMs
+          entry.sourceSize = stat.size
           changed = true
         }
-      } catch {
-        // Keep stored names if the file can no longer be parsed.
+        const fingerprint = tryFingerprintFile(entry.sourcePath)
+        if (fingerprint && fingerprint !== entry.sourceFingerprint) {
+          entry.sourceFingerprint = fingerprint
+          changed = true
+        }
+        try {
+          const parsed = parseFontFile(entry.sourcePath)
+          if (JSON.stringify(entry.faces) !== JSON.stringify(parsed.faces)) {
+            entry.faces = parsed.faces
+            entry.format = parsed.format
+            changed = true
+          }
+        } catch {
+          // Keep stored names if the file can no longer be parsed.
+        }
       }
+      const fingerprint = entry.sourceFingerprint
       const bytesDiffer = fingerprint && entry.installedFingerprint
         ? fingerprint !== entry.installedFingerprint
         : stat.mtimeMs !== entry.installedSnapshotMtimeMs ||

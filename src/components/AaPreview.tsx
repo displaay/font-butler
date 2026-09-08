@@ -65,14 +65,16 @@ function AaGlyph({
   italic = false,
   variation,
   pendingSize = 'md',
+  wait = true,
 }: {
   family: string
   weight?: number
   italic?: boolean
   variation?: string
   pendingSize?: 'sm' | 'md' | 'glyph'
+  wait?: boolean
 }) {
-  const ready = usePreviewFontReady(family, weight, italic)
+  const ready = usePreviewFontReady(family, weight, italic, wait)
   if (!ready) return <PreviewPending size={pendingSize} />
   return (
     <span
@@ -166,6 +168,7 @@ export function CyclingAaPreview({
             italic={face.italic}
             variation={face.variation}
             pendingSize="glyph"
+            wait={faceIndex === visibleIndex}
           />
           {cycling ? <PreviewLabel>{face.label}</PreviewLabel> : null}
         </div>

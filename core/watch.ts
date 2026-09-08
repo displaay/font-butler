@@ -3,7 +3,6 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
-  applySourcePresence,
   findBySourcePath,
   isExternalSource,
   loadCatalog,
@@ -31,44 +30,74 @@ export function setSourceStatusListener(listener?: (entry: CatalogEntry) => void
   sourceStatusListener = listener
 }
 
+function persistCatalogIfChanged(
+  paths: AppPaths,
+  catalog: ReturnType<typeof loadCatalog>,
+  changed: boolean,
+): void {
+  if (!changed) return
+  saveCatalog(paths, catalog)
+  emitEvent({ type: 'catalog', entries: catalog.entries })
+}
+
+export function refreshWatchedEntry(entry: CatalogEntry): boolean {
+  let changed = applyEntryFacts(entry)
+  if (entry.sourceAvailability !== 'present' || !entry.sourcePath) {
+    if (changed) entry.updatedAt = Date.now()
+    return changed
+  }
+  const sourcePath = entry.sourcePath
+  const stat = readFileStat(sourcePath)
+  const stampUnchanged =
+    stat.mtimeMs === entry.sourceMtimeMs &&
+    stat.size === entry.sourceSize &&
+    Boolean(entry.sourceFingerprint)
+  let fingerprint = entry.sourceFingerprint
+  if (!stampUnchanged) {
+    if (entry.sourceMtimeMs !== stat.mtimeMs) {
+      entry.sourceMtimeMs = stat.mtimeMs
+      changed = true
+    }
+    if (entry.sourceSize !== stat.size) {
+      entry.sourceSize = stat.size
+      changed = true
+    }
+    fingerprint = tryFingerprintFile(sourcePath) ?? fingerprint
+    if (fingerprint && fingerprint !== entry.sourceFingerprint) {
+      entry.sourceFingerprint = fingerprint
+      changed = true
+    }
+  }
+  const bytesDiffer = fingerprint && entry.installedFingerprint
+    ? fingerprint !== entry.installedFingerprint
+    : stat.mtimeMs !== entry.installedSnapshotMtimeMs || stat.size !== entry.installedSnapshotSize
+  let nextStatus = entry.status
+  if (
+    (entry.status === 'installed' || entry.status === 'outdated') &&
+    bytesDiffer &&
+    !entry.updateHold
+  ) {
+    nextStatus = 'outdated'
+  } else if (entry.status === 'source-missing') {
+    nextStatus = resolveStatusWhenSourceFound(entry)
+  } else if (entry.status === 'outdated' && !bytesDiffer) {
+    nextStatus = 'installed'
+  }
+  if (nextStatus !== entry.status) {
+    entry.status = nextStatus
+    changed = true
+  }
+  if (changed) entry.updatedAt = Date.now()
+  return changed
+}
+
 function refreshStatusUnlocked(paths: AppPaths, sourcePath: string): CatalogEntry | undefined {
   const catalog = loadCatalog(paths)
   const entry = findBySourcePath(catalog, sourcePath)
   if (!entry) {
     return undefined
   }
-  applySourcePresence(entry)
-  applyEntryFacts(entry)
-  if (entry.sourceAvailability !== 'present') {
-    entry.updatedAt = Date.now()
-    saveCatalog(paths, catalog)
-    emitEvent({ type: 'catalog', entries: catalog.entries })
-    return entry
-  }
-  const stat = readFileStat(sourcePath)
-  entry.sourceMtimeMs = stat.mtimeMs
-  entry.sourceSize = stat.size
-  const fingerprint = tryFingerprintFile(sourcePath)
-  if (fingerprint) {
-    entry.sourceFingerprint = fingerprint
-  }
-  const bytesDiffer = fingerprint && entry.installedFingerprint
-    ? fingerprint !== entry.installedFingerprint
-    : stat.mtimeMs !== entry.installedSnapshotMtimeMs || stat.size !== entry.installedSnapshotSize
-  if (
-    (entry.status === 'installed' || entry.status === 'outdated') &&
-    bytesDiffer &&
-    !entry.updateHold
-  ) {
-    entry.status = 'outdated'
-  } else if (entry.status === 'source-missing') {
-    entry.status = resolveStatusWhenSourceFound(entry)
-  } else if (entry.status === 'outdated' && !bytesDiffer) {
-    entry.status = 'installed'
-  }
-  entry.updatedAt = Date.now()
-  saveCatalog(paths, catalog)
-  emitEvent({ type: 'catalog', entries: catalog.entries })
+  persistCatalogIfChanged(paths, catalog, refreshWatchedEntry(entry))
   return entry
 }
 
@@ -85,9 +114,9 @@ export function reconcileWatchedSources(paths: AppPaths): Promise<CatalogEntry[]
     const changed: CatalogEntry[] = []
     for (const entry of catalog.entries) {
       if (!isExternalSource(entry) || !entry.sourcePath) continue
-      const next = refreshStatusUnlocked(paths, entry.sourcePath)
-      if (next) changed.push(next)
+      if (refreshWatchedEntry(entry)) changed.push(entry)
     }
+    persistCatalogIfChanged(paths, catalog, changed.length > 0)
     return changed
   })
 }
