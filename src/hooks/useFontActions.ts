@@ -378,7 +378,7 @@ export function useFontActions({
   }
 
   async function installToAdobeFor(groups: FamilyGroup[]) {
-    const ids = groups.flatMap(adobeInstallableIds)
+    const ids = groups.flatMap((group) => adobeInstallableIds(group))
     if (ids.length === 0) return
     await run(async () => {
       for (const id of ids) {
