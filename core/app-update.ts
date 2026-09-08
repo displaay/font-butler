@@ -6,6 +6,8 @@ import {
   APP_UPDATE_AUTO_INSTALL,
   APP_UPDATE_CACHE_MS,
   APP_UPDATE_GITHUB_LATEST_API,
+  APP_UPDATE_GITHUB_TOKEN_ENV,
+  APP_UPDATE_GITHUB_TOKEN_FALLBACK_ENV,
   emptyAppUpdateStatus,
   parseGithubRelease,
   type AppUpdateStatus,
@@ -19,6 +21,8 @@ export {
   APP_UPDATE_GITHUB_OWNER,
   APP_UPDATE_GITHUB_RELEASES_URL,
   APP_UPDATE_GITHUB_REPO,
+  APP_UPDATE_GITHUB_TOKEN_ENV,
+  APP_UPDATE_GITHUB_TOKEN_FALLBACK_ENV,
   PARKED_AUTO_INSTALL_MESSAGE,
   PARKED_AUTO_INSTALL_NOTICE,
   appUpdateRowLabel,
@@ -73,11 +77,19 @@ export function readAppVersion(): string {
   return process.env.npm_package_version || '0.0.0'
 }
 
-function githubToken(explicit?: string): string {
+/**
+ * Public repo / public releases: no token.
+ * Private repo: unauthenticated /releases/latest 404s (looks up to date). Set a
+ * read-only FONT_BUTLER_GITHUB_TOKEN (GITHUB_TOKEN as fallback) until Releases are public.
+ */
+export function resolveGithubReleasesToken(
+  explicit?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
   return (
     explicit ||
-    process.env.FONT_BUTLER_GITHUB_TOKEN ||
-    process.env.GITHUB_TOKEN ||
+    env[APP_UPDATE_GITHUB_TOKEN_ENV] ||
+    env[APP_UPDATE_GITHUB_TOKEN_FALLBACK_ENV] ||
     ''
   ).trim()
 }
@@ -127,7 +139,7 @@ export function createAppUpdateChecker(options: { cacheMs?: number } = {}) {
     const fetchImpl: AppUpdateFetch = input.fetch ?? (globalThis.fetch as AppUpdateFetch)
     try {
       const response = await fetchImpl(APP_UPDATE_GITHUB_LATEST_API, {
-        headers: requestHeaders(currentVersion, githubToken(input.githubToken)),
+        headers: requestHeaders(currentVersion, resolveGithubReleasesToken(input.githubToken)),
       })
       if (response.status === 404) {
         const status = emptyAppUpdateStatus(currentVersion, { checkedAt: now })

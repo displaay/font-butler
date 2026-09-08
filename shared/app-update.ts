@@ -3,6 +3,10 @@ export const APP_UPDATE_GITHUB_REPO = 'font-butler'
 export const APP_UPDATE_GITHUB_RELEASES_URL = `https://github.com/${APP_UPDATE_GITHUB_OWNER}/${APP_UPDATE_GITHUB_REPO}/releases`
 export const APP_UPDATE_GITHUB_LATEST_API = `https://api.github.com/repos/${APP_UPDATE_GITHUB_OWNER}/${APP_UPDATE_GITHUB_REPO}/releases/latest`
 
+/** Read-only token for private repos until Releases are public. */
+export const APP_UPDATE_GITHUB_TOKEN_ENV = 'FONT_BUTLER_GITHUB_TOKEN'
+export const APP_UPDATE_GITHUB_TOKEN_FALLBACK_ENV = 'GITHUB_TOKEN'
+
 /** Auto-download / auto-install stay off until Apple signing and notarization land. */
 export const APP_UPDATE_AUTO_INSTALL = 'parked' as const
 

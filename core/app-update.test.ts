@@ -3,6 +3,8 @@ import { test } from 'node:test'
 import {
   APP_UPDATE_AUTO_INSTALL,
   APP_UPDATE_GITHUB_LATEST_API,
+  APP_UPDATE_GITHUB_TOKEN_ENV,
+  APP_UPDATE_GITHUB_TOKEN_FALLBACK_ENV,
   PARKED_AUTO_INSTALL_MESSAGE,
   appUpdateRowLabel,
   compareVersions,
@@ -15,6 +17,7 @@ import {
   preferredReleaseAsset,
   shouldShowUpdatesTab,
   readAppVersion,
+  resolveGithubReleasesToken,
   startParkedAutoInstall,
   type AppUpdateFetch,
   type GithubReleaseJson,
@@ -244,4 +247,37 @@ test('shouldShowUpdatesTab appears for font updates or an app release', () => {
 
 test('readAppVersion matches package.json', () => {
   assert.match(readAppVersion(), /^\d+\.\d+\.\d+/)
+})
+
+test('resolveGithubReleasesToken prefers FONT_BUTLER_GITHUB_TOKEN for a private repo', () => {
+  assert.equal(resolveGithubReleasesToken(' explicit '), 'explicit')
+  assert.equal(
+    resolveGithubReleasesToken(undefined, {
+      [APP_UPDATE_GITHUB_TOKEN_ENV]: 'read-only',
+      [APP_UPDATE_GITHUB_TOKEN_FALLBACK_ENV]: 'ci-token',
+    }),
+    'read-only',
+  )
+  assert.equal(
+    resolveGithubReleasesToken(undefined, { [APP_UPDATE_GITHUB_TOKEN_FALLBACK_ENV]: 'ci-token' }),
+    'ci-token',
+  )
+  assert.equal(resolveGithubReleasesToken(undefined, {}), '')
+})
+
+test('checkAppUpdate sends the read-only token only on the GitHub Releases request', async () => {
+  const checker = createAppUpdateChecker()
+  let authorization = ''
+  const status = await checker.check({
+    currentVersion: '0.1.1',
+    githubToken: 'read-only-token',
+    fetch: async (_url, init) => {
+      authorization = init?.headers?.Authorization ?? ''
+      return jsonFetch(404, { message: 'Not Found' })(_url)
+    },
+    now: 13,
+  })
+  assert.equal(authorization, 'Bearer read-only-token')
+  assert.equal(status.updateAvailable, false)
+  assert.equal(status.error, undefined)
 })

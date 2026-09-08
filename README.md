@@ -64,4 +64,4 @@ The packaged macOS app ships its own CPython and `fonttools`, so â€œInstall asâ€
 
 ## App updates
 
-Font Buttler compares its running version to the latest [GitHub Release](https://github.com/displaay/font-butler/releases). When a newer release exists, Settings, the Updates tab, and the menu bar show the version, notes, **Download**, and **Open release**. Nothing is downloaded or installed automatically. Offline or GitHub failures stay quiet. See [docs/releases.md](docs/releases.md) for how to cut a release and what stays parked until Apple signing.
+Font Buttler compares its running version to the latest [GitHub Release](https://github.com/displaay/font-butler/releases). When a newer release exists, Settings, the Updates tab, and the menu bar show the version, notes, **Download**, and **Open release**. Nothing is downloaded or installed automatically. Offline or GitHub failures stay quiet. A public repo needs no token; a private repo needs a read-only `FONT_BUTLER_GITHUB_TOKEN` until Releases are public (see [docs/releases.md](docs/releases.md)).
