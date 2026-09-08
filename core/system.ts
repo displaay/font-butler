@@ -80,9 +80,16 @@ export function scanSystemFonts(paths: AppPaths): SystemFace[] {
   const bySource = new Map(
     catalog.entries.map((entry) => [path.resolve(entry.sourcePath), entry.id]),
   )
+  const cachedByPath = new Map<string, SystemFace[]>()
+  for (const face of cache.faces) {
+    const list = cachedByPath.get(face.path)
+    if (list) list.push(face)
+    else cachedByPath.set(face.path, [face])
+  }
 
   const nextFaces: SystemFace[] = []
   const nextStamps: Record<string, number> = {}
+  const seenPaths = new Set<string>()
 
   for (const filePath of files) {
     let mtime = 0
@@ -92,7 +99,8 @@ export function scanSystemFonts(paths: AppPaths): SystemFace[] {
       continue
     }
     nextStamps[filePath] = mtime
-    const cached = cache.faces.filter((face) => face.path === filePath)
+    seenPaths.add(path.resolve(filePath))
+    const cached = cachedByPath.get(filePath) ?? []
     if (cache.stamps[filePath] === mtime && cached.length > 0) {
       nextFaces.push(
         ...cached.map((face) => ({
@@ -137,8 +145,8 @@ export function scanSystemFonts(paths: AppPaths): SystemFace[] {
     if (!isUnderAnyRoot(entry.sourcePath, [paths.computerFontsDir])) {
       continue
     }
-    const already = nextFaces.some((face) => path.resolve(face.path) === path.resolve(entry.disabledPath!))
-    if (already) continue
+    if (seenPaths.has(path.resolve(entry.disabledPath))) continue
+    seenPaths.add(path.resolve(entry.disabledPath))
     for (const face of entry.faces) {
       nextFaces.push({
         path: entry.disabledPath,

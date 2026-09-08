@@ -21,6 +21,33 @@ export function familyNameOf(entry: CatalogEntry): string {
   return entry.customFamilyName || entry.faces[0]?.familyName || 'Unknown'
 }
 
+export function countFamilyNames(entries: CatalogEntry[]): number {
+  const names = new Set<string>()
+  for (const entry of entries) names.add(familyNameOf(entry))
+  return names.size
+}
+
+export function catalogEntriesMatch(prev: CatalogEntry[], next: CatalogEntry[]): boolean {
+  if (prev === next) return true
+  if (prev.length !== next.length) return false
+  for (let i = 0; i < prev.length; i++) {
+    const a = prev[i]!
+    const b = next[i]!
+    if (
+      a.id !== b.id ||
+      a.updatedAt !== b.updatedAt ||
+      a.status !== b.status ||
+      a.sourcePresent !== b.sourcePresent ||
+      a.installedPath !== b.installedPath ||
+      a.sourceFingerprint !== b.sourceFingerprint ||
+      a.installedFingerprint !== b.installedFingerprint
+    ) {
+      return false
+    }
+  }
+  return true
+}
+
 export function groupCatalog(entries: CatalogEntry[]): FamilyGroup[] {
   const map = new Map<string, CatalogEntry[]>()
   for (const entry of entries) {

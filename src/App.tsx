@@ -61,7 +61,7 @@ import {
   renameSavedFilter,
   savedFilterMatches,
 } from '@/lib/savedFilters'
-import { familyNameOf, catalogRevealEntry, countLibraryFilters, entryIds, familyStatusSummary, groupCatalog, groupSystem, matchesLibraryFilter, matchesQuery, sortFamilyGroups, uniquePaths } from '@/lib/group'
+import { familyNameOf, catalogEntriesMatch, catalogRevealEntry, countFamilyNames, countLibraryFilters, entryIds, familyStatusSummary, groupCatalog, groupSystem, matchesLibraryFilter, matchesQuery, sortFamilyGroups, uniquePaths } from '@/lib/group'
 import {
   LIBRARY_FILTERS_KEY,
   readLibraryFilters,
@@ -363,7 +363,8 @@ function AppShell() {
         return
       }
       if (event && typeof event === 'object' && (event as { type?: string }).type === 'catalog') {
-        setEntries((event as { entries: CatalogEntry[] }).entries)
+        const next = (event as { entries: CatalogEntry[] }).entries
+        setEntries((current) => (catalogEntriesMatch(current, next) ? current : next))
       }
       if (event && typeof event === 'object' && (event as { type?: string }).type === 'system') {
         setSystemFaces((event as { faces: SystemFace[] }).faces)
@@ -467,9 +468,7 @@ function AppShell() {
   const watchFolderCounts = useMemo(() => {
     const counts: Record<string, number> = {}
     for (const folder of watchFolders) {
-      counts[folder] = groupCatalog(
-        entries.filter((entry) => isWatchFolderEntry(entry, folder)),
-      ).length
+      counts[folder] = countFamilyNames(entries.filter((entry) => isWatchFolderEntry(entry, folder)))
     }
     return counts
   }, [entries, watchFolders])
@@ -493,9 +492,9 @@ function AppShell() {
   )
   const tabCounts = useMemo(
     () => ({
-      library: groupCatalog(entries).length,
+      library: countFamilyNames(entries),
       system: groupSystem(systemFaces).length,
-      updates: groupCatalog(entries.filter((entry) => entry.status === 'outdated')).length,
+      updates: countFamilyNames(entries.filter((entry) => entry.status === 'outdated')),
       activity: operations.length,
     }),
     [entries, systemFaces, operations.length],

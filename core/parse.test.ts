@@ -50,10 +50,13 @@ test('parseFontFile reads every face from a synthetic TTC and OTC', () => {
       { family: 'Pack', psName: 'Pack-Regular', style: 'Regular', format: 'otf' },
       { family: 'Pack', psName: 'Pack-Bold', style: 'Bold', format: 'otf' },
     ])
-    const parsedOtc = parseFontFile(otc)
+    const parsedOtc = parseFontFile(otc, { previewMeta: true })
     assert.equal(parsedOtc.format, 'otc')
     assert.equal(parsedOtc.faces.length, 2)
     assert.ok(parsedOtc.characterSet?.includes(65))
+    const catalogParse = parseFontFile(otc)
+    assert.equal(catalogParse.characterSet, undefined)
+    assert.equal(catalogParse.features, undefined)
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }

@@ -109,14 +109,19 @@ export type ParsedFont = {
   characterSet?: number[]
 }
 
-export function parseFontFile(filePath: string): ParsedFont {
-  const opened = openSync(filePath)
-  return parseOpened(opened, path.extname(filePath).slice(1).toLowerCase())
+export type ParseFontOptions = {
+  /** When true, also read cmap/features/axes. Catalog import only needs faces. */
+  previewMeta?: boolean
 }
 
-export function parseFontBuffer(buffer: Buffer, formatHint = 'ttf'): ParsedFont {
+export function parseFontFile(filePath: string, options?: ParseFontOptions): ParsedFont {
+  const opened = openSync(filePath)
+  return parseOpened(opened, path.extname(filePath).slice(1).toLowerCase(), options)
+}
+
+export function parseFontBuffer(buffer: Buffer, formatHint = 'ttf', options?: ParseFontOptions): ParsedFont {
   const opened = create(buffer)
-  return parseOpened(opened, formatHint)
+  return parseOpened(opened, formatHint, options)
 }
 
 export function glyphNameForCodePoint(filePath: string, code: number): string | null {
@@ -132,20 +137,21 @@ export function glyphNameForCodePoint(filePath: string, code: number): string | 
   return name
 }
 
-function parseOpened(opened: Font | FontCollection, format: string): ParsedFont {
+function parseOpened(opened: Font | FontCollection, format: string, options?: ParseFontOptions): ParsedFont {
+  const preview = options?.previewMeta
   if (isCollection(opened)) {
     const first = opened.fonts[0]
     return {
       format: format || 'ttc',
       faces: opened.fonts.map((font) => faceFromFont(font)),
-      ...previewMetaFromFont(first),
+      ...(preview ? previewMetaFromFont(first) : {}),
     }
   }
   const detected = opened.type?.toLowerCase()
   return {
     format: detected === 'woff' || detected === 'woff2' ? detected : format || 'ttf',
     faces: [faceFromFont(opened)],
-    ...previewMetaFromFont(opened),
+    ...(preview ? previewMetaFromFont(opened) : {}),
   }
 }
 

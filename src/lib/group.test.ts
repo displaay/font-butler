@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   catalogRevealEntry,
+  catalogEntriesMatch,
+  countFamilyNames,
   countLibraryFilters,
   entryHasTrackedSource,
   familyBadgeEntry,
@@ -267,4 +269,16 @@ test('groupCatalog counts OTF and TTF copies of the same styles once', () => {
   assert.equal(groups.length, 1)
   assert.equal(groups[0]?.instanceCount, 2)
   assert.equal(familyStatusSummary(groups[0]!), null)
+})
+
+test('countFamilyNames matches groupCatalog length', () => {
+  const entries = [entry('old', 'Zed', 10), entry('new', 'Zed', 50), entry('solo', 'Able', 20)]
+  assert.equal(countFamilyNames(entries), groupCatalog(entries).length)
+})
+
+test('catalogEntriesMatch ignores array identity when revision fields are equal', () => {
+  const a = [entry('a', 'Able', 1), entry('z', 'Zed', 2)]
+  const b = [entry('a', 'Able', 1), entry('z', 'Zed', 2)]
+  assert.equal(catalogEntriesMatch(a, b), true)
+  assert.equal(catalogEntriesMatch(a, [entry('a', 'Able', 1, 'outdated'), entry('z', 'Zed', 2)]), false)
 })

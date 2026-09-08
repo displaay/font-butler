@@ -177,3 +177,55 @@ export async function cachedSignedSystemFontUrl(
     signedSystemFontUrl(filePath, secret, options.revision, options.now),
   )
 }
+
+export function catalogEntriesNeedingPreviewCss(
+  entries: CatalogEntry[],
+  previousFingerprints: ReadonlyMap<string, string>,
+  options: { refresh?: boolean; mounted?: ReadonlySet<string> } = {},
+): { keep: Set<string>; changed: CatalogEntry[]; fingerprints: Map<string, string> } {
+  const keep = new Set<string>()
+  const fingerprints = new Map<string, string>()
+  const changed: CatalogEntry[] = []
+  const refresh = Boolean(options.refresh)
+  const mounted = options.mounted
+  for (const entry of entries) {
+    keep.add(entry.id)
+    const fingerprint = catalogPreviewFingerprint(entry)
+    fingerprints.set(entry.id, fingerprint)
+    if (
+      !refresh &&
+      previousFingerprints.get(entry.id) === fingerprint &&
+      (!mounted || mounted.has(entry.id))
+    ) {
+      continue
+    }
+    changed.push(entry)
+  }
+  return { keep, changed, fingerprints }
+}
+
+export function systemFacesNeedingPreviewCss(
+  faces: Array<Pick<SystemFace, 'path' | 'weight' | 'isVariable'>>,
+  previousFingerprints: ReadonlyMap<string, string>,
+  options: { refresh?: boolean; mounted?: ReadonlySet<string> } = {},
+): { keep: Set<string>; changed: typeof faces; fingerprints: Map<string, string> } {
+  const keep = new Set<string>()
+  const fingerprints = new Map<string, string>()
+  const changed: typeof faces = []
+  const refresh = Boolean(options.refresh)
+  const mounted = options.mounted
+  for (const face of faces) {
+    keep.add(face.path)
+    const fingerprint = systemPreviewFingerprint(face)
+    fingerprints.set(face.path, fingerprint)
+    if (
+      !refresh &&
+      previousFingerprints.get(face.path) === fingerprint &&
+      (!mounted || mounted.has(face.path))
+    ) {
+      continue
+    }
+    changed.push(face)
+  }
+  return { keep, changed, fingerprints }
+}

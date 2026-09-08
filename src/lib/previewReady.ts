@@ -25,7 +25,7 @@ function ensurePreviewFontTicking() {
   if (interval != null) return
   document.fonts.addEventListener('loadingdone', notifyPreviewFonts)
   document.fonts.addEventListener('loadingerror', notifyPreviewFonts)
-  interval = setInterval(notifyPreviewFonts, 100)
+  interval = setInterval(notifyPreviewFonts, 250)
 }
 
 function stopPreviewFontTicking() {
@@ -55,19 +55,14 @@ export function isPreviewFontReady(
 ): boolean {
   if (isGenericPreviewFamily(family)) return true
   if (typeof document === 'undefined' || !document.fonts) return false
-  const name = normalizePreviewFamily(family).toLowerCase()
-  let matched = false
-  let loaded = false
-  document.fonts.forEach((face) => {
-    if (normalizePreviewFamily(face.family).toLowerCase() !== name) return
-    matched = true
-    if (face.status === 'loaded') loaded = true
-  })
-  if (loaded) return true
-  if (matched) {
-    const spec = `${italic ? 'italic' : 'normal'} ${weight} 24px "${normalizePreviewFamily(family)}"`
-    void document.fonts.load(spec)
+  const name = normalizePreviewFamily(family)
+  const spec = `${italic ? 'italic' : 'normal'} ${weight} 24px "${name}"`
+  try {
+    if (document.fonts.check(spec)) return true
+  } catch {
+    // Fall through to load() when FontFaceSet.check rejects the descriptor.
   }
+  void document.fonts.load(spec)
   return false
 }
 

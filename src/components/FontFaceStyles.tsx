@@ -3,9 +3,11 @@ import { getApiToken } from '@/lib/api'
 import {
   cachedSignedCatalogFontUrl,
   cachedSignedSystemFontUrl,
+  catalogEntriesNeedingPreviewCss,
   catalogFontFaceRules,
   catalogPreviewFingerprintSet,
   catalogPreviewWhich,
+  systemFacesNeedingPreviewCss,
   systemPreviewFingerprintSet,
   type PreviewUrlCache,
   type PreviewWhich,
@@ -55,7 +57,7 @@ async function catalogEntryCss(
 }
 
 async function systemFaceCss(
-  face: SystemFace,
+  face: Pick<SystemFace, 'path' | 'weight' | 'isVariable'>,
   secret: string,
   cache: PreviewUrlCache,
   refresh: boolean,
@@ -97,6 +99,8 @@ export function FontFaceStyles({
   const catalogStylesRef = useRef<Map<string, HTMLStyleElement>>(new Map())
   const systemStylesRef = useRef<Map<string, HTMLStyleElement>>(new Map())
   const cacheRef = useRef<PreviewUrlCache>(new Map())
+  const catalogFingerprintsRef = useRef<Map<string, string>>(new Map())
+  const systemFingerprintsRef = useRef<Map<string, string>>(new Map())
   const entriesRef = useRef(entries)
   const systemFacesRef = useRef(systemFaces)
   const catalogFingerprint = catalogPreviewFingerprintSet(entries)
@@ -116,15 +120,21 @@ export function FontFaceStyles({
       try {
         const secret = await getApiToken()
         const nextEntries = entriesRef.current
-        const keep = new Set<string>()
-        for (const entry of nextEntries) {
-          keep.add(entry.id)
-          const css = await catalogEntryCss(entry, secret, cache, refresh)
-          if (cancelled) return
-          const style = ensureStyle(styles, entry.id, 'data-font-butler-face')
+        const { keep, changed, fingerprints } = catalogEntriesNeedingPreviewCss(
+          nextEntries,
+          catalogFingerprintsRef.current,
+          { refresh, mounted: new Set(styles.keys()) },
+        )
+        const cssById = await Promise.all(
+          changed.map(async (entry) => [entry.id, await catalogEntryCss(entry, secret, cache, refresh)] as const),
+        )
+        if (cancelled) return
+        for (const [id, css] of cssById) {
+          const style = ensureStyle(styles, id, 'data-font-butler-face')
           if (style.textContent !== css) style.textContent = css
         }
-        if (!cancelled) pruneStyles(styles, keep)
+        pruneStyles(styles, keep)
+        catalogFingerprintsRef.current = fingerprints
       } catch {
         // Keep already-mounted @font-face rules; a signing blip must not blank cards.
       }
@@ -148,15 +158,21 @@ export function FontFaceStyles({
       try {
         const secret = await getApiToken()
         const nextFaces = systemFacesRef.current
-        const keep = new Set<string>()
-        for (const face of nextFaces) {
-          keep.add(face.path)
-          const css = await systemFaceCss(face, secret, cache, refresh)
-          if (cancelled) return
-          const style = ensureStyle(styles, face.path, 'data-font-butler-system')
+        const { keep, changed, fingerprints } = systemFacesNeedingPreviewCss(
+          nextFaces,
+          systemFingerprintsRef.current,
+          { refresh, mounted: new Set(styles.keys()) },
+        )
+        const cssByPath = await Promise.all(
+          changed.map(async (face) => [face.path, await systemFaceCss(face, secret, cache, refresh)] as const),
+        )
+        if (cancelled) return
+        for (const [path, css] of cssByPath) {
+          const style = ensureStyle(styles, path, 'data-font-butler-system')
           if (style.textContent !== css) style.textContent = css
         }
-        if (!cancelled) pruneStyles(styles, keep)
+        pruneStyles(styles, keep)
+        systemFingerprintsRef.current = fingerprints
       } catch {
         // Keep already-mounted system @font-face rules.
       }
