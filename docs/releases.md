@@ -16,12 +16,12 @@ Font Buttler checks [GitHub Releases](https://github.com/displaay/font-butler/re
 
 4. Surfaces:
 
-   - **Settings → General → App updates** — current version, notes, **Open on GitHub**, optional asset link
+   - **Settings → General → App updates** — current version, notes, **Download** (asset, opens in the browser to save), **Open release**
    - **Updates** tab — same card when a newer release exists (font **Reinstall** is unchanged)
-   - **Menu bar → Updates** — `Font Buttler {version}` opens the release page; **Reinstall all fonts** still only reinstalls fonts
+   - **Menu bar → Updates** — `Font Buttler {version}` opens the release page; **Download {asset}** opens the file; **Reinstall all fonts** still only reinstalls fonts
    - **Font Buttler → Check for Updates…** — refreshes, then focuses Settings
 
-Install and Switch are not part of this path.
+Install and Switch are not part of this path. Offline or GitHub API failures stay a quiet no-update: no crash, no toast, no Install/Switch/auth churn. A last-good check is kept if one exists.
 
 ## How to cut a release
 
@@ -62,7 +62,7 @@ When signing lands:
 
 1. Sign and notarize the Mac app (`hardenedRuntime`, `entitlements`, notarize hook).
 2. Add `electron-updater` with the GitHub provider (`owner: displaay`, `repo: font-butler`). Keep **`autoDownload: false`** and **`autoInstallOnAppQuit: false`**.
-3. Keep the current “Open on GitHub” path as the default.
+3. Keep the current **Download** / **Open release** path as the default.
 4. Add an explicit **Install {version}** action that is the only thing that may download, then install on quit.
 5. Confirm `latest-mac.yml` (and matching zip) is attached to the GitHub Release.
 6. Only then consider auto-download for users who opt in.

@@ -122,6 +122,10 @@ export function buildTrayMenuModel({
       ? {
           label: appLabel || 'Font Buttler update',
           htmlUrl: appUpdate.htmlUrl ?? null,
+          downloadUrl: appUpdate.preferredAsset?.url ?? null,
+          downloadLabel: appUpdate.preferredAsset?.name
+            ? `Download ${appUpdate.preferredAsset.name}`
+            : null,
           notes: typeof appUpdate.releaseNotes === 'string' ? appUpdate.releaseNotes : null,
         }
       : null,

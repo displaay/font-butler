@@ -183,7 +183,7 @@ test('checkAppUpdate treats a 404 latest release as up to date', async () => {
   assert.equal(status.error, undefined)
 })
 
-test('checkAppUpdate records GitHub HTTP and network errors without throwing', async () => {
+test('offline and GitHub API failures stay a quiet no-update and do not throw', async () => {
   const checker = createAppUpdateChecker()
   const http = await checker.check({
     currentVersion: '0.1.1',
@@ -191,7 +191,8 @@ test('checkAppUpdate records GitHub HTTP and network errors without throwing', a
     now: 11,
   })
   assert.equal(http.updateAvailable, false)
-  assert.match(http.error ?? '', /HTTP 500/)
+  assert.equal(http.error, undefined)
+  assert.equal(http.latestVersion, null)
   const network = await checker.check({
     currentVersion: '0.1.1',
     fetch: async () => {
@@ -200,7 +201,33 @@ test('checkAppUpdate records GitHub HTTP and network errors without throwing', a
     now: 12,
     refresh: true,
   })
-  assert.equal(network.error, 'offline')
+  assert.equal(network.updateAvailable, false)
+  assert.equal(network.error, undefined)
+})
+
+test('a failed refresh keeps the last good GitHub release', async () => {
+  let calls = 0
+  const checker = createAppUpdateChecker({ cacheMs: 1 })
+  const fetchImpl: AppUpdateFetch = async () => {
+    calls += 1
+    if (calls === 1) return jsonFetch(200, release())('')
+    throw new Error('offline')
+  }
+  const first = await checker.check({
+    currentVersion: '0.1.1',
+    fetch: fetchImpl,
+    now: 1_000,
+  })
+  assert.equal(first.updateAvailable, true)
+  const kept = await checker.check({
+    currentVersion: '0.1.1',
+    fetch: fetchImpl,
+    now: 2_000,
+    refresh: true,
+  })
+  assert.equal(kept.updateAvailable, true)
+  assert.equal(kept.latestVersion, '0.2.0')
+  assert.equal(kept.error, undefined)
 })
 
 test('startParkedAutoInstall refuses to download or install', () => {

@@ -117,6 +117,10 @@ test('buildTrayMenuModel puts a GitHub app release above font source updates', (
       latestVersion: '0.2.0',
       htmlUrl: 'https://github.com/displaay/font-butler/releases/tag/v0.2.0',
       releaseNotes: 'Notes',
+      preferredAsset: {
+        name: 'Font-Buttler-0.2.0-arm64.dmg',
+        url: 'https://github.com/displaay/font-butler/releases/download/v0.2.0/Font-Buttler-0.2.0-arm64.dmg',
+      },
     },
   })
   assert.equal(model.hasAppUpdate, true)
@@ -125,6 +129,11 @@ test('buildTrayMenuModel puts a GitHub app release above font source updates', (
   assert.equal(model.updatesEmpty, false)
   assert.equal(model.appUpdateRow?.label, 'Font Buttler 0.2.0')
   assert.equal(model.appUpdateRow?.htmlUrl, 'https://github.com/displaay/font-butler/releases/tag/v0.2.0')
+  assert.equal(
+    model.appUpdateRow?.downloadUrl,
+    'https://github.com/displaay/font-butler/releases/download/v0.2.0/Font-Buttler-0.2.0-arm64.dmg',
+  )
+  assert.equal(model.appUpdateRow?.downloadLabel, 'Download Font-Buttler-0.2.0-arm64.dmg')
 })
 
 test('an app-only release still shows the Updates section without enabling Reinstall all', () => {

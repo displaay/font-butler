@@ -12,6 +12,9 @@ export const APP_UPDATE_NOTES_LIMIT = 32 * 1024
 export const PARKED_AUTO_INSTALL_MESSAGE =
   'Auto-install is parked until Apple signing lands. Open the GitHub release to download.'
 
+export const PARKED_AUTO_INSTALL_NOTICE =
+  'Auto-install is pending Apple signing. Download the release or open it in your browser.'
+
 export type AppUpdateAsset = {
   name: string
   url: string

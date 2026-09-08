@@ -1,4 +1,5 @@
 import {
+  APP_UPDATE_GITHUB_RELEASES_URL,
   isAllowedAppUpdateUrl,
   type AppUpdateStatus,
 } from '../../shared/app-update.ts'
@@ -6,6 +7,7 @@ import {
 export {
   APP_UPDATE_AUTO_INSTALL,
   APP_UPDATE_GITHUB_RELEASES_URL,
+  PARKED_AUTO_INSTALL_NOTICE,
   appUpdateRowLabel,
   isAllowedAppUpdateUrl,
   shouldShowUpdatesTab,
@@ -23,8 +25,14 @@ export async function openAppUpdateUrl(url: string): Promise<boolean> {
   return true
 }
 
+export function appUpdateReleaseUrl(
+  status: Pick<AppUpdateStatus, 'htmlUrl'>,
+): string {
+  return status.htmlUrl || APP_UPDATE_GITHUB_RELEASES_URL
+}
+
 export function appUpdateDownloadUrl(
-  status: Pick<AppUpdateStatus, 'preferredAsset' | 'htmlUrl'>,
+  status: Pick<AppUpdateStatus, 'preferredAsset'>,
 ): string | null {
-  return status.preferredAsset?.url || status.htmlUrl || null
+  return status.preferredAsset?.url ?? null
 }

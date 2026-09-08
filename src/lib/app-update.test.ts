@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   appUpdateDownloadUrl,
+  appUpdateReleaseUrl,
   appUpdateRowLabel,
   isAllowedAppUpdateUrl,
   shouldShowUpdatesTab,
@@ -33,10 +34,11 @@ test('appUpdateRowLabel names the GitHub release version', () => {
   assert.equal(appUpdateRowLabel(status({ updateAvailable: false })), '')
 })
 
-test('appUpdateDownloadUrl prefers the matching asset over the release page', () => {
+test('appUpdateDownloadUrl is the asset only; Open release uses the GitHub page', () => {
   assert.match(appUpdateDownloadUrl(status()) ?? '', /arm64\.dmg$/)
+  assert.equal(appUpdateDownloadUrl(status({ preferredAsset: null })), null)
   assert.equal(
-    appUpdateDownloadUrl(status({ preferredAsset: null })),
+    appUpdateReleaseUrl(status({ preferredAsset: null })),
     'https://github.com/displaay/font-butler/releases/tag/v0.2.0',
   )
 })

@@ -6,7 +6,6 @@ import {
   APP_UPDATE_AUTO_INSTALL,
   APP_UPDATE_CACHE_MS,
   APP_UPDATE_GITHUB_LATEST_API,
-  APP_UPDATE_GITHUB_RELEASES_URL,
   emptyAppUpdateStatus,
   parseGithubRelease,
   type AppUpdateStatus,
@@ -21,6 +20,7 @@ export {
   APP_UPDATE_GITHUB_RELEASES_URL,
   APP_UPDATE_GITHUB_REPO,
   PARKED_AUTO_INSTALL_MESSAGE,
+  PARKED_AUTO_INSTALL_NOTICE,
   appUpdateRowLabel,
   compareVersions,
   isAllowedAppUpdateUrl,
@@ -94,12 +94,17 @@ function requestHeaders(version: string, token: string): Record<string, string> 
   return headers
 }
 
-function errorStatus(currentVersion: string, now: number, error: string): AppUpdateStatus {
-  return emptyAppUpdateStatus(currentVersion, {
-    htmlUrl: APP_UPDATE_GITHUB_RELEASES_URL,
-    checkedAt: now,
-    error,
-  })
+function quietFailure(
+  cached: CacheEntry | null,
+  currentVersion: string,
+  now: number,
+  reason: string,
+): AppUpdateStatus {
+  console.warn(`Font Butler update check skipped (${reason})`)
+  if (cached?.status) {
+    return cached.status
+  }
+  return emptyAppUpdateStatus(currentVersion, { checkedAt: now })
 }
 
 export function createAppUpdateChecker(options: { cacheMs?: number } = {}) {
@@ -131,13 +136,13 @@ export function createAppUpdateChecker(options: { cacheMs?: number } = {}) {
         return status
       }
       if (!response.ok) {
-        const status = errorStatus(
+        const status = quietFailure(
+          cached,
           currentVersion,
           now,
           `GitHub Releases returned HTTP ${response.status}`,
         )
-        cached = { at: now, status }
-        emitEvent({ type: 'app-update', update: status })
+        if (!cached) cached = { at: now, status }
         return status
       }
       const json = (await response.json()) as GithubReleaseJson
@@ -149,13 +154,13 @@ export function createAppUpdateChecker(options: { cacheMs?: number } = {}) {
       emitEvent({ type: 'app-update', update: status })
       return status
     } catch (error) {
-      const status = errorStatus(
+      const status = quietFailure(
+        cached,
         currentVersion,
         now,
         error instanceof Error ? error.message : 'Could not reach GitHub Releases',
       )
-      cached = { at: now, status }
-      emitEvent({ type: 'app-update', update: status })
+      if (!cached) cached = { at: now, status }
       return status
     }
   }

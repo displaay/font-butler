@@ -416,6 +416,14 @@ function buildTrayMenu() {
         }
       },
     })
+    if (model.appUpdateRow.downloadUrl) {
+      items.push({
+        label: model.appUpdateRow.downloadLabel || 'Download',
+        click: () => {
+          void openExternalUrl(model.appUpdateRow.downloadUrl)
+        },
+      })
+    }
   }
   if (families.length === 0) {
     items.push({ label: 'No source updates', enabled: false })

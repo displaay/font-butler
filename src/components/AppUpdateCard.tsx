@@ -1,7 +1,10 @@
-import { ExternalLink } from 'lucide-react'
+import { Download, ExternalLink } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   APP_UPDATE_GITHUB_RELEASES_URL,
+  PARKED_AUTO_INSTALL_NOTICE,
+  appUpdateDownloadUrl,
+  appUpdateReleaseUrl,
   openAppUpdateUrl,
   type AppUpdateStatus,
 } from '@/lib/app-update'
@@ -19,7 +22,8 @@ export function AppUpdateCard({
   compact?: boolean
 }) {
   const updateAvailable = Boolean(status?.updateAvailable)
-  const releaseUrl = status?.htmlUrl || APP_UPDATE_GITHUB_RELEASES_URL
+  const releaseUrl = status ? appUpdateReleaseUrl(status) : APP_UPDATE_GITHUB_RELEASES_URL
+  const downloadUrl = status ? appUpdateDownloadUrl(status) : null
   const asset = status?.preferredAsset
 
   return (
@@ -36,15 +40,13 @@ export function AppUpdateCard({
           <div className="text-sm font-medium">
             {updateAvailable
               ? `Font Buttler ${status?.latestVersion} is available`
-              : status?.error
-                ? 'Could not check for updates'
-                : 'Font Buttler is up to date'}
+              : 'Font Buttler is up to date'}
           </div>
           <p className="mt-0.5 text-[13px] leading-5 text-muted-foreground">
             {status
-              ? `This Mac is running ${status.currentVersion}. Downloads stay manual until Apple signing lands.`
+              ? `This Mac is running ${status.currentVersion}.`
               : 'Check GitHub Releases for a newer build.'}
-            {status?.error ? ` ${status.error}` : ''}
+            {updateAvailable ? ` ${PARKED_AUTO_INSTALL_NOTICE}` : ''}
           </p>
         </div>
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
@@ -53,14 +55,24 @@ export function AppUpdateCard({
               {checking ? 'Checking…' : 'Check for updates'}
             </Button>
           ) : null}
+          {updateAvailable && downloadUrl ? (
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => void openAppUpdateUrl(downloadUrl)}
+            >
+              <Download />
+              Download
+            </Button>
+          ) : null}
           <Button
             type="button"
             size="sm"
-            variant={updateAvailable ? 'default' : 'outline'}
+            variant="outline"
             onClick={() => void openAppUpdateUrl(releaseUrl)}
           >
             <ExternalLink />
-            Open on GitHub
+            {updateAvailable ? 'Open release' : 'Open releases'}
           </Button>
         </div>
       </div>
@@ -71,13 +83,7 @@ export function AppUpdateCard({
       ) : null}
       {updateAvailable && asset ? (
         <p className="mt-2 text-xs text-muted-foreground">
-          <button
-            type="button"
-            className="underline-offset-2 hover:underline"
-            onClick={() => void openAppUpdateUrl(asset.url)}
-          >
-            {asset.name}
-          </button>
+          {asset.name}
           {typeof asset.size === 'number' ? ` · ${formatBytes(asset.size)}` : ''}
         </p>
       ) : null}
