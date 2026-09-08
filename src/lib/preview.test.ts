@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { catalogFontUrl, catalogFontFaceRules, catalogPreviewFingerprint, catalogPreviewFingerprintSet, catalogPreviewRevision, catalogPreviewWhich, cachedSignedCatalogFontUrl, catalogEntriesNeedingPreviewCss, previewStylesFingerprint, signedCatalogFontUrl, systemPreviewFingerprintSet } from './preview.ts'
+import { catalogFontUrl, catalogFontFaceRules, catalogPreviewFingerprint, catalogPreviewFingerprintSet, catalogPreviewRevision, catalogPreviewWhich, cachedSignedCatalogFontUrl, catalogEntriesNeedingPreviewCss, previewStylesFingerprint, signedCatalogFontUrl, systemFacesNeedingPreviewCss, systemPathPreviewFingerprint, systemPreviewFingerprintSet } from './preview.ts'
 import { verifyFontPreviewQuery } from '../../core/font-access.ts'
 import type { CatalogEntry, FontFaceInfo } from './types.ts'
 
@@ -202,4 +202,54 @@ test('catalogEntriesNeedingPreviewCss skips unchanged fingerprints until refresh
   const removed = catalogEntriesNeedingPreviewCss([kept], first.fingerprints, { mounted: first.keep })
   assert.deepEqual([...removed.keep], ['kept'])
   assert.deepEqual(removed.changed, [])
+})
+
+test('system path fingerprints cover every TTC/OTC face on the shared file', () => {
+  const ttc = '/System/Library/Fonts/Collection.ttc'
+  const regular = { path: ttc, weight: 400, italic: false, isVariable: false }
+  const bold = { path: ttc, weight: 700, italic: false, isVariable: false }
+  const italic = { path: ttc, weight: 400, italic: true, isVariable: false }
+  assert.equal(
+    systemPathPreviewFingerprint([regular, bold]),
+    systemPathPreviewFingerprint([bold, regular]),
+  )
+  assert.notEqual(
+    systemPathPreviewFingerprint([regular, bold]),
+    systemPathPreviewFingerprint([regular, italic]),
+  )
+  const rules = catalogFontFaceRules('sys-ttc', '/api/system-font?path=Collection.ttc', [regular, bold])
+  assert.equal(rules.length, 2)
+  assert.match(rules[0]!, /font-weight:400/)
+  assert.match(rules[1]!, /font-weight:700/)
+})
+
+test('systemFacesNeedingPreviewCss keeps the full path group instead of clobbering TTC faces', () => {
+  const ttc = '/System/Library/Fonts/Collection.ttc'
+  const other = '/System/Library/Fonts/Other.ttf'
+  const regular = { path: ttc, weight: 400, italic: false, isVariable: false }
+  const bold = { path: ttc, weight: 700, italic: false, isVariable: false }
+  const extra = { path: other, weight: 400, italic: false, isVariable: false }
+  const first = systemFacesNeedingPreviewCss([regular, bold, extra], new Map())
+  assert.deepEqual([...first.keep].sort(), [other, ttc].sort())
+  const collection = first.changed.find((group) => group.path === ttc)
+  assert.ok(collection)
+  assert.equal(collection.faces.length, 2)
+  assert.deepEqual(
+    collection.faces.map((face) => face.weight).sort(),
+    [400, 700],
+  )
+  assert.equal(first.fingerprints.get(ttc), systemPathPreviewFingerprint([regular, bold]))
+
+  const second = systemFacesNeedingPreviewCss([regular, bold, extra], first.fingerprints, {
+    mounted: first.keep,
+  })
+  assert.deepEqual(second.changed, [])
+
+  const heavier = { path: other, weight: 700, italic: false, isVariable: false }
+  const third = systemFacesNeedingPreviewCss([regular, bold, heavier], first.fingerprints, {
+    mounted: first.keep,
+  })
+  assert.equal(third.changed.length, 1)
+  assert.equal(third.changed[0]!.path, other)
+  assert.equal(third.fingerprints.get(ttc), first.fingerprints.get(ttc))
 })

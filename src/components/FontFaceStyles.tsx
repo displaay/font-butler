@@ -56,15 +56,16 @@ async function catalogEntryCss(
   return faces.join('\n')
 }
 
-async function systemFaceCss(
-  face: Pick<SystemFace, 'path' | 'weight' | 'isVariable'>,
+async function systemPathCss(
+  faces: Array<Pick<SystemFace, 'path' | 'weight' | 'italic' | 'isVariable'>>,
   secret: string,
   cache: PreviewUrlCache,
   refresh: boolean,
 ): Promise<string> {
-  const url = await cachedSignedSystemFontUrl(cache, face.path, secret, { refresh })
-  const weight = face.isVariable ? '1 1000' : face.weight ? String(face.weight) : '400'
-  return `@font-face{font-family:"${hashPath(face.path)}";src:url("${url}");font-weight:${weight};font-display:block;}`
+  const filePath = faces[0]?.path
+  if (!filePath) return ''
+  const url = await cachedSignedSystemFontUrl(cache, filePath, secret, { refresh })
+  return catalogFontFaceRules(hashPath(filePath), url, faces).join('\n')
 }
 
 function ensureStyle(
@@ -164,7 +165,7 @@ export function FontFaceStyles({
           { refresh, mounted: new Set(styles.keys()) },
         )
         const cssByPath = await Promise.all(
-          changed.map(async (face) => [face.path, await systemFaceCss(face, secret, cache, refresh)] as const),
+          changed.map(async (group) => [group.path, await systemPathCss(group.faces, secret, cache, refresh)] as const),
         )
         if (cancelled) return
         for (const [path, css] of cssByPath) {

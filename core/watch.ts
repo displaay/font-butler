@@ -40,7 +40,10 @@ function persistCatalogIfChanged(
   emitEvent({ type: 'catalog', entries: catalog.entries })
 }
 
-export function refreshWatchedEntry(entry: CatalogEntry): boolean {
+export function refreshWatchedEntry(
+  entry: CatalogEntry,
+  options: { forceFingerprint?: boolean } = {},
+): boolean {
   let changed = applyEntryFacts(entry)
   if (entry.sourceAvailability !== 'present' || !entry.sourcePath) {
     if (changed) entry.updatedAt = Date.now()
@@ -48,7 +51,10 @@ export function refreshWatchedEntry(entry: CatalogEntry): boolean {
   }
   const sourcePath = entry.sourcePath
   const stat = readFileStat(sourcePath)
+  // Periodic reconcile can trust mtime+size. Watcher-triggered refresh cannot:
+  // timestamp-preserving sync (Dropbox-style) can replace bytes without a stamp change.
   const stampUnchanged =
+    !options.forceFingerprint &&
     stat.mtimeMs === entry.sourceMtimeMs &&
     stat.size === entry.sourceSize &&
     Boolean(entry.sourceFingerprint)
@@ -97,7 +103,7 @@ function refreshStatusUnlocked(paths: AppPaths, sourcePath: string): CatalogEntr
   if (!entry) {
     return undefined
   }
-  persistCatalogIfChanged(paths, catalog, refreshWatchedEntry(entry))
+  persistCatalogIfChanged(paths, catalog, refreshWatchedEntry(entry, { forceFingerprint: true }))
   return entry
 }
 
