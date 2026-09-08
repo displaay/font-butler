@@ -271,13 +271,12 @@ function AppShell() {
         if (openPath) {
           await api.open(openPath)
         }
-        const [catalog, settingsResult, projectResult, activityResult, duplicatesResult, appUpdateResult] = await Promise.all([
+        const [catalog, settingsResult, projectResult, activityResult, duplicatesResult] = await Promise.all([
           api.catalog(),
           api.settings(),
           api.projects().catch(() => ({ projects: [] })),
           api.activity().catch(() => ({ operations: [] })),
           api.duplicates().catch(() => ({ duplicates: [] })),
-          api.appUpdate().catch(() => null),
         ])
         if (!cancelled) {
           applySettings(settingsResult.settings)
@@ -286,9 +285,6 @@ function AppShell() {
           setOperations(activityResult.operations)
           operationsRef.current = activityResult.operations
           setDuplicates(duplicatesResult.duplicates)
-          if (appUpdateResult?.update) {
-            setAppUpdate(appUpdateResult.update)
-          }
           if (shouldShowOnboarding(settingsResult.settings)) {
             setOnboardingOpen(true)
           }
@@ -313,6 +309,7 @@ function AppShell() {
       } finally {
         if (!cancelled) setLoading(false)
       }
+      if (!cancelled) void loadAppUpdate()
     }
     void boot()
     const stop = subscribeEvents((event) => {

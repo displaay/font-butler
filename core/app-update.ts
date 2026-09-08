@@ -5,11 +5,13 @@ import { emitEvent } from './events.ts'
 import {
   APP_UPDATE_AUTO_INSTALL,
   APP_UPDATE_CACHE_MS,
+  APP_UPDATE_FETCH_TIMEOUT_MS,
   APP_UPDATE_GITHUB_LATEST_API,
   APP_UPDATE_GITHUB_TOKEN_ENV,
   APP_UPDATE_GITHUB_TOKEN_FALLBACK_ENV,
   emptyAppUpdateStatus,
   parseGithubRelease,
+  withTimeout,
   type AppUpdateStatus,
   type GithubReleaseJson,
 } from '../shared/app-update.ts'
@@ -17,6 +19,7 @@ import {
 export {
   APP_UPDATE_AUTO_INSTALL,
   APP_UPDATE_CACHE_MS,
+  APP_UPDATE_FETCH_TIMEOUT_MS,
   APP_UPDATE_GITHUB_LATEST_API,
   APP_UPDATE_GITHUB_OWNER,
   APP_UPDATE_GITHUB_RELEASES_URL,
@@ -34,12 +37,13 @@ export {
   preferredReleaseAsset,
   shouldShowUpdatesTab,
   startParkedAutoInstall,
+  withTimeout,
 } from '../shared/app-update.ts'
 export type { AppUpdateAsset, AppUpdateStatus, GithubReleaseJson } from '../shared/app-update.ts'
 
 export type AppUpdateFetch = (
   url: string,
-  init?: { headers?: Record<string, string> },
+  init?: { headers?: Record<string, string>; signal?: AbortSignal },
 ) => Promise<{
   ok: boolean
   status: number
@@ -55,6 +59,7 @@ export type CheckAppUpdateOptions = {
   refresh?: boolean
   githubToken?: string
   skipNetworkInTest?: boolean
+  timeoutMs?: number
 }
 
 type CacheEntry = { at: number; status: AppUpdateStatus }
@@ -119,8 +124,9 @@ function quietFailure(
   return emptyAppUpdateStatus(currentVersion, { checkedAt: now })
 }
 
-export function createAppUpdateChecker(options: { cacheMs?: number } = {}) {
+export function createAppUpdateChecker(options: { cacheMs?: number; timeoutMs?: number } = {}) {
   const cacheMs = options.cacheMs ?? APP_UPDATE_CACHE_MS
+  const timeoutMs = options.timeoutMs ?? APP_UPDATE_FETCH_TIMEOUT_MS
   let cached: CacheEntry | null = null
 
   async function check(input: CheckAppUpdateOptions = {}): Promise<AppUpdateStatus> {
@@ -137,10 +143,22 @@ export function createAppUpdateChecker(options: { cacheMs?: number } = {}) {
       return status
     }
     const fetchImpl: AppUpdateFetch = input.fetch ?? (globalThis.fetch as AppUpdateFetch)
+    const controller = new AbortController()
     try {
-      const response = await fetchImpl(APP_UPDATE_GITHUB_LATEST_API, {
-        headers: requestHeaders(currentVersion, resolveGithubReleasesToken(input.githubToken)),
-      })
+      const github = await withTimeout(
+        (async () => {
+          const response = await fetchImpl(APP_UPDATE_GITHUB_LATEST_API, {
+            headers: requestHeaders(currentVersion, resolveGithubReleasesToken(input.githubToken)),
+            signal: controller.signal,
+          })
+          if (response.status === 404 || !response.ok) {
+            return { response, json: null as GithubReleaseJson | null }
+          }
+          return { response, json: (await response.json()) as GithubReleaseJson }
+        })(),
+        input.timeoutMs ?? timeoutMs,
+      )
+      const { response, json } = github
       if (response.status === 404) {
         const status = emptyAppUpdateStatus(currentVersion, { checkedAt: now })
         cached = { at: now, status }
@@ -157,7 +175,11 @@ export function createAppUpdateChecker(options: { cacheMs?: number } = {}) {
         if (!cached) cached = { at: now, status }
         return status
       }
-      const json = (await response.json()) as GithubReleaseJson
+      if (!json) {
+        const status = quietFailure(cached, currentVersion, now, 'GitHub Releases returned an empty body')
+        if (!cached) cached = { at: now, status }
+        return status
+      }
       const status = parseGithubRelease(json, currentVersion, {
         now,
         platform: { platform: process.platform, arch: process.arch },
@@ -166,6 +188,7 @@ export function createAppUpdateChecker(options: { cacheMs?: number } = {}) {
       emitEvent({ type: 'app-update', update: status })
       return status
     } catch (error) {
+      controller.abort()
       const status = quietFailure(
         cached,
         currentVersion,

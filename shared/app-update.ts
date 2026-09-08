@@ -11,6 +11,7 @@ export const APP_UPDATE_GITHUB_TOKEN_FALLBACK_ENV = 'GITHUB_TOKEN'
 export const APP_UPDATE_AUTO_INSTALL = 'parked' as const
 
 export const APP_UPDATE_CACHE_MS = 60 * 60 * 1000
+export const APP_UPDATE_FETCH_TIMEOUT_MS = 4000
 export const APP_UPDATE_NOTES_LIMIT = 32 * 1024
 
 export const PARKED_AUTO_INSTALL_MESSAGE =
@@ -233,6 +234,21 @@ export function appUpdateRowLabel(status: Pick<AppUpdateStatus, 'updateAvailable
 
 export function shouldShowUpdatesTab(fontUpdateCount: number, hasAppUpdate: boolean): boolean {
   return fontUpdateCount > 0 || hasAppUpdate
+}
+
+/** Resolve `work` or reject after `timeoutMs`. A hung fetch must not block boot. */
+export async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('GitHub Releases timed out')), timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
 }
 
 /**

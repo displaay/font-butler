@@ -19,6 +19,7 @@ import {
   readAppVersion,
   resolveGithubReleasesToken,
   startParkedAutoInstall,
+  withTimeout,
   type AppUpdateFetch,
   type GithubReleaseJson,
 } from './app-update.ts'
@@ -233,6 +234,12 @@ test('a failed refresh keeps the last good GitHub release', async () => {
   assert.equal(kept.error, undefined)
 })
 
+test('withTimeout rejects a hung promise instead of waiting forever', async () => {
+  const started = Date.now()
+  await assert.rejects(() => withTimeout(new Promise(() => {}), 20), /timed out/)
+  assert.ok(Date.now() - started < 500)
+})
+
 test('startParkedAutoInstall refuses to download or install', () => {
   assert.throws(() => startParkedAutoInstall(), { message: PARKED_AUTO_INSTALL_MESSAGE })
   assert.match(parkedAutoInstallState().reason, /electron-updater/)
@@ -263,6 +270,37 @@ test('resolveGithubReleasesToken prefers FONT_BUTLER_GITHUB_TOKEN for a private 
     'ci-token',
   )
   assert.equal(resolveGithubReleasesToken(undefined, {}), '')
+})
+
+test('a hung GitHub fetch times out as a quiet no-update', async () => {
+  const checker = createAppUpdateChecker({ timeoutMs: 25 })
+  const started = Date.now()
+  const status = await checker.check({
+    currentVersion: '0.1.1',
+    fetch: () => new Promise(() => {}),
+    now: 14,
+  })
+  assert.ok(Date.now() - started < 500, `hung fetch took ${Date.now() - started}ms; expected a hard timeout`)
+  assert.equal(status.updateAvailable, false)
+  assert.equal(status.error, undefined)
+})
+
+test('a hung GitHub response body times out as a quiet no-update', async () => {
+  const checker = createAppUpdateChecker({ timeoutMs: 25 })
+  const started = Date.now()
+  const status = await checker.check({
+    currentVersion: '0.1.1',
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: () => new Promise(() => {}),
+    }),
+    now: 15,
+  })
+  assert.ok(Date.now() - started < 500, `hung body took ${Date.now() - started}ms; expected a hard timeout`)
+  assert.equal(status.updateAvailable, false)
+  assert.equal(status.error, undefined)
 })
 
 test('checkAppUpdate sends the read-only token only on the GitHub Releases request', async () => {
