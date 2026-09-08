@@ -1,6 +1,7 @@
 import type {
   AdobeFontCacheInfo,
   AppSettings,
+  AppUpdateStatus,
   CatalogEntry,
   DuplicateWarning,
   DestinationCapability,
@@ -113,6 +114,8 @@ export const api = {
     return { settings: bootstrapSettings }
   },
   catalog: () => get<{ entries: CatalogEntry[] }>('/api/catalog'),
+  appUpdate: (refresh = false) =>
+    get<{ update: AppUpdateStatus }>(`/api/app-update${refresh ? '?refresh=1' : ''}`),
   system: () => get<{ faces: SystemFace[] }>('/api/system'),
   inspectDrop: (paths: string[]) =>
     json<{
@@ -443,5 +446,13 @@ export function isDuplicatesEvent(
 ): value is { type: 'duplicates'; duplicates: DuplicateWarning[] } {
   return Boolean(
     value && typeof value === 'object' && (value as { type?: string }).type === 'duplicates',
+  )
+}
+
+export function isAppUpdateEvent(
+  value: unknown,
+): value is { type: 'app-update'; update: AppUpdateStatus } {
+  return Boolean(
+    value && typeof value === 'object' && (value as { type?: string }).type === 'app-update',
   )
 }

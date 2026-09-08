@@ -346,3 +346,25 @@ export type ComparisonCapture = {
   installedFingerprint: string | null
   sourceFingerprint: string
 }
+
+export type AppUpdateAsset = {
+  name: string
+  url: string
+  contentType?: string
+  size?: number
+}
+
+export type AppUpdateStatus = {
+  currentVersion: string
+  latestVersion: string | null
+  updateAvailable: boolean
+  releaseName: string | null
+  releaseNotes: string | null
+  htmlUrl: string | null
+  publishedAt: string | null
+  assets: AppUpdateAsset[]
+  preferredAsset: AppUpdateAsset | null
+  autoInstall: 'parked'
+  checkedAt: number
+  error?: string
+}

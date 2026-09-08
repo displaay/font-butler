@@ -15,10 +15,11 @@ contextBridge.exposeInMainWorld('fontButlerDesktop', {
   getApiToken: () => ipcRenderer.invoke('get-api-token'),
   requestNotifications: () => ipcRenderer.invoke('request-notifications'),
   onOpenSettings: (callback) => {
-    const listener = () => callback()
+    const listener = (_event, payload) => callback(payload)
     ipcRenderer.on('open-settings', listener)
     return () => ipcRenderer.removeListener('open-settings', listener)
   },
+  openExternal: (url) => ipcRenderer.invoke('open-external', url),
   onReinstallFonts: (callback) => {
     const listener = (_event, payload) => callback(payload)
     ipcRenderer.on('reinstall-fonts', listener)

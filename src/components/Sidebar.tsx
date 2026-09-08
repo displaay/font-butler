@@ -55,6 +55,7 @@ import {
 } from '@/lib/projects'
 import { savedFilterMatches } from '@/lib/savedFilters'
 import { hasInsetTrafficLights } from '@/lib/desktop'
+import { shouldShowUpdatesTab } from '@/lib/app-update'
 import { cn } from '@/lib/utils'
 import { watchFolderLabel } from '@/lib/watchFolders'
 
@@ -257,6 +258,7 @@ export function Sidebar({
   onOpenDuplicates,
   counts,
   activityUnread = 0,
+  hasAppUpdate = false,
   onOpenSettings,
 }: {
   query: string
@@ -292,6 +294,7 @@ export function Sidebar({
   onOpenDuplicates?: () => void
   counts: { library: number; system: number; updates: number; activity?: number }
   activityUnread?: number
+  hasAppUpdate?: boolean
   onOpenSettings: () => void
 }) {
   const insetTrafficLights = hasInsetTrafficLights()
@@ -461,7 +464,7 @@ export function Sidebar({
         </div>
       </div>
       <nav className="flex min-h-0 flex-1 flex-row flex-wrap gap-0.5 overflow-y-auto px-2 pb-2 md:flex-col md:flex-nowrap">
-        {TABS.filter((item) => item.id !== 'updates' || counts.updates > 0).map((item) => {
+        {TABS.filter((item) => item.id !== 'updates' || shouldShowUpdatesTab(counts.updates, hasAppUpdate)).map((item) => {
           if (item.id === 'library') {
             return (
               <div key={item.id} className="flex w-full flex-col gap-0.5">
@@ -528,7 +531,9 @@ export function Sidebar({
               title={
                 item.id === 'activity' && activityUnread > 0
                   ? `${activityUnread} unread`
-                  : undefined
+                  : item.id === 'updates' && hasAppUpdate
+                    ? 'App update available'
+                    : undefined
               }
             />
           )

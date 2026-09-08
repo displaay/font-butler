@@ -455,6 +455,28 @@ export type DuplicateWarning = {
   notifiedAt?: number
 }
 
+export type AppUpdateAsset = {
+  name: string
+  url: string
+  contentType?: string
+  size?: number
+}
+
+export type AppUpdateStatus = {
+  currentVersion: string
+  latestVersion: string | null
+  updateAvailable: boolean
+  releaseName: string | null
+  releaseNotes: string | null
+  htmlUrl: string | null
+  publishedAt: string | null
+  assets: AppUpdateAsset[]
+  preferredAsset: AppUpdateAsset | null
+  autoInstall: 'parked'
+  checkedAt: number
+  error?: string
+}
+
 export type ServiceEvent =
   | { type: 'catalog'; entries: CatalogEntry[] }
   | { type: 'system'; faces: SystemFace[] }
@@ -463,3 +485,4 @@ export type ServiceEvent =
   | { type: 'operations'; operations: Operation[] }
   | { type: 'projects'; projects: ProjectSet[] }
   | { type: 'duplicates'; duplicates: DuplicateWarning[] }
+  | { type: 'app-update'; update: AppUpdateStatus }

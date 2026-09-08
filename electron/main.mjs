@@ -1,8 +1,9 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, nativeImage, nativeTheme, Tray } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, nativeImage, nativeTheme, shell, Tray } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readApiTokenFile } from './api-token.mjs'
+import { isAllowedAppUpdateUrl, trayTooltip } from './app-update.mjs'
 import { deliverNativeNotice, electronNotificationPermission } from './notify.mjs'
 import {
   buildTrayMenuModel,
@@ -51,6 +52,9 @@ let lastNoticeKey = ''
 let lastNoticeAt = 0
 let isQuitting = false
 const queuedFiles = []
+/** @type {null | { updateAvailable?: boolean, latestVersion?: string, htmlUrl?: string | null, releaseNotes?: string | null }} */
+let appUpdate = null
+const APP_UPDATE_POLL_MS = 6 * 60 * 60 * 1000
 
 function apiHeaders(extra = {}) {
   const headers = { ...extra }
@@ -160,8 +164,21 @@ function sendWhenReady(channel, payload) {
   }
 }
 
-function openSettings() {
-  sendWhenReady('open-settings')
+function openSettings(focus) {
+  sendWhenReady('open-settings', typeof focus === 'string' ? { focus } : undefined)
+}
+
+function openAppUpdate() {
+  void loadAppUpdate(true)
+  openSettings('app-update')
+}
+
+async function openExternalUrl(url) {
+  if (!isAllowedAppUpdateUrl(url)) {
+    return false
+  }
+  await shell.openExternal(url)
+  return true
 }
 
 function createWindow() {
@@ -187,6 +204,12 @@ function createWindow() {
     },
   })
   mainWindow.loadURL(UI)
+  mainWindow.webContents.setWindowOpenHandler((details) => {
+    if (isAllowedAppUpdateUrl(details.url)) {
+      void shell.openExternal(details.url)
+    }
+    return { action: 'deny' }
+  })
   mainWindow.on('close', (event) => {
     if (!isQuitting && menuBarIconEnabled) {
       event.preventDefault()
@@ -346,7 +369,7 @@ async function markActivityUnreadFromMain(ids) {
 
 function buildTrayMenu() {
   const families = outdatedFamilies(catalogEntries)
-  const model = buildTrayMenuModel({ operations: activityOperations, families })
+  const model = buildTrayMenuModel({ operations: activityOperations, families, appUpdate })
   /** @type {import('electron').MenuItemConstructorOptions[]} */
   const items = []
   items.push({ label: model.activityHeadline, enabled: false })
@@ -382,7 +405,27 @@ function buildTrayMenu() {
   }
   items.push({ type: 'separator' })
   items.push({ label: model.updatesHeadline, enabled: false })
-  if (model.updatesEmpty) {
+  if (model.appUpdateRow) {
+    items.push({
+      label: model.appUpdateRow.label,
+      click: () => {
+        if (model.appUpdateRow?.htmlUrl) {
+          void openExternalUrl(model.appUpdateRow.htmlUrl)
+        } else {
+          openAppUpdate()
+        }
+      },
+    })
+    if (model.appUpdateRow.downloadUrl) {
+      items.push({
+        label: model.appUpdateRow.downloadLabel || 'Download',
+        click: () => {
+          void openExternalUrl(model.appUpdateRow.downloadUrl)
+        },
+      })
+    }
+  }
+  if (families.length === 0) {
     items.push({ label: 'No source updates', enabled: false })
   } else {
     for (const family of model.updateRows) {
@@ -442,20 +485,30 @@ function refreshTrayMenu() {
     return
   }
   const families = outdatedFamilies(catalogEntries)
-  const model = buildTrayMenuModel({ operations: activityOperations, families })
-  const tooltip = model.hasUnread
-    ? model.hasUpdates
-      ? 'Font Buttler — unread activity and updates'
-      : 'Font Buttler — unread activity'
-    : model.hasUpdates
-      ? `Font Buttler — ${families.length} updates`
-      : 'Font Buttler'
-  tray.setToolTip(tooltip)
-  const icon = trayTemplateIcon({ hasUnread: model.hasUnread, hasUpdates: model.hasUpdates })
+  const model = buildTrayMenuModel({ operations: activityOperations, families, appUpdate })
+  tray.setToolTip(
+    trayTooltip({
+      hasUnread: model.hasUnread,
+      hasUpdates: model.hasUpdates,
+      hasAppUpdate: model.hasAppUpdate,
+      fontUpdateCount: families.length,
+    }),
+  )
+  const icon = trayTemplateIcon({
+    hasUnread: model.hasUnread,
+    hasUpdates: model.hasUpdates,
+    hasAppUpdate: model.hasAppUpdate,
+  })
   if (icon) {
     tray.setImage(icon)
   }
-  tray.setTitle(menuBarUpdateBadge({ hasUnread: model.hasUnread, hasUpdates: model.hasUpdates }))
+  tray.setTitle(
+    menuBarUpdateBadge({
+      hasUnread: model.hasUnread,
+      hasUpdates: model.hasUpdates,
+      hasAppUpdate: model.hasAppUpdate,
+    }),
+  )
   tray.setContextMenu(buildTrayMenu())
 }
 
@@ -504,6 +557,7 @@ function ensureTray() {
   const icon = trayTemplateIcon({
     hasUnread: activityOperations.some((operation) => operation.unread),
     hasUpdates: outdatedFamilies(catalogEntries).length > 0,
+    hasAppUpdate: Boolean(appUpdate?.updateAvailable),
   })
   if (!icon) {
     return
@@ -620,6 +674,11 @@ function handleApiEvent(event) {
   if (event.type === 'notice' && event.notice) {
     maybeNotify(event.notice)
   }
+  if (event.type === 'app-update' && event.update) {
+    appUpdate = event.update
+    refreshTrayMenu()
+    Menu.setApplicationMenu(buildAppMenu())
+  }
 }
 
 async function loadCatalog() {
@@ -651,6 +710,25 @@ async function loadActivity() {
     }
   } catch (error) {
     console.error('Failed to load activity for menu bar', error)
+  }
+}
+
+async function loadAppUpdate(refresh = false) {
+  // PARKED AUTO-INSTALL: never download or install GitHub assets. See docs/releases.md.
+  try {
+    await ensureApiToken()
+    const url = `${API}/api/app-update${refresh ? '?refresh=1' : ''}`
+    const response = await fetch(url, {
+      headers: apiHeaders(),
+    })
+    const data = await response.json()
+    if (data && data.update && typeof data.update === 'object') {
+      appUpdate = data.update
+      refreshTrayMenu()
+      Menu.setApplicationMenu(buildAppMenu())
+    }
+  } catch (error) {
+    console.error('Failed to check GitHub Releases', error)
   }
 }
 
@@ -707,6 +785,10 @@ function buildAppMenu() {
             label: app.name,
             submenu: [
               { role: 'about' },
+              {
+                label: 'Check for Updates…',
+                click: openAppUpdate,
+              },
               { type: 'separator' },
               settingsItem,
               { type: 'separator' },
@@ -723,7 +805,15 @@ function buildAppMenu() {
       : [
           {
             label: 'File',
-            submenu: [settingsItem, { type: 'separator' }, { role: 'quit' }],
+            submenu: [
+              {
+                label: 'Check for Updates…',
+                click: openAppUpdate,
+              },
+              settingsItem,
+              { type: 'separator' },
+              { role: 'quit' },
+            ],
           },
         ]),
     ...(process.platform === 'darwin' ? [{ role: 'fileMenu' }] : []),
@@ -831,7 +921,11 @@ if (!gotLock) {
     createWindow()
     void loadCatalog()
     void loadActivity()
+    void loadAppUpdate()
     void listenForApiEvents()
+    setInterval(() => {
+      if (!isQuitting) void loadAppUpdate()
+    }, APP_UPDATE_POLL_MS)
     const fromArgv = process.argv.filter((arg) =>
       /\.(ttf|otf|ttc|otc|woff2?)$/i.test(arg),
     )
@@ -861,6 +955,11 @@ ipcMain.handle('get-api-token', async () => {
   } catch {
     return null
   }
+})
+
+ipcMain.handle('open-external', async (_event, url) => {
+  if (typeof url !== 'string') return false
+  return openExternalUrl(url)
 })
 
 ipcMain.handle('request-notifications', () => electronNotificationPermission(Notification))

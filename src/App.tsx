@@ -10,6 +10,7 @@ import {
 import { DropFolderDialog } from '@/components/DropFolderDialog'
 import { DuplicatesDialog } from '@/components/DuplicatesDialog'
 import { EmptyState } from '@/components/EmptyState'
+import { AppUpdateCard } from '@/components/AppUpdateCard'
 import { FolderRelinkDialog } from '@/components/FolderRelinkDialog'
 import { FolderSetupDialog } from '@/components/FolderSetupDialog'
 import { FontFaceStyles } from '@/components/FontFaceStyles'
@@ -37,7 +38,7 @@ import { NotifyProvider, useSetActionStatus } from '@/components/NotifyProvider'
 import { Toaster } from '@/components/ui/sonner'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useFontActions, type FormatPrompt, type ReplacePrompt } from '@/hooks/useFontActions'
-import { api, isDuplicatesEvent, isNotice, isOperationsEvent, isProjectsEvent, isSettingsEvent, subscribeEvents } from '@/lib/api'
+import { api, isAppUpdateEvent, isDuplicatesEvent, isNotice, isOperationsEvent, isProjectsEvent, isSettingsEvent, subscribeEvents } from '@/lib/api'
 import {
   mergeUnreadFlags,
   unreadActivityCount,
@@ -108,7 +109,7 @@ import {
 } from '@/lib/inspector'
 import { applyTheme } from '@/lib/theme'
 import { allUpdateGroups, visibleUpdateGroups } from '@/lib/updateInventory'
-import type { AppSettings, CatalogEntry, DestinationCapability, DuplicateWarning, FamilyGroup, ImportPlan, ImportPlanItem, LibraryFilter, Operation, PreviewPreferences, ProjectSet, SavedLibraryFilter, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
+import type { AppSettings, AppUpdateStatus, CatalogEntry, DestinationCapability, DuplicateWarning, FamilyGroup, ImportPlan, ImportPlanItem, LibraryFilter, Operation, PreviewPreferences, ProjectSet, SavedLibraryFilter, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { isPathUnderFolder, isWatchFolderEntry, watchFolderName } from '@/lib/watchFolders'
 
@@ -141,6 +142,9 @@ function AppShell() {
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null)
   const [renameEntry, setRenameEntry] = useState<CatalogEntry | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsFocusAppUpdate, setSettingsFocusAppUpdate] = useState(false)
+  const [appUpdate, setAppUpdate] = useState<AppUpdateStatus | null>(null)
+  const [checkingAppUpdate, setCheckingAppUpdate] = useState(false)
   const [onboardingOpen, setOnboardingOpen] = useState(false)
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const settingsRef = useRef<AppSettings | null>(null)
@@ -243,6 +247,18 @@ function AppShell() {
     }
   }
 
+  async function loadAppUpdate(refresh = false) {
+    setCheckingAppUpdate(true)
+    try {
+      const result = await api.appUpdate(refresh)
+      setAppUpdate(result.update)
+    } catch {
+      // Keep the last successful check; Settings still offers a manual retry.
+    } finally {
+      setCheckingAppUpdate(false)
+    }
+  }
+
   useEffect(() => {
     let cancelled = false
     async function boot() {
@@ -293,6 +309,7 @@ function AppShell() {
       } finally {
         if (!cancelled) setLoading(false)
       }
+      if (!cancelled) void loadAppUpdate()
     }
     void boot()
     const stop = subscribeEvents((event) => {
@@ -336,6 +353,10 @@ function AppShell() {
       }
       if (isDuplicatesEvent(event)) {
         setDuplicates(event.duplicates)
+        return
+      }
+      if (isAppUpdateEvent(event)) {
+        setAppUpdate(event.update)
         return
       }
       if (isOperationsEvent(event)) {
@@ -405,7 +426,10 @@ function AppShell() {
       }
     }
     window.addEventListener('keydown', onKeyDown)
-    const stopDesktop = window.fontButlerDesktop?.onOpenSettings(() => setSettingsOpen(true))
+    const stopDesktop = window.fontButlerDesktop?.onOpenSettings((payload) => {
+      setSettingsFocusAppUpdate(payload?.focus === 'app-update')
+      setSettingsOpen(true)
+    })
     const stopReinstall = window.fontButlerDesktop?.onReinstallFonts?.((payload) => {
       const ids = Array.isArray(payload?.ids)
         ? payload.ids.filter((id): id is string => typeof id === 'string' && id.length > 0)
@@ -520,10 +544,10 @@ function AppShell() {
       : null
 
   useEffect(() => {
-    if (tab === 'updates' && allUpdates.length === 0) {
+    if (tab === 'updates' && allUpdates.length === 0 && !appUpdate?.updateAvailable) {
       setTab('library')
     }
-  }, [tab, allUpdates.length])
+  }, [tab, allUpdates.length, appUpdate?.updateAvailable])
 
   useEffect(() => {
     if (watchFolderFilter && !watchFolders.includes(watchFolderFilter)) {
@@ -1381,7 +1405,11 @@ function AppShell() {
           onOpenDuplicates={() => setDuplicatesOpen(true)}
           counts={tabCounts}
           activityUnread={activityUnread}
-          onOpenSettings={() => setSettingsOpen(true)}
+          hasAppUpdate={Boolean(appUpdate?.updateAvailable)}
+          onOpenSettings={() => {
+            setSettingsFocusAppUpdate(false)
+            setSettingsOpen(true)
+          }}
         />
 
         <div className="relative flex min-h-0 min-w-0 flex-1">
@@ -1476,6 +1504,11 @@ function AppShell() {
             )}
             <ScrollArea className="min-h-0 flex-1">
               <div className={cn('flex min-h-full flex-col p-4', showBatchBar && 'pb-24')}>
+                {!loading && tab === 'updates' && appUpdate?.updateAvailable ? (
+                  <div className="mb-3">
+                    <AppUpdateCard status={appUpdate} compact />
+                  </div>
+                ) : null}
                 {error && (
                   <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>
                 )}
@@ -2181,10 +2214,17 @@ function AppShell() {
         />
         <SettingsDialog
           open={settingsOpen}
-          onOpenChange={setSettingsOpen}
+          onOpenChange={(open) => {
+            setSettingsOpen(open)
+            if (!open) setSettingsFocusAppUpdate(false)
+          }}
           settings={settings}
           onSettingsChange={applySettings}
           onDestinationsChange={applyAdobeAvailability}
+          appUpdate={appUpdate}
+          checkingAppUpdate={checkingAppUpdate}
+          onCheckAppUpdate={(refresh) => void loadAppUpdate(refresh)}
+          highlightAppUpdate={settingsFocusAppUpdate}
         />
         <MarqueeOverlay rect={marqueeRect} />
         <Toaster theme={settings?.theme ?? 'system'} />

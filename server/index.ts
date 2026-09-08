@@ -7,6 +7,7 @@ import { contentDisposition, shouldIncludeBootstrapToken } from '../core/auth.ts
 import { onEvent } from '../core/events.ts'
 import { isFullyUnderAnyRoot } from '../core/containment.ts'
 import { denyRemoteRequest, isAuthorizedApiRequest, resolveStaticAsset } from '../core/http.ts'
+import { checkAppUpdate } from '../core/app-update.ts'
 import { FontButlerService } from '../core/service.ts'
 import type { AppSettings } from '../core/types.ts'
 
@@ -100,6 +101,12 @@ app.use('/api/*', async (c, next) => {
 })
 
 app.get('/api/health', (c) => c.json({ ok: true, platform: process.platform }))
+
+app.get('/api/app-update', async (c) => {
+  const refresh = c.req.query('refresh') === '1' || c.req.query('refresh') === 'true'
+  const update = await checkAppUpdate({ refresh })
+  return c.json({ update })
+})
 
 app.get('/api/bootstrap', (c) => {
   const payload = {

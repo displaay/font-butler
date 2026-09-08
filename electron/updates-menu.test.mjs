@@ -55,12 +55,13 @@ test('menuBarUpdateBadge stays empty because attention lives on the template ico
   assert.equal(menuBarUpdateBadge({ hasUnread: false, hasUpdates: true }), '')
 })
 
-test('menuBarNeedsAttention is true for unread activity or outdated updates', () => {
+test('menuBarNeedsAttention is true for unread activity, outdated fonts, or an app release', () => {
   assert.equal(menuBarNeedsAttention(0), false)
   assert.equal(menuBarNeedsAttention(1), true)
   assert.equal(menuBarNeedsAttention({ hasUnread: false, hasUpdates: false }), false)
   assert.equal(menuBarNeedsAttention({ hasUnread: true, hasUpdates: false }), true)
   assert.equal(menuBarNeedsAttention({ hasUnread: false, hasUpdates: true }), true)
+  assert.equal(menuBarNeedsAttention({ hasUnread: false, hasUpdates: false, hasAppUpdate: true }), true)
 })
 
 test('menuBarTrayIconPath uses the notification SVG only when attention is needed', () => {
@@ -69,6 +70,7 @@ test('menuBarTrayIconPath uses the notification SVG only when attention is neede
   assert.equal(menuBarTrayIconPath({ hasUnread: true, hasUpdates: false }, paths), paths.attention)
   assert.equal(menuBarTrayIconPath({ hasUnread: false, hasUpdates: true }, paths), paths.attention)
   assert.equal(menuBarTrayIconPath({ hasUnread: true, hasUpdates: true }, paths), paths.attention)
+  assert.equal(menuBarTrayIconPath({ hasUnread: false, hasUpdates: false, hasAppUpdate: true }, paths), paths.attention)
 })
 
 test('buildTrayMenuModel orders Activity then Updates with headlines and a 5-row cap', () => {
@@ -91,6 +93,8 @@ test('buildTrayMenuModel orders Activity then Updates with headlines and a 5-row
   assert.equal(model.reinstallAll, true)
   assert.equal(model.hasUnread, true)
   assert.equal(model.hasUpdates, true)
+  assert.equal(model.hasAppUpdate, false)
+  assert.equal(model.appUpdateRow, null)
 })
 
 test('buildTrayMenuModel hides Mark all as read and Show all when they are not needed', () => {
@@ -103,6 +107,44 @@ test('buildTrayMenuModel hides Mark all as read and Show all when they are not n
   assert.equal(model.updatesShowAll, false)
   assert.equal(model.activityEmpty, false)
   assert.equal(model.updatesEmpty, false)
+})
+
+test('buildTrayMenuModel puts a GitHub app release above font source updates', () => {
+  const model = buildTrayMenuModel({
+    families: [{ name: 'Inter', ids: ['inter'] }],
+    appUpdate: {
+      updateAvailable: true,
+      latestVersion: '0.2.0',
+      htmlUrl: 'https://github.com/displaay/font-butler/releases/tag/v0.2.0',
+      releaseNotes: 'Notes',
+      preferredAsset: {
+        name: 'Font-Buttler-0.2.0-arm64.dmg',
+        url: 'https://github.com/displaay/font-butler/releases/download/v0.2.0/Font-Buttler-0.2.0-arm64.dmg',
+      },
+    },
+  })
+  assert.equal(model.hasAppUpdate, true)
+  assert.equal(model.hasUpdates, true)
+  assert.equal(model.reinstallAll, true)
+  assert.equal(model.updatesEmpty, false)
+  assert.equal(model.appUpdateRow?.label, 'Font Buttler 0.2.0')
+  assert.equal(model.appUpdateRow?.htmlUrl, 'https://github.com/displaay/font-butler/releases/tag/v0.2.0')
+  assert.equal(
+    model.appUpdateRow?.downloadUrl,
+    'https://github.com/displaay/font-butler/releases/download/v0.2.0/Font-Buttler-0.2.0-arm64.dmg',
+  )
+  assert.equal(model.appUpdateRow?.downloadLabel, 'Download Font-Buttler-0.2.0-arm64.dmg')
+})
+
+test('an app-only release still shows the Updates section without enabling Reinstall all', () => {
+  const model = buildTrayMenuModel({
+    appUpdate: { updateAvailable: true, latestVersion: '0.2.0', htmlUrl: 'https://github.com/displaay/font-butler/releases/tag/v0.2.0' },
+  })
+  assert.equal(model.hasAppUpdate, true)
+  assert.equal(model.hasUpdates, false)
+  assert.equal(model.reinstallAll, false)
+  assert.equal(model.updatesEmpty, false)
+  assert.equal(model.updateRows.length, 0)
 })
 
 test('activityRowLabel uses past tense with the family first', () => {
