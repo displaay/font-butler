@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
+  activityItemLabel,
   activityRowLabel,
+  entryActivityLabel,
   mergeUnreadFlags,
   unreadActivityCount,
   unreadOperationIdsToMark,
@@ -21,9 +23,71 @@ function op(
   }
 }
 
-test('activityRowLabel uses the action and family', () => {
-  assert.equal(activityRowLabel({ action: 'install', familyName: 'Inter' }), 'Install · Inter')
-  assert.equal(activityRowLabel({ action: 'apply-plan' }), 'Import')
+test('activityRowLabel uses past tense with the family first', () => {
+  assert.equal(activityRowLabel({ action: 'install', familyName: 'Inter' }), 'Inter installed')
+  assert.equal(activityRowLabel({ action: 'uninstall', familyName: 'Fenul' }), 'Fenul uninstalled')
+  assert.equal(activityRowLabel({ action: 'deactivate', familyName: 'Fenul' }), 'Fenul deactivated')
+  assert.equal(activityRowLabel({ action: 'apply-plan', familyName: 'News' }), 'News imported')
+  assert.equal(activityRowLabel({ action: 'apply-plan' }), 'Imported')
+})
+
+test('entryActivityLabel names the style and format', () => {
+  assert.equal(
+    entryActivityLabel({
+      faces: [
+        {
+          familyName: 'Fenul',
+          styleName: 'Regular',
+          fullName: 'Fenul Regular',
+          postscriptName: 'Fenul-Regular',
+          isVariable: false,
+          instanceCount: 1,
+          instanceNames: [],
+          weight: 400,
+          italic: false,
+        },
+      ],
+      format: 'otf',
+      sourcePath: '/Fonts/Fenul/Fenul-Regular.otf',
+    }),
+    'Regular · OTF',
+  )
+})
+
+test('activityItemLabel upgrades family-only labels from the catalog', () => {
+  const entry = {
+    faces: [
+      {
+        familyName: 'Fenul',
+        styleName: 'Bold',
+        fullName: 'Fenul Bold',
+        postscriptName: 'Fenul-Bold',
+        isVariable: false,
+        instanceCount: 1,
+        instanceNames: [],
+        weight: 700,
+        italic: false,
+      },
+    ],
+    format: 'otf',
+    sourcePath: '/Fonts/Fenul/Fenul-Bold.otf',
+  }
+  assert.equal(activityItemLabel({ label: 'Fenul', entryId: '1' }, entry), 'Bold · OTF')
+  assert.equal(
+    activityItemLabel(
+      { label: 'Fenul', entryId: '1' },
+      {
+        ...entry,
+        sourcePath: '/uploads/1788535075094-Fenul-Bold.otf',
+      },
+    ),
+    'Bold · OTF',
+  )
+  assert.equal(
+    activityItemLabel({ label: 'subdir/Fenul-Bold.otf', entryId: '1' }, entry),
+    'subdir/Fenul-Bold.otf',
+  )
+  assert.equal(activityItemLabel({ label: 'Fenul' }), 'Fenul')
 })
 
 test('unreadActivityCount ignores read operations', () => {

@@ -12,7 +12,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { api } from '@/lib/api'
-import { DESTINATIONS, FOLDER_POLICIES, destinationNeedsAdobe } from '@/lib/folders'
+import { DESTINATIONS, FOLDER_POLICIES, adobeTestingFolderAvailable, destinationNeedsAdobe } from '@/lib/folders'
 import type { DefaultDestinationId, FolderPolicyPreset, ImportPlan, WatchFolder } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
@@ -48,8 +48,7 @@ export function FolderSetupDialog({
     void api
       .destinations()
       .then((result) => {
-        const adobe = result.destinations.find((item) => item.id === 'adobe-shared')
-        setAdobeSupported(adobe?.supported !== false)
+        setAdobeSupported(adobeTestingFolderAvailable(result.destinations))
       })
       .catch(() => setAdobeSupported(true))
   }, [open, roots])
@@ -182,20 +181,20 @@ export function FolderSetupDialog({
                 if (root.trim()) void configure(root, policy, next)
               }}
             >
-              {DESTINATIONS.map((option) => (
-                <option
-                  key={option.id}
-                  value={option.id}
-                  disabled={destinationNeedsAdobe(option.id) && !adobeSupported}
-                >
-                  {option.label}
-                </option>
-              ))}
+              {DESTINATIONS.filter((option) => adobeSupported || !destinationNeedsAdobe(option.id)).map(
+                (option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ),
+              )}
             </select>
-            <span className="block text-xs text-muted-foreground">
-              Adobe testing folder places files only. It is unavailable until that folder exists and
-              is writable.
-            </span>
+            {adobeSupported ? (
+              <span className="block text-xs text-muted-foreground">
+                Adobe testing folder places files only. It is unavailable until that folder exists and
+                is writable.
+              </span>
+            ) : null}
           </Label>
           <Label className="block space-y-1 font-normal">
             <span className="text-sm">Exclusions</span>

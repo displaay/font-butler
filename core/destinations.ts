@@ -63,11 +63,17 @@ export function destinationDir(paths: AppPaths, id: DestinationId): string {
   return id === 'adobe-shared' ? adobeFontsDir(paths) : path.resolve(paths.installDir)
 }
 
-function dirState(dir: string): { exists: boolean; writable: boolean; reason?: string; remedy?: string } {
+function dirState(dir: string): {
+  exists: boolean
+  writable: boolean
+  canCreate: boolean
+  reason?: string
+  remedy?: string
+} {
   try {
     if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
       fs.accessSync(dir, fs.constants.W_OK)
-      return { exists: true, writable: true }
+      return { exists: true, writable: true, canCreate: false }
     }
   } catch (error) {
     const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : ''
@@ -75,6 +81,7 @@ function dirState(dir: string): { exists: boolean; writable: boolean; reason?: s
       return {
         exists: true,
         writable: false,
+        canCreate: false,
         reason: 'Write permission was denied.',
         remedy:
           'Give your user Read & Write on that folder in Finder Get Info. Font Buttler will not change permissions.',
@@ -86,9 +93,10 @@ function dirState(dir: string): { exists: boolean; writable: boolean; reason?: s
   return {
     exists: false,
     writable: false,
+    canCreate: parentExists,
     reason: parentExists ? 'The Fonts folder is not present.' : 'The destination is not available.',
     remedy: parentExists
-      ? `Create ${dir} with Read & Write access. Font Buttler will not create or chmod a system Adobe folder.`
+      ? `Create ${dir} with Read & Write access.`
       : 'The Adobe Application Support folder was not found on this Mac.',
   }
 }
@@ -107,6 +115,7 @@ export function inspectDestination(paths: AppPaths, id: DestinationId): Destinat
         writable: true,
         supported: true,
         activationVerified: true,
+        canCreate: false,
       }
     } catch {
       return {
@@ -117,6 +126,7 @@ export function inspectDestination(paths: AppPaths, id: DestinationId): Destinat
         writable: false,
         supported: false,
         activationVerified: false,
+        canCreate: false,
         reason: 'The macOS fonts folder is not writable.',
         remedy: 'Check that Font Buttler can write to the user Fonts folder.',
       }
@@ -135,11 +145,35 @@ export function inspectDestination(paths: AppPaths, id: DestinationId): Destinat
     writable: state.writable,
     supported: state.exists && state.writable,
     activationVerified: false,
+    canCreate: state.canCreate,
     reason: state.writable
       ? 'File placement is supported. Presence in an Adobe app is not verified.'
       : state.reason,
     remedy: state.writable ? undefined : state.remedy,
   }
+}
+
+export function createAdobeTestingFolder(paths: AppPaths): DestinationCapability {
+  const dest = adobeFontsDir(paths)
+  if (fs.existsSync(dest) && fs.statSync(dest).isDirectory()) {
+    return inspectDestination(paths, 'adobe-shared')
+  }
+  const parent = path.dirname(dest)
+  if (!fs.existsSync(parent) || !fs.statSync(parent).isDirectory()) {
+    throw new Error('The Adobe Application Support folder was not found on this Mac.')
+  }
+  try {
+    fs.mkdirSync(dest)
+  } catch (error) {
+    const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : ''
+    if (code === 'EACCES' || code === 'EPERM') {
+      throw new Error(
+        'Could not create that folder. Give your user Read & Write on the Adobe Application Support folder in Finder Get Info.',
+      )
+    }
+    throw new Error(error instanceof Error ? error.message : 'Could not create the Adobe testing folder.')
+  }
+  return inspectDestination(paths, 'adobe-shared')
 }
 
 export function listDestinations(paths: AppPaths): DestinationCapability[] {

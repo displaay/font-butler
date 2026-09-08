@@ -44,6 +44,7 @@ export type DestinationCapability = {
   writable: boolean
   supported: boolean
   activationVerified: boolean
+  canCreate?: boolean
   reason?: string
   remedy?: string
 }

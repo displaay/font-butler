@@ -1,4 +1,10 @@
-import type { DefaultDestinationId, DestinationId, FolderPolicyPreset, WatchFolder } from './types'
+import type {
+  DefaultDestinationId,
+  DestinationCapability,
+  DestinationId,
+  FolderPolicyPreset,
+  WatchFolder,
+} from './types'
 
 export const DESTINATIONS: { id: DefaultDestinationId; label: string; detail: string }[] = [
   {
@@ -20,6 +26,13 @@ export const DESTINATIONS: { id: DefaultDestinationId; label: string; detail: st
 
 export function destinationNeedsAdobe(id: DefaultDestinationId | undefined): boolean {
   return id === 'adobe-shared' || id === 'macos-and-adobe'
+}
+
+export function adobeTestingFolderAvailable(
+  destinations: DestinationCapability[] | undefined,
+): boolean {
+  const adobe = destinations?.find((item) => item.id === 'adobe-shared')
+  return adobe?.supported !== false
 }
 
 export function destinationLabel(id: DefaultDestinationId | DestinationId | undefined): string {

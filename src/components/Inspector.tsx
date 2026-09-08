@@ -1,23 +1,40 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { ArrowLeftRight, CircleMinus, CirclePlus, FolderOpen, ListX, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { ArrowLeftRight, CircleMinus, CirclePlus, FolderOpen, Link2, ListX, Loader2, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
 import { CatalogBatchButtons, SystemBatchButtons } from '@/components/BatchActions'
-import { SourceBadge, StateBadges } from '@/components/Badges'
+import { SourceBadge, StateBadges, FormatBadges, AdobeLogo } from '@/components/Badges'
+import { Badge } from '@/components/ui/badge'
 import { systemFontFamily } from '@/components/FontFaceStyles'
-import { InstanceList } from '@/components/InstanceList'
+import { GlyphGrid } from '@/components/GlyphGrid'
+import { InstanceList, type InstanceActions } from '@/components/InstanceList'
 import { SpecimenWorkspace } from '@/components/SpecimenWorkspace'
+import { DropdownActionButton, SplitUninstallButton, type SplitUninstallExtra } from '@/components/SplitUninstallButton'
 import { Button } from '@/components/ui/button'
+import { usePreviewFontReady } from '@/hooks/usePreviewFontReady'
 import { api } from '@/lib/api'
-import { catalogBatchPlan } from '@/lib/batch'
+import { catalogBatchPlan, deleteSourcesLabel, forgetSourcesLabel } from '@/lib/batch'
 import type { InspectorDensity } from '@/lib/inspector'
 import { catalogInstanceRows, systemInstanceRows } from '@/lib/instances'
-import { collectionScopeLabel, displayStateLabel, needsLocateSource } from '@/lib/state'
+import { mixedFormatWarning, occupyingFormats, formatSwap, formatSwapLabel, uniqueEntryFormats } from '@/lib/formats'
+import { collectionScopeLabel, displayStateLabel, familyCopyDestinations, needsLocateSource } from '@/lib/state'
 import { formatBytes, formatRelativeTime } from '@/lib/utils'
-import { entryHasTrackedSource, familyNameOf, hasTrackedSource } from '@/lib/group'
+import { entryHasTrackedSource, familyBadgeEntry, familyNameOf, hasTrackedSource } from '@/lib/group'
 import type { CatalogBatchPlan, SystemBatchPlan } from '@/lib/batch'
-import type { CatalogEntry, ComparisonCapture, FamilyGroup, PreviewPreferences, ProjectSet, SystemFamilyGroup } from '@/lib/types'
+import type { CatalogEntry, FamilyGroup, PreviewPreferences, ProjectSet, SystemFamilyGroup } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 const SAMPLE = 'The quick brown fox jumps over the lazy type.'
+
+export type InspectorPaneTab = 'details' | 'tester' | 'glyphs'
+
+export const INSPECTOR_PANE_TABS: { id: InspectorPaneTab; label: string }[] = [
+  { id: 'details', label: 'Details' },
+  { id: 'tester', label: 'Tester' },
+  { id: 'glyphs', label: 'Glyphs' },
+]
+
+export function inspectorPaneTabs(hasGlyphs: boolean): InspectorPaneTab[] {
+  return hasGlyphs ? ['details', 'tester', 'glyphs'] : ['details', 'tester']
+}
 
 export function Inspector({
   group,
@@ -25,23 +42,24 @@ export function Inspector({
   statusSummary,
   selectedEntryId,
   onSelectEntry,
+  instanceActions,
   systemGroup,
   busy,
   specimen,
   onSpecimenChange,
   projects,
   compareEntry,
-  comparisonInstallBlocked,
-  onComparisonCapture,
   onInstall,
   onInstallAs,
   onReinstall,
   onRepair,
   onUninstall,
+  onUninstallFormat,
   onUninstallAndRemove,
   onDeactivate,
   onActivate,
   onSwitch,
+  onFormatSwap,
   onReveal,
   onUninstallSystem,
   onDeactivateSystem,
@@ -51,37 +69,40 @@ export function Inspector({
   onLocateSource,
   onLinkSource,
   onInstallToAdobe,
-  onRemoveAdobeCopy,
+  adobeAvailable = true,
   onResumeUpdates,
   onRestore,
   onPin,
   onOpenWithPreview,
   multiSelect,
-  density = 'expanded',
+  pane = 'details',
+  onPaneChange,
+  tablistId,
 }: {
   group: FamilyGroup | null
   entry: CatalogEntry | null
   statusSummary: string | null
   selectedEntryId: string | null
   onSelectEntry: (entryId: string) => void
+  instanceActions?: InstanceActions
   systemGroup: SystemFamilyGroup | null
   busy: boolean
   specimen?: PreviewPreferences
   onSpecimenChange?: (next: PreviewPreferences) => void
   projects?: ProjectSet[]
   compareEntry?: CatalogEntry | null
-  comparisonInstallBlocked?: boolean
-  onComparisonCapture?: (capture: ComparisonCapture | null) => void
   onInstall: () => void
   onInstallAs: () => void
   onReinstall: () => void
   onRepair?: () => void
   onUninstall: () => void
+  onUninstallFormat?: (format: string) => void
   onUninstallAndRemove?: () => void
   onDeactivate: () => void
   onActivate: () => void
   /** Passed only when a same-format occupying sibling exists (`canSwitchTo`). */
   onSwitch?: () => void
+  onFormatSwap?: () => void
   onReveal: (which: 'source' | 'installed') => void
   onUninstallSystem: () => void
   onDeactivateSystem: () => void
@@ -91,12 +112,15 @@ export function Inspector({
   onLocateSource?: () => void
   onLinkSource?: () => void
   onInstallToAdobe?: () => void
-  onRemoveAdobeCopy?: () => void
+  adobeAvailable?: boolean
   onResumeUpdates?: () => void
   onRestore?: (fingerprint?: string) => void
   onPin?: (fingerprint: string) => void
   onOpenWithPreview?: () => void
   density?: InspectorDensity
+  pane?: InspectorPaneTab
+  onPaneChange?: (pane: InspectorPaneTab) => void
+  tablistId?: string
   multiSelect?: {
     names: string[]
     summary: string
@@ -180,7 +204,9 @@ export function Inspector({
     return (
       <aside className={inspectorShellClass()}>
         <SystemInspectorBody
-          density={density}
+          pane={pane}
+          onPaneChange={onPaneChange}
+          tablistId={tablistId}
           systemGroup={systemGroup}
           face={face}
           busy={busy}
@@ -200,7 +226,10 @@ export function Inspector({
     )
   }
 
-  const plan = catalogBatchPlan([group])
+  const plan = catalogBatchPlan([group], adobeAvailable)
+  const mixedFormats = occupyingFormats(group.entries)
+  const mixedWarning = mixedFormatWarning(mixedFormats)
+  const swap = formatSwap(group.entries)
   const scope = collectionScopeLabel(entry)
   const previewOnly = Boolean(entry.previewOnly)
   const unlinked = entry.sourceAvailability === 'none' || (!entry.sourceAvailability && !entryHasTrackedSource(entry))
@@ -211,15 +240,27 @@ export function Inspector({
   const instances = catalogInstanceRows(group)
   const header = (
     <div>
-      <h2 className="text-base font-semibold tracking-tight">{familyNameOf(entry)}</h2>
+      <div className="flex items-center gap-2">
+        <h2 className="text-base font-semibold tracking-tight">{familyNameOf(entry)}</h2>
+        {hasTrackedSource(group) ? <SourceBadge /> : null}
+      </div>
       <p className="mt-1 text-sm text-muted-foreground">
         {group.instanceCount} {group.instanceCount === 1 ? 'instance' : 'instances'}
-        {group.isVariable ? ' · variable' : ''}
+        {` · ${group.isVariable ? 'Variable' : 'Static'}`}
         {group.entries.length > 1 ? ` · ${group.entries.length} files` : ''}
         {statusSummary ? ` · ${statusSummary}` : ''}
       </p>
       <div className="mt-2 flex flex-wrap gap-1.5">
-        <StateBadges entry={entry} />
+        <FormatBadges formats={uniqueEntryFormats(group.entries)} occupying={mixedFormats} />
+        <StateBadges entry={familyBadgeEntry(group)} destinations={familyCopyDestinations(group.entries)} />
+        {mixedWarning ? (
+          <Badge
+            tone="warn"
+            title="OpenType and TrueType copies of this family are installed. Uninstall one format."
+          >
+            {mixedWarning}
+          </Badge>
+        ) : null}
       </div>
     </div>
   )
@@ -255,13 +296,6 @@ export function Inspector({
         <dt className="text-muted-foreground">State</dt>
         <dd>{displayStateLabel(entry)}</dd>
       </dl>
-      <DestinationCopies
-        entry={entry}
-        busy={busy}
-        previewOnly={previewOnly}
-        onInstallToAdobe={onInstallToAdobe}
-        onRemoveAdobeCopy={onRemoveAdobeCopy}
-      />
     </>
   )
   const files = (
@@ -271,6 +305,7 @@ export function Inspector({
         rows={instances}
         selectedEntryId={selectedEntryId}
         onSelectEntry={onSelectEntry}
+        instanceActions={instanceActions}
         className="border-t-0 px-0 py-0"
       />
     </div>
@@ -282,7 +317,6 @@ export function Inspector({
         specimen={specimen}
         onSpecimenChange={onSpecimenChange}
         compareEntry={compareEntry}
-        onCaptureChange={onComparisonCapture}
         size="large"
       />
     ) : null
@@ -293,6 +327,36 @@ export function Inspector({
       onPin={onPin}
       onResumeUpdates={onResumeUpdates}
     />
+  )
+  const uninstallExtras = ([
+    ...(onUninstallFormat && mixedFormats.length >= 2
+      ? mixedFormats.map((format) => ({
+          key: `uninstall-format-${format}`,
+          label: format.toUpperCase(),
+          icon: <CircleMinus className="size-4 shrink-0" />,
+          onSelect: () => onUninstallFormat(format),
+        }))
+      : []),
+    hasTrackedSource(group) && onUninstallAndRemove
+      ? {
+          key: 'uninstall-and-delete',
+          label: 'Uninstall and delete sources',
+          onSelect: onUninstallAndRemove,
+          separatorBefore: Boolean(onUninstallFormat && mixedFormats.length >= 2),
+        }
+      : null,
+    onDeleteFiles && plan.deleteFiles > 0
+      ? {
+          key: 'delete-sources',
+          label: deleteSourcesLabel(plan.deleteFiles, false),
+          onSelect: onDeleteFiles,
+          separatorBefore:
+            Boolean(onUninstallFormat && mixedFormats.length >= 2) &&
+            !(hasTrackedSource(group) && onUninstallAndRemove),
+        }
+      : null,
+  ] as Array<SplitUninstallExtra | null>).filter(
+    (item): item is SplitUninstallExtra => Boolean(item),
   )
   const actions = (
       <div className="flex flex-wrap gap-2">
@@ -307,7 +371,7 @@ export function Inspector({
               </Button>
             )}
             <Button size="sm" variant="outline" disabled={busy} onClick={onForget}>
-              <ListX /> Remove from list
+              <ListX /> {forgetSourcesLabel(1, false)}
             </Button>
           </>
         ) : entry.status === 'source-missing' ? (
@@ -318,7 +382,7 @@ export function Inspector({
               </Button>
             )}
             <Button size="sm" variant="destructive" disabled={busy} onClick={onForget}>
-              <ListX /> Remove from list
+              <ListX /> {forgetSourcesLabel(1, false)}
             </Button>
           </>
         ) : (
@@ -327,7 +391,7 @@ export function Inspector({
               <Button
                 size="sm"
                 variant="accent"
-                disabled={busy || comparisonInstallBlocked}
+                disabled={busy}
                 onClick={onReinstall}
               >
                 <RefreshCw /> Install update
@@ -339,15 +403,25 @@ export function Inspector({
               </Button>
             )}
             {plan.install > 0 && (
-              <Button size="sm" disabled={busy || comparisonInstallBlocked} onClick={onInstall}>
+              <Button size="sm" variant="success" disabled={busy} onClick={onInstall}>
                 <CirclePlus /> {plan.installMissing ? 'Install missing styles' : 'Install'}
               </Button>
             )}
+            {swap && onFormatSwap ? (
+              <Button size="sm" variant="success" disabled={busy} onClick={onFormatSwap}>
+                <ArrowLeftRight /> {formatSwapLabel(swap)}
+              </Button>
+            ) : null}
+            {plan.adobeInstall > 0 && onInstallToAdobe ? (
+              <Button size="sm" variant="outline" disabled={busy} onClick={onInstallToAdobe}>
+                <AdobeLogo className="size-3.5" /> Install to Adobe testing folder
+              </Button>
+            ) : null}
             {plan.install > 0 && (
               <Button
                 size="sm"
                 variant="outline"
-                disabled={busy || comparisonInstallBlocked}
+                disabled={busy}
                 onClick={onInstallAs}
               >
                 <CirclePlus /> Install as…
@@ -369,28 +443,31 @@ export function Inspector({
               </Button>
             )}
             {plan.uninstall > 0 && (
-              <Button size="sm" variant="destructive" disabled={busy} onClick={onUninstall}>
-                <CircleMinus /> Uninstall
-              </Button>
+              <SplitUninstallButton
+                busy={busy}
+                uninstallLabel="Uninstall"
+                extras={uninstallExtras}
+                onUninstall={onUninstall}
+              />
             )}
-            {hasTrackedSource(group) && onUninstallAndRemove ? (
+            {plan.uninstall === 0 && hasTrackedSource(group) && onUninstallAndRemove ? (
               <Button size="sm" variant="destructive" disabled={busy} onClick={onUninstallAndRemove}>
-                <Trash2 /> Uninstall and remove
+                <Trash2 /> Uninstall and delete sources
               </Button>
             ) : null}
             {plan.forget > 0 && (
               <Button size="sm" variant="outline" disabled={busy} onClick={onForget}>
-                <ListX /> Remove from list
+                <ListX /> {forgetSourcesLabel(plan.forget, false)}
               </Button>
             )}
-            {onDeleteFiles && plan.deleteFiles > 0 && (
+            {plan.uninstall === 0 && onDeleteFiles && plan.deleteFiles > 0 && (
               <Button size="sm" variant="destructive" disabled={busy} onClick={onDeleteFiles}>
-                <Trash2 /> Delete files
+                <Trash2 /> {deleteSourcesLabel(plan.deleteFiles, false)}
               </Button>
             )}
             {unlinked && onLinkSource && (
               <Button size="sm" variant="outline" onClick={onLinkSource}>
-                Link source…
+                <Link2 /> Link source…
               </Button>
             )}
             {needsLocateSource(entry) && !unlinked && onLocateSource && (
@@ -400,38 +477,47 @@ export function Inspector({
             )}
           </>
         )}
-        {(entry.installedPath || entry.disabledPath) && (
-          <Button size="sm" variant="outline" onClick={() => onReveal('installed')}>
-            <FolderOpen /> Show in Finder
-          </Button>
-        )}
-        {entryHasTrackedSource(entry) && (
-          <Button size="sm" variant="outline" onClick={() => onReveal('source')}>
-            <FolderOpen /> Show source in Finder
-          </Button>
-        )}
+        <DropdownActionButton
+          label="Show in Finder"
+          items={[
+            entry.installedPath || entry.disabledPath
+              ? {
+                  key: 'installed',
+                  label: 'Installed fonts',
+                  onSelect: () => onReveal('installed'),
+                }
+              : null,
+            entryHasTrackedSource(entry)
+              ? {
+                  key: 'source',
+                  label: 'Source fonts',
+                  onSelect: () => onReveal('source'),
+                }
+              : null,
+          ].filter((item): item is { key: string; label: string; onSelect: () => void } => Boolean(item))}
+        />
       </div>
   )
 
   return (
     <aside className={inspectorShellClass()}>
       <InspectorLayout
-        density={density}
-        header={
-          <>
-            {header}
-            {notices}
-          </>
-        }
-        primary={specimenBlock}
-        secondary={
-          <>
-            {meta}
-            {files}
-            {versions}
-          </>
-        }
+        familyKey={group.key}
+        header={header}
         actions={actions}
+        pane={pane}
+        onPaneChange={onPaneChange}
+        tablistId={tablistId}
+        details={
+          <div className="flex flex-col gap-5">
+            {notices}
+            {files}
+            {meta}
+            {versions}
+          </div>
+        }
+        tester={specimenBlock}
+        glyphs={<GlyphGrid entry={entry} />}
       />
     </aside>
   )
@@ -441,39 +527,129 @@ function inspectorShellClass() {
   return 'flex h-full min-h-0 w-full flex-col overflow-hidden'
 }
 
-function InspectorLayout({
-  density,
-  header,
-  primary,
-  secondary,
-  actions,
+export function InspectorTabList({
+  tabs,
+  value,
+  onChange,
+  tablistId,
 }: {
-  density: InspectorDensity
-  header: ReactNode
-  primary: ReactNode
-  secondary: ReactNode
-  actions: ReactNode
+  tabs: InspectorPaneTab[]
+  value: InspectorPaneTab
+  onChange: (tab: InspectorPaneTab) => void
+  tablistId: string
 }) {
-  if (density === 'specimen') {
-    return (
-      <>
-        <div className="shrink-0 space-y-2 border-b px-5 py-3">{header}</div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-5">{primary}</div>
-      </>
-    )
+  const refs = useRef<Partial<Record<InspectorPaneTab, HTMLButtonElement | null>>>({})
+
+  function move(event: KeyboardEvent<HTMLButtonElement>, delta: number) {
+    event.preventDefault()
+    const index = tabs.indexOf(value)
+    const next = tabs[(index + delta + tabs.length) % tabs.length]
+    onChange(next)
+    queueMicrotask(() => refs.current[next]?.focus())
   }
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-5">
-      {header}
-      {primary}
-      {actions}
-      {secondary}
+    <div
+      role="tablist"
+      aria-label="Inspector sections"
+      className="flex w-fit items-center gap-0.5 rounded-md border bg-background p-0.5"
+    >
+      {tabs.map((id) => {
+        const active = value === id
+        const label = INSPECTOR_PANE_TABS.find((item) => item.id === id)?.label ?? id
+        return (
+          <Button
+            key={id}
+            ref={(node) => {
+              refs.current[id] = node
+            }}
+            type="button"
+            size="sm"
+            role="tab"
+            id={`${tablistId}-${id}`}
+            aria-selected={active}
+            aria-controls={`${tablistId}-panel`}
+            tabIndex={active ? 0 : -1}
+            variant="ghost"
+            className={cn('h-7 px-2.5', active && 'bg-muted')}
+            onClick={() => onChange(id)}
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowRight') move(event, 1)
+              if (event.key === 'ArrowLeft') move(event, -1)
+            }}
+          >
+            {label}
+          </Button>
+        )
+      })}
+    </div>
+  )
+}
+
+function InspectorLayout({
+  familyKey,
+  header,
+  actions,
+  details,
+  tester,
+  glyphs,
+  pane = 'details',
+  onPaneChange,
+  tablistId: tablistIdProp,
+}: {
+  familyKey: string
+  header: ReactNode
+  actions?: ReactNode
+  details: ReactNode
+  tester: ReactNode
+  glyphs?: ReactNode
+  pane?: InspectorPaneTab
+  onPaneChange?: (pane: InspectorPaneTab) => void
+  tablistId?: string
+}) {
+  const generatedId = useId()
+  const tablistId = tablistIdProp ?? generatedId
+  const familyKeyRef = useRef(familyKey)
+
+  useEffect(() => {
+    if (familyKeyRef.current === familyKey) return
+    familyKeyRef.current = familyKey
+    onPaneChange?.('details')
+  }, [familyKey, onPaneChange])
+
+  useEffect(() => {
+    if (pane === 'glyphs' && !glyphs) onPaneChange?.('details')
+  }, [pane, glyphs, onPaneChange])
+
+  const panel = pane === 'details' ? details : pane === 'tester' ? tester : glyphs
+  const glyphsTab = pane === 'glyphs'
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div className="shrink-0 space-y-3 border-b px-5 pt-3 pb-3">
+        {header}
+        {actions}
+      </div>
+      <div
+        id={`${tablistId}-panel`}
+        role="tabpanel"
+        className={cn(
+          'min-h-0 flex-1 p-5',
+          glyphsTab
+            ? 'overflow-hidden'
+            : 'overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
+        )}
+      >
+        {panel}
+      </div>
     </div>
   )
 }
 
 function SystemInspectorBody({
-  density,
+  pane,
+  onPaneChange,
+  tablistId,
   systemGroup,
   face,
   busy,
@@ -481,7 +657,9 @@ function SystemInspectorBody({
   onDeactivateSystem,
   onUninstallSystem,
 }: {
-  density: InspectorDensity
+  pane?: InspectorPaneTab
+  onPaneChange?: (pane: InspectorPaneTab) => void
+  tablistId?: string
   systemGroup: SystemFamilyGroup
   face: SystemFamilyGroup['faces'][number] | undefined
   busy: boolean
@@ -490,21 +668,27 @@ function SystemInspectorBody({
   onUninstallSystem: () => void
 }) {
   const instances = useMemo(() => systemInstanceRows(systemGroup), [systemGroup])
+  const previewFamily = face ? systemFontFamily(face.path) : ''
+  const previewReady = usePreviewFontReady(previewFamily, face?.weight ?? 400, Boolean(face?.italic))
   const header = (
     <div>
       <h2 className="text-base font-semibold tracking-tight">{systemGroup.familyName}</h2>
       <p className="mt-1 text-sm text-muted-foreground">
         {systemGroup.instanceCount} {systemGroup.instanceCount === 1 ? 'instance' : 'instances'}
+        {` · ${systemGroup.isVariable ? 'Variable' : 'Static'}`}
         {systemGroup.protected ? ' · system font' : ''}
       </p>
     </div>
   )
   const preview = (
-    <div
-      className="font-preview min-h-[16rem] rounded-lg border bg-muted/40 p-6 text-5xl leading-tight"
-      style={{ fontFamily: `"${face ? systemFontFamily(face.path) : ''}", ui-sans-serif` }}
-    >
-      {SAMPLE}
+    <div className="font-preview relative min-h-[16rem] rounded-lg border bg-muted/40 p-6 text-5xl leading-tight">
+      {!previewFamily || !previewReady ? (
+        <div className="flex min-h-[13rem] items-center justify-center" role="status" aria-label="Loading preview">
+          <Loader2 className="size-6 animate-spin text-muted-foreground/70 motion-reduce:animate-none" />
+        </div>
+      ) : (
+        <div style={{ fontFamily: `"${previewFamily}"` }}>{SAMPLE}</div>
+      )}
     </div>
   )
   const secondary = (
@@ -517,96 +701,48 @@ function SystemInspectorBody({
     </>
   )
   const actions = (
-    <>
-      <div className="flex flex-wrap gap-2">
-        <Button variant="outline" size="sm" onClick={onRevealSystem}>
-          <FolderOpen /> Show in Finder
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={!systemGroup.writable || busy}
-          onClick={onDeactivateSystem}
-        >
-          <PowerOff /> Deactivate
-        </Button>
-        <Button
-          variant="destructive"
-          size="sm"
-          disabled={!systemGroup.writable || busy}
-          onClick={onUninstallSystem}
-        >
-          <CircleMinus /> Uninstall
-        </Button>
-      </div>
-      {!systemGroup.writable && (
-        <p className="text-xs text-muted-foreground">
-          Protected fonts stay on the Mac. Font Buttler can only remove fonts you installed.
-        </p>
-      )}
-    </>
+    <div className="flex flex-wrap gap-2">
+      <Button variant="outline" size="sm" onClick={onRevealSystem}>
+        <FolderOpen /> Show in Finder
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={!systemGroup.writable || busy}
+        onClick={onDeactivateSystem}
+      >
+        <PowerOff /> Deactivate
+      </Button>
+      <Button
+        variant="destructive"
+        size="sm"
+        disabled={!systemGroup.writable || busy}
+        onClick={onUninstallSystem}
+      >
+        <CircleMinus /> Uninstall
+      </Button>
+    </div>
   )
   return (
     <InspectorLayout
-      density={density}
+      familyKey={systemGroup.key}
       header={header}
-      primary={preview}
-      secondary={secondary}
       actions={actions}
-    />
-  )
-}
-
-function DestinationCopies({
-  entry,
-  busy,
-  previewOnly,
-  onInstallToAdobe,
-  onRemoveAdobeCopy,
-}: {
-  entry: CatalogEntry
-  busy: boolean
-  previewOnly: boolean
-  onInstallToAdobe?: () => void
-  onRemoveAdobeCopy?: () => void
-}) {
-  const copies = entry.installations ?? []
-  const macos = copies.find((item) => item.destinationId === 'macos')
-  const adobe = copies.find((item) => item.destinationId === 'adobe-shared')
-  const macosPresent = Boolean(entry.installedPath || (macos && macos.verification === 'file-present'))
-  return (
-    <div className="space-y-2 rounded-md border px-3 py-2">
-      <div className="text-sm font-medium">Copies</div>
-      <p className="text-xs text-muted-foreground">
-        This Mac is a system installation. The Adobe testing folder is a placed file only — Font
-        Buttler does not verify that an Adobe app activated it.
-      </p>
-      <div className="text-sm">
-        This Mac · {macosPresent ? (entry.status === 'deactivated' ? 'Deactivated' : 'Installed') : 'Not installed'}
-      </div>
-      <div className="text-sm">
-        Adobe testing folder ·{' '}
-        {adobe?.verification === 'file-present'
-          ? 'File present'
-          : adobe?.verification === 'unavailable'
-            ? 'Unavailable'
-            : 'Not placed'}
-      </div>
-      {!previewOnly && (
-        <div className="flex flex-wrap gap-2">
-          {onInstallToAdobe && adobe?.verification !== 'file-present' && (
-            <Button size="sm" variant="outline" disabled={busy} onClick={onInstallToAdobe}>
-              Install to Adobe testing folder
-            </Button>
+      pane={pane}
+      onPaneChange={onPaneChange}
+      tablistId={tablistId}
+      details={
+        <div className="flex flex-col gap-5">
+          {!systemGroup.writable && (
+            <p className="text-xs text-muted-foreground">
+              Protected fonts stay on the Mac. Font Buttler can only remove fonts you installed.
+            </p>
           )}
-          {onRemoveAdobeCopy && adobe && (
-            <Button size="sm" variant="outline" disabled={busy} onClick={onRemoveAdobeCopy}>
-              Remove Adobe copy
-            </Button>
-          )}
+          {secondary}
         </div>
-      )}
-    </div>
+      }
+      tester={preview}
+    />
   )
 }
 
@@ -650,13 +786,6 @@ function SourceStateCopy({ entry }: { entry: CatalogEntry }) {
     return (
       <div className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
         The source file is missing. Locate it to keep this record, or remove it from the list.
-      </div>
-    )
-  }
-  if (entry.sourceAvailability === 'none') {
-    return (
-      <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
-        No external source is linked. The installed copy stays on the Mac.
       </div>
     )
   }

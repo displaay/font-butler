@@ -54,6 +54,7 @@ import {
   type ProjectSortMode,
 } from '@/lib/projects'
 import { savedFilterMatches } from '@/lib/savedFilters'
+import { hasInsetTrafficLights } from '@/lib/desktop'
 import { cn } from '@/lib/utils'
 import { watchFolderLabel } from '@/lib/watchFolders'
 
@@ -293,7 +294,7 @@ export function Sidebar({
   activityUnread?: number
   onOpenSettings: () => void
 }) {
-  const insetTrafficLights = window.fontButlerDesktop?.platform === 'darwin'
+  const insetTrafficLights = hasInsetTrafficLights()
   const [fontsOpen, setFontsOpen] = useState(true)
   const [projectsOpen, setProjectsOpen] = useState(true)
   const [projectSort, setProjectSort] = useState<ProjectSortMode>(readProjectSort)
@@ -321,6 +322,14 @@ export function Sidebar({
     libraryFilters,
     watchFolder: watchFolderFilter,
   }
+  const hasSavedFilters = (savedFilters?.length ?? 0) > 0
+  const hasActiveLibraryCriteria =
+    currentCriteria.query.trim().length > 0 ||
+    currentCriteria.libraryFilters.length > 0 ||
+    Boolean(currentCriteria.watchFolder)
+  const showSavedFilters =
+    tab === 'library' &&
+    (hasSavedFilters || Boolean(onCreateSavedFilter && hasActiveLibraryCriteria))
   const fontsActive = tab === 'library' && !watchFolderFilter
 
   useEffect(() => {
@@ -730,7 +739,7 @@ export function Sidebar({
             ) : null}
           </div>
         )}
-        {(onCreateSavedFilter || (savedFilters && savedFilters.length > 0)) && (
+        {showSavedFilters && (
           <div className="flex w-full flex-col gap-0.5 md:mt-2 md:border-t md:pt-2">
             <div className="group/filters flex w-full items-center gap-0.5 px-1 pt-1">
               <button

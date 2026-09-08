@@ -32,6 +32,10 @@ export function ViewOptions({
   showSources,
   onShowSourcesChange,
   showSourcesToggle = true,
+  showAdded,
+  onShowAddedChange,
+  hideDestinations,
+  onHideDestinationsChange,
   previewSize,
   onPreviewSizeChange,
   className,
@@ -43,13 +47,17 @@ export function ViewOptions({
   showSources: boolean
   onShowSourcesChange: (value: boolean) => void
   showSourcesToggle?: boolean
+  showAdded: boolean
+  onShowAddedChange: (value: boolean) => void
+  hideDestinations: boolean
+  onHideDestinationsChange: (value: boolean) => void
   previewSize: number
   onPreviewSizeChange: (size: number) => void
   className?: string
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
-  const showMenu = showSourcesToggle
+  const showMenu = true
 
   useEffect(() => {
     if (!menuOpen) return
@@ -172,6 +180,24 @@ export function ViewOptions({
                     Show sources
                   </Label>
                 )}
+                <Label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 font-normal text-foreground hover:bg-muted">
+                  <input
+                    type="checkbox"
+                    checked={showAdded}
+                    onChange={(event) => onShowAddedChange(event.target.checked)}
+                    className="size-3.5 rounded border border-input accent-primary"
+                  />
+                  Show date added
+                </Label>
+                <Label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 font-normal text-foreground hover:bg-muted">
+                  <input
+                    type="checkbox"
+                    checked={hideDestinations}
+                    onChange={(event) => onHideDestinationsChange(event.target.checked)}
+                    className="size-3.5 rounded border border-input accent-primary"
+                  />
+                  Hide destinations
+                </Label>
               </div>
             )}
           </div>

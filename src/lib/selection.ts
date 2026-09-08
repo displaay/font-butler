@@ -59,9 +59,24 @@ export function clickPreservesSelection(target: EventTarget | null): boolean {
   return (
     target instanceof Element &&
     target.closest(
-      '[data-family-key], [data-keep-selection], [data-radix-scroll-area-scrollbar]',
+      '[data-family-key], [data-keep-selection], [data-radix-scroll-area-scrollbar], [data-radix-popper-content-wrapper], [role="menu"]',
     ) != null
   )
+}
+
+export function pointerUpClearsSelection(args: {
+  marqueeActive: boolean
+  downPreserves: boolean
+  contextMenuOpened: boolean
+  button: number
+  upPreserves: boolean
+}): boolean {
+  if (args.marqueeActive) return false
+  if (args.downPreserves) return false
+  if (args.contextMenuOpened) return false
+  if (args.button !== 0) return false
+  if (args.upPreserves) return false
+  return true
 }
 
 export function canStartMarquee(target: EventTarget | null): boolean {

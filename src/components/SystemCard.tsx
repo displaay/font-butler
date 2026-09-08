@@ -1,4 +1,4 @@
-import { useMemo, useState, type MouseEvent } from 'react'
+import { useMemo, useRef, useState, type MouseEvent } from 'react'
 import { ChevronDown, FolderOpen } from 'lucide-react'
 import { AaPreview, CyclingAaPreview } from '@/components/AaPreview'
 import { FormatBadges, VfBadge } from '@/components/Badges'
@@ -30,7 +30,6 @@ export function SystemCard({
   batch,
   onSelect,
   onInspect,
-  onEnsureSelected,
   onReveal,
   onUninstall,
   onDeactivate,
@@ -44,13 +43,13 @@ export function SystemCard({
   batch: SystemBatchPlan | null
   onSelect: (event: MouseEvent) => void
   onInspect: () => void
-  onEnsureSelected: () => void
   onReveal: () => void
   onUninstall: () => void
   onDeactivate: () => void
 }) {
   const [expanded, setExpanded] = useState(false)
   const [hovered, setHovered] = useState(false)
+  const skipNextClick = useRef(false)
   const face = group.faces[0]
   const instances = useMemo(() => systemInstanceRows(group), [group])
   const showInstances = instances.length > 0 && layout === 'list'
@@ -66,6 +65,22 @@ export function SystemCard({
     [instances, previewFamily],
   )
   const plan = batch ?? systemBatchPlan([group])
+
+  function handleCardClick(event: MouseEvent) {
+    if (skipNextClick.current) {
+      skipNextClick.current = false
+      return
+    }
+    if (event.button !== 0) return
+    onSelect(event)
+  }
+
+  function skipClickAfterContextMenu() {
+    skipNextClick.current = true
+    window.setTimeout(() => {
+      skipNextClick.current = false
+    }, 400)
+  }
 
   const metadata = (
     <>
@@ -90,7 +105,7 @@ export function SystemCard({
   )
 
   return (
-    <ContextMenu onOpenChange={(open) => { if (open) onEnsureSelected() }}>
+    <ContextMenu onOpenChange={(open) => { if (open) skipClickAfterContextMenu() }}>
       <ContextMenuTrigger asChild>
         <div
           data-family-key={group.familyName}
@@ -104,7 +119,8 @@ export function SystemCard({
           {layout === 'grid' ? (
             <button
               type="button"
-              onClick={onSelect}
+              onClick={handleCardClick}
+              onContextMenu={skipClickAfterContextMenu}
               onDoubleClick={onInspect}
               className="flex w-full flex-col text-left"
             >
@@ -126,7 +142,8 @@ export function SystemCard({
               <div className="flex items-stretch">
                 <button
                   type="button"
-                  onClick={onSelect}
+                  onClick={handleCardClick}
+                  onContextMenu={skipClickAfterContextMenu}
                   onDoubleClick={onInspect}
                   className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left"
                 >

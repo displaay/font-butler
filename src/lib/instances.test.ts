@@ -65,8 +65,12 @@ test('variable-font instance rows carry named-instance variation settings', () =
     [300, 400, 700],
   )
   assert.deepEqual(
-    rows.map((row) => row.installState),
-    ['uninstalled', 'uninstalled', 'uninstalled'],
+    rows.map((row) => [row.format, row.installState, row.hasSource, row.macosCopy, row.adobeCopy]),
+    [
+      [undefined, undefined, undefined, undefined, undefined],
+      [undefined, undefined, undefined, undefined, undefined],
+      [undefined, undefined, undefined, undefined, undefined],
+    ],
   )
 })
 
@@ -114,11 +118,54 @@ test('catalog instance rows keep live vs inactive styles when the source is miss
   assert.equal(groups.length, 1)
   const rows = catalogInstanceRows(groups[0]!)
   assert.deepEqual(
-    rows.map((row) => [row.label, row.installState]),
+    rows.map((row) => [row.label, row.installState, row.macosCopy, row.adobeCopy]),
     [
-      ['Regular', 'installed'],
-      ['Italic', 'deactivated'],
-      ['Bold', 'uninstalled'],
+      ['Regular', 'installed', true, false],
+      ['Italic', 'deactivated', false, false],
+      ['Bold', 'uninstalled', false, false],
+    ],
+  )
+  assert.deepEqual(
+    rows.map((row) => row.format),
+    ['otf', 'otf', 'otf'],
+  )
+  assert.deepEqual(
+    rows.map((row) => row.hasSource),
+    [true, true, false],
+  )
+})
+
+test('system variable-font instance rows omit format and computer tags', () => {
+  const face: SystemFace = {
+    path: '/System/RecoletaVF.ttf',
+    familyName: 'Recoleta',
+    styleName: 'Regular',
+    fullName: 'Recoleta Regular',
+    postscriptName: 'Recoleta-Regular',
+    isVariable: true,
+    instanceCount: 2,
+    instanceNames: ['Light', 'Bold'],
+    weight: 400,
+    italic: false,
+    format: 'ttf',
+    protected: false,
+    writable: true,
+    deactivated: false,
+  }
+  const rows = systemInstanceRows({
+    key: 'Recoleta',
+    familyName: 'Recoleta',
+    faces: [face],
+    isVariable: true,
+    instanceCount: 2,
+    protected: false,
+    writable: true,
+  })
+  assert.deepEqual(
+    rows.map((row) => [row.label, row.format, row.installState, row.macosCopy]),
+    [
+      ['Light', undefined, undefined, undefined],
+      ['Bold', undefined, undefined, undefined],
     ],
   )
 })
@@ -149,10 +196,42 @@ test('system instance rows mark deactivated faces separately from live ones', ()
     writable: true,
   })
   assert.deepEqual(
-    rows.map((row) => [row.label, row.installState]),
+    rows.map((row) => [row.label, row.installState, row.format, row.macosCopy]),
     [
-      ['Regular', 'installed'],
-      ['Light', 'deactivated'],
+      ['Regular', 'installed', 'otf', true],
+      ['Light', 'deactivated', 'otf', false],
+    ],
+  )
+})
+
+test('catalog instance rows tag each file format', () => {
+  const groups = groupCatalog([
+    staticEntry('otf', 'Regular', 'installed', {
+      format: 'otf',
+      sourcePath: '/tmp/otf.otf',
+      installedPath: '/Library/Fonts/otf.otf',
+    }),
+    staticEntry('ttf', 'Regular', 'installed', {
+      format: 'ttf',
+      sourcePath: '/tmp/ttf.ttf',
+      faces: [staticFace('Plex', 'Regular')],
+      installedPath: '/Library/Fonts/ttf.ttf',
+      installations: [
+        { destinationId: 'macos', path: '/Library/Fonts/ttf.ttf', verification: 'file-present' },
+        {
+          destinationId: 'adobe-shared',
+          path: '/tmp/adobe/ttf.ttf',
+          verification: 'file-present',
+        },
+      ],
+    }),
+  ])
+  const rows = catalogInstanceRows(groups[0]!)
+  assert.deepEqual(
+    rows.map((row) => [row.label, row.format, row.installState, row.macosCopy, row.adobeCopy]),
+    [
+      ['Regular', 'otf', 'installed', true, false],
+      ['Regular', 'ttf', 'installed', true, true],
     ],
   )
 })

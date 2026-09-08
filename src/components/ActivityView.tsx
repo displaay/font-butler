@@ -3,23 +3,26 @@ import { toast } from 'sonner'
 import { CheckCheck, Undo2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
-import { activityActionLabel, unreadActivityCount } from '@/lib/activityInbox'
+import { activityItemLabel, activityRowLabel, unreadActivityCount } from '@/lib/activityInbox'
 import { cn, formatRelativeTime } from '@/lib/utils'
-import type { Operation } from '@/lib/types'
+import type { CatalogEntry, Operation } from '@/lib/types'
 
 export function ActivityView({
   operations,
+  entries = [],
   highlightId,
   onUndo,
   onMarkAllRead,
 }: {
   operations: Operation[]
+  entries?: CatalogEntry[]
   highlightId?: string | null
   onUndo: (id: string) => void
   onMarkAllRead?: () => void
 }) {
   const [expanded, setExpanded] = useState<string | null>(highlightId ?? null)
   const unreadCount = unreadActivityCount(operations)
+  const entriesById = new Map(entries.map((entry) => [entry.id, entry]))
 
   useEffect(() => {
     if (highlightId) setExpanded(highlightId)
@@ -67,12 +70,14 @@ export function ActivityView({
                         />
                       ) : null}
                       <div className="truncate text-sm font-medium">
-                        {activityActionLabel(operation.action)}
-                        {operation.familyName ? ` · ${operation.familyName}` : ''}
+                        {activityRowLabel(operation)}
                       </div>
                     </div>
                     <div className="text-xs text-muted-foreground">
-                      {formatRelativeTime(operation.startedAt)} · {operation.trigger} · {operation.outcome}
+                      {formatRelativeTime(operation.startedAt)}
+                      {operation.items.length > 1 ? ` · ${operation.items.length} files` : ''}
+                      {' · '}
+                      {operation.trigger} · {operation.outcome}
                       {operation.undone ? ' · undone' : ''}
                     </div>
                   </button>
@@ -88,15 +93,21 @@ export function ActivityView({
                 </div>
                 {open && (
                   <ul className="mt-2 space-y-1 border-t pt-2 text-xs">
-                    {operation.items.map((item) => (
-                      <li key={item.id} className="flex justify-between gap-3">
-                        <span className="truncate">{item.label}</span>
-                        <span className="shrink-0 text-muted-foreground">
-                          {item.outcome}
-                          {item.reason ? ` · ${item.reason}` : ''}
-                        </span>
-                      </li>
-                    ))}
+                    {operation.items.map((item) => {
+                      const label = activityItemLabel(
+                        item,
+                        item.entryId ? entriesById.get(item.entryId) : undefined,
+                      )
+                      return (
+                        <li key={item.id} className="flex justify-between gap-3">
+                          <span className="truncate" title={label}>{label}</span>
+                          <span className="shrink-0 text-muted-foreground">
+                            {item.outcome}
+                            {item.reason ? ` · ${item.reason}` : ''}
+                          </span>
+                        </li>
+                      )
+                    })}
                   </ul>
                 )}
               </li>

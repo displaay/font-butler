@@ -47,9 +47,8 @@ async function ensureToken(): Promise<string> {
       // Fall back to HTTP bootstrap when the preload bridge is unavailable.
     }
   }
-  const response = await fetch('/api/bootstrap')
-  const data = (await response.json()) as { token?: string; settings?: AppSettings }
-  if (!response.ok || !data.token) {
+  const data = await parseJson<{ token?: string; settings?: AppSettings }>(fetch('/api/bootstrap'))
+  if (!data.token) {
     throw new Error('Could not connect to Font Buttler API.')
   }
   apiToken = data.token
@@ -69,7 +68,20 @@ function authHeaders(extra?: HeadersInit): HeadersInit {
 
 async function parseJson<T>(input: Promise<Response>): Promise<T> {
   const response = await input
-  const data = (await response.json()) as T & { error?: string }
+  const text = await response.text()
+  let data: T & { error?: string }
+  try {
+    data = JSON.parse(text) as T & { error?: string }
+  } catch {
+    const unreachable = response.status === 502 || response.status === 503 || response.status === 504
+    throw new Error(
+      unreachable
+        ? 'Could not reach the Font Buttler API.'
+        : response.ok
+          ? 'The Font Buttler API returned an empty response.'
+          : `Request failed (HTTP ${response.status})`,
+    )
+  }
   if (!response.ok) {
     throw new Error(data.error || response.statusText)
   }
@@ -123,7 +135,12 @@ export const api = {
   install: (
     id: string,
     familyName?: string,
-    options?: { replace?: boolean; destinationId?: DestinationId; expectedSourceFingerprint?: string },
+    options?: {
+      replace?: boolean
+      destinationId?: DestinationId
+      destinationIds?: DestinationId[]
+      expectedSourceFingerprint?: string
+    },
   ) =>
     json<{ entry: CatalogEntry }>(
       post('/api/install', {
@@ -131,13 +148,19 @@ export const api = {
         familyName,
         replace: options?.replace,
         destinationId: options?.destinationId,
+        destinationIds: options?.destinationIds,
         expectedSourceFingerprint: options?.expectedSourceFingerprint,
       }),
     ),
   installMany: (
     ids: string[],
     familyName?: string,
-    options?: { replace?: boolean; destinationId?: DestinationId; expectedSourceFingerprint?: string },
+    options?: {
+      replace?: boolean
+      destinationId?: DestinationId
+      destinationIds?: DestinationId[]
+      expectedSourceFingerprint?: string
+    },
   ) =>
     json<{ entries: CatalogEntry[] }>(
       post('/api/install', {
@@ -145,6 +168,7 @@ export const api = {
         familyName,
         replace: options?.replace,
         destinationId: options?.destinationId,
+        destinationIds: options?.destinationIds,
         expectedSourceFingerprint: options?.expectedSourceFingerprint,
       }),
     ),
@@ -153,6 +177,10 @@ export const api = {
   destinations: () =>
     get<{ destinations: DestinationCapability[]; investigation: DestinationInvestigationRow[] }>(
       '/api/destinations',
+    ),
+  createAdobeTestingFolder: () =>
+    json<{ destinations: DestinationCapability[]; investigation: DestinationInvestigationRow[] }>(
+      post('/api/destinations/adobe', {}),
     ),
   uninstall: (id: string, options?: { deleteSource?: boolean }) =>
     json<{ entry: CatalogEntry; operationId?: string; undoable?: boolean }>(
@@ -165,10 +193,30 @@ export const api = {
   deactivate: (id: string) => json<{ entry: CatalogEntry }>(post('/api/deactivate', { id })),
   deactivateMany: (ids: string[]) =>
     json<{ entries: CatalogEntry[] }>(post('/api/deactivate', { ids })),
-  activate: (id: string, options?: { replace?: boolean; switch?: boolean }) =>
-    json<{ entry: CatalogEntry }>(post('/api/activate', { id, replace: options?.replace, switch: options?.switch })),
-  activateMany: (ids: string[], options?: { replace?: boolean; switch?: boolean }) =>
-    json<{ entries: CatalogEntry[] }>(post('/api/activate', { ids, replace: options?.replace, switch: options?.switch })),
+  activate: (
+    id: string,
+    options?: { replace?: boolean; switch?: boolean; destinationIds?: DestinationId[] },
+  ) =>
+    json<{ entry: CatalogEntry }>(
+      post('/api/activate', {
+        id,
+        replace: options?.replace,
+        switch: options?.switch,
+        destinationIds: options?.destinationIds,
+      }),
+    ),
+  activateMany: (
+    ids: string[],
+    options?: { replace?: boolean; switch?: boolean; destinationIds?: DestinationId[] },
+  ) =>
+    json<{ entries: CatalogEntry[] }>(
+      post('/api/activate', {
+        ids,
+        replace: options?.replace,
+        switch: options?.switch,
+        destinationIds: options?.destinationIds,
+      }),
+    ),
   reinstall: (id: string, options?: { expectedSourceFingerprint?: string }) =>
     json<{ entry: CatalogEntry }>(
       post('/api/reinstall', { id, expectedSourceFingerprint: options?.expectedSourceFingerprint }),
@@ -314,6 +362,10 @@ export const api = {
       fingerprint?: string
     }>(
       `/api/preview-meta/${encodeURIComponent(id)}?which=${which}${revision ? `&revision=${encodeURIComponent(revision)}` : ''}`,
+    ),
+  previewGlyph: (id: string, code: number, which: 'source' | 'installed' | 'revision' = 'installed') =>
+    get<{ code: number; name: string | null }>(
+      `/api/preview-glyph/${encodeURIComponent(id)}?which=${which}&code=${encodeURIComponent(String(code))}`,
     ),
   captureComparison: (id: string) => json<ComparisonCapture>(post('/api/comparison/capture', { id })),
 }

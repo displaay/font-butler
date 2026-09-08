@@ -7,7 +7,7 @@ import {
   repairableIds,
   uninstallableIds,
 } from './eligibility.ts'
-import { familyBadgeEntry, hasTrackedSource, isUninstallableGroup } from './group.ts'
+import { familyBadgeEntry, hasTrackedSource, isForgettableOnlyGroup, isUninstallableGroup } from './group.ts'
 import { displayStateParts } from './state.ts'
 import type { FamilyGroup, SystemFamilyGroup } from './types.ts'
 
@@ -32,7 +32,7 @@ export type SystemBatchPlan = {
   uninstall: number
 }
 
-export function catalogBatchPlan(groups: FamilyGroup[]): CatalogBatchPlan {
+export function catalogBatchPlan(groups: FamilyGroup[], adobeAvailable = true): CatalogBatchPlan {
   let install = 0
   let adobeInstall = 0
   let activate = 0
@@ -47,7 +47,7 @@ export function catalogBatchPlan(groups: FamilyGroup[]): CatalogBatchPlan {
   for (const group of groups) {
     const toInstall = installableIds(group)
     install += toInstall.length
-    adobeInstall += adobeInstallableIds(group).length
+    adobeInstall += adobeInstallableIds(group, adobeAvailable).length
     if (
       toInstall.length > 0 &&
       group.entries.some(
@@ -68,9 +68,7 @@ export function catalogBatchPlan(groups: FamilyGroup[]): CatalogBatchPlan {
     }
     reinstall += reinstallableIds(group).length
     repair += repairableIds(group).length
-    if (group.entries.some((entry) => entry.status === 'uninstalled' || entry.status === 'source-missing')) {
-      forget += 1
-    }
+    if (isForgettableOnlyGroup(group)) forget += 1
     if (group.entries.some((entry) => entry.status === 'uninstalled')) deleteFiles += 1
   }
   return {
@@ -94,8 +92,8 @@ export function catalogBatchPlan(groups: FamilyGroup[]): CatalogBatchPlan {
  * Install-missing + Deactivate-installed counts; a Not installed badge never
  * offers Deactivate / Uninstall / Activate / Update.
  */
-export function familyCardPlan(group: FamilyGroup): CatalogBatchPlan {
-  const plan = catalogBatchPlan([group])
+export function familyCardPlan(group: FamilyGroup, adobeAvailable = true): CatalogBatchPlan {
+  const plan = catalogBatchPlan([group], adobeAvailable)
   if (!displayStateParts(familyBadgeEntry(group)).includes('Not installed')) {
     return plan
   }
@@ -175,15 +173,29 @@ export function actionLabel(verb: string, count: number, multi: boolean): string
   if (verb === 'Install missing') {
     return count === 1 && !multi ? 'Install missing style' : `Install ${count} missing styles`
   }
-  if (verb === 'Deactivate') {
-    if (!multi && count <= 1) return 'Deactivate'
-    return `Deactivate ${count} ${count === 1 ? 'style' : 'styles'}`
+  if (verb === 'Deactivate' || verb === 'Uninstall') {
+    return verb
   }
   if (verb === 'Install to Adobe testing folder') {
-    return count === 1 && !multi ? verb : `Install ${count} to Adobe testing folder`
+    return verb
+  }
+  if (verb === 'Uninstall and delete sources') {
+    return count === 1 && !multi
+      ? verb
+      : `Uninstall and delete sources of ${count} ${count === 1 ? 'font' : 'fonts'}`
   }
   if (!multi) return verb
   return `${verb} ${count} ${count === 1 ? 'font' : 'fonts'}`
+}
+
+export function forgetSourcesLabel(count: number, multi: boolean): string {
+  if (count <= 1 && !multi) return 'Remove from list'
+  return `Remove ${count} source${count === 1 ? '' : 's'} from list`
+}
+
+export function deleteSourcesLabel(count: number, multi: boolean): string {
+  if (count <= 1 && !multi) return 'Delete source files'
+  return `Delete ${count} source file${count === 1 ? '' : 's'}`
 }
 
 export function fileActionLabel(
@@ -195,9 +207,8 @@ export function fileActionLabel(
   if (verb === 'install') {
     return mixed || count > 1 ? (count === 1 ? 'Install missing style' : `Install ${count} missing styles`) : 'Install'
   }
-  if (verb === 'deactivate') {
-    return count <= 1 && !mixed ? 'Deactivate' : `Deactivate ${count} ${count === 1 ? 'style' : 'styles'}`
-  }
+  if (verb === 'deactivate') return 'Deactivate'
+  if (verb === 'uninstall') return 'Uninstall'
   if (verb === 'repair') return 'Reinstall installed version'
   if (!mixed && count <= 1) return verb[0]!.toUpperCase() + verb.slice(1)
   return `${verb[0]!.toUpperCase()}${verb.slice(1)} ${count} ${count === 1 ? 'file' : 'files'}`

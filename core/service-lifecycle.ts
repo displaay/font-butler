@@ -20,7 +20,7 @@ import {
   removeStagedFile,
   stageFontFile,
 } from './install.ts'
-import { identityMutexMessage, occupiedDestinations, occupyingSiblings } from './identity.ts'
+import { identityMutexMessage, occupiedDestinations, occupyingSiblings, occupiesDestination } from './identity.ts'
 import { recordMutationDestination, withMutationJournal } from './journal.ts'
 import { ensureFontActivation, getFontNative } from './native.ts'
 import { parseFontFile, readFileStat } from './parse.ts'
@@ -55,6 +55,7 @@ export type ServiceLifecycleHost = {
     entry: CatalogEntry,
     catalog: CatalogEntry[],
     replace?: boolean,
+    destinationIds?: DestinationId[],
   ): Promise<CatalogEntry[]>
   snapshotAndRemoveConflicts(
     conflicts: CatalogEntry[],
@@ -70,7 +71,7 @@ export async function installEntry(
   host: ServiceLifecycleHost,
   id: string,
   familyName?: string,
-  options?: InstallOptions,
+  options?: InstallOptions & { sourcePathOverride?: string },
 ): Promise<CatalogEntry> {
   let catalog = loadCatalog(host.paths)
   let entry = findById(catalog, id)
@@ -81,18 +82,21 @@ export async function installEntry(
     throw new Error(WOFF_INSTALL_ERROR)
   }
   host.assertPinnedInstall(entry)
-  if (!sourceFileExists(entry.sourcePath)) {
+  const sourcePath = options?.sourcePathOverride ?? entry.sourcePath
+  if (!sourceFileExists(sourcePath)) {
     applySourcePresence(entry)
     saveCatalog(host.paths, catalog)
     throw new Error('The source file is missing.')
   }
-  assertExpectedSourceFingerprint(tryFingerprintFile(entry.sourcePath), options?.expectedSourceFingerprint)
+  if (!options?.sourcePathOverride) {
+    assertExpectedSourceFingerprint(tryFingerprintFile(entry.sourcePath), options?.expectedSourceFingerprint)
+  }
   const renameTo = familyName?.trim()
   const installAs = Boolean(renameTo && renameTo !== displayFamily(entry))
   if (installAs && renameTo) {
     return installRenamedCopy(host, entry, renameTo, options)
   }
-  const staged = stageFontFile(entry.sourcePath, path.join(host.paths.dataRoot, 'staging'))
+  const staged = stageFontFile(sourcePath, path.join(host.paths.dataRoot, 'staging'))
   const targets = installTargets(host.paths, entry, options)
   if (!options?.switch) {
     const siblings = occupyingSiblings(catalog.entries, entry, host.paths, targets)
@@ -105,8 +109,8 @@ export async function installEntry(
   try {
     entry.format = staged.parsed.format
     entry.faces = staged.parsed.faces
-    const conflicts = installMacos
-      ? await host.resolveFormatConflicts(entry, catalog.entries, options?.replace)
+    const conflicts = installMacos || options?.replace
+      ? await host.resolveFormatConflicts(entry, catalog.entries, options?.replace, targets)
       : []
     catalog = loadCatalog(host.paths)
     entry = findById(catalog, id)
@@ -223,7 +227,7 @@ export async function installEntry(
       entry.status = 'installed'
       const fingerprint = tryFingerprintFile(staged.stagedPath)
       if (fingerprint) entry.installedFingerprint = fingerprint
-      if (isExternalSource(entry)) {
+      if (isExternalSource(entry) && !options?.sourcePathOverride) {
         entry.sourceMtimeMs = staged.stat.mtimeMs
         entry.sourceSize = staged.stat.size
         entry.sourcePresent = true
@@ -406,7 +410,7 @@ export async function deactivateEntry(
 export async function activateEntry(
   host: ServiceLifecycleHost,
   id: string,
-  options: { replace?: boolean; owner?: 'manual' | 'project'; switch?: boolean } = {},
+  options: InstallOptions & { owner?: 'manual' | 'project' } = {},
 ): Promise<CatalogEntry> {
   let catalog = loadCatalog(host.paths)
   let entry = findById(catalog, id)
@@ -416,7 +420,8 @@ export async function activateEntry(
   if (!options.switch) {
     host.assertNoOccupyingSibling(entry, catalog.entries)
   }
-  const conflicts = await host.resolveFormatConflicts(entry, catalog.entries, options?.replace)
+  const targets = installTargets(host.paths, entry, options)
+  const conflicts = await host.resolveFormatConflicts(entry, catalog.entries, options?.replace, targets)
   const conflictSnapshots: Array<{ entry: CatalogEntry; file: string }> = []
   catalog = loadCatalog(host.paths)
   entry = findById(catalog, id)
@@ -439,7 +444,8 @@ export async function activateEntry(
       Boolean(entry.disabledPath && fs.existsSync(entry.disabledPath)) ||
       Boolean(copyAt(entry, 'adobe-shared')?.parkedPath && fs.existsSync(copyAt(entry, 'adobe-shared')!.parkedPath))
     if (parked) {
-      await host.unparkManagedCopies(entry)
+      const requestedDestinations = options.destinationIds?.length ? options.destinationIds : undefined
+      await host.unparkManagedCopies(entry, requestedDestinations)
       if (options.owner === 'manual') {
         addManualOwner(entry)
       }
@@ -447,6 +453,20 @@ export async function activateEntry(
       entry.sourcePresent = isExternalSource(entry)
       touchEntry(entry)
       saveCatalog(host.paths, catalog)
+      const extra = (options.destinationIds ?? []).filter(
+        (dest) => !occupiesDestination(entry, dest, host.paths),
+      )
+      const retainedPath =
+        entry.installedPath && fs.existsSync(entry.installedPath)
+          ? entry.installedPath
+          : copyAt(entry, 'adobe-shared')?.path
+      if (extra.length && retainedPath && fs.existsSync(retainedPath)) {
+        return installEntry(host, id, undefined, {
+          ...options,
+          destinationIds: extra,
+          sourcePathOverride: retainedPath,
+        })
+      }
       return entry
     }
     if (entry.installedPath && fs.existsSync(entry.installedPath) && host.isLiveDestPath(entry.installedPath)) {
@@ -462,6 +482,16 @@ export async function activateEntry(
       entry.status = 'installed'
       touchEntry(entry)
       saveCatalog(host.paths, catalog)
+      const extra = (options.destinationIds ?? []).filter(
+        (dest) => !occupiesDestination(entry, dest, host.paths),
+      )
+      if (extra.length && entry.installedPath && fs.existsSync(entry.installedPath)) {
+        return installEntry(host, id, undefined, {
+          ...options,
+          destinationIds: extra,
+          sourcePathOverride: entry.installedPath,
+        })
+      }
       return entry
     }
     return installEntry(host, id, undefined, options)

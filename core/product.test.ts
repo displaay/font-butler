@@ -478,6 +478,24 @@ test('keep and undo preserve the installed revision', async () => {
   })
 })
 
+test('uninstall activity names each file instead of only the family', async () => {
+  await withService(async (service, paths) => {
+    const regular = path.join(paths.dataRoot, 'Fenul-Regular.otf')
+    const bold = path.join(paths.dataRoot, 'Fenul-Bold.otf')
+    writeTestFont(regular, 'Fenul', 'Fenul-Regular', { style: 'Regular', format: 'otf' })
+    writeTestFont(bold, 'Fenul', 'Fenul-Bold', { style: 'Bold', format: 'otf', weight: 700 })
+    const imported = await service.importPaths([regular, bold])
+    await service.installMany(imported.entries.map((item) => item.id))
+    await service.uninstallMany(imported.entries.map((item) => item.id))
+    const operation = service.listActivity().find((item) => item.action === 'uninstall')
+    assert.equal(operation?.familyName, 'Fenul')
+    assert.deepEqual(
+      operation?.items.map((item) => item.label).sort(),
+      ['Bold · OTF', 'Regular · OTF'],
+    )
+  })
+})
+
 test('uninstall retains enough data for undo', async () => {
   await withService(async (service, paths) => {
     const source = path.join(paths.dataRoot, 'UndoUninstall.ttf')

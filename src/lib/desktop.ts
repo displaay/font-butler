@@ -1,3 +1,7 @@
+export function hasInsetTrafficLights(): boolean {
+  return typeof window !== 'undefined' && window.fontButlerDesktop?.platform === 'darwin'
+}
+
 export function desktopPathForFile(file: File): string | undefined {
   const getter =
     typeof window !== 'undefined' ? window.fontButlerDesktop?.getPathForFile : undefined

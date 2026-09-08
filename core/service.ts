@@ -20,6 +20,7 @@ import { locateAdobeFontCache, locateOfficeFontCache } from './caches.ts'
 import {
   adobeInvestigation,
   copyAt,
+  createAdobeTestingFolder as createAdobeTestingFolderFn,
   dropCopy,
   entryHasParkedBytes,
   inspectDestination,
@@ -83,6 +84,7 @@ import {
   upsertOperation,
 } from './operations.ts'
 import {
+  glyphNameForCodePoint,
   isFontFile,
   isPreviewableFontFile,
   mimeForFont,
@@ -180,6 +182,8 @@ import {
 import {
   bindEntryToInstalledFile,
   deleteSourceFile,
+  displayEntry,
+  displayEntryLabel,
   displayFamily,
   emitCatalog,
   emitDuplicates,
@@ -507,6 +511,11 @@ export class FontButlerService {
     }
   }
 
+  createAdobeTestingFolder() {
+    createAdobeTestingFolderFn(this.paths)
+    return this.listDestinations()
+  }
+
   getApiToken(): string {
     return getOrCreateApiToken(this.paths.apiTokenPath)
   }
@@ -742,10 +751,13 @@ export class FontButlerService {
   async uninstallMany(ids: string[], options?: { deleteSource?: boolean }): Promise<CatalogEntry[]> {
     return runCatalogTask(async () => {
       const entries: CatalogEntry[] = []
+      const familyNames = new Map<string, string>()
       const previousRevisions = new Map<string, string | undefined>()
       for (const id of ids) {
         previousRevisions.set(id, this.retainInstalledRevision(id))
-        entries.push(await this.uninstallEntry(id, options))
+        const entry = await this.uninstallEntry(id, options)
+        familyNames.set(entry.id, displayFamily(entry))
+        entries.push(entry)
       }
       this.commitManualOperation(
         'uninstall',
@@ -756,6 +768,7 @@ export class FontButlerService {
         }),
         entries[0] ? displayFamily(entries[0]) : undefined,
         !options?.deleteSource,
+        familyNames,
       )
       await syncWatchers(this.paths)
       emitCatalog(this.paths)
@@ -800,7 +813,7 @@ export class FontButlerService {
     })
   }
 
-  async activate(id: string, options?: { replace?: boolean; switch?: boolean }): Promise<CatalogEntry> {
+  async activate(id: string, options?: InstallOptions): Promise<CatalogEntry> {
     return runCatalogTask(async () => {
       const current = findById(loadCatalog(this.paths), id)
       const relatedId = current
@@ -821,7 +834,7 @@ export class FontButlerService {
     })
   }
 
-  async activateMany(ids: string[], options?: { replace?: boolean; switch?: boolean }): Promise<CatalogEntry[]> {
+  async activateMany(ids: string[], options?: InstallOptions): Promise<CatalogEntry[]> {
     return runCatalogTask(async () => {
       const catalog = loadCatalog(this.paths)
       const toActivate = ids
@@ -1197,7 +1210,7 @@ export class FontButlerService {
           {
             id: newId(),
             entryId: entry.id,
-            label: displayFamily(entry),
+            label: displayEntry(entry),
             outcome: 'succeeded',
             previousSourcePath: previous,
             expectedRevision: entry.installedFingerprint,
@@ -1288,7 +1301,7 @@ export class FontButlerService {
         items.push({
           id: newId(),
           entryId: entry.id,
-          label: displayFamily(entry),
+          label: row.relativePath,
           outcome: 'succeeded',
         })
       }
@@ -1462,7 +1475,12 @@ export class FontButlerService {
           items.push({
             id: item.id,
             entryId: item.entryId,
-            label: item.familyName || path.basename(item.path),
+            label: displayEntryLabel({
+              familyName: item.familyName,
+              faces: item.faces,
+              format: item.format,
+              filePath: item.path,
+            }),
             outcome: 'skipped',
           })
           continue
@@ -1542,7 +1560,14 @@ export class FontButlerService {
           items.push({
             id: item.id,
             entryId: appliedEntry?.id,
-            label: item.familyName || path.basename(item.path),
+            label: appliedEntry
+              ? displayEntry(appliedEntry)
+              : displayEntryLabel({
+                  familyName: item.familyName,
+                  faces: item.faces,
+                  format: item.format,
+                  filePath: item.path,
+                }),
             outcome: 'succeeded',
             previousRevision:
               appliedEntry?.id === item.entryId ? previousInstalledFingerprint : undefined,
@@ -1555,7 +1580,12 @@ export class FontButlerService {
           items.push({
             id: item.id,
             entryId: item.entryId,
-            label: item.familyName || path.basename(item.path),
+            label: displayEntryLabel({
+              familyName: item.familyName,
+              faces: item.faces,
+              format: item.format,
+              filePath: item.path,
+            }),
             outcome: 'failed',
             reason: error instanceof Error ? error.message : String(error),
           })
@@ -1755,7 +1785,7 @@ export class FontButlerService {
         [{
           id: newId(),
           entryId: entry.id,
-          label: displayFamily(entry),
+          label: displayEntry(entry),
           outcome: 'succeeded',
           previousRevision: previousFingerprint,
           expectedRevision: target,
@@ -1894,10 +1924,10 @@ export class FontButlerService {
             entry.installedPath,
             entry.status !== 'deactivated',
           )
-          fonts.push({ target: displayFamily(entry), kind: 'font', outcome: 'succeeded' })
+          fonts.push({ target: displayEntry(entry), kind: 'font', outcome: 'succeeded' })
         } catch (error) {
           fonts.push({
-            target: displayFamily(entry),
+            target: displayEntry(entry),
             kind: 'font',
             outcome: 'failed',
             reason: error instanceof Error ? error.message : String(error),
@@ -1906,19 +1936,19 @@ export class FontButlerService {
       } else if (entry.previousRevisionId && readRevisionBytes(this.paths, entry.previousRevisionId)) {
         try {
           await this.restoreRevision(entry.id, entry.previousRevisionId)
-          fonts.push({ target: displayFamily(entry), kind: 'font', outcome: 'succeeded' })
+          fonts.push({ target: displayEntry(entry), kind: 'font', outcome: 'succeeded' })
         } catch (error) {
           fonts.push({
-            target: displayFamily(entry),
+            target: displayEntry(entry),
             kind: 'font',
             outcome: 'failed',
             reason: error instanceof Error ? error.message : String(error),
           })
         }
       } else if (!entry.installedPath) {
-        fonts.push({ target: displayFamily(entry), kind: 'font', outcome: 'not-found' })
+        fonts.push({ target: displayEntry(entry), kind: 'font', outcome: 'not-found' })
       } else {
-        fonts.push({ target: displayFamily(entry), kind: 'font', outcome: 'not-found', reason: 'Installed copy is missing.' })
+        fonts.push({ target: displayEntry(entry), kind: 'font', outcome: 'not-found', reason: 'Installed copy is missing.' })
       }
       const adobe = copyAt(entry, 'adobe-shared')
       if (adobe) {
@@ -1927,7 +1957,7 @@ export class FontButlerService {
           ? verifyManagedCopy(this.paths, 'adobe-shared', adobe.path, adobe.fingerprint)
           : 'unavailable'
         fonts.push({
-          target: `${displayFamily(entry)} · Adobe testing folder`,
+          target: `${displayEntry(entry)} · Adobe testing folder`,
           kind: 'font',
           outcome: dest.supported
             ? adobe.verification === 'file-present'
@@ -2090,7 +2120,7 @@ export class FontButlerService {
         items.push({
           id: newId(),
           entryId: member.assetId,
-          label: entry ? displayFamily(entry) : member.assetId,
+          label: entry ? displayEntry(entry) : member.assetId,
           outcome: entry?.previewOnly ? 'skipped' : 'failed',
           reason: entry ? 'Preview-only web font' : 'Missing member',
         })
@@ -2125,14 +2155,14 @@ export class FontButlerService {
           entries.push(latest)
           setMemberUnsatisfied(project, member.assetId, false)
         }
-        items.push({ id: newId(), entryId: entry.id, label: displayFamily(entry), outcome: 'succeeded' })
+        items.push({ id: newId(), entryId: entry.id, label: displayEntry(entry), outcome: 'succeeded' })
       } catch (error) {
         setMemberUnsatisfied(project, member.assetId, true)
         failedIds.push(entry.id)
         items.push({
           id: newId(),
           entryId: entry.id,
-          label: displayFamily(entry),
+          label: displayEntry(entry),
           outcome: 'failed',
           reason: error instanceof Error ? error.message : String(error),
         })
@@ -2203,6 +2233,29 @@ export class FontButlerService {
       entryId: id,
       which,
       fingerprint: tryFingerprintFile(filePath),
+    }
+  }
+
+  previewGlyph(
+    id: string,
+    code: number,
+    which: 'source' | 'installed' | 'revision' = 'installed',
+    fingerprint?: string,
+  ) {
+    const entry = findById(loadCatalog(this.paths), id)
+    if (!entry) throw new Error('Font is not in the library.')
+    const filePath =
+      which === 'revision' && fingerprint
+        ? revisionFilePath(this.paths, fingerprint)
+        : which === 'source'
+          ? entry.sourcePath
+          : entry.installedPath || entry.disabledPath || entry.sourcePath
+    if (!filePath || !fs.existsSync(filePath)) {
+      throw new Error('No font file is available to preview.')
+    }
+    return {
+      code,
+      name: glyphNameForCodePoint(filePath, code),
     }
   }
 
@@ -2286,8 +2339,12 @@ export class FontButlerService {
     entry: CatalogEntry,
     catalog: CatalogEntry[],
     replace?: boolean,
+    destinationIds?: DestinationId[],
   ): Promise<CatalogEntry[]> {
-    const conflicts = installedFormatConflicts(entry, catalog)
+    const conflicts = installedFormatConflicts(entry, catalog).filter((other) =>
+      !destinationIds?.length ||
+      destinationIds.some((destination) => occupiedDestinations(other, this.paths).includes(destination)),
+    )
     if (conflicts.length === 0) return []
     if (!replace) {
       throw new Error(formatConflictMessage(entry, conflicts[0]))
@@ -2342,7 +2399,8 @@ export class FontButlerService {
       paths: this.paths,
       assertPinnedInstall: (entry) => this.assertPinnedInstall(entry),
       assertNoOccupyingSibling: (entry, catalog, dests) => this.assertNoOccupyingSibling(entry, catalog, dests),
-      resolveFormatConflicts: (entry, catalog, replace) => this.resolveFormatConflicts(entry, catalog, replace),
+      resolveFormatConflicts: (entry, catalog, replace, destinations) =>
+        this.resolveFormatConflicts(entry, catalog, replace, destinations),
       snapshotAndRemoveConflicts: (conflicts) => this.snapshotAndRemoveConflicts(conflicts),
       restoreConflictSnapshots: (snapshots) => this.restoreConflictSnapshots(snapshots),
       parkManagedCopies: (entry) => this.parkManagedCopies(entry),
@@ -2707,7 +2765,7 @@ export class FontButlerService {
 
   private async activateEntry(
     id: string,
-    options: { replace?: boolean; owner?: 'manual' | 'project'; switch?: boolean } = {},
+    options: InstallOptions & { owner?: 'manual' | 'project' } = {},
   ): Promise<CatalogEntry> {
     return activateEntryFn(this.asLifecycleHost(), id, options)
   }
@@ -3238,7 +3296,7 @@ export class FontButlerService {
     return {
       id: crypto.randomUUID(),
       entryId: entry.id,
-      label: displayFamily(entry),
+      label: displayEntry(entry),
       outcome,
       reason,
       previousRevision: entry.previousRevisionId,
@@ -3270,8 +3328,24 @@ export class FontButlerService {
     items: OperationItem[],
     familyName?: string,
     undoable = true,
+    familyNames?: Map<string, string>,
   ) {
     if (items.length === 0) return
+    const catalog = loadCatalog(this.paths)
+    const families = new Set(
+      items
+        .map((item) => (item.entryId ? findById(catalog, item.entryId) : undefined))
+        .filter((entry): entry is CatalogEntry => Boolean(entry))
+        .map((entry) => displayFamily(entry)),
+    )
+    for (const family of familyNames?.values() ?? []) families.add(family)
+    if (families.size > 1) {
+      items = items.map((item) => {
+        const entry = item.entryId ? findById(catalog, item.entryId) : undefined
+        const family = familyNames?.get(item.entryId ?? '') ?? (entry ? displayFamily(entry) : undefined)
+        return family ? { ...item, label: `${family} · ${item.label}` } : item
+      })
+    }
     const operation = finishOperation(
       createOperation({ trigger: 'manual', action, familyName }),
       items,

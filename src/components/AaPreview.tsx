@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { Loader2 } from 'lucide-react'
+import { usePreviewFontReady } from '@/hooks/usePreviewFontReady'
 import { cn } from '@/lib/utils'
 
 const CYCLE_MS = 600
@@ -37,22 +39,46 @@ function previewBoxClass(size: 'sm' | 'md') {
   return size === 'sm' ? 'size-8 text-[17px] rounded-md' : 'size-11 text-[24px] rounded-md'
 }
 
+function PreviewPending({ size }: { size: 'sm' | 'md' | 'glyph' }) {
+  return (
+    <span
+      className="inline-flex items-center justify-center"
+      role="status"
+      aria-label="Loading preview"
+    >
+      <Loader2
+        className={cn(
+          'animate-spin text-muted-foreground/70 motion-reduce:animate-none',
+          size === 'sm' && 'size-3.5',
+          size === 'md' && 'size-4',
+          size === 'glyph' && 'size-[0.4em] min-h-4 min-w-4',
+        )}
+        aria-hidden
+      />
+    </span>
+  )
+}
+
 function AaGlyph({
   family,
   weight = 400,
   italic = false,
   variation,
+  pendingSize = 'md',
 }: {
   family: string
   weight?: number
   italic?: boolean
   variation?: string
+  pendingSize?: 'sm' | 'md' | 'glyph'
 }) {
+  const ready = usePreviewFontReady(family, weight, italic)
+  if (!ready) return <PreviewPending size={pendingSize} />
   return (
     <span
       className="font-preview translate-y-px select-none"
       style={{
-        fontFamily: `"${family}", ui-sans-serif, system-ui`,
+        fontFamily: `"${family}"`,
         fontWeight: weight,
         fontStyle: italic ? 'italic' : 'normal',
         fontSynthesis: 'none',
@@ -90,7 +116,7 @@ export function AaPreview({
         previewBoxClass(size),
       )}
     >
-      <AaGlyph family={family} weight={weight} italic={italic} />
+      <AaGlyph family={family} weight={weight} italic={italic} pendingSize={size} />
     </div>
   )
 }
@@ -139,6 +165,7 @@ export function CyclingAaPreview({
             weight={face.weight}
             italic={face.italic}
             variation={face.variation}
+            pendingSize="glyph"
           />
           {cycling ? <PreviewLabel>{face.label}</PreviewLabel> : null}
         </div>

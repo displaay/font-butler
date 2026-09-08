@@ -1,3 +1,4 @@
+import { uniqueStyleCount, occupyingStyleCount } from './formats.ts'
 import type {
   CatalogEntry,
   FamilyGroup,
@@ -32,10 +33,7 @@ export function groupCatalog(entries: CatalogEntry[]): FamilyGroup[] {
     .map(([familyName, groupEntries]) => {
       const faces = groupEntries.flatMap((entry) => entry.faces)
       const isVariable = faces.some((face) => face.isVariable)
-      const instanceCount = faces.reduce(
-        (sum, face) => sum + (face.isVariable ? face.instanceCount : 1),
-        0,
-      )
+      const instanceCount = uniqueStyleCount(groupEntries)
       const status = groupEntries.reduce(
         (best, entry) =>
           statusRank[entry.status] < statusRank[best] ? entry.status : best,
@@ -201,15 +199,13 @@ export function isForgettableOnlyGroup(group: { status: FontStatus }): boolean {
 }
 
 export function familyStatusSummary(group: { entries: CatalogEntry[] }): string | null {
-  const statuses = new Set(group.entries.map((entry) => entry.status))
-  if (statuses.size <= 1) {
+  const total = uniqueStyleCount(group.entries)
+  const active = occupyingStyleCount(group.entries)
+  if (active === 0 || active === total) {
     return null
   }
-  const active = group.entries.filter(
-    (entry) => entry.status === 'installed' || entry.status === 'outdated',
-  ).length
-  const noun = group.entries.length === 1 ? 'style' : 'styles'
-  return `${active} of ${group.entries.length} ${noun} active`
+  const noun = total === 1 ? 'style' : 'styles'
+  return `${active} of ${total} ${noun} active`
 }
 
 /** Status badge representative: family status, not the Aa preview face. */

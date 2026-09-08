@@ -18,6 +18,48 @@ export function instanceInstallLabel(state: InstanceInstallState): string {
   return 'Not installed'
 }
 
+export type CopyDestinations = {
+  macos: boolean
+  adobe: boolean
+}
+
+export function entryCopyDestinations(
+  entry: Pick<
+    CatalogEntry,
+    'previewOnly' | 'status' | 'installedPath' | 'disabledPath' | 'installations'
+  >,
+): CopyDestinations {
+  if (entry.previewOnly || entry.status === 'deactivated') return { macos: false, adobe: false }
+  const copies = entry.installations ?? []
+  const adobe = copies.some(
+    (copy) => copy.destinationId === 'adobe-shared' && copy.verification === 'file-present',
+  )
+  const macosFromCopy = copies.some(
+    (copy) => copy.destinationId === 'macos' && copy.verification === 'file-present',
+  )
+  const macos =
+    entry.status === 'installed' ||
+    entry.status === 'outdated' ||
+    Boolean(entry.installedPath) ||
+    macosFromCopy
+  return { macos, adobe }
+}
+
+export function familyCopyDestinations(
+  entries: Array<
+    Pick<CatalogEntry, 'previewOnly' | 'status' | 'installedPath' | 'disabledPath' | 'installations'>
+  >,
+): CopyDestinations {
+  let macos = false
+  let adobe = false
+  for (const entry of entries) {
+    const dest = entryCopyDestinations(entry)
+    if (dest.macos) macos = true
+    if (dest.adobe) adobe = true
+  }
+  return { macos, adobe }
+}
+
 export function displayStateParts(entry: CatalogEntry): string[] {
   const parts: string[] = []
   if (entry.previewOnly) {
@@ -28,12 +70,6 @@ export function displayStateParts(entry: CatalogEntry): string[] {
     parts.push(entry.installedPath || entry.disabledPath ? 'Deactivated' : 'Not installed')
   } else {
     parts.push('Installed')
-    const copies = entry.installations ?? []
-    const macos = copies.some((copy) => copy.destinationId === 'macos' && copy.verification !== 'unavailable')
-    const adobe = copies.some((copy) => copy.destinationId === 'adobe-shared' && copy.verification !== 'unavailable')
-    if (macos && adobe) parts.push('This Mac and Adobe testing folder')
-    else if (adobe && !entry.installedPath) parts.push('Adobe testing folder')
-    else if (adobe) parts.push('This Mac and Adobe testing folder')
   }
   const availability = entry.sourceAvailability
   if (availability === 'missing' || entry.status === 'source-missing') {

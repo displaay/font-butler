@@ -48,7 +48,7 @@ export function catalogFontFaceRules(
   return descriptors.map((face) => {
     const weight = face.isVariable ? '1 1000' : String(face.weight ?? 400)
     const style = face.italic ? 'italic' : 'normal'
-    return `@font-face{font-family:"${family}";src:url("${url}");font-weight:${weight};font-style:${style};font-display:swap;}`
+    return `@font-face{font-family:"${family}";src:url("${url}");font-weight:${weight};font-style:${style};font-display:block;}`
   })
 }
 

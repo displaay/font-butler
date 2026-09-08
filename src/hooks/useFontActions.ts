@@ -15,13 +15,20 @@ import {
   conflictInstanceNames,
   countFormats,
   entryFormatOf,
+  occupyingDestinationIds,
+  occupyingIdsForFormat,
   listFormatConflicts,
+  formatSwap,
+  formatSwapLabel,
+  instanceFormatSwap,
+  instanceSwapLabel,
   type FormatCount,
 } from '@/lib/formats'
 import {
   deletableSourceIds,
   entryHasTrackedSource,
   entryIds,
+  familyNameOf,
   forgettableIds,
   hasTrackedSource,
   isForgettableOnlyGroup,
@@ -33,7 +40,14 @@ import { actionCopy, actionCopyFor, adobeInstallCopy, remainingActionCopy } from
 import { batchResultCopy, type BatchOutcome } from '@/lib/results'
 import { doneToastAction, latestUndoableOperationId } from '@/lib/toastAction'
 import { updateGroupsForIds } from '@/lib/updateInventory'
-import type { CatalogEntry, ComparisonCapture, FamilyGroup, Operation, SystemFace, SystemFamilyGroup } from '@/lib/types'
+import type {
+  CatalogEntry,
+  DestinationId,
+  FamilyGroup,
+  Operation,
+  SystemFace,
+  SystemFamilyGroup,
+} from '@/lib/types'
 
 export type FormatPrompt = {
   formats: FormatCount[]
@@ -60,7 +74,6 @@ export type FontActionInput = {
   setTab: Dispatch<SetStateAction<Tab>>
   setWatchFolderFilter: Dispatch<SetStateAction<string | null>>
   setHighlightOperation: Dispatch<SetStateAction<string | null>>
-  comparisonCapture: ComparisonCapture | null
   selectedCatalogGroups: () => FamilyGroup[]
   selectedSystemList: () => SystemFamilyGroup[]
   tab: Tab
@@ -81,7 +94,6 @@ export function useFontActions({
   setTab,
   setWatchFolderFilter,
   setHighlightOperation,
-  comparisonCapture,
   selectedCatalogGroups,
   selectedSystemList,
   tab,
@@ -140,25 +152,30 @@ export function useFontActions({
     return { ids: chosen.map((entry) => entry.id), replace: true }
   }
 
-  function comparisonFingerprintFor(ids: string[]): string | undefined {
-    if (ids.length !== 1) return undefined
-    if (comparisonCapture?.id !== ids[0]) return undefined
-    return comparisonCapture.sourceFingerprint
+  function instanceSubject(entry: CatalogEntry): string {
+    const style = entry.faces[0]?.styleName
+    const family = familyNameOf(entry)
+    return style ? `${family} ${style}` : family
   }
 
-  function installPrepared(ids: string[], familyName?: string, replace?: boolean) {
-    const expectedSourceFingerprint = comparisonFingerprintFor(ids)
+  function installPrepared(
+    ids: string[],
+    familyName?: string,
+    replace?: boolean,
+    destinationIds?: DestinationId[],
+  ) {
+    const options = { replace, destinationIds }
     return ids.length > 1
-      ? api.installMany(ids, familyName, { replace, expectedSourceFingerprint })
-      : api.install(ids[0], familyName, { replace, expectedSourceFingerprint })
+      ? api.installMany(ids, familyName, options)
+      : api.install(ids[0], familyName, options)
   }
 
-  function activatePrepared(ids: string[], replace?: boolean) {
+  function activatePrepared(ids: string[], replace?: boolean, destinationIds?: DestinationId[]) {
     const needsSwitch = ids.some((id) => {
       const entry = entries.find((item) => item.id === id)
       return entry ? canSwitchTo(entry, entries) : false
     })
-    const options = { replace, switch: needsSwitch }
+    const options = { replace, switch: needsSwitch, destinationIds }
     return ids.length > 1 ? api.activateMany(ids, options) : api.activate(ids[0], options)
   }
 
@@ -166,6 +183,59 @@ export function useFontActions({
     const ids = uninstallableIds(group)
     if (ids.length === 0) return Promise.resolve({ entries: [] })
     return ids.length > 1 ? api.uninstallMany(ids, options) : api.uninstall(ids[0], options)
+  }
+
+  function uninstallFormatFrom(groups: FamilyGroup[], format: string) {
+    const ids = groups.flatMap((group) => occupyingIdsForFormat(group.entries, format))
+    if (ids.length === 0) return
+    const label =
+      groups.length === 1
+        ? `${groups[0]!.familyName} ${format.toUpperCase()}`
+        : `${format.toUpperCase()} from ${groups.length} fonts`
+    void run(
+      () => (ids.length > 1 ? api.uninstallMany(ids) : api.uninstall(ids[0]!)),
+      actionCopy('remove', label),
+      { undo: 'uninstall' },
+    )
+  }
+
+  function swapFormatFrom(group: FamilyGroup) {
+    const swap = formatSwap(group.entries)
+    if (!swap) return
+    const incoming = swap.incomingIds
+      .map((id) => group.entries.find((entry) => entry.id === id))
+      .filter((entry): entry is CatalogEntry => Boolean(entry))
+    const toActivate = incoming.filter((entry) => entry.status === 'deactivated').map((entry) => entry.id)
+    const toInstall = incoming.filter((entry) => entry.status === 'uninstalled').map((entry) => entry.id)
+    if (toActivate.length === 0 && toInstall.length === 0) return
+    const destinationIds = occupyingDestinationIds(group.entries, swap.from)
+    const label = formatSwapLabel(swap)
+    void run(async () => {
+      if (toActivate.length) await activatePrepared(toActivate, true, destinationIds)
+      if (toInstall.length) await installPrepared(toInstall, undefined, true, destinationIds)
+    }, { pending: `${label}…`, done: `Swapped ${swap.from.toUpperCase()} for ${swap.to.toUpperCase()}` })
+  }
+
+  function swapInstanceFormat(id: string) {
+    const entry = entries.find((item) => item.id === id)
+    if (!entry || entry.previewOnly) return
+    const family = entries.filter((item) => familyNameOf(item) === familyNameOf(entry))
+    const swap = instanceFormatSwap(entry, family)
+    if (!swap) return
+    const incoming = family.find((item) => item.id === swap.incomingIds[0])
+    if (!incoming) return
+    const destinationIds = occupyingDestinationIds(family, swap.from)
+    const label = instanceSwapLabel(swap, id)
+    void run(
+      async () => {
+        if (incoming.status === 'deactivated') {
+          await activatePrepared([incoming.id], true, destinationIds)
+          return
+        }
+        await installPrepared([incoming.id], undefined, true, destinationIds)
+      },
+      { pending: `${label}…`, done: `Swapped ${swap.from.toUpperCase()} for ${swap.to.toUpperCase()}` },
+    )
   }
 
   function deactivateGroup(group: FamilyGroup) {
@@ -177,10 +247,7 @@ export function useFontActions({
   function reinstallGroup(group: FamilyGroup) {
     const ids = reinstallableIds(group)
     if (ids.length === 0) return Promise.resolve({ entries: [] })
-    const expectedSourceFingerprint = comparisonFingerprintFor(ids)
-    return ids.length > 1
-      ? api.reinstallMany(ids, { expectedSourceFingerprint })
-      : api.reinstall(ids[0], { expectedSourceFingerprint })
+    return ids.length > 1 ? api.reinstallMany(ids) : api.reinstall(ids[0])
   }
 
   function forgetGroup(group: FamilyGroup, options?: { deleteFiles?: boolean }) {
@@ -318,6 +385,49 @@ export function useFontActions({
         await api.install(id, undefined, { destinationId: 'adobe-shared' })
       }
     }, adobeInstallCopy(ids.length))
+  }
+
+  async function installInstanceGuarded(id: string) {
+    const entry = entries.find((item) => item.id === id)
+    if (!entry || entry.previewOnly) return
+    const prepared = await prepareInstall([id])
+    if (!prepared) return
+    await run(
+      () => installPrepared(prepared.ids, undefined, prepared.replace),
+      actionCopy('install', instanceSubject(entry)),
+    )
+  }
+
+  async function activateInstanceGuarded(id: string) {
+    const entry = entries.find((item) => item.id === id)
+    if (!entry || entry.previewOnly) return
+    const prepared = await prepareInstall([id])
+    if (!prepared) return
+    await run(
+      () => activatePrepared(prepared.ids, prepared.replace),
+      actionCopy('activate', instanceSubject(entry)),
+    )
+  }
+
+  async function deactivateInstance(id: string) {
+    const entry = entries.find((item) => item.id === id)
+    if (!entry) return
+    await run(() => api.deactivate(id), actionCopy('deactivate', instanceSubject(entry)))
+  }
+
+  async function uninstallInstance(id: string) {
+    const entry = entries.find((item) => item.id === id)
+    if (!entry) return
+    await run(() => api.uninstall(id), actionCopy('remove', instanceSubject(entry)), { undo: 'uninstall' })
+  }
+
+  async function installInstanceToAdobe(id: string) {
+    const entry = entries.find((item) => item.id === id)
+    if (!entry) return
+    await run(
+      () => api.install(id, undefined, { destinationId: 'adobe-shared' }),
+      adobeInstallCopy(1),
+    )
   }
 
   async function activateGroupGuarded(group: FamilyGroup) {
@@ -601,6 +711,11 @@ export function useFontActions({
     installOrActivateSelected,
     installGroupGuarded,
     installToAdobeFor,
+    installInstanceGuarded,
+    activateInstanceGuarded,
+    deactivateInstance,
+    uninstallInstance,
+    installInstanceToAdobe,
     activateGroupGuarded,
     reinstallSelected,
     repairSelected,
@@ -612,6 +727,9 @@ export function useFontActions({
     uninstallAndRemoveFor,
     uninstallAndRemoveSelected,
     uninstallSelected,
+    uninstallFormatFrom,
+    swapFormatFrom,
+    swapInstanceFormat,
     deactivateSelected,
     showDoneToast,
     run,

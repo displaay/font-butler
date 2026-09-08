@@ -5,11 +5,12 @@ import { loadCatalog } from './catalog.ts'
 import { isUnderAnyRoot } from './containment.ts'
 import { pruneStaleDuplicates } from './duplicates.ts'
 import { emitEvent } from './events.ts'
+import { entryFormat } from './formats.ts'
 import { getFontNative } from './native.ts'
 import { readFileStat } from './parse.ts'
 import type { AppPaths } from './paths.ts'
 import { moveToTrash } from './reveal.ts'
-import type { CatalogEntry, DuplicateWarning, Notice } from './types.ts'
+import type { CatalogEntry, DuplicateWarning, FontFaceInfo, Notice } from './types.ts'
 
 export function now(): number {
   return Date.now()
@@ -21,6 +22,61 @@ export function newId(): string {
 
 export function displayFamily(entry: CatalogEntry): string {
   return entry.customFamilyName || entry.faces[0]?.familyName || 'Unknown'
+}
+
+function uniqueStyleNames(faces: Array<Pick<FontFaceInfo, 'styleName'>>): string[] {
+  const names: string[] = []
+  const seen = new Set<string>()
+  for (const face of faces) {
+    const name = face.styleName.trim()
+    if (!name) continue
+    const key = name.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    names.push(name)
+  }
+  return names
+}
+
+function styleSummary(faces: Array<Pick<FontFaceInfo, 'styleName'>>): string {
+  const styles = uniqueStyleNames(faces)
+  if (styles.length === 0) return ''
+  if (styles.length <= 3) return styles.join(', ')
+  return `${styles.length} styles`
+}
+
+function prettyFileName(filePath?: string): string {
+  if (!filePath) return ''
+  const name = path.basename(filePath)
+  return name.replace(/^(?:[0-9]{10,}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})-/i, '')
+}
+
+export function displayEntryLabel(input: {
+  familyName?: string
+  faces?: Array<Pick<FontFaceInfo, 'styleName'>>
+  format?: string
+  filePath?: string
+}): string {
+  const fileName = prettyFileName(input.filePath)
+  const format = (input.format || path.extname(input.filePath || '').replace(/^\./, ''))
+    .trim()
+    .toUpperCase()
+  const styles = styleSummary(input.faces ?? [])
+  if (styles) return format ? `${styles} · ${format}` : styles
+  const parts: string[] = []
+  if (input.familyName) parts.push(input.familyName)
+  if (fileName && fileName !== parts[0]) parts.push(fileName)
+  else if (format && format !== parts[0]) parts.push(format)
+  return parts.join(' · ') || input.familyName || fileName || 'Unknown'
+}
+
+export function displayEntry(entry: CatalogEntry): string {
+  return displayEntryLabel({
+    familyName: displayFamily(entry),
+    faces: entry.faces,
+    format: entryFormat(entry),
+    filePath: entry.sourcePath || entry.installedPath || entry.disabledPath,
+  })
 }
 
 export function bindEntryToInstalledFile(entry: CatalogEntry, dest: string): void {

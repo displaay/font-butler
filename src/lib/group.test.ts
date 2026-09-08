@@ -253,3 +253,18 @@ test('groupCatalog keeps typographic family styles on one card', () => {
   assert.equal(groups[0]?.instanceCount, 5)
   assert.equal(groups[0]?.previewEntryId, 'regular')
 })
+
+test('groupCatalog counts OTF and TTF copies of the same styles once', () => {
+  const otfRegular = entry('otf-r', 'Fenul', 1, 'installed', 'Regular')
+  const ttfRegular = entry('ttf-r', 'Fenul', 2, 'uninstalled', 'Regular')
+  ttfRegular.format = 'ttf'
+  ttfRegular.sourcePath = '/tmp/ttf-r.ttf'
+  const otfItalic = entry('otf-i', 'Fenul', 3, 'installed', 'Italic', true)
+  const ttfItalic = entry('ttf-i', 'Fenul', 4, 'uninstalled', 'Italic', true)
+  ttfItalic.format = 'ttf'
+  ttfItalic.sourcePath = '/tmp/ttf-i.ttf'
+  const groups = groupCatalog([otfRegular, ttfRegular, otfItalic, ttfItalic])
+  assert.equal(groups.length, 1)
+  assert.equal(groups[0]?.instanceCount, 2)
+  assert.equal(familyStatusSummary(groups[0]!), null)
+})

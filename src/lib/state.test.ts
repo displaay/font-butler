@@ -3,6 +3,8 @@ import { test } from 'node:test'
 import {
   collectionScopeLabel,
   displayStateLabel,
+  entryCopyDestinations,
+  familyCopyDestinations,
   instanceInstallLabel,
   instanceInstallState,
   isNotInstalledLabel,
@@ -92,11 +94,23 @@ test('displayStateLabel compounds installation and source facts', () => {
     displayStateLabel(entry({ sourceAvailability: 'offline' })),
     'Installed · Source drive offline',
   )
-  assert.match(
-    displayStateLabel(
+})
+
+test('copy destinations follow Mac and Adobe file-present copies', () => {
+  assert.deepEqual(entryCopyDestinations(entry({ status: 'uninstalled' })), {
+    macos: false,
+    adobe: false,
+  })
+  assert.deepEqual(entryCopyDestinations(entry({ status: 'installed' })), {
+    macos: true,
+    adobe: false,
+  })
+  assert.deepEqual(
+    entryCopyDestinations(
       entry({
-        sourceAvailability: 'present',
+        installedPath: '/Library/Fonts/State.otf',
         installations: [
+          { destinationId: 'macos', path: '/Library/Fonts/State.otf', verification: 'file-present' },
           {
             destinationId: 'adobe-shared',
             path: '/tmp/adobe/State.otf',
@@ -105,7 +119,59 @@ test('displayStateLabel compounds installation and source facts', () => {
         ],
       }),
     ),
-    /Adobe testing folder/,
+    { macos: true, adobe: true },
+  )
+  assert.deepEqual(
+    familyCopyDestinations([
+      entry({ id: 'mac', installedPath: '/Library/Fonts/State.otf' }),
+      entry({
+        id: 'adobe',
+        installations: [
+          {
+            destinationId: 'adobe-shared',
+            path: '/tmp/adobe/State.otf',
+            verification: 'file-present',
+          },
+        ],
+      }),
+    ]),
+    { macos: true, adobe: true },
+  )
+  assert.deepEqual(
+    entryCopyDestinations(
+      entry({
+        status: 'deactivated',
+        installedPath: '/Library/Fonts/State.otf',
+        disabledPath: '/tmp/Disabled/State.otf',
+        installations: [
+          { destinationId: 'macos', path: '/Library/Fonts/State.otf', verification: 'file-present' },
+          {
+            destinationId: 'adobe-shared',
+            path: '/tmp/adobe/State.otf',
+            verification: 'file-present',
+          },
+        ],
+      }),
+    ),
+    { macos: false, adobe: false },
+  )
+  assert.deepEqual(
+    familyCopyDestinations([
+      entry({
+        id: 'parked',
+        status: 'deactivated',
+        disabledPath: '/tmp/Disabled/State.otf',
+        installations: [
+          {
+            destinationId: 'adobe-shared',
+            path: '/tmp/adobe/State.otf',
+            parkedPath: '/tmp/Disabled/Adobe.otf',
+            verification: 'unavailable',
+          },
+        ],
+      }),
+    ]),
+    { macos: false, adobe: false },
   )
 })
 

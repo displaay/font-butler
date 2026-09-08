@@ -17,10 +17,21 @@ test('actionCopy names the family and uses an ellipsis while pending', () => {
   })
 })
 
-test('actionCopy explains forget as a list removal', () => {
+test('actionCopy explains forget as removing a catalog row from the list', () => {
   assert.deepEqual(actionCopy('forget', 'Recoleta'), {
     pending: 'Removing Recoleta from the list…',
     done: 'Removed Recoleta from the list',
+  })
+})
+
+test('actionCopy names source files for delete and uninstall-and-delete', () => {
+  assert.deepEqual(actionCopy('deleteFiles', 'Recoleta'), {
+    pending: 'Deleting source files for Recoleta…',
+    done: 'Deleted source files for Recoleta',
+  })
+  assert.deepEqual(actionCopy('uninstallAndRemove', 'Recoleta'), {
+    pending: 'Uninstalling and deleting sources of Recoleta…',
+    done: 'Uninstalled and deleted sources of Recoleta',
   })
 })
 

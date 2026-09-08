@@ -87,7 +87,7 @@ test('buildTrayMenuModel orders Activity then Updates with headlines and a 5-row
   assert.equal(model.activityShowAll, true)
   assert.equal(model.updatesShowAll, true)
   assert.equal(model.markAllAsRead, true)
-  assert.equal(model.activityRows[0]?.label, 'Install · Family 0')
+  assert.equal(model.activityRows[0]?.label, 'Family 0 installed')
   assert.equal(model.reinstallAll, true)
   assert.equal(model.hasUnread, true)
   assert.equal(model.hasUpdates, true)
@@ -105,8 +105,10 @@ test('buildTrayMenuModel hides Mark all as read and Show all when they are not n
   assert.equal(model.updatesEmpty, false)
 })
 
-test('activityRowLabel maps apply-plan to Import', () => {
-  assert.equal(activityRowLabel({ action: 'apply-plan', familyName: 'News' }), 'Import · News')
+test('activityRowLabel uses past tense with the family first', () => {
+  assert.equal(activityRowLabel({ action: 'apply-plan', familyName: 'News' }), 'News imported')
+  assert.equal(activityRowLabel({ action: 'uninstall', familyName: 'Fenul' }), 'Fenul uninstalled')
+  assert.equal(activityRowLabel({ action: 'apply-plan' }), 'Imported')
 })
 
 test('attention tray SVG is Daniel’s black 60×59 template', () => {

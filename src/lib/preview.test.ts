@@ -65,7 +65,7 @@ test('catalogFontFaceRules emit one descriptor per collection face', () => {
   assert.equal(rules.length, 2)
   assert.match(rules[0]!, /font-weight:400/)
   assert.match(rules[1]!, /font-weight:700/)
-  assert.match(rules[0]!, /src:url\("\/api\/font-file\/pack"\)/)
+  assert.match(rules[0]!, /font-display:block/)
   assert.equal(rules[0] === rules[1], false)
 })
 

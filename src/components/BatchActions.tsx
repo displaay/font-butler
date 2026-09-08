@@ -1,17 +1,26 @@
 import type { ReactNode } from 'react'
-import { ArrowLeftRight, CircleMinus, CirclePlus, FolderInput, ListX, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
+import { ArrowLeftRight, CircleMinus, CirclePlus, ListX, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
+import { AdobeLogo } from '@/components/Badges'
 import { Button } from '@/components/ui/button'
+import { SplitUninstallButton } from '@/components/SplitUninstallButton'
 import {
   ContextMenuItem,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
 } from '@/components/ui/context-menu'
 import {
   actionLabel,
+  deleteSourcesLabel,
+  forgetSourcesLabel,
   hasCatalogBatchActions,
   hasSystemBatchActions,
   type CatalogBatchPlan,
   type SystemBatchPlan,
 } from '@/lib/batch'
+import { hasInstanceMenuActions, type InstanceMenuPlan } from '@/lib/eligibility'
+import { formatSwapLabel, instanceSwapLabel, type FormatSwap } from '@/lib/formats'
 
 export function CatalogBatchButtons({
   plan,
@@ -25,6 +34,9 @@ export function CatalogBatchButtons({
   onRepair,
   onForget,
   onDeleteFiles,
+  formatSwap = null,
+  onFormatSwap,
+  splitMenuPlacement = 'down',
 }: {
   plan: CatalogBatchPlan
   busy: boolean
@@ -37,10 +49,30 @@ export function CatalogBatchButtons({
   onRepair?: () => void
   onForget: () => void
   onDeleteFiles?: () => void
+  formatSwap?: FormatSwap | null
+  onFormatSwap?: () => void
+  splitMenuPlacement?: 'up' | 'down'
 }) {
-  if (!hasCatalogBatchActions(plan)) return null
+  if (!hasCatalogBatchActions(plan) && !formatSwap) return null
   const multi = plan.count > 1
   const installVerb = plan.installMissing ? 'Install missing' : 'Install'
+  const uninstallExtras = [
+    plan.uninstallAndRemove > 0 && onUninstallAndRemove
+      ? {
+          key: 'uninstall-and-delete',
+          label: actionLabel('Uninstall and delete sources', plan.uninstallAndRemove, multi),
+          onSelect: onUninstallAndRemove,
+        }
+      : null,
+    plan.deleteFiles > 0 && onDeleteFiles
+      ? {
+          key: 'delete-sources',
+          label: deleteSourcesLabel(plan.deleteFiles, multi),
+          onSelect: onDeleteFiles,
+        }
+      : null,
+  ].filter((item): item is { key: string; label: string; onSelect: () => void } => Boolean(item))
+  const extrasOnSplit = plan.uninstall > 0
   return (
     <div className="flex flex-wrap gap-2">
       {plan.reinstall > 0 && (
@@ -54,10 +86,15 @@ export function CatalogBatchButtons({
         </Button>
       )}
       {plan.install > 0 && (
-        <Button size="sm" disabled={busy} onClick={onInstall}>
+        <Button size="sm" variant="success" disabled={busy} onClick={onInstall}>
           <CirclePlus /> {actionLabel(installVerb, plan.install, plan.install > 1 || multi)}
         </Button>
       )}
+      {formatSwap && onFormatSwap ? (
+        <Button size="sm" variant="success" disabled={busy} onClick={onFormatSwap}>
+          <ArrowLeftRight /> {formatSwapLabel(formatSwap)}
+        </Button>
+      ) : null}
       {plan.activate > 0 && (
         <Button size="sm" disabled={busy} onClick={onActivate}>
           <Power /> {actionLabel('Activate', plan.activate, multi)}
@@ -65,27 +102,33 @@ export function CatalogBatchButtons({
       )}
       {plan.deactivate > 0 && (
         <Button size="sm" variant="outline" disabled={busy} onClick={onDeactivate}>
-          <PowerOff /> {actionLabel('Deactivate', plan.deactivate, plan.deactivate > 1 || multi)}
+          <PowerOff /> Deactivate
         </Button>
       )}
       {plan.uninstall > 0 && (
-        <Button size="sm" variant="destructive" disabled={busy} onClick={onUninstall}>
-          <CircleMinus /> {actionLabel('Uninstall', plan.uninstall, multi)}
-        </Button>
+        <SplitUninstallButton
+          busy={busy}
+          uninstallLabel="Uninstall"
+          extras={uninstallExtras}
+          onUninstall={onUninstall}
+          menuPlacement={splitMenuPlacement}
+        />
       )}
-      {plan.uninstallAndRemove > 0 && onUninstallAndRemove && (
-        <Button size="sm" variant="destructive" disabled={busy} onClick={onUninstallAndRemove}>
-          <Trash2 /> {actionLabel('Uninstall and remove', plan.uninstallAndRemove, multi)}
-        </Button>
-      )}
+      {!extrasOnSplit &&
+        plan.uninstallAndRemove > 0 &&
+        onUninstallAndRemove && (
+          <Button size="sm" variant="destructive" disabled={busy} onClick={onUninstallAndRemove}>
+            <Trash2 /> {actionLabel('Uninstall and delete sources', plan.uninstallAndRemove, multi)}
+          </Button>
+        )}
       {plan.forget > 0 && (
         <Button size="sm" variant="outline" disabled={busy} onClick={onForget}>
-          <ListX /> {multi ? `Remove ${plan.forget} from list` : 'Remove from list'}
+          <ListX /> {forgetSourcesLabel(plan.forget, multi)}
         </Button>
       )}
-      {plan.deleteFiles > 0 && onDeleteFiles && (
+      {!extrasOnSplit && plan.deleteFiles > 0 && onDeleteFiles && (
         <Button size="sm" variant="destructive" disabled={busy} onClick={onDeleteFiles}>
-          <Trash2 /> {multi ? `Delete ${plan.deleteFiles} files` : 'Delete files'}
+          <Trash2 /> {deleteSourcesLabel(plan.deleteFiles, multi)}
         </Button>
       )}
     </div>
@@ -104,14 +147,13 @@ export function SystemBatchButtons({
   onUninstall: () => void
 }) {
   if (!hasSystemBatchActions(plan)) return null
-  const multi = plan.count > 1
   return (
     <div className="flex flex-wrap gap-2">
       <Button size="sm" variant="outline" disabled={busy} onClick={onDeactivate}>
-        <PowerOff /> {actionLabel('Deactivate', plan.deactivate, multi)}
+        <PowerOff /> Deactivate
       </Button>
       <Button size="sm" variant="destructive" disabled={busy} onClick={onUninstall}>
-        <CircleMinus /> {actionLabel('Uninstall', plan.uninstall, multi)}
+        <CircleMinus /> Uninstall
       </Button>
     </div>
   )
@@ -159,6 +201,10 @@ export function CatalogMenuItems({
   onSwitch,
   onForget,
   onDeleteFiles,
+  formatUninstalls = [],
+  onUninstallFormat,
+  formatSwap = null,
+  onFormatSwap,
 }: {
   plan: CatalogBatchPlan
   busy: boolean
@@ -176,6 +222,10 @@ export function CatalogMenuItems({
   onSwitch?: () => void
   onForget: () => void
   onDeleteFiles?: () => void
+  formatUninstalls?: string[]
+  onUninstallFormat?: (format: string) => void
+  formatSwap?: { from: string; to: string } | null
+  onFormatSwap?: () => void
 }) {
   const multi = plan.count > 1
   const installVerb = plan.installMissing ? 'Install missing' : 'Install'
@@ -187,7 +237,9 @@ export function CatalogMenuItems({
     plan.activate > 0 ||
     plan.deactivate > 0 ||
     plan.uninstall > 0 ||
-    plan.uninstallAndRemove > 0
+    plan.uninstallAndRemove > 0 ||
+    formatUninstalls.length >= 2 ||
+    Boolean(formatSwap)
   return (
     <>
       {plan.reinstall > 0 && (
@@ -210,9 +262,14 @@ export function CatalogMenuItems({
           <CirclePlus /> Install as…
         </ContextMenuItem>
       )}
+      {formatSwap && onFormatSwap ? (
+        <ContextMenuItem disabled={busy} onSelect={onFormatSwap}>
+          <ArrowLeftRight /> {formatSwapLabel(formatSwap)}
+        </ContextMenuItem>
+      ) : null}
       {plan.adobeInstall > 0 && onInstallToAdobe && (
         <ContextMenuItem disabled={busy} onSelect={onInstallToAdobe}>
-          <FolderInput /> {actionLabel('Install to Adobe testing folder', plan.adobeInstall, plan.adobeInstall > 1 || multi)}
+          <AdobeLogo /> {actionLabel('Install to Adobe testing folder', plan.adobeInstall, multi)}
         </ContextMenuItem>
       )}
       {onSwitch && (
@@ -227,21 +284,39 @@ export function CatalogMenuItems({
       )}
       {plan.deactivate > 0 && (
         <ContextMenuItem disabled={busy} onSelect={onDeactivate}>
-          <PowerOff /> {actionLabel('Deactivate', plan.deactivate, plan.deactivate > 1 || multi)}
+          <PowerOff /> Deactivate
         </ContextMenuItem>
       )}
       {plan.uninstall > 0 && (
         <ContextMenuItem disabled={busy} onSelect={onUninstall}>
-          <CircleMinus /> {actionLabel('Uninstall', plan.uninstall, multi)}
+          <CircleMinus /> Uninstall
         </ContextMenuItem>
       )}
+      {formatUninstalls.length >= 2 && onUninstallFormat ? (
+        <ContextMenuSub>
+          <ContextMenuSubTrigger disabled={busy}>
+            <CircleMinus /> Uninstall format…
+          </ContextMenuSubTrigger>
+          <ContextMenuSubContent>
+            {formatUninstalls.map((format) => (
+              <ContextMenuItem
+                key={format}
+                disabled={busy}
+                onSelect={() => onUninstallFormat(format)}
+              >
+                {format.toUpperCase()}
+              </ContextMenuItem>
+            ))}
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+      ) : null}
       {plan.uninstallAndRemove > 0 && onUninstallAndRemove && (
         <ContextMenuItem
           disabled={busy}
-          className="text-destructive focus:text-destructive"
+          className="text-destructive focus:text-destructive data-[highlighted]:bg-red-100 data-[highlighted]:text-destructive dark:data-[highlighted]:bg-red-500/20"
           onSelect={onUninstallAndRemove}
         >
-          <Trash2 /> {actionLabel('Uninstall and remove', plan.uninstallAndRemove, multi)}
+          <Trash2 /> {actionLabel('Uninstall and delete sources', plan.uninstallAndRemove, multi)}
         </ContextMenuItem>
       )}
       {(plan.forget > 0 || plan.deleteFiles > 0) && (
@@ -249,16 +324,16 @@ export function CatalogMenuItems({
           {hasPrimary && <ContextMenuSeparator />}
           {plan.forget > 0 && (
             <ContextMenuItem disabled={busy} onSelect={onForget}>
-              <ListX /> {multi ? `Remove ${plan.forget} from list` : 'Remove from list'}
+              <ListX /> {forgetSourcesLabel(plan.forget, multi)}
             </ContextMenuItem>
           )}
           {plan.deleteFiles > 0 && onDeleteFiles && (
             <ContextMenuItem
               disabled={busy}
-              className="text-destructive focus:text-destructive"
+              className="text-destructive focus:text-destructive data-[highlighted]:bg-red-100 data-[highlighted]:text-destructive dark:data-[highlighted]:bg-red-500/20"
               onSelect={onDeleteFiles}
             >
-              <Trash2 /> {multi ? `Delete ${plan.deleteFiles} files` : 'Delete files'}
+              <Trash2 /> {deleteSourcesLabel(plan.deleteFiles, multi)}
             </ContextMenuItem>
           )}
         </>
@@ -278,16 +353,73 @@ export function SystemMenuItems({
   onDeactivate: () => void
   onUninstall: () => void
 }) {
-  const multi = plan.count > 1
   const enabled = hasSystemBatchActions(plan)
   return (
     <>
       <ContextMenuItem disabled={!enabled || busy} onSelect={onDeactivate}>
-        <PowerOff /> {actionLabel('Deactivate', Math.max(plan.deactivate, 1), multi && enabled)}
+        <PowerOff /> Deactivate
       </ContextMenuItem>
       <ContextMenuItem disabled={!enabled || busy} onSelect={onUninstall}>
-        <CircleMinus /> {actionLabel('Uninstall', Math.max(plan.uninstall, 1), multi && enabled)}
+        <CircleMinus /> Uninstall
       </ContextMenuItem>
+    </>
+  )
+}
+
+export function InstanceMenuItems({
+  plan,
+  entryId,
+  busy,
+  onInstall,
+  onActivate,
+  onDeactivate,
+  onUninstall,
+  onInstallToAdobe,
+  onFormatSwap,
+}: {
+  plan: InstanceMenuPlan
+  entryId: string
+  busy: boolean
+  onInstall: () => void
+  onActivate: () => void
+  onDeactivate: () => void
+  onUninstall: () => void
+  onInstallToAdobe: () => void
+  onFormatSwap?: () => void
+}) {
+  if (!hasInstanceMenuActions(plan)) return null
+  return (
+    <>
+      {plan.formatSwap && onFormatSwap ? (
+        <ContextMenuItem disabled={busy} onSelect={onFormatSwap}>
+          <ArrowLeftRight /> {instanceSwapLabel(plan.formatSwap, entryId)}
+        </ContextMenuItem>
+      ) : null}
+      {plan.install ? (
+        <ContextMenuItem disabled={busy} onSelect={onInstall}>
+          <CirclePlus /> Install instance
+        </ContextMenuItem>
+      ) : null}
+      {plan.activate ? (
+        <ContextMenuItem disabled={busy} onSelect={onActivate}>
+          <Power /> Activate instance
+        </ContextMenuItem>
+      ) : null}
+      {plan.adobeInstall ? (
+        <ContextMenuItem disabled={busy} onSelect={onInstallToAdobe}>
+          <AdobeLogo /> Install to Adobe testing folder
+        </ContextMenuItem>
+      ) : null}
+      {plan.deactivate ? (
+        <ContextMenuItem disabled={busy} onSelect={onDeactivate}>
+          <PowerOff /> Deactivate instance
+        </ContextMenuItem>
+      ) : null}
+      {plan.uninstall ? (
+        <ContextMenuItem disabled={busy} onSelect={onUninstall}>
+          <CircleMinus /> Uninstall instance
+        </ContextMenuItem>
+      ) : null}
     </>
   )
 }

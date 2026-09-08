@@ -62,7 +62,7 @@ async function systemFaceCss(
 ): Promise<string> {
   const url = await cachedSignedSystemFontUrl(cache, face.path, secret, { refresh })
   const weight = face.isVariable ? '1 1000' : face.weight ? String(face.weight) : '400'
-  return `@font-face{font-family:"${hashPath(face.path)}";src:url("${url}");font-weight:${weight};font-display:swap;}`
+  return `@font-face{font-family:"${hashPath(face.path)}";src:url("${url}");font-weight:${weight};font-display:block;}`
 }
 
 function ensureStyle(

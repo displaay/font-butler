@@ -6,11 +6,13 @@ import {
   deactivatableIds,
   familyHasAction,
   familyHasSwitch,
+  instanceMenuLabels,
   installableIds,
   reinstallableIds,
   repairableIds,
   uninstallableIds,
 } from './eligibility.ts'
+import { formatSwap } from './formats.ts'
 import type { CatalogEntry, FamilyGroup, FontFaceInfo } from './types.ts'
 
 function face(familyName: string, styleName = 'Regular'): FontFaceInfo {
@@ -132,6 +134,24 @@ test('repair is hidden unless a managed copy is missing', () => {
   assert.deepEqual(repairableIds(healthy), [])
   assert.deepEqual(repairableIds(missing), ['gone'])
   assert.deepEqual(repairableIds(adobeGone), ['adobe'])
+
+  const deactivated = group([
+    {
+      ...entry('parked', 'deactivated'),
+      installedPath: '/tmp/live/Fenul.ttf',
+      disabledPath: '/tmp/disabled/Fenul.ttf',
+      previousRevisionId: 'abc',
+      installations: [
+        {
+          destinationId: 'macos',
+          path: '/tmp/live/Fenul.ttf',
+          parkedPath: '/tmp/disabled/Fenul.ttf',
+          verification: 'unavailable',
+        },
+      ],
+    },
+  ])
+  assert.deepEqual(repairableIds(deactivated), [])
 })
 
 test('Adobe install is offered until a testing-folder copy is present', () => {
@@ -165,11 +185,51 @@ test('Adobe install is offered until a testing-folder copy is present', () => {
   assert.deepEqual(adobeInstallableIds(web), [])
 })
 
+test('Adobe install is hidden when the testing folder is unavailable', () => {
+  const installed = entry('on', 'installed', 'Bold')
+  assert.deepEqual(adobeInstallableIds(group([entry('plain', 'installed')]), false), [])
+  assert.deepEqual(instanceMenuLabels(installed, [installed], false), [
+    'Deactivate instance',
+    'Uninstall instance',
+  ])
+})
+
+test('Adobe install picks one file per unique style, preferring the occupying format', () => {
+  const otf = {
+    ...entry('otf', 'installed'),
+    format: 'otf' as const,
+    sourcePath: '/tmp/otf.otf',
+  }
+  const ttf = {
+    ...entry('ttf', 'uninstalled'),
+    format: 'ttf' as const,
+    sourcePath: '/tmp/ttf.ttf',
+  }
+  assert.deepEqual(adobeInstallableIds(group([otf, ttf])), ['otf'])
+
+  const placed = {
+    ...otf,
+    installations: [
+      { destinationId: 'adobe-shared' as const, path: '/tmp/adobe.otf', verification: 'file-present' as const },
+    ],
+  }
+  assert.deepEqual(adobeInstallableIds(group([placed, ttf])), [])
+
+  const boldTtf = {
+    ...entry('bold', 'installed', 'Bold'),
+    format: 'ttf' as const,
+    sourcePath: '/tmp/bold.ttf',
+  }
+  assert.deepEqual(adobeInstallableIds(group([otf, boldTtf])), ['otf', 'bold'])
+})
+
 test('family Switch is hidden for a kept alt-format sibling', () => {
   const otf = { ...entry('otf', 'installed'), format: 'otf' as const, sourcePath: '/tmp/otf.otf' }
   const ttf = { ...entry('ttf', 'uninstalled'), format: 'ttf' as const, sourcePath: '/tmp/ttf.ttf' }
   const mixed = group([otf, ttf])
   assert.equal(familyHasSwitch(mixed, mixed.entries), false)
+  assert.deepEqual(installableIds(mixed), [])
+  assert.deepEqual(formatSwap(mixed.entries), { from: 'otf', to: 'ttf', incomingIds: ['ttf'] })
 })
 
 test('family Switch is offered for a kept same-format sibling', () => {
@@ -177,4 +237,54 @@ test('family Switch is offered for a kept same-format sibling', () => {
   const kept = entry('kept', 'uninstalled')
   const copies = group([live, kept])
   assert.equal(familyHasSwitch(copies, copies.entries), true)
+})
+
+test('instance menu is scoped to that catalog entry', () => {
+  const installed = entry('on', 'installed', 'Bold')
+  assert.deepEqual(instanceMenuLabels(installed), [
+    'Install to Adobe testing folder',
+    'Deactivate instance',
+    'Uninstall instance',
+  ])
+
+  const withAdobe = {
+    ...installed,
+    installations: [
+      { destinationId: 'adobe-shared' as const, path: '/tmp/adobe.ttf', verification: 'file-present' as const },
+    ],
+  }
+  assert.deepEqual(instanceMenuLabels(withAdobe), ['Deactivate instance', 'Uninstall instance'])
+
+  const deactivated = entry('off', 'deactivated', 'Light')
+  assert.deepEqual(instanceMenuLabels(deactivated), [
+    'Activate instance',
+    'Install to Adobe testing folder',
+    'Uninstall instance',
+  ])
+
+  const uninstalled = entry('missing', 'uninstalled', 'Regular')
+  assert.deepEqual(instanceMenuLabels(uninstalled), [
+    'Install instance',
+    'Install to Adobe testing folder',
+  ])
+
+  const otf = { ...entry('otf', 'installed'), format: 'otf' as const, sourcePath: '/tmp/otf.otf' }
+  const ttf = {
+    ...entry('ttf', 'uninstalled'),
+    format: 'ttf' as const,
+    sourcePath: '/tmp/ttf.ttf',
+  }
+  assert.deepEqual(instanceMenuLabels(ttf, [otf, ttf]), [
+    'Swap with OTF',
+    'Install to Adobe testing folder',
+  ])
+  assert.deepEqual(instanceMenuLabels(otf, [otf, ttf]), [
+    'Swap for TTF',
+    'Install to Adobe testing folder',
+    'Deactivate instance',
+    'Uninstall instance',
+  ])
+
+  const preview = { ...entry('web', 'uninstalled'), previewOnly: true, format: 'woff' as const }
+  assert.deepEqual(instanceMenuLabels(preview), [])
 })

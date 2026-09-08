@@ -117,8 +117,11 @@ body {
 .app-region-drag input,
 .app-region-drag textarea,
 .app-region-drag select,
+.app-region-drag label,
 .app-region-drag a,
 .app-region-drag [role='button'],
+.app-region-drag [role='tab'],
+.app-region-drag [role='tablist'],
 .app-region-drag [role='menu'],
 .app-region-drag [role='menuitem'],
 .app-region-drag [role='menuitemcheckbox'] {

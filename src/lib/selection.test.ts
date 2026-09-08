@@ -6,6 +6,7 @@ import {
   keysInMarquee,
   mergeMarqueeSelection,
   nextSelection,
+  pointerUpClearsSelection,
   rectsIntersect,
   sameKeys,
   shortcutAction,
@@ -82,6 +83,22 @@ test('keysInMarquee returns overlapping cards', () => {
 test('mergeMarqueeSelection replaces or adds', () => {
   assert.deepEqual(mergeMarqueeSelection(['A'], ['B', 'C'], false), ['B', 'C'])
   assert.deepEqual(mergeMarqueeSelection(['A'], ['B', 'A'], true), ['A', 'B'])
+})
+
+test('pointerUpClearsSelection only clears empty primary clicks', () => {
+  const empty = {
+    marqueeActive: false,
+    downPreserves: false,
+    contextMenuOpened: false,
+    button: 0,
+    upPreserves: false,
+  }
+  assert.equal(pointerUpClearsSelection(empty), true)
+  assert.equal(pointerUpClearsSelection({ ...empty, downPreserves: true }), false)
+  assert.equal(pointerUpClearsSelection({ ...empty, contextMenuOpened: true }), false)
+  assert.equal(pointerUpClearsSelection({ ...empty, button: 2 }), false)
+  assert.equal(pointerUpClearsSelection({ ...empty, upPreserves: true }), false)
+  assert.equal(pointerUpClearsSelection({ ...empty, marqueeActive: true }), false)
 })
 
 test('shortcutAction maps keys and ignores typing', () => {

@@ -17,8 +17,11 @@ const ACTION_WORDS: Record<ActionVerb, { pending: string; done: string }> = {
   remove: { pending: 'Removing', done: 'Removed' },
   reinstall: { pending: 'Reinstalling', done: 'Reinstalled' },
   forget: { pending: 'Removing', done: 'Removed' },
-  deleteFiles: { pending: 'Deleting', done: 'Deleted' },
-  uninstallAndRemove: { pending: 'Uninstalling and removing', done: 'Uninstalled and removed' },
+  deleteFiles: { pending: 'Deleting source files for', done: 'Deleted source files for' },
+  uninstallAndRemove: {
+    pending: 'Uninstalling and deleting sources of',
+    done: 'Uninstalled and deleted sources of',
+  },
 }
 
 export function actionCopy(verb: ActionVerb, subject: string): { pending: string; done: string } {

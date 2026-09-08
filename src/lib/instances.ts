@@ -1,5 +1,8 @@
-import { instanceInstallState, type InstanceInstallState } from './state'
+import { entryFormatOf } from './formats.ts'
+import { entryHasTrackedSource } from './group.ts'
+import { entryCopyDestinations, instanceInstallState, type InstanceInstallState } from './state'
 import type {
+  CatalogEntry,
   FamilyGroup,
   FontFaceInfo,
   SystemFace,
@@ -12,10 +15,14 @@ export type InstanceRow = {
   sublabel?: string
   catalogEntryId?: string
   systemPath?: string
+  format?: string
   weight?: number
   italic?: boolean
   variation?: string
   installState?: InstanceInstallState
+  hasSource?: boolean
+  macosCopy?: boolean
+  adobeCopy?: boolean
 }
 
 export function variationSettings(coordinates?: Record<string, number>): string | undefined {
@@ -48,33 +55,42 @@ function italicFromStyleName(name: string, fallback = false): boolean {
 
 function rowsFromFace(
   face: FontFaceInfo,
-  entryId: string,
+  entry: Pick<
+    CatalogEntry,
+    'id' | 'format' | 'sourcePath' | 'previewOnly' | 'status' | 'installedPath' | 'disabledPath' | 'installations'
+  >,
   installState: InstanceInstallState,
+  hasSource = false,
 ): InstanceRow[] {
+  const format = entryFormatOf(entry) || undefined
+  const dest = entryCopyDestinations(entry)
   if (face.isVariable && face.instanceNames.length > 0) {
     return face.instanceNames.map((name) => {
       const named = face.namedInstances?.find((item) => item.name === name)
       return {
-        key: `${entryId}-${face.postscriptName}-${name}`,
+        key: `${entry.id}-${face.postscriptName}-${name}`,
         label: name,
         sublabel: face.postscriptName,
-        catalogEntryId: entryId,
+        catalogEntryId: entry.id,
         weight: weightFromStyleName(name, face.weight),
         italic: italicFromStyleName(name, face.italic),
         variation: variationSettings(named?.coordinates),
-        installState,
       }
     })
   }
   return [
     {
-      key: `${entryId}-${face.postscriptName}`,
+      key: `${entry.id}-${face.postscriptName}`,
       label: face.styleName,
       sublabel: face.postscriptName,
-      catalogEntryId: entryId,
+      catalogEntryId: entry.id,
+      format,
       weight: face.weight,
       italic: face.italic,
       installState,
+      hasSource,
+      macosCopy: dest.macos,
+      adobeCopy: dest.adobe,
     },
   ]
 }
@@ -83,8 +99,9 @@ export function catalogInstanceRows(group: FamilyGroup): InstanceRow[] {
   const rows: InstanceRow[] = []
   for (const entry of group.entries) {
     const installState = instanceInstallState(entry)
+    const hasSource = entryHasTrackedSource(entry)
     for (const face of entry.faces) {
-      rows.push(...rowsFromFace(face, entry.id, installState))
+      rows.push(...rowsFromFace(face, entry, installState, hasSource))
     }
   }
   return rows
@@ -93,15 +110,19 @@ export function catalogInstanceRows(group: FamilyGroup): InstanceRow[] {
 function rowsFromSystemFace(face: SystemFace): InstanceRow[] {
   const names = face.instanceNames ?? []
   const installState: InstanceInstallState = face.deactivated ? 'deactivated' : 'installed'
+  const row = {
+    systemPath: face.path,
+    format: face.format,
+    installState,
+    macosCopy: !face.deactivated,
+  }
   if (face.isVariable && names.length > 0) {
     return names.map((name) => ({
       key: `${face.path}-${name}`,
       label: name,
       sublabel: face.postscriptName,
-      systemPath: face.path,
       weight: weightFromStyleName(name, face.weight),
       italic: italicFromStyleName(name, face.italic),
-      installState,
     }))
   }
   return [
@@ -109,10 +130,9 @@ function rowsFromSystemFace(face: SystemFace): InstanceRow[] {
       key: `${face.path}-${face.postscriptName}`,
       label: face.styleName,
       sublabel: face.postscriptName,
-      systemPath: face.path,
       weight: face.weight,
       italic: face.italic,
-      installState,
+      ...row,
     },
   ]
 }

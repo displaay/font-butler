@@ -123,6 +123,17 @@ app.get('/api/settings', (c) =>
 
 app.get('/api/destinations', (c) => c.json(service.listDestinations()))
 
+app.post('/api/destinations/adobe', (c) => {
+  try {
+    return c.json(service.createAdobeTestingFolder())
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : 'Could not create the Adobe testing folder' },
+      400,
+    )
+  }
+})
+
 app.post('/api/settings', async (c) => {
   const body = await c.req.json<{
     watchFolders?: string[]
@@ -253,11 +264,13 @@ app.post('/api/install', async (c) => {
     familyName?: string
     replace?: boolean
     destinationId?: 'macos' | 'adobe-shared'
+    destinationIds?: Array<'macos' | 'adobe-shared'>
     expectedSourceFingerprint?: string
   }>()
   const options = {
     replace: body.replace === true,
     destinationId: body.destinationId,
+    destinationIds: body.destinationIds,
     expectedSourceFingerprint: body.expectedSourceFingerprint,
   }
   try {
@@ -345,8 +358,18 @@ app.post('/api/deactivate', async (c) => {
 })
 
 app.post('/api/activate', async (c) => {
-  const body = await c.req.json<{ id?: string; ids?: string[]; replace?: boolean; switch?: boolean }>()
-  const options = { replace: body.replace === true, switch: body.switch === true }
+  const body = await c.req.json<{
+    id?: string
+    ids?: string[]
+    replace?: boolean
+    switch?: boolean
+    destinationIds?: Array<'macos' | 'adobe-shared'>
+  }>()
+  const options = {
+    replace: body.replace === true,
+    switch: body.switch === true,
+    destinationIds: body.destinationIds,
+  }
   try {
     if (body.ids?.length) {
       const entries = await service.activateMany(body.ids, options)
@@ -739,6 +762,21 @@ app.get('/api/preview-meta/:id', (c) => {
     return c.json(service.previewMeta(c.req.param('id'), which, c.req.query('revision') ?? undefined))
   } catch (error) {
     return c.json(fail(error, 'Could not read preview'), 400)
+  }
+})
+
+app.get('/api/preview-glyph/:id', (c) => {
+  try {
+    const which = (c.req.query('which') ?? 'installed') as 'source' | 'installed' | 'revision'
+    const code = Number(c.req.query('code'))
+    if (!Number.isInteger(code)) {
+      return c.json({ error: 'Missing code' }, 400)
+    }
+    return c.json(
+      service.previewGlyph(c.req.param('id'), code, which, c.req.query('revision') ?? undefined),
+    )
+  } catch (error) {
+    return c.json(fail(error, 'Could not read glyph'), 400)
   }
 })
 

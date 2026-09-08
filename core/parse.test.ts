@@ -3,8 +3,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { parseFontFile, resolveFamilyNames } from './parse.ts'
-import { writeTestCollection } from './test-util.ts'
+import { parseFontFile, glyphNameForCodePoint, resolveFamilyNames } from './parse.ts'
+import { writeTestCollection, writeTestFont } from './test-util.ts'
 
 test('resolveFamilyNames prefers typographic family and style', () => {
   assert.deepEqual(
@@ -96,4 +96,16 @@ test('parseFontFile groups Booton OTFs under the typographic family', (t) => {
       'Thin Italic',
     ],
   )
+})
+
+test('glyphNameForCodePoint reads the PostScript glyph name', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-glyph-name-'))
+  try {
+    const file = path.join(dir, 'Pack-Regular.ttf')
+    writeTestFont(file, 'Pack', 'Pack-Regular')
+    assert.equal(glyphNameForCodePoint(file, 65), 'A')
+    assert.equal(glyphNameForCodePoint(file, 66), null)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
 })

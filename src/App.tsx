@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
 import { toast } from 'sonner'
-import { ArrowLeft, Maximize2, Minimize2, RefreshCw, X } from 'lucide-react'
+import { ArrowLeft, RefreshCw } from 'lucide-react'
 import { ActivityView } from '@/components/ActivityView'
 import {
   BatchActionBar,
@@ -15,7 +15,7 @@ import { FolderSetupDialog } from '@/components/FolderSetupDialog'
 import { FontFaceStyles } from '@/components/FontFaceStyles'
 import { FormatDialog } from '@/components/FormatDialog'
 import { ImportPlanDialog } from '@/components/ImportPlanDialog'
-import { Inspector } from '@/components/Inspector'
+import { Inspector, InspectorTabList, inspectorPaneTabs, type InspectorPaneTab } from '@/components/Inspector'
 import { LibraryCard } from '@/components/LibraryCard'
 import { MarqueeOverlay } from '@/components/MarqueeOverlay'
 import { OnboardingDialog } from '@/components/OnboardingDialog'
@@ -43,7 +43,7 @@ import {
   unreadActivityCount,
   unreadOperationIdsToMark,
 } from '@/lib/activityInbox'
-import { desktopPathForFile } from '@/lib/desktop'
+import { desktopPathForFile, hasInsetTrafficLights } from '@/lib/desktop'
 import {
   collectDropPayload,
   commonDroppedFolder,
@@ -52,8 +52,8 @@ import {
   planPathsForImport,
 } from '@/lib/drop'
 import { familyHasSwitch, switchableEntries } from '@/lib/eligibility'
+import { adobeTestingFolderAvailable } from '@/lib/folders'
 import { canSwitchTo } from '@/lib/identity'
-import { canCompareInstalledVsSource, isComparisonSourceStale } from '@/lib/comparison'
 import {
   createSavedFilter,
   deleteSavedFilter,
@@ -68,7 +68,7 @@ import {
   readSortMode,
   shouldShowOnboarding,
 } from '@/lib/preferences'
-import { actionCopy, adobeInstallCopy, emptyImportError, importDoneCopy } from '@/lib/notify'
+import { actionCopy, emptyImportError, importDoneCopy } from '@/lib/notify'
 import { planNeedsReview } from '@/lib/planner'
 import { clearFontDragImage } from '@/lib/dragPreview'
 import {
@@ -80,6 +80,7 @@ import {
 } from '@/lib/projects'
 import { specimenFromSettings } from '@/lib/specimen'
 import { needsLocateSource } from '@/lib/state'
+import { formatSwap } from '@/lib/formats'
 import {
   catalogBatchPlan,
   catalogBatchSummary,
@@ -94,6 +95,7 @@ import {
   keysInMarquee,
   mergeMarqueeSelection,
   nextSelection,
+  pointerUpClearsSelection,
   sameKeys,
   shortcutAction,
   type Rect,
@@ -101,13 +103,12 @@ import {
 import {
   clickOpensInspector,
   DEFAULT_INSPECTOR_DENSITY,
-  expandInspector,
   inspectorHidesBrowseGrid,
   type InspectorDensity,
 } from '@/lib/inspector'
 import { applyTheme } from '@/lib/theme'
 import { allUpdateGroups, visibleUpdateGroups } from '@/lib/updateInventory'
-import type { AppSettings, CatalogEntry, ComparisonCapture, DuplicateWarning, FamilyGroup, ImportPlan, ImportPlanItem, LibraryFilter, Operation, PreviewPreferences, ProjectSet, SavedLibraryFilter, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
+import type { AppSettings, CatalogEntry, DestinationCapability, DuplicateWarning, FamilyGroup, ImportPlan, ImportPlanItem, LibraryFilter, Operation, PreviewPreferences, ProjectSet, SavedLibraryFilter, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { isPathUnderFolder, isWatchFolderEntry, watchFolderName } from '@/lib/watchFolders'
 
@@ -138,7 +139,6 @@ function AppShell() {
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null)
-  const [comparisonCapture, setComparisonCapture] = useState<ComparisonCapture | null>(null)
   const [renameEntry, setRenameEntry] = useState<CatalogEntry | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [onboardingOpen, setOnboardingOpen] = useState(false)
@@ -155,6 +155,12 @@ function AppShell() {
   const [showSources, setShowSources] = useState(
     () => localStorage.getItem('font-butler-show-sources') === 'true',
   )
+  const [showAdded, setShowAdded] = useState(
+    () => localStorage.getItem('font-butler-show-added') === 'true',
+  )
+  const [hideDestinations, setHideDestinations] = useState(
+    () => localStorage.getItem('font-butler-hide-destinations') === 'true',
+  )
   const [viewLayout, setViewLayout] = useState<ViewLayout>(() =>
     localStorage.getItem('font-butler-view-layout') === 'grid' ? 'grid' : 'list',
   )
@@ -164,6 +170,11 @@ function AppShell() {
   const [selectionAnchor, setSelectionAnchor] = useState<string | null>(null)
   const [inspectSelection, setInspectSelection] = useState(false)
   const [inspectorDensity, setInspectorDensity] = useState<InspectorDensity>(DEFAULT_INSPECTOR_DENSITY)
+  const [inspectorPane, setInspectorPane] = useState<InspectorPaneTab>('details')
+  const inspectorTablistId = useId()
+  useEffect(() => {
+    if (tab === 'system' && inspectorPane === 'glyphs') setInspectorPane('details')
+  }, [tab, inspectorPane])
   const [marqueeRect, setMarqueeRect] = useState<Rect | null>(null)
   const marqueeRef = useRef<{
     startX: number
@@ -200,6 +211,11 @@ function AppShell() {
   const [highlightOperation, setHighlightOperation] = useState<string | null>(null)
   const [duplicates, setDuplicates] = useState<DuplicateWarning[]>([])
   const [duplicatesOpen, setDuplicatesOpen] = useState(false)
+  const [adobeAvailable, setAdobeAvailable] = useState(true)
+
+  function applyAdobeAvailability(destinations?: DestinationCapability[]) {
+    setAdobeAvailable(adobeTestingFolderAvailable(destinations))
+  }
 
   function applySettings(next: AppSettings) {
     const current = settingsRef.current
@@ -248,6 +264,7 @@ function AppShell() {
         ])
         if (!cancelled) {
           applySettings(settingsResult.settings)
+          applyAdobeAvailability(settingsResult.destinations?.destinations)
           setProjects(projectResult.projects)
           setOperations(activityResult.operations)
           operationsRef.current = activityResult.operations
@@ -300,6 +317,7 @@ function AppShell() {
               setSelectedFamily(familyNameOf(match))
               if (match.previewOnly) {
                 setInspectorDensity(DEFAULT_INSPECTOR_DENSITY)
+                setInspectorPane('details')
                 setInspectSelection(true)
               }
             }
@@ -356,6 +374,12 @@ function AppShell() {
       stop()
     }
   }, [])
+
+  useLayoutEffect(() => {
+    if (!loading) return
+    setActionStatus('Reading fonts…')
+    return () => setActionStatus(null)
+  }, [loading, setActionStatus])
 
   useEffect(() => {
     operationsRef.current = operations
@@ -483,14 +507,6 @@ function AppShell() {
       tab === 'system' || tab === 'activity' ? [] : tab === 'updates' ? updateGroups : libraryGroups,
     [tab, updateGroups, libraryGroups],
   )
-  const hasCatalogList =
-    tab === 'system'
-      ? shownSystemGroups.length > 0
-      : tab === 'activity'
-        ? operations.length > 0
-        : tab === 'library'
-          ? libraryGroupsUnfiltered.length > 0
-          : allUpdates.length > 0
   const selectedGroup =
     selectedFamily && selectedFamilyKeys.includes(selectedFamily)
       ? (visibleGroups.find((group) => group.familyName === selectedFamily) ?? null)
@@ -499,11 +515,6 @@ function AppShell() {
     selectedGroup?.entries.find((entry) => entry.id === selectedEntryId) ??
     selectedGroup?.entries[0] ??
     null
-  const comparisonInstallBlocked = Boolean(
-    canCompareInstalledVsSource(selectedEntry) &&
-      (comparisonCapture?.id !== selectedEntry?.id ||
-        isComparisonSourceStale(comparisonCapture, selectedEntry?.sourceFingerprint)),
-  )
   const selectedSystemGroup =
     tab === 'system' && selectedSystem && selectedSystemKeys.includes(selectedSystem)
       ? (shownSystemGroups.find((group) => group.familyName === selectedSystem) ?? null)
@@ -570,6 +581,7 @@ function AppShell() {
     setSelectedEntryId(group.entries[0]?.id ?? null)
     setInspectSelection(true)
     setInspectorDensity(DEFAULT_INSPECTOR_DENSITY)
+    setInspectorPane('details')
   }
 
   function handleCatalogSelect(group: FamilyGroup, event: MouseEvent) {
@@ -579,10 +591,9 @@ function AppShell() {
     const range = event.shiftKey
     const toggle = event.metaKey || event.ctrlKey
     if (clickOpensInspector(current, group.familyName, { toggle, range })) {
-      if (inspectSelection) {
-        setInspectorDensity((density) => expandInspector(density))
-      } else {
+      if (!inspectSelection) {
         setInspectorDensity(DEFAULT_INSPECTOR_DENSITY)
+        setInspectorPane('details')
         setInspectSelection(true)
       }
       return
@@ -607,6 +618,7 @@ function AppShell() {
     setSelectionAnchor(group.familyName)
     setInspectSelection(true)
     setInspectorDensity(DEFAULT_INSPECTOR_DENSITY)
+    setInspectorPane('details')
   }
 
   function handleSystemSelect(group: SystemFamilyGroup, event: MouseEvent) {
@@ -616,10 +628,9 @@ function AppShell() {
     const range = event.shiftKey
     const toggle = event.metaKey || event.ctrlKey
     if (clickOpensInspector(current, group.familyName, { toggle, range })) {
-      if (inspectSelection) {
-        setInspectorDensity((density) => expandInspector(density))
-      } else {
+      if (!inspectSelection) {
         setInspectorDensity(DEFAULT_INSPECTOR_DENSITY)
+        setInspectorPane('details')
         setInspectSelection(true)
       }
       return
@@ -649,7 +660,7 @@ function AppShell() {
 
   const catalogSelection = selectedCatalogGroups()
   const systemSelection = selectedSystemList()
-  const catalogPlan = catalogBatchPlan(catalogSelection)
+  const catalogPlan = catalogBatchPlan(catalogSelection, adobeAvailable)
   const systemPlan = systemBatchPlan(systemSelection)
   const catalogSummary = catalogBatchSummary(catalogSelection)
   const systemSummary = systemBatchSummary(systemSelection)
@@ -657,10 +668,12 @@ function AppShell() {
   const showInspector = selectionCount === 1 && inspectSelection
   const showBatchBar = selectionCount > 1 || (selectionCount === 1 && !inspectSelection)
   const hideBrowseGrid = inspectorHidesBrowseGrid(showInspector)
+  const insetTrafficLights = hasInsetTrafficLights()
 
   function closeInspector() {
     setInspectSelection(false)
     setInspectorDensity(DEFAULT_INSPECTOR_DENSITY)
+    setInspectorPane('details')
   }
 
   function clearSelection() {
@@ -695,6 +708,8 @@ function AppShell() {
 
     const currentKeys = tab === 'system' ? selectedSystemKeys : selectedFamilyKeys
     const additive = event.metaKey || event.ctrlKey || event.shiftKey
+    const downPreserves = clickPreservesSelection(event.target)
+    let contextMenuOpened = false
     marqueeRef.current = {
       startX: event.clientX,
       startY: event.clientY,
@@ -732,27 +747,49 @@ function AppShell() {
       if (!session?.active) return
       updateFromPoint(session.lastX, session.lastY)
     }
+    const onContextMenu = () => {
+      contextMenuOpened = true
+    }
     const onUp = (up: globalThis.PointerEvent) => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
       window.removeEventListener('pointercancel', onUp)
       window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('contextmenu', onContextMenu, true)
       const session = marqueeRef.current
       marqueeRef.current = null
       setMarqueeRect(null)
-      if (!session?.active) {
-        if (!clickPreservesSelection(up.target)) clearSelection()
+      if (
+        pointerUpClearsSelection({
+          marqueeActive: Boolean(session?.active),
+          downPreserves,
+          contextMenuOpened,
+          button: up.button,
+          upPreserves: clickPreservesSelection(up.target),
+        })
+      ) {
+        clearSelection()
         return
       }
-      window.setTimeout(() => {
-        suppressClickRef.current = false
-      }, 0)
+      if (contextMenuOpened) {
+        suppressClickRef.current = true
+        window.setTimeout(() => {
+          suppressClickRef.current = false
+        }, 400)
+        return
+      }
+      if (session?.active) {
+        window.setTimeout(() => {
+          suppressClickRef.current = false
+        }, 0)
+      }
     }
 
     window.addEventListener('pointermove', onMove, { passive: false })
     window.addEventListener('pointerup', onUp)
     window.addEventListener('pointercancel', onUp)
     window.addEventListener('scroll', onScroll, true)
+    window.addEventListener('contextmenu', onContextMenu, true)
   }
 
   function selectAllVisible() {
@@ -787,6 +824,11 @@ function AppShell() {
     installOrActivateSelected,
     installGroupGuarded,
     installToAdobeFor,
+    installInstanceGuarded,
+    activateInstanceGuarded,
+    deactivateInstance,
+    uninstallInstance,
+    installInstanceToAdobe,
     activateGroupGuarded,
     reinstallSelected,
     repairSelected,
@@ -798,6 +840,9 @@ function AppShell() {
     uninstallAndRemoveFor,
     uninstallAndRemoveSelected,
     uninstallSelected,
+    uninstallFormatFrom,
+    swapFormatFrom,
+    swapInstanceFormat,
     deactivateSelected,
     showDoneToast,
     run,
@@ -813,7 +858,6 @@ function AppShell() {
     setTab,
     setWatchFolderFilter,
     setHighlightOperation,
-    comparisonCapture,
     selectedCatalogGroups,
     selectedSystemList,
     tab,
@@ -996,10 +1040,9 @@ function AppShell() {
       if (action === 'inspect') {
         if (selectionCount !== 1) return
         event.preventDefault()
-        if (inspectSelection) {
-          setInspectorDensity((density) => expandInspector(density))
-        } else {
+        if (!inspectSelection) {
           setInspectorDensity(DEFAULT_INSPECTOR_DENSITY)
+          setInspectorPane('details')
           setInspectSelection(true)
         }
         return
@@ -1007,7 +1050,7 @@ function AppShell() {
       if (action === 'specimen') {
         if (!inspectSelection) return
         event.preventDefault()
-        setInspectorDensity('specimen')
+        setInspectorPane('tester')
         return
       }
       event.preventDefault()
@@ -1353,8 +1396,15 @@ function AppShell() {
             className={cn('flex min-h-0 min-w-0 flex-1 flex-col', marqueeRect && 'select-none')}
             onPointerDown={handleListPointerDown}
           >
-            {!loading && hasCatalogList && (
-              <div className="relative shrink-0 space-y-3 bg-background px-4 pt-4 pb-3">
+            {tab !== 'activity' && (
+              <div
+                data-keep-selection=""
+                data-no-marquee=""
+                className={cn(
+                  'relative shrink-0 space-y-3 bg-background px-4 pt-4 pb-3',
+                  insetTrafficLights && 'app-region-drag',
+                )}
+              >
                 {tabCounts.updates > 0 && tab !== 'updates' ? (
                   <Button
                     type="button"
@@ -1401,6 +1451,16 @@ function AppShell() {
                       localStorage.setItem('font-butler-show-sources', String(next))
                     }}
                     showSourcesToggle
+                    showAdded={showAdded}
+                    onShowAddedChange={(next) => {
+                      setShowAdded(next)
+                      localStorage.setItem('font-butler-show-added', String(next))
+                    }}
+                    hideDestinations={hideDestinations}
+                    onHideDestinationsChange={(next) => {
+                      setHideDestinations(next)
+                      localStorage.setItem('font-butler-hide-destinations', String(next))
+                    }}
                     previewSize={gridPreviewSize}
                     onPreviewSizeChange={(next) => {
                       setGridPreviewSize(next)
@@ -1417,17 +1477,13 @@ function AppShell() {
             )}
             <ScrollArea className="min-h-0 flex-1">
               <div className={cn('flex min-h-full flex-col p-4', showBatchBar && 'pb-24')}>
-                {loading && (
-                  <p className="px-2 py-12 text-center text-sm text-muted-foreground">
-                    Reading fonts…
-                  </p>
-                )}
                 {error && (
                   <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>
                 )}
                 {!loading && tab === 'activity' && (
                   <ActivityView
                     operations={operations}
+                    entries={entries}
                     highlightId={highlightOperation}
                     onUndo={(id) =>
                       void run(() => api.undo(id), { pending: 'Undoing…', done: 'Undid the last change' })
@@ -1516,14 +1572,6 @@ function AppShell() {
                           batch={systemSelection.length > 1 && inSelection ? systemPlan : null}
                           onSelect={(event) => handleSystemSelect(group, event)}
                           onInspect={() => inspectSystemGroup(group)}
-                          onEnsureSelected={() => {
-                            if (!inSelection) {
-                              setSelectedSystem(group.familyName)
-                              setSelectedSystemKeys([group.familyName])
-                              setSelectionAnchor(group.familyName)
-                            }
-                            setInspectSelection(false)
-                          }}
                           onReveal={() => {
                             setSelectedSystem(group.familyName)
                             void revealSystem(group.faces[0].path)
@@ -1561,6 +1609,8 @@ function AppShell() {
                           previewSize={gridPreviewSize}
                           group={group}
                           showSourcePath={showSources}
+                          showAddedAt={showAdded}
+                          hideDestinations={hideDestinations}
                           selected={inSelection || selectedGroup?.key === group.key}
                           selectedEntryId={selectedEntryId}
                           batch={useBatch ? catalogPlan : null}
@@ -1586,6 +1636,13 @@ function AppShell() {
                               ? void installToAdobeFor(catalogSelection)
                               : void installToAdobeFor([group])
                           }
+                          onInstallInstance={(entryId) => void installInstanceGuarded(entryId)}
+                          onActivateInstance={(entryId) => void activateInstanceGuarded(entryId)}
+                          onDeactivateInstance={(entryId) => void deactivateInstance(entryId)}
+                          onUninstallInstance={(entryId) => void uninstallInstance(entryId)}
+                          onInstallInstanceToAdobe={(entryId) => void installInstanceToAdobe(entryId)}
+                          onSwapInstanceFormat={(entryId) => void swapInstanceFormat(entryId)}
+                          adobeAvailable={adobeAvailable}
                           onReinstall={() =>
                             useBatch
                               ? void reinstallSelected()
@@ -1603,6 +1660,9 @@ function AppShell() {
                               : void run(() => uninstallGroup(group), actionCopy('remove', group.familyName), {
                                   undo: 'uninstall',
                                 })
+                          }
+                          onUninstallFormat={(format) =>
+                            uninstallFormatFrom(useBatch ? catalogSelection : [group], format)
                           }
                           onUninstallAndRemove={() => {
                             if (useBatch) {
@@ -1633,6 +1693,7 @@ function AppShell() {
                                 }
                               : undefined
                           }
+                          onFormatSwap={() => swapFormatFrom(group)}
                           onReveal={() => {
                             const entry = catalogRevealEntry(
                               group,
@@ -1706,6 +1767,16 @@ function AppShell() {
                       onRepair={() => void repairSelected()}
                       onForget={() => void forgetSelected()}
                       onDeleteFiles={() => void deleteFilesSelected()}
+                      formatSwap={
+                        catalogSelection.length === 1
+                          ? formatSwap(catalogSelection[0]!.entries)
+                          : null
+                      }
+                      onFormatSwap={() => {
+                        const group = catalogSelection[0]
+                        if (group) swapFormatFrom(group)
+                      }}
+                      splitMenuPlacement="up"
                     />
                   </BatchActionBar>
                 )}
@@ -1720,64 +1791,64 @@ function AppShell() {
             role="region"
             aria-label="Font details"
           >
-            <div className="flex shrink-0 items-center justify-between gap-1 px-2 pt-2">
-              <div className="flex items-center gap-0.5">
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      className="h-7 w-7 px-0"
-                      aria-label="Back to grid"
-                      onClick={closeInspector}
-                    >
-                      <ArrowLeft />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Back to grid</TooltipContent>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      className="h-7 w-7 px-0"
-                      aria-label={inspectorDensity === 'specimen' ? 'Show details' : 'Specimen view'}
-                      onClick={() =>
-                        setInspectorDensity((density) =>
-                          density === 'specimen' ? DEFAULT_INSPECTOR_DENSITY : expandInspector(density),
-                        )
-                      }
-                    >
-                      {inspectorDensity === 'specimen' ? <Minimize2 /> : <Maximize2 />}
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    {inspectorDensity === 'specimen' ? 'Show details' : 'Specimen view'}
-                  </TooltipContent>
-                </Tooltip>
+            <div
+              className={cn(
+                'grid shrink-0 grid-cols-[2.25rem_1fr_2.25rem] items-center px-2 pt-2',
+                insetTrafficLights && 'app-region-drag',
+              )}
+            >
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 w-7 px-0"
+                    aria-label="Back to grid"
+                    onClick={closeInspector}
+                  >
+                    <ArrowLeft />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Back to grid</TooltipContent>
+              </Tooltip>
+              <div className="flex justify-center">
+                <InspectorTabList
+                  tablistId={inspectorTablistId}
+                  tabs={inspectorPaneTabs(tab !== 'system')}
+                  value={inspectorPane}
+                  onChange={setInspectorPane}
+                />
               </div>
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                className="h-7 w-7 px-0"
-                aria-label="Close details"
-                onClick={clearSelection}
-              >
-                <X />
-              </Button>
+              <div />
             </div>
             <div className="min-h-0 flex-1 overflow-hidden">
             <Inspector
               density={inspectorDensity}
+              pane={inspectorPane}
+              onPaneChange={setInspectorPane}
+              tablistId={inspectorTablistId}
               group={tab === 'system' ? null : selectedGroup}
               entry={tab === 'system' ? null : selectedEntry}
               statusSummary={selectedGroup ? familyStatusSummary(selectedGroup) : null}
               selectedEntryId={selectedEntryId}
               onSelectEntry={setSelectedEntryId}
+              instanceActions={
+                selectedGroup
+                  ? {
+                      entries: selectedGroup.entries,
+                      busy,
+                      onInstall: (entryId) => void installInstanceGuarded(entryId),
+                      onActivate: (entryId) => void activateInstanceGuarded(entryId),
+                      onDeactivate: (entryId) => void deactivateInstance(entryId),
+                      onUninstall: (entryId) => void uninstallInstance(entryId),
+                      onInstallToAdobe: (entryId) => void installInstanceToAdobe(entryId),
+                      adobeAvailable,
+                      onFormatSwap: (entryId) => void swapInstanceFormat(entryId),
+                      onOpen: setSelectedEntryId,
+                    }
+                  : undefined
+              }
               systemGroup={selectedSystemGroup}
               busy={busy}
               specimen={specimenFromSettings(settings?.specimen)}
@@ -1788,8 +1859,6 @@ function AppShell() {
                   ? catalogSelection.find((group) => group.familyName !== selectedFamily)?.entries[0] ?? null
                   : null
               }
-              comparisonInstallBlocked={comparisonInstallBlocked}
-              onComparisonCapture={setComparisonCapture}
               onInstall={() => selectedGroup && void installGroupGuarded(selectedGroup)}
               onInstallAs={() => setRenameEntry(selectedEntry)}
               onReinstall={() =>
@@ -1803,6 +1872,7 @@ function AppShell() {
                   undo: 'uninstall',
                 })
               }
+              onUninstallFormat={(format) => selectedGroup && uninstallFormatFrom([selectedGroup], format)}
               onUninstallAndRemove={() => {
                 if (!selectedGroup) return
                 void uninstallAndRemoveFor([selectedGroup])
@@ -1821,6 +1891,7 @@ function AppShell() {
                       )
                   : undefined
               }
+              onFormatSwap={() => selectedGroup && swapFormatFrom(selectedGroup)}
               onReveal={(which) => selectedEntry && void revealCatalog(selectedEntry, which)}
               onUninstallSystem={() =>
                 selectedSystemGroup &&
@@ -1868,19 +1939,9 @@ function AppShell() {
                 setRelinkEntry(selectedEntry)
               }}
               onInstallToAdobe={() =>
-                selectedEntry &&
-                void run(
-                  () => api.install(selectedEntry.id, undefined, { destinationId: 'adobe-shared' }),
-                  adobeInstallCopy(1),
-                )
+                selectedGroup && void installToAdobeFor([selectedGroup])
               }
-              onRemoveAdobeCopy={() =>
-                selectedEntry &&
-                void run(() => api.removeDestinationCopy(selectedEntry.id, 'adobe-shared'), {
-                  pending: 'Removing Adobe testing copy…',
-                  done: 'Removed Adobe testing copy',
-                })
-              }
+              adobeAvailable={adobeAvailable}
               onResumeUpdates={() =>
                 selectedEntry &&
                 void run(() => api.resumeUpdates(selectedEntry.id), {
@@ -1917,7 +1978,7 @@ function AppShell() {
               }}
               onOpenWithPreview={() => {
                 setInspectSelection(true)
-                setInspectorDensity('specimen')
+                setInspectorPane('tester')
               }}
               multiSelect={
                 (tab === 'system' ? systemSelection.length : catalogSelection.length) > 1
@@ -2124,6 +2185,7 @@ function AppShell() {
           onOpenChange={setSettingsOpen}
           settings={settings}
           onSettingsChange={applySettings}
+          onDestinationsChange={applyAdobeAvailability}
         />
         <MarqueeOverlay rect={marqueeRect} />
         <Toaster theme={settings?.theme ?? 'system'} />

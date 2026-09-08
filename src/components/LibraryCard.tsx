@@ -1,7 +1,7 @@
-import { useMemo, useState, type DragEvent, type MouseEvent } from 'react'
+import { useMemo, useRef, useState, type DragEvent, type MouseEvent } from 'react'
 import { Check, ChevronDown, FolderMinus, FolderOpen, Plus } from 'lucide-react'
 import { AaPreview, CyclingAaPreview } from '@/components/AaPreview'
-import { FormatBadges, SourceBadge, StateBadges, VfBadge } from '@/components/Badges'
+import { FormatBadges, SourceBadge, StateBadges, VfBadge, DestinationIcons } from '@/components/Badges'
 import { Badge } from '@/components/ui/badge'
 import { CatalogMenuItems } from '@/components/BatchActions'
 import { CatalogCardActions } from '@/components/FontCardActions'
@@ -19,11 +19,12 @@ import {
 } from '@/components/ui/context-menu'
 import { familyCardPlan, type CatalogBatchPlan } from '@/lib/batch'
 import { applyFontDragImage } from '@/lib/dragPreview'
-import { uniqueEntryFormats } from '@/lib/formats'
+import { formatAddedAt } from '@/lib/dates'
+import { mixedFormatWarning, occupyingFormats, uniqueEntryFormats, formatSwap } from '@/lib/formats'
 import { familyBadgeEntry, familyStatusSummary, hasSourceMissing, hasTrackedSource } from '@/lib/group'
 import { catalogInstanceRows } from '@/lib/instances'
 import { projectContainsAll, writeFontButlerEntries } from '@/lib/projects'
-import { isNotInstalledLabel, needsLocateSource } from '@/lib/state'
+import { familyCopyDestinations, isNotInstalledLabel, needsLocateSource } from '@/lib/state'
 import type { FamilyGroup, ProjectSet, ViewLayout } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
@@ -32,6 +33,8 @@ export function LibraryCard({
   layout,
   previewSize,
   showSourcePath,
+  showAddedAt,
+  hideDestinations = false,
   selected,
   selectedEntryId,
   busy,
@@ -43,13 +46,22 @@ export function LibraryCard({
   onInstall,
   onInstallAs,
   onInstallToAdobe,
+  onInstallInstance,
+  onActivateInstance,
+  onDeactivateInstance,
+  onUninstallInstance,
+  onInstallInstanceToAdobe,
+  onSwapInstanceFormat,
+  adobeAvailable = true,
   onReinstall,
   onLocateSource,
   onUninstall,
+  onUninstallFormat,
   onUninstallAndRemove,
   onDeactivate,
   onActivate,
   onSwitch,
+  onFormatSwap,
   onReveal,
   onRevealSource,
   onForget,
@@ -68,6 +80,8 @@ export function LibraryCard({
   layout: ViewLayout
   previewSize: number
   showSourcePath?: boolean
+  showAddedAt?: boolean
+  hideDestinations?: boolean
   selected: boolean
   selectedEntryId: string | null
   busy: boolean
@@ -79,13 +93,22 @@ export function LibraryCard({
   onInstall: () => void
   onInstallAs: () => void
   onInstallToAdobe: () => void
+  onInstallInstance: (entryId: string) => void
+  onActivateInstance: (entryId: string) => void
+  onDeactivateInstance: (entryId: string) => void
+  onUninstallInstance: (entryId: string) => void
+  onInstallInstanceToAdobe: (entryId: string) => void
+  onSwapInstanceFormat?: (entryId: string) => void
+  adobeAvailable?: boolean
   onReinstall: () => void
   onLocateSource?: () => void
   onUninstall: () => void
+  onUninstallFormat: (format: string) => void
   onUninstallAndRemove: () => void
   onDeactivate: () => void
   onActivate: () => void
   onSwitch?: () => void
+  onFormatSwap?: () => void
   onReveal: () => void
   onRevealSource: () => void
   onForget: () => void
@@ -102,6 +125,7 @@ export function LibraryCard({
 }) {
   const [expanded, setExpanded] = useState(false)
   const [hovered, setHovered] = useState(false)
+  const skipNextClick = useRef(false)
   const preview = group.entries.find((entry) => entry.id === group.previewEntryId) ?? group.entries[0]
   const badgeEntry = familyBadgeEntry(group)
   const mixedSummary = familyStatusSummary(group)
@@ -123,12 +147,28 @@ export function LibraryCard({
       })),
     [instances, previewFamily],
   )
-  const plan = batch ?? familyCardPlan(group)
+  const plan = batch ?? familyCardPlan(group, adobeAvailable)
   const inCurrentProject = Boolean(
     projectFilter && group.entries.some((entry) =>
       projects.find((item) => item.id === projectFilter)?.members.some((member) => member.assetId === entry.id),
     ),
   )
+  function handleCardClick(event: MouseEvent) {
+    if (skipNextClick.current) {
+      skipNextClick.current = false
+      return
+    }
+    if (event.button !== 0) return
+    onSelect(event)
+  }
+
+  function skipClickAfterContextMenu() {
+    skipNextClick.current = true
+    window.setTimeout(() => {
+      skipNextClick.current = false
+    }, 400)
+  }
+
   function startFontDrag(event: DragEvent) {
     if (event.target instanceof Element && event.target.closest('[data-no-marquee]')) {
       event.preventDefault()
@@ -140,13 +180,22 @@ export function LibraryCard({
   }
 
   const muted = group.status === 'deactivated'
+  const mixedFormats = occupyingFormats(group.entries)
+  const mixedWarning = mixedFormatWarning(mixedFormats)
+  const swap = formatSwap(group.entries)
 
+  const dest = familyCopyDestinations(group.entries)
+  const showDestIcons = !hideDestinations && (dest.macos || dest.adobe)
+  const showIconRow =
+    showDestIcons || hasTrackedSource(group) || (layout === 'grid' && notInstalled)
+  const showCorner = showIconRow || Boolean(mixedWarning)
+  const addedLabel = showAddedAt ? formatAddedAt(group.addedAt) : ''
   const identity = (
     <>
       <div className="flex flex-wrap items-center gap-2">
         <span className="truncate font-medium">{group.familyName}</span>
         <VfBadge show={group.isVariable} />
-        <FormatBadges formats={uniqueEntryFormats(group.entries)} />
+        <FormatBadges formats={uniqueEntryFormats(group.entries)} occupying={mixedFormats} />
         <StateBadges
           entry={badgeEntry}
           hideInstalled
@@ -161,6 +210,7 @@ export function LibraryCard({
       <div className="mt-0.5 text-xs text-muted-foreground">
         {group.instanceCount} {group.instanceCount === 1 ? 'instance' : 'instances'}
         {group.entries.length > 1 ? ` · ${group.entries.length} files` : ''}
+        {addedLabel ? ` · Added ${addedLabel}` : ''}
       </div>
       {showSourcePath && (
         <div className="mt-1 space-y-0.5">
@@ -182,37 +232,52 @@ export function LibraryCard({
   )
 
   return (
-    <ContextMenu onOpenChange={(open) => { if (open) onEnsureSelected() }}>
-      <ContextMenuTrigger asChild>
-        <div
-          data-family-key={group.familyName}
-          draggable
-          onDragStart={startFontDrag}
-          onDragEnd={onFontDragEnd}
-          className={cn(
-            'group relative overflow-hidden rounded-lg border transition-colors',
-            selected ? 'border-border bg-muted/60' : 'border-border/80 hover:bg-muted/40',
-            muted && '[&>:not([data-no-marquee])]:opacity-50',
-          )}
-          onPointerEnter={() => setHovered(true)}
-          onPointerLeave={() => setHovered(false)}
-        >
-          {hasTrackedSource(group) || (layout === 'grid' && notInstalled) ? (
-            <div className="pointer-events-none absolute top-1.5 left-1.5 z-10 flex items-center gap-1">
-              {hasTrackedSource(group) ? <SourceBadge /> : null}
-              {layout === 'grid' && notInstalled ? (
-                <Badge tone="muted" title="Not installed">
-                  Not installed
-                </Badge>
-              ) : null}
-            </div>
-          ) : null}
-          {layout === 'grid' ? (
+    <ContextMenu onOpenChange={(open) => { if (open) skipClickAfterContextMenu() }}>
+      <div
+        data-family-key={group.familyName}
+        draggable
+        onDragStart={startFontDrag}
+        onDragEnd={onFontDragEnd}
+        className={cn(
+          'group relative overflow-hidden rounded-lg border transition-colors',
+          selected ? 'border-border bg-muted/60' : 'border-border/80 hover:bg-muted/40',
+          muted && '[&>:not([data-no-marquee])]:opacity-50',
+        )}
+        onPointerEnter={() => setHovered(true)}
+        onPointerLeave={() => setHovered(false)}
+      >
+        {showCorner ? (
+          <div className="pointer-events-none absolute top-1.5 left-1.5 z-10 flex max-w-[calc(100%-0.75rem)] flex-col items-start gap-1">
+            {showIconRow ? (
+              <div className="flex items-center gap-1">
+                {showDestIcons ? <DestinationIcons macos={dest.macos} adobe={dest.adobe} overlay /> : null}
+                {hasTrackedSource(group) ? <SourceBadge /> : null}
+                {layout === 'grid' && notInstalled ? (
+                  <Badge tone="muted" title="Not installed">
+                    Not installed
+                  </Badge>
+                ) : null}
+              </div>
+            ) : null}
+            {mixedWarning ? (
+              <Badge
+                tone="warn"
+                className="max-w-full truncate"
+                title="OpenType and TrueType copies of this family are installed. Uninstall one format."
+              >
+                {mixedWarning}
+              </Badge>
+            ) : null}
+          </div>
+        ) : null}
+        {layout === 'grid' ? (
+          <ContextMenuTrigger asChild>
             <button
               type="button"
               draggable
               onDragStart={startFontDrag}
-              onClick={onSelect}
+              onClick={handleCardClick}
+              onContextMenu={skipClickAfterContextMenu}
               onDoubleClick={onInspect}
               className="flex w-full flex-col text-left"
             >
@@ -232,14 +297,17 @@ export function LibraryCard({
               />
               <div className={previewSize < 3.25 ? 'p-2' : 'p-3'}>{identity}</div>
             </button>
-          ) : (
-            <>
+          </ContextMenuTrigger>
+        ) : (
+          <>
+            <ContextMenuTrigger asChild>
               <div className="flex items-stretch">
                 <button
                   type="button"
                   draggable
                   onDragStart={startFontDrag}
-                  onClick={onSelect}
+                  onClick={handleCardClick}
+                  onContextMenu={skipClickAfterContextMenu}
                   onDoubleClick={onInspect}
                   className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left"
                 >
@@ -268,34 +336,51 @@ export function LibraryCard({
                   </button>
                 )}
               </div>
-              {expanded && showInstances && (
-                <InstanceList
-                  rows={instances}
-                  selectedEntryId={selectedEntryId}
-                  onSelectEntry={onSelectEntry}
-                />
-              )}
-            </>
-          )}
-          {!batch && (
-            <CatalogCardActions
-              plan={plan}
-              previewOnly={group.entries.every((entry) => entry.previewOnly)}
-              missingSource={missingSource}
-              busy={busy}
-              visible={selected}
-              offset={layout === 'list' && showInstances}
-              onInstall={onInstall}
-              onReinstall={onReinstall}
-              onDeactivate={onDeactivate}
-              onUninstall={onUninstall}
-              onActivate={onActivate}
-              onSwitch={onSwitch}
-              onForget={onForget}
-            />
-          )}
-        </div>
-      </ContextMenuTrigger>
+            </ContextMenuTrigger>
+            {expanded && showInstances && (
+              <InstanceList
+                rows={instances}
+                selectedEntryId={selectedEntryId}
+                onSelectEntry={onSelectEntry}
+                instanceActions={{
+                  entries: group.entries,
+                  busy,
+                  onInstall: onInstallInstance,
+                  onActivate: onActivateInstance,
+                  onDeactivate: onDeactivateInstance,
+                  onUninstall: onUninstallInstance,
+                  onInstallToAdobe: onInstallInstanceToAdobe,
+                  adobeAvailable,
+                  onFormatSwap: onSwapInstanceFormat,
+                  onOpen: (entryId) => {
+                    onEnsureSelected()
+                    onSelectEntry(entryId)
+                  },
+                }}
+              />
+            )}
+          </>
+        )}
+        {!batch && (
+          <CatalogCardActions
+            plan={plan}
+            previewOnly={group.entries.every((entry) => entry.previewOnly)}
+            missingSource={missingSource}
+            busy={busy}
+            visible={selected}
+            offset={layout === 'list' && showInstances}
+            onInstall={onInstall}
+            onReinstall={onReinstall}
+            onDeactivate={onDeactivate}
+            onUninstall={onUninstall}
+            onActivate={onActivate}
+            onSwitch={onSwitch}
+            formatSwap={swap}
+            onFormatSwap={onFormatSwap}
+            onForget={onForget}
+          />
+        )}
+      </div>
       <ContextMenuContent>
         <ContextMenuItem
           disabled={!group.entries.some((entry) => entry.installedPath || entry.disabledPath)}
@@ -363,6 +448,10 @@ export function LibraryCard({
           onSwitch={onSwitch}
           onForget={onForget}
           onDeleteFiles={onDeleteFiles}
+          formatUninstalls={mixedFormats}
+          onUninstallFormat={onUninstallFormat}
+          formatSwap={swap}
+          onFormatSwap={onFormatSwap}
         />
       </ContextMenuContent>
     </ContextMenu>

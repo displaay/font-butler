@@ -119,6 +119,19 @@ export function parseFontBuffer(buffer: Buffer, formatHint = 'ttf'): ParsedFont 
   return parseOpened(opened, formatHint)
 }
 
+export function glyphNameForCodePoint(filePath: string, code: number): string | null {
+  if (!Number.isInteger(code) || code < 0) return null
+  const opened = openSync(filePath)
+  const font = isCollection(opened) ? opened.fonts[0] : opened
+  if (!font) return null
+  const glyph = (
+    font as Font & { glyphForCodePoint?: (value: number) => { name?: string } }
+  ).glyphForCodePoint?.(code)
+  const name = glyph?.name?.trim()
+  if (!name || name === '.notdef') return null
+  return name
+}
+
 function parseOpened(opened: Font | FontCollection, format: string): ParsedFont {
   if (isCollection(opened)) {
     const first = opened.fonts[0]

@@ -19,26 +19,31 @@ export function outdatedFamilies(entries) {
 export const TRAY_SECTION_LIMIT = 5
 
 const ACTIVITY_ACTION_LABELS = {
-  deactivate: 'Deactivate',
-  activate: 'Activate',
-  install: 'Install',
-  'install-update': 'Install update',
-  uninstall: 'Uninstall',
-  reinstall: 'Reinstall',
-  repair: 'Repair',
-  'apply-plan': 'Import',
-  'relink-source': 'Link source',
-  'relink-folder': 'Relink folder',
-  'restore-revision': 'Restore version',
-  'activate-project': 'Activate project',
-  undo: 'Undo',
-  'recover-journal': 'Recovered after interruption',
-  switch: 'Switch',
+  deactivate: 'deactivated',
+  activate: 'activated',
+  install: 'installed',
+  'install-update': 'update installed',
+  uninstall: 'uninstalled',
+  reinstall: 'reinstalled',
+  repair: 'repaired',
+  'apply-plan': 'imported',
+  'relink-source': 'source linked',
+  'relink-folder': 'folder relinked',
+  'restore-revision': 'version restored',
+  'activate-project': 'activated',
+  undo: 'undone',
+  'recover-journal': 'recovered after interruption',
+  switch: 'switched',
+}
+
+function sentenceCase(value) {
+  if (!value) return value
+  return value.charAt(0).toUpperCase() + value.slice(1)
 }
 
 export function activityRowLabel(operation) {
-  const action = ACTIVITY_ACTION_LABELS[operation?.action] ?? operation?.action ?? 'Activity'
-  return operation?.familyName ? `${action} · ${operation.familyName}` : action
+  const done = ACTIVITY_ACTION_LABELS[operation?.action] ?? operation?.action ?? 'Activity'
+  return operation?.familyName ? `${operation.familyName} ${done}` : sentenceCase(done)
 }
 
 export function isBackgroundActivityTrigger(trigger) {

@@ -2,7 +2,8 @@ import type { ReactNode } from 'react'
 import { ArrowLeftRight, CircleMinus, CirclePlus, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { CatalogBatchPlan } from '@/lib/batch'
-import { actionLabel } from '@/lib/batch'
+import { actionLabel, forgetSourcesLabel } from '@/lib/batch'
+import { formatSwapLabel } from '@/lib/formats'
 import { cn } from '@/lib/utils'
 
 type CatalogCardActionHandlers = {
@@ -14,6 +15,8 @@ type CatalogCardActionHandlers = {
   onActivate: () => void
   /** Passed only when a same-format occupying sibling exists (`canSwitchTo`). */
   onSwitch?: () => void
+  formatSwap?: { from: string; to: string } | null
+  onFormatSwap?: () => void
   onForget: () => void
 }
 
@@ -30,6 +33,8 @@ export function CatalogCardActions({
   onUninstall,
   onActivate,
   onSwitch,
+  formatSwap,
+  onFormatSwap,
   onForget,
 }: CatalogCardActionHandlers & {
   plan: CatalogBatchPlan
@@ -42,7 +47,7 @@ export function CatalogCardActions({
     return (
       <ActionDock offset={offset} visible={visible}>
         {missingSource && (
-          <IconAction label="Remove from list" disabled={busy} destructive onClick={onForget}>
+          <IconAction label={forgetSourcesLabel(1, false)} disabled={busy} destructive onClick={onForget}>
             <Trash2 />
           </IconAction>
         )}
@@ -68,6 +73,11 @@ export function CatalogCardActions({
           <CirclePlus />
         </IconAction>
       )}
+      {formatSwap && onFormatSwap && (
+        <IconAction label={formatSwapLabel(formatSwap)} disabled={busy} success onClick={onFormatSwap}>
+          <ArrowLeftRight />
+        </IconAction>
+      )}
       {onSwitch && (
         <IconAction label="Switch" disabled={busy} onClick={onSwitch}>
           <ArrowLeftRight />
@@ -79,11 +89,7 @@ export function CatalogCardActions({
         </IconAction>
       )}
       {plan.deactivate > 0 && (
-        <IconAction
-          label={actionLabel('Deactivate', plan.deactivate, plan.deactivate > 1)}
-          disabled={busy}
-          onClick={onDeactivate}
-        >
+        <IconAction label="Deactivate" disabled={busy} onClick={onDeactivate}>
           <PowerOff />
         </IconAction>
       )}
@@ -92,8 +98,8 @@ export function CatalogCardActions({
           <CircleMinus />
         </IconAction>
       )}
-      {missingSource && (
-        <IconAction label="Remove from list" disabled={busy} destructive onClick={onForget}>
+      {plan.forget > 0 && (
+        <IconAction label={forgetSourcesLabel(1, false)} disabled={busy} destructive onClick={onForget}>
           <Trash2 />
         </IconAction>
       )}
@@ -181,7 +187,7 @@ function IconAction({
             destructive
               ? 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-500/20 dark:text-red-400 dark:hover:bg-red-500/30'
               : success
-                ? 'bg-emerald-600 text-white hover:bg-emerald-600/90'
+                ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-400 dark:hover:bg-emerald-500/30'
                 : 'border bg-card hover:bg-muted',
           )}
           onClick={(event) => {

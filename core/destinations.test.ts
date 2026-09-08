@@ -4,6 +4,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 import {
   adobeInvestigation,
+  createAdobeTestingFolder,
   entryHasParkedBytes,
   findUnmanagedConflicts,
   inspectDestination,
@@ -87,6 +88,37 @@ test('F09-E a missing Adobe destination stays unsupported', () => {
   const capability = inspectDestination(paths, 'adobe-shared')
   assert.equal(capability.supported, false)
   assert.ok(capability.remedy)
+  assert.equal(capability.remedy?.includes('will not create or chmod'), false)
+})
+
+test('createAdobeTestingFolder makes a missing Fonts folder when the parent exists', () => {
+  const paths = tempPaths()
+  const parent = path.join(paths.dataRoot, 'Adobe')
+  const dest = path.join(parent, 'Fonts')
+  fs.mkdirSync(parent, { recursive: true })
+  paths.adobeFontsDir = dest
+  try {
+    assert.equal(fs.existsSync(dest), false)
+    const created = createAdobeTestingFolder(paths)
+    assert.equal(created.exists, true)
+    assert.equal(created.supported, true)
+    assert.equal(fs.existsSync(dest), true)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('createAdobeTestingFolder refuses when Adobe Application Support is missing', () => {
+  const paths = tempPaths()
+  paths.adobeFontsDir = path.join(paths.dataRoot, 'missing-adobe', 'Fonts')
+  try {
+    assert.throws(
+      () => createAdobeTestingFolder(paths),
+      /Adobe Application Support folder was not found/,
+    )
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
 })
 
 test('Mac+Adobe default expands to both destination IDs', () => {

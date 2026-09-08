@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "concurrently -k -n server,vite -c cyan,magenta \"npm run server\" \"vite\"",
     "server": "FONT_BUTLER_DEV_BOOTSTRAP=1 tsx server/index.ts",
-    "electron": "concurrently -k -n server,vite,app -c cyan,magenta,green \"npm run server\" \"vite\" \"wait-on http://127.0.0.1:43181 && electron .\"",
+    "electron": "concurrently -k -n server,vite,app -c cyan,magenta,green \"npm run server\" \"vite\" \"wait-on http://127.0.0.1:43181 http-get://127.0.0.1:43182/api/health && electron .\"",
     "build": "tsc -b && vite build && node scripts/bundle-server.mjs",
     "bundle:python": "node scripts/bundle-python-runtime.mjs",
     "dist": "npm run build && npm run bundle:python && electron-builder --mac",

@@ -39,7 +39,7 @@ import type {
   ViewLayout,
 } from '@/lib/types'
 import { cn } from '@/lib/utils'
-import { DESTINATIONS, FOLDER_POLICIES, destinationLabel, destinationNeedsAdobe, folderAvailabilityLabel, folderPolicyLabel } from '@/lib/folders'
+import { DESTINATIONS, FOLDER_POLICIES, adobeTestingFolderAvailable, destinationLabel, destinationNeedsAdobe, folderAvailabilityLabel, folderPolicyLabel } from '@/lib/folders'
 import { watchFolderName } from '@/lib/watchFolders'
 import type { FolderPolicyPreset, WatchFolder } from '@/lib/types'
 
@@ -139,11 +139,13 @@ export function SettingsDialog({
   onOpenChange,
   settings,
   onSettingsChange,
+  onDestinationsChange,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   settings: AppSettings | null
   onSettingsChange: (settings: AppSettings) => void
+  onDestinationsChange?: (destinations: DestinationCapability[]) => void
 }) {
   const setActionStatus = useSetActionStatus()
   const tablistId = useId()
@@ -180,6 +182,7 @@ export function SettingsDialog({
         if (result.destinations) {
           setDestinations(result.destinations.destinations)
           setInvestigation(result.destinations.investigation)
+          onDestinationsChange?.(result.destinations.destinations)
         }
       })
       .catch(() => {
@@ -191,6 +194,21 @@ export function SettingsDialog({
       cancelled = true
     }
   }, [open])
+
+  async function createAdobeFolder() {
+    setBusy(true)
+    try {
+      const result = await api.createAdobeTestingFolder()
+      setDestinations(result.destinations)
+      setInvestigation(result.investigation)
+      onDestinationsChange?.(result.destinations)
+      toast.success('Created the Adobe testing folder')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not create that folder')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   async function save(patch: SettingsPatch) {
     setBusy(true)
@@ -286,8 +304,8 @@ export function SettingsDialog({
                     onClick={() => selectCategory(item.id)}
                     onKeyDown={onCategoryKeyDown}
                   >
-                    <Icon className="size-3.5 opacity-70" />
-                    <span className="min-w-0 truncate">{item.label}</span>
+                    <Icon className="size-3.5 shrink-0 opacity-70" />
+                    <span className="min-w-0 flex-1 truncate text-left">{item.label}</span>
                   </Button>
                 )
               })}
@@ -334,6 +352,7 @@ export function SettingsDialog({
                   destinations={destinations}
                   investigation={investigation}
                   onSave={save}
+                  onCreateAdobeFolder={() => void createAdobeFolder()}
                 />
               )}
               {category === 'caches' && (
@@ -664,14 +683,20 @@ function DestinationsPane({
   destinations,
   investigation,
   onSave,
+  onCreateAdobeFolder,
 }: {
   settings: AppSettings | null
   busy: boolean
   destinations: DestinationCapability[]
   investigation: DestinationInvestigationRow[]
   onSave: (patch: SettingsPatch) => Promise<void>
+  onCreateAdobeFolder: () => void
 }) {
+  const adobeAvailable = adobeTestingFolderAvailable(destinations)
   const adobe = destinations.find((item) => item.id === 'adobe-shared')
+  const adobeRemedy = adobe?.remedy
+    ?.replace(/\s*Font Buttler will not create or chmod a system Adobe folder\./g, '')
+    .trim()
   return (
     <SettingsSection>
       <SettingsRow
@@ -693,7 +718,7 @@ function DestinationsPane({
             <option
               key={option.id}
               value={option.id}
-              disabled={destinationNeedsAdobe(option.id) && Boolean(adobe) && !adobe.supported}
+              disabled={destinationNeedsAdobe(option.id) && !adobeAvailable}
             >
               {option.label}
             </option>
@@ -712,11 +737,11 @@ function DestinationsPane({
             <div className="truncate font-mono text-[11px] text-muted-foreground" title={adobe?.path}>
               {adobe?.path}
             </div>
-            {adobe?.reason ? (
+            {adobe?.reason && !adobe.supported ? (
               <div className="mt-1 text-xs text-muted-foreground">{adobe.reason}</div>
             ) : null}
-            {adobe?.remedy ? (
-              <div className="mt-1 text-xs text-muted-foreground">{adobe.remedy}</div>
+            {adobeRemedy && !adobe.canCreate ? (
+              <div className="mt-1 text-xs text-muted-foreground">{adobeRemedy}</div>
             ) : null}
             {investigation[0] ? (
               <details className="mt-2 text-xs text-muted-foreground">
@@ -734,7 +759,13 @@ function DestinationsPane({
             ) : null}
           </div>
         }
-      />
+      >
+        {adobe?.canCreate ? (
+          <Button type="button" size="sm" variant="outline" disabled={busy} onClick={onCreateAdobeFolder}>
+            Create folder
+          </Button>
+        ) : null}
+      </SettingsRow>
     </SettingsSection>
   )
 }

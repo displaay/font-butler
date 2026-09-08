@@ -10,6 +10,7 @@ import { uniquePathFromOriginal } from './install.ts'
 import { ensureFontActivation, getFontNative, type FontNative } from './native.ts'
 import { createOperation, finishOperation, upsertOperation } from './operations.ts'
 import { journalDir, journalPath, type AppPaths } from './paths.ts'
+import { displayEntry } from './service-helpers.ts'
 import { applyEntryFacts } from './state.ts'
 import type { CatalogEntry } from './types.ts'
 
@@ -424,7 +425,7 @@ function recordRecovery(
   const items = journal.targets.map((target) => ({
     id: crypto.randomUUID(),
     entryId: target.entryId,
-    label: target.familyName,
+    label: target.entryBefore ? displayEntry(target.entryBefore) : target.familyName,
     outcome,
     reason,
   }))
