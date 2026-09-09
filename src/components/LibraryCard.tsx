@@ -189,7 +189,7 @@ export function LibraryCard({
   const showDestIcons = !hideDestinations && (dest.macos || dest.adobe)
   const showIconRow =
     showDestIcons || hasTrackedSource(group) || (layout === 'grid' && notInstalled)
-  const showCorner = showIconRow || Boolean(mixedWarning)
+  const showCorner = showIconRow || Boolean(mixedWarning) || deactivated
   const addedLabel = showAddedAt ? formatAddedAt(group.addedAt) : ''
   const identity = (
     <>
@@ -201,6 +201,7 @@ export function LibraryCard({
           entry={badgeEntry}
           hideInstalled
           hideNotInstalled={layout === 'grid'}
+          hideDeactivated
         />
         {mixedSummary ? (
           <Badge tone="muted" title={mixedSummary}>
@@ -248,11 +249,19 @@ export function LibraryCard({
         onPointerLeave={() => setHovered(false)}
       >
         {showCorner ? (
-          <div className="pointer-events-none absolute top-1.5 left-1.5 z-10 flex max-w-[calc(100%-0.75rem)] flex-col items-start gap-1">
-            {showIconRow ? (
+          <div
+            data-no-marquee=""
+            className="pointer-events-none absolute top-1.5 left-1.5 z-10 flex max-w-[calc(100%-0.75rem)] flex-col items-start gap-1"
+          >
+            {showIconRow || deactivated ? (
               <div className="flex items-center gap-1">
                 {showDestIcons ? <DestinationIcons macos={dest.macos} adobe={dest.adobe} overlay /> : null}
                 {hasTrackedSource(group) ? <SourceBadge /> : null}
+                {deactivated ? (
+                  <Badge tone="muted" title="Deactivated">
+                    Deactivated
+                  </Badge>
+                ) : null}
                 {layout === 'grid' && notInstalled ? (
                   <Badge tone="muted" title="Not installed">
                     Not installed
