@@ -62,7 +62,7 @@ export function catalogBatchPlan(groups: FamilyGroup[], adobeAvailable = true): 
     ) {
       installMissing = true
     }
-    activate += activatableIds(group).length
+    if (activatableIds(group).length) activate += 1
     deactivate += deactivatableIds(group).length
     const toUninstall = uninstallableIds(group)
     if (toUninstall.length || isUninstallableGroup(group)) {

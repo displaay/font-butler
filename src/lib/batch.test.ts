@@ -226,6 +226,20 @@ test('catalogBatchPlan counts Adobe installs only when a copy is not present', (
   assert.equal(catalogBatchPlan(groups, false).adobeInstall, 0)
 })
 
+test('catalogBatchPlan counts Activate by family, not files', () => {
+  const groups = groupCatalog([
+    entry('a-reg', 'Able', 'deactivated', 'Regular'),
+    entry('a-bold', 'Able', 'deactivated', 'Bold'),
+    entry('a-black', 'Able', 'deactivated', 'Black'),
+    entry('b', 'Baker', 'deactivated'),
+    entry('c', 'Cage', 'installed'),
+  ])
+  const plan = catalogBatchPlan(groups)
+  assert.equal(plan.count, 3)
+  assert.equal(plan.activate, 2)
+  assert.equal(activateActionLabel(plan, true), 'Activate 2 fonts')
+})
+
 test('actionLabel adds a count for multi-select', () => {
   assert.equal(actionLabel('Install', 1, false), 'Install')
   assert.equal(actionLabel('Install', 1, true), 'Install 1 font')
@@ -237,6 +251,7 @@ test('actionLabel adds a count for multi-select', () => {
   assert.equal(actionLabel('Deactivate', 2, true), 'Deactivate')
   assert.equal(actionLabel('Deactivate', 1, false), 'Deactivate')
   assert.equal(activateActionLabel({ activate: 1 }), 'Activate')
+  assert.equal(activateActionLabel({ activate: 12 }, true), 'Activate 12 fonts')
   assert.equal(activateActionLabel({ activate: 1, activateFormat: 'otf' }), 'Activate OTF')
   assert.equal(actionLabel('Install to Adobe testing folder', 1, false), 'Install to Adobe testing folder')
   assert.equal(actionLabel('Install to Adobe testing folder', 3, true), 'Install to Adobe testing folder')
