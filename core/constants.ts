@@ -1,2 +1,2 @@
 export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
-export const SYSTEM_FONT_CACHE_VERSION = 4
+export const SYSTEM_FONT_CACHE_VERSION = 5

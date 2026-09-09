@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { parseFontFile, glyphNameForCodePoint, resolveFamilyNames } from './parse.ts'
-import { writeTestCollection, writeTestFont } from './test-util.ts'
+import { writeTestCollection, writeTestFont, withService } from './test-util.ts'
 
 test('resolveFamilyNames prefers typographic family and style', () => {
   assert.deepEqual(
@@ -57,6 +57,7 @@ test('parseFontFile reads every face from a synthetic TTC and OTC', () => {
     const catalogParse = parseFontFile(otc)
     assert.equal(catalogParse.characterSet, undefined)
     assert.equal(catalogParse.features, undefined)
+    assert.equal(catalogParse.previewSample, 'AA')
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }
@@ -101,6 +102,25 @@ test('parseFontFile groups Booton OTFs under the typographic family', (t) => {
   )
 })
 
+test('parseFontFile picks a Font Book-style preview sample from cmap coverage', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-preview-sample-'))
+  try {
+    const latin = path.join(dir, 'Latin.ttf')
+    writeTestFont(latin, 'Latin', 'Latin-Regular', {
+      codePoints: [65, 66, 67, 97, 98, 99],
+    })
+    assert.equal(parseFontFile(latin).previewSample, 'Aa')
+
+    const hebrew = path.join(dir, 'Hebrew.ttf')
+    writeTestFont(hebrew, 'Hebrew', 'Hebrew-Regular', {
+      codePoints: [65, 97, 0x05d0, 0x05d1, 0x05d2, 0x05d3, 0x05d4, 0x05d5],
+    })
+    assert.equal(parseFontFile(hebrew).previewSample, 'א')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('glyphNameForCodePoint reads the PostScript glyph name', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-glyph-name-'))
   try {
@@ -111,4 +131,15 @@ test('glyphNameForCodePoint reads the PostScript glyph name', () => {
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('import persists the cmap preview sample on the catalog entry', async () => {
+  await withService(async (service, paths) => {
+    const file = path.join(paths.uploadsDir, 'Hebrew.ttf')
+    writeTestFont(file, 'Hebrew', 'Hebrew-Regular', {
+      codePoints: [65, 97, 0x05d0, 0x05d1, 0x05d2, 0x05d3, 0x05d4, 0x05d5],
+    })
+    const result = await service.importPaths([file])
+    assert.equal(result.entries[0]?.previewSample, 'א')
+  })
 })

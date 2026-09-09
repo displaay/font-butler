@@ -130,6 +130,7 @@ export function InstanceList({
               family={family}
               weight={row.weight}
               italic={row.italic}
+              sample={row.previewSample}
             />
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-medium">{row.label}</div>

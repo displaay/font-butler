@@ -90,6 +90,8 @@ import {
   isPreviewableFontFile,
   mimeForFont,
   parseFontBuffer,
+  applyParsedFont,
+  fillEntryPreviewSample,
   parseFontFile,
   readFileStat,
 } from './parse.ts'
@@ -266,6 +268,7 @@ export class FontButlerService {
     await this.adoptUserFonts()
     await this.detachRenamedInstallSources()
     await this.seedIfEmpty()
+    await runCatalogTask(() => this.fillMissingPreviewSamplesUnlocked())
     await this.refreshSourceStatuses()
     await this.reinstallCurrentlyOutdated()
     await syncWatchers(this.paths)
@@ -1092,6 +1095,7 @@ export class FontButlerService {
         disabledPath: dest,
         faces: parsed.faces,
         format: parsed.format,
+        previewSample: parsed.previewSample,
         addedAt: now(),
         updatedAt: now(),
       }
@@ -1739,8 +1743,7 @@ export class FontButlerService {
           catalog = loadCatalog(this.paths)
           entry = findById(catalog, id)
           if (!entry) throw new Error('Font is not in the library.')
-          entry.faces = staged.parsed.faces
-          entry.format = staged.parsed.format
+          applyParsedFont(entry, staged.parsed)
           entry.installedFingerprint = target
           entry.installedSnapshotMtimeMs = staged.stat.mtimeMs
           entry.installedSnapshotSize = staged.stat.size
@@ -2435,8 +2438,7 @@ export class FontButlerService {
         if (sourceFileExists(entry.sourcePath)) {
           try {
             const parsed = parseFontFile(entry.sourcePath)
-            entry.faces = parsed.faces
-            entry.format = parsed.format
+            applyParsedFont(entry, parsed)
           } catch {
             // Keep stored names if the original file cannot be parsed.
           }
@@ -2897,6 +2899,15 @@ export class FontButlerService {
     return runCatalogTask(() => this.refreshSourceStatusesUnlocked())
   }
 
+  private fillMissingPreviewSamplesUnlocked(): void {
+    const catalog = loadCatalog(this.paths)
+    let changed = false
+    for (const entry of catalog.entries) {
+      if (fillEntryPreviewSample(entry)) changed = true
+    }
+    if (changed) saveCatalog(this.paths, catalog)
+  }
+
   private refreshSourceStatusesUnlocked(): void {
     const catalog = loadCatalog(this.paths)
     let changed = false
@@ -2927,8 +2938,10 @@ export class FontButlerService {
         try {
           const parsed = parseFontFile(entry.sourcePath)
           if (JSON.stringify(entry.faces) !== JSON.stringify(parsed.faces)) {
-            entry.faces = parsed.faces
-            entry.format = parsed.format
+            applyParsedFont(entry, parsed)
+            changed = true
+          } else if (parsed.previewSample && entry.previewSample !== parsed.previewSample) {
+            entry.previewSample = parsed.previewSample
             changed = true
           }
         } catch {
@@ -3207,6 +3220,7 @@ export class FontButlerService {
           installedPath: resolved,
           faces: parsed.faces,
           format: parsed.format,
+          previewSample: parsed.previewSample,
           addedAt: now(),
           updatedAt: now(),
         })

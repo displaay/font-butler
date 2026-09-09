@@ -127,6 +127,7 @@ export function scanSystemFonts(paths: AppPaths): SystemFace[] {
           weight: face.weight,
           italic: face.italic,
           format: parsed.format,
+          previewSample: parsed.previewSample,
           protected: isProtectedPath(filePath, paths),
           writable: isWritable(filePath) && !isProtectedPath(filePath, paths),
           managedId:
@@ -160,6 +161,7 @@ export function scanSystemFonts(paths: AppPaths): SystemFace[] {
         weight: face.weight,
         italic: face.italic,
         format: entry.format,
+        previewSample: entry.previewSample,
         protected: false,
         writable: true,
         managedId: entry.id,
