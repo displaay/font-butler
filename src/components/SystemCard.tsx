@@ -18,7 +18,7 @@ import { systemBatchPlan, type SystemBatchPlan } from '@/lib/batch'
 import { countFormats } from '@/lib/formats'
 import { systemInstanceRows } from '@/lib/instances'
 import type { SystemFamilyGroup, ViewLayout } from '@/lib/types'
-import { DEFAULT_PREVIEW_SAMPLE } from '@/lib/previewSample'
+import { resolvedPreviewSample } from '@/lib/previewSample'
 import { cn } from '@/lib/utils'
 
 export function SystemCard({
@@ -55,7 +55,7 @@ export function SystemCard({
   const instances = useMemo(() => systemInstanceRows(group), [group])
   const showInstances = instances.length > 0 && layout === 'list'
   const previewFamily = systemFontFamily(face.path)
-  const previewSample = face.previewSample || DEFAULT_PREVIEW_SAMPLE
+  const previewSample = resolvedPreviewSample(face.previewSample)
   const previewFaces = useMemo(
     () =>
       instances.map((row) => ({

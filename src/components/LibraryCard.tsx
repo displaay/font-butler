@@ -26,7 +26,7 @@ import { catalogInstanceRows } from '@/lib/instances'
 import { projectContainsAll, writeFontButlerEntries } from '@/lib/projects'
 import { displayStateParts, familyCopyDestinations, isNotInstalledLabel, needsLocateSource } from '@/lib/state'
 import type { FamilyGroup, ProjectSet, ViewLayout } from '@/lib/types'
-import { DEFAULT_PREVIEW_SAMPLE } from '@/lib/previewSample'
+import { resolvedPreviewSample } from '@/lib/previewSample'
 import { cn } from '@/lib/utils'
 
 export function LibraryCard({
@@ -138,10 +138,10 @@ export function LibraryCard({
   const previewFamily = catalogFontFamily(group.previewEntryId)
   const previewWeight = preview.faces[0]?.weight
   const previewItalic = preview.faces[0]?.italic
-  const previewSample =
-    preview.previewSample ||
-    group.entries.find((entry) => entry.previewSample)?.previewSample ||
-    DEFAULT_PREVIEW_SAMPLE
+  const previewSample = resolvedPreviewSample(
+    preview.previewSample,
+    group.entries.find((entry) => entry.previewSample)?.previewSample,
+  )
   const previewFaces = useMemo(
     () =>
       instances.map((row) => ({

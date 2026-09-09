@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { DEFAULT_PREVIEW_SAMPLE, previewSampleFromCoverage } from './previewSample.ts'
+import {
+  DEFAULT_PREVIEW_SAMPLE,
+  previewSampleFromCoverage,
+  resolvedPreviewSample,
+} from './previewSample.ts'
 
 function codes(...chars: string[]): number[] {
   return chars.flatMap((text) => [...text].map((char) => char.codePointAt(0)!))
@@ -10,49 +14,43 @@ function latin(): number[] {
   return codes('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz')
 }
 
-test('Latin coverage uses Aa, or AA when the font is caps-only', () => {
-  assert.equal(previewSampleFromCoverage(latin()), 'Aa')
-  assert.equal(previewSampleFromCoverage(codes('A')), 'AA')
-  assert.equal(previewSampleFromCoverage(codes('a')), 'aa')
-  assert.equal(previewSampleFromCoverage([]), DEFAULT_PREVIEW_SAMPLE)
-  assert.equal(previewSampleFromCoverage(undefined), DEFAULT_PREVIEW_SAMPLE)
+/** Locked product matrix: primary-script glyph, including with incidental Latin. */
+const PRODUCT_MATRIX: Array<{ name: string; coverage: string; sample: string }> = [
+  { name: 'Arabic', coverage: 'ابتجدرسعلمني', sample: 'ع' },
+  { name: 'Hebrew', coverage: 'אבגדהו', sample: 'א' },
+  { name: 'Hangul', coverage: '동가나다라마바사아자하', sample: '동' },
+  { name: 'Thai', coverage: 'กขคงจดตทนบม', sample: 'ก' },
+  { name: 'Bengali', coverage: 'কখগঘঙচজটডন', sample: 'ক' },
+  { name: 'Devanagari', coverage: 'कखगघङचजटडण', sample: 'क' },
+]
+
+test('product matrix: Arabic ع · Hebrew א · Hangul 동 · Thai ก · Bengali ক · Devanagari क', () => {
+  for (const row of PRODUCT_MATRIX) {
+    assert.equal(previewSampleFromCoverage(codes(row.coverage)), row.sample, row.name)
+    assert.equal(
+      previewSampleFromCoverage([...latin(), ...codes(row.coverage)]),
+      row.sample,
+      `${row.name} with incidental Latin must not flash Aa`,
+    )
+  }
 })
 
-test('Hebrew coverage uses Alef even when Latin is also present', () => {
-  assert.equal(previewSampleFromCoverage(codes('אבגדהו')), 'א')
-  assert.equal(previewSampleFromCoverage([...latin(), ...codes('אבגדהו')]), 'א')
-})
-
-test('Arabic coverage uses Ain even when Latin is also present', () => {
-  assert.equal(previewSampleFromCoverage(codes('ابتجدرسعلمني')), 'ع')
-  assert.equal(previewSampleFromCoverage([...latin(), ...codes('ابتجدرسعلمني')]), 'ع')
-})
-
-test('Hangul coverage uses 동', () => {
-  assert.equal(previewSampleFromCoverage(codes('동가나다라마바사아자하')), '동')
-  assert.equal(previewSampleFromCoverage([...latin(), ...codes('동가나다라마바사아자하')]), '동')
-})
-
-test('emoji coverage uses the grinning face', () => {
+test('product matrix: emoji 😀-class', () => {
   assert.equal(previewSampleFromCoverage(codes('😀')), '😀')
   assert.equal(previewSampleFromCoverage([...latin(), ...codes('😀')]), '😀')
+  assert.equal(previewSampleFromCoverage([...latin(), ...codes('😂')]), '😂')
 })
 
-test('symbol coverage uses Font Book-style ornament glyphs', () => {
-  assert.equal(previewSampleFromCoverage(codes('☎☺★')), '☎☺')
+test('product matrix: ornaments/symbols use a covered dingbat', () => {
+  assert.equal(previewSampleFromCoverage(codes('☎☺')), '☎☺')
+  assert.equal(previewSampleFromCoverage([0x273f]), '✿')
   assert.equal(previewSampleFromCoverage([0xf000, 0xf0a8]), '\uF000')
 })
 
-test('Thai, Bengali, Devanagari, Braille, and CJK pick Font Book representatives', () => {
-  assert.equal(previewSampleFromCoverage(codes('กขคงจดตทนบม')), 'ก')
-  assert.equal(previewSampleFromCoverage(codes('কখগঘঙচজটডন')), 'ক')
-  assert.equal(previewSampleFromCoverage(codes('कखगघङचजटडण')), 'क')
-  assert.equal(previewSampleFromCoverage(codes('⠓⠁⠃⠉⠙⠑')), '⠓')
-  assert.equal(previewSampleFromCoverage(codes('永漢一二三人日')), '永')
-  assert.equal(previewSampleFromCoverage(codes('あいうえおアイウエオ')), 'あ')
-})
-
-test('multi-script pan-Unicode fonts keep Latin Aa as the primary', () => {
+test('Latin-primary faces use Aa, including pan-Unicode like Arial Unicode MS', () => {
+  assert.equal(previewSampleFromCoverage(latin()), 'Aa')
+  assert.equal(previewSampleFromCoverage(codes('A')), 'AA')
+  assert.equal(previewSampleFromCoverage([]), DEFAULT_PREVIEW_SAMPLE)
   assert.equal(
     previewSampleFromCoverage([
       ...latin(),
@@ -64,7 +62,8 @@ test('multi-script pan-Unicode fonts keep Latin Aa as the primary', () => {
   )
 })
 
-test('Greek and Cyrillic ride with Latin instead of replacing Aa', () => {
-  assert.equal(previewSampleFromCoverage([...latin(), ...codes('ΑαΒβΓγΟο'), ...codes('АаБбВвОо')]), 'Aa')
-  assert.equal(previewSampleFromCoverage(codes('ΑαΒβΓγΟο')), 'Αα')
+test('grid and list resolve missing coverage to Aa', () => {
+  assert.equal(resolvedPreviewSample('ع'), 'ع')
+  assert.equal(resolvedPreviewSample(undefined, 'א'), 'א')
+  assert.equal(resolvedPreviewSample(undefined, null, ''), DEFAULT_PREVIEW_SAMPLE)
 })

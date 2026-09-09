@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { usePreviewFontReady } from '@/hooks/usePreviewFontReady'
-import { DEFAULT_PREVIEW_SAMPLE } from '@/lib/previewSample'
+import { resolvedPreviewSample } from '@/lib/previewSample'
 import { cn } from '@/lib/utils'
 
 const CYCLE_MS = 600
@@ -67,7 +67,7 @@ function AaGlyph({
   variation,
   pendingSize = 'md',
   wait = true,
-  sample = DEFAULT_PREVIEW_SAMPLE,
+  sample,
 }: {
   family: string
   weight?: number
@@ -91,7 +91,7 @@ function AaGlyph({
         fontVariationSettings: variation || undefined,
       }}
     >
-      {sample}
+      {resolvedPreviewSample(sample)}
     </span>
   )
 }
@@ -109,7 +109,7 @@ export function AaPreview({
   weight = 400,
   italic = false,
   size = 'md',
-  sample = DEFAULT_PREVIEW_SAMPLE,
+  sample,
 }: {
   family: string
   weight?: number
@@ -134,7 +134,7 @@ export function CyclingAaPreview({
   rest,
   active,
   size,
-  sample = DEFAULT_PREVIEW_SAMPLE,
+  sample,
 }: {
   faces: PreviewFace[]
   rest: PreviewFace

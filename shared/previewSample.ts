@@ -1,37 +1,20 @@
 /**
- * Library-card preview samples, in the spirit of macOS Font Book’s My Fonts grid.
+ * Library-card preview samples from cmap coverage (not a hardcoded “Aa”).
  *
- * Font Book / Core Text typically inspects cmap coverage (`coveredCharacterSet`),
- * not OS/2 code-page bits (those are often incomplete). This helper does the same
- * with a compact script table:
+ * Locked product rules:
+ * 1. Prefer the primary non-Latin script glyph when that is the face.
+ * 2. Use Latin Aa only when Latin is the primary/default for the face
+ *    (Arial, Arial Unicode MS). Incidental Latin in an Arabic/Hebrew/Hangul/…
+ *    face must not flash Aa.
+ * 3. Use specialty glyphs when that is the face (emoji / ornaments / symbols /
+ *    Braille).
  *
- *   Latin        Aa  (AA if the font is caps-only)
- *   Hebrew       א
- *   Arabic       ع
- *   Hangul       동
- *   Kana         あ
- *   Han          永
- *   Thai         ก
- *   Devanagari   क
- *   Bengali      ক
- *   Emoji        😀
- *   Braille      ⠓
- *   Symbols      ☎☺ (or the first covered dingbat / PUA glyph)
+ * Product matrix:
+ *   Arabic ع · Hebrew א · Hangul 동 · Thai ก · Bengali ক · Devanagari क
+ *   emoji 😀-class · ornaments/symbols a covered dingbat
  *
- * Selection rules:
- * 1. A non-Latin “distinct” script counts as supported when its representative
- *    is present and at least two core letters hit, or when three core letters hit.
- * 2. One distinct script → that script’s sample (so Arial Hebrew → א even though
- *    Latin is also present; incidental Latin fallbacks do not win).
- * 3. Three or more distinct scripts + Latin → pan-Unicode default Aa
- *    (Arial Unicode MS).
- * 4. Two distinct scripts → the better-covered one (Hangul before Kana before Han).
- * 5. No distinct script → Latin Aa/AA/aa when A or a exists; otherwise Greek or
- *    Cyrillic if those companions are the only letters; otherwise emoji / braille /
- *    symbols / first interesting glyph; otherwise Aa.
- *
- * Greek and Cyrillic travel with Latin in European fonts (Arial, Times), so they
- * do not override Latin when A/a is present.
+ * Pan-Unicode (many distinct scripts + Latin) still defaults to Aa, matching
+ * Font Book’s Arial Unicode MS card. Greek/Cyrillic ride with Latin.
  */
 
 export const DEFAULT_PREVIEW_SAMPLE = 'Aa'
@@ -106,8 +89,8 @@ export const PREVIEW_SCRIPTS: PreviewScript[] = [
   {
     id: 'emoji',
     kind: 'emoji',
-    samples: ['😀'],
-    core: [0x1f600, 0x1f602, 0x1f44d, 0x2764, 0x1f525, 0x2b50],
+    samples: ['😀', '😃', '😄', '😁', '😆', '😅', '😂'],
+    core: range(0x1f600, 0x1f64f),
   },
   {
     id: 'greek',
@@ -155,9 +138,31 @@ function coveredCount(set: Set<number>, codes: number[]): number {
   return hits
 }
 
+function isGrinningClass(code: number): boolean {
+  return code >= 0x1f600 && code <= 0x1f64f
+}
+
+function isCoveredDingbat(code: number): boolean {
+  return (
+    (code >= 0x2600 && code <= 0x27bf) ||
+    (code >= 0xe000 && code <= 0xf8ff) ||
+    (code >= 0x1f300 && code <= 0x1f5ff)
+  )
+}
+
 function sampleFor(set: Set<number>, script: PreviewScript): string {
   for (const sample of script.samples) {
     if (stringCovered(set, sample)) return sample
+  }
+  if (script.kind === 'emoji') {
+    for (const code of set) {
+      if (isGrinningClass(code)) return String.fromCodePoint(code)
+    }
+  }
+  if (script.kind === 'symbol') {
+    for (const code of set) {
+      if (isCoveredDingbat(code)) return String.fromCodePoint(code)
+    }
   }
   for (const code of script.core) {
     if (set.has(code)) return String.fromCodePoint(code)
@@ -168,10 +173,23 @@ function sampleFor(set: Set<number>, script: PreviewScript): string {
 function scriptSupported(set: Set<number>, script: PreviewScript): boolean {
   const hits = coveredCount(set, script.core)
   const hasSample = script.samples.some((sample) => stringCovered(set, sample))
-  if (script.kind === 'emoji') return hasSample || hits >= 3
+  if (script.kind === 'emoji') {
+    if (hasSample || hits >= 1) return true
+    for (const code of set) {
+      if (isGrinningClass(code)) return true
+    }
+    return false
+  }
   if (script.kind === 'braille') return hasSample || hits >= 3
-  if (script.kind === 'symbol') return hasSample || hits >= 2
-  return hits >= 3 || (hasSample && hits >= 2)
+  if (script.kind === 'symbol') {
+    if (hasSample || hits >= 1) return true
+    for (const code of set) {
+      if (isCoveredDingbat(code)) return true
+    }
+    return false
+  }
+  // Representative present means this is the face, even with incidental Latin.
+  return hasSample || hits >= 3
 }
 
 function coverageRatio(set: Set<number>, script: PreviewScript): number {
@@ -271,4 +289,12 @@ export function previewSampleFromCoverage(coverage: Iterable<number> | undefined
   }
   if (symbols && scriptSupported(set, symbols)) return sampleFor(set, symbols)
   return fallbackSample(set) ?? DEFAULT_PREVIEW_SAMPLE
+}
+
+/** Grid and list cards share this so missing coverage still renders Aa. */
+export function resolvedPreviewSample(...values: Array<string | undefined | null>): string {
+  for (const value of values) {
+    if (value) return value
+  }
+  return DEFAULT_PREVIEW_SAMPLE
 }
