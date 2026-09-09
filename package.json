@@ -2,7 +2,7 @@
   "name": "font-butler",
   "productName": "Font Buttler",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Source-tracked font manager for macOS",
   "author": "Font Buttler",
   "type": "module",
