@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowLeftRight, CircleMinus, CirclePlus, ListX, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
 import { AdobeLogo } from '@/components/Badges'
 import { Button } from '@/components/ui/button'
@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/context-menu'
 import {
   actionLabel,
+  activateActionLabel,
   deleteSourcesLabel,
   forgetSourcesLabel,
   hasCatalogBatchActions,
@@ -21,6 +22,7 @@ import {
 } from '@/lib/batch'
 import { hasInstanceMenuActions, type InstanceMenuPlan } from '@/lib/eligibility'
 import { formatSwapLabel, instanceSwapLabel, type FormatSwap } from '@/lib/formats'
+import { cn } from '@/lib/utils'
 
 export function CatalogBatchButtons({
   plan,
@@ -90,16 +92,16 @@ export function CatalogBatchButtons({
           <CirclePlus /> {actionLabel(installVerb, plan.install, plan.install > 1 || multi)}
         </Button>
       )}
+      {plan.activate > 0 && (
+        <Button size="sm" disabled={busy} onClick={onActivate}>
+          <Power /> {activateActionLabel(plan, multi)}
+        </Button>
+      )}
       {formatSwap && onFormatSwap ? (
-        <Button size="sm" variant="success" disabled={busy} onClick={onFormatSwap}>
+        <Button size="sm" disabled={busy} onClick={onFormatSwap}>
           <ArrowLeftRight /> {formatSwapLabel(formatSwap)}
         </Button>
       ) : null}
-      {plan.activate > 0 && (
-        <Button size="sm" disabled={busy} onClick={onActivate}>
-          <Power /> {actionLabel('Activate', plan.activate, multi)}
-        </Button>
-      )}
       {plan.deactivate > 0 && (
         <Button size="sm" variant="outline" disabled={busy} onClick={onDeactivate}>
           <PowerOff /> Deactivate
@@ -155,6 +157,62 @@ export function SystemBatchButtons({
       <Button size="sm" variant="destructive" disabled={busy} onClick={onUninstall}>
         <CircleMinus /> Uninstall
       </Button>
+    </div>
+  )
+}
+
+const batchBarMotion =
+  'duration-300 motion-reduce:animate-none motion-reduce:transition-none'
+
+export function BatchActionBarContainer({
+  open,
+  children,
+}: {
+  open: boolean
+  children: ReactNode
+}) {
+  const [rendered, setRendered] = useState(open)
+  const [closing, setClosing] = useState(false)
+  const contentRef = useRef(children)
+
+  if (open && children) contentRef.current = children
+
+  useEffect(() => {
+    if (open) {
+      setRendered(true)
+      setClosing(false)
+      return
+    }
+    if (!rendered) return
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setRendered(false)
+      setClosing(false)
+      return
+    }
+    setClosing(true)
+  }, [open, rendered])
+
+  if (!rendered) return null
+
+  return (
+    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex justify-center p-4">
+      <div
+        className={cn(
+          'w-full max-w-3xl',
+          closing ? 'pointer-events-none' : 'pointer-events-auto',
+          batchBarMotion,
+          closing
+            ? 'animate-out slide-out-to-bottom fade-out ease-in'
+            : 'animate-in slide-in-from-bottom fade-in ease-out',
+        )}
+        onAnimationEnd={(event) => {
+          if (event.target !== event.currentTarget || !closing) return
+          setRendered(false)
+          setClosing(false)
+        }}
+      >
+        {contentRef.current}
+      </div>
     </div>
   )
 }
@@ -262,6 +320,11 @@ export function CatalogMenuItems({
           <CirclePlus /> Install as…
         </ContextMenuItem>
       )}
+      {plan.activate > 0 && (
+        <ContextMenuItem disabled={busy} onSelect={onActivate}>
+          <Power /> {activateActionLabel(plan, multi)}
+        </ContextMenuItem>
+      )}
       {formatSwap && onFormatSwap ? (
         <ContextMenuItem disabled={busy} onSelect={onFormatSwap}>
           <ArrowLeftRight /> {formatSwapLabel(formatSwap)}
@@ -275,11 +338,6 @@ export function CatalogMenuItems({
       {onSwitch && (
         <ContextMenuItem disabled={busy} onSelect={onSwitch}>
           <ArrowLeftRight /> Switch
-        </ContextMenuItem>
-      )}
-      {plan.activate > 0 && (
-        <ContextMenuItem disabled={busy} onSelect={onActivate}>
-          <Power /> {actionLabel('Activate', plan.activate, multi)}
         </ContextMenuItem>
       )}
       {plan.deactivate > 0 && (
@@ -390,11 +448,6 @@ export function InstanceMenuItems({
   if (!hasInstanceMenuActions(plan)) return null
   return (
     <>
-      {plan.formatSwap && onFormatSwap ? (
-        <ContextMenuItem disabled={busy} onSelect={onFormatSwap}>
-          <ArrowLeftRight /> {instanceSwapLabel(plan.formatSwap, entryId)}
-        </ContextMenuItem>
-      ) : null}
       {plan.install ? (
         <ContextMenuItem disabled={busy} onSelect={onInstall}>
           <CirclePlus /> Install instance
@@ -403,6 +456,11 @@ export function InstanceMenuItems({
       {plan.activate ? (
         <ContextMenuItem disabled={busy} onSelect={onActivate}>
           <Power /> Activate instance
+        </ContextMenuItem>
+      ) : null}
+      {plan.formatSwap && onFormatSwap ? (
+        <ContextMenuItem disabled={busy} onSelect={onFormatSwap}>
+          <ArrowLeftRight /> {instanceSwapLabel(plan.formatSwap, entryId)}
         </ContextMenuItem>
       ) : null}
       {plan.adobeInstall ? (

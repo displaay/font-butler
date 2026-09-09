@@ -24,7 +24,7 @@ import { mixedFormatWarning, occupyingFormats, uniqueEntryFormats, formatSwap } 
 import { familyBadgeEntry, familyStatusSummary, hasSourceMissing, hasTrackedSource } from '@/lib/group'
 import { catalogInstanceRows } from '@/lib/instances'
 import { projectContainsAll, writeFontButlerEntries } from '@/lib/projects'
-import { familyCopyDestinations, isNotInstalledLabel, needsLocateSource } from '@/lib/state'
+import { displayStateParts, familyCopyDestinations, isNotInstalledLabel, needsLocateSource } from '@/lib/state'
 import type { FamilyGroup, ProjectSet, ViewLayout } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
@@ -130,6 +130,7 @@ export function LibraryCard({
   const badgeEntry = familyBadgeEntry(group)
   const mixedSummary = familyStatusSummary(group)
   const notInstalled = isNotInstalledLabel(badgeEntry)
+  const deactivated = displayStateParts(badgeEntry).includes('Deactivated')
   const missingSource = hasSourceMissing(group)
   const instances = useMemo(() => catalogInstanceRows(group), [group])
   const showInstances = instances.length > 0 && layout === 'list'
@@ -240,7 +241,7 @@ export function LibraryCard({
         onDragEnd={onFontDragEnd}
         className={cn(
           'group relative overflow-hidden rounded-lg border transition-colors',
-          selected ? 'border-border bg-muted/60' : 'border-border/80 hover:bg-muted/40',
+            selected ? 'border-neutral-300 bg-muted/60 dark:border-zinc-600' : 'border-border/80 hover:bg-muted/40',
           muted && '[&>:not([data-no-marquee])]:opacity-50',
         )}
         onPointerEnter={() => setHovered(true)}
@@ -261,7 +262,7 @@ export function LibraryCard({
             ) : null}
             {mixedWarning ? (
               <Badge
-                tone="warn"
+                tone="accent"
                 className="max-w-full truncate"
                 title="OpenType and TrueType copies of this family are installed. Uninstall one format."
               >

@@ -210,10 +210,16 @@ export function useFontActions({
     if (toActivate.length === 0 && toInstall.length === 0) return
     const destinationIds = occupyingDestinationIds(group.entries, swap.from)
     const label = formatSwapLabel(swap)
+    const replace = swap.occupying
     void run(async () => {
-      if (toActivate.length) await activatePrepared(toActivate, true, destinationIds)
-      if (toInstall.length) await installPrepared(toInstall, undefined, true, destinationIds)
-    }, { pending: `${label}…`, done: `Swapped ${swap.from.toUpperCase()} for ${swap.to.toUpperCase()}` })
+      if (toActivate.length) await activatePrepared(toActivate, replace, destinationIds)
+      if (toInstall.length) await installPrepared(toInstall, undefined, replace, destinationIds)
+    }, {
+      pending: `${label}…`,
+      done: swap.occupying
+        ? `Swapped ${swap.from.toUpperCase()} for ${swap.to.toUpperCase()}`
+        : `Installed ${swap.to.toUpperCase()}`,
+    })
   }
 
   function swapInstanceFormat(id: string) {

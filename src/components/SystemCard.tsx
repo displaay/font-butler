@@ -111,7 +111,7 @@ export function SystemCard({
           data-family-key={group.familyName}
           className={cn(
             'group relative overflow-hidden rounded-lg border transition-colors',
-            selected ? 'border-border bg-muted/60' : 'border-border/80 hover:bg-muted/40',
+            selected ? 'border-neutral-300 bg-muted/60 dark:border-zinc-600' : 'border-border/80 hover:bg-muted/40',
           )}
           onPointerEnter={() => setHovered(true)}
           onPointerLeave={() => setHovered(false)}

@@ -11,7 +11,7 @@ import { DropdownActionButton, SplitUninstallButton, type SplitUninstallExtra } 
 import { Button } from '@/components/ui/button'
 import { usePreviewFontReady } from '@/hooks/usePreviewFontReady'
 import { api } from '@/lib/api'
-import { catalogBatchPlan, deleteSourcesLabel, forgetSourcesLabel } from '@/lib/batch'
+import { activateActionLabel, catalogBatchPlan, deleteSourcesLabel, forgetSourcesLabel } from '@/lib/batch'
 import type { InspectorDensity } from '@/lib/inspector'
 import { catalogInstanceRows, systemInstanceRows } from '@/lib/instances'
 import { mixedFormatWarning, occupyingFormats, formatSwap, formatSwapLabel, uniqueEntryFormats } from '@/lib/formats'
@@ -255,7 +255,7 @@ export function Inspector({
         <StateBadges entry={familyBadgeEntry(group)} destinations={familyCopyDestinations(group.entries)} />
         {mixedWarning ? (
           <Badge
-            tone="warn"
+            tone="accent"
             title="OpenType and TrueType copies of this family are installed. Uninstall one format."
           >
             {mixedWarning}
@@ -407,8 +407,13 @@ export function Inspector({
                 <CirclePlus /> {plan.installMissing ? 'Install missing styles' : 'Install'}
               </Button>
             )}
+            {plan.activate > 0 && (
+              <Button size="sm" disabled={busy} onClick={onActivate}>
+                <Power /> {activateActionLabel(plan)}
+              </Button>
+            )}
             {swap && onFormatSwap ? (
-              <Button size="sm" variant="success" disabled={busy} onClick={onFormatSwap}>
+              <Button size="sm" disabled={busy} onClick={onFormatSwap}>
                 <ArrowLeftRight /> {formatSwapLabel(swap)}
               </Button>
             ) : null}
@@ -430,11 +435,6 @@ export function Inspector({
             {onSwitch && (
               <Button size="sm" disabled={busy} onClick={onSwitch}>
                 <ArrowLeftRight /> Switch
-              </Button>
-            )}
-            {plan.activate > 0 && (
-              <Button size="sm" disabled={busy} onClick={onActivate}>
-                <Power /> Activate
               </Button>
             )}
             {plan.deactivate > 0 && (

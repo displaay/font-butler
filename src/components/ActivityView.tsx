@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { CheckCheck, Undo2 } from 'lucide-react'
+import { CheckCheck, ListX, Undo2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { activityItemLabel, activityRowLabel, unreadActivityCount } from '@/lib/activityInbox'
@@ -13,12 +13,14 @@ export function ActivityView({
   highlightId,
   onUndo,
   onMarkAllRead,
+  onClearAll,
 }: {
   operations: Operation[]
   entries?: CatalogEntry[]
   highlightId?: string | null
   onUndo: (id: string) => void
   onMarkAllRead?: () => void
+  onClearAll?: () => void
 }) {
   const [expanded, setExpanded] = useState<string | null>(highlightId ?? null)
   const unreadCount = unreadActivityCount(operations)
@@ -38,11 +40,18 @@ export function ActivityView({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {unreadCount > 0 && onMarkAllRead ? (
-        <div className="flex shrink-0 items-center justify-end px-4 pt-1 pb-2">
-          <Button type="button" size="sm" variant="ghost" onClick={onMarkAllRead}>
-            <CheckCheck /> Mark all as read
-          </Button>
+      {(unreadCount > 0 && onMarkAllRead) || onClearAll ? (
+        <div className="flex shrink-0 items-center justify-end gap-1 px-4 pt-1 pb-2">
+          {unreadCount > 0 && onMarkAllRead ? (
+            <Button type="button" size="sm" variant="ghost" onClick={onMarkAllRead}>
+              <CheckCheck /> Mark all as read
+            </Button>
+          ) : null}
+          {onClearAll ? (
+            <Button type="button" size="sm" variant="ghost" onClick={onClearAll}>
+              <ListX /> Clear all
+            </Button>
+          ) : null}
         </div>
       ) : null}
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">

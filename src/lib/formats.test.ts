@@ -163,10 +163,25 @@ test('occupyingDestinationIds follow Mac and Adobe copies of the live format', (
 test('formatSwap offers replacing the live format with the catalog copy', () => {
   const otf = entry({ id: 'a', format: 'otf', status: 'installed' })
   const ttf = entry({ id: 'b', format: 'ttf', status: 'uninstalled' })
-  assert.deepEqual(formatSwap([otf, ttf]), { from: 'otf', to: 'ttf', incomingIds: ['b'] })
+  assert.deepEqual(formatSwap([otf, ttf]), {
+    from: 'otf',
+    to: 'ttf',
+    incomingIds: ['b'],
+    occupying: true,
+  })
   assert.equal(formatSwapLabel(formatSwap([otf, ttf])!), 'Swap OTF for TTF')
-  assert.deepEqual(instanceFormatSwap(ttf, [otf, ttf]), { from: 'otf', to: 'ttf', incomingIds: ['b'] })
-  assert.deepEqual(instanceFormatSwap(otf, [otf, ttf]), { from: 'otf', to: 'ttf', incomingIds: ['b'] })
+  assert.deepEqual(instanceFormatSwap(ttf, [otf, ttf]), {
+    from: 'otf',
+    to: 'ttf',
+    incomingIds: ['b'],
+    occupying: true,
+  })
+  assert.deepEqual(instanceFormatSwap(otf, [otf, ttf]), {
+    from: 'otf',
+    to: 'ttf',
+    incomingIds: ['b'],
+    occupying: true,
+  })
   assert.equal(instanceSwapLabel(instanceFormatSwap(ttf, [otf, ttf])!, 'b'), 'Swap with OTF')
   assert.equal(instanceSwapLabel(instanceFormatSwap(otf, [otf, ttf])!, 'a'), 'Swap for TTF')
 })
@@ -192,6 +207,30 @@ test('formatSwap stays hidden when the other format is missing styles', () => {
     ],
   })
   assert.equal(formatSwap([otf, ttf]), null)
+})
+
+test('formatSwap offers installing the other format while a copy is parked', () => {
+  const otf = entry({ id: 'a', format: 'otf', status: 'deactivated' })
+  const ttf = entry({ id: 'b', format: 'ttf', status: 'uninstalled' })
+  assert.deepEqual(formatSwap([otf, ttf]), {
+    from: 'otf',
+    to: 'ttf',
+    incomingIds: ['b'],
+    occupying: false,
+  })
+  assert.equal(formatSwapLabel(formatSwap([otf, ttf])!), 'Install TTF')
+})
+
+test('formatSwap offers the non-preferred parked format when both are deactivated', () => {
+  const otf = entry({ id: 'a', format: 'otf', status: 'deactivated' })
+  const ttf = entry({ id: 'b', format: 'ttf', status: 'deactivated' })
+  assert.deepEqual(formatSwap([otf, ttf]), {
+    from: 'otf',
+    to: 'ttf',
+    incomingIds: ['b'],
+    occupying: false,
+  })
+  assert.equal(formatSwapLabel(formatSwap([otf, ttf])!), 'Install TTF')
 })
 
 test('instanceFormatSwap stays hidden for a partial collection replacement', () => {

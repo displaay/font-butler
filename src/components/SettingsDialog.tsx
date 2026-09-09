@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState, type ComponentType, type KeyboardEv
 import { toast } from 'sonner'
 import {
   Eraser,
+  Folder,
   FolderOpen,
   History,
   Layers,
@@ -9,6 +10,7 @@ import {
   Moon,
   Pause,
   Play,
+  RefreshCw,
   Settings,
   Sun,
   Type,
@@ -79,7 +81,7 @@ const CATEGORIES: {
   {
     id: 'folders',
     label: 'Watch folders',
-    icon: FolderOpen,
+    icon: Folder,
     description: 'Watch folders for new fonts and choose a policy for each one.',
   },
   {
@@ -131,7 +133,7 @@ type SettingsPatch = {
 
 function navButtonClass(active: boolean) {
   return cn(
-    'h-8 w-full justify-start font-normal text-muted-foreground',
+    'h-8 w-full justify-start font-normal text-muted-foreground hover:bg-black/[0.05] dark:hover:bg-white/[0.08]',
     active && 'bg-black/[0.05] font-medium text-foreground dark:bg-white/[0.08]',
   )
 }
@@ -210,16 +212,39 @@ export function SettingsDialog({
     }
   }, [open])
 
+  function applyDestinations(result: {
+    destinations: DestinationCapability[]
+    investigation: DestinationInvestigationRow[]
+  }) {
+    setDestinations(result.destinations)
+    setInvestigation(result.investigation)
+    onDestinationsChange?.(result.destinations)
+    return result.destinations
+  }
+
   async function createAdobeFolder() {
     setBusy(true)
     try {
-      const result = await api.createAdobeTestingFolder()
-      setDestinations(result.destinations)
-      setInvestigation(result.investigation)
-      onDestinationsChange?.(result.destinations)
+      applyDestinations(await api.createAdobeTestingFolder())
       toast.success('Created the Adobe testing folder')
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not create that folder')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function refreshDestinations() {
+    setBusy(true)
+    try {
+      const destinations = applyDestinations(await api.destinations())
+      if (adobeTestingFolderAvailable(destinations)) {
+        toast.success('Adobe testing folder is available')
+      } else {
+        toast.message('Adobe testing folder is still not available')
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not check that folder')
     } finally {
       setBusy(false)
     }
@@ -372,6 +397,7 @@ export function SettingsDialog({
                   investigation={investigation}
                   onSave={save}
                   onCreateAdobeFolder={() => void createAdobeFolder()}
+                  onRefreshDestinations={() => void refreshDestinations()}
                 />
               )}
               {category === 'caches' && (
@@ -684,8 +710,8 @@ function FontsPane({
   return (
     <SettingsSection>
       <SettingsRow
-        label="Install after adding"
-        description="Dropping fonts, or adding a watch folder, installs them and selects them in the list. Turn this off to add fonts to the library without installing."
+        label="Activate after adding"
+        description="Dropping fonts, or adding a watch folder, activates them and selects them in the list. Turn this off to add fonts to the library without activating."
         htmlFor="install-after-upload"
       >
         <input
@@ -726,6 +752,7 @@ function DestinationsPane({
   investigation,
   onSave,
   onCreateAdobeFolder,
+  onRefreshDestinations,
 }: {
   settings: AppSettings | null
   busy: boolean
@@ -733,6 +760,7 @@ function DestinationsPane({
   investigation: DestinationInvestigationRow[]
   onSave: (patch: SettingsPatch) => Promise<void>
   onCreateAdobeFolder: () => void
+  onRefreshDestinations: () => void
 }) {
   const adobeAvailable = adobeTestingFolderAvailable(destinations)
   const adobe = destinations.find((item) => item.id === 'adobe-shared')
@@ -802,10 +830,24 @@ function DestinationsPane({
           </div>
         }
       >
-        {adobe?.canCreate ? (
-          <Button type="button" size="sm" variant="outline" disabled={busy} onClick={onCreateAdobeFolder}>
-            Create folder
-          </Button>
+        {adobe && !adobe.supported ? (
+          <div className="flex flex-wrap items-center justify-end gap-1.5">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              onClick={onRefreshDestinations}
+            >
+              <RefreshCw className="size-3.5" />
+              Check again
+            </Button>
+            {adobe.canCreate ? (
+              <Button type="button" size="sm" variant="outline" disabled={busy} onClick={onCreateAdobeFolder}>
+                Create folder
+              </Button>
+            ) : null}
+          </div>
         ) : null}
       </SettingsRow>
     </SettingsSection>

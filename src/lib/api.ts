@@ -330,6 +330,7 @@ export const api = {
   markActivityRead: () => json<{ operations: Operation[] }>(post('/api/activity/read', {})),
   markActivityUnread: (ids: string[]) =>
     json<{ operations: Operation[] }>(post('/api/activity/unread', { ids })),
+  clearActivity: () => json<{ operations: Operation[] }>(post('/api/activity/clear', {})),
   undo: (id: string) => json<{ operationId: string }>(post('/api/activity/undo', { id })),
   revisions: (id: string) =>
     get<{ revisions: Array<{ fingerprint: string; current: boolean; previous: boolean }> }>(

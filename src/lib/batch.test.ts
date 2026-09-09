@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   actionLabel,
+  activateActionLabel,
   catalogBatchPlan,
   catalogBatchSummary,
   deleteSourcesLabel,
@@ -186,6 +187,25 @@ test('catalogBatchPlan does not count an alt-format copy as missing styles', () 
   assert.equal(plan.forget, 0)
 })
 
+test('catalogBatchPlan does not count a parked alt-format copy as missing styles', () => {
+  const parked = {
+    ...entry('otf', 'Fenul', 'deactivated'),
+    format: 'otf' as const,
+    sourcePath: '/tmp/otf.otf',
+  }
+  const kept = {
+    ...entry('ttf', 'Fenul', 'uninstalled'),
+    format: 'ttf' as const,
+    sourcePath: '/tmp/ttf.ttf',
+  }
+  const plan = catalogBatchPlan(groupCatalog([parked, kept]))
+  assert.equal(plan.install, 0)
+  assert.equal(plan.installMissing, false)
+  assert.equal(plan.activate, 1)
+  assert.equal(plan.activateFormat, 'otf')
+  assert.equal(activateActionLabel(plan), 'Activate OTF')
+})
+
 test('hasCatalogBatchActions is false for an empty selection', () => {
   assert.equal(hasCatalogBatchActions(catalogBatchPlan([])), false)
 })
@@ -216,6 +236,8 @@ test('actionLabel adds a count for multi-select', () => {
   assert.equal(actionLabel('Install missing', 3, true), 'Install 3 missing styles')
   assert.equal(actionLabel('Deactivate', 2, true), 'Deactivate')
   assert.equal(actionLabel('Deactivate', 1, false), 'Deactivate')
+  assert.equal(activateActionLabel({ activate: 1 }), 'Activate')
+  assert.equal(activateActionLabel({ activate: 1, activateFormat: 'otf' }), 'Activate OTF')
   assert.equal(actionLabel('Install to Adobe testing folder', 1, false), 'Install to Adobe testing folder')
   assert.equal(actionLabel('Install to Adobe testing folder', 3, true), 'Install to Adobe testing folder')
   assert.equal(actionLabel('Uninstall and delete sources', 1, false), 'Uninstall and delete sources')

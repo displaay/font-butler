@@ -96,13 +96,13 @@ const LIBRARY_FILTER_GROUPS: {
 const TABS: { id: Tab; label: string; icon: typeof Type }[] = [
   { id: 'library', label: 'Fonts', icon: Type },
   { id: 'system', label: 'On this Mac', icon: Laptop },
-  { id: 'updates', label: 'Updates', icon: RefreshCw },
   { id: 'activity', label: 'Activity', icon: List },
+  { id: 'updates', label: 'Updates', icon: RefreshCw },
 ]
 
 function navButtonClass(active: boolean, extra?: string) {
   return cn(
-    'h-8 justify-start font-normal text-muted-foreground',
+    'h-8 justify-start font-normal text-muted-foreground hover:bg-black/[0.05] dark:hover:bg-white/[0.08]',
     active && 'bg-black/[0.05] font-medium text-foreground dark:bg-white/[0.08]',
     extra,
   )
@@ -120,6 +120,8 @@ function SidebarItem({
   title,
   badgeTone = 'muted',
   unreadCount = 0,
+  lockTotal = false,
+  hoverAction,
   onReveal,
   onRemove,
   expanded,
@@ -136,66 +138,95 @@ function SidebarItem({
   title?: string
   badgeTone?: 'muted' | 'warn'
   unreadCount?: number
+  lockTotal?: boolean
+  hoverAction?: { label: string; onClick: () => void; disabled?: boolean }
   onReveal?: () => void
   onRemove?: () => void
   expanded?: boolean
   onToggleExpand?: () => void
 }) {
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <Button
-          size="default"
-          variant="ghost"
-          title={title}
-          aria-current={active ? 'page' : undefined}
-          aria-expanded={onToggleExpand ? expanded : undefined}
-          className={navButtonClass(active, cn(onToggleExpand && 'group', className))}
-          onClick={onClick}
-        >
-          <span
-            className="relative -m-1 inline-flex size-6 shrink-0 items-center justify-center"
-            aria-hidden={!onToggleExpand}
-            aria-label={
-              onToggleExpand ? (expanded ? 'Hide watch folders' : 'Show watch folders') : undefined
-            }
-            onClick={
-              onToggleExpand
-                ? (event) => {
-                    event.preventDefault()
-                    event.stopPropagation()
-                    onToggleExpand()
-                  }
-                : undefined
-            }
-            onPointerDown={onToggleExpand ? (event) => event.stopPropagation() : undefined}
-          >
-            <Icon
+  const showCount = unreadCount > 0 || lockTotal || showTotal
+  const button = (
+    <Button
+      size="default"
+      variant="ghost"
+      title={title}
+      aria-current={active ? 'page' : undefined}
+      aria-expanded={onToggleExpand ? expanded : undefined}
+      className={navButtonClass(active, cn((onToggleExpand || hoverAction) && 'group', className))}
+      onClick={onClick}
+    >
+      <span
+        className="relative -m-1 inline-flex size-6 shrink-0 items-center justify-center"
+        aria-hidden={!onToggleExpand}
+        aria-label={
+          onToggleExpand ? (expanded ? 'Hide watch folders' : 'Show watch folders') : undefined
+        }
+        onClick={
+          onToggleExpand
+            ? (event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                onToggleExpand()
+              }
+            : undefined
+        }
+        onPointerDown={onToggleExpand ? (event) => event.stopPropagation() : undefined}
+      >
+        <Icon
+          className={cn(
+            'size-3.5 opacity-70 transition-opacity',
+            onToggleExpand && 'group-hover:opacity-0',
+          )}
+        />
+        {onToggleExpand ? (
+          expanded ? (
+            <ChevronDown className="pointer-events-none absolute size-3.5 opacity-0 transition-opacity group-hover:opacity-100" />
+          ) : (
+            <ChevronRight className="pointer-events-none absolute size-3.5 opacity-0 transition-opacity group-hover:opacity-100" />
+          )
+        ) : null}
+      </span>
+      <span className="min-w-0 truncate">{label}</span>
+      {showCount || hoverAction ? (
+        <span className="ml-auto inline-flex items-center gap-0.5">
+          {hoverAction ? (
+            <span
+              role="button"
+              tabIndex={-1}
+              aria-label={hoverAction.label}
+              title={hoverAction.label}
               className={cn(
-                'size-3.5 opacity-70 transition-opacity',
-                onToggleExpand && 'group-hover:opacity-0',
+                'inline-flex size-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-black/[0.05] hover:text-foreground dark:hover:bg-white/[0.08]',
+                hoverAction.disabled && 'pointer-events-none',
               )}
-            />
-            {onToggleExpand ? (
-              expanded ? (
-                <ChevronDown className="pointer-events-none absolute size-3.5 opacity-0 transition-opacity group-hover:opacity-100" />
-              ) : (
-                <ChevronRight className="pointer-events-none absolute size-3.5 opacity-0 transition-opacity group-hover:opacity-100" />
-              )
-            ) : null}
-          </span>
-          <span className="min-w-0 truncate">{label}</span>
+              onClick={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                if (!hoverAction.disabled) hoverAction.onClick()
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              <RefreshCw className="size-3.5" />
+            </span>
+          ) : null}
           {unreadCount > 0 ? (
-            <Badge tone="accent" className="ml-auto" aria-label={`${unreadCount} unread`}>
+            <Badge tone="accent" aria-label={`${unreadCount} unread`}>
               {unreadCount}
             </Badge>
-          ) : showTotal ? (
-            <Badge tone={badgeTone} className="ml-auto">
-              {count}
-            </Badge>
+          ) : lockTotal || showTotal ? (
+            <Badge tone={badgeTone}>{count}</Badge>
           ) : null}
-        </Button>
-      </ContextMenuTrigger>
+        </span>
+      ) : null}
+    </Button>
+  )
+  if (lockTotal && !onReveal && !onRemove) {
+    return button
+  }
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{button}</ContextMenuTrigger>
       <ContextMenuContent>
         {onReveal || onRemove ? (
           <>
@@ -259,6 +290,7 @@ export function Sidebar({
   counts,
   activityUnread = 0,
   hasAppUpdate = false,
+  onReinstallAllUpdates,
   onOpenSettings,
 }: {
   query: string
@@ -295,6 +327,7 @@ export function Sidebar({
   counts: { library: number; system: number; updates: number; activity?: number }
   activityUnread?: number
   hasAppUpdate?: boolean
+  onReinstallAllUpdates?: () => void
   onOpenSettings: () => void
 }) {
   const insetTrafficLights = hasInsetTrafficLights()
@@ -520,14 +553,25 @@ export function Sidebar({
                   ? counts.system
                   : item.id === 'activity'
                     ? counts.activity ?? 0
-                    : counts.updates
+                    : item.id === 'updates'
+                      ? counts.updates + (hasAppUpdate ? 1 : 0)
+                      : counts.updates
               }
-              showTotal={Boolean(showTotals[item.id])}
+              showTotal={item.id === 'updates' ? true : Boolean(showTotals[item.id])}
+              lockTotal={item.id === 'updates'}
               onShowTotalChange={(value) => changeShowTotal(item.id, value)}
               onClick={() => onTabChange(item.id)}
               className="flex-1 md:flex-none"
               badgeTone={item.id === 'updates' ? 'warn' : 'muted'}
               unreadCount={item.id === 'activity' ? activityUnread : 0}
+              hoverAction={
+                item.id === 'updates' && counts.updates > 0 && onReinstallAllUpdates
+                  ? {
+                      label: counts.updates === 1 ? 'Reinstall update' : 'Reinstall all updates',
+                      onClick: onReinstallAllUpdates,
+                    }
+                  : undefined
+              }
               title={
                 item.id === 'activity' && activityUnread > 0
                   ? `${activityUnread} unread`
@@ -935,7 +979,7 @@ export function Sidebar({
       <div className="border-t p-2">
         <Button
           variant="ghost"
-          className="h-8 w-full justify-start font-normal text-muted-foreground"
+          className={navButtonClass(false, 'w-full')}
           onClick={onOpenSettings}
         >
           <Settings className="size-3.5 opacity-70" />

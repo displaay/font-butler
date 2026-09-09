@@ -1,5 +1,6 @@
 import { canSwitchTo } from './identity.ts'
 import {
+  coveredStyleKeys,
   entryAddsUnoccupiedStyle,
   entryFormatOf,
   formatSwap,
@@ -19,33 +20,39 @@ function skipSwapIds(entries: CatalogEntry[]): Set<string> {
   return new Set(formatSwap(entries)?.incomingIds ?? [])
 }
 
-function isMissingStyle(entry: CatalogEntry, occupyingKeys: Set<string>): boolean {
-  if (occupyingKeys.size === 0) return true
-  return entryAddsUnoccupiedStyle(entry, occupyingKeys)
+function isMissingStyle(entry: CatalogEntry, coveredKeys: Set<string>): boolean {
+  if (coveredKeys.size === 0) return true
+  return entryAddsUnoccupiedStyle(entry, coveredKeys)
 }
 
 export function installableEntries(group: { entries: CatalogEntry[] }): CatalogEntry[] {
   const skip = skipSwapIds(group.entries)
-  const occupyingKeys = occupyingStyleKeys(group.entries)
+  const coveredKeys = coveredStyleKeys(group.entries)
   return group.entries.filter(
     (entry) =>
       entry.status === 'uninstalled' &&
       !entry.previewOnly &&
       !skip.has(entry.id) &&
-      isMissingStyle(entry, occupyingKeys),
+      isMissingStyle(entry, coveredKeys),
   )
 }
 
 export function activatableEntries(group: { entries: CatalogEntry[] }): CatalogEntry[] {
   const skip = skipSwapIds(group.entries)
   const occupyingKeys = occupyingStyleKeys(group.entries)
-  return group.entries.filter(
+  const candidates = group.entries.filter(
     (entry) =>
       entry.status === 'deactivated' &&
       !entry.previewOnly &&
       !skip.has(entry.id) &&
       isMissingStyle(entry, occupyingKeys),
   )
+  const formats = uniqueEntryFormats(candidates)
+  if (formats.length <= 1) return candidates
+  const preferred = preferredFormat(formats)
+  return preferred
+    ? candidates.filter((entry) => entryFormatOf(entry) === preferred)
+    : candidates
 }
 
 export function deactivatableEntries(group: { entries: CatalogEntry[] }): CatalogEntry[] {
@@ -227,9 +234,9 @@ export function instanceMenuLabels(
 ): string[] {
   const plan = instanceMenuPlan(entry, family, adobeAvailable)
   const labels: string[] = []
-  if (plan.formatSwap) labels.push(instanceSwapLabel(plan.formatSwap, entry.id))
   if (plan.install) labels.push('Install instance')
   if (plan.activate) labels.push('Activate instance')
+  if (plan.formatSwap) labels.push(instanceSwapLabel(plan.formatSwap, entry.id))
   if (plan.adobeInstall) labels.push('Install to Adobe testing folder')
   if (plan.deactivate) labels.push('Deactivate instance')
   if (plan.uninstall) labels.push('Uninstall instance')

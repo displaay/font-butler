@@ -58,7 +58,7 @@ export function menuBarNeedsAttention(input) {
   if (typeof input === 'number') {
     return input > 0
   }
-  return Boolean(input?.hasUnread || input?.hasUpdates || input?.hasAppUpdate)
+  return Boolean(input?.hasUnread)
 }
 
 export function menuBarUpdateBadge(_input) {
@@ -115,8 +115,9 @@ export function buildTrayMenuModel({
       unread: Boolean(operation.unread),
     })),
     activityEmpty: operations.length === 0,
-    activityShowAll: operations.length > limit,
+    activityShowAll: operations.length > 0,
     markAllAsRead: unreadCount > 0,
+    clearAll: operations.length > 0,
     updatesHeadline: 'Updates',
     appUpdateRow: appUpdateAvailable
       ? {

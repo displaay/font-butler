@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
+  clearOperations,
   createOperation,
   finishOperation,
   loadOperations,
@@ -58,4 +59,16 @@ test('markOperationsUnread keys off operation ids from the operations bus', () =
   const operations = loadOperations(paths)
   assert.equal(operations.find((item) => item.id === install.id)?.unread, true)
   assert.equal(operations.find((item) => item.id === activate.id)?.unread, false)
+})
+
+test('clearOperations wipes persisted activity history', () => {
+  const paths = tempPaths('font-butler-ops-clear-')
+  const install = finishOperation(
+    createOperation({ trigger: 'manual', action: 'install', familyName: 'Inter' }),
+    [{ id: '1', label: 'Inter', outcome: 'succeeded' }],
+  )
+  upsertOperation(paths, install)
+  assert.equal(loadOperations(paths).length, 1)
+  assert.deepEqual(clearOperations(paths), [])
+  assert.deepEqual(loadOperations(paths), [])
 })

@@ -73,6 +73,14 @@ test('importDoneCopy mentions ignored web fonts only in the success line', () =>
     importDoneCopy({ installed: false, count: 1, name: 'Web', preview: 1 }),
     'Added preview of Web',
   )
+  assert.equal(
+    importDoneCopy({ installed: false, count: 0, skipped: 1 }),
+    'That font is already in the library.',
+  )
+  assert.equal(
+    importDoneCopy({ installed: false, count: 0, skipped: 3 }),
+    '3 fonts are already in the library.',
+  )
 })
 
 test('adobeInstallCopy singularizes a single placement', () => {

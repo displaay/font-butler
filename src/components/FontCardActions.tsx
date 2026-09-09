@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { ArrowLeftRight, CircleMinus, CirclePlus, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { CatalogBatchPlan } from '@/lib/batch'
-import { actionLabel, forgetSourcesLabel } from '@/lib/batch'
+import { actionLabel, activateActionLabel, forgetSourcesLabel } from '@/lib/batch'
 import { formatSwapLabel } from '@/lib/formats'
 import { cn } from '@/lib/utils'
 
@@ -15,7 +15,7 @@ type CatalogCardActionHandlers = {
   onActivate: () => void
   /** Passed only when a same-format occupying sibling exists (`canSwitchTo`). */
   onSwitch?: () => void
-  formatSwap?: { from: string; to: string } | null
+  formatSwap?: { from: string; to: string; occupying?: boolean } | null
   onFormatSwap?: () => void
   onForget: () => void
 }
@@ -63,6 +63,7 @@ export function CatalogCardActions({
         <IconAction
           label={actionLabel('Install update', plan.reinstall, plan.reinstall > 1)}
           disabled={busy}
+          warn
           onClick={onReinstall}
         >
           <RefreshCw />
@@ -73,19 +74,19 @@ export function CatalogCardActions({
           <CirclePlus />
         </IconAction>
       )}
+      {plan.activate > 0 && (
+        <IconAction label={activateActionLabel(plan)} disabled={busy} onClick={onActivate}>
+          <Power />
+        </IconAction>
+      )}
       {formatSwap && onFormatSwap && (
-        <IconAction label={formatSwapLabel(formatSwap)} disabled={busy} success onClick={onFormatSwap}>
+        <IconAction label={formatSwapLabel(formatSwap)} disabled={busy} onClick={onFormatSwap}>
           <ArrowLeftRight />
         </IconAction>
       )}
       {onSwitch && (
         <IconAction label="Switch" disabled={busy} onClick={onSwitch}>
           <ArrowLeftRight />
-        </IconAction>
-      )}
-      {plan.activate > 0 && (
-        <IconAction label="Activate" disabled={busy} onClick={onActivate}>
-          <Power />
         </IconAction>
       )}
       {plan.deactivate > 0 && (
@@ -165,6 +166,7 @@ function IconAction({
   disabled,
   destructive,
   success,
+  warn,
   onClick,
   children,
 }: {
@@ -172,6 +174,7 @@ function IconAction({
   disabled?: boolean
   destructive?: boolean
   success?: boolean
+  warn?: boolean
   onClick: () => void
   children: ReactNode
 }) {
@@ -186,9 +189,11 @@ function IconAction({
             'inline-flex size-7 items-center justify-center rounded-md outline-none disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-3.5',
             destructive
               ? 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-500/20 dark:text-red-400 dark:hover:bg-red-500/30'
-              : success
-                ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-400 dark:hover:bg-emerald-500/30'
-                : 'border bg-card hover:bg-muted',
+              : warn
+                ? 'bg-amber-50 text-amber-800 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-400 dark:hover:bg-amber-900'
+                : success
+                  ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-400 dark:hover:bg-emerald-500/30'
+                  : 'border bg-card hover:bg-muted',
           )}
           onClick={(event) => {
             event.preventDefault()

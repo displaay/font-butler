@@ -75,6 +75,7 @@ import {
   createOperation,
   findOperationByIdempotency,
   finishOperation,
+  clearOperations,
   loadOperations,
   markAllOperationsRead,
   markOperationsUnread,
@@ -1634,6 +1635,12 @@ export class FontButlerService {
 
   markActivityUnread(ids: string[]): Operation[] {
     const operations = markOperationsUnread(this.paths, ids)
+    emitEvent({ type: 'operations', operations })
+    return operations
+  }
+
+  clearActivity(): Operation[] {
+    const operations = clearOperations(this.paths)
     emitEvent({ type: 'operations', operations })
     return operations
   }
@@ -3236,13 +3243,24 @@ export class FontButlerService {
     }
   }
 
-  private async refreshUserFontsWatcher(): Promise<void> {
-    await syncUserFontsWatcher(this.paths.userFontsDir, () => {
-      void runCatalogTask(async () => {
+  private userFontsAdoptQueued = false
+
+  private scheduleAdoptUserFonts(): void {
+    if (this.userFontsAdoptQueued) return
+    this.userFontsAdoptQueued = true
+    void runCatalogTask(async () => {
+      while (this.userFontsAdoptQueued) {
+        this.userFontsAdoptQueued = false
         await this.adoptUserFonts()
         await syncWatchers(this.paths)
         emitCatalog(this.paths)
-      })
+      }
+    })
+  }
+
+  private async refreshUserFontsWatcher(): Promise<void> {
+    await syncUserFontsWatcher(this.paths.userFontsDir, () => {
+      this.scheduleAdoptUserFonts()
     })
   }
 

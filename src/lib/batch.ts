@@ -1,4 +1,5 @@
 import {
+  activatableEntries,
   activatableIds,
   adobeInstallableIds,
   deactivatableIds,
@@ -7,6 +8,7 @@ import {
   repairableIds,
   uninstallableIds,
 } from './eligibility.ts'
+import { uniqueEntryFormats } from './formats.ts'
 import { familyBadgeEntry, hasTrackedSource, isForgettableOnlyGroup, isUninstallableGroup } from './group.ts'
 import { displayStateParts } from './state.ts'
 import type { FamilyGroup, SystemFamilyGroup } from './types.ts'
@@ -17,6 +19,7 @@ export type CatalogBatchPlan = {
   installMissing: boolean
   adobeInstall: number
   activate: number
+  activateFormat?: string
   deactivate: number
   uninstall: number
   uninstallAndRemove: number
@@ -71,12 +74,18 @@ export function catalogBatchPlan(groups: FamilyGroup[], adobeAvailable = true): 
     if (isForgettableOnlyGroup(group)) forget += 1
     if (group.entries.some((entry) => entry.status === 'uninstalled')) deleteFiles += 1
   }
+  const activating = groups.flatMap((group) => activatableEntries(group))
+  const familyFormats = uniqueEntryFormats(groups.flatMap((group) => group.entries))
+  const activatingFormats = uniqueEntryFormats(activating)
+  const activateFormat =
+    familyFormats.length > 1 && activatingFormats.length === 1 ? activatingFormats[0] : undefined
   return {
     count: groups.length,
     install,
     installMissing,
     adobeInstall,
     activate,
+    ...(activateFormat ? { activateFormat } : {}),
     deactivate,
     uninstall,
     uninstallAndRemove,
@@ -110,6 +119,7 @@ export function familyCardPlan(group: FamilyGroup, adobeAvailable = true): Catal
     deactivate: 0,
     uninstall: 0,
     activate: 0,
+    activateFormat: undefined,
     reinstall: 0,
   }
 }
@@ -186,6 +196,14 @@ export function actionLabel(verb: string, count: number, multi: boolean): string
   }
   if (!multi) return verb
   return `${verb} ${count} ${count === 1 ? 'font' : 'fonts'}`
+}
+
+export function activateActionLabel(
+  plan: Pick<CatalogBatchPlan, 'activate' | 'activateFormat'>,
+  multi = false,
+): string {
+  if (plan.activateFormat) return `Activate ${plan.activateFormat.toUpperCase()}`
+  return actionLabel('Activate', plan.activate, multi)
 }
 
 export function forgetSourcesLabel(count: number, multi: boolean): string {

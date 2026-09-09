@@ -112,15 +112,18 @@ export function StateBadges({
   destinations,
   hideInstalled = false,
   hideNotInstalled = false,
+  hideDeactivated = false,
 }: {
   entry: CatalogEntry
   destinations?: CopyDestinations
   hideInstalled?: boolean
   hideNotInstalled?: boolean
+  hideDeactivated?: boolean
 }) {
   const parts = displayStateParts(entry).filter((part) => {
     if (hideInstalled && part === 'Installed') return false
     if (hideNotInstalled && part === 'Not installed') return false
+    if (hideDeactivated && part === 'Deactivated') return false
     return true
   })
   if (parts.length === 0) return null

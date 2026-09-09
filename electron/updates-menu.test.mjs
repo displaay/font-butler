@@ -55,22 +55,23 @@ test('menuBarUpdateBadge stays empty because attention lives on the template ico
   assert.equal(menuBarUpdateBadge({ hasUnread: false, hasUpdates: true }), '')
 })
 
-test('menuBarNeedsAttention is true for unread activity, outdated fonts, or an app release', () => {
+test('menuBarNeedsAttention is true only for unread activity, not font or app updates', () => {
   assert.equal(menuBarNeedsAttention(0), false)
   assert.equal(menuBarNeedsAttention(1), true)
   assert.equal(menuBarNeedsAttention({ hasUnread: false, hasUpdates: false }), false)
   assert.equal(menuBarNeedsAttention({ hasUnread: true, hasUpdates: false }), true)
-  assert.equal(menuBarNeedsAttention({ hasUnread: false, hasUpdates: true }), true)
-  assert.equal(menuBarNeedsAttention({ hasUnread: false, hasUpdates: false, hasAppUpdate: true }), true)
+  assert.equal(menuBarNeedsAttention({ hasUnread: false, hasUpdates: true }), false)
+  assert.equal(menuBarNeedsAttention({ hasUnread: false, hasUpdates: false, hasAppUpdate: true }), false)
+  assert.equal(menuBarNeedsAttention({ hasUnread: true, hasUpdates: true, hasAppUpdate: true }), true)
 })
 
-test('menuBarTrayIconPath uses the notification SVG only when attention is needed', () => {
+test('menuBarTrayIconPath keeps the quiet icon when only updates are available', () => {
   const paths = { quiet: 'quiet.png', attention: 'menubarNotificationTemplate.svg' }
   assert.equal(menuBarTrayIconPath({ hasUnread: false, hasUpdates: false }, paths), paths.quiet)
   assert.equal(menuBarTrayIconPath({ hasUnread: true, hasUpdates: false }, paths), paths.attention)
-  assert.equal(menuBarTrayIconPath({ hasUnread: false, hasUpdates: true }, paths), paths.attention)
+  assert.equal(menuBarTrayIconPath({ hasUnread: false, hasUpdates: true }, paths), paths.quiet)
   assert.equal(menuBarTrayIconPath({ hasUnread: true, hasUpdates: true }, paths), paths.attention)
-  assert.equal(menuBarTrayIconPath({ hasUnread: false, hasUpdates: false, hasAppUpdate: true }, paths), paths.attention)
+  assert.equal(menuBarTrayIconPath({ hasUnread: false, hasUpdates: false, hasAppUpdate: true }, paths), paths.quiet)
 })
 
 test('buildTrayMenuModel orders Activity then Updates with headlines and a 5-row cap', () => {
@@ -89,6 +90,7 @@ test('buildTrayMenuModel orders Activity then Updates with headlines and a 5-row
   assert.equal(model.activityShowAll, true)
   assert.equal(model.updatesShowAll, true)
   assert.equal(model.markAllAsRead, true)
+  assert.equal(model.clearAll, true)
   assert.equal(model.activityRows[0]?.label, 'Family 0 installed')
   assert.equal(model.reinstallAll, true)
   assert.equal(model.hasUnread, true)
@@ -97,16 +99,25 @@ test('buildTrayMenuModel orders Activity then Updates with headlines and a 5-row
   assert.equal(model.appUpdateRow, null)
 })
 
-test('buildTrayMenuModel hides Mark all as read and Show all when they are not needed', () => {
+test('buildTrayMenuModel hides Mark all as read and Updates Show all when they are not needed', () => {
   const model = buildTrayMenuModel({
     operations: [operation('op-1', 'activate', 'Inter', false)],
     families: [{ name: 'Inter', ids: ['inter'] }],
   })
   assert.equal(model.markAllAsRead, false)
-  assert.equal(model.activityShowAll, false)
+  assert.equal(model.clearAll, true)
+  assert.equal(model.activityShowAll, true)
   assert.equal(model.updatesShowAll, false)
   assert.equal(model.activityEmpty, false)
   assert.equal(model.updatesEmpty, false)
+})
+
+test('buildTrayMenuModel hides Show all and Clear all when activity is empty', () => {
+  const model = buildTrayMenuModel({ operations: [], families: [] })
+  assert.equal(model.activityShowAll, false)
+  assert.equal(model.clearAll, false)
+  assert.equal(model.activityEmpty, true)
+  assert.equal(model.reinstallAll, false)
 })
 
 test('buildTrayMenuModel puts a GitHub app release above font source updates', () => {
@@ -136,7 +147,7 @@ test('buildTrayMenuModel puts a GitHub app release above font source updates', (
   assert.equal(model.appUpdateRow?.downloadLabel, 'Download Font-Buttler-0.2.0-arm64.dmg')
 })
 
-test('an app-only release still shows the Updates section without enabling Reinstall all', () => {
+test('an app-only release still shows the Updates section without Reinstall all', () => {
   const model = buildTrayMenuModel({
     appUpdate: { updateAvailable: true, latestVersion: '0.2.0', htmlUrl: 'https://github.com/displaay/font-butler/releases/tag/v0.2.0' },
   })

@@ -57,9 +57,16 @@ export function importDoneCopy(options: {
   name?: string
   ignored?: number
   preview?: number
+  skipped?: number
 }): string {
   const ignored = options.ignored ?? 0
   const preview = options.preview ?? 0
+  const skipped = options.skipped ?? 0
+  if (options.count === 0 && skipped > 0) {
+    return skipped === 1
+      ? 'That font is already in the library.'
+      : `${skipped} fonts are already in the library.`
+  }
   if (preview > 0 && options.count > preview) {
     const installed = options.count - preview
     return `${installed} ${installed === 1 ? 'font' : 'fonts'} ${

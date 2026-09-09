@@ -4,6 +4,7 @@ import { ArrowLeft, RefreshCw } from 'lucide-react'
 import { ActivityView } from '@/components/ActivityView'
 import {
   BatchActionBar,
+  BatchActionBarContainer,
   CatalogBatchButtons,
   SystemBatchButtons,
 } from '@/components/BatchActions'
@@ -900,6 +901,22 @@ function AppShell() {
     }
   }
 
+  async function clearAllActivity() {
+    if (operations.length === 0) return
+    const confirmed = window.confirm(
+      'Clear all activity history? Undo will no longer be available for these actions.',
+    )
+    if (!confirmed) return
+    try {
+      const result = await api.clearActivity()
+      operationsRef.current = result.operations
+      setOperations(result.operations)
+      setHighlightOperation(null)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not clear activity')
+    }
+  }
+
   async function createProjectWith(ids: string[], familyNames: string[]) {
     try {
       const result = await api.createProject(defaultProjectName(familyNames), ids)
@@ -1148,6 +1165,7 @@ function AppShell() {
     setTab('library')
     setWatchFolderFilter(folder)
     setProjectFilter(null)
+    if (folder === null) closeInspector()
   }
 
   async function watchDroppedFolders(folders: string[], leftover: { paths: string[]; files: File[] }) {
@@ -1179,6 +1197,7 @@ function AppShell() {
     const latest = (await api.catalog()).entries
     setEntries(latest)
     const preview = result.entries.filter((entry) => entry.previewOnly).length
+    const firstEntry = result.entries[0]
     const names = [...new Set(result.entries.map(familyNameOf))]
     if (result.entries.length) {
       setQuery('')
@@ -1195,8 +1214,9 @@ function AppShell() {
       importDoneCopy({
         installed: result.succeeded > 0 && preview < result.succeeded,
         count: result.entries.length,
-        name: familyNameOf(result.entries[0]),
+        name: firstEntry ? familyNameOf(firstEntry) : undefined,
         preview,
+        skipped: result.skipped,
       }),
       result.failedIds,
       { operationId: result.operationId },
@@ -1406,6 +1426,7 @@ function AppShell() {
           counts={tabCounts}
           activityUnread={activityUnread}
           hasAppUpdate={Boolean(appUpdate?.updateAvailable)}
+          onReinstallAllUpdates={() => void reinstallAllUpdates()}
           onOpenSettings={() => {
             setSettingsFocusAppUpdate(false)
             setSettingsOpen(true)
@@ -1521,6 +1542,7 @@ function AppShell() {
                       void run(() => api.undo(id), { pending: 'Undoing…', done: 'Undid the last change' })
                     }
                     onMarkAllRead={() => void markAllActivityRead()}
+                    onClearAll={() => void clearAllActivity()}
                   />
                 )}
                 {!loading && tab !== 'system' && tab !== 'activity' && visibleGroups.length === 0 && (
@@ -1773,48 +1795,44 @@ function AppShell() {
               </div>
             </ScrollArea>
           </section>
-          {showBatchBar && (
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex justify-center p-4">
-              <div className="pointer-events-auto w-full max-w-3xl">
-                {tab === 'system' ? (
-                  <BatchActionBar count={systemPlan.count} summary={systemSummary}>
-                    <SystemBatchButtons
-                      plan={systemPlan}
-                      busy={busy}
-                      onDeactivate={() => void deactivateSelected()}
-                      onUninstall={() => void uninstallSelected()}
-                    />
-                  </BatchActionBar>
-                ) : (
-                  <BatchActionBar count={catalogPlan.count} summary={catalogSummary}>
-                    <CatalogBatchButtons
-                      plan={catalogPlan}
-                      busy={busy}
-                      onInstall={() => void installSelected()}
-                      onActivate={() => void activateSelected()}
-                      onDeactivate={() => void deactivateSelected()}
-                      onUninstall={() => void uninstallSelected()}
-                      onUninstallAndRemove={() => void uninstallAndRemoveSelected()}
-                      onReinstall={() => void reinstallSelected()}
-                      onRepair={() => void repairSelected()}
-                      onForget={() => void forgetSelected()}
-                      onDeleteFiles={() => void deleteFilesSelected()}
-                      formatSwap={
-                        catalogSelection.length === 1
-                          ? formatSwap(catalogSelection[0]!.entries)
-                          : null
-                      }
-                      onFormatSwap={() => {
-                        const group = catalogSelection[0]
-                        if (group) swapFormatFrom(group)
-                      }}
-                      splitMenuPlacement="up"
-                    />
-                  </BatchActionBar>
-                )}
-              </div>
-            </div>
-          )}
+          <BatchActionBarContainer open={showBatchBar}>
+            {tab === 'system' ? (
+              <BatchActionBar count={systemPlan.count} summary={systemSummary}>
+                <SystemBatchButtons
+                  plan={systemPlan}
+                  busy={busy}
+                  onDeactivate={() => void deactivateSelected()}
+                  onUninstall={() => void uninstallSelected()}
+                />
+              </BatchActionBar>
+            ) : (
+              <BatchActionBar count={catalogPlan.count} summary={catalogSummary}>
+                <CatalogBatchButtons
+                  plan={catalogPlan}
+                  busy={busy}
+                  onInstall={() => void installSelected()}
+                  onActivate={() => void activateSelected()}
+                  onDeactivate={() => void deactivateSelected()}
+                  onUninstall={() => void uninstallSelected()}
+                  onUninstallAndRemove={() => void uninstallAndRemoveSelected()}
+                  onReinstall={() => void reinstallSelected()}
+                  onRepair={() => void repairSelected()}
+                  onForget={() => void forgetSelected()}
+                  onDeleteFiles={() => void deleteFilesSelected()}
+                  formatSwap={
+                    catalogSelection.length === 1
+                      ? formatSwap(catalogSelection[0]!.entries)
+                      : null
+                  }
+                  onFormatSwap={() => {
+                    const group = catalogSelection[0]
+                    if (group) swapFormatFrom(group)
+                  }}
+                  splitMenuPlacement="up"
+                />
+              </BatchActionBar>
+            )}
+          </BatchActionBarContainer>
           </div>
           {showInspector && (
           <div
@@ -1825,7 +1843,7 @@ function AppShell() {
           >
             <div
               className={cn(
-                'grid shrink-0 grid-cols-[2.25rem_1fr_2.25rem] items-center px-2 pt-2',
+                'grid shrink-0 grid-cols-[2.25rem_1fr_2.25rem] items-center px-5 pt-2',
                 insetTrafficLights && 'app-region-drag',
               )}
             >

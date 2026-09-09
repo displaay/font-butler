@@ -661,6 +661,14 @@ app.post('/api/activity/unread', async (c) => {
   }
 })
 
+app.post('/api/activity/clear', async (c) => {
+  try {
+    return c.json({ operations: service.clearActivity() })
+  } catch (error) {
+    return c.json(fail(error, 'Could not clear activity'), 400)
+  }
+})
+
 app.post('/api/activity/undo', async (c) => {
   const body = await c.req.json<{ id: string }>()
   try {

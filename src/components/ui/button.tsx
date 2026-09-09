@@ -15,6 +15,7 @@ const buttonVariants = cva(
         secondary: 'bg-muted text-foreground hover:bg-muted/80',
         destructive: 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-500/20 dark:text-red-400 dark:hover:bg-red-500/30',
         success: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-400 dark:hover:bg-emerald-500/30',
+        warn: 'bg-amber-50 text-amber-800 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-400 dark:hover:bg-amber-900',
       },
       size: {
         default: 'h-8 px-2.5',

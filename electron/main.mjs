@@ -314,6 +314,8 @@ function menuActionIcon(kind) {
   const svg =
     kind === 'mark-read'
       ? '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path fill="#000" d="M6.2 11.4 2.8 8l1.1-1.1 2.3 2.3 5.9-5.9 1.1 1.1z"/></svg>'
+      : kind === 'clear-all'
+        ? '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path fill="#000" d="M3.2 3.2h9.6v1.3H3.2zm1.3 2.4h7v7.2c0 .7-.6 1.3-1.3 1.3H5.8c-.7 0-1.3-.6-1.3-1.3zm2.1 1.6v4.2h1.2V7.2zm2.4 0v4.2h1.2V7.2zM6.2 1.8h3.6v1.1H6.2z"/></svg>'
       : '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path fill="#000" d="M2.5 3.5h11v1.4h-11zm0 3.8h11v1.4h-11zm0 3.8h7.5V12H2.5z"/></svg>'
   const image = nativeImage.createFromDataURL(
     `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`,
@@ -340,6 +342,42 @@ async function markAllActivityReadFromTray() {
     }
   } catch (error) {
     console.error('Failed to mark activity as read', error)
+  }
+}
+
+async function clearAllActivityFromTray() {
+  const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined
+  const options = {
+    type: 'warning',
+    buttons: ['Cancel', 'Clear all'],
+    defaultId: 1,
+    cancelId: 0,
+    message: 'Clear all activity history?',
+    detail: 'Undo will no longer be available for these actions.',
+  }
+  const choice = parent
+    ? await dialog.showMessageBox(parent, options)
+    : await dialog.showMessageBox(options)
+  if (choice.response !== 1) {
+    return
+  }
+  try {
+    const token = await ensureApiToken()
+    const response = await fetch(`${API}/api/activity/clear`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: '{}',
+    })
+    const data = await response.json()
+    if (Array.isArray(data.operations)) {
+      activityOperations = data.operations
+      refreshTrayMenu()
+    }
+  } catch (error) {
+    console.error('Failed to clear activity', error)
   }
 }
 
@@ -391,6 +429,14 @@ function buildTrayMenu() {
       icon: menuActionIcon('show-all'),
       click: () => {
         openTab('activity')
+      },
+    })
+    items.push({
+      label: 'Clear all',
+      icon: menuActionIcon('clear-all'),
+      alternate: true,
+      click: () => {
+        void clearAllActivityFromTray()
       },
     })
   }
@@ -447,13 +493,14 @@ function buildTrayMenu() {
     })
   }
   const allIds = families.flatMap((family) => family.ids)
-  items.push({
-    label: 'Reinstall all fonts',
-    enabled: allIds.length > 0,
-    click: () => {
-      reinstallFromTray(allIds)
-    },
-  })
+  if (model.reinstallAll) {
+    items.push({
+      label: 'Reinstall all fonts',
+      click: () => {
+        reinstallFromTray(allIds)
+      },
+    })
+  }
   items.push({ type: 'separator' })
   items.push({
     label: 'Remove font cache',

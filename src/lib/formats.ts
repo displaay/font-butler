@@ -202,26 +202,63 @@ export type FormatSwap = {
   from: string
   to: string
   incomingIds: string[]
+  occupying: boolean
 }
 
-export function formatSwapLabel(swap: Pick<FormatSwap, 'from' | 'to'>): string {
+export function formatSwapLabel(swap: Pick<FormatSwap, 'from' | 'to' | 'occupying'>): string {
+  if (!swap.occupying) return `Install ${swap.to.toUpperCase()}`
   return `Swap ${swap.from.toUpperCase()} for ${swap.to.toUpperCase()}`
 }
 
+function deactivatedEntries<
+  T extends Pick<CatalogEntry, 'status' | 'previewOnly' | 'format' | 'sourcePath' | 'faces'>,
+>(entries: T[]): T[] {
+  return entries.filter((entry) => entry.status === 'deactivated' && !entry.previewOnly)
+}
+
+/** Styles already live, or parked when nothing is live. */
+export function coveredStyleKeys(
+  entries: Array<Pick<CatalogEntry, 'faces' | 'status' | 'previewOnly'>>,
+): Set<string> {
+  const occupying = occupyingStyleKeys(entries)
+  if (occupying.size > 0) return occupying
+  const keys = new Set<string>()
+  for (const entry of deactivatedEntries(entries)) {
+    for (const key of styleKeysForEntry(entry)) keys.add(key)
+  }
+  return keys
+}
+
 /**
- * One live format plus a catalog copy of the same styles in another format.
- * Installing the inactive files is a format swap, not missing styles.
+ * One live or parked format plus a catalog copy of the same styles in another
+ * format. Installing those files is a format change, not missing styles.
  */
 export function formatSwap(
   entries: Array<
     Pick<CatalogEntry, 'id' | 'format' | 'sourcePath' | 'status' | 'faces' | 'previewOnly'>
   >,
 ): FormatSwap | null {
-  const fromFormats = occupyingFormats(entries)
+  const liveFormats = occupyingFormats(entries)
+  if (liveFormats.length > 1) return null
+  const occupying = liveFormats.length === 1
+  const parkedFormats = uniqueEntryFormats(deactivatedEntries(entries))
+  const fromFormats = occupying
+    ? liveFormats
+    : parkedFormats.length === 1
+      ? parkedFormats
+      : parkedFormats.length === 2
+        ? [preferredFormat(parkedFormats)].filter((format): format is string => Boolean(format))
+        : []
   if (fromFormats.length !== 1) return null
   const from = fromFormats[0]!
-  const occupyingKeys = occupyingStyleKeys(entries)
-  if (occupyingKeys.size === 0) return null
+  const fromKeys = occupying
+    ? occupyingStyleKeys(entries)
+    : new Set(
+        deactivatedEntries(entries)
+          .filter((entry) => entryFormatOf(entry) === from)
+          .flatMap(styleKeysForEntry),
+      )
+  if (fromKeys.size === 0) return null
   const incoming = entries.filter((entry) => {
     if (entry.previewOnly) return false
     if (entry.status !== 'uninstalled' && entry.status !== 'deactivated') return false
@@ -232,10 +269,10 @@ export function formatSwap(
   if (toFormats.length !== 1) return null
   const to = toFormats[0]!
   const incomingKeys = new Set(incoming.flatMap(styleKeysForEntry))
-  for (const key of occupyingKeys) {
+  for (const key of fromKeys) {
     if (!incomingKeys.has(key)) return null
   }
-  return { from, to, incomingIds: incoming.map((entry) => entry.id) }
+  return { from, to, incomingIds: incoming.map((entry) => entry.id), occupying }
 }
 
 function isIncomingStatus(status: CatalogEntry['status']): boolean {
@@ -275,10 +312,10 @@ export function instanceFormatSwap(
   const entryLive = occupyingEntries([entry]).length > 0
   const otherLive = occupyingEntries([counterpart]).length > 0
   if (entryLive && isIncomingStatus(counterpart.status)) {
-    return { from: format, to: otherFormat, incomingIds: [counterpart.id] }
+    return { from: format, to: otherFormat, incomingIds: [counterpart.id], occupying: true }
   }
   if (otherLive && isIncomingStatus(entry.status)) {
-    return { from: otherFormat, to: format, incomingIds: [entry.id] }
+    return { from: otherFormat, to: format, incomingIds: [entry.id], occupying: true }
   }
   return null
 }

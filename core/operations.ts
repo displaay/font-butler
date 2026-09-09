@@ -144,6 +144,11 @@ export function markOperationsUnread(paths: AppPaths, ids: string[]): Operation[
   return operations
 }
 
+export function clearOperations(paths: AppPaths): Operation[] {
+  saveOperations(paths, [])
+  return []
+}
+
 export function operationCounts(operation: Operation): {
   succeeded: number
   failed: number

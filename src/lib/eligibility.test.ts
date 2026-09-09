@@ -229,7 +229,34 @@ test('family Switch is hidden for a kept alt-format sibling', () => {
   const mixed = group([otf, ttf])
   assert.equal(familyHasSwitch(mixed, mixed.entries), false)
   assert.deepEqual(installableIds(mixed), [])
-  assert.deepEqual(formatSwap(mixed.entries), { from: 'otf', to: 'ttf', incomingIds: ['ttf'] })
+  assert.deepEqual(formatSwap(mixed.entries), {
+    from: 'otf',
+    to: 'ttf',
+    incomingIds: ['ttf'],
+    occupying: true,
+  })
+})
+
+test('a parked family does not treat the alt format as missing styles', () => {
+  const otf = { ...entry('otf', 'deactivated'), format: 'otf' as const, sourcePath: '/tmp/otf.otf' }
+  const ttf = { ...entry('ttf', 'uninstalled'), format: 'ttf' as const, sourcePath: '/tmp/ttf.ttf' }
+  const mixed = group([otf, ttf])
+  assert.deepEqual(installableIds(mixed), [])
+  assert.deepEqual(activatableIds(mixed), ['otf'])
+  assert.deepEqual(formatSwap(mixed.entries), {
+    from: 'otf',
+    to: 'ttf',
+    incomingIds: ['ttf'],
+    occupying: false,
+  })
+})
+
+test('activating a family with two parked formats only targets the preferred format', () => {
+  const otf = { ...entry('otf', 'deactivated'), format: 'otf' as const, sourcePath: '/tmp/otf.otf' }
+  const ttf = { ...entry('ttf', 'deactivated'), format: 'ttf' as const, sourcePath: '/tmp/ttf.ttf' }
+  const mixed = group([otf, ttf])
+  assert.deepEqual(activatableIds(mixed), ['otf'])
+  assert.deepEqual(installableIds(mixed), [])
 })
 
 test('family Switch is offered for a kept same-format sibling', () => {
