@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowLeftRight, CircleMinus, CirclePlus, ListX, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
 import { AdobeLogo } from '@/components/Badges'
 import { Button } from '@/components/ui/button'
@@ -23,6 +23,9 @@ import {
 import { hasInstanceMenuActions, type InstanceMenuPlan } from '@/lib/eligibility'
 import { formatSwapLabel, instanceSwapLabel, type FormatSwap } from '@/lib/formats'
 import { cn } from '@/lib/utils'
+
+const destructiveMenuItemClass =
+  'text-destructive focus:text-destructive data-[highlighted]:bg-red-100 data-[highlighted]:text-destructive dark:data-[highlighted]:bg-red-500/20'
 
 export function CatalogBatchButtons({
   plan,
@@ -161,9 +164,6 @@ export function SystemBatchButtons({
   )
 }
 
-const batchBarMotion =
-  'duration-300 motion-reduce:animate-none motion-reduce:transition-none'
-
 export function BatchActionBarContainer({
   open,
   children,
@@ -172,43 +172,51 @@ export function BatchActionBarContainer({
   children: ReactNode
 }) {
   const [rendered, setRendered] = useState(open)
-  const [closing, setClosing] = useState(false)
+  const [visible, setVisible] = useState(false)
   const contentRef = useRef(children)
+  const frameRef = useRef(0)
 
   if (open && children) contentRef.current = children
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    cancelAnimationFrame(frameRef.current)
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
     if (open) {
       setRendered(true)
-      setClosing(false)
-      return
+      if (reduceMotion) {
+        setVisible(true)
+        return
+      }
+      setVisible(false)
+      frameRef.current = requestAnimationFrame(() => {
+        frameRef.current = requestAnimationFrame(() => setVisible(true))
+      })
+      return () => cancelAnimationFrame(frameRef.current)
     }
-    if (!rendered) return
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+
+    if (reduceMotion) {
       setRendered(false)
-      setClosing(false)
+      setVisible(false)
       return
     }
-    setClosing(true)
-  }, [open, rendered])
+    setVisible(false)
+  }, [open])
 
   if (!rendered) return null
 
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex justify-center p-4">
+    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex justify-center overflow-hidden p-4">
       <div
         className={cn(
-          'w-full max-w-3xl',
-          closing ? 'pointer-events-none' : 'pointer-events-auto',
-          batchBarMotion,
-          closing
-            ? 'animate-out slide-out-to-bottom fade-out ease-in'
-            : 'animate-in slide-in-from-bottom fade-in ease-out',
+          'w-full max-w-3xl will-change-transform',
+          visible ? 'pointer-events-auto' : 'pointer-events-none',
+          'transition-[transform,opacity] duration-300 ease-out motion-reduce:transition-none',
+          visible ? 'translate-y-0 opacity-100' : 'translate-y-[calc(100%+1rem)] opacity-0',
         )}
-        onAnimationEnd={(event) => {
-          if (event.target !== event.currentTarget || !closing) return
+        onTransitionEnd={(event) => {
+          if (event.target !== event.currentTarget || visible || open) return
           setRendered(false)
-          setClosing(false)
         }}
       >
         {contentRef.current}
@@ -346,13 +354,17 @@ export function CatalogMenuItems({
         </ContextMenuItem>
       )}
       {plan.uninstall > 0 && (
-        <ContextMenuItem disabled={busy} onSelect={onUninstall}>
+        <ContextMenuItem
+          disabled={busy}
+          className={destructiveMenuItemClass}
+          onSelect={onUninstall}
+        >
           <CircleMinus /> Uninstall
         </ContextMenuItem>
       )}
       {formatUninstalls.length >= 2 && onUninstallFormat ? (
         <ContextMenuSub>
-          <ContextMenuSubTrigger disabled={busy}>
+          <ContextMenuSubTrigger disabled={busy} className={destructiveMenuItemClass}>
             <CircleMinus /> Uninstall format…
           </ContextMenuSubTrigger>
           <ContextMenuSubContent>
@@ -371,7 +383,7 @@ export function CatalogMenuItems({
       {plan.uninstallAndRemove > 0 && onUninstallAndRemove && (
         <ContextMenuItem
           disabled={busy}
-          className="text-destructive focus:text-destructive data-[highlighted]:bg-red-100 data-[highlighted]:text-destructive dark:data-[highlighted]:bg-red-500/20"
+          className={destructiveMenuItemClass}
           onSelect={onUninstallAndRemove}
         >
           <Trash2 /> {actionLabel('Uninstall and delete sources', plan.uninstallAndRemove, multi)}
@@ -388,7 +400,7 @@ export function CatalogMenuItems({
           {plan.deleteFiles > 0 && onDeleteFiles && (
             <ContextMenuItem
               disabled={busy}
-              className="text-destructive focus:text-destructive data-[highlighted]:bg-red-100 data-[highlighted]:text-destructive dark:data-[highlighted]:bg-red-500/20"
+              className={destructiveMenuItemClass}
               onSelect={onDeleteFiles}
             >
               <Trash2 /> {deleteSourcesLabel(plan.deleteFiles, multi)}
@@ -417,7 +429,11 @@ export function SystemMenuItems({
       <ContextMenuItem disabled={!enabled || busy} onSelect={onDeactivate}>
         <PowerOff /> Deactivate
       </ContextMenuItem>
-      <ContextMenuItem disabled={!enabled || busy} onSelect={onUninstall}>
+      <ContextMenuItem
+        disabled={!enabled || busy}
+        className={destructiveMenuItemClass}
+        onSelect={onUninstall}
+      >
         <CircleMinus /> Uninstall
       </ContextMenuItem>
     </>
@@ -474,7 +490,11 @@ export function InstanceMenuItems({
         </ContextMenuItem>
       ) : null}
       {plan.uninstall ? (
-        <ContextMenuItem disabled={busy} onSelect={onUninstall}>
+        <ContextMenuItem
+          disabled={busy}
+          className={destructiveMenuItemClass}
+          onSelect={onUninstall}
+        >
           <CircleMinus /> Uninstall instance
         </ContextMenuItem>
       ) : null}

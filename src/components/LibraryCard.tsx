@@ -189,7 +189,7 @@ export function LibraryCard({
   const showDestIcons = !hideDestinations && (dest.macos || dest.adobe)
   const showIconRow =
     showDestIcons || hasTrackedSource(group) || (layout === 'grid' && notInstalled)
-  const showCorner = showIconRow || Boolean(mixedWarning) || deactivated
+  const showCorner = showIconRow || Boolean(mixedWarning) || (deactivated && layout === 'grid')
   const addedLabel = showAddedAt ? formatAddedAt(group.addedAt) : ''
   const identity = (
     <>
@@ -253,11 +253,11 @@ export function LibraryCard({
             data-no-marquee=""
             className="pointer-events-none absolute top-1.5 left-1.5 z-10 flex max-w-[calc(100%-0.75rem)] flex-col items-start gap-1"
           >
-            {showIconRow || deactivated ? (
+            {showIconRow || (deactivated && layout === 'grid') ? (
               <div className="flex items-center gap-1">
                 {showDestIcons ? <DestinationIcons macos={dest.macos} adobe={dest.adobe} overlay /> : null}
                 {hasTrackedSource(group) ? <SourceBadge /> : null}
-                {deactivated ? (
+                {deactivated && layout === 'grid' ? (
                   <Badge tone="muted" title="Deactivated">
                     Deactivated
                   </Badge>
@@ -321,11 +321,22 @@ export function LibraryCard({
                   onDoubleClick={onInspect}
                   className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left"
                 >
-                  <AaPreview
-                    family={previewFamily}
-                    weight={previewWeight}
-                    italic={previewItalic}
-                  />
+                  <div className="relative shrink-0">
+                    <AaPreview
+                      family={previewFamily}
+                      weight={previewWeight}
+                      italic={previewItalic}
+                    />
+                    {deactivated ? (
+                      <Badge
+                        tone="muted"
+                        title="Deactivated"
+                        className="absolute left-0 top-0 z-10"
+                      >
+                        Deactivated
+                      </Badge>
+                    ) : null}
+                  </div>
                   <div className="min-w-0 flex-1">{identity}</div>
                 </button>
                 {showInstances && (
