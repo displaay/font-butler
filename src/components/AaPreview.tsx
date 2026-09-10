@@ -1,6 +1,16 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react'
 import { Loader2 } from 'lucide-react'
 import { usePreviewFontReady } from '@/hooks/usePreviewFontReady'
+import { fitPreviewTransform } from '@/lib/fitPreview'
 import { applyLatinPreviewSample, DEFAULT_LATIN_PREVIEW_TEXT } from '@/lib/latinPreview'
 import { cn } from '@/lib/utils'
 
@@ -82,6 +92,7 @@ function AaGlyph({
   pendingSize = 'md',
   wait = true,
   sample,
+  fit = false,
 }: {
   family: string
   weight?: number
@@ -90,13 +101,62 @@ function AaGlyph({
   pendingSize?: 'sm' | 'md' | 'glyph'
   wait?: boolean
   sample?: string
+  fit?: boolean
 }) {
-  const ready = usePreviewFontReady(family, weight, italic, wait)
+  const ready = usePreviewFontReady(family, weight, italic, wait || fit)
   const latinText = useContext(LatinPreviewContext)
+  const text = applyLatinPreviewSample(sample, latinText)
+  const glyphRef = useRef<HTMLSpanElement>(null)
+  const [fitStyle, setFitStyle] = useState<CSSProperties>({})
+
+  useLayoutEffect(() => {
+    if (!fit || !ready) {
+      setFitStyle({})
+      return
+    }
+    const el = glyphRef.current
+    const box = el?.parentElement
+    if (!el || !box) return
+
+    function measure() {
+      if (!el || !box) return
+      const previousTransform = el.style.transform
+      const previousOrigin = el.style.transformOrigin
+      el.style.transform = 'none'
+      el.style.transformOrigin = '0 0'
+      const range = document.createRange()
+      range.selectNodeContents(el)
+      const ink = range.getBoundingClientRect()
+      const frame = box.getBoundingClientRect()
+      const element = el.getBoundingClientRect()
+      range.detach()
+      el.style.transform = previousTransform
+      el.style.transformOrigin = previousOrigin
+      if (ink.width <= 0 || ink.height <= 0 || frame.width <= 0 || frame.height <= 0) return
+      const next = fitPreviewTransform(ink, frame, element)
+      const transform = `translate(${next.translateX}px, ${next.translateY}px) scale(${next.scale})`
+      const transformOrigin = `${next.originX}px ${next.originY}px`
+      setFitStyle((current) =>
+        current.transform === transform && current.transformOrigin === transformOrigin
+          ? current
+          : { transform, transformOrigin },
+      )
+    }
+
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(box)
+    return () => observer.disconnect()
+  }, [fit, ready, family, weight, italic, variation, text])
+
   if (!ready) return <PreviewPending size={pendingSize} />
   return (
     <span
-      className="font-preview translate-y-px select-none overflow-hidden whitespace-nowrap"
+      ref={glyphRef}
+      className={cn(
+        'font-preview select-none whitespace-nowrap',
+        !fit && 'translate-y-px overflow-hidden',
+      )}
       dir="auto"
       style={{
         fontFamily: `"${family}"`,
@@ -104,9 +164,10 @@ function AaGlyph({
         fontStyle: italic ? 'italic' : 'normal',
         fontSynthesis: 'none',
         fontVariationSettings: variation || undefined,
+        ...fitStyle,
       }}
     >
-      {applyLatinPreviewSample(sample, latinText)}
+      {text}
     </span>
   )
 }
@@ -193,6 +254,7 @@ export function CyclingAaPreview({
             pendingSize="glyph"
             wait={faceIndex === visibleIndex}
             sample={sample}
+            fit
           />
           {cycling ? <PreviewLabel>{face.label}</PreviewLabel> : null}
         </div>
