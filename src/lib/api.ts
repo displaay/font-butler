@@ -343,6 +343,7 @@ export const api = {
     configure: (input: {
       enabled?: boolean
       workerBaseUrl?: string
+      autoCheckMinutes?: number
       token?: string
       folderId?: string | null
     }) => json<{ status: RetailSyncStatus }>(post('/api/retail/configure', input)),

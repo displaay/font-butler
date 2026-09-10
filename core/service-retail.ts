@@ -15,6 +15,7 @@ import {
 } from './retail-sync.ts'
 import { DEFAULT_RETAIL_WORKER_BASE_URL, defaultRetailSync, loadSettings, saveSettings } from './settings.ts'
 import type { AppSettings, RetailSyncSettings, WatchFolder } from './types.ts'
+import { normalizeAutoCheckMinutes } from '../shared/retail.ts'
 import type { RetailDriftItem, RetailManifest, RetailSkip, RetailSyncStatus } from '../shared/retail.ts'
 
 /** In-memory only: the last check's result, so `status` is cheap and never touches the network. */
@@ -57,6 +58,7 @@ export function retailStatus(paths: AppPaths, settings = loadSettings(paths)): R
   const local = loadRetailManifest(paths)
   return {
     enabled: config.enabled,
+    autoCheckMinutes: config.autoCheckMinutes,
     configured: Boolean(folder),
     // Never the token itself: this object is emitted as an event and returned to the renderer.
     hasToken: readRetailToken(retailTokenPath(paths)).length > 0,
@@ -79,7 +81,13 @@ function emitRetail(paths: AppPaths): RetailSyncStatus {
 
 export function configureRetailSync(
   paths: AppPaths,
-  input: { enabled?: boolean; workerBaseUrl?: string; token?: string; folderId?: string | null },
+  input: {
+    enabled?: boolean
+    workerBaseUrl?: string
+    autoCheckMinutes?: number
+    token?: string
+    folderId?: string | null
+  },
 ): RetailSyncStatus {
   const settings = loadSettings(paths)
   const current = retailSettings(settings)
@@ -92,6 +100,10 @@ export function configureRetailSync(
   const next: RetailSyncSettings = {
     enabled: input.enabled ?? current.enabled,
     workerBaseUrl: workerBaseUrl || DEFAULT_RETAIL_WORKER_BASE_URL,
+    autoCheckMinutes:
+      input.autoCheckMinutes === undefined
+        ? current.autoCheckMinutes
+        : normalizeAutoCheckMinutes(input.autoCheckMinutes),
     folderId: input.folderId === undefined ? current.folderId : input.folderId,
   }
   // Cached drift describes one folder on one server. If either moves, or the credentials change, it is

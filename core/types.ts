@@ -222,6 +222,8 @@ export type PreviewPreferences = {
 export type RetailSyncSettings = {
   enabled: boolean
   workerBaseUrl: string
+  /** Background check interval in minutes; `0` means the app never checks on its own. */
+  autoCheckMinutes: number
   /** Id of the WatchFolder that holds the collection, once configured. */
   folderId: string | null
 }

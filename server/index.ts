@@ -693,6 +693,7 @@ app.post('/api/retail/configure', async (c) => {
   const body = await c.req.json<{
     enabled?: boolean
     workerBaseUrl?: string
+    autoCheckMinutes?: number
     token?: string
     folderId?: string | null
   }>()

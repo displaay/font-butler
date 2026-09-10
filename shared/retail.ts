@@ -96,6 +96,8 @@ export type RetailDriftItem = {
 
 export type RetailSyncStatus = {
   enabled: boolean
+  /** Background check interval in minutes; `0` means the app never checks on its own. */
+  autoCheckMinutes: number
   configured: boolean
   hasToken: boolean
   workerBaseUrl: string
@@ -107,6 +109,33 @@ export type RetailSyncStatus = {
   drift: RetailDriftItem[]
   skipped: RetailSkip[]
   error: string | null
+}
+
+/**
+ * How often the app re-checks the collection in the background, in minutes. `0` turns it off.
+ *
+ * Background checks deliberately do NOT pass `refresh`, so they are served from the worker's cached
+ * manifest — the regenerate webhook purges that cache, so a fresh generation still shows up promptly
+ * without every client rebuilding the manifest on its own schedule. The manual Check button passes
+ * `refresh` and rebuilds.
+ */
+export const DEFAULT_RETAIL_AUTOCHECK_MINUTES = 60
+
+export const RETAIL_AUTOCHECK_CHOICES: ReadonlyArray<{ minutes: number; label: string }> = [
+  { minutes: 0, label: 'Never' },
+  { minutes: 15, label: 'Every 15 minutes' },
+  { minutes: 60, label: 'Every hour' },
+  { minutes: 360, label: 'Every 6 hours' },
+]
+
+export function normalizeAutoCheckMinutes(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    return DEFAULT_RETAIL_AUTOCHECK_MINUTES
+  }
+  // Only an exact 0 means "never". Rounding first would turn a positive sub-minute value into 0 and
+  // silently stop checking altogether, which is the opposite of what asking for 0.2 wants.
+  if (value === 0) return 0
+  return Math.max(1, Math.round(value))
 }
 
 /** Drift kinds a sync actually downloads. `removed` is reported but never acted on. */

@@ -288,3 +288,36 @@ test('overlapping syncs share one run instead of fighting over the same files', 
   const later = await syncRetail(paths, options)
   assert.equal(later.error, null)
 })
+
+test('the autocheck interval round-trips and rejects nonsense', () => {
+  const { paths, root } = setup()
+  const folderId = withFolder(paths, root)
+
+  // Default when never set.
+  assert.equal(configureRetailSync(paths, { folderId }).autoCheckMinutes, 60)
+  assert.equal(configureRetailSync(paths, { autoCheckMinutes: 15 }).autoCheckMinutes, 15)
+  // 0 is a real choice: never check in the background.
+  assert.equal(configureRetailSync(paths, { autoCheckMinutes: 0 }).autoCheckMinutes, 0)
+  // Sub-minute values would hammer the worker; negatives and junk fall back to the default.
+  assert.equal(configureRetailSync(paths, { autoCheckMinutes: 0.2 }).autoCheckMinutes, 1)
+  assert.equal(configureRetailSync(paths, { autoCheckMinutes: -5 }).autoCheckMinutes, 60)
+  assert.equal(
+    configureRetailSync(paths, { autoCheckMinutes: Number.NaN }).autoCheckMinutes,
+    60,
+  )
+
+  // Survives a reload from disk.
+  configureRetailSync(paths, { autoCheckMinutes: 360 })
+  assert.equal(loadSettings(paths).retailSync?.autoCheckMinutes, 360)
+})
+
+test('changing the interval alone does not discard measured drift', async () => {
+  const { paths, root } = setup()
+  const folderId = withFolder(paths, root)
+  configureRetailSync(paths, { enabled: true, token: 't', folderId })
+  await checkRetail(paths, { fetchManifest: async () => manifestWith(4, 'e1') })
+
+  const changed = configureRetailSync(paths, { autoCheckMinutes: 60 })
+  assert.equal(changed.pending, 1)
+  assert.equal(changed.autoCheckMinutes, 60)
+})

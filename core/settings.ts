@@ -10,6 +10,10 @@ import {
 import { parseDefaultDestination } from './destinations.ts'
 import { parseLatinPreview } from '../shared/latinPreview.ts'
 import { normalizeSavedFilters } from './saved-filters.ts'
+import {
+  DEFAULT_RETAIL_AUTOCHECK_MINUTES,
+  normalizeAutoCheckMinutes,
+} from '../shared/retail.ts'
 import type {
   AppSettings,
   PreviewPreferences,
@@ -23,7 +27,12 @@ import type {
 export const DEFAULT_RETAIL_WORKER_BASE_URL = 'https://w.displaay.net'
 
 export function defaultRetailSync(): RetailSyncSettings {
-  return { enabled: false, workerBaseUrl: DEFAULT_RETAIL_WORKER_BASE_URL, folderId: null }
+  return {
+    enabled: false,
+    workerBaseUrl: DEFAULT_RETAIL_WORKER_BASE_URL,
+    autoCheckMinutes: DEFAULT_RETAIL_AUTOCHECK_MINUTES,
+    folderId: null,
+  }
 }
 
 function readRetailSync(value: unknown): RetailSyncSettings {
@@ -37,6 +46,7 @@ function readRetailSync(value: unknown): RetailSyncSettings {
   return {
     enabled: row.enabled === true,
     workerBaseUrl,
+    autoCheckMinutes: normalizeAutoCheckMinutes(row.autoCheckMinutes),
     folderId: typeof row.folderId === 'string' && row.folderId ? row.folderId : null,
   }
 }

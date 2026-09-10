@@ -2225,6 +2225,7 @@ export class FontButlerService {
   configureRetailSync(input: {
     enabled?: boolean
     workerBaseUrl?: string
+    autoCheckMinutes?: number
     token?: string
     folderId?: string | null
   }): RetailSyncStatus {

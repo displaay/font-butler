@@ -4,6 +4,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { api } from '@/lib/api'
 import {
+  DEFAULT_RETAIL_AUTOCHECK_MINUTES,
+  RETAIL_AUTOCHECK_CHOICES,
   retailDriftSummary,
   type RetailSkipReason,
   type RetailSyncStatus,
@@ -54,6 +56,7 @@ export function RetailPane({
   const urlId = useId()
   const tokenId = useId()
   const folderId = useId()
+  const autoCheckId = useId()
   const [token, setToken] = useState('')
   // `status` is null on the first render, so the field cannot be seeded from it directly — an edited
   // value wins, otherwise fall back to whatever the server reports.
@@ -163,6 +166,28 @@ export function RetailPane({
               }
             }}
           />
+        </SettingsRow>
+
+        <SettingsRow
+          label="Check automatically"
+          htmlFor={autoCheckId}
+          description="How often Font Buttler looks for newer retail fonts in the background. Checking still never runs at startup, and the Check button below always asks the server for a fresh list."
+        >
+          <select
+            id={autoCheckId}
+            className="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
+            value={status?.autoCheckMinutes ?? DEFAULT_RETAIL_AUTOCHECK_MINUTES}
+            disabled={disabled}
+            onChange={(event) =>
+              void run(() => api.retail.configure({ autoCheckMinutes: Number(event.target.value) }))
+            }
+          >
+            {RETAIL_AUTOCHECK_CHOICES.map((choice) => (
+              <option key={choice.minutes} value={choice.minutes}>
+                {choice.label}
+              </option>
+            ))}
+          </select>
         </SettingsRow>
 
         <SettingsRow
