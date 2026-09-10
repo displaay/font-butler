@@ -437,7 +437,9 @@ export function useFontActions({
     )
   }
 
-  async function uninstallFromAdobeFor(groups: FamilyGroup[]) {
+  // Only `entries` is ever read, and `adobeRemovableIds` already takes that shape. Asking for a whole
+  // FamilyGroup would force callers with a single entry to fabricate the other eight fields.
+  async function uninstallFromAdobeFor(groups: Array<Pick<FamilyGroup, 'entries'>>) {
     const ids = groups.flatMap((group) => adobeRemovableIds(group))
     if (ids.length === 0) return
     await run(async () => {

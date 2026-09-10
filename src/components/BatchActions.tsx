@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowLeftRight, CircleMinus, CirclePlus, ListX, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
 import { AdobeLogo } from '@/components/Badges'
 import { Button } from '@/components/ui/button'
-import { SplitUninstallButton } from '@/components/SplitUninstallButton'
+import { SplitUninstallButton, type SplitUninstallExtra } from '@/components/SplitUninstallButton'
 import {
   ContextMenuItem,
   ContextMenuSeparator,
@@ -63,7 +63,7 @@ export function CatalogBatchButtons({
   if (!hasCatalogBatchActions(plan) && !formatSwap) return null
   const multi = plan.count > 1
   const installVerb = plan.installMissing ? 'Install missing' : 'Install'
-  const uninstallExtras = [
+  const uninstallExtras: SplitUninstallExtra[] = [
     plan.adobeUninstall > 0 && onUninstallFromAdobe
       ? {
           key: 'uninstall-adobe',
@@ -86,7 +86,7 @@ export function CatalogBatchButtons({
           onSelect: onDeleteFiles,
         }
       : null,
-  ].filter((item): item is { key: string; label: string; onSelect: () => void; icon?: ReactNode } => Boolean(item))
+  ].filter((item) => item !== null)
   const extrasOnSplit = plan.uninstall > 0
   return (
     <div className="flex flex-wrap gap-2">
