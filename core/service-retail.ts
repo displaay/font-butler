@@ -475,8 +475,7 @@ async function runSync(
       native: getFontNative(),
       download: (key, expectedSize) => download({ workerBaseUrl, token, key, expectedSize }),
     })
-
-    catalogRetailWrites(paths, result.writtenDests)
+    // persist already cataloged each batch under the lock; do not replay writtenDests.
 
     cache.checkedAt = new Date().toISOString()
     cache.drift = measureDrift(paths, manifest)
