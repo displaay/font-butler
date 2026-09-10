@@ -23,6 +23,7 @@ export type InstanceRow = {
   hasSource?: boolean
   macosCopy?: boolean
   adobeCopy?: boolean
+  previewSample?: string
 }
 
 export function variationSettings(coordinates?: Record<string, number>): string | undefined {
@@ -57,7 +58,15 @@ function rowsFromFace(
   face: FontFaceInfo,
   entry: Pick<
     CatalogEntry,
-    'id' | 'format' | 'sourcePath' | 'previewOnly' | 'status' | 'installedPath' | 'disabledPath' | 'installations'
+    | 'id'
+    | 'format'
+    | 'sourcePath'
+    | 'previewOnly'
+    | 'status'
+    | 'installedPath'
+    | 'disabledPath'
+    | 'installations'
+    | 'previewSample'
   >,
   installState: InstanceInstallState,
   hasSource = false,
@@ -75,6 +84,7 @@ function rowsFromFace(
         weight: weightFromStyleName(name, face.weight),
         italic: italicFromStyleName(name, face.italic),
         variation: variationSettings(named?.coordinates),
+        previewSample: entry.previewSample,
       }
     })
   }
@@ -91,6 +101,7 @@ function rowsFromFace(
       hasSource,
       macosCopy: dest.macos,
       adobeCopy: dest.adobe,
+      previewSample: entry.previewSample,
     },
   ]
 }
@@ -123,6 +134,7 @@ function rowsFromSystemFace(face: SystemFace): InstanceRow[] {
       sublabel: face.postscriptName,
       weight: weightFromStyleName(name, face.weight),
       italic: italicFromStyleName(name, face.italic),
+      previewSample: face.previewSample,
     }))
   }
   return [
@@ -132,6 +144,7 @@ function rowsFromSystemFace(face: SystemFace): InstanceRow[] {
       sublabel: face.postscriptName,
       weight: face.weight,
       italic: face.italic,
+      previewSample: face.previewSample,
       ...row,
     },
   ]

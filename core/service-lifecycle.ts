@@ -23,7 +23,7 @@ import {
 import { identityMutexMessage, occupiedDestinations, occupyingSiblings, occupiesDestination } from './identity.ts'
 import { recordMutationDestination, withMutationJournal } from './journal.ts'
 import { ensureFontActivation, getFontNative } from './native.ts'
-import { parseFontFile, readFileStat } from './parse.ts'
+import { applyParsedFont, parseFontFile, readFileStat } from './parse.ts'
 import type { AppPaths } from './paths.ts'
 import { addManualOwner, removeManualOwner } from './projects.ts'
 import { storeRevision } from './revisions.ts'
@@ -108,8 +108,7 @@ export async function installEntry(
   const installMacos = targets.includes('macos')
   let conflictSnapshots: Array<{ entry: CatalogEntry; file: string }> = []
   try {
-    entry.format = staged.parsed.format
-    entry.faces = staged.parsed.faces
+    applyParsedFont(entry, staged.parsed)
     const conflicts = installMacos || options?.replace
       ? await host.resolveFormatConflicts(entry, catalog.entries, options?.replace, targets)
       : []
@@ -118,8 +117,7 @@ export async function installEntry(
     if (!entry) {
       throw new Error('Font is not in the library.')
     }
-    entry.format = staged.parsed.format
-    entry.faces = staged.parsed.faces
+    applyParsedFont(entry, staged.parsed)
     if (
       installMacos &&
       entry.status === 'installed' &&
@@ -155,8 +153,7 @@ export async function installEntry(
       if (!entry) {
         throw new Error('Font is not in the library.')
       }
-      entry.format = staged.parsed.format
-      entry.faces = staged.parsed.faces
+      applyParsedFont(entry, staged.parsed)
     }
     if (installMacos) {
       const dest = destinationForInstall(host.paths, entry, entry.sourcePath)
@@ -224,8 +221,7 @@ export async function installEntry(
       }
     }
     if (!installMacos) {
-      entry.faces = staged.parsed.faces
-      entry.format = staged.parsed.format
+      applyParsedFont(entry, staged.parsed)
       entry.status = 'installed'
       const fingerprint = tryFingerprintFile(staged.stagedPath)
       if (fingerprint) entry.installedFingerprint = fingerprint
@@ -277,6 +273,7 @@ async function installRenamedCopy(
       status: 'uninstalled',
       faces: parsed.faces,
       format: parsed.format,
+      previewSample: parsed.previewSample,
       addedAt: now(),
       updatedAt: now(),
     }
@@ -304,8 +301,7 @@ async function installRenamedCopy(
         native: getFontNative(),
       })
       bindEntryToInstalledFile(draft, dest)
-      draft.faces = parsed.faces
-      draft.format = parsed.format
+      applyParsedFont(draft, parsed)
       const next = loadCatalog(host.paths)
       upsertEntry(next, draft)
       saveCatalog(host.paths, next)

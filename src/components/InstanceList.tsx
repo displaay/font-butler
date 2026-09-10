@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/context-menu'
 import { hasInstanceMenuActions, instanceMenuPlan } from '@/lib/eligibility'
 import type { InstanceRow } from '@/lib/instances'
+import { resolvedPreviewSample } from '@/lib/previewSample'
 import type { CatalogEntry } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
@@ -130,6 +131,7 @@ export function InstanceList({
               family={family}
               weight={row.weight}
               italic={row.italic}
+              sample={resolvedPreviewSample(row.previewSample)}
             />
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-medium">{row.label}</div>

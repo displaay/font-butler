@@ -109,6 +109,13 @@ function staticEntry(
   }
 }
 
+test('instance rows carry the family preview sample', () => {
+  const groups = groupCatalog([
+    staticEntry('on', 'Regular', 'installed', { previewSample: 'א' }),
+  ])
+  assert.equal(catalogInstanceRows(groups[0]!)[0]?.previewSample, 'א')
+})
+
 test('catalog instance rows keep live vs inactive styles when the source is missing', () => {
   const groups = groupCatalog([
     staticEntry('on', 'Regular', 'installed', { sourceAvailability: 'missing' }),

@@ -45,30 +45,45 @@ export function writeTestFont(
   dest: string,
   family: string,
   psName: string,
-  options: { style?: string; format?: 'ttf' | 'otf'; version?: string; weight?: number } = {},
+  options: {
+    style?: string
+    format?: 'ttf' | 'otf'
+    version?: string
+    weight?: number
+    codePoints?: number[]
+  } = {},
 ): void {
   fs.mkdirSync(path.dirname(dest), { recursive: true })
   const style = options.style ?? 'Regular'
   const format = options.format ?? 'ttf'
   const version = options.version ?? 'Version 1.000'
   const weight = options.weight ?? (/bold/i.test(style) ? 700 : 400)
+  const codePoints = options.codePoints ?? [65]
   const isTtf = format === 'ttf'
   const script = isTtf
     ? `
 from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 
+def glyph_name(cp):
+    if 65 <= cp <= 90 or 97 <= cp <= 122:
+        return chr(cp)
+    return "uni%04X" % cp
+
+codepoints = ${JSON.stringify(codePoints)}
+names = [glyph_name(cp) for cp in codepoints]
 fb = FontBuilder(1000, isTTF=True)
-fb.setupGlyphOrder([".notdef", "A"])
-fb.setupCharacterMap({65: "A"})
+fb.setupGlyphOrder([".notdef"] + names)
+fb.setupCharacterMap({cp: glyph_name(cp) for cp in codepoints})
 empty = TTGlyphPen(None).glyph()
 pen = TTGlyphPen(None)
 pen.moveTo((0, 0))
 pen.lineTo((500, 0))
 pen.lineTo((250, 700))
 pen.closePath()
-fb.setupGlyf({".notdef": empty, "A": pen.glyph()})
-fb.setupHorizontalMetrics({".notdef": (500, 0), "A": (600, 0)})
+triangle = pen.glyph()
+fb.setupGlyf({".notdef": empty, **{name: triangle for name in names}})
+fb.setupHorizontalMetrics({".notdef": (500, 0), **{name: (600, 0) for name in names}})
 fb.setupHorizontalHeader(ascent=800, descent=-200)
 fb.setupNameTable({
     "familyName": ${JSON.stringify(family)},
@@ -86,9 +101,16 @@ fb.save(${JSON.stringify(dest)})
 from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.t2CharStringPen import T2CharStringPen
 
+def glyph_name(cp):
+    if 65 <= cp <= 90 or 97 <= cp <= 122:
+        return chr(cp)
+    return "uni%04X" % cp
+
+codepoints = ${JSON.stringify(codePoints)}
+names = [glyph_name(cp) for cp in codepoints]
 fb = FontBuilder(1000, isTTF=False)
-fb.setupGlyphOrder([".notdef", "A"])
-fb.setupCharacterMap({65: "A"})
+fb.setupGlyphOrder([".notdef"] + names)
+fb.setupCharacterMap({cp: glyph_name(cp) for cp in codepoints})
 empty_pen = T2CharStringPen(500, None)
 empty = empty_pen.getCharString()
 pen = T2CharStringPen(600, None)
@@ -97,8 +119,8 @@ pen.lineTo((500, 0))
 pen.lineTo((250, 700))
 pen.closePath()
 charstring = pen.getCharString()
-fb.setupCFF(${JSON.stringify(psName)}, {"FullName": ${JSON.stringify(`${family} ${style}`)}}, {".notdef": empty, "A": charstring}, {})
-fb.setupHorizontalMetrics({".notdef": (500, 0), "A": (600, 0)})
+fb.setupCFF(${JSON.stringify(psName)}, {"FullName": ${JSON.stringify(`${family} ${style}`)}}, {".notdef": empty, **{name: charstring for name in names}}, {})
+fb.setupHorizontalMetrics({".notdef": (500, 0), **{name: (600, 0) for name in names}})
 fb.setupHorizontalHeader(ascent=800, descent=-200)
 fb.setupNameTable({
     "familyName": ${JSON.stringify(family)},

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { usePreviewFontReady } from '@/hooks/usePreviewFontReady'
+import { resolvedPreviewSample } from '@/lib/previewSample'
 import { cn } from '@/lib/utils'
 
 const CYCLE_MS = 600
@@ -66,6 +67,7 @@ function AaGlyph({
   variation,
   pendingSize = 'md',
   wait = true,
+  sample,
 }: {
   family: string
   weight?: number
@@ -73,12 +75,14 @@ function AaGlyph({
   variation?: string
   pendingSize?: 'sm' | 'md' | 'glyph'
   wait?: boolean
+  sample?: string
 }) {
   const ready = usePreviewFontReady(family, weight, italic, wait)
   if (!ready) return <PreviewPending size={pendingSize} />
   return (
     <span
       className="font-preview translate-y-px select-none"
+      dir="auto"
       style={{
         fontFamily: `"${family}"`,
         fontWeight: weight,
@@ -87,7 +91,7 @@ function AaGlyph({
         fontVariationSettings: variation || undefined,
       }}
     >
-      Aa
+      {resolvedPreviewSample(sample)}
     </span>
   )
 }
@@ -105,11 +109,13 @@ export function AaPreview({
   weight = 400,
   italic = false,
   size = 'md',
+  sample,
 }: {
   family: string
   weight?: number
   italic?: boolean
   size?: 'sm' | 'md'
+  sample?: string
 }) {
   return (
     <div
@@ -118,7 +124,7 @@ export function AaPreview({
         previewBoxClass(size),
       )}
     >
-      <AaGlyph family={family} weight={weight} italic={italic} pendingSize={size} />
+      <AaGlyph family={family} weight={weight} italic={italic} pendingSize={size} sample={sample} />
     </div>
   )
 }
@@ -128,11 +134,13 @@ export function CyclingAaPreview({
   rest,
   active,
   size,
+  sample,
 }: {
   faces: PreviewFace[]
   rest: PreviewFace
   active: boolean
   size: number
+  sample?: string
 }) {
   const restIndex = Math.max(
     0,
@@ -169,6 +177,7 @@ export function CyclingAaPreview({
             variation={face.variation}
             pendingSize="glyph"
             wait={faceIndex === visibleIndex}
+            sample={sample}
           />
           {cycling ? <PreviewLabel>{face.label}</PreviewLabel> : null}
         </div>
