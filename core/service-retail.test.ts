@@ -344,3 +344,46 @@ test('installing a retail listing replaces the catalogue font that occupies Font
     )
   })
 })
+
+test('an Adobe-only install of a cached retail listing leaves the Fonts occupant in place', async () => {
+  resetRetailCache()
+  await withService(async (service, paths) => {
+    const dest = path.join(paths.userFontsDir, 'RecklessVF.otf')
+    writeTestFont(dest, 'LocalReckless', 'LocalRecklessVF', { format: 'otf', version: 'Version 1.000' })
+    const imported = await service.importPaths([dest])
+    assert.equal(imported.entries[0]?.status, 'installed')
+    const occupantId = imported.entries[0]!.id
+    const occupantBytes = fs.readFileSync(dest)
+
+    await service.updateSettings({ defaultDestination: 'adobe-shared' })
+
+    const incoming = path.join(paths.dataRoot, 'incoming.otf')
+    writeTestFont(incoming, 'Reckless', 'RecklessVF', { format: 'otf', version: 'Version 2.000' })
+    const bytes = fs.readFileSync(incoming)
+    configureRetailSync(paths, { enabled: true, token: 't' })
+    await checkRetail(paths, { fetchManifest: async () => manifestWith(bytes.length, 'e2') })
+    const listing = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath === 'Reckless/RecklessVF.otf')
+    assert.ok(listing)
+    assert.equal(listing.status, 'uninstalled')
+
+    await syncRetail(paths, {
+      fetchManifest: async () => manifestWith(bytes.length, 'e2'),
+      fetchFile: async () => new Uint8Array(bytes),
+    })
+    assert.equal(fs.readFileSync(dest).equals(bytes), false, 'sync must not overwrite the occupied Fonts file')
+
+    const installed = await service.install(listing.id)
+    assert.equal(installed.status, 'installed')
+    assert.equal(installed.retailRelativePath, 'Reckless/RecklessVF.otf')
+    assert.ok(installed.installations?.some((copy) => copy.destinationId === 'adobe-shared'))
+    assert.equal(
+      installed.installations?.some((copy) => copy.destinationId === 'macos'),
+      false,
+    )
+    assert.equal(fs.readFileSync(dest).equals(occupantBytes), true)
+    const occupant = loadCatalog(paths).entries.find((entry) => entry.id === occupantId)
+    assert.ok(occupant)
+    assert.equal(occupant.status, 'installed')
+    assert.equal(occupant.installedPath, dest)
+  })
+})

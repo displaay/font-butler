@@ -116,8 +116,14 @@ export async function installEntry(
   let conflictSnapshots: Array<{ entry: CatalogEntry; file: string }> = []
   try {
     applyParsedFont(entry, staged.parsed)
-    const dest = destinationForInstall(host.paths, entry, sourcePath)
-    const destOccupants = occupantsAtPath(catalog.entries, dest).filter((other) => other.id !== entry.id)
+    // Only macOS writes claim the Fonts path. Adobe-only installs must not
+    // treat an occupant of that basename as a conflict to uninstall.
+    const destOccupants = installMacos
+      ? occupantsAtPath(
+          catalog.entries,
+          destinationForInstall(host.paths, entry, sourcePath),
+        ).filter((other) => other.id !== entry.id)
+      : []
     const formatConflicts = installMacos || options?.replace
       ? await host.resolveFormatConflicts(entry, catalog.entries, options?.replace, targets)
       : []
