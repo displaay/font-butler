@@ -292,6 +292,7 @@ export function Sidebar({
   hasAppUpdate = false,
   hasFontUpdates = false,
   searching = false,
+  retailPending = 0,
   onReinstallAllUpdates,
   onOpenSettings,
 }: {
@@ -331,6 +332,8 @@ export function Sidebar({
   hasAppUpdate?: boolean
   hasFontUpdates?: boolean
   searching?: boolean
+  /** Retail fonts whose newer version is still on the server. */
+  retailPending?: number
   onReinstallAllUpdates?: () => void
   onOpenSettings: () => void
 }) {
@@ -504,7 +507,7 @@ export function Sidebar({
         {TABS.filter(
           (item) =>
             item.id !== 'updates' ||
-            shouldShowUpdatesTab(counts.updates, hasAppUpdate) ||
+            shouldShowUpdatesTab(counts.updates, hasAppUpdate, retailPending) ||
             (searching && hasFontUpdates),
         ).map((item) => {
           if (item.id === 'library') {
@@ -563,7 +566,9 @@ export function Sidebar({
                   : item.id === 'activity'
                     ? counts.activity ?? 0
                     : item.id === 'updates'
-                      ? counts.updates + (hasAppUpdate && !searching ? 1 : 0)
+                      ? counts.updates +
+                        (hasAppUpdate && !searching ? 1 : 0) +
+                        (searching ? 0 : retailPending)
                       : counts.updates
               }
               showTotal={item.id === 'updates' || searching || Boolean(showTotals[item.id])}
@@ -586,7 +591,9 @@ export function Sidebar({
                   ? `${activityUnread} unread`
                   : item.id === 'updates' && hasAppUpdate
                     ? 'App update available'
-                    : undefined
+                    : item.id === 'updates' && retailPending > 0
+                      ? `${retailPending} retail ${retailPending === 1 ? 'font has' : 'fonts have'} a newer version`
+                      : undefined
               }
             />
           )

@@ -12,6 +12,7 @@ import { DropFolderDialog } from '@/components/DropFolderDialog'
 import { DuplicatesDialog } from '@/components/DuplicatesDialog'
 import { EmptyState } from '@/components/EmptyState'
 import { AppUpdateCard } from '@/components/AppUpdateCard'
+import { RetailUpdateCard } from '@/components/RetailUpdateCard'
 import { FolderRelinkDialog } from '@/components/FolderRelinkDialog'
 import { FolderSetupDialog } from '@/components/FolderSetupDialog'
 import { FontFaceStyles } from '@/components/FontFaceStyles'
@@ -151,6 +152,7 @@ function AppShell() {
   const [settingsFocusAppUpdate, setSettingsFocusAppUpdate] = useState(false)
   const [appUpdate, setAppUpdate] = useState<AppUpdateStatus | null>(null)
   const [retail, setRetail] = useState<RetailSyncStatus | null>(null)
+  const [retailBusy, setRetailBusy] = useState(false)
   const [checkingAppUpdate, setCheckingAppUpdate] = useState(false)
   const [onboardingOpen, setOnboardingOpen] = useState(false)
   const [settings, setSettings] = useState<AppSettings | null>(null)
@@ -266,6 +268,31 @@ function AppShell() {
     }
   }
 
+  /**
+   * Local read only — settings plus the on-disk manifest, no network. Safe right after boot; the
+   * worker is only contacted by an explicit check or the background one below.
+   */
+  async function loadRetailStatus() {
+    try {
+      const result = await api.retail.status()
+      setRetail(result.status)
+    } catch {
+      // The pane offers a manual retry; a missing status must not surface as an app error.
+    }
+  }
+
+  async function syncRetail() {
+    setRetailBusy(true)
+    try {
+      const result = await api.retail.sync()
+      setRetail(result.status)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not sync the retail collection')
+    } finally {
+      setRetailBusy(false)
+    }
+  }
+
   useEffect(() => {
     let cancelled = false
     async function boot() {
@@ -317,6 +344,7 @@ function AppShell() {
         if (!cancelled) setLoading(false)
       }
       if (!cancelled) void loadAppUpdate()
+      if (!cancelled) void loadRetailStatus()
     }
     void boot()
     const stop = subscribeEvents((event) => {
@@ -580,10 +608,15 @@ function AppShell() {
       : null
 
   useEffect(() => {
-    if (tab === 'updates' && allUpdates.length === 0 && !appUpdate?.updateAvailable) {
+    if (
+      tab === 'updates' &&
+      allUpdates.length === 0 &&
+      !appUpdate?.updateAvailable &&
+      (retail?.pending ?? 0) === 0
+    ) {
       setTab('library')
     }
-  }, [tab, allUpdates.length, appUpdate?.updateAvailable])
+  }, [tab, allUpdates.length, appUpdate?.updateAvailable, retail?.pending])
 
   const searchTab = tabWithSearchHits({
     current: tab,
@@ -1480,6 +1513,7 @@ function AppShell() {
           hasAppUpdate={Boolean(appUpdate?.updateAvailable)}
           hasFontUpdates={allUpdates.length > 0}
           searching={searching}
+          retailPending={retail?.pending ?? 0}
           onReinstallAllUpdates={() => void reinstallAllUpdates()}
           onOpenSettings={() => {
             setSettingsFocusAppUpdate(Boolean(appUpdate?.updateAvailable))
@@ -1579,6 +1613,16 @@ function AppShell() {
             )}
             <ScrollArea className="min-h-0 flex-1">
               <div className={cn('flex min-h-full flex-col p-4', showBatchBar && 'pb-24')}>
+                {!loading && tab === 'updates' && (retail?.pending ?? 0) > 0 && retail ? (
+                  <div className="px-4 pt-3">
+                    <RetailUpdateCard
+                      status={retail}
+                      busy={retailBusy}
+                      onSync={() => void syncRetail()}
+                      onOpenSettings={() => setSettingsOpen(true)}
+                    />
+                  </div>
+                ) : null}
                 {!loading && tab === 'updates' && appUpdate?.updateAvailable ? (
                   <div className="mb-3">
                     <AppUpdateCard status={appUpdate} compact />

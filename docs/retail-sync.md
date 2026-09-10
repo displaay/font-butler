@@ -12,7 +12,7 @@ directly — it goes through two endpoints on the admin worker, both behind `req
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /font-butler/retail/manifest` | One entry per glyphs file: the desktop fonts of its active revision with `size`, `etag` and `lastRegeneratedAt`. Cached in KV for 10 minutes; `?refresh=1` rebuilds. |
+| `GET /font-butler/retail/manifest` | One entry per glyphs file: the desktop fonts of its active revision with `size`, `etag` and `lastRegeneratedAt`. Cached in KV; `?refresh=1` rebuilds. |
 | `GET /font-butler/retail/file/<key>` | Streams one object, honouring `If-None-Match`. |
 
 ### What counts as retail
@@ -86,6 +86,24 @@ it is the user's call, not ours.
   the manifest is discarded and the previous file is left intact.
 - Checking and syncing are always explicit actions. Nothing runs on the cold-start path, matching the
   rule the app-update check follows.
+
+## Checking
+
+Two paths, on purpose:
+
+- **Background check** — runs in the Electron main process next to the app-update poll, so it keeps
+  going with the window closed. Sends no `refresh`, so the worker answers from its cached manifest.
+  The interval is a setting (**Check automatically**): never, 15 minutes, hourly (default) or every 6
+  hours. Never on the cold-start path.
+- **Check button** — sends `refresh=1` and makes the worker rebuild the manifest from R2.
+
+The cache does not have to expire for a new generation to show up: the regenerate webhook purges
+`RETAIL_MANIFEST_CACHE_KEY` on success, right where it already invalidates cached trial packages. The
+TTL is only a backstop.
+
+A pending sync surfaces on the **Updates** tab, next to the app-update card, and adds to the sidebar
+badge. Fonts that were already synced and then regenerated do not appear there — they become
+`outdated` catalog entries and join the normal update list, like any other watched source.
 
 ## Guard rails
 

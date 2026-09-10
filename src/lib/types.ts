@@ -396,4 +396,8 @@ export type {
   RetailSkipReason,
   RetailSyncStatus,
 } from '../../shared/retail'
-export { retailDriftSummary } from '../../shared/retail'
+export {
+  DEFAULT_RETAIL_AUTOCHECK_MINUTES,
+  RETAIL_AUTOCHECK_CHOICES,
+  retailDriftSummary,
+} from '../../shared/retail'
