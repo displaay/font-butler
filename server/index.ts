@@ -283,7 +283,17 @@ app.post('/api/install', async (c) => {
   try {
     if (body.ids?.length) {
       const entries = await service.installMany(body.ids, body.familyName, options)
-      return c.json({ entries })
+      const batch = entries as typeof entries & Partial<import('../core/types.ts').BatchActionResult>
+      return c.json({
+        entries,
+        operationId: batch.operationId,
+        succeeded: batch.succeeded,
+        failed: batch.failed,
+        skipped: batch.skipped,
+        canceled: batch.canceled,
+        errors: batch.errors,
+        failedIds: batch.failedIds,
+      })
     }
     if (!body.id) {
       return c.json({ error: 'Missing id or ids' }, 400)
@@ -429,7 +439,17 @@ app.post('/api/reinstall', async (c) => {
   try {
     if (body.ids?.length) {
       const entries = await service.reinstallMany(body.ids, options)
-      return c.json({ entries })
+      const batch = entries as typeof entries & Partial<import('../core/types.ts').BatchActionResult>
+      return c.json({
+        entries,
+        operationId: batch.operationId,
+        succeeded: batch.succeeded,
+        failed: batch.failed,
+        skipped: batch.skipped,
+        canceled: batch.canceled,
+        errors: batch.errors,
+        failedIds: batch.failedIds,
+      })
     }
     if (!body.id) {
       return c.json({ error: 'Missing id or ids' }, 400)

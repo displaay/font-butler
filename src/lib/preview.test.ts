@@ -47,6 +47,25 @@ test('uninstalled previews use the source file, not a stale installed fingerprin
   assert.match(catalogFontUrl(gone, catalogPreviewWhich(gone)), /which=source/)
 })
 
+test('Adobe-only installs use the retained destination for default previews', () => {
+  const adobeOnly = entry({
+    installedPath: undefined,
+    disabledPath: undefined,
+    sourcePresent: false,
+    installedFingerprint: 'c'.repeat(64),
+    installations: [{
+      destinationId: 'adobe-shared',
+      path: '/tmp/adobe/Preview.ttf',
+      verification: 'file-present',
+    }],
+  })
+  assert.equal(catalogPreviewWhich(adobeOnly), 'installed')
+  assert.notEqual(
+    catalogPreviewRevision(adobeOnly, 'installed'),
+    catalogPreviewRevision(adobeOnly, 'source'),
+  )
+})
+
 test('installed preview URLs version from the installed revision, not the source mtime', () => {
   const installed = entry()
   const sourceChanged = entry({ sourceMtimeMs: 99, sourceSize: 999 })

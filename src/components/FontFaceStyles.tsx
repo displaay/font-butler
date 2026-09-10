@@ -49,7 +49,7 @@ async function catalogEntryCss(
     ...catalogFontFaceRules(cssFamily(entry.id), defaultUrl, entry.faces),
     ...catalogFontFaceRules(cssFamily(entry.id, 'installed'), installedUrl, entry.faces),
   ]
-  if (entry.sourcePath && entry.sourcePath !== entry.installedPath) {
+  if (entry.sourcePath && entry.sourcePath !== entry.installedPath && entry.sourcePresent !== false) {
     const sourceUrl = await cachedSignedCatalogFontUrl(cache, entry, 'source', secret, { refresh })
     faces.push(...catalogFontFaceRules(cssFamily(entry.id, 'source'), sourceUrl, entry.faces))
   }

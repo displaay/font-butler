@@ -165,7 +165,16 @@ export const api = {
       expectedSourceFingerprint?: string
     },
   ) =>
-    json<{ entries: CatalogEntry[] }>(
+    json<{
+      entries: CatalogEntry[]
+      operationId?: string
+      succeeded?: number
+      failed?: number
+      skipped?: number
+      canceled?: number
+      errors?: string[]
+      failedIds?: string[]
+    }>(
       post('/api/install', {
         ids,
         familyName,
@@ -225,7 +234,16 @@ export const api = {
       post('/api/reinstall', { id, expectedSourceFingerprint: options?.expectedSourceFingerprint }),
     ),
   reinstallMany: (ids: string[], options?: { expectedSourceFingerprint?: string }) =>
-    json<{ entries: CatalogEntry[] }>(
+    json<{
+      entries: CatalogEntry[]
+      operationId?: string
+      succeeded?: number
+      failed?: number
+      skipped?: number
+      canceled?: number
+      errors?: string[]
+      failedIds?: string[]
+    }>(
       post('/api/reinstall', { ids, expectedSourceFingerprint: options?.expectedSourceFingerprint }),
     ),
   bakeFeatures: (

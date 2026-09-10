@@ -1,0 +1,14 @@
+{"confirmed": "Deactivated preview metadata resolves retained bytes", "detail": {"cardBytesAvailable": true, "metadataAndGlyphNameAvailable": true}}
+{"confirmed": "Adobe-only preview retains access when source is removed", "detail": {"adobeCopyExists": true, "fontBytesAvailable": true, "installedRevealResolvesAdobeCopy": true}}
+{"confirmed": "Baking respects a version pinned by an active project", "detail": {"bakeRejected": true, "pinnedVersionPreserved": true, "projectState": "active"}}
+{"confirmed": "Failed source write rolls back the bake transaction", "detail": {"actionRejected": true, "installedBytesRestored": true, "sourceUnchanged": true, "activityNotRecorded": true}}
+{"confirmed": "Batch install reports partial failures in the result and Activity", "detail": {"requested": 2, "returned": 1, "outcome": "partial", "missingFailureRecord": true}}
+{"confirmed": "Reinstall clears caches once for the batch", "detail": {"fonts": 2, "changedCacheClears": 1, "unchangedCacheClears": 0}}
+{"confirmed": "Undo relink restores the complete previous source state", "detail": {"originalPathRestored": true, "fingerprintRestored": true, "updateHold": null, "status": "installed"}}
+{"confirmed": "Install as honors the Adobe-only destination", "detail": {"requested": "adobe-shared", "actual": "adobe-shared"}}
+{"confirmed": "Same-stamp source replacement is detected across app startup", "detail": {"afterStartup": "outdated", "afterExplicitWatchRefresh": "outdated"}}
+{"confirmed": "Reinstall with unchanged timestamps replaces changed bytes", "detail": {"actionSucceeded": true, "installedBytesReplaced": true}}
+{"confirmed": "Live watch imports respect pause and exclusions", "detail": {"initialScanImported": 0, "liveHandlerImported": 0}}
+{"benchmark":"bulk import","count":100,"elapsedMs":86,"eventLoopDelayMs":63,"catalogBytesWritten":95689,"finalCatalogBytes":95689}
+{"benchmark":"bulk import","count":500,"elapsedMs":369,"eventLoopDelayMs":31,"catalogBytesWritten":478798,"finalCatalogBytes":478798}
+{"benchmark":"bulk import","count":1000,"elapsedMs":670,"eventLoopDelayMs":27,"catalogBytesWritten":957641,"finalCatalogBytes":957641}

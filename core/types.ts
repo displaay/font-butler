@@ -276,6 +276,14 @@ export type OperationItem = {
   expectedSourcePath?: string
   previousRevision?: string
   previousSourcePath?: string
+  previousSourceMtimeMs?: number
+  previousSourceSize?: number
+  previousSourcePresent?: boolean
+  previousSourceAvailability?: SourceAvailability
+  previousSourceFingerprint?: string
+  previousStatus?: FontStatus
+  previousUpdateHold?: UpdateHold | null
+  previousUpdatePolicy?: UpdatePolicy | null
   relatedEntryId?: string
 }
 

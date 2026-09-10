@@ -18,7 +18,15 @@ function resolvedPath(value: string | undefined): string | undefined {
 function isExternalSource(entry: CatalogEntry): boolean {
   const source = resolvedPath(entry.sourcePath)
   if (!source) return false
-  return source !== resolvedPath(entry.installedPath) && source !== resolvedPath(entry.disabledPath)
+  if (source === resolvedPath(entry.installedPath) || source === resolvedPath(entry.disabledPath)) {
+    return false
+  }
+  if (entry.installations?.some((copy) =>
+    source === resolvedPath(copy.path) || source === resolvedPath(copy.parkedPath),
+  )) {
+    return false
+  }
+  return true
 }
 
 function fileExists(filePath: string | undefined): boolean {

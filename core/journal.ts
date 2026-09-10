@@ -16,7 +16,7 @@ import type { CatalogEntry } from './types.ts'
 
 export type MutationJournalKind = 'install' | 'replace' | 'park' | 'switch'
 export type MutationJournalPhase = 'prepared' | 'mutating' | 'catalog' | 'failed'
-export type JournalFileRole = 'macos-live' | 'adobe-live' | 'macos-parked' | 'adobe-parked'
+export type JournalFileRole = 'macos-live' | 'adobe-live' | 'macos-parked' | 'adobe-parked' | 'source'
 
 export type JournalFileSnapshot = {
   role: JournalFileRole
@@ -117,6 +117,7 @@ function intendedDestPaths(entry: CatalogEntry): string[] {
     if (value) found.add(path.resolve(value))
   }
   add(entry.installedPath)
+  add(entry.sourcePath)
   for (const copy of copiesOf(entry)) {
     add(copy.path)
   }
@@ -145,6 +146,13 @@ function snapshotTarget(paths: AppPaths, entry: CatalogEntry, snapshotRoot: stri
   }
   if (adobe?.parkedPath) {
     const snap = snapshotFile(snapshotRoot, adobe.parkedPath, 'adobe-parked')
+    if (snap) files.push(snap)
+  }
+  // Source write-back is part of a few higher-level mutations (for example
+  // baking features). Keep an external source in the same durable journal so
+  // a failure after the installed copy was committed restores both files.
+  if (entry.sourcePath && !files.some((file) => path.resolve(file.originalPath) === path.resolve(entry.sourcePath))) {
+    const snap = snapshotFile(snapshotRoot, entry.sourcePath, 'source')
     if (snap) files.push(snap)
   }
   return {
@@ -190,6 +198,31 @@ export function recordMutationDestination(
     target.destPaths.push(resolved)
     upsertJournal(paths, journal)
   }
+}
+
+/**
+ * Add targets discovered after a journal has started. This is needed by
+ * higher-level mutations that wrap an operation which discovers format
+ * conflicts lazily; nested journals intentionally reuse the outer journal,
+ * so those conflict entries must be snapshotted before they are removed.
+ */
+export function extendMutationJournal(
+  paths: AppPaths,
+  entries: CatalogEntry[],
+  newEntryIds: string[] = [],
+): void {
+  const journal = openJournal.getStore()
+  if (!journal) return
+  const seen = new Set(journal.targets.map((target) => target.entryId))
+  const snapshotRoot = path.join(journalDir(paths), journal.id)
+  for (const entry of entries) {
+    if (seen.has(entry.id)) continue
+    seen.add(entry.id)
+    const target = snapshotTarget(paths, entry, path.join(snapshotRoot, entry.id))
+    if (newEntryIds.includes(entry.id)) target.entryBefore = null
+    journal.targets.push(target)
+  }
+  upsertJournal(paths, journal)
 }
 
 export function loadIncompleteJournals(paths: AppPaths): MutationJournal[] {
@@ -390,10 +423,13 @@ async function restoreJournal(
     // A live destination belongs to the prior state only if we actually
     // snapshotted bytes from it. Deactivated records intentionally retain the
     // nominal live path in their catalog row while the file is parked.
+    const expectedOriginals = new Set(
+      target.files.map((file) => path.resolve(file.originalPath)),
+    )
     const expectedLive = liveSnapshots
     for (const destPath of target.destPaths) {
       const resolved = path.resolve(destPath)
-      if (expectedLive.has(resolved) || isParkedPath(resolved, paths)) continue
+      if (expectedOriginals.has(resolved) || expectedLive.has(resolved) || isParkedPath(resolved, paths)) continue
       if (fs.existsSync(resolved)) {
         await removeLivePath(native, resolved)
       }
