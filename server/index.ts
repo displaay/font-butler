@@ -686,6 +686,40 @@ app.post('/api/import/apply', async (c) => {
   }
 })
 
+app.get('/api/retail/status', (c) => c.json({ status: service.retailStatus() }))
+
+app.post('/api/retail/configure', async (c) => {
+  const body = await c.req.json<{
+    enabled?: boolean
+    workerBaseUrl?: string
+    token?: string
+    folderId?: string | null
+  }>()
+  try {
+    // The token goes in on this route and never comes back out: status reports `hasToken` only.
+    return c.json({ status: service.configureRetailSync(body) })
+  } catch (error) {
+    return c.json(fail(error, 'Could not save the retail collection settings'), 400)
+  }
+})
+
+app.post('/api/retail/check', async (c) => {
+  const body = await c.req.json<{ refresh?: boolean }>().catch(() => ({}) as { refresh?: boolean })
+  try {
+    return c.json({ status: await service.checkRetail({ refresh: body.refresh }) })
+  } catch (error) {
+    return c.json(fail(error, 'Could not check the retail collection'), 400)
+  }
+})
+
+app.post('/api/retail/sync', async (c) => {
+  try {
+    return c.json({ status: await service.syncRetail() })
+  } catch (error) {
+    return c.json(fail(error, 'Could not sync the retail collection'), 400)
+  }
+})
+
 app.get('/api/activity', (c) => c.json({ operations: service.listActivity() }))
 
 app.post('/api/activity/read', async (c) => {

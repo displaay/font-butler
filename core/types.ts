@@ -1,3 +1,5 @@
+import type { RetailSyncStatus } from '../shared/retail.ts'
+
 export const FONT_EXTENSIONS = ['.ttf', '.otf', '.ttc', '.otc'] as const
 export const WEB_FONT_EXTENSIONS = ['.woff', '.woff2'] as const
 
@@ -212,6 +214,18 @@ export type PreviewPreferences = {
   preset: SpecimenPreset
 }
 
+/**
+ * Optional DISPLAAY retail collection sync. The worker API token is deliberately NOT here: AppSettings
+ * is broadcast to the renderer on bootstrap and on every settings event, so the token lives in a 0600
+ * file next to the local API token instead (see `retailTokenPath`).
+ */
+export type RetailSyncSettings = {
+  enabled: boolean
+  workerBaseUrl: string
+  /** Id of the WatchFolder that holds the collection, once configured. */
+  folderId: string | null
+}
+
 export type AppSettings = {
   version: 1
   watchFolders: string[]
@@ -235,6 +249,7 @@ export type AppSettings = {
   specimen?: PreviewPreferences
   defaultDestination?: DefaultDestinationId
   savedFilters: SavedLibraryFilter[]
+  retailSync?: RetailSyncSettings
 }
 
 export type OfficeFontCacheInfo = {
@@ -497,3 +512,4 @@ export type ServiceEvent =
   | { type: 'projects'; projects: ProjectSet[] }
   | { type: 'duplicates'; duplicates: DuplicateWarning[] }
   | { type: 'app-update'; update: AppUpdateStatus }
+  | { type: 'retail'; status: RetailSyncStatus }

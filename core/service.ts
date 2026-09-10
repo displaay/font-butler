@@ -237,6 +237,13 @@ import {
 } from './service-destinations.ts'
 import { importInboxFiles as importInboxFilesFn, importOneUnlocked as importOneUnlockedFn } from './service-import.ts'
 import {
+  checkRetail as checkRetailFn,
+  configureRetailSync as configureRetailSyncFn,
+  retailStatus as retailStatusFn,
+  syncRetail as syncRetailFn,
+} from './service-retail.ts'
+import type { RetailSyncStatus } from '../shared/retail.ts'
+import {
   activateEntry as activateEntryFn,
   bakeFeatures as bakeFeaturesFn,
   deactivateEntry as deactivateEntryFn,
@@ -2201,6 +2208,34 @@ export class FontButlerService {
       })),
     )
     return { fonts, caches }
+  }
+
+  /** Optional DISPLAAY retail collection. Delegated to `service-retail.ts` to keep this file navigable. */
+  retailStatus(): RetailSyncStatus {
+    return retailStatusFn(this.paths)
+  }
+
+  configureRetailSync(input: {
+    enabled?: boolean
+    workerBaseUrl?: string
+    token?: string
+    folderId?: string | null
+  }): RetailSyncStatus {
+    return configureRetailSyncFn(this.paths, input)
+  }
+
+  async checkRetail(options: { refresh?: boolean } = {}): Promise<RetailSyncStatus> {
+    return checkRetailFn(this.paths, options)
+  }
+
+  async syncRetail(): Promise<RetailSyncStatus> {
+    return syncRetailFn(this.paths, {
+      // Newly written fonts still have to enter the library; the inbox watcher's `add` is not
+      // guaranteed for a rename-over, so importing what is already there closes the gap.
+      onFolderReady: async () => {
+        await this.refreshInboxWatcher(this.watchingFolderRoots(), { importExisting: true })
+      },
+    })
   }
 
   listProjects(): ProjectSet[] {
