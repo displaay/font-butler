@@ -206,6 +206,24 @@ test('a failed check keeps the old checkedAt rather than claiming a fresh measur
   assert.equal(retailDriftSummary(failed), 'Could not check the collection.')
 })
 
+test('skipped families are not reported as up to date', async () => {
+  const paths = setup()
+  configureRetailSync(paths, { enabled: true, token: 't' })
+  const status = await checkRetail(paths, {
+    fetchManifest: async () => ({
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      collections: [],
+      skipped: [
+        { glyphsFile: 'Reckless', reason: 'incomplete' },
+        { glyphsFile: 'Vinila', reason: 'incomplete' },
+      ],
+    }),
+  })
+  assert.equal(status.pending, 0)
+  assert.equal(status.skipped.length, 2)
+  assert.equal(retailDriftSummary(status), '2 families are not available on the worker.')
+})
+
 test('overlapping syncs share one run instead of fighting over the same files', async () => {
   const paths = setup()
   configureRetailSync(paths, { enabled: true, token: 't' })

@@ -26,7 +26,7 @@ function skipLabel(reason: RetailSkipReason): string {
     case 'transaction-not-succeeded':
       return 'last generation did not finish'
     case 'incomplete':
-      return 'still uploading'
+      return 'has no files on the worker yet'
     case 'no-files':
       return 'has no desktop fonts'
     default:
