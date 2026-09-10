@@ -220,6 +220,7 @@ export type OperationItem = {
   expectedStatus?: FontStatus
   expectedSourcePath?: string
   relatedEntryId?: string
+  previousEntry?: CatalogEntry
 }
 
 export type Operation = {

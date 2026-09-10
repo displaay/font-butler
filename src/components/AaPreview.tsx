@@ -117,25 +117,23 @@ function AaGlyph({
     const el = glyphRef.current
     const box = el?.parentElement
     if (!el || !box) return
+    let frame = 0
 
-    function measure() {
+    function applyFit() {
       if (!el || !box) return
-      const previousTransform = el.style.transform
-      const previousOrigin = el.style.transformOrigin
       el.style.transform = 'none'
       el.style.transformOrigin = '0 0'
       const range = document.createRange()
       range.selectNodeContents(el)
       const ink = range.getBoundingClientRect()
-      const frame = box.getBoundingClientRect()
+      const frameRect = box.getBoundingClientRect()
       const element = el.getBoundingClientRect()
-      range.detach()
-      el.style.transform = previousTransform
-      el.style.transformOrigin = previousOrigin
-      if (ink.width <= 0 || ink.height <= 0 || frame.width <= 0 || frame.height <= 0) return
-      const next = fitPreviewTransform(ink, frame, element)
+      if (ink.width <= 0 || ink.height <= 0 || frameRect.width <= 0 || frameRect.height <= 0) return
+      const next = fitPreviewTransform(ink, frameRect, element)
       const transform = `translate(${next.translateX}px, ${next.translateY}px) scale(${next.scale})`
       const transformOrigin = `${next.originX}px ${next.originY}px`
+      el.style.transformOrigin = transformOrigin
+      el.style.transform = transform
       setFitStyle((current) =>
         current.transform === transform && current.transformOrigin === transformOrigin
           ? current
@@ -143,10 +141,18 @@ function AaGlyph({
       )
     }
 
-    measure()
-    const observer = new ResizeObserver(measure)
+    applyFit()
+    frame = requestAnimationFrame(applyFit)
+    const observer = new ResizeObserver(applyFit)
     observer.observe(box)
-    return () => observer.disconnect()
+    observer.observe(el)
+    document.fonts?.addEventListener('loadingdone', applyFit)
+    void document.fonts?.ready.then(applyFit)
+    return () => {
+      cancelAnimationFrame(frame)
+      observer.disconnect()
+      document.fonts?.removeEventListener('loadingdone', applyFit)
+    }
   }, [fit, ready, family, weight, italic, variation, text])
 
   if (!ready) return <PreviewPending size={pendingSize} />

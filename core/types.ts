@@ -310,6 +310,7 @@ export type OperationItem = {
   previousUpdateHold?: UpdateHold | null
   previousUpdatePolicy?: UpdatePolicy | null
   relatedEntryId?: string
+  previousEntry?: CatalogEntry
 }
 
 export type Operation = {

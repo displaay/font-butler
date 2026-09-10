@@ -739,6 +739,7 @@ export class FontButlerService {
     options?: InstallOptions,
   ): Promise<CatalogEntry> {
     return runCatalogTask(async () => {
+      const previousRevision = this.previousRevisionBeforeChange(findById(loadCatalog(this.paths), id))
       const entry = await this.installEntry(id, familyName, options)
       const catalog = loadCatalog(this.paths)
       const latest = findById(catalog, entry.id)
@@ -747,9 +748,11 @@ export class FontButlerService {
         touchEntry(latest)
         saveCatalog(this.paths, catalog)
       }
+      const item = this.operationItem(entry, 'succeeded')
+      item.previousRevision = previousRevision
       this.commitManualOperation(
         options?.replace ? 'install-update' : 'install',
-        [this.operationItem(entry, 'succeeded')],
+        [item],
         displayFamily(entry),
       )
       await syncWatchers(this.paths)
@@ -788,6 +791,7 @@ export class FontButlerService {
       }
       for (const entry of toInstall) {
         try {
+          const previousRevision = this.previousRevisionBeforeChange(entry)
           const installed = await this.installEntry(entry.id, familyName, options)
           const catalog = loadCatalog(this.paths)
           const latest = findById(catalog, installed.id)
@@ -798,7 +802,9 @@ export class FontButlerService {
           }
           const completed = latest ?? installed
           entries.push(completed)
-          items.push(this.operationItem(completed, 'succeeded'))
+          const item = this.operationItem(completed, 'succeeded')
+          item.previousRevision = previousRevision
+          items.push(item)
         } catch (error) {
           const reason = error instanceof Error ? error.message : String(error)
           errors.push(reason)
@@ -836,10 +842,13 @@ export class FontButlerService {
 
   async uninstall(id: string, options?: { deleteSource?: boolean }): Promise<CatalogEntry> {
     return runCatalogTask(async () => {
+      const current = findById(loadCatalog(this.paths), id)
+      const previousEntry = current ? structuredClone(current) : undefined
       const previousRevision = this.retainInstalledRevision(id)
       const entry = await this.uninstallEntry(id, options)
       const item = this.operationItem(entry, 'succeeded')
       item.previousRevision = previousRevision
+      item.previousEntry = previousEntry
       this.commitManualOperation(
         'uninstall',
         [item],
@@ -857,7 +866,10 @@ export class FontButlerService {
       const entries: CatalogEntry[] = []
       const familyNames = new Map<string, string>()
       const previousRevisions = new Map<string, string | undefined>()
+      const previousEntries = new Map<string, CatalogEntry>()
       for (const id of ids) {
+        const current = findById(loadCatalog(this.paths), id)
+        if (current) previousEntries.set(id, structuredClone(current))
         previousRevisions.set(id, this.retainInstalledRevision(id))
         const entry = await this.uninstallEntry(id, options)
         familyNames.set(entry.id, displayFamily(entry))
@@ -868,6 +880,7 @@ export class FontButlerService {
         entries.map((entry) => {
           const item = this.operationItem(entry, 'succeeded')
           item.previousRevision = previousRevisions.get(entry.id)
+          item.previousEntry = previousEntries.get(entry.id)
           return item
         }),
         entries[0] ? displayFamily(entries[0]) : undefined,
@@ -2005,7 +2018,10 @@ export class FontButlerService {
     const entries: CatalogEntry[] = []
     for (const item of operation.items) {
       if (item.outcome !== 'succeeded' || !item.entryId) continue
-      const entry = findById(loadCatalog(this.paths), item.entryId)
+      let entry = findById(loadCatalog(this.paths), item.entryId)
+      if (!entry && item.previousEntry) {
+        entry = this.rehydrateUninstalledEntry(item)
+      }
       if (!entry) {
         items.push({ ...item, outcome: 'failed', reason: 'The font is no longer in the library.' })
         continue
@@ -2085,6 +2101,7 @@ export class FontButlerService {
             entries.push(await this.deactivateEntry(entry.id, { removeManualOwner: true }))
           }
         } else if (operation.action === 'uninstall' && item.previousRevision) {
+          this.applyUninstallUndoState(entry.id, item)
           entries.push(await this.restoreRevision(entry.id, item.previousRevision))
         }
         else {
@@ -3584,6 +3601,37 @@ export class FontButlerService {
       expectedRevision: entry.installedFingerprint,
       expectedStatus: entry.status,
     }
+  }
+
+  private previousRevisionBeforeChange(entry: CatalogEntry | undefined): string | undefined {
+    if (!entry) return undefined
+    if (entry.status === 'uninstalled' || entry.status === 'source-missing') return undefined
+    return this.retainInstalledRevision(entry.id) ?? entry.installedFingerprint
+  }
+
+  private rehydrateUninstalledEntry(item: OperationItem): CatalogEntry | undefined {
+    if (!item.previousEntry || !item.entryId) return undefined
+    const catalog = loadCatalog(this.paths)
+    const entry = structuredClone(item.previousEntry)
+    entry.id = item.entryId
+    entry.status = item.expectedStatus ?? 'uninstalled'
+    upsertEntry(catalog, entry)
+    saveCatalog(this.paths, catalog)
+    return entry
+  }
+
+  private applyUninstallUndoState(id: string, item: OperationItem): void {
+    const snapshot = item.previousEntry
+    if (!snapshot) return
+    const catalog = loadCatalog(this.paths)
+    const entry = findById(catalog, id)
+    if (!entry) return
+    entry.installedPath = snapshot.installedPath
+    entry.disabledPath = snapshot.disabledPath
+    entry.destinationId = snapshot.destinationId
+    entry.installations = snapshot.installations ? structuredClone(snapshot.installations) : snapshot.installations
+    upsertEntry(catalog, entry)
+    saveCatalog(this.paths, catalog)
   }
 
   private retainInstalledRevision(id: string): string | undefined {
