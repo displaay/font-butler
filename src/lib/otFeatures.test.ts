@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { groupOtFeatures, normalizeFeatureTag } from './otFeatures.ts'
+import { bakeableEnabledTags, groupOtFeatures, normalizeFeatureTag, suggestedBakeFamilyName } from './otFeatures.ts'
 
 test('normalizeFeatureTag keeps four-character tags and maps friendly names', () => {
   assert.equal(normalizeFeatureTag('ss03'), 'ss03')
@@ -29,4 +29,16 @@ test('groupOtFeatures uses tags only and buckets stylistic sets, figures, and th
       ['rest', ['liga', 'kern']],
     ],
   )
+})
+
+test('bakeableEnabledTags keeps tnum and stylistic sets and ignores other features', () => {
+  assert.deepEqual(
+    bakeableEnabledTags({ liga: true, tnum: true, ss02: true, onum: true, ss01: false }),
+    ['tnum', 'ss02'],
+  )
+  assert.deepEqual(bakeableEnabledTags({ liga: true, zero: true }), [])
+})
+
+test('suggestedBakeFamilyName appends bakeable tags in stable order', () => {
+  assert.equal(suggestedBakeFamilyName('Fenul', ['ss01', 'tnum']), 'Fenul Tnum SS01')
 })

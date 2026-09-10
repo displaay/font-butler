@@ -142,6 +142,7 @@ function AppShell() {
   const busyRef = useRef(false)
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null)
   const [renameEntry, setRenameEntry] = useState<CatalogEntry | null>(null)
+  const [bakeRenameFeatures, setBakeRenameFeatures] = useState<string[] | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsFocusAppUpdate, setSettingsFocusAppUpdate] = useState(false)
   const [appUpdate, setAppUpdate] = useState<AppUpdateStatus | null>(null)
@@ -1684,7 +1685,10 @@ function AppShell() {
                           onInstall={() =>
                             useBatch ? void installSelected() : void installGroupGuarded(group)
                           }
-                          onInstallAs={() => setRenameEntry(selectedEntry ?? group.entries[0])}
+                          onInstallAs={() => {
+                            setBakeRenameFeatures(null)
+                            setRenameEntry(selectedEntry ?? group.entries[0])
+                          }}
                           onInstallToAdobe={() =>
                             useBatch
                               ? void installToAdobeFor(catalogSelection)
@@ -1909,8 +1913,34 @@ function AppShell() {
                   ? catalogSelection.find((group) => group.familyName !== selectedFamily)?.entries[0] ?? null
                   : null
               }
+              onBake={(mode, features) => {
+                if (!selectedEntry) return
+                if (mode === 'new-copy') {
+                  setBakeRenameFeatures(features)
+                  setRenameEntry(selectedEntry)
+                  return
+                }
+                const family = familyNameOf(selectedEntry)
+                const labels = features.join(', ')
+                void run(
+                  async () => {
+                    const result = await api.bakeFeatures(selectedEntry.id, features, 'reinstall')
+                    if (result.report.skippedWarnings.length) {
+                      toast.warning(result.report.skippedWarnings.join('\n'))
+                    }
+                    return result
+                  },
+                  {
+                    pending: `Baking ${labels} into ${family}…`,
+                    done: `Baked ${labels} into ${family} and reinstalled`,
+                  },
+                )
+              }}
               onInstall={() => selectedGroup && void installGroupGuarded(selectedGroup)}
-              onInstallAs={() => setRenameEntry(selectedEntry)}
+              onInstallAs={() => {
+                setBakeRenameFeatures(null)
+                setRenameEntry(selectedEntry)
+              }}
               onReinstall={() =>
                 selectedGroup &&
                 void run(() => reinstallGroup(selectedGroup), actionCopy('reinstall', selectedGroup.familyName))
@@ -2215,12 +2245,17 @@ function AppShell() {
         />
         <RenameDialog
           entry={renameEntry}
+          bakeFeatures={bakeRenameFeatures}
           open={Boolean(renameEntry)}
           onOpenChange={(open) => {
-            if (!open) setRenameEntry(null)
+            if (!open) {
+              setRenameEntry(null)
+              setBakeRenameFeatures(null)
+            }
           }}
           onDone={(entry) => {
             setSelectedFamily(familyNameOf(entry))
+            setBakeRenameFeatures(null)
             void api.catalog().then((result) => setEntries(result.entries))
           }}
         />

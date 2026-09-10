@@ -21,6 +21,15 @@ const FIGURE_TAGS = [
 
 const FIGURE_TAG_SET = new Set<string>(FIGURE_TAGS)
 
+const BAKEABLE_FEATURE_ORDER = [
+  'tnum',
+  ...Array.from({ length: 20 }, (_, index) => `ss${String(index + 1).padStart(2, '0')}`),
+] as const
+
+export type BakeableFeatureTag = (typeof BAKEABLE_FEATURE_ORDER)[number]
+
+const BAKEABLE_FEATURE_SET = new Set<string>(BAKEABLE_FEATURE_ORDER)
+
 const FIGURE_NAME_TO_TAG: Record<string, string> = {
   'lining figures': 'lnum',
   'lining numerals': 'lnum',
@@ -78,4 +87,19 @@ export function groupOtFeatures(raw: string[]): OtFeatureGroup[] {
     { id: 'rest', label: 'Rest', tags: rest },
   ]
   return groups.filter((group) => group.tags.length > 0)
+}
+
+export function isBakeableFeatureTag(tag: string): tag is BakeableFeatureTag {
+  return BAKEABLE_FEATURE_SET.has(tag)
+}
+
+export function bakeableEnabledTags(features: Record<string, boolean>): string[] {
+  return BAKEABLE_FEATURE_ORDER.filter((tag) => features[tag])
+}
+
+export function suggestedBakeFamilyName(family: string, tags: string[]): string {
+  const labels = bakeableEnabledTags(Object.fromEntries(tags.map((tag) => [tag, true]))).map((tag) =>
+    tag === 'tnum' ? 'Tnum' : tag.toUpperCase(),
+  )
+  return [family.trim(), ...labels].filter(Boolean).join(' ')
 }

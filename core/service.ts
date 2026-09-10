@@ -203,9 +203,12 @@ import {
 import { importInboxFiles as importInboxFilesFn, importOneUnlocked as importOneUnlockedFn } from './service-import.ts'
 import {
   activateEntry as activateEntryFn,
+  bakeFeatures as bakeFeaturesFn,
   deactivateEntry as deactivateEntryFn,
   installEntry as installEntryFn,
   reinstallEntry as reinstallEntryFn,
+  type BakeFeaturesMode,
+  type BakeFeaturesResult,
   type ServiceLifecycleHost,
   uninstallEntry as uninstallEntryFn,
 } from './service-lifecycle.ts'
@@ -879,6 +882,35 @@ export class FontButlerService {
       )
       emitCatalog(this.paths)
       return entry
+    })
+  }
+
+  async bakeFeatures(
+    id: string,
+    features: string[],
+    mode: BakeFeaturesMode,
+    familyName?: string,
+  ): Promise<BakeFeaturesResult> {
+    return runCatalogTask(async () => {
+      const result = await bakeFeaturesFn(this.asLifecycleHost(), id, features, mode, familyName)
+      if (mode === 'new-copy') {
+        const catalog = loadCatalog(this.paths)
+        const latest = findById(catalog, result.entry.id)
+        if (latest) {
+          addManualOwner(latest)
+          touchEntry(latest)
+          saveCatalog(this.paths, catalog)
+          result.entry = latest
+        }
+      }
+      this.commitManualOperation(
+        mode === 'new-copy' ? 'install' : 'reinstall',
+        [this.operationItem(result.entry, 'succeeded')],
+        displayFamily(result.entry),
+      )
+      await syncWatchers(this.paths)
+      emitCatalog(this.paths)
+      return result
     })
   }
 
