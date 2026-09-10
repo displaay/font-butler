@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { SettingsRow, SettingsSection } from '@/components/SettingsRow'
+import { DisplaayMark } from '@/components/DisplaayMark'
+import { SettingsRow, SettingsSection, settingsSelectClass } from '@/components/SettingsRow'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { api } from '@/lib/api'
@@ -9,9 +10,8 @@ import {
   retailDriftSummary,
   type RetailSkipReason,
   type RetailSyncStatus,
-  type WatchFolder,
 } from '@/lib/types'
-import { watchFolderName } from '@/lib/watchFolders'
+import { cn } from '@/lib/utils'
 
 const BLOCKED_KINDS = new Set(['conflict', 'refused'])
 
@@ -35,27 +35,22 @@ function skipLabel(reason: RetailSkipReason): string {
 }
 
 /**
- * The optional DISPLAAY retail collection.
+ * The optional Displaay retail collection.
  *
  * Checking and syncing are always explicit actions — never on mount and never automatic — so a slow or
  * unreachable worker can't stall the app, the same rule the app-update check follows.
  */
 export function RetailPane({
   status,
-  folders,
   busy,
   onStatus,
-  onAddFolder,
 }: {
   status: RetailSyncStatus | null
-  folders: WatchFolder[]
   busy: boolean
   onStatus: (status: RetailSyncStatus) => void
-  onAddFolder: () => void
 }) {
   const urlId = useId()
   const tokenId = useId()
-  const folderId = useId()
   const autoCheckId = useId()
   const [token, setToken] = useState('')
   // `status` is null on the first render, so the field cannot be seeded from it directly — an edited
@@ -67,6 +62,7 @@ export function RetailPane({
 
   const disabled = busy || working
   const loadedRef = useRef(false)
+  const enabled = Boolean(status?.enabled)
 
   // `/api/retail/status` reads settings and the local manifest only — no network — so it is safe on
   // first render. Checking the worker stays an explicit action.
@@ -94,203 +90,215 @@ export function RetailPane({
   }
 
   const blocked = (status?.drift ?? []).filter((item) => BLOCKED_KINDS.has(item.kind))
+  const lastError = error ?? status?.error ?? null
 
   return (
-    <div>
-      <SettingsSection>
-        <SettingsRow
-          label="Sync the DISPLAAY retail collection"
-          description="Keeps a watch folder in step with the fonts generated for the retail collection."
+    <SettingsSection
+      title={
+        <>
+          <DisplaayMark className="size-4" />
+          Displaay retail
+        </>
+      }
+    >
+      <SettingsRow
+        label="Sync"
+        description="Keep the latest versions of all fonts from the Displaay retail collection."
+      >
+        <div
+          role="radiogroup"
+          aria-label="Displaay retail sync"
+          className="inline-flex items-center gap-0.5 rounded-md border bg-background p-0.5"
         >
-          <Button
-            variant={status?.enabled ? 'secondary' : 'default'}
-            disabled={disabled}
-            onClick={() => void run(() => api.retail.configure({ enabled: !status?.enabled }))}
-          >
-            {status?.enabled ? 'On' : 'Off'}
-          </Button>
-        </SettingsRow>
+          {(
+            [
+              { id: false, label: 'Off' },
+              { id: true, label: 'On' },
+            ] as const
+          ).map((option) => {
+            const selected = enabled === option.id
+            return (
+              <Button
+                key={option.label}
+                type="button"
+                size="sm"
+                variant="ghost"
+                role="radio"
+                aria-checked={selected}
+                disabled={disabled}
+                className={cn(
+                  'h-7 px-2.5',
+                  selected ? 'bg-muted font-medium' : 'text-muted-foreground',
+                )}
+                onClick={() => {
+                  if (!selected) void run(() => api.retail.configure({ enabled: option.id }))
+                }}
+              >
+                {option.label}
+              </Button>
+            )
+          })}
+        </div>
+      </SettingsRow>
 
-        <SettingsRow
-          label="Folder"
-          htmlFor={folderId}
-          description={
-            status?.folderRoot
-              ? status.folderRoot
-              : 'Pick which watch folder holds the collection. Font Buttler writes into it.'
+      {enabled ? (
+        <>
+      <SettingsRow
+        label="Worker address"
+        htmlFor={urlId}
+        description="The Displaay worker that serves the collection."
+      >
+        <Input
+          id={urlId}
+          className="w-[min(18rem,100%)]"
+          value={workerBaseUrl}
+          disabled={disabled}
+          placeholder="https://w.displaay.net"
+          onChange={(event) => setEditedUrl(event.target.value)}
+          onBlur={() => {
+            if (workerBaseUrl && workerBaseUrl !== status?.workerBaseUrl) {
+              void run(async () => {
+                const result = await api.retail.configure({ workerBaseUrl })
+                setEditedUrl(null)
+                return result
+              })
+            }
+          }}
+        />
+      </SettingsRow>
+
+      <SettingsRow
+        label="Check automatically"
+        htmlFor={autoCheckId}
+        description="How often to look for newer retail fonts. Checking never runs at startup."
+      >
+        <select
+          id={autoCheckId}
+          className={settingsSelectClass}
+          value={status?.autoCheckMinutes ?? DEFAULT_RETAIL_AUTOCHECK_MINUTES}
+          disabled={disabled}
+          onChange={(event) =>
+            void run(() => api.retail.configure({ autoCheckMinutes: Number(event.target.value) }))
           }
         >
-          {folders.length > 0 ? (
-            <select
-              id={folderId}
-              className="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
-              value={folders.find((folder) => folder.root === status?.folderRoot)?.id ?? ''}
-              disabled={disabled}
-              onChange={(event) =>
-                void run(() => api.retail.configure({ folderId: event.target.value || null }))
-              }
-            >
-              <option value="">Not set</option>
-              {folders.map((folder) => (
-                <option key={folder.id} value={folder.id}>
-                  {watchFolderName(folder.root)}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <Button variant="secondary" disabled={disabled} onClick={onAddFolder}>
-              Add a watch folder
-            </Button>
-          )}
-        </SettingsRow>
+          {RETAIL_AUTOCHECK_CHOICES.map((choice) => (
+            <option key={choice.minutes} value={choice.minutes}>
+              {choice.label}
+            </option>
+          ))}
+        </select>
+      </SettingsRow>
 
-        <SettingsRow
-          label="Worker address"
-          htmlFor={urlId}
-          description="The DISPLAAY worker that serves the collection."
-        >
+      <SettingsRow
+        label="Worker token"
+        htmlFor={tokenId}
+        description={
+          status?.hasToken
+            ? 'A token is saved. Type a new one to replace it, or remove it.'
+            : 'Paste the Displaay worker token. It is stored outside the settings file.'
+        }
+      >
+        <div className="flex max-w-[min(100%,22rem)] flex-wrap items-center justify-end gap-1.5">
           <Input
-            id={urlId}
-            className="w-72"
-            value={workerBaseUrl}
+            id={tokenId}
+            type="password"
+            className="w-44"
+            value={token}
             disabled={disabled}
-            placeholder="https://w.displaay.net"
-            onChange={(event) => setEditedUrl(event.target.value)}
-            onBlur={() => {
-              if (workerBaseUrl && workerBaseUrl !== status?.workerBaseUrl) {
-                void run(async () => {
-                  const result = await api.retail.configure({ workerBaseUrl })
-                  setEditedUrl(null)
-                  return result
-                })
-              }
-            }}
+            placeholder={status?.hasToken ? '••••••••' : 'Token'}
+            onChange={(event) => setToken(event.target.value)}
           />
-        </SettingsRow>
-
-        <SettingsRow
-          label="Check automatically"
-          htmlFor={autoCheckId}
-          description="How often Font Buttler looks for newer retail fonts in the background. Checking still never runs at startup, and the Check button below always asks the server for a fresh list."
-        >
-          <select
-            id={autoCheckId}
-            className="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
-            value={status?.autoCheckMinutes ?? DEFAULT_RETAIL_AUTOCHECK_MINUTES}
-            disabled={disabled}
-            onChange={(event) =>
-              void run(() => api.retail.configure({ autoCheckMinutes: Number(event.target.value) }))
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={disabled || !token}
+            onClick={() =>
+              void run(async () => {
+                const result = await api.retail.configure({ token })
+                setToken('')
+                return result
+              })
             }
           >
-            {RETAIL_AUTOCHECK_CHOICES.map((choice) => (
-              <option key={choice.minutes} value={choice.minutes}>
-                {choice.label}
-              </option>
-            ))}
-          </select>
-        </SettingsRow>
-
-        <SettingsRow
-          label="Worker token"
-          htmlFor={tokenId}
-          description={
-            status?.hasToken
-              ? 'A token is saved. Type a new one to replace it, or remove it.'
-              : 'Paste the DISPLAAY worker token. It is stored outside the settings file.'
-          }
-        >
-          <div className="flex gap-2">
-            <Input
-              id={tokenId}
-              type="password"
-              className="w-56"
-              value={token}
+            Save
+          </Button>
+          {status?.hasToken ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
               disabled={disabled}
-              placeholder={status?.hasToken ? '••••••••' : 'Token'}
-              onChange={(event) => setToken(event.target.value)}
-            />
-            <Button
-              variant="secondary"
-              disabled={disabled || !token}
-              onClick={() =>
-                void run(async () => {
-                  const result = await api.retail.configure({ token })
-                  setToken('')
-                  return result
-                })
-              }
+              onClick={() => void run(() => api.retail.configure({ token: '' }))}
             >
-              Save
+              Remove
             </Button>
-            {status?.hasToken ? (
+          ) : null}
+        </div>
+      </SettingsRow>
+
+      <div className="py-3.5">
+        <div className="rounded-lg border bg-muted/30 px-3 py-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-sm font-medium">
+                {status ? retailDriftSummary(status) : 'Not checked yet.'}
+              </div>
+              <p className="mt-0.5 text-[13px] leading-5 text-muted-foreground">
+                {status?.checkedAt
+                  ? `Last checked ${new Date(status.checkedAt).toLocaleString()}.`
+                  : status?.enabled
+                    ? 'Check to compare the collection on the server against this Mac.'
+                    : 'Turn sync on to check the collection.'}
+              </p>
+            </div>
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
               <Button
-                variant="ghost"
-                disabled={disabled}
-                onClick={() => void run(() => api.retail.configure({ token: '' }))}
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={disabled || !status?.enabled}
+                onClick={() => void run(() => api.retail.check(true))}
               >
-                Remove
+                Check
               </Button>
-            ) : null}
+              <Button
+                type="button"
+                size="sm"
+                disabled={disabled || !status?.enabled || !status?.pending}
+                onClick={() => void run(() => api.retail.sync())}
+              >
+                {status?.pending ? `Sync ${status.pending}` : 'Sync'}
+              </Button>
+            </div>
           </div>
-        </SettingsRow>
-      </SettingsSection>
-
-      <SettingsSection title="Status">
-        <SettingsRow
-          label={status ? retailDriftSummary(status) : 'Not checked yet.'}
-          description={
-            status?.checkedAt
-              ? `Last checked ${new Date(status.checkedAt).toLocaleString()}.`
-              : status?.enabled
-                ? 'Check to compare the collection on the server against this Mac.'
-                : 'Turn the collection on to check it.'
-          }
-        >
-          <div className="flex gap-2">
-            <Button
-              variant="secondary"
-              disabled={disabled || !status?.enabled}
-              onClick={() => void run(() => api.retail.check(true))}
-            >
-              Check
-            </Button>
-            <Button
-              disabled={disabled || !status?.enabled || !status?.pending}
-              onClick={() => void run(() => api.retail.sync())}
-            >
-              {status?.pending ? `Sync ${status.pending}` : 'Sync'}
-            </Button>
-          </div>
-        </SettingsRow>
-
-        {error || status?.error ? (
-          <SettingsRow
-            label="Last error"
-            description={error ?? status?.error ?? ''}
-            className="text-destructive"
-          />
-        ) : null}
-
-        {blocked.length > 0 ? (
-          <SettingsRow
-            label={`${blocked.length} ${blocked.length === 1 ? 'file needs' : 'files need'} attention`}
-            description={blocked
-              .slice(0, 3)
-              .map((item) => item.note ?? item.relativePath)
-              .join(' ')}
-          />
-        ) : null}
-
-        {status && status.skipped.length > 0 ? (
-          <SettingsRow
-            label={`${status.skipped.length} ${status.skipped.length === 1 ? 'family' : 'families'} not available`}
-            description={status.skipped
-              .slice(0, 4)
-              .map((skip) => `${skip.glyphsFile} ${skipLabel(skip.reason)}`)
-              .join(' · ')}
-          />
-        ) : null}
-      </SettingsSection>
-    </div>
+          {lastError ? (
+            <p className="mt-2 text-[13px] leading-5 text-destructive">{lastError}</p>
+          ) : null}
+          {blocked.length > 0 ? (
+            <p className="mt-2 text-[13px] leading-5 text-muted-foreground">
+              {blocked.length === 1 ? '1 file needs attention' : `${blocked.length} files need attention`}
+              {': '}
+              {blocked
+                .slice(0, 3)
+                .map((item) => item.note ?? item.relativePath)
+                .join(' ')}
+            </p>
+          ) : null}
+          {status && status.skipped.length > 0 ? (
+            <p className="mt-2 text-[13px] leading-5 text-muted-foreground">
+              {status.skipped.length === 1 ? '1 family not available' : `${status.skipped.length} families not available`}
+              {' · '}
+              {status.skipped
+                .slice(0, 4)
+                .map((skip) => `${skip.glyphsFile} ${skipLabel(skip.reason)}`)
+                .join(' · ')}
+            </p>
+          ) : null}
+        </div>
+      </div>
+        </>
+      ) : null}
+    </SettingsSection>
   )
 }

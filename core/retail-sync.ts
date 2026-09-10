@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { isFullyUnderAnyRoot } from './containment.ts'
-import { retailManifestPath } from './paths.ts'
+import { retailCacheDir, retailManifestPath } from './paths.ts'
 import type { AppPaths } from './paths.ts'
 import {
   emptyRetailLocalManifest,
@@ -18,9 +18,9 @@ export type RetailStat = { exists: boolean; size: number }
 /** Injected so the diff stays pure and testable without touching disk. */
 export type RetailStatFile = (relativePath: string) => RetailStat
 
-export function statRetailFile(root: string): RetailStatFile {
+export function statRetailFile(userFontsDir: string): RetailStatFile {
   return (relativePath) => {
-    const target = resolveRetailPath(root, relativePath)
+    const target = resolveRetailInstallPath(userFontsDir, relativePath)
     if (!target) return { exists: false, size: 0 }
     try {
       const stat = fs.statSync(target)
@@ -75,6 +75,34 @@ export function resolveRetailPath(root: string, relativePath: string): string | 
   return target
 }
 
+/** Basename written into ~/Library/Fonts. Nested `Family/` dirs stay off disk. */
+export function retailInstallBasename(relativePath: string): string | null {
+  if (!isSafeRelativePath(relativePath)) return null
+  const base = relativePath.split('/').at(-1)
+  if (!base || !isSafeRelativePath(base)) return null
+  return base
+}
+
+/**
+ * Flattened install path under the user fonts folder, or null when the relative path is unsafe.
+ *
+ * `Family/File.otf` becomes `<userFontsDir>/File.otf`. The full relative path must still be safe so
+ * `../escape.otf` cannot sneak in by taking only the basename.
+ */
+export function resolveRetailCachePath(paths: AppPaths, relativePath: string): string | null {
+  return resolveRetailPath(retailCacheDir(paths), relativePath)
+}
+
+export function resolveRetailInstallPath(userFontsDir: string, relativePath: string): string | null {
+  const base = retailInstallBasename(relativePath)
+  if (!base) return null
+  const root = path.resolve(userFontsDir)
+  const dest = path.resolve(root, base)
+  if (path.dirname(dest) !== root) return null
+  if (!isFullyUnderAnyRoot(dest, [root])) return null
+  return dest
+}
+
 /** Identity as the filesystem sees it: APFS is case- and unicode-normalization-insensitive. */
 function pathIdentity(relativePath: string): string {
   return relativePath.normalize('NFC').toLowerCase()
@@ -121,6 +149,7 @@ export function diffRetailManifest(
   // Keyed on filesystem identity, so a case-only or NFC/NFD-only difference is caught as a collision
   // rather than becoming two manifest entries fighting over one file forever.
   const claimed = new Map<string, { glyphsFile: string; relativePath: string }>()
+  const destClaimed = new Map<string, { glyphsFile: string; relativePath: string }>()
 
   const known = new Map<string, RetailLocalFile>()
   for (const [key, value] of Object.entries(local.files ?? {})) {
@@ -158,6 +187,24 @@ export function diffRetailManifest(
       }
       if (owner) continue
       claimed.set(identity, { glyphsFile: collection.glyphsFile, relativePath: file.relativePath })
+
+      const destName = retailInstallBasename(file.relativePath)
+      if (destName) {
+        const destId = pathIdentity(destName)
+        const destOwner = destClaimed.get(destId)
+        if (destOwner && destOwner.relativePath !== file.relativePath) {
+          seen.add(file.relativePath)
+          drift.push({
+            kind: 'conflict',
+            relativePath: file.relativePath,
+            glyphsFile: collection.glyphsFile,
+            remote: file,
+            note: `${collection.glyphsFile} and ${destOwner.glyphsFile} both want ${destName} in Fonts.`,
+          })
+          continue
+        }
+        destClaimed.set(destId, { glyphsFile: collection.glyphsFile, relativePath: file.relativePath })
+      }
       seen.add(file.relativePath)
 
       const current = known.get(file.relativePath)
@@ -254,4 +301,12 @@ export function saveRetailManifest(paths: AppPaths, manifest: RetailLocalManifes
   const tmp = `${file}.${process.pid}.tmp`
   fs.writeFileSync(tmp, JSON.stringify(manifest, null, 2))
   fs.renameSync(tmp, file)
+}
+
+/** Drop a file from the last-sync record so the next check treats it as `added` again. */
+export function forgetRetailFile(paths: AppPaths, relativePath: string): void {
+  const local = loadRetailManifest(paths)
+  if (!local.files[relativePath]) return
+  delete local.files[relativePath]
+  saveRetailManifest(paths, local)
 }

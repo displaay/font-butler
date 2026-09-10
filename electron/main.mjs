@@ -24,7 +24,6 @@ const ICON_PATH = path.join(__dirname, '../build/icon.png')
 const MENUBAR_ICON_PATH = path.join(__dirname, '../build/menubarTemplate.png')
 const MENUBAR_ATTENTION_ICON_PATH = path.join(__dirname, '../build/menubarNotificationTemplate.svg')
 const APP_ICON = fs.existsSync(ICON_PATH) ? nativeImage.createFromPath(ICON_PATH) : undefined
-const TRAY_ICON_PATHS = { quiet: MENUBAR_ICON_PATH, attention: MENUBAR_ATTENTION_ICON_PATH }
 const trayTemplateIcons = new Map()
 const LIGHT_BACKGROUND = '#ffffff'
 const DARK_BACKGROUND = '#0a0a0a'
@@ -39,12 +38,46 @@ function applyThemeSetting(theme) {
   mainWindow?.setBackgroundColor(windowBackgroundColor())
 }
 
+function parseAppIconStyle(value) {
+  return value === 'mono' ? 'mono' : 'bright'
+}
+
+function iconPackDir(style) {
+  return path.join(__dirname, '../build/icons', parseAppIconStyle(style))
+}
+
+function trayIconPaths() {
+  const quiet = path.join(iconPackDir(appIconStyle), 'tray.png')
+  return {
+    quiet: fs.existsSync(quiet) ? quiet : MENUBAR_ICON_PATH,
+    attention: MENUBAR_ATTENTION_ICON_PATH,
+  }
+}
+
+function applyDockIcon() {
+  if (process.platform !== 'darwin' || !app.dock) {
+    return
+  }
+  const file = path.join(iconPackDir(appIconStyle), 'app.png')
+  const image = fs.existsSync(file) ? nativeImage.createFromPath(file) : APP_ICON
+  if (image && !image.isEmpty()) {
+    app.dock.setIcon(image)
+  }
+}
+
+function applyAppIconSetting(style) {
+  appIconStyle = parseAppIconStyle(style)
+  applyDockIcon()
+  refreshTrayMenu()
+}
+
 let mainWindow = null
 let tray = null
 let apiToken = null
 let catalogEntries = []
 let activityOperations = []
 let menuBarIconEnabled = true
+let appIconStyle = 'bright'
 let clearOfficeFontCacheEnabled = true
 let clearAdobeFontCacheEnabled = true
 let nativeNotificationsEnabled = false
@@ -73,6 +106,7 @@ function applyBootstrapSettings(settings) {
     return
   }
   applyThemeSetting(settings.theme)
+  applyAppIconSetting(settings.appIcon)
   applyMenuBarSetting(settings.menuBarIcon)
   applyOpenAtLogin(settings.openAtLogin)
   applyOfficeCacheSetting(settings.clearOfficeFontCache)
@@ -592,7 +626,7 @@ function loadTrayTemplateIcon(iconPath) {
 }
 
 function trayTemplateIcon(attention) {
-  const iconPath = menuBarTrayIconPath(attention, TRAY_ICON_PATHS)
+  const iconPath = menuBarTrayIconPath(attention, trayIconPaths())
   return loadTrayTemplateIcon(iconPath) ?? loadTrayTemplateIcon(MENUBAR_ICON_PATH)
 }
 
@@ -719,6 +753,7 @@ function handleApiEvent(event) {
   }
   if (event.type === 'settings' && event.settings) {
     applyThemeSetting(event.settings.theme)
+    applyAppIconSetting(event.settings.appIcon)
     applyMenuBarSetting(event.settings.menuBarIcon)
     applyOpenAtLogin(event.settings.openAtLogin)
     applyOfficeCacheSetting(event.settings.clearOfficeFontCache)
@@ -787,7 +822,7 @@ async function loadAppUpdate(refresh = false) {
 }
 
 /**
- * Background check for the DISPLAAY retail collection.
+ * Background check for the Displaay retail collection.
  *
  * Lives here rather than in the renderer so it keeps running with the window closed, the same reason
  * the app-update poll does. Deliberately sends no `refresh`, so the worker answers from its cached
@@ -796,7 +831,7 @@ async function loadAppUpdate(refresh = false) {
  */
 async function retailTick() {
   const status = retailStatus
-  if (!status || !status.enabled || !status.folderRoot || !status.hasToken) return
+  if (!status || !status.enabled || !status.hasToken) return
   const minutes = Number(status.autoCheckMinutes)
   if (!Number.isFinite(minutes) || minutes <= 0) return
 
@@ -1002,8 +1037,8 @@ if (!gotLock) {
   }
 
   app.whenReady().then(async () => {
-    if (process.platform === 'darwin' && app.dock && APP_ICON && !APP_ICON.isEmpty() && !app.isPackaged) {
-      app.dock.setIcon(APP_ICON)
+    if (process.platform === 'darwin' && app.dock) {
+      applyDockIcon()
     }
     Menu.setApplicationMenu(buildAppMenu())
     nativeTheme.on('updated', () => {

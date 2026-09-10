@@ -1,3 +1,5 @@
+import type { AppIconStyle } from '../../shared/appIcon.ts'
+
 export type FontStatus =
   | 'installed'
   | 'uninstalled'
@@ -90,6 +92,8 @@ export type CatalogEntry = {
   updatePolicy?: UpdatePolicy
   updateHold?: UpdateHold | null
   ownerFolderId?: string | null
+  /** Stable key in the Displaay retail collection (`Family/File.otf`). Self-sourced when set. */
+  retailRelativePath?: string | null
   previewOnly?: boolean
   activationOwners?: ActivationOwner[]
   destinationId?: DestinationId
@@ -185,6 +189,7 @@ export type FamilyGroup = {
 export type ViewLayout = 'list' | 'grid'
 
 export type ThemeMode = 'light' | 'dark' | 'system'
+export type { AppIconStyle }
 
 export type PreviewPreferences = {
   text: string
@@ -323,6 +328,7 @@ export type AppSettings = {
   installAfterUpload: boolean
   installWatchFolderFonts: boolean
   theme: ThemeMode
+  appIcon?: AppIconStyle
   menuBarIcon: boolean
   openAtLogin: boolean
   clearOfficeFontCache: boolean

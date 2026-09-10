@@ -294,6 +294,7 @@ export const api = {
     installAfterUpload?: boolean
     installWatchFolderFonts?: boolean
     theme?: ThemeMode
+    appIcon?: AppSettings['appIcon']
     menuBarIcon?: boolean
     openAtLogin?: boolean
     clearOfficeFontCache?: boolean

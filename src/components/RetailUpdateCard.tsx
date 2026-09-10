@@ -35,10 +35,10 @@ export function RetailUpdateCard({
           </div>
           <p className="mt-0.5 text-[13px] leading-5 text-muted-foreground">
             {status.checkedAt
-              ? `The DISPLAAY collection changed since the last sync. Last checked ${new Date(
+              ? `The Displaay collection changed since the last sync. Last checked ${new Date(
                   status.checkedAt,
                 ).toLocaleString()}.`
-              : 'The DISPLAAY collection changed since the last sync.'}
+              : 'The Displaay collection changed since the last sync.'}
           </p>
         </div>
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">

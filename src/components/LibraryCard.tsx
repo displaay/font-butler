@@ -439,6 +439,8 @@ export function LibraryCard({
             onReinstall={onReinstall}
             onDeactivate={onDeactivate}
             onUninstall={onUninstall}
+            onUninstallFormat={onUninstallFormat}
+            formatUninstalls={mixedFormats}
             onActivate={onActivate}
             onSwitch={onSwitch}
             formatSwap={swap}

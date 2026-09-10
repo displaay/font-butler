@@ -57,7 +57,7 @@ import { savedFilterMatches } from '@/lib/savedFilters'
 import { hasInsetTrafficLights } from '@/lib/desktop'
 import { shouldShowUpdatesTab } from '@/lib/app-update'
 import { cn } from '@/lib/utils'
-import { watchFolderLabel } from '@/lib/watchFolders'
+import { watchFolderLabel, RETAIL_LIBRARY_FILTER, RETAIL_LIBRARY_LABEL } from '@/lib/watchFolders'
 
 export type Tab = 'library' | 'system' | 'updates' | 'activity'
 
@@ -124,6 +124,7 @@ function SidebarItem({
   hoverAction,
   onReveal,
   onRemove,
+  onOpenWatchFoldersSettings,
   expanded,
   onToggleExpand,
 }: {
@@ -142,6 +143,7 @@ function SidebarItem({
   hoverAction?: { label: string; onClick: () => void; disabled?: boolean }
   onReveal?: () => void
   onRemove?: () => void
+  onOpenWatchFoldersSettings?: () => void
   expanded?: boolean
   onToggleExpand?: () => void
 }) {
@@ -221,14 +223,14 @@ function SidebarItem({
       ) : null}
     </Button>
   )
-  if (lockTotal && !onReveal && !onRemove) {
+  if (lockTotal && !onReveal && !onRemove && !onOpenWatchFoldersSettings) {
     return button
   }
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{button}</ContextMenuTrigger>
       <ContextMenuContent>
-        {onReveal || onRemove ? (
+        {onReveal || onRemove || onOpenWatchFoldersSettings ? (
           <>
             {onReveal ? (
               <ContextMenuItem onSelect={onReveal}>
@@ -238,6 +240,11 @@ function SidebarItem({
             {onRemove ? (
               <ContextMenuItem onSelect={onRemove}>
                 <FolderMinus /> Remove Watch folder
+              </ContextMenuItem>
+            ) : null}
+            {onOpenWatchFoldersSettings ? (
+              <ContextMenuItem onSelect={onOpenWatchFoldersSettings}>
+                <Settings /> Watch folders settings
               </ContextMenuItem>
             ) : null}
             <ContextMenuSeparator />
@@ -293,8 +300,13 @@ export function Sidebar({
   hasFontUpdates = false,
   searching = false,
   retailPending = 0,
+  retailEnabled = false,
+  retailBusy = false,
+  retailCount = 0,
+  onSyncRetail,
   onReinstallAllUpdates,
   onOpenSettings,
+  onOpenWatchFoldersSettings,
 }: {
   query: string
   onQueryChange: (value: string) => void
@@ -334,8 +346,13 @@ export function Sidebar({
   searching?: boolean
   /** Retail fonts whose newer version is still on the server. */
   retailPending?: number
+  retailEnabled?: boolean
+  retailBusy?: boolean
+  retailCount?: number
+  onSyncRetail?: () => void
   onReinstallAllUpdates?: () => void
   onOpenSettings: () => void
+  onOpenWatchFoldersSettings?: () => void
 }) {
   const insetTrafficLights = hasInsetTrafficLights()
   const [fontsOpen, setFontsOpen] = useState(true)
@@ -373,6 +390,7 @@ export function Sidebar({
   const showSavedFilters =
     tab === 'library' &&
     (hasSavedFilters || Boolean(onCreateSavedFilter && hasActiveLibraryCriteria))
+  const hasWatchChildren = watchFolders.length > 0 || retailEnabled
   const fontsActive = tab === 'library' && !watchFolderFilter
 
   useEffect(() => {
@@ -503,7 +521,7 @@ export function Sidebar({
           />
         </div>
       </div>
-      <nav className="flex min-h-0 flex-1 flex-row flex-wrap gap-0.5 overflow-y-auto px-2 pb-2 md:flex-col md:flex-nowrap">
+      <nav className="flex min-h-0 flex-1 flex-row flex-wrap gap-0.5 overflow-y-auto px-3 pb-2 md:flex-col md:flex-nowrap">
         {TABS.filter(
           (item) =>
             item.id !== 'updates' ||
@@ -524,7 +542,7 @@ export function Sidebar({
                   className="w-full"
                   expanded={fontsOpen}
                   onToggleExpand={
-                    watchFolders.length > 0 ? () => setFontsOpen((value) => !value) : undefined
+                    hasWatchChildren ? () => setFontsOpen((value) => !value) : undefined
                   }
                 />
                 {fontsOpen &&
@@ -551,6 +569,32 @@ export function Sidebar({
                       />
                     )
                   })}
+                {fontsOpen && retailEnabled ? (
+                  <SidebarItem
+                    key={RETAIL_LIBRARY_FILTER}
+                    active={tab === 'library' && watchFolderFilter === RETAIL_LIBRARY_FILTER}
+                    icon={Folder}
+                    label={RETAIL_LIBRARY_LABEL}
+                    count={retailCount}
+                    showTotal={Boolean(showTotals[watchShowTotalId(RETAIL_LIBRARY_FILTER)])}
+                    onShowTotalChange={(value) =>
+                      changeShowTotal(watchShowTotalId(RETAIL_LIBRARY_FILTER), value)
+                    }
+                    onClick={() => onSelectWatchFolder(RETAIL_LIBRARY_FILTER)}
+                    className="w-full pl-7"
+                    title={RETAIL_LIBRARY_LABEL}
+                    hoverAction={
+                      onSyncRetail
+                        ? {
+                            label: 'Sync',
+                            onClick: onSyncRetail,
+                            disabled: retailBusy,
+                          }
+                        : undefined
+                    }
+                    onOpenWatchFoldersSettings={onOpenWatchFoldersSettings}
+                  />
+                ) : null}
               </div>
             )
           }
@@ -992,7 +1036,7 @@ export function Sidebar({
           </div>
         )}
       </nav>
-      <div className="border-t p-2">
+      <div className="border-t px-3 py-2">
         <Button
           variant="ghost"
           className={navButtonClass(false, 'w-full')}

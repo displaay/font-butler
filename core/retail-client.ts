@@ -86,13 +86,13 @@ export function retailUrl(workerBaseUrl: string, endpoint: string): string {
 
 function assertBaseUrl(workerBaseUrl: string): void {
   if (!isAllowedRetailBaseUrl(workerBaseUrl)) {
-    throw new RetailRequestError('The DISPLAAY worker address must be an https URL.')
+    throw new RetailRequestError('The Displaay worker address must be an https URL.')
   }
 }
 
 function requestHeaders(token: string): Record<string, string> {
   if (!token) {
-    throw new RetailRequestError('Add a DISPLAAY worker token first.')
+    throw new RetailRequestError('Add a Displaay worker token first.')
   }
   return { Authorization: `Bearer ${token}`, Accept: 'application/json' }
 }
@@ -120,23 +120,23 @@ export async function fetchRetailManifest(
     const response = await withTimeout(
       resolveFetch(options)(url, { headers, signal: controller.signal }),
       options.timeoutMs ?? RETAIL_FETCH_TIMEOUT_MS,
-      'The DISPLAAY worker',
+      'The Displaay worker',
     )
     if (response.status === 401 || response.status === 403) {
-      throw new RetailRequestError('The DISPLAAY worker rejected that token.')
+      throw new RetailRequestError('The Displaay worker rejected that token.')
     }
     if (!response.ok) {
-      throw new RetailRequestError(`The DISPLAAY worker returned HTTP ${response.status}.`)
+      throw new RetailRequestError(`The Displaay worker returned HTTP ${response.status}.`)
     }
     // The body read has to be inside the timeout as well: a worker that returns headers and then
     // stalls the body would otherwise hang the caller forever.
     const parsed = (await withTimeout(
       response.json(),
       options.timeoutMs ?? RETAIL_FETCH_TIMEOUT_MS,
-      'The DISPLAAY worker',
+      'The Displaay worker',
     )) as RetailManifest
     if (!parsed || !Array.isArray(parsed.collections)) {
-      throw new RetailRequestError('The DISPLAAY worker returned an unexpected manifest.')
+      throw new RetailRequestError('The Displaay worker returned an unexpected manifest.')
     }
     return {
       generatedAt: typeof parsed.generatedAt === 'string' ? parsed.generatedAt : new Date().toISOString(),
@@ -148,7 +148,7 @@ export async function fetchRetailManifest(
     throw error instanceof RetailRequestError
       ? error
       : new RetailRequestError(
-          error instanceof Error ? error.message : 'Could not reach the DISPLAAY worker.',
+          error instanceof Error ? error.message : 'Could not reach the Displaay worker.',
         )
   }
 }
@@ -171,10 +171,10 @@ export async function fetchRetailFile(
     const response = await withTimeout(
       resolveFetch(options)(url, { headers, signal: controller.signal }),
       options.timeoutMs ?? RETAIL_DOWNLOAD_TIMEOUT_MS,
-      'The DISPLAAY worker',
+      'The Displaay worker',
     )
     if (response.status === 401 || response.status === 403) {
-      throw new RetailRequestError('The DISPLAAY worker rejected that token.')
+      throw new RetailRequestError('The Displaay worker rejected that token.')
     }
     if (!response.ok) {
       throw new RetailRequestError(`${options.key}: HTTP ${response.status}`)
@@ -195,7 +195,7 @@ export async function fetchRetailFile(
       await withTimeout(
         response.arrayBuffer(),
         options.timeoutMs ?? RETAIL_DOWNLOAD_TIMEOUT_MS,
-        'The DISPLAAY worker',
+        'The Displaay worker',
       ),
     )
   } catch (error) {

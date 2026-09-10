@@ -223,7 +223,7 @@ export function SpecimenWorkspace({
         <div className="grid gap-2 md:grid-cols-2">
           <SpecimenPane
             label={entry.faces[0]?.familyName || 'A'}
-            family={entry.installedPath ? liveInstalledFamily : liveSourceFamily}
+            family={previewWhich === 'installed' ? liveInstalledFamily : liveSourceFamily}
             text={specimen.text}
             size={liveSize}
             lineHeight={liveLineHeight}
@@ -251,8 +251,8 @@ export function SpecimenWorkspace({
         </div>
       ) : (
         <SpecimenPane
-          label={entry.previewOnly ? 'Preview only' : entry.installedPath ? 'Installed' : 'Source'}
-          family={entry.installedPath ? liveInstalledFamily : liveSourceFamily}
+          label={entry.previewOnly ? 'Preview only' : previewWhich === 'installed' ? 'Installed' : 'Source'}
+          family={previewWhich === 'installed' ? liveInstalledFamily : liveSourceFamily}
           text={specimen.text}
           size={liveSize}
           lineHeight={liveLineHeight}
@@ -296,7 +296,7 @@ export function SpecimenWorkspace({
           {(meta?.axes ?? []).map((axis) => (
             <Label key={axis.tag} className="grid grid-cols-[4.5rem_1fr_3.5rem] items-center gap-2 font-normal">
               <span className="truncate">{axis.name || axis.tag}</span>
-              <span className="flex h-7 items-center">
+              <span className="flex h-8 items-center">
                 <Slider
                   min={axis.min}
                   max={axis.max}
@@ -308,7 +308,7 @@ export function SpecimenWorkspace({
               </span>
               <Input
                 type="number"
-                className="h-7 px-1.5 text-xs tabular-nums"
+                className="h-8 px-1.5 text-xs tabular-nums"
                 value={axes[axis.tag] ?? axis.default}
                 onChange={(event) => setAxis(axis.tag, Number(event.target.value))}
               />

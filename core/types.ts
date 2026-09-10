@@ -1,4 +1,5 @@
 import type { RetailSyncStatus } from '../shared/retail.ts'
+import type { AppIconStyle } from '../shared/appIcon.ts'
 
 export const FONT_EXTENSIONS = ['.ttf', '.otf', '.ttc', '.otc'] as const
 export const WEB_FONT_EXTENSIONS = ['.woff', '.woff2'] as const
@@ -117,6 +118,8 @@ export type CatalogEntry = {
   updatePolicy?: UpdatePolicy
   updateHold?: UpdateHold | null
   ownerFolderId?: string | null
+  /** Stable key in the Displaay retail collection (`Family/File.otf`). Self-sourced when set. */
+  retailRelativePath?: string | null
   previewOnly?: boolean
   storageVolumeId?: string
   sourceRoot?: string
@@ -173,6 +176,7 @@ export type ViewLayout = 'list' | 'grid'
 export type SortMode = 'name' | 'added'
 
 export type ThemeMode = 'light' | 'dark' | 'system'
+export type { AppIconStyle }
 
 export type LibraryFilter =
   | 'installed'
@@ -215,7 +219,7 @@ export type PreviewPreferences = {
 }
 
 /**
- * Optional DISPLAAY retail collection sync. The worker API token is deliberately NOT here: AppSettings
+ * Optional Displaay retail collection sync. The worker API token is deliberately NOT here: AppSettings
  * is broadcast to the renderer on bootstrap and on every settings event, so the token lives in a 0600
  * file next to the local API token instead (see `retailTokenPath`).
  */
@@ -224,8 +228,6 @@ export type RetailSyncSettings = {
   workerBaseUrl: string
   /** Background check interval in minutes; `0` means the app never checks on its own. */
   autoCheckMinutes: number
-  /** Id of the WatchFolder that holds the collection, once configured. */
-  folderId: string | null
 }
 
 export type LatinPreviewPreset = 'Aa' | 'Ag' | 'Ta' | 'ag' | 'custom'
@@ -244,6 +246,7 @@ export type AppSettings = {
   installAfterUpload: boolean
   installWatchFolderFonts: boolean
   theme: ThemeMode
+  appIcon: AppIconStyle
   menuBarIcon: boolean
   openAtLogin: boolean
   clearOfficeFontCache: boolean

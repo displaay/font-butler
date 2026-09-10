@@ -20,7 +20,7 @@ import { FolderRelinkDialog } from '@/components/FolderRelinkDialog'
 import { FolderSetupDialog } from '@/components/FolderSetupDialog'
 import { AppUpdateCard } from '@/components/AppUpdateCard'
 import { RetailPane } from '@/components/RetailPane'
-import { SettingsRow, SettingsSection } from '@/components/SettingsRow'
+import { SettingsRow, SettingsSection, settingsSelectClass } from '@/components/SettingsRow'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -31,6 +31,11 @@ import {
 import { Input } from '@/components/ui/input'
 import { useSetActionStatus } from '@/components/NotifyProvider'
 import { api } from '@/lib/api'
+import {
+  LATIN_PREVIEW_MAX_LENGTH,
+  LATIN_PREVIEW_PRESETS,
+  normalizeLatinPreviewCustom,
+} from '@/lib/latinPreview'
 import { persistNativeNotificationsEnabled, requestNotificationPermission } from '@/lib/notifications'
 import type {
   AdobeFontCacheInfo,
@@ -44,18 +49,11 @@ import type {
   ThemeMode,
   ViewLayout,
 } from '@/lib/types'
-import {
-  LATIN_PREVIEW_MAX_LENGTH,
-  LATIN_PREVIEW_PRESETS,
-  normalizeLatinPreviewCustom,
-} from '@/lib/latinPreview'
+import { APP_ICON_OPTIONS, appIconPreviewSrc, parseAppIconStyle } from '@/lib/appIcon'
 import { cn } from '@/lib/utils'
 import { DESTINATIONS, FOLDER_POLICIES, adobeTestingFolderAvailable, destinationLabel, destinationNeedsAdobe, folderAvailabilityLabel, folderPolicyLabel } from '@/lib/folders'
 import { watchFolderName } from '@/lib/watchFolders'
 import type { FolderPolicyPreset, RetailSyncStatus, WatchFolder } from '@/lib/types'
-
-const selectClass =
-  'h-8 w-auto min-w-[9.5rem] max-w-full rounded-md border bg-background px-2 text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring/30'
 
 const checkboxClass = 'size-4 shrink-0 cursor-pointer rounded border border-input accent-primary'
 
@@ -68,7 +66,6 @@ const THEME_OPTIONS: { id: ThemeMode; label: string; icon: typeof Sun }[] = [
 type SettingsCategoryId =
   | 'general'
   | 'folders'
-  | 'retail'
   | 'fonts'
   | 'destinations'
   | 'caches'
@@ -90,13 +87,7 @@ const CATEGORIES: {
     id: 'folders',
     label: 'Watch folders',
     icon: Folder,
-    description: 'Watch folders for new fonts and choose a policy for each one.',
-  },
-  {
-    id: 'retail',
-    label: 'DISPLAAY retail',
-    icon: FolderOpen,
-    description: 'Optionally keep a watch folder in step with the DISPLAAY retail collection.',
+    description: 'Watch folders for new fonts, and the optional Displaay retail collection.',
   },
   {
     id: 'fonts',
@@ -131,6 +122,7 @@ type SettingsPatch = {
   installAfterUpload?: boolean
   installWatchFolderFonts?: boolean
   theme?: ThemeMode
+  appIcon?: AppSettings['appIcon']
   menuBarIcon?: boolean
   openAtLogin?: boolean
   clearOfficeFontCache?: boolean
@@ -163,6 +155,7 @@ export function SettingsDialog({
   checkingAppUpdate = false,
   onCheckAppUpdate,
   highlightAppUpdate = false,
+  highlightWatchFolders = false,
   retail = null,
   onRetailChange,
 }: {
@@ -175,6 +168,7 @@ export function SettingsDialog({
   checkingAppUpdate?: boolean
   onCheckAppUpdate?: (refresh?: boolean) => void
   highlightAppUpdate?: boolean
+  highlightWatchFolders?: boolean
   retail?: RetailSyncStatus | null
   onRetailChange?: (status: RetailSyncStatus) => void
 }) {
@@ -205,6 +199,11 @@ export function SettingsDialog({
     if (!open || !highlightAppUpdate) return
     setCategory('general')
   }, [open, highlightAppUpdate])
+
+  useEffect(() => {
+    if (!open || !highlightWatchFolders) return
+    setCategory('folders')
+  }, [open, highlightWatchFolders])
 
   useEffect(() => {
     if (!open) return
@@ -379,7 +378,7 @@ export function SettingsDialog({
               role="tabpanel"
               id={`${tablistId}-panel`}
               aria-labelledby={`${tablistId}-${selected.id}`}
-              className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4"
+              className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
             >
               {category === 'general' && (
                 <GeneralPane
@@ -399,19 +398,12 @@ export function SettingsDialog({
                   folders={folders}
                   watchFolders={watchFolders}
                   busy={busy}
+                  retail={retail}
+                  onRetailChange={onRetailChange}
                   onSave={save}
                   onAddFolder={() => setSetupOpen(true)}
                   onRelink={(root) => setRelinkRoot(root)}
                   onSettingsChange={onSettingsChange}
-                />
-              )}
-              {category === 'retail' && (
-                <RetailPane
-                  status={retail}
-                  folders={folders}
-                  busy={busy}
-                  onStatus={(next) => onRetailChange?.(next)}
-                  onAddFolder={() => setSetupOpen(true)}
                 />
               )}
               {category === 'fonts' && (
@@ -513,7 +505,7 @@ function GeneralPane({
                   aria-checked={selected}
                   disabled={busy || !settings}
                   className={cn(
-                    'h-8 gap-1.5 px-2.5',
+                    'h-7 gap-1.5 px-2.5',
                     selected ? 'bg-muted font-medium' : 'text-muted-foreground',
                   )}
                   onClick={() => {
@@ -528,13 +520,51 @@ function GeneralPane({
           </div>
         </SettingsRow>
         <SettingsRow
+          label="App icon"
+          description="Dock and menu bar. A packaged app’s Finder icon updates when you install a new build."
+        >
+          <div role="radiogroup" aria-label="App icon" className="flex items-end gap-2">
+            {APP_ICON_OPTIONS.map((option) => {
+              const selected = parseAppIconStyle(settings?.appIcon) === option.id
+              return (
+                <Button
+                  key={option.id}
+                  type="button"
+                  variant="ghost"
+                  role="radio"
+                  aria-checked={selected}
+                  aria-label={option.label}
+                  title={option.label}
+                  disabled={busy || !settings}
+                  className={cn(
+                    'h-auto flex-col gap-1 rounded-xl border px-1.5 pb-1 pt-0.5',
+                    selected
+                      ? 'border-foreground/30 bg-muted ring-2 ring-ring/40'
+                      : 'border-border text-muted-foreground',
+                  )}
+                  onClick={() => {
+                    if (!selected) void onSave({ appIcon: option.id })
+                  }}
+                >
+                  <img
+                    src={appIconPreviewSrc(option.id)}
+                    alt=""
+                    className="size-12 rounded-[0.6rem]"
+                  />
+                  <span className="whitespace-nowrap text-[11px] leading-4">{option.label}</span>
+                </Button>
+              )
+            })}
+          </div>
+        </SettingsRow>
+        <SettingsRow
           label="Default view"
           description="List or grid when you open the library."
           htmlFor="default-view"
         >
           <select
             id="default-view"
-            className={selectClass}
+            className={settingsSelectClass}
             value={settings?.defaultView ?? 'list'}
             disabled={busy || !settings}
             onChange={(event) =>
@@ -552,7 +582,7 @@ function GeneralPane({
         >
           <select
             id="default-sort"
-            className={selectClass}
+            className={settingsSelectClass}
             value={settings?.defaultSort ?? 'name'}
             disabled={busy || !settings}
             onChange={(event) =>
@@ -724,7 +754,7 @@ function LatinPreviewRow({
               aria-checked={selected}
               disabled={busy || !settings}
               className={cn(
-                'h-8 px-2.5',
+                'h-7 px-2.5',
                 selected ? 'bg-muted font-medium' : 'text-muted-foreground',
               )}
               onClick={() => {
@@ -745,6 +775,8 @@ function FoldersPane({
   folders,
   watchFolders,
   busy,
+  retail,
+  onRetailChange,
   onSave,
   onAddFolder,
   onRelink,
@@ -754,6 +786,8 @@ function FoldersPane({
   folders: WatchFolder[]
   watchFolders: string[]
   busy: boolean
+  retail?: RetailSyncStatus | null
+  onRetailChange?: (status: RetailSyncStatus) => void
   onSave: (patch: SettingsPatch) => Promise<void>
   onAddFolder: () => void
   onRelink: (root: string) => void
@@ -816,6 +850,11 @@ function FoldersPane({
           />
         </SettingsRow>
       </SettingsSection>
+      <RetailPane
+        status={retail ?? null}
+        busy={busy}
+        onStatus={(next) => onRetailChange?.(next)}
+      />
     </div>
   )
 }
@@ -833,7 +872,7 @@ function FontsPane({
     <SettingsSection>
       <SettingsRow
         label="Activate after adding"
-        description="Dropping fonts, or adding a watch folder, activates them and selects them in the list. Turn this off to add fonts to the library without activating."
+        description="Turn this off to add fonts to the library without activating."
         htmlFor="install-after-upload"
       >
         <input
@@ -893,12 +932,12 @@ function DestinationsPane({
     <SettingsSection>
       <SettingsRow
         label="Default install destination"
-        description="Choose where new installs go. Adobe is a testing folder for apps to pick up — not the same as installing for macOS, and Font Buttler does not claim a font is active in InDesign or Photoshop."
+        description="Choose where new installs go. Adobe is a testing folder for apps to pick up — not the same as installing for macOS."
         htmlFor="default-destination"
       >
         <select
           id="default-destination"
-          className={selectClass}
+          className={settingsSelectClass}
           aria-label="Default install destination"
           disabled={busy || !settings}
           value={settings?.defaultDestination ?? 'macos'}
@@ -1219,7 +1258,7 @@ function SettingsFolderRow({
     >
         <div className="flex max-w-[min(100%,22rem)] flex-wrap items-center justify-end gap-1.5">
           <select
-            className={selectClass}
+            className={settingsSelectClass}
             value={folder.policy}
             disabled={busy}
             aria-label={`Policy for ${name}`}

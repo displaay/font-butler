@@ -37,7 +37,7 @@ import {
 } from '@/lib/glyphs'
 import { hasManagedInstall } from '@/lib/group'
 import type { CatalogEntry } from '@/lib/types'
-import { cn } from '@/lib/utils'
+import { cn, CONTROL_H } from '@/lib/utils'
 
 const GAP = 6
 const OVERSCAN = 3
@@ -187,7 +187,7 @@ export function GlyphGrid({ entry }: { entry: CatalogEntry }) {
                 placeholder="Search"
                 aria-label="Search glyphs"
                 autoFocus
-                className="h-8 min-w-0 max-w-48 flex-1 [&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none"
+                className="min-w-0 max-w-48 flex-1 [&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none"
               />
               <Label className="flex shrink-0 cursor-pointer items-center gap-1.5 font-normal">
                 <input
@@ -222,7 +222,7 @@ export function GlyphGrid({ entry }: { entry: CatalogEntry }) {
             </Button>
           )}
         </div>
-        <label className="flex h-8 shrink-0 items-center gap-2 rounded-md border bg-background px-2.5">
+        <label className={cn('flex shrink-0 items-center gap-2 rounded-md border bg-background px-2.5', CONTROL_H)}>
           <span className="select-none text-[10px] leading-none text-muted-foreground" aria-hidden>
             A
           </span>

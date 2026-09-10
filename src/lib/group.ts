@@ -221,8 +221,10 @@ export function isUninstallableGroup(group: { status: FontStatus }): boolean {
 }
 
 /** Delete/Backspace forgets these families (already off the Mac). */
-export function isForgettableOnlyGroup(group: { status: FontStatus }): boolean {
-  return group.status === 'uninstalled' || group.status === 'source-missing'
+export function isForgettableOnlyGroup(group: { status: FontStatus; entries?: CatalogEntry[] }): boolean {
+  if (group.status !== 'uninstalled' && group.status !== 'source-missing') return false
+  if (group.entries) return forgettableIds({ entries: group.entries }).length > 0
+  return true
 }
 
 export function familyStatusSummary(group: { entries: CatalogEntry[] }): string | null {
@@ -249,13 +251,17 @@ export function entryIds(group: { entries: CatalogEntry[] }): string[] {
 
 export function forgettableIds(group: { entries: CatalogEntry[] }): string[] {
   return group.entries
-    .filter((entry) => entry.status === 'uninstalled' || entry.status === 'source-missing')
+    .filter(
+      (entry) =>
+        !entry.retailRelativePath &&
+        (entry.status === 'uninstalled' || entry.status === 'source-missing'),
+    )
     .map((entry) => entry.id)
 }
 
 export function deletableSourceIds(group: { entries: CatalogEntry[] }): string[] {
   return group.entries
-    .filter((entry) => entry.status === 'uninstalled')
+    .filter((entry) => !entry.retailRelativePath && entry.status === 'uninstalled')
     .map((entry) => entry.id)
 }
 
@@ -279,6 +285,9 @@ function isSelfSourced(entry: CatalogEntry): boolean {
 }
 
 export function entryHasTrackedSource(entry: CatalogEntry): boolean {
+  if (entry.retailRelativePath) {
+    return false
+  }
   if (entry.customFamilyName) {
     return false
   }

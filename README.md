@@ -4,15 +4,26 @@ A source-tracked font manager for macOS — a simpler stand-in for Font Book.
 
 Drop a font file into Font Buttler and it remembers the original path. When that source file changes, Font Buttler offers a reinstall. Reinstalling uninstalls the old copy, clears user font caches (including Microsoft Office and Adobe font caches when present), then installs the new file.
 
+## Features
+
+- **Watch folders** — Point Font Buttler at a folder of sources. New files are imported automatically; you choose whether they also install. Pause a folder, pick a destination policy per folder, or drop a folder once without watching it.
+- **Format swap** — Keep OTF and TTF of the same family in the library, then **Swap OTF for TTF** (or the other way) in one step. The other format stays on the card, deactivated, so you can swap back.
+- **Install as…** — Rewrite the family name across OpenType name (and CFF) tables and install a copy. The original file is never mutated. The packaged app ships Python and fonttools, so this works without a system Python.
+- **Bake OpenType features** — Turn stylistic sets, figures, and other features on in the specimen, then bake them into a reinstall or a new **Install as…** copy.
+- **Destinations** — Install to `~/Library/Fonts`, an Adobe testing folder, or both. Watch-folder and drop policies can follow that choice.
+- **Activate, deactivate, uninstall** — Same user-font workflow as Font Book. Uninstalling removes the copy from the destination; a tracked source stays in the library as **Not installed**.
+- **Source tracking and updates** — The **Source** badge means the original file is still on disk. When it changes, the family shows as outdated and you can reinstall (or auto-reinstall). Removing the source does not uninstall the font.
+- **Projects** — Named sets of families you can activate or deactivate together, and pin so a project keeps a specific installed version.
+- **Specimen and glyphs** — Live preview with variable-axis sliders, OpenType feature toggles, side-by-side compare, and a searchable glyph grid. Cards pick a sample glyph from cmap coverage (Latin **Aa**, or the face’s script / specialty sample).
+- **Library filters** — Status, type (VF / static), and source chips, plus saved filters and per-folder views.
+- **On this Mac** — Browse computer and system fonts and remove ones that are not protected.
+- **Caches** — Reinstall and the **Font cache** menu can clear the user ATS cache, Microsoft Office `FontCache`, and Adobe font list caches when those options are on.
+- **Displaay retail** — Optional sync with the Displaay worker. **Check** lists every remote font on the Displaay retail tab, even when a copy is already in the catalogue or not installed. **Sync** installs free slots; installing a listed font replaces the occupying catalogue copy. Listings cannot be removed. See [docs/retail-sync.md](docs/retail-sync.md).
+
 ## What it does
 
 - Shows Font Book’s **My Fonts** (`~/Library/Fonts`) on the Fonts tab as soon as the app opens
-- Tracks a separate source file when you drop or watch one. A **Source** badge means that original file is still on disk; removing it does not uninstall the font
 - Groups families, counts instances, and marks variable fonts with a **VF** badge
-- Shows a live preview glyph on every card from cmap coverage: Latin-primary faces use **Aa**; Arabic/Hebrew/Hangul/Thai/Indic faces keep their script glyph even if they also contain Latin; emoji, Braille, and symbol faces use a specialty sample
-- Installs, uninstalls, and deactivates user fonts in place, like Font Book. Uninstalling removes the file from `~/Library/Fonts`. If a separate source file is still on disk, the family stays on the Fonts list as **Not installed**; otherwise it leaves the list
-- **Install as…** rewrites the family name across OpenType name (and CFF) tables, then installs a copy. The original file is never mutated
-- **On this Mac** lists computer and system fonts and lets you remove ones that are not protected
 - Right-click a card → **Show in Finder**
 - If Font Buttler is the default app for a font, double-clicking the file adds it to the library and installs it immediately
 
@@ -62,13 +73,12 @@ Electron + Vite + React + TypeScript. Font metadata comes from `fontkit`. Family
 
 The packaged macOS app ships its own CPython and `fonttools`, so “Install as…” does not need a system Python. `npm run dist` downloads that runtime into `vendor/python`. From source, install fonttools (`python3 -m pip install fonttools`) or run `npm run bundle:python`.
 
-## DISPLAAY retail collection
+## Displaay retail collection
 
-An optional watch folder can be kept in step with the DISPLAAY retail collection. Turn it on in
-**Settings → DISPLAAY retail**: pick a watch folder, give it the worker address and a token, then use
-**Check** to see what changed on the server and **Sync** to pull it down. Nothing happens automatically
-and nothing runs at startup. Files land as `<folder>/<GlyphsFile name>/<font>`, so a regenerated font
-replaces the file in place and shows up as a normal update. See
+An optional collection can be kept in step with the Displaay worker. Turn it on in
+**Settings → Watch folders**, give it the worker address and a token, then use **Check** to see what
+changed on the server and **Sync** to pull it down. Nothing happens automatically and nothing runs at
+startup. Fonts flatten into `~/Library/Fonts` (no separate source folder on disk). See
 [docs/retail-sync.md](docs/retail-sync.md).
 
 ## App updates

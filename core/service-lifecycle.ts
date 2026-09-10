@@ -5,6 +5,7 @@ import {
   findById,
   isExternalSource,
   loadCatalog,
+  occupantsAtPath,
   removeEntryById,
   saveCatalog,
   sourceFileExists,
@@ -101,7 +102,11 @@ export async function installEntry(
   }
   const staged = stageFontFile(sourcePath, path.join(host.paths.dataRoot, 'staging'))
   const targets = installTargets(host.paths, entry, options)
-  if (!options?.switch) {
+  const retailReplace = Boolean(entry.retailRelativePath)
+  if (retailReplace) {
+    options = { ...options, replace: true }
+  }
+  if (!options?.switch && !retailReplace) {
     const siblings = occupyingSiblings(catalog.entries, entry, host.paths, targets)
     if (siblings[0]) {
       throw new Error(identityMutexMessage(siblings[0]))
@@ -111,9 +116,20 @@ export async function installEntry(
   let conflictSnapshots: Array<{ entry: CatalogEntry; file: string }> = []
   try {
     applyParsedFont(entry, staged.parsed)
-    const conflicts = installMacos || options?.replace
+    const dest = destinationForInstall(host.paths, entry, sourcePath)
+    const destOccupants = occupantsAtPath(catalog.entries, dest).filter((other) => other.id !== entry.id)
+    const formatConflicts = installMacos || options?.replace
       ? await host.resolveFormatConflicts(entry, catalog.entries, options?.replace, targets)
       : []
+    const siblingConflicts = retailReplace
+      ? occupyingSiblings(catalog.entries, entry, host.paths, targets)
+      : []
+    const seen = new Set<string>()
+    const conflicts = [...formatConflicts, ...destOccupants, ...siblingConflicts].filter((other) => {
+      if (seen.has(other.id)) return false
+      seen.add(other.id)
+      return true
+    })
     // A bake operation can already own the outer journal. Extend it with
     // lazily discovered conflicts before any of them are removed.
     extendMutationJournal(host.paths, [entry, ...conflicts])
@@ -389,7 +405,7 @@ export async function uninstallEntry(
   }
   entry.disabledPath = undefined
   entry.installedPath = undefined
-  if (deleteSource) {
+  if (deleteSource && !entry.retailRelativePath) {
     await deleteSourceFile(sourcePath, host.paths)
     removeEntryById(catalog, id)
     saveCatalog(host.paths, catalog)
@@ -397,8 +413,8 @@ export async function uninstallEntry(
     entry.status = 'uninstalled'
     return entry
   }
-  if (hasSource) {
-    entry.sourcePresent = true
+  if (hasSource || entry.retailRelativePath) {
+    entry.sourcePresent = hasSource
     entry.status = 'uninstalled'
     touchEntry(entry)
     saveCatalog(host.paths, catalog)

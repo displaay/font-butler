@@ -149,6 +149,7 @@ app.post('/api/settings', async (c) => {
     installAfterUpload?: boolean
     installWatchFolderFonts?: boolean
     theme?: 'light' | 'dark' | 'system'
+    appIcon?: AppSettings['appIcon']
     menuBarIcon?: boolean
     openAtLogin?: boolean
     clearOfficeFontCache?: boolean
@@ -699,7 +700,7 @@ app.post('/api/retail/configure', async (c) => {
   }>()
   try {
     // The token goes in on this route and never comes back out: status reports `hasToken` only.
-    return c.json({ status: service.configureRetailSync(body) })
+    return c.json({ status: await service.configureRetailSync(body) })
   } catch (error) {
     return c.json(fail(error, 'Could not save the retail collection settings'), 400)
   }

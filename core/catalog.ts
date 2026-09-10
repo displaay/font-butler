@@ -123,6 +123,30 @@ export function findBySourcePath(
   return catalog.entries.find((entry) => resolvedPath(entry.sourcePath) === resolved)
 }
 
+export function occupantsAtPath(catalog: CatalogFile | CatalogEntry[], filePath: string): CatalogEntry[] {
+  const resolved = path.resolve(filePath)
+  const entries = Array.isArray(catalog) ? catalog : catalog.entries
+  return entries.filter((entry) => {
+    if (
+      entry.installedPath &&
+      resolvedPath(entry.installedPath) === resolved &&
+      fs.existsSync(entry.installedPath)
+    ) return true
+    if (
+      entry.disabledPath &&
+      resolvedPath(entry.disabledPath) === resolved &&
+      fs.existsSync(entry.disabledPath)
+    ) return true
+    if (
+      entry.installations?.some((copy) =>
+        ((copy.path && resolvedPath(copy.path) === resolved && fs.existsSync(copy.path)) ||
+          (copy.parkedPath && resolvedPath(copy.parkedPath) === resolved && fs.existsSync(copy.parkedPath))),
+      )
+    ) return true
+    return false
+  })
+}
+
 export function findByInstalledPath(
   catalog: CatalogFile,
   filePath: string,

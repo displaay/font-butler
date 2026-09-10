@@ -8,7 +8,7 @@
 export type RetailFile = {
   /** Full R2 key. Opaque here — it is handed straight back to the worker's file proxy. */
   key: string
-  /** Path under the retail watch folder: `<GlyphsFile name>/<basename>`. Carries no revision id. */
+  /** Identity that survives a revision bump: `<GlyphsFile name>/<basename>`. Flattened to Fonts on install. */
   relativePath: string
   size: number
   etag: string
@@ -65,6 +65,10 @@ export type RetailLocalFile = {
   glyphsFile: string
   revisionId: string
   syncedAt: string
+  /** Last install path in ~/Library/Fonts (or the parked copy). */
+  installedPath?: string
+  /** True when installedPath is a parked copy kept out of the live Fonts folder. */
+  parked?: boolean
 }
 
 export type RetailDriftKind =
@@ -101,7 +105,6 @@ export type RetailSyncStatus = {
   configured: boolean
   hasToken: boolean
   workerBaseUrl: string
-  folderRoot: string | null
   checkedAt: string | null
   syncedAt: string | null
   /** Only drift that a sync would act on: added + changed + missing-locally + corrupt-locally. */

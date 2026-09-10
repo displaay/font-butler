@@ -1,8 +1,9 @@
-# DISPLAAY retail collection sync
+# Displaay retail collection sync
 
-An optional watch folder that Font Buttler keeps in step with the DISPLAAY retail collection. It is off
-by default and does nothing until a folder, a worker address and a token are configured in
-**Settings → DISPLAAY retail**.
+An optional collection that Font Buttler keeps in step with the Displaay worker. It is off by default.
+Turn it on in **Settings → Watch folders**. Fonts install into `~/Library/Fonts` through the normal
+install path. There is no physical watch folder and no on-disk collection directory — identity lives on
+the catalog entry as `retailRelativePath` (`Family/File.otf`). Nested family folders stay off disk.
 
 ## How it works
 
@@ -44,19 +45,31 @@ it no longer produces, so a bare listing also returns stale leftovers.
 
 ## Local layout
 
+There is no Application Support collection folder. Downloads land in a staging directory under the
+data root (`.part` never appears in Fonts), then `commitInstalledFile` flattens them to:
+
 ```
-<watch folder>/
-  Reckless/
-    RecklessStandardVF.otf
-    RecklessStandard-Regular.otf
-  Vinila/
-    VinilaVF.otf
+~/Library/Fonts/
+  RecklessStandardVF.otf
+  RecklessStandard-Regular.otf
+  VinilaVF.otf
 ```
 
-The revision id is deliberately **not** in the path. A regeneration therefore rewrites the same file,
-which the existing source watcher sees as a normal `change` → `outdated` → reinstall prompt. Putting the
-revision in the path would make every regeneration an unlink+add, orphaning old files and creating
-duplicate catalog entries.
+The stable key remains `Reckless/RecklessVF.otf` on the catalog entry. Two glyphs files that flatten to
+the same basename are `conflict` drift and are not written. The revision id is deliberately **not** in
+the path. A regeneration therefore rewrites the same Fonts file.
+
+Do not register `~/Library/Fonts` as a watch folder. Leftover Application Support `DISPLAAY Retail`
+directories from earlier builds are ignored and are not deleted automatically.
+
+Every remote file becomes a catalog listing on Check, including fonts that are not installed yet.
+The **Displaay retail** sidebar lists those entries; a listing cannot be forgotten or deleted. Uninstall
+removes the Fonts copy and leaves the row as **Not installed**.
+
+If `~/Library/Fonts` already has that basename from another catalogue font, Sync downloads to an
+internal cache and leaves the listing uninstalled. Installing the retail row replaces the occupying
+catalogue copy. Retail cache files are not user sources, so Delete source and the source badge stay
+hidden.
 
 ## Drift kinds
 
@@ -79,11 +92,9 @@ it is the user's call, not ours.
   `AppSettings` is broadcast to the renderer on bootstrap and on every settings event, so a token there
   would leak into the UI payload. The API reports `hasToken: boolean` and never the value.
 - Every server-supplied path is validated before a write: lexically by `isSafeRelativePath` and then
-  through `isFullyUnderAnyRoot`, which resolves symlinks so a symlinked subfolder cannot redirect a write
-  outside the retail folder.
-- Downloads are written to a same-directory `.part` file and renamed over the target. `.part` is not a
-  font extension, so the inbox watcher ignores half-written files. A download whose length does not match
-  the manifest is discarded and the previous file is left intact.
+  flattened to a basename under the Fonts folder. Traversal and Windows-hostile segments are refused.
+- Downloads are written to a staging `.part` file under the data root and committed into Fonts. A
+  download whose length does not match the manifest is discarded and the previous file is left intact.
 - Checking and syncing are always explicit actions. Nothing runs on the cold-start path, matching the
   rule the app-update check follows.
 
@@ -102,15 +113,18 @@ The cache does not have to expire for a new generation to show up: the regenerat
 TTL is only a backstop.
 
 A pending sync surfaces on the **Updates** tab, next to the app-update card, and adds to the sidebar
-badge. Fonts that were already synced and then regenerated do not appear there — they become
-`outdated` catalog entries and join the normal update list, like any other watched source.
+badge. When sync is on, **Displaay retail** also appears under Fonts in the sidebar. Fonts that were
+already synced and then regenerated do not appear on Updates as a collection card — they become
+`outdated` catalog entries and join the normal update list.
 
 ## Guard rails
 
 - The **On/Off** switch gates everything: with the collection off, Check and Sync refuse and never
-  contact the worker.
-- The chosen folder must be watching and not paused. Synced fonts reach the library through the inbox
-  watcher, so writing into a paused folder would put files on disk that nothing imports.
+  contact the worker. Turning it on does not create a watch folder.
+- Installs go to the Mac Fonts folder only (no Adobe destination unless that is reused later).
+- Occupied Fonts files that are not this retail font stay put. The retail font is still listed as
+  **Not installed**; installing it replaces the occupying catalogue copy.
+- `removed` on the server is reported only — Fonts copies are never deleted automatically.
 - Only one sync runs at a time. A second request joins the run in progress rather than competing over
   the same `.part` files.
 - A failed check does not update "last checked" and does not report "Up to date" — the previous drift
@@ -128,9 +142,10 @@ reach the other. There is no `?token=` query fallback: the caller is a Node proc
 header, and a token in a URL ends up in logs. An unset token fails closed (401).
 
 In Font Buttler the token is stored in `<data root>/retail-token` (mode `0600`) and entered under
-**Settings → DISPLAAY retail → Worker token**.
+**Settings → Watch folders → Worker token**.
 
-`AppSettings.retailSync` holds `{ enabled, workerBaseUrl, folderId }`. The default worker address is
+`AppSettings.retailSync` holds `{ enabled, workerBaseUrl, autoCheckMinutes }`. There is no `folderId`.
+The default worker address is
 `https://w.displaay.net`; `https://admin-worker-dev.displaay.workers.dev` and a loopback `wrangler dev`
 address are accepted for development. Any other plain-http address is refused, because the token travels
 as a bearer header.

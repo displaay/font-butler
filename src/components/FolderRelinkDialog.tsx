@@ -179,7 +179,7 @@ function FolderRelinkRowView({
       <td className="py-1.5">
         {row.status === 'ambiguous' ? (
           <select
-            className="h-7 w-full rounded-md border bg-background px-1"
+            className="h-8 w-full rounded-md border bg-background px-1"
             value={selected ?? ''}
             aria-label={`Choose a match for ${row.relativePath}`}
             onChange={(event) => onSelect(event.target.value || undefined)}

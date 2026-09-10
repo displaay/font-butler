@@ -13,7 +13,7 @@ import {
 import { emitEvent } from './events.ts'
 import { countInstallableFormats, isWebFontFile } from './formats.ts'
 import { tryFingerprintFile } from './fingerprint.ts'
-import { isFontFile, readFileStat } from './parse.ts'
+import { isFontFile, isPreviewableFontFile, readFileStat } from './parse.ts'
 import { applyEntryFacts } from './state.ts'
 import type { AppPaths } from './paths.ts'
 import type { CatalogEntry } from './types.ts'
@@ -461,7 +461,7 @@ export async function syncInboxWatcher(
     depth: FONT_TREE_MAX_DEPTH,
   })
   const queue = (filePath: string) => {
-    if (!isFontFile(filePath)) {
+    if (!isPreviewableFontFile(filePath)) {
       return
     }
     inboxPending.push(path.resolve(filePath))

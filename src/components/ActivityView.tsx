@@ -45,7 +45,7 @@ export function ActivityView({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {(unreadCount > 0 && onMarkAllRead) || onClearAll ? (
-        <div className="flex shrink-0 items-center justify-end gap-1 px-4 pt-1 pb-2">
+        <div className="flex shrink-0 items-center justify-end gap-1 px-3 pt-1 pb-2">
           {unreadCount > 0 && onMarkAllRead ? (
             <Button type="button" size="sm" variant="ghost" onClick={onMarkAllRead}>
               <CheckCheck /> Mark all as read
@@ -58,7 +58,7 @@ export function ActivityView({
           ) : null}
         </div>
       ) : null}
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4">
         <ul className="space-y-2">
           {operations.map((operation) => {
             const open = expanded === operation.id

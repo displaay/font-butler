@@ -8,6 +8,7 @@ import {
   entryHasTrackedSource,
   familyBadgeEntry,
   familyStatusSummary,
+  forgettableIds,
   groupCatalog,
   hasTrackedSource,
   isForgettableOnlyGroup,
@@ -157,6 +158,16 @@ test('Delete uninstalls installed families and forgets the rest', () => {
   assert.equal(isForgettableOnlyGroup({ status: 'uninstalled' }), true)
   assert.equal(isForgettableOnlyGroup({ status: 'source-missing' }), true)
   assert.equal(isForgettableOnlyGroup({ status: 'installed' }), false)
+})
+
+test('Displaay retail listings cannot be forgotten', () => {
+  const retail = {
+    ...entry('retail', 'Reckless', 1, 'uninstalled'),
+    retailRelativePath: 'Reckless/RecklessVF.otf',
+  }
+  assert.deepEqual(forgettableIds({ entries: [retail] }), [])
+  assert.equal(isForgettableOnlyGroup({ status: 'uninstalled', entries: [retail] }), false)
+  assert.equal(entryHasTrackedSource(retail), false)
 })
 
 test('groupCatalog merges installed and uninstalled styles onto one Fonts card', () => {

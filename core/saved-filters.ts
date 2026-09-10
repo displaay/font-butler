@@ -45,8 +45,14 @@ export function normalizeSavedFilters(value: unknown): SavedLibraryFilter[] {
   return out
 }
 
+const RETAIL_LIBRARY_FILTER = '__retail__'
+const RETAIL_LIBRARY_LABEL = 'Displaay retail'
+
 export function defaultSavedFilterName(criteria: SavedFilterCriteria): string {
-  const folder = criteria.watchFolder?.split(/[/\\]/).filter(Boolean).at(-1)
+  const folder =
+    criteria.watchFolder === RETAIL_LIBRARY_FILTER
+      ? RETAIL_LIBRARY_LABEL
+      : criteria.watchFolder?.split(/[/\\]/).filter(Boolean).at(-1)
   const chips = criteria.libraryFilters.join(', ')
   const parts = [criteria.query.trim(), folder, chips].filter((part) => Boolean(part))
   return parts.join(' · ') || 'Untitled filter'

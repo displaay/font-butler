@@ -426,6 +426,7 @@ export class FontButlerService {
     installAfterUpload?: boolean
     installWatchFolderFonts?: boolean
     theme?: ThemeMode
+    appIcon?: AppSettings['appIcon']
     menuBarIcon?: boolean
     openAtLogin?: boolean
     clearOfficeFontCache?: boolean
@@ -460,6 +461,9 @@ export class FontButlerService {
     }
     if (patch.theme === 'light' || patch.theme === 'dark' || patch.theme === 'system') {
       next.theme = patch.theme
+    }
+    if (patch.appIcon === 'bright' || patch.appIcon === 'mono') {
+      next.appIcon = patch.appIcon
     }
     if (typeof patch.menuBarIcon === 'boolean') {
       next.menuBarIcon = patch.menuBarIcon
@@ -739,7 +743,12 @@ export class FontButlerService {
     options?: InstallOptions,
   ): Promise<CatalogEntry> {
     return runCatalogTask(async () => {
-      const previousRevision = this.previousRevisionBeforeChange(findById(loadCatalog(this.paths), id))
+      const before = findById(loadCatalog(this.paths), id)
+      const requestedFamilyName = familyName?.trim()
+      const installAs = Boolean(
+        before && requestedFamilyName && requestedFamilyName !== displayFamily(before),
+      )
+      const previousRevision = installAs ? undefined : this.previousRevisionBeforeChange(before)
       const entry = await this.installEntry(id, familyName, options)
       const catalog = loadCatalog(this.paths)
       const latest = findById(catalog, entry.id)
@@ -1686,6 +1695,7 @@ export class FontButlerService {
           continue
         }
         try {
+          let relatedEntryId: string | undefined
           if (item.classification === 'unsupported') {
             throw new Error(item.reason || 'Unsupported font.')
           }
@@ -1695,6 +1705,7 @@ export class FontButlerService {
             entries.push(this.importOneUnlocked(item.path, { forceNew: true }))
           } else if (choice === 'switch') {
             const imported = this.importOneUnlocked(item.path, { forceNew: true })
+            relatedEntryId = occupyingSiblings(loadCatalog(this.paths).entries, imported, this.paths)[0]?.id
             entries.push(await this.switchToEntry(imported.id))
           } else if (
             choice === 'keep' &&
@@ -1774,6 +1785,7 @@ export class FontButlerService {
             expectedRevision: appliedEntry?.installedFingerprint,
             expectedStatus: appliedEntry?.status,
             expectedSourcePath: appliedEntry?.sourcePath,
+            relatedEntryId,
           })
         } catch (error) {
           failedIds.push(item.entryId || item.id)
@@ -2084,6 +2096,8 @@ export class FontButlerService {
           } else {
             entries.push(await this.uninstallAndHold(entry.id))
           }
+        } else if (operation.action === 'apply-plan' && item.relatedEntryId) {
+          entries.push(await this.switchToEntry(item.relatedEntryId))
         } else if (operation.action === 'apply-plan' || operation.action === 'install') {
           entries.push(
             item.previousRevision
@@ -2234,18 +2248,18 @@ export class FontButlerService {
     return { fonts, caches }
   }
 
-  /** Optional DISPLAAY retail collection. Delegated to `service-retail.ts` to keep this file navigable. */
+  /** Optional Displaay retail collection. Delegated to `service-retail.ts` to keep this file navigable. */
   retailStatus(): RetailSyncStatus {
     return retailStatusFn(this.paths)
   }
 
-  configureRetailSync(input: {
+  async configureRetailSync(input: {
     enabled?: boolean
     workerBaseUrl?: string
     autoCheckMinutes?: number
     token?: string
     folderId?: string | null
-  }): RetailSyncStatus {
+  }): Promise<RetailSyncStatus> {
     return configureRetailSyncFn(this.paths, input)
   }
 
@@ -2254,13 +2268,7 @@ export class FontButlerService {
   }
 
   async syncRetail(): Promise<RetailSyncStatus> {
-    return syncRetailFn(this.paths, {
-      // Newly written fonts still have to enter the library; the inbox watcher's `add` is not
-      // guaranteed for a rename-over, so importing what is already there closes the gap.
-      onFolderReady: async () => {
-        await this.refreshInboxWatcher(this.watchingFolderRoots(), { importExisting: true })
-      },
-    })
+    return syncRetailFn(this.paths)
   }
 
   listProjects(): ProjectSet[] {
@@ -3040,6 +3048,9 @@ export class FontButlerService {
     const entry = findById(catalog, id)
     if (!entry) {
       throw new Error('Font is not in the library.')
+    }
+    if (entry.retailRelativePath) {
+      throw new Error('Displaay retail fonts stay in the collection.')
     }
     if (entry.status !== 'source-missing' && entry.status !== 'uninstalled') {
       throw new Error('Only uninstalled fonts can be removed from the list.')

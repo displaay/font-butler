@@ -218,6 +218,11 @@ export function retailManifestPath(paths: AppPaths): string {
   return path.join(paths.dataRoot, 'retail-manifest.json')
 }
 
+/** Cached retail downloads that are not yet (or no longer) in Fonts. */
+export function retailCacheDir(paths: AppPaths): string {
+  return path.join(paths.dataRoot, 'retail-cache')
+}
+
 export function retailTokenPath(paths: AppPaths): string {
   return path.join(paths.dataRoot, 'retail-token')
 }

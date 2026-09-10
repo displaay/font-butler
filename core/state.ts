@@ -237,6 +237,7 @@ export function canAutomateUpdates(
 }
 
 export function isCleanupEligible(entry: CatalogEntry): boolean {
+  if (entry.retailRelativePath) return false
   if (entry.status !== 'source-missing') return false
   if (entry.installedPath || entry.disabledPath) return false
   const availability = entry.sourceAvailability ?? deriveSourceAvailability(entry)
