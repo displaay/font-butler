@@ -28,6 +28,7 @@ import type { AppPaths } from './paths.ts'
 import { addManualOwner, removeManualOwner } from './projects.ts'
 import { storeRevision } from './revisions.ts'
 import { applyEntryFacts } from './state.ts'
+import { materialiseFeatureCopy, type MaterialiseReport } from './materialise.ts'
 import { renameFamilyCopy } from './rename.ts'
 import type { CatalogEntry, DestinationId, InstallOptions } from './types.ts'
 import {
@@ -123,9 +124,10 @@ export async function installEntry(
       entry.installedPath &&
       fs.existsSync(entry.installedPath) &&
       conflicts.length === 0 &&
-      !targets.includes('adobe-shared')
+      !targets.includes('adobe-shared') &&
+      !options?.sourcePathOverride
     ) {
-      const current = readFileStat(entry.sourcePath)
+      const current = readFileStat(sourcePath)
       if (
         current.mtimeMs === entry.installedSnapshotMtimeMs &&
         current.size === entry.installedSnapshotSize
@@ -256,9 +258,9 @@ async function installRenamedCopy(
   host: ServiceLifecycleHost,
   sourceEntry: CatalogEntry,
   familyName: string,
-  options?: { replace?: boolean },
+  options?: { replace?: boolean; sourcePath?: string },
 ): Promise<CatalogEntry> {
-  const temp = await renameFamilyCopy(sourceEntry.sourcePath, familyName)
+  const temp = await renameFamilyCopy(options?.sourcePath ?? sourceEntry.sourcePath, familyName)
   try {
     const parsed = parseFontFile(temp)
     const catalog = loadCatalog(host.paths)
@@ -526,4 +528,102 @@ export async function reinstallEntry(
     entryId: updated.id,
   })
   return updated
+}
+
+export type BakeFeaturesMode = 'reinstall' | 'new-copy'
+
+export type BakeFeaturesResult = {
+  entry: CatalogEntry
+  report: MaterialiseReport
+}
+
+function resolveBakeInput(entry: CatalogEntry): string {
+  if (sourceFileExists(entry.sourcePath)) return entry.sourcePath
+  if (entry.installedPath && fs.existsSync(entry.installedPath)) return entry.installedPath
+  if (entry.disabledPath && fs.existsSync(entry.disabledPath)) return entry.disabledPath
+  throw new Error('The source file is missing.')
+}
+
+export async function bakeFeatures(
+  host: ServiceLifecycleHost,
+  id: string,
+  features: string[],
+  mode: BakeFeaturesMode,
+  familyName?: string,
+): Promise<BakeFeaturesResult> {
+  const catalog = loadCatalog(host.paths)
+  const entry = findById(catalog, id)
+  if (!entry) {
+    throw new Error('Font is not in the library.')
+  }
+  if (entry.previewOnly || isWebFontFormat(entry.format) || isWebFontFile(entry.sourcePath)) {
+    throw new Error(WOFF_INSTALL_ERROR)
+  }
+  host.assertPinnedInstall(entry)
+  const tags = [...new Set(features.map((tag) => tag.trim().toLowerCase()).filter(Boolean))]
+  if (tags.length === 0) {
+    throw new Error('Turn on a stylistic set or tnum before baking.')
+  }
+  const inputPath = resolveBakeInput(entry)
+  const { destPath: bakedPath, report } = await materialiseFeatureCopy(inputPath, tags)
+  try {
+    if (!report.changed) {
+      const skipped = report.skippedWarnings.filter(Boolean)
+      throw new Error(
+        skipped.length
+          ? skipped.join('\n')
+          : 'None of the selected features could be baked into default glyphs.',
+      )
+    }
+    if (mode === 'new-copy') {
+      const renameTo = familyName?.trim()
+      if (!renameTo) {
+        throw new Error('Enter a family name for the baked copy.')
+      }
+      const next = await installRenamedCopy(host, entry, renameTo, { sourcePath: bakedPath })
+      emitNotice({
+        kind: 'installed',
+        message: `Installed ${displayFamily(next)} with baked features`,
+        entryId: next.id,
+      })
+      return { entry: next, report }
+    }
+    const trackedSource = entry.sourcePath
+    const hadTrackedSource = sourceFileExists(trackedSource)
+    if (entry.installedPath && fs.existsSync(entry.installedPath)) {
+      storeRevision(host.paths, entry.installedPath, { faces: entry.faces, format: entry.format })
+    }
+    if (hadTrackedSource) {
+      storeRevision(host.paths, trackedSource, { faces: entry.faces, format: entry.format })
+    }
+    await host.clearCachesAfterInstall()
+    let updated = await installEntry(host, id, entry.customFamilyName, { sourcePathOverride: bakedPath })
+    if (hadTrackedSource && path.resolve(trackedSource) !== path.resolve(bakedPath)) {
+      fs.copyFileSync(bakedPath, trackedSource)
+      const catalogAfter = loadCatalog(host.paths)
+      const latest = findById(catalogAfter, updated.id)
+      if (latest) {
+        const stat = readFileStat(trackedSource)
+        latest.sourceMtimeMs = stat.mtimeMs
+        latest.sourceSize = stat.size
+        const fingerprint = tryFingerprintFile(trackedSource)
+        if (fingerprint) latest.sourceFingerprint = fingerprint
+        latest.sourcePresent = true
+        applyEntryFacts(latest)
+        touchEntry(latest)
+        saveCatalog(host.paths, catalogAfter)
+        updated = latest
+      }
+    }
+    emitNotice({
+      kind: 'reinstalled',
+      message: `Baked features into ${displayFamily(updated)}`,
+      entryId: updated.id,
+    })
+    return { entry: updated, report }
+  } finally {
+    if (fs.existsSync(bakedPath) && path.resolve(bakedPath) !== path.resolve(inputPath)) {
+      fs.rmSync(bakedPath, { force: true })
+    }
+  }
 }

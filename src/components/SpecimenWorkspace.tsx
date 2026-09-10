@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { AlignVerticalSpaceAround, Loader2 } from 'lucide-react'
+import { AlignVerticalSpaceAround, Blend, Loader2 } from 'lucide-react'
 import { catalogFontFamily } from '@/components/FontFaceStyles'
+import { DropdownActionButton } from '@/components/SplitUninstallButton'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -8,7 +9,7 @@ import { Slider } from '@/components/ui/slider'
 import { usePreviewFontReady } from '@/hooks/usePreviewFontReady'
 import { api } from '@/lib/api'
 import { formatMissingCharacters, missingCodePoints } from '@/lib/coverage'
-import { groupOtFeatures } from '@/lib/otFeatures'
+import { bakeableEnabledTags, groupOtFeatures } from '@/lib/otFeatures'
 import { DEFAULT_SPECIMEN, SPECIMEN_PRESETS } from '@/lib/specimen'
 import type { CatalogEntry, FontAxisInfo, PreviewPreferences } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -30,6 +31,8 @@ export function SpecimenWorkspace({
   compare,
   compareEntry,
   size = 'default',
+  busy = false,
+  onBake,
 }: {
   entry: CatalogEntry
   specimen: PreviewPreferences
@@ -37,6 +40,8 @@ export function SpecimenWorkspace({
   compare?: 'source' | 'families'
   compareEntry?: CatalogEntry | null
   size?: 'default' | 'large'
+  busy?: boolean
+  onBake?: (mode: 'reinstall' | 'new-copy', features: string[]) => void
 }) {
   const [meta, setMeta] = useState<PreviewMeta | null>(null)
   const [axes, setAxes] = useState<Record<string, number>>({})
@@ -158,6 +163,8 @@ export function SpecimenWorkspace({
   const featureSettings = Object.entries(features)
     .map(([tag, on]) => `'${tag}' ${on ? 1 : 0}`)
     .join(', ')
+  const bakeTags = bakeableEnabledTags(features)
+  const canBake = Boolean(onBake) && bakeTags.length > 0 && !entry.previewOnly
 
   function applyPreset(preset: PreviewPreferences['preset']) {
     if (preset === 'custom') {
@@ -327,6 +334,25 @@ export function SpecimenWorkspace({
               </div>
             </div>
           ))}
+          {canBake ? (
+            <DropdownActionButton
+              busy={busy}
+              label="Bake into…"
+              icon={<Blend />}
+              items={[
+                {
+                  key: 'reinstall',
+                  label: 'This font and reinstall',
+                  onSelect: () => onBake?.('reinstall', bakeTags),
+                },
+                {
+                  key: 'new-copy',
+                  label: 'New copy',
+                  onSelect: () => onBake?.('new-copy', bakeTags),
+                },
+              ]}
+            />
+          ) : null}
         </div>
       )}
       {missing.length > 0 && (

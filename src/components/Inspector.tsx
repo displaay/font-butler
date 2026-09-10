@@ -74,6 +74,7 @@ export function Inspector({
   onRestore,
   onPin,
   onOpenWithPreview,
+  onBake,
   multiSelect,
   pane = 'details',
   onPaneChange,
@@ -117,6 +118,7 @@ export function Inspector({
   onRestore?: (fingerprint?: string) => void
   onPin?: (fingerprint: string) => void
   onOpenWithPreview?: () => void
+  onBake?: (mode: 'reinstall' | 'new-copy', features: string[]) => void
   density?: InspectorDensity
   pane?: InspectorPaneTab
   onPaneChange?: (pane: InspectorPaneTab) => void
@@ -193,6 +195,8 @@ export function Inspector({
             compare="families"
             specimen={specimen}
             onSpecimenChange={onSpecimenChange}
+            busy={busy}
+            onBake={onBake}
           />
         ) : null}
       </aside>
@@ -318,6 +322,8 @@ export function Inspector({
         onSpecimenChange={onSpecimenChange}
         compareEntry={compareEntry}
         size="large"
+        busy={busy}
+        onBake={onBake}
       />
     ) : null
   const versions = (
