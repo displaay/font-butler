@@ -14,7 +14,7 @@ export type MaterialiseReport = {
   skippedWarnings: string[]
   mapping: Array<{ source?: string; replacement?: string }>
   errors: string[]
-  warnings?: string[]
+  warnings: string[]
   changed: boolean
   inputPath?: string
   outputPath?: string

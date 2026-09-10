@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { test } from 'node:test'
 import { isExternalSource } from './catalog.ts'
+import { noopFontNative } from './native.ts'
 import { parseFontFile } from './parse.ts'
 import { withService } from './test-util.ts'
 
@@ -128,5 +129,57 @@ test('bake new-copy leaves the original font unchanged', async () => {
     const leftover = service.listCatalog().find((entry) => entry.id === original.id)
     assert.ok(leftover)
     assert.equal(leftover.faces[0]?.familyName, 'CopyFace')
+  })
+})
+
+test('bake reinstall leaves the source unchanged when activation fails', async () => {
+  let failRegister = false
+  await withService(
+    async (service, paths) => {
+      await service.init()
+      const font = path.join(paths.dataRoot, 'FailFace.ttf')
+      writeSs01Font(font, 'FailFace')
+      const imported = await service.importPaths([font])
+      const original = imported.entries[0]
+      assert.ok(original)
+      await service.install(original.id)
+      assert.equal(glyphMetrics(font).width, 200)
+      failRegister = true
+      await assert.rejects(
+        () => service.bakeFeatures(original.id, ['ss01'], 'reinstall'),
+        /Could not register the font/,
+      )
+      assert.equal(glyphMetrics(font).width, 200)
+      assert.ok(glyphMetrics(font).tags.includes('ss01'))
+    },
+    {
+      native: noopFontNative({
+        async registerFont() {
+          if (failRegister) return { ok: false, native: false, error: 'Could not register the font.' }
+          return { ok: true, native: false }
+        },
+      }),
+    },
+  )
+})
+
+test('bake reinstall uses the installed copy when the tracked source is missing', async () => {
+  await withService(async (service, paths) => {
+    await service.init()
+    const font = path.join(paths.dataRoot, 'MissingSource.ttf')
+    writeSs01Font(font, 'MissingSource')
+    const imported = await service.importPaths([font])
+    const original = imported.entries[0]
+    assert.ok(original)
+    const installed = await service.install(original.id)
+    assert.ok(installed.installedPath)
+    assert.notEqual(path.resolve(installed.sourcePath), path.resolve(installed.installedPath))
+    fs.rmSync(font)
+    const baked = await service.bakeFeatures(installed.id, ['ss01'], 'reinstall')
+    assert.equal(baked.report.changed, true)
+    const installedPath = baked.entry.installedPath ?? baked.entry.sourcePath
+    const after = glyphMetrics(installedPath)
+    assert.equal(after.width, 300)
+    assert.equal(after.tags.includes('ss01'), false)
   })
 })

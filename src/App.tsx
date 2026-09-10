@@ -81,6 +81,7 @@ import {
   uniqueMemberIds,
 } from '@/lib/projects'
 import { specimenFromSettings } from '@/lib/specimen'
+import { bakeReportWarnings } from '@/lib/otFeatures'
 import { needsLocateSource } from '@/lib/state'
 import { formatSwap } from '@/lib/formats'
 import {
@@ -1925,9 +1926,8 @@ function AppShell() {
                 void run(
                   async () => {
                     const result = await api.bakeFeatures(selectedEntry.id, features, 'reinstall')
-                    if (result.report.skippedWarnings.length) {
-                      toast.warning(result.report.skippedWarnings.join('\n'))
-                    }
+                    const warnings = bakeReportWarnings(result.report)
+                    if (warnings.length) toast.warning(warnings.join('\n'))
                     return result
                   },
                   {

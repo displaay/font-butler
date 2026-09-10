@@ -126,9 +126,10 @@ export async function installEntry(
       entry.installedPath &&
       fs.existsSync(entry.installedPath) &&
       conflicts.length === 0 &&
-      !targets.includes('adobe-shared')
+      !targets.includes('adobe-shared') &&
+      !options?.sourcePathOverride
     ) {
-      const current = readFileStat(entry.sourcePath)
+      const current = readFileStat(sourcePath)
       if (
         current.mtimeMs === entry.installedSnapshotMtimeMs &&
         current.size === entry.installedSnapshotSize
@@ -591,19 +592,32 @@ export async function bakeFeatures(
       })
       return { entry: next, report }
     }
+    const trackedSource = entry.sourcePath
+    const hadTrackedSource = sourceFileExists(trackedSource)
     if (entry.installedPath && fs.existsSync(entry.installedPath)) {
       storeRevision(host.paths, entry.installedPath, { faces: entry.faces, format: entry.format })
     }
+    if (hadTrackedSource) {
+      storeRevision(host.paths, trackedSource, { faces: entry.faces, format: entry.format })
+    }
     await host.clearCachesAfterInstall()
-    let updated: CatalogEntry
-    if (sourceFileExists(entry.sourcePath)) {
-      storeRevision(host.paths, entry.sourcePath, { faces: entry.faces, format: entry.format })
-      if (path.resolve(entry.sourcePath) !== path.resolve(bakedPath)) {
-        fs.copyFileSync(bakedPath, entry.sourcePath)
+    let updated = await installEntry(host, id, entry.customFamilyName, { sourcePathOverride: bakedPath })
+    if (hadTrackedSource && path.resolve(trackedSource) !== path.resolve(bakedPath)) {
+      fs.copyFileSync(bakedPath, trackedSource)
+      const catalogAfter = loadCatalog(host.paths)
+      const latest = findById(catalogAfter, updated.id)
+      if (latest) {
+        const stat = readFileStat(trackedSource)
+        latest.sourceMtimeMs = stat.mtimeMs
+        latest.sourceSize = stat.size
+        const fingerprint = tryFingerprintFile(trackedSource)
+        if (fingerprint) latest.sourceFingerprint = fingerprint
+        latest.sourcePresent = true
+        applyEntryFacts(latest)
+        touchEntry(latest)
+        saveCatalog(host.paths, catalogAfter)
+        updated = latest
       }
-      updated = await installEntry(host, id, entry.customFamilyName)
-    } else {
-      updated = await installEntry(host, id, entry.customFamilyName, { sourcePathOverride: bakedPath })
     }
     emitNotice({
       kind: 'reinstalled',

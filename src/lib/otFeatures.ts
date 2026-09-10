@@ -103,3 +103,18 @@ export function suggestedBakeFamilyName(family: string, tags: string[]): string 
   )
   return [family.trim(), ...labels].filter(Boolean).join(' ')
 }
+
+export function bakeReportWarnings(report: {
+  skippedWarnings?: string[]
+  warnings?: string[]
+}): string[] {
+  const seen = new Set<string>()
+  const merged: string[] = []
+  for (const warning of [...(report.warnings ?? []), ...(report.skippedWarnings ?? [])]) {
+    const text = warning.trim()
+    if (!text || seen.has(text)) continue
+    seen.add(text)
+    merged.push(text)
+  }
+  return merged
+}

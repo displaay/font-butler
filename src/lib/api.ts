@@ -239,6 +239,7 @@ export const api = {
       report: {
         appliedFeatures: string[]
         skippedWarnings: string[]
+        warnings: string[]
         errors: string[]
         changed: boolean
       }

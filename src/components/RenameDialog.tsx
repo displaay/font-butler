@@ -14,7 +14,7 @@ import { useSetActionStatus } from '@/components/NotifyProvider'
 import { api } from '@/lib/api'
 import type { CatalogEntry } from '@/lib/types'
 import { familyNameOf } from '@/lib/group'
-import { suggestedBakeFamilyName } from '@/lib/otFeatures'
+import { bakeReportWarnings, suggestedBakeFamilyName } from '@/lib/otFeatures'
 
 export function RenameDialog({
   entry,
@@ -61,9 +61,8 @@ export function RenameDialog({
       if (bakeFeatures?.length) {
         const result = await api.bakeFeatures(entry.id, bakeFeatures, 'new-copy', family)
         toast.success(`Installed ${family} with ${bakeFeatures.join(', ')} baked in`)
-        if (result.report.skippedWarnings.length) {
-          toast.warning(result.report.skippedWarnings.join('\n'))
-        }
+        const warnings = bakeReportWarnings(result.report)
+        if (warnings.length) toast.warning(warnings.join('\n'))
         onDone(result.entry)
       } else {
         const result = await api.install(entry.id, family)

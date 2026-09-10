@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { bakeableEnabledTags, groupOtFeatures, normalizeFeatureTag, suggestedBakeFamilyName } from './otFeatures.ts'
+import { bakeableEnabledTags, bakeReportWarnings, groupOtFeatures, normalizeFeatureTag, suggestedBakeFamilyName } from './otFeatures.ts'
 
 test('normalizeFeatureTag keeps four-character tags and maps friendly names', () => {
   assert.equal(normalizeFeatureTag('ss03'), 'ss03')
@@ -41,4 +41,14 @@ test('bakeableEnabledTags keeps tnum and stylistic sets and ignores other featur
 
 test('suggestedBakeFamilyName appends bakeable tags in stable order', () => {
   assert.equal(suggestedBakeFamilyName('Fenul', ['ss01', 'tnum']), 'Fenul Tnum SS01')
+})
+
+test('bakeReportWarnings merges skipped and general warnings without duplicates', () => {
+  assert.deepEqual(
+    bakeReportWarnings({
+      skippedWarnings: ['Skipped ss20', 'Metric changes detected'],
+      warnings: ['Positioning was not swapped', 'Metric changes detected'],
+    }),
+    ['Positioning was not swapped', 'Metric changes detected', 'Skipped ss20'],
+  )
 })
