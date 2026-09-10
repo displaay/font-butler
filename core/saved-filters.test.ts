@@ -97,4 +97,8 @@ test('defaultSavedFilterName uses search, folder, and chips', () => {
     defaultSavedFilterName({ query: '', libraryFilters: [], watchFolder: null }),
     'Untitled filter',
   )
+  assert.equal(
+    defaultSavedFilterName({ query: '', libraryFilters: [], watchFolder: '__retail__' }),
+    'Displaay retail',
+  )
 })

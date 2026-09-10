@@ -33,7 +33,7 @@ export function getOrCreateApiToken(tokenPath: string): string {
 }
 
 /**
- * The DISPLAAY worker API token, kept in its own 0600 file rather than in settings.json.
+ * The Displaay worker API token, kept in its own 0600 file rather than in settings.json.
  *
  * AppSettings is broadcast to the renderer on `/api/bootstrap`, on `/api/settings` and on every
  * `settings` event, so a token stored there would leak into the UI payload. Same reasoning and same

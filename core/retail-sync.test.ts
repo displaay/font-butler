@@ -1,11 +1,18 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
+import { buildPaths } from './paths.ts'
 import {
   countPendingDrift,
   diffRetailManifest,
+  forgetRetailFile,
   isSafeRelativePath,
+  loadRetailManifest,
+  resolveRetailInstallPath,
   resolveRetailPath,
+  saveRetailManifest,
   type RetailStatFile,
 } from './retail-sync.ts'
 import type {
@@ -192,6 +199,39 @@ test('resolveRetailPath keeps every result under the root', () => {
   assert.equal(resolveRetailPath(root, '/etc/passwd'), null)
 })
 
+test('resolveRetailInstallPath flattens to the Fonts folder basename', () => {
+  const fonts = path.resolve('/tmp/Fonts')
+  assert.equal(resolveRetailInstallPath(fonts, 'Reckless/RecklessVF.otf'), path.join(fonts, 'RecklessVF.otf'))
+  assert.equal(resolveRetailInstallPath(fonts, '../escape.otf'), null)
+})
+
+test('two families that flatten to the same Fonts basename conflict', () => {
+  const drift = diffRetailManifest(
+    {
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      collections: [
+        {
+          glyphsFile: 'Reckless',
+          revisionId: 'rev-1',
+          lastRegeneratedAt: null,
+          files: [remoteFile({ key: 'Reckless/rev-1/X.otf', relativePath: 'Reckless/X.otf', etag: 'e1', size: 10 })],
+        },
+        {
+          glyphsFile: 'Vinila',
+          revisionId: 'rev-1',
+          lastRegeneratedAt: null,
+          files: [remoteFile({ key: 'Vinila/rev-1/X.otf', relativePath: 'Vinila/X.otf', etag: 'e2', size: 20 })],
+        },
+      ],
+      skipped: [],
+    },
+    local([]),
+    absent,
+  )
+  assert.equal(drift.filter((item) => item.kind === 'added').length, 1)
+  assert.equal(drift.filter((item) => item.kind === 'conflict').length, 1)
+})
+
 test('two collections claiming one path conflict instead of fighting over the file', () => {
   // Without this, each check flips the file between the two versions and `pending` never reaches 0.
   const drift = diffRetailManifest(
@@ -307,4 +347,13 @@ test('a remote entry with a non-numeric size is refused rather than always chang
   )
   assert.equal(drift.length, 1)
   assert.equal(drift[0].kind, 'refused')
+})
+
+test('forgetRetailFile drops a key from the local manifest', () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-retail-forget-'))
+  const paths = buildPaths({ override: dataRoot, mac: false })
+  fs.mkdirSync(paths.dataRoot, { recursive: true })
+  saveRetailManifest(paths, local([localFile()]))
+  forgetRetailFile(paths, 'Reckless/RecklessVF.otf')
+  assert.equal(loadRetailManifest(paths).files['Reckless/RecklessVF.otf'], undefined)
 })

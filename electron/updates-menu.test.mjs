@@ -190,6 +190,15 @@ test('attention tray SVG is Daniel’s black 60×59 template', () => {
   assert.match(main, /tray\.setImage\(icon\)/)
 })
 
+test('packaged app includes switchable dock and menu-bar icon packs', () => {
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+  assert.ok(pkg.build.files.includes('build/icons/**/*'))
+  const main = readFileSync(new URL('./main.mjs', import.meta.url), 'utf8')
+  assert.match(main, /build\/icons/)
+  assert.match(main, /app\.dock\.setIcon/)
+  assert.match(main, /function applyAppIconSetting/)
+})
+
 test('unreadOperationIdsToMark badges hidden-window ops and skips visible foreground', () => {
   assert.deepEqual(
     unreadOperationIdsToMark({

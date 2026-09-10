@@ -117,7 +117,7 @@ import { allUpdateGroups, visibleUpdateGroups } from '@/lib/updateInventory'
 import { operationMatchesQuery, tabWithSearchHits } from '@/lib/search'
 import type { AppSettings, AppUpdateStatus, CatalogEntry, DestinationCapability, DuplicateWarning, FamilyGroup, ImportPlan, ImportPlanItem, LibraryFilter, Operation, PreviewPreferences, ProjectSet, RetailSyncStatus, SavedLibraryFilter, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
 import { cn } from '@/lib/utils'
-import { isPathUnderFolder, isWatchFolderEntry, watchFolderName } from '@/lib/watchFolders'
+import { isPathUnderFolder, isRetailLibraryFilter, isWatchFolderEntry, libraryFolderFilterLabel, matchesLibraryFolderFilter, RETAIL_LIBRARY_FILTER, watchFolderName } from '@/lib/watchFolders'
 
 const EMPTY_WATCH_FOLDERS: string[] = []
 const EMPTY_SYSTEM_FACES: SystemFace[] = []
@@ -150,6 +150,7 @@ function AppShell() {
   const [bakeRenameFeatures, setBakeRenameFeatures] = useState<string[] | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsFocusAppUpdate, setSettingsFocusAppUpdate] = useState(false)
+  const [settingsFocusWatchFolders, setSettingsFocusWatchFolders] = useState(false)
   const [appUpdate, setAppUpdate] = useState<AppUpdateStatus | null>(null)
   const [retail, setRetail] = useState<RetailSyncStatus | null>(null)
   const [retailBusy, setRetailBusy] = useState(false)
@@ -504,7 +505,7 @@ function AppShell() {
     () =>
       entries.filter((entry) => {
         if (searching) return true
-        if (watchFolderFilter && !isWatchFolderEntry(entry, watchFolderFilter)) return false
+        if (watchFolderFilter && !matchesLibraryFolderFilter(entry, watchFolderFilter)) return false
         if (projectFilter && !projectMemberIds.has(entry.id)) return false
         return true
       }),
@@ -535,6 +536,9 @@ function AppShell() {
     for (const folder of watchFolders) {
       counts[folder] = countFamilyNames(entries.filter((entry) => isWatchFolderEntry(entry, folder)))
     }
+    counts[RETAIL_LIBRARY_FILTER] = countFamilyNames(
+      entries.filter((entry) => matchesLibraryFolderFilter(entry, RETAIL_LIBRARY_FILTER)),
+    )
     return counts
   }, [entries, watchFolders])
   const allUpdates = useMemo(() => allUpdateGroups(entries, sortMode), [entries, sortMode])
@@ -633,10 +637,15 @@ function AppShell() {
   }
 
   useEffect(() => {
-    if (watchFolderFilter && !watchFolders.includes(watchFolderFilter)) {
+    if (!watchFolderFilter) return
+    if (isRetailLibraryFilter(watchFolderFilter)) {
+      if (!retail?.enabled) setWatchFolderFilter(null)
+      return
+    }
+    if (!watchFolders.includes(watchFolderFilter)) {
       setWatchFolderFilter(null)
     }
-  }, [watchFolderFilter, watchFolders])
+  }, [watchFolderFilter, watchFolders, retail?.enabled])
 
   useEffect(() => {
     if (loading) return
@@ -1514,9 +1523,19 @@ function AppShell() {
           hasFontUpdates={allUpdates.length > 0}
           searching={searching}
           retailPending={retail?.pending ?? 0}
+          retailEnabled={Boolean(retail?.enabled)}
+          retailBusy={retailBusy}
+          retailCount={watchFolderCounts[RETAIL_LIBRARY_FILTER] ?? 0}
+          onSyncRetail={() => void syncRetail()}
           onReinstallAllUpdates={() => void reinstallAllUpdates()}
           onOpenSettings={() => {
             setSettingsFocusAppUpdate(Boolean(appUpdate?.updateAvailable))
+            setSettingsFocusWatchFolders(false)
+            setSettingsOpen(true)
+          }}
+          onOpenWatchFoldersSettings={() => {
+            setSettingsFocusAppUpdate(false)
+            setSettingsFocusWatchFolders(true)
             setSettingsOpen(true)
           }}
         />
@@ -1537,7 +1556,7 @@ function AppShell() {
                 data-keep-selection=""
                 data-no-marquee=""
                 className={cn(
-                  'relative shrink-0 space-y-3 bg-background px-4 pt-4 pb-3',
+                  'relative shrink-0 space-y-3 bg-background px-3 pt-3 pb-3',
                   insetTrafficLights && 'app-region-drag',
                 )}
               >
@@ -1545,7 +1564,7 @@ function AppShell() {
                   <Button
                     type="button"
                     size="sm"
-                    className="app-region-no-drag absolute top-4 left-1/2 z-10 -translate-x-1/2 rounded-full border-0 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-400 dark:hover:bg-amber-900"
+                    className="app-region-no-drag absolute top-3 left-1/2 z-10 -translate-x-1/2 rounded-full border-0 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-400 dark:hover:bg-amber-900"
                     onClick={() => {
                       setTab('updates')
                       setWatchFolderFilter(null)
@@ -1561,7 +1580,7 @@ function AppShell() {
                     type="button"
                     size="sm"
                     disabled={busy}
-                    className="app-region-no-drag absolute top-4 left-1/2 z-10 -translate-x-1/2 rounded-full border-0 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-400 dark:hover:bg-amber-900"
+                    className="app-region-no-drag absolute top-3 left-1/2 z-10 -translate-x-1/2 rounded-full border-0 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-400 dark:hover:bg-amber-900"
                     onClick={() => void reinstallAllUpdates()}
                   >
                     <RefreshCw />
@@ -1612,14 +1631,18 @@ function AppShell() {
               </div>
             )}
             <ScrollArea className="min-h-0 flex-1">
-              <div className={cn('flex min-h-full flex-col p-4', showBatchBar && 'pb-24')}>
+              <div className={cn('flex min-h-full flex-col p-3', showBatchBar && 'pb-24')}>
                 {!loading && tab === 'updates' && (retail?.pending ?? 0) > 0 && retail ? (
-                  <div className="px-4 pt-3">
+                  <div className="pt-3">
                     <RetailUpdateCard
                       status={retail}
                       busy={retailBusy}
                       onSync={() => void syncRetail()}
-                      onOpenSettings={() => setSettingsOpen(true)}
+                      onOpenSettings={() => {
+                        setSettingsFocusAppUpdate(false)
+                        setSettingsFocusWatchFolders(true)
+                        setSettingsOpen(true)
+                      }}
                     />
                   </div>
                 ) : null}
@@ -1662,7 +1685,7 @@ function AppShell() {
                       tab={tab}
                       watchFolderName={
                         tab === 'library' && watchFolderFilter
-                          ? watchFolderName(watchFolderFilter)
+                          ? libraryFolderFilterLabel(watchFolderFilter, watchFolders)
                           : null
                       }
                       projectName={
@@ -1704,12 +1727,11 @@ function AppShell() {
                   </div>
                 )}
                 <div
-                  className={cn(viewLayout === 'grid' ? 'grid' : 'grid gap-2')}
+                  className={cn('grid', viewLayout === 'grid' ? 'gap-3' : 'gap-2')}
                   style={
                     viewLayout === 'grid'
                       ? {
                           gridTemplateColumns: `repeat(auto-fill, minmax(${gridCardMinWidthRem(gridPreviewSize)}rem, 1fr))`,
-                          gap: `${Math.max(0.5, gridPreviewSize * 0.18)}rem`,
                         }
                       : undefined
                   }
@@ -2374,13 +2396,17 @@ function AppShell() {
           open={onboardingOpen}
           settings={settings}
           onSettingsChange={applySettings}
+          onRetailChange={setRetail}
           onComplete={() => setOnboardingOpen(false)}
         />
         <SettingsDialog
           open={settingsOpen}
           onOpenChange={(open) => {
             setSettingsOpen(open)
-            if (!open) setSettingsFocusAppUpdate(false)
+            if (!open) {
+              setSettingsFocusAppUpdate(false)
+              setSettingsFocusWatchFolders(false)
+            }
           }}
           settings={settings}
           onSettingsChange={applySettings}
@@ -2389,6 +2415,7 @@ function AppShell() {
           checkingAppUpdate={checkingAppUpdate}
           onCheckAppUpdate={(refresh) => void loadAppUpdate(refresh)}
           highlightAppUpdate={settingsFocusAppUpdate}
+          highlightWatchFolders={settingsFocusWatchFolders}
           retail={retail}
           onRetailChange={setRetail}
         />

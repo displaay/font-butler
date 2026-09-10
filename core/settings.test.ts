@@ -40,6 +40,7 @@ function sampleSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     installAfterUpload: true,
     installWatchFolderFonts: true,
     theme: 'system',
+    appIcon: 'bright',
     menuBarIcon: true,
     openAtLogin: false,
     clearOfficeFontCache: true,
@@ -149,6 +150,7 @@ test('loadSettings fills installAfterUpload on older settings files', () => {
     assert.equal(settings.defaultView, 'grid')
     assert.equal(settings.defaultSort, 'added')
     assert.equal(settings.theme, 'system')
+    assert.equal(settings.appIcon, 'bright')
     assert.equal(settings.menuBarIcon, true)
     assert.equal(settings.openAtLogin, false)
     assert.equal(settings.clearOfficeFontCache, true)
@@ -197,7 +199,49 @@ test('loadSettings fills theme on older settings files', () => {
       }),
     )
     assert.equal(loadSettings(paths).theme, 'system')
+    assert.equal(loadSettings(paths).appIcon, 'bright')
     assert.equal(loadSettings(paths).menuBarIcon, true)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings defaults appIcon to bright', () => {
+  const paths = tempPaths()
+  try {
+    assert.equal(loadSettings(paths).appIcon, 'bright')
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings keeps a stored mono appIcon', () => {
+  const paths = tempPaths()
+  try {
+    saveSettings(paths, sampleSettings({ appIcon: 'mono' }))
+    assert.equal(loadSettings(paths).appIcon, 'mono')
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings ignores junk appIcon values', () => {
+  const paths = tempPaths()
+  try {
+    fs.mkdirSync(paths.dataRoot, { recursive: true })
+    fs.writeFileSync(
+      paths.settingsPath,
+      JSON.stringify({
+        version: 1,
+        watchFolder: null,
+        defaultView: 'list',
+        defaultSort: 'name',
+        installAfterUpload: true,
+        theme: 'system',
+        appIcon: 'neon',
+      }),
+    )
+    assert.equal(loadSettings(paths).appIcon, 'bright')
   } finally {
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }

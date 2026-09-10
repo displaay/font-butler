@@ -9,6 +9,7 @@ import {
 } from './folders.ts'
 import { parseDefaultDestination } from './destinations.ts'
 import { parseLatinPreview } from '../shared/latinPreview.ts'
+import { parseAppIconStyle } from '../shared/appIcon.ts'
 import { normalizeSavedFilters } from './saved-filters.ts'
 import {
   DEFAULT_RETAIL_AUTOCHECK_MINUTES,
@@ -31,7 +32,6 @@ export function defaultRetailSync(): RetailSyncSettings {
     enabled: false,
     workerBaseUrl: DEFAULT_RETAIL_WORKER_BASE_URL,
     autoCheckMinutes: DEFAULT_RETAIL_AUTOCHECK_MINUTES,
-    folderId: null,
   }
 }
 
@@ -47,7 +47,6 @@ function readRetailSync(value: unknown): RetailSyncSettings {
     enabled: row.enabled === true,
     workerBaseUrl,
     autoCheckMinutes: normalizeAutoCheckMinutes(row.autoCheckMinutes),
-    folderId: typeof row.folderId === 'string' && row.folderId ? row.folderId : null,
   }
 }
 
@@ -60,6 +59,7 @@ const emptySettings = (): AppSettings => ({
   installAfterUpload: true,
   installWatchFolderFonts: true,
   theme: 'system',
+  appIcon: 'bright',
   menuBarIcon: true,
   openAtLogin: false,
   clearOfficeFontCache: true,
@@ -168,6 +168,7 @@ export function loadSettings(paths: AppPaths): AppSettings {
           : defaults.installAfterUpload,
       installWatchFolderFonts,
       theme: isThemeMode(parsed.theme) ? parsed.theme : defaults.theme,
+      appIcon: parseAppIconStyle(parsed.appIcon),
       menuBarIcon:
         typeof parsed.menuBarIcon === 'boolean' ? parsed.menuBarIcon : defaults.menuBarIcon,
       openAtLogin:

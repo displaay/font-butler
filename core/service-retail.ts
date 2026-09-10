@@ -1,8 +1,15 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { readRetailToken, writeRetailToken } from './auth.ts'
+import { loadCatalog, occupantsAtPath, removeEntryById, runCatalogTask, saveCatalog, upsertEntry } from './catalog.ts'
+import { copyAt, upsertCopy } from './destinations.ts'
 import { emitEvent } from './events.ts'
+import { tryFingerprintFile } from './fingerprint.ts'
+import { importOneUnlocked } from './service-import.ts'
+import { getFontNative } from './native.ts'
+import { applyParsedFont, parseFontFile } from './parse.ts'
 import { retailTokenPath } from './paths.ts'
+import { loadProjects } from './projects.ts'
 import type { AppPaths } from './paths.ts'
 import { applyRetailSync } from './retail-apply.ts'
 import { fetchRetailFile, fetchRetailManifest, isAllowedRetailBaseUrl } from './retail-client.ts'
@@ -10,11 +17,15 @@ import {
   countPendingDrift,
   diffRetailManifest,
   loadRetailManifest,
+  resolveRetailCachePath,
+  resolveRetailInstallPath,
   saveRetailManifest,
   statRetailFile,
 } from './retail-sync.ts'
+import { newId, now } from './service-helpers.ts'
 import { DEFAULT_RETAIL_WORKER_BASE_URL, defaultRetailSync, loadSettings, saveSettings } from './settings.ts'
-import type { AppSettings, RetailSyncSettings, WatchFolder } from './types.ts'
+import { applyEntryFacts } from './state.ts'
+import type { AppSettings, CatalogEntry, FontFaceInfo, RetailSyncSettings } from './types.ts'
 import { normalizeAutoCheckMinutes } from '../shared/retail.ts'
 import type { RetailDriftItem, RetailManifest, RetailSkip, RetailSyncStatus } from '../shared/retail.ts'
 
@@ -46,24 +57,16 @@ function retailSettings(settings: AppSettings): RetailSyncSettings {
   return settings.retailSync ?? defaultRetailSync()
 }
 
-function retailFolder(settings: AppSettings): WatchFolder | undefined {
-  const config = retailSettings(settings)
-  if (!config.folderId) return undefined
-  return settings.folders.find((folder) => folder.id === config.folderId)
-}
-
 export function retailStatus(paths: AppPaths, settings = loadSettings(paths)): RetailSyncStatus {
   const config = retailSettings(settings)
-  const folder = retailFolder(settings)
   const local = loadRetailManifest(paths)
   return {
     enabled: config.enabled,
     autoCheckMinutes: config.autoCheckMinutes,
-    configured: Boolean(folder),
+    configured: config.enabled,
     // Never the token itself: this object is emitted as an event and returned to the renderer.
     hasToken: readRetailToken(retailTokenPath(paths)).length > 0,
     workerBaseUrl: config.workerBaseUrl || DEFAULT_RETAIL_WORKER_BASE_URL,
-    folderRoot: folder?.root ?? null,
     checkedAt: cache.checkedAt,
     syncedAt: local.syncedAt,
     pending: countPendingDrift(cache.drift),
@@ -94,7 +97,7 @@ export function configureRetailSync(
 
   const workerBaseUrl = (input.workerBaseUrl ?? current.workerBaseUrl).trim()
   if (workerBaseUrl && !isAllowedRetailBaseUrl(workerBaseUrl)) {
-    throw new Error('The DISPLAAY worker address must be an https URL.')
+    throw new Error('The Displaay worker address must be an https URL.')
   }
 
   const next: RetailSyncSettings = {
@@ -104,14 +107,10 @@ export function configureRetailSync(
       input.autoCheckMinutes === undefined
         ? current.autoCheckMinutes
         : normalizeAutoCheckMinutes(input.autoCheckMinutes),
-    folderId: input.folderId === undefined ? current.folderId : input.folderId,
   }
-  // Cached drift describes one folder on one server. If either moves, or the credentials change, it is
-  // no longer a statement about anything — serving it would report the old folder's files as pending.
-  const invalidates =
-    next.folderId !== current.folderId ||
-    next.workerBaseUrl !== current.workerBaseUrl ||
-    input.token !== undefined
+  // Cached drift describes one server. If the address or credentials change, it is no longer a
+  // statement about anything — serving it would report the old server's files as pending.
+  const invalidates = next.workerBaseUrl !== current.workerBaseUrl || input.token !== undefined
   // The token is written to its own 0600 file, never into settings.json. An empty string clears it.
   // Written first: if it throws, settings are not yet on disk and the two cannot disagree.
   if (input.token !== undefined) {
@@ -129,42 +128,276 @@ export function configureRetailSync(
 
 function requireReady(paths: AppPaths): {
   config: RetailSyncSettings
-  folder: WatchFolder
   token: string
 } {
   const settings = loadSettings(paths)
   const config = retailSettings(settings)
   if (!config.enabled) {
-    throw new Error('Turn on the DISPLAAY retail collection first.')
-  }
-  const folder = retailFolder(settings)
-  if (!folder) {
-    throw new Error('Pick a folder for the DISPLAAY retail collection first.')
-  }
-  // Synced fonts reach the library through the inbox watcher, which only walks folders that are
-  // watching and not paused. Writing into a paused folder would put files on disk that nothing
-  // imports, and the sync would still report success.
-  if (!folder.watching || folder.paused) {
-    throw new Error('Start watching that folder before syncing the retail collection.')
+    throw new Error('Turn on the Displaay retail collection first.')
   }
   const token = readRetailToken(retailTokenPath(paths))
   if (!token) {
-    throw new Error('Add a DISPLAAY worker token first.')
+    throw new Error('Add a Displaay worker token first.')
   }
-  return { config, folder, token }
+  return { config, token }
+}
+
+function findRetailEntry(catalog: ReturnType<typeof loadCatalog>, relativePath: string): CatalogEntry | undefined {
+  return catalog.entries.find((entry) => entry.retailRelativePath === relativePath)
+}
+
+function occupantAt(catalog: ReturnType<typeof loadCatalog>, dest: string): CatalogEntry | undefined {
+  const resolved = path.resolve(dest)
+  return (
+    catalog.entries.find(
+      (entry) =>
+        entry.installedPath &&
+        path.resolve(entry.installedPath) === resolved &&
+        fs.existsSync(entry.installedPath),
+    ) ??
+    catalog.entries.find(
+      (entry) =>
+        entry.disabledPath &&
+        path.resolve(entry.disabledPath) === resolved &&
+        fs.existsSync(entry.disabledPath),
+    )
+  )
+}
+
+function fontsDestOccupied(paths: AppPaths, relativePath: string): boolean {
+  const dest = resolveRetailInstallPath(paths.userFontsDir, relativePath)
+  if (!dest) return false
+  const occupants = occupantsAtPath(loadCatalog(paths), dest).filter(
+    (entry) => entry.retailRelativePath !== relativePath,
+  )
+  if (occupants.length > 0) return true
+  return fs.existsSync(dest) && !occupantAt(loadCatalog(paths), dest)
+}
+
+function destForRelativePath(paths: AppPaths, relativePath: string): { dest: string; parked: boolean } | null {
+  const catalog = loadCatalog(paths)
+  const existing = findRetailEntry(catalog, relativePath)
+  const pinned = loadProjects(paths).some(
+    (project) =>
+      project.desiredActive &&
+      project.members.some(
+        (member) =>
+          member.assetId === existing?.id &&
+          Boolean(member.pinFingerprint),
+      ),
+  )
+  if (pinned) throw new Error('This retail font is pinned by an active project.')
+  if (existing?.status === 'deactivated' && existing.disabledPath) {
+    return { dest: existing.disabledPath, parked: true }
+  }
+  if (existing?.installedPath && existing.status !== 'uninstalled') {
+    return { dest: existing.installedPath, parked: false }
+  }
+  const known = loadRetailManifest(paths).files[relativePath]
+  const holdOffFonts = existing?.status === 'uninstalled' && Boolean(known)
+  if (holdOffFonts || fontsDestOccupied(paths, relativePath)) {
+    const cached = resolveRetailCachePath(paths, relativePath)
+    if (!cached) return null
+    return { dest: cached, parked: true }
+  }
+  const dest = resolveRetailInstallPath(paths.userFontsDir, relativePath)
+  if (!dest) return null
+  return { dest, parked: false }
+}
+
+function stubRetailFace(glyphsFile: string, relativePath: string): FontFaceInfo {
+  const base = path.basename(relativePath, path.extname(relativePath))
+  const familyName = glyphsFile.trim() || base
+  return {
+    familyName,
+    styleName: base.replace(new RegExp(`^${familyName}`, 'i'), '').replace(/^[-_ ]+/, '') || 'Regular',
+    fullName: `${familyName} ${base}`.trim(),
+    postscriptName: '',
+    isVariable: /vf$/i.test(base),
+    instanceCount: 1,
+    instanceNames: [],
+    weight: 400,
+    italic: false,
+  }
+}
+
+function ensureRetailListings(paths: AppPaths, manifest: RetailManifest): boolean {
+  const catalog = loadCatalog(paths)
+  let changed = false
+  for (const collection of manifest.collections ?? []) {
+    for (const file of collection.files ?? []) {
+      if (!file?.relativePath || !resolveRetailInstallPath(paths.userFontsDir, file.relativePath)) {
+        continue
+      }
+      if (findRetailEntry(catalog, file.relativePath)) continue
+      const format = path.extname(file.relativePath).replace(/^\./, '').toLowerCase() || 'otf'
+      const entry: CatalogEntry = {
+        id: newId(),
+        sourcePath: '',
+        sourceMtimeMs: 0,
+        sourceSize: 0,
+        sourcePresent: false,
+        retailRelativePath: file.relativePath,
+        status: 'uninstalled',
+        faces: [stubRetailFace(collection.glyphsFile, file.relativePath)],
+        format,
+        addedAt: now(),
+        updatedAt: now(),
+      }
+      applyEntryFacts(entry)
+      upsertEntry(catalog, entry)
+      changed = true
+    }
+  }
+  if (changed) {
+    saveCatalog(paths, catalog)
+    emitEvent({ type: 'catalog', entries: loadCatalog(paths).entries })
+  }
+  return changed
+}
+
+function statRetailInstall(paths: AppPaths) {
+  const catalog = loadCatalog(paths)
+  const disk = statRetailFile(paths.userFontsDir)
+  return (relativePath: string) => {
+    const entry = findRetailEntry(catalog, relativePath)
+    const live = entry?.installedPath
+    const parked = entry?.disabledPath
+    for (const candidate of [live, parked, entry?.sourcePath]) {
+      if (!candidate) continue
+      try {
+        const stat = fs.statSync(candidate)
+        if (stat.isFile()) return { exists: true, size: stat.size }
+      } catch {
+        // Fall through to the flattened Fonts path.
+      }
+    }
+    const cached = resolveRetailCachePath(paths, relativePath)
+    if (cached) {
+      try {
+        const stat = fs.statSync(cached)
+        if (stat.isFile()) return { exists: true, size: stat.size }
+      } catch {
+        // Fall through.
+      }
+    }
+    return disk(relativePath)
+  }
 }
 
 async function readManifest(
   paths: AppPaths,
   options: { refresh?: boolean; fetchManifest?: typeof fetchRetailManifest } = {},
-): Promise<{ manifest: RetailManifest; folder: WatchFolder; token: string; workerBaseUrl: string }> {
-  const { config, folder, token } = requireReady(paths)
+): Promise<{ manifest: RetailManifest; token: string; workerBaseUrl: string }> {
+  const { config, token } = requireReady(paths)
   const manifest = await (options.fetchManifest ?? fetchRetailManifest)({
     workerBaseUrl: config.workerBaseUrl,
     token,
     refresh: options.refresh,
   })
-  return { manifest, folder, token, workerBaseUrl: config.workerBaseUrl }
+  return { manifest, token, workerBaseUrl: config.workerBaseUrl }
+}
+
+function measureDrift(paths: AppPaths, manifest: RetailManifest): RetailDriftItem[] {
+  return diffRetailManifest(manifest, loadRetailManifest(paths), statRetailInstall(paths))
+}
+
+function catalogRetailWrites(
+  paths: AppPaths,
+  written: Array<{ relativePath: string; dest: string; parked: boolean }>,
+): void {
+  if (written.length === 0) return
+  for (const item of written) {
+    const catalog = loadCatalog(paths)
+    let entry = findRetailEntry(catalog, item.relativePath)
+    const pathOccupant = catalog.entries.find((candidate) => {
+      if (candidate.id === entry?.id || candidate.retailRelativePath) return false
+      const pathsToCheck = [candidate.installedPath, candidate.disabledPath, ...(candidate.installations ?? []).flatMap((copy) => [copy.path, copy.parkedPath])]
+      return pathsToCheck.some((candidatePath) => candidatePath && path.resolve(candidatePath) === path.resolve(item.dest) && fs.existsSync(candidatePath))
+    })
+    if (!entry && pathOccupant) entry = pathOccupant
+    if (entry && pathOccupant && pathOccupant.id !== entry.id) {
+      removeEntryById(catalog, pathOccupant.id)
+    }
+    const wasDeactivated = Boolean(
+      entry &&
+        (entry.status === 'deactivated' ||
+          (entry.disabledPath && fs.existsSync(entry.disabledPath)) ||
+          copyAt(entry, 'macos')?.parkedPath && fs.existsSync(copyAt(entry, 'macos')!.parkedPath!)),
+    )
+    const previousMacos = entry ? copyAt(entry, 'macos') : undefined
+    try {
+      if (fs.existsSync(item.dest)) {
+        const parsed = parseFontFile(item.dest)
+        if (parsed.faces.length > 0) {
+          if (entry) applyParsedFont(entry, parsed)
+          else entry = importOneUnlocked(paths, item.dest, { catalog, persist: false })
+        }
+      }
+    } catch {
+      // Dummy or unreadable bytes still keep the listing.
+    }
+    if (!entry) continue
+    entry.retailRelativePath = item.relativePath
+    const fingerprint = fs.existsSync(item.dest) ? tryFingerprintFile(item.dest) : undefined
+    if (item.parked && wasDeactivated) {
+      const livePath = entry.installedPath ?? previousMacos?.path ?? resolveRetailInstallPath(paths.userFontsDir, item.relativePath) ?? item.dest
+      entry.sourcePath = entry.sourcePath || livePath
+      entry.installedPath = livePath
+      entry.disabledPath = item.dest
+      entry.status = 'deactivated'
+      upsertCopy(entry, {
+        destinationId: 'macos',
+        path: livePath,
+        parkedPath: item.dest,
+        fingerprint,
+        verification: 'unavailable',
+      })
+      if (fingerprint) entry.installedFingerprint = fingerprint
+    } else if (item.parked) {
+      // A cached copy is still the source used when the user explicitly installs the listing.
+      entry.sourcePath = item.dest
+      entry.sourcePresent = true
+      entry.installedPath = undefined
+      entry.disabledPath = undefined
+      entry.status = 'uninstalled'
+      if (previousMacos) {
+        entry.installations = (entry.installations ?? []).filter((copy) => copy.destinationId !== 'macos')
+      }
+    } else {
+      entry.installedPath = item.dest
+      entry.disabledPath = undefined
+      entry.sourcePath = item.dest
+      entry.status = 'installed'
+      entry.sourcePresent = false
+      entry.installedFingerprint = fingerprint
+      if (fingerprint) {
+        const stat = fs.statSync(item.dest)
+        entry.installedSnapshotMtimeMs = stat.mtimeMs
+        entry.installedSnapshotSize = stat.size
+      }
+      upsertCopy(entry, {
+        destinationId: 'macos',
+        path: item.dest,
+        fingerprint,
+        verification: 'file-present',
+      })
+    }
+    upsertEntry(catalog, entry)
+    applyEntryFacts(entry)
+    saveCatalog(paths, catalog)
+  }
+  emitEvent({ type: 'catalog', entries: loadCatalog(paths).entries })
+}
+
+function reconcileRetailCatalog(paths: AppPaths, manifest: ReturnType<typeof loadRetailManifest>): void {
+  const written = Object.values(manifest.files).flatMap((file) => {
+    const dest = file.installedPath ?? resolveRetailInstallPath(paths.userFontsDir, file.relativePath)
+    if (!dest || !fs.existsSync(dest)) return []
+    const parked = Boolean(file.parked)
+    return [{ relativePath: file.relativePath, dest, parked }]
+  })
+  catalogRetailWrites(paths, written)
 }
 
 /**
@@ -176,9 +409,10 @@ export async function checkRetail(
   options: { refresh?: boolean; fetchManifest?: typeof fetchRetailManifest } = {},
 ): Promise<RetailSyncStatus> {
   try {
-    const { manifest, folder } = await readManifest(paths, options)
-    // The folder may not exist yet on a first run; treat everything as missing rather than throwing.
-    const drift = diffRetailManifest(manifest, loadRetailManifest(paths), statRetailFile(folder.root))
+    const { manifest } = await readManifest(paths, options)
+    ensureRetailListings(paths, manifest)
+    reconcileRetailCatalog(paths, loadRetailManifest(paths))
+    const drift = measureDrift(paths, manifest)
     cache.checkedAt = new Date().toISOString()
     cache.drift = drift
     cache.skipped = manifest.skipped
@@ -186,7 +420,7 @@ export async function checkRetail(
   } catch (error) {
     // Deliberately does NOT bump `checkedAt`: nothing was measured, and a fresh timestamp next to
     // stale drift would read as a successful check.
-    cache.error = error instanceof Error ? error.message : 'Could not reach the DISPLAAY worker.'
+    cache.error = error instanceof Error ? error.message : 'Could not reach the Displaay worker.'
   }
   return emitRetail(paths)
 }
@@ -196,7 +430,6 @@ export async function syncRetail(
   options: {
     fetchManifest?: typeof fetchRetailManifest
     fetchFile?: typeof fetchRetailFile
-    onFolderReady?: (root: string) => Promise<void>
   } = {},
 ): Promise<RetailSyncStatus> {
   // A second request joins the run already in progress rather than starting a competing one.
@@ -212,39 +445,43 @@ async function runSync(
   options: {
     fetchManifest?: typeof fetchRetailManifest
     fetchFile?: typeof fetchRetailFile
-    onFolderReady?: (root: string) => Promise<void>
   },
 ): Promise<RetailSyncStatus> {
   try {
-    const { manifest, folder, token, workerBaseUrl } = await readManifest(paths, {
+    const { manifest, token, workerBaseUrl } = await readManifest(paths, {
       refresh: true,
       fetchManifest: options.fetchManifest,
     })
+    ensureRetailListings(paths, manifest)
+    reconcileRetailCatalog(paths, loadRetailManifest(paths))
 
-    // `resolveWatchFolders` throws on a missing directory, so the folder has to exist before anything
-    // downstream re-reads it as a watch folder.
-    fs.mkdirSync(path.resolve(folder.root), { recursive: true })
-
-    const drift = diffRetailManifest(manifest, loadRetailManifest(paths), statRetailFile(folder.root))
+    const drift = measureDrift(paths, manifest)
     const download = options.fetchFile ?? fetchRetailFile
 
     const result = await applyRetailSync({
-      root: folder.root,
+      userFontsDir: paths.userFontsDir,
+      stagingDir: path.join(paths.dataRoot, 'staging'),
+      rollbackDir: path.join(paths.dataRoot, 'rollback'),
       drift,
       manifest: loadRetailManifest(paths),
-      persist: (next) => saveRetailManifest(paths, next),
+      persist: async (next, written) => {
+        saveRetailManifest(paths, next)
+        if (written?.length) {
+          await runCatalogTask(() => catalogRetailWrites(paths, written))
+        }
+      },
+      destFor: (relativePath) => destForRelativePath(paths, relativePath),
+      withLock: (task) => runCatalogTask(task),
+      native: getFontNative(),
       download: (key, expectedSize) => download({ workerBaseUrl, token, key, expectedSize }),
     })
 
-    // Re-diff against what actually landed, so the status reflects disk rather than intent.
+    catalogRetailWrites(paths, result.writtenDests)
+
     cache.checkedAt = new Date().toISOString()
-    cache.drift = diffRetailManifest(manifest, result.manifest, statRetailFile(folder.root))
+    cache.drift = measureDrift(paths, manifest)
     cache.skipped = manifest.skipped
     cache.error = result.errors.length ? result.errors.slice(0, 5).join(' ') : null
-
-    if (result.written > 0) {
-      await options.onFolderReady?.(folder.root)
-    }
   } catch (error) {
     cache.error = error instanceof Error ? error.message : 'Could not sync the retail collection.'
   }

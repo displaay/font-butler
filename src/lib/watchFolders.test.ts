@@ -3,8 +3,14 @@ import { test } from 'node:test'
 import type { CatalogEntry, FontFaceInfo } from './types.ts'
 import {
   isPathUnderFolder,
+  isRetailLibraryEntry,
+  isRetailLibraryFilter,
   isWatchFolderEntry,
+  libraryFolderFilterLabel,
+  matchesLibraryFolderFilter,
   mergeWatchFolders,
+  RETAIL_LIBRARY_FILTER,
+  RETAIL_LIBRARY_LABEL,
   watchFolderLabel,
   watchFolderName,
 } from './watchFolders.ts'
@@ -74,4 +80,15 @@ test('mergeWatchFolders appends new folders without duplicates', () => {
     '/Users/you/Fonts',
     '/Users/you/Clients',
   ])
+})
+
+test('the retail library filter matches catalog entries tagged with a retail path', () => {
+  const retail = { ...entry('/Users/you/Library/Fonts/RecklessVF.otf', true), retailRelativePath: 'Reckless/RecklessVF.otf' }
+  const local = entry('/Users/you/Fonts/Inbox/Family.otf', true)
+  assert.equal(isRetailLibraryFilter(RETAIL_LIBRARY_FILTER), true)
+  assert.equal(isRetailLibraryEntry(retail), true)
+  assert.equal(isRetailLibraryEntry(local), false)
+  assert.equal(matchesLibraryFolderFilter(retail, RETAIL_LIBRARY_FILTER), true)
+  assert.equal(matchesLibraryFolderFilter(local, RETAIL_LIBRARY_FILTER), false)
+  assert.equal(libraryFolderFilterLabel(RETAIL_LIBRARY_FILTER, []), RETAIL_LIBRARY_LABEL)
 })

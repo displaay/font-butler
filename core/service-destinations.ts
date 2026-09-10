@@ -18,6 +18,7 @@ import { tryFingerprintFile } from './fingerprint.ts'
 import { extensionForFormat } from './install.ts'
 import { recordMutationDestination } from './journal.ts'
 import type { AppPaths } from './paths.ts'
+import { resolveRetailInstallPath } from './retail-sync.ts'
 import { loadSettings } from './settings.ts'
 import type { CatalogEntry, DefaultDestinationId, DestinationId, InstallOptions } from './types.ts'
 
@@ -37,6 +38,10 @@ export function destinationForInstall(
   fromPath: string,
   options: { reuseInstalled?: boolean } = {},
 ): string {
+  if (entry.retailRelativePath) {
+    const retailDest = resolveRetailInstallPath(paths.userFontsDir, entry.retailRelativePath)
+    if (retailDest) return retailDest
+  }
   const resolvedFrom = path.resolve(fromPath)
   const reuseInstalled = options.reuseInstalled !== false
   if (reuseInstalled && isUnderAnyRoot(resolvedFrom, [paths.installDir, paths.userFontsDir])) {
@@ -68,7 +73,7 @@ export function destinationForInstall(
 export function defaultDestinationFor(paths: AppPaths, entry: CatalogEntry): DefaultDestinationId {
   const settings = loadSettings(paths)
   const folder = settings.folders.find((item) => item.id === entry.ownerFolderId)
-  if (folder?.destinationId && folder.destinationId !== 'macos') {
+  if (folder?.destinationId) {
     return folder.destinationId
   }
   return isDefaultDestinationId(settings.defaultDestination) ? settings.defaultDestination : 'macos'
@@ -135,8 +140,10 @@ export function removeAdobeCopy(paths: AppPaths, entry: CatalogEntry): void {
   if (!existing) return
   try {
     removeManagedCopy(paths, 'adobe-shared', existing.path)
-  } catch {
-    // The destination may already be gone; keep the catalog recoverable.
+  } catch (error) {
+    // A missing destination is already clean. Preserve metadata when removal failed for a
+    // real reason so callers can report the failure and retry instead of silently forgetting it.
+    if (fs.existsSync(existing.path)) throw error
   }
   dropCopy(entry, 'adobe-shared')
 }

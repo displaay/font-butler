@@ -39,4 +39,8 @@ test('rename and delete do not change captured library criteria', () => {
   assert.deepEqual(renamed[0]!.libraryFilters, ['installed'])
   assert.equal(deleteSavedFilter(renamed, renamed[0]!.id).length, 0)
   assert.equal(defaultSavedFilterName(emptyLibraryCriteria()), 'Untitled filter')
+  assert.equal(
+    defaultSavedFilterName({ query: '', libraryFilters: [], watchFolder: '__retail__' }),
+    'Displaay retail',
+  )
 })

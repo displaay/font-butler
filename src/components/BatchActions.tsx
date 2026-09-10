@@ -25,7 +25,7 @@ import { formatSwapLabel, instanceSwapLabel, type FormatSwap } from '@/lib/forma
 import { cn } from '@/lib/utils'
 
 const destructiveMenuItemClass =
-  'text-destructive focus:text-destructive data-[highlighted]:bg-red-100 data-[highlighted]:text-destructive dark:data-[highlighted]:bg-red-500/20'
+  'text-destructive focus:bg-red-100 focus:text-destructive data-[highlighted]:bg-red-100 data-[highlighted]:text-destructive data-[state=open]:bg-red-100 data-[state=open]:text-destructive dark:data-[highlighted]:bg-red-500/20 dark:data-[state=open]:bg-red-500/20 dark:focus:bg-red-500/20'
 
 export function CatalogBatchButtons({
   plan,
@@ -394,6 +394,7 @@ export function CatalogMenuItems({
               <ContextMenuItem
                 key={format}
                 disabled={busy}
+                className={destructiveMenuItemClass}
                 onSelect={() => onUninstallFormat(format)}
               >
                 {format.toUpperCase()}

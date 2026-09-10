@@ -10,7 +10,13 @@ import {
   uninstallableIds,
 } from './eligibility.ts'
 import { uniqueEntryFormats } from './formats.ts'
-import { familyBadgeEntry, hasTrackedSource, isForgettableOnlyGroup, isUninstallableGroup } from './group.ts'
+import {
+  deletableSourceIds,
+  familyBadgeEntry,
+  hasTrackedSource,
+  isForgettableOnlyGroup,
+  isUninstallableGroup,
+} from './group.ts'
 import { displayStateParts } from './state.ts'
 import type { FamilyGroup, SystemFamilyGroup } from './types.ts'
 
@@ -76,7 +82,7 @@ export function catalogBatchPlan(groups: FamilyGroup[], adobeAvailable = true): 
     reinstall += reinstallableIds(group).length
     repair += repairableIds(group).length
     if (isForgettableOnlyGroup(group)) forget += 1
-    if (group.entries.some((entry) => entry.status === 'uninstalled')) deleteFiles += 1
+    if (deletableSourceIds(group).length > 0) deleteFiles += 1
   }
   const activating = groups.flatMap((group) => activatableEntries(group))
   const familyFormats = uniqueEntryFormats(groups.flatMap((group) => group.entries))

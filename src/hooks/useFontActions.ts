@@ -171,6 +171,23 @@ export function useFontActions({
       : api.install(ids[0], familyName, options)
   }
 
+  function combineBatchResults(results: unknown[]): BatchOutcome | undefined {
+    const batches = results.filter((result): result is BatchOutcome => {
+      if (!result || typeof result !== 'object') return false
+      const value = result as Record<string, unknown>
+      return ['succeeded', 'failed', 'skipped', 'preview', 'errors', 'failedIds'].some((key) => key in value)
+    })
+    if (batches.length === 0) return undefined
+    return {
+      succeeded: batches.reduce((sum, result) => sum + (result.succeeded ?? 0), 0),
+      failed: batches.reduce((sum, result) => sum + (result.failed ?? 0), 0),
+      skipped: batches.reduce((sum, result) => sum + (result.skipped ?? 0), 0),
+      preview: batches.reduce((sum, result) => sum + (result.preview ?? 0), 0),
+      errors: batches.flatMap((result) => result.errors ?? []),
+      failedIds: batches.flatMap((result) => result.failedIds ?? []),
+    }
+  }
+
   function activatePrepared(ids: string[], replace?: boolean, destinationIds?: DestinationId[]) {
     const needsSwitch = ids.some((id) => {
       const entry = entries.find((item) => item.id === id)
@@ -315,6 +332,7 @@ export function useFontActions({
     if (!prepared) return
     const allowed = new Set(prepared.ids)
     await run(async () => {
+      const results: unknown[] = []
       for (let index = 0; index < groups.length; index += 1) {
         const ids = installableIds(groups[index]).filter((id) => allowed.has(id))
         if (ids.length === 0) continue
@@ -325,8 +343,9 @@ export function useFontActions({
             groups.length === 1 ? groups[0].familyName : undefined,
           ),
         )
-        await installPrepared(ids, undefined, prepared.replace)
+        results.push(await installPrepared(ids, undefined, prepared.replace))
       }
+      return combineBatchResults(results)
     }, actionCopyFor('install', groups))
   }
 
@@ -337,11 +356,13 @@ export function useFontActions({
     if (!prepared) return
     const allowed = new Set(prepared.ids)
     await run(async () => {
+      const results: unknown[] = []
       for (const group of groups) {
         const ids = activatableIds(group).filter((id) => allowed.has(id))
         if (ids.length === 0) continue
-        await activatePrepared(ids, prepared.replace)
+        results.push(await activatePrepared(ids, prepared.replace))
       }
+      return combineBatchResults(results)
     }, actionCopyFor('activate', groups))
   }
 
@@ -357,6 +378,7 @@ export function useFontActions({
     if (!prepared) return
     const allowed = new Set(prepared.ids)
     await run(async () => {
+      const results: unknown[] = []
       for (let index = 0; index < groups.length; index += 1) {
         const group = groups[index]
         const toActivate = activatableIds(group).filter((id) => allowed.has(id))
@@ -369,9 +391,10 @@ export function useFontActions({
             groups.length === 1 ? groups[0].familyName : undefined,
           ),
         )
-        if (toActivate.length) await activatePrepared(toActivate, prepared.replace)
-        if (toInstall.length) await installPrepared(toInstall, undefined, prepared.replace)
+        if (toActivate.length) results.push(await activatePrepared(toActivate, prepared.replace))
+        if (toInstall.length) results.push(await installPrepared(toInstall, undefined, prepared.replace))
       }
+      return combineBatchResults(results)
     }, actionCopyFor(verb, groups))
   }
 
@@ -468,9 +491,11 @@ export function useFontActions({
     const groups = selectedCatalogGroups().filter((group) => reinstallableIds(group).length > 0)
     if (groups.length === 0) return
     await run(async () => {
+      const results: unknown[] = []
       for (const group of groups) {
-        await reinstallGroup(group)
+        results.push(await reinstallGroup(group))
       }
+      return combineBatchResults(results)
     }, actionCopyFor('reinstall', groups))
   }
 
@@ -488,9 +513,11 @@ export function useFontActions({
     const groups = allUpdates
     if (groups.length === 0) return
     await run(async () => {
+      const results: unknown[] = []
       for (const group of groups) {
-        await reinstallGroup(group)
+        results.push(await reinstallGroup(group))
       }
+      return combineBatchResults(results)
     }, actionCopyFor('reinstall', groups))
   }
 
@@ -517,9 +544,11 @@ export function useFontActions({
     setTab('updates')
     setWatchFolderFilter(null)
     void run(async () => {
+      const results: unknown[] = []
       for (const group of groups) {
-        await reinstallGroup(group)
+        results.push(await reinstallGroup(group))
       }
+      return combineBatchResults(results)
     }, actionCopyFor('reinstall', groups))
   }
 
@@ -665,12 +694,14 @@ export function useFontActions({
       return
     }
     await run(async () => {
+      const results: unknown[] = []
       if (toUpdate.length) {
-        await (toUpdate.length > 1 ? api.reinstallMany(toUpdate.map((entry) => entry.id)) : api.reinstall(toUpdate[0]!.id))
+        results.push(await (toUpdate.length > 1 ? api.reinstallMany(toUpdate.map((entry) => entry.id)) : api.reinstall(toUpdate[0]!.id)))
       }
       if (toInstall.length) {
-        await installPrepared(toInstall.map((entry) => entry.id))
+        results.push(await installPrepared(toInstall.map((entry) => entry.id)))
       }
+      return combineBatchResults(results)
     }, { pending: 'Retrying failed items…', done: 'Retried failed items' })
   }
 

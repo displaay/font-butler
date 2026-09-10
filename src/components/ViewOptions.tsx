@@ -3,7 +3,7 @@ import { ArrowDownAZ, CalendarPlus, Ellipsis, LayoutGrid, List } from 'lucide-re
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import type { SortMode, ViewLayout } from '@/lib/types'
-import { cn } from '@/lib/utils'
+import { cn, CONTROL_H } from '@/lib/utils'
 
 export const GRID_PREVIEW_SIZE_KEY = 'font-butler-grid-preview-size'
 export const GRID_PREVIEW_SIZE_MIN = 2
@@ -103,7 +103,7 @@ export function ViewOptions({
           </Button>
         </div>
         {layout === 'grid' && (
-          <label className="flex h-8 items-center gap-2 rounded-md border bg-background px-2.5">
+          <label className={cn('flex items-center gap-2 rounded-md border bg-background px-2.5', CONTROL_H)}>
             <span className="select-none text-[10px] leading-none text-muted-foreground" aria-hidden>
               A
             </span>
@@ -156,7 +156,7 @@ export function ViewOptions({
               type="button"
               size="sm"
               variant="ghost"
-              className={cn('h-7 w-7 px-0', menuOpen && 'bg-muted')}
+              className={cn(CONTROL_H, 'w-8 px-0', menuOpen && 'bg-muted')}
               aria-label="More view options"
               aria-haspopup="menu"
               aria-expanded={menuOpen}
