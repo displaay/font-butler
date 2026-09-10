@@ -56,6 +56,7 @@ export function Inspector({
   onUninstall,
   onUninstallFormat,
   onUninstallAndRemove,
+  onUninstallFromAdobe,
   onDeactivate,
   onActivate,
   onSwitch,
@@ -99,6 +100,7 @@ export function Inspector({
   onUninstall: () => void
   onUninstallFormat?: (format: string) => void
   onUninstallAndRemove?: () => void
+  onUninstallFromAdobe?: () => void
   onDeactivate: () => void
   onActivate: () => void
   /** Passed only when a same-format occupying sibling exists (`canSwitchTo`). */
@@ -133,6 +135,7 @@ export function Inspector({
     onDeactivate: () => void
     onUninstall: () => void
     onUninstallAndRemove?: () => void
+    onUninstallFromAdobe?: () => void
     onReinstall: () => void
     onRepair?: () => void
     onForget: () => void
@@ -182,6 +185,7 @@ export function Inspector({
             onDeactivate={multiSelect.onDeactivate}
             onUninstall={multiSelect.onUninstall}
             onUninstallAndRemove={multiSelect.onUninstallAndRemove}
+            onUninstallFromAdobe={multiSelect.onUninstallFromAdobe}
             onReinstall={multiSelect.onReinstall}
             onRepair={multiSelect.onRepair}
             onForget={multiSelect.onForget}
@@ -335,12 +339,21 @@ export function Inspector({
     />
   )
   const uninstallExtras = ([
+    plan.adobeUninstall > 0 && onUninstallFromAdobe
+      ? {
+          key: 'uninstall-adobe',
+          label: 'Uninstall from Adobe testing folder',
+          icon: <AdobeLogo className="size-4 shrink-0" />,
+          onSelect: onUninstallFromAdobe,
+        }
+      : null,
     ...(onUninstallFormat && mixedFormats.length >= 2
-      ? mixedFormats.map((format) => ({
+      ? mixedFormats.map((format, index) => ({
           key: `uninstall-format-${format}`,
           label: format.toUpperCase(),
           icon: <CircleMinus className="size-4 shrink-0" />,
           onSelect: () => onUninstallFormat(format),
+          separatorBefore: index === 0 && plan.adobeUninstall > 0 && Boolean(onUninstallFromAdobe),
         }))
       : []),
     hasTrackedSource(group) && onUninstallAndRemove
@@ -348,7 +361,9 @@ export function Inspector({
           key: 'uninstall-and-delete',
           label: 'Uninstall and delete sources',
           onSelect: onUninstallAndRemove,
-          separatorBefore: Boolean(onUninstallFormat && mixedFormats.length >= 2),
+          separatorBefore:
+            Boolean(onUninstallFormat && mixedFormats.length >= 2) ||
+            (plan.adobeUninstall > 0 && Boolean(onUninstallFromAdobe)),
         }
       : null,
     onDeleteFiles && plan.deleteFiles > 0
@@ -357,7 +372,8 @@ export function Inspector({
           label: deleteSourcesLabel(plan.deleteFiles, false),
           onSelect: onDeleteFiles,
           separatorBefore:
-            Boolean(onUninstallFormat && mixedFormats.length >= 2) &&
+            (Boolean(onUninstallFormat && mixedFormats.length >= 2) ||
+              (plan.adobeUninstall > 0 && Boolean(onUninstallFromAdobe))) &&
             !(hasTrackedSource(group) && onUninstallAndRemove),
         }
       : null,

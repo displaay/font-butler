@@ -304,6 +304,7 @@ export const api = {
     onboardingCompleted?: boolean
     folders?: WatchFolder[]
     specimen?: AppSettings['specimen']
+    latinPreview?: AppSettings['latinPreview']
     defaultDestination?: DefaultDestinationId
     savedFilters?: AppSettings['savedFilters']
   }) =>

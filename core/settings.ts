@@ -8,6 +8,7 @@ import {
   syncWatchFolderPaths,
 } from './folders.ts'
 import { parseDefaultDestination } from './destinations.ts'
+import { parseLatinPreview } from '../shared/latinPreview.ts'
 import { normalizeSavedFilters } from './saved-filters.ts'
 import type {
   AppSettings,
@@ -193,6 +194,7 @@ export function loadSettings(paths: AppPaths): AppSettings {
           ? parsed.activityMaxOperations
           : defaults.activityMaxOperations,
       specimen: readSpecimen(parsed.specimen),
+      latinPreview: parseLatinPreview(parsed.latinPreview),
       defaultDestination: parseDefaultDestination(parsed.defaultDestination),
       savedFilters: normalizeSavedFilters(parsed.savedFilters),
       retailSync: readRetailSync(parsed.retailSync),

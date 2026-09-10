@@ -2,6 +2,7 @@ import {
   activatableEntries,
   activatableIds,
   adobeInstallableIds,
+  adobeRemovableIds,
   deactivatableIds,
   installableIds,
   reinstallableIds,
@@ -18,6 +19,7 @@ export type CatalogBatchPlan = {
   install: number
   installMissing: boolean
   adobeInstall: number
+  adobeUninstall: number
   activate: number
   activateFormat?: string
   deactivate: number
@@ -38,6 +40,7 @@ export type SystemBatchPlan = {
 export function catalogBatchPlan(groups: FamilyGroup[], adobeAvailable = true): CatalogBatchPlan {
   let install = 0
   let adobeInstall = 0
+  let adobeUninstall = 0
   let activate = 0
   let deactivate = 0
   let uninstall = 0
@@ -51,6 +54,7 @@ export function catalogBatchPlan(groups: FamilyGroup[], adobeAvailable = true): 
     const toInstall = installableIds(group)
     install += toInstall.length
     adobeInstall += adobeInstallableIds(group, adobeAvailable).length
+    adobeUninstall += adobeRemovableIds(group).length
     if (
       toInstall.length > 0 &&
       group.entries.some(
@@ -84,6 +88,7 @@ export function catalogBatchPlan(groups: FamilyGroup[], adobeAvailable = true): 
     install,
     installMissing,
     adobeInstall,
+    adobeUninstall,
     activate,
     ...(activateFormat ? { activateFormat } : {}),
     deactivate,
@@ -161,6 +166,7 @@ export function hasCatalogBatchActions(plan: CatalogBatchPlan): boolean {
   return (
     plan.install > 0 ||
     plan.adobeInstall > 0 ||
+    plan.adobeUninstall > 0 ||
     plan.activate > 0 ||
     plan.deactivate > 0 ||
     plan.uninstall > 0 ||
@@ -186,7 +192,7 @@ export function actionLabel(verb: string, count: number, multi: boolean): string
   if (verb === 'Deactivate' || verb === 'Uninstall') {
     return verb
   }
-  if (verb === 'Install to Adobe testing folder') {
+  if (verb === 'Install to Adobe testing folder' || verb === 'Uninstall from Adobe testing folder') {
     return verb
   }
   if (verb === 'Uninstall and delete sources') {

@@ -22,6 +22,7 @@ export type InstanceActions = {
   onDeactivate: (entryId: string) => void
   onUninstall: (entryId: string) => void
   onInstallToAdobe: (entryId: string) => void
+  onUninstallFromAdobe?: (entryId: string) => void
   adobeAvailable?: boolean
   onFormatSwap?: (entryId: string) => void
   onOpen?: (entryId: string) => void
@@ -42,6 +43,7 @@ function InstanceRowMenu({
   onUninstall,
   onInstallToAdobe,
   adobeAvailable = true,
+  onUninstallFromAdobe,
   onFormatSwap,
   onOpen,
 }: {
@@ -55,6 +57,7 @@ function InstanceRowMenu({
   onUninstall: (entryId: string) => void
   onInstallToAdobe: (entryId: string) => void
   adobeAvailable?: boolean
+  onUninstallFromAdobe?: (entryId: string) => void
   onFormatSwap?: (entryId: string) => void
   onOpen?: (entryId: string) => void
 }) {
@@ -79,6 +82,7 @@ function InstanceRowMenu({
           onDeactivate={() => onDeactivate(entry.id)}
           onUninstall={() => onUninstall(entry.id)}
           onInstallToAdobe={() => onInstallToAdobe(entry.id)}
+          onUninstallFromAdobe={onUninstallFromAdobe ? () => onUninstallFromAdobe(entry.id) : undefined}
           onFormatSwap={onFormatSwap ? () => onFormatSwap(entry.id) : undefined}
         />
       </ContextMenuContent>
@@ -134,16 +138,20 @@ export function InstanceList({
               sample={resolvedPreviewSample(row.previewSample)}
             />
             <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium">{row.label}</div>
+              <div className="flex min-w-0 items-center gap-1.5">
+                <div className="truncate text-sm font-medium">{row.label}</div>
+                {row.format ? (
+                  <FormatBadge format={row.format} inactive={row.installState !== 'installed'} />
+                ) : null}
+              </div>
               {row.sublabel && (
                 <div className="truncate text-xs text-muted-foreground">{row.sublabel}</div>
               )}
             </div>
-            {row.format ? (
-              <FormatBadge format={row.format} inactive={row.installState !== 'installed'} />
-            ) : null}
             {row.hasSource ? <SourceBadge className="shrink-0" /> : null}
-            {row.installState ? <InstanceInstallBadge state={row.installState} /> : null}
+            {row.installState && row.installState !== 'installed' ? (
+              <InstanceInstallBadge state={row.installState} />
+            ) : null}
             <DestinationIcons
               macos={Boolean(row.macosCopy)}
               adobe={Boolean(row.adobeCopy)}
@@ -163,6 +171,7 @@ export function InstanceList({
                 onDeactivate={instanceActions.onDeactivate}
                 onUninstall={instanceActions.onUninstall}
                 onInstallToAdobe={instanceActions.onInstallToAdobe}
+                onUninstallFromAdobe={instanceActions.onUninstallFromAdobe}
                 adobeAvailable={instanceActions.adobeAvailable}
                 onFormatSwap={instanceActions.onFormatSwap}
                 onOpen={instanceActions.onOpen}

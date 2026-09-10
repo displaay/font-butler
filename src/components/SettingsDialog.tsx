@@ -38,11 +38,17 @@ import type {
   AppUpdateStatus,
   DestinationCapability,
   DestinationInvestigationRow,
+  LatinPreviewPreset,
   OfficeFontCacheInfo,
   SortMode,
   ThemeMode,
   ViewLayout,
 } from '@/lib/types'
+import {
+  LATIN_PREVIEW_MAX_LENGTH,
+  LATIN_PREVIEW_PRESETS,
+  normalizeLatinPreviewCustom,
+} from '@/lib/latinPreview'
 import { cn } from '@/lib/utils'
 import { DESTINATIONS, FOLDER_POLICIES, adobeTestingFolderAvailable, destinationLabel, destinationNeedsAdobe, folderAvailabilityLabel, folderPolicyLabel } from '@/lib/folders'
 import { watchFolderName } from '@/lib/watchFolders'
@@ -137,6 +143,7 @@ type SettingsPatch = {
   activityRetentionDays?: number
   activityMaxOperations?: number
   defaultDestination?: AppSettings['defaultDestination']
+  latinPreview?: AppSettings['latinPreview']
 }
 
 function navButtonClass(active: boolean) {
@@ -556,6 +563,7 @@ function GeneralPane({
             <option value="added">Added</option>
           </select>
         </SettingsRow>
+        <LatinPreviewRow settings={settings} busy={busy} onSave={onSave} />
       </SettingsSection>
 
       <SettingsSection title="App">
@@ -636,6 +644,99 @@ function GeneralPane({
         </div>
       </SettingsSection>
     </div>
+  )
+}
+
+function LatinPreviewRow({
+  settings,
+  busy,
+  onSave,
+}: {
+  settings: AppSettings | null
+  busy: boolean
+  onSave: (patch: SettingsPatch) => Promise<void>
+}) {
+  const preset = settings?.latinPreview?.preset ?? 'Aa'
+  const storedCustom = settings?.latinPreview?.custom ?? ''
+  const [custom, setCustom] = useState(storedCustom)
+
+  useEffect(() => {
+    setCustom(storedCustom)
+  }, [storedCustom])
+
+  function persist(nextPreset: LatinPreviewPreset, nextCustom = custom) {
+    void onSave({
+      latinPreview: {
+        preset: nextPreset,
+        custom: normalizeLatinPreviewCustom(nextCustom),
+      },
+    })
+  }
+
+  function commitCustom() {
+    const next = normalizeLatinPreviewCustom(custom)
+    setCustom(next)
+    if (next === storedCustom && preset === 'custom') return
+    persist('custom', next)
+  }
+
+  return (
+    <SettingsRow
+      label="Latin preview"
+      description="Letters shown on library and system cards for Latin-primary faces. Other scripts keep their own glyph."
+      extra={
+        preset === 'custom' ? (
+          <div className="flex justify-end">
+            <Input
+              id="latin-preview-custom"
+              value={custom}
+              maxLength={LATIN_PREVIEW_MAX_LENGTH}
+              disabled={busy || !settings}
+              placeholder="Aa"
+              aria-label="Custom Latin preview"
+              className="max-w-[9.5rem]"
+              onChange={(event) => setCustom(event.target.value.slice(0, LATIN_PREVIEW_MAX_LENGTH))}
+              onBlur={commitCustom}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.currentTarget.blur()
+                }
+              }}
+            />
+          </div>
+        ) : null
+      }
+    >
+      <div
+        role="radiogroup"
+        aria-label="Latin preview"
+        className="inline-flex flex-wrap items-center justify-end gap-0.5 rounded-md border bg-background p-0.5"
+      >
+        {[...LATIN_PREVIEW_PRESETS, 'custom' as const].map((option) => {
+          const selected = preset === option
+          return (
+            <Button
+              key={option}
+              type="button"
+              size="sm"
+              variant="ghost"
+              role="radio"
+              aria-checked={selected}
+              disabled={busy || !settings}
+              className={cn(
+                'h-8 px-2.5',
+                selected ? 'bg-muted font-medium' : 'text-muted-foreground',
+              )}
+              onClick={() => {
+                if (!selected) persist(option)
+              }}
+            >
+              {option === 'custom' ? 'Custom' : option}
+            </Button>
+          )
+        })}
+      </div>
+    </SettingsRow>
   )
 }
 

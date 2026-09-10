@@ -140,6 +140,8 @@ import {
 import { postscriptPreview } from './rename.ts'
 import { revealInFileManager } from './reveal.ts'
 import { loadSettings, saveSettings } from './settings.ts'
+import { parseLatinPreview } from '../shared/latinPreview.ts'
+import { isLatinPreviewSample } from '../shared/previewSample.ts'
 import { normalizeSavedFilters } from './saved-filters.ts'
 import { allowedFontPath, scanSystemFonts } from './system.ts'
 import type {
@@ -436,6 +438,7 @@ export class FontButlerService {
     activityRetentionDays?: number
     activityMaxOperations?: number
     specimen?: AppSettings['specimen']
+    latinPreview?: AppSettings['latinPreview']
     defaultDestination?: DefaultDestinationId
     savedFilters?: AppSettings['savedFilters']
   }): Promise<AppSettings> {
@@ -523,6 +526,10 @@ export class FontButlerService {
     }
     if (patch.specimen) {
       next.specimen = patch.specimen
+    }
+    if (patch.latinPreview) {
+      const latinPreview = parseLatinPreview(patch.latinPreview)
+      if (latinPreview) next.latinPreview = latinPreview
     }
     if (isDefaultDestinationId(patch.defaultDestination)) {
       next.defaultDestination = patch.defaultDestination
@@ -3131,7 +3138,8 @@ export class FontButlerService {
     const catalog = loadCatalog(this.paths)
     let changed = false
     for (const entry of catalog.entries) {
-      if (fillEntryPreviewSample(entry)) changed = true
+      const refresh = Boolean(entry.previewSample) && !isLatinPreviewSample(entry.previewSample)
+      if (fillEntryPreviewSample(entry, { refresh })) changed = true
     }
     if (changed) saveCatalog(this.paths, catalog)
   }

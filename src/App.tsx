@@ -24,6 +24,7 @@ import { OnboardingDialog } from '@/components/OnboardingDialog'
 import { RelinkDialog } from '@/components/RelinkDialog'
 import { RenameDialog } from '@/components/RenameDialog'
 import { ReplaceFormatDialog } from '@/components/ReplaceFormatDialog'
+import { LatinPreviewProvider } from '@/components/AaPreview'
 import { SettingsDialog } from '@/components/SettingsDialog'
 import { Sidebar, type Tab } from '@/components/Sidebar'
 import { SystemCard } from '@/components/SystemCard'
@@ -80,6 +81,7 @@ import {
   removeMemberIds,
   uniqueMemberIds,
 } from '@/lib/projects'
+import { latinPreviewText } from '@/lib/latinPreview'
 import { specimenFromSettings } from '@/lib/specimen'
 import { bakeReportWarnings } from '@/lib/otFeatures'
 import { needsLocateSource } from '@/lib/state'
@@ -111,6 +113,7 @@ import {
 } from '@/lib/inspector'
 import { applyTheme } from '@/lib/theme'
 import { allUpdateGroups, visibleUpdateGroups } from '@/lib/updateInventory'
+import { operationMatchesQuery, tabWithSearchHits } from '@/lib/search'
 import type { AppSettings, AppUpdateStatus, CatalogEntry, DestinationCapability, DuplicateWarning, FamilyGroup, ImportPlan, ImportPlanItem, LibraryFilter, Operation, PreviewPreferences, ProjectSet, RetailSyncStatus, SavedLibraryFilter, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { isPathUnderFolder, isWatchFolderEntry, watchFolderName } from '@/lib/watchFolders'
@@ -468,14 +471,16 @@ function AppShell() {
     const project = projects.find((item) => item.id === projectFilter)
     return new Set(project?.members.map((member) => member.assetId) ?? [])
   }, [projects, projectFilter])
+  const searching = Boolean(query.trim())
   const librarySourceEntries = useMemo(
     () =>
       entries.filter((entry) => {
+        if (searching) return true
         if (watchFolderFilter && !isWatchFolderEntry(entry, watchFolderFilter)) return false
         if (projectFilter && !projectMemberIds.has(entry.id)) return false
         return true
       }),
-    [entries, watchFolderFilter, projectFilter, projectMemberIds],
+    [entries, watchFolderFilter, projectFilter, projectMemberIds, searching],
   )
   const libraryGroups = useMemo(
     () =>
@@ -507,7 +512,10 @@ function AppShell() {
   const allUpdates = useMemo(() => allUpdateGroups(entries, sortMode), [entries, sortMode])
   const updateGroups = useMemo(() => visibleUpdateGroups(allUpdates, query), [allUpdates, query])
   const systemGroups = useMemo(
-    () => groupSystem(systemFaces).filter((group) => matchesQuery(group.familyName, query)),
+    () =>
+      groupSystem(systemFaces).filter((group) =>
+        matchesQuery(`${group.familyName} ${group.faces.map((face) => face.styleName).join(' ')}`, query),
+      ),
     [systemFaces, query],
   )
   const shownSystemGroups = useMemo(
@@ -522,15 +530,35 @@ function AppShell() {
     () => entries.filter((entry) => entry.status === 'source-missing').length,
     [entries],
   )
-  const tabCounts = useMemo(
-    () => ({
+  const visibleOperations = useMemo(
+    () => operations.filter((operation) => operationMatchesQuery(operation, query)),
+    [operations, query],
+  )
+  const tabCounts = useMemo(() => {
+    if (searching) {
+      return {
+        library: libraryGroups.length,
+        system: systemGroups.length,
+        updates: updateGroups.length,
+        activity: visibleOperations.length,
+      }
+    }
+    return {
       library: countFamilyNames(entries),
       system: groupSystem(systemFaces).length,
       updates: countFamilyNames(entries.filter((entry) => entry.status === 'outdated')),
       activity: operations.length,
-    }),
-    [entries, systemFaces, operations.length],
-  )
+    }
+  }, [
+    searching,
+    libraryGroups.length,
+    systemGroups.length,
+    updateGroups.length,
+    visibleOperations.length,
+    entries,
+    systemFaces,
+    operations.length,
+  ])
   const activityUnread = useMemo(() => unreadActivityCount(operations), [operations])
 
   const visibleGroups = useMemo(
@@ -556,6 +584,20 @@ function AppShell() {
       setTab('library')
     }
   }, [tab, allUpdates.length, appUpdate?.updateAvailable])
+
+  const searchTab = tabWithSearchHits({
+    current: tab,
+    query,
+    libraryHits: libraryGroups.length,
+    systemHits: systemGroups.length,
+    updateHits: updateGroups.length,
+    activityHits: visibleOperations.length,
+  })
+  if (searchTab !== tab) {
+    setTab(searchTab)
+    if (searchTab !== 'library') setWatchFolderFilter(null)
+    if (searchTab === 'library') setProjectFilter(null)
+  }
 
   useEffect(() => {
     if (watchFolderFilter && !watchFolders.includes(watchFolderFilter)) {
@@ -855,6 +897,8 @@ function AppShell() {
     installOrActivateSelected,
     installGroupGuarded,
     installToAdobeFor,
+    uninstallFromAdobeFor,
+    uninstallInstanceFromAdobe,
     installInstanceGuarded,
     activateInstanceGuarded,
     deactivateInstance,
@@ -1355,6 +1399,7 @@ function AppShell() {
   }
 
   return (
+    <LatinPreviewProvider text={latinPreviewText(settings?.latinPreview)}>
       <div
         className="flex h-dvh min-h-0 flex-col overflow-hidden bg-background text-foreground md:flex-row"
         onDragEnter={(event) => {
@@ -1433,9 +1478,11 @@ function AppShell() {
           counts={tabCounts}
           activityUnread={activityUnread}
           hasAppUpdate={Boolean(appUpdate?.updateAvailable)}
+          hasFontUpdates={allUpdates.length > 0}
+          searching={searching}
           onReinstallAllUpdates={() => void reinstallAllUpdates()}
           onOpenSettings={() => {
-            setSettingsFocusAppUpdate(false)
+            setSettingsFocusAppUpdate(Boolean(appUpdate?.updateAvailable))
             setSettingsOpen(true)
           }}
         />
@@ -1460,7 +1507,7 @@ function AppShell() {
                   insetTrafficLights && 'app-region-drag',
                 )}
               >
-                {tabCounts.updates > 0 && tab !== 'updates' ? (
+                {!searching && allUpdates.length > 0 && tab !== 'updates' ? (
                   <Button
                     type="button"
                     size="sm"
@@ -1471,9 +1518,9 @@ function AppShell() {
                     }}
                   >
                     <RefreshCw />
-                    {tabCounts.updates === 1
+                    {allUpdates.length === 1
                       ? 'Font update available'
-                      : `${tabCounts.updates} font updates available`}
+                      : `${allUpdates.length} font updates available`}
                   </Button>
                 ) : tab === 'updates' && updateGroups.length > 0 ? (
                   <Button
@@ -1542,7 +1589,8 @@ function AppShell() {
                 )}
                 {!loading && tab === 'activity' && (
                   <ActivityView
-                    operations={operations}
+                    operations={visibleOperations}
+                    query={query}
                     entries={entries}
                     highlightId={highlightOperation}
                     onUndo={(id) =>
@@ -1553,7 +1601,11 @@ function AppShell() {
                   />
                 )}
                 {!loading && tab !== 'system' && tab !== 'activity' && visibleGroups.length === 0 && (
-                  tab === 'library' && libraryGroupsUnfiltered.length > 0 && libraryFilters.length > 0 ? (
+                  searching ? (
+                    <p className="px-2 py-12 text-center text-sm text-muted-foreground">
+                      {tab === 'updates' ? 'No updates match this search.' : 'No fonts match this search.'}
+                    </p>
+                  ) : tab === 'library' && libraryGroupsUnfiltered.length > 0 && libraryFilters.length > 0 ? (
                     <p className="px-2 py-12 text-center text-sm text-muted-foreground">
                       No fonts match these filters.
                     </p>
@@ -1580,7 +1632,7 @@ function AppShell() {
                 )}
                 {!loading && tab === 'system' && systemGroups.length === 0 && (
                   <p className="px-2 py-12 text-center text-sm text-muted-foreground">
-                    No fonts found in the system folders.
+                    {searching ? 'No fonts match this search.' : 'No fonts found in the system folders.'}
                   </p>
                 )}
                 {!loading && missingSourceCount > 0 && tab !== 'system' && tab !== 'updates' && tab !== 'activity' && (
@@ -1705,6 +1757,7 @@ function AppShell() {
                           onDeactivateInstance={(entryId) => void deactivateInstance(entryId)}
                           onUninstallInstance={(entryId) => void uninstallInstance(entryId)}
                           onInstallInstanceToAdobe={(entryId) => void installInstanceToAdobe(entryId)}
+                          onUninstallInstanceFromAdobe={(entryId) => void uninstallInstanceFromAdobe(entryId)}
                           onSwapInstanceFormat={(entryId) => void swapInstanceFormat(entryId)}
                           adobeAvailable={adobeAvailable}
                           onReinstall={() =>
@@ -1735,6 +1788,11 @@ function AppShell() {
                             }
                             void uninstallAndRemoveFor([group])
                           }}
+                          onUninstallFromAdobe={() =>
+                            useBatch
+                              ? void uninstallFromAdobeFor(catalogSelection)
+                              : void uninstallFromAdobeFor([group])
+                          }
                           onDeactivate={() =>
                             useBatch
                               ? void deactivateSelected()
@@ -1825,6 +1883,7 @@ function AppShell() {
                   onDeactivate={() => void deactivateSelected()}
                   onUninstall={() => void uninstallSelected()}
                   onUninstallAndRemove={() => void uninstallAndRemoveSelected()}
+                  onUninstallFromAdobe={() => void uninstallFromAdobeFor(catalogSelection)}
                   onReinstall={() => void reinstallSelected()}
                   onRepair={() => void repairSelected()}
                   onForget={() => void forgetSelected()}
@@ -1903,6 +1962,7 @@ function AppShell() {
                       onDeactivate: (entryId) => void deactivateInstance(entryId),
                       onUninstall: (entryId) => void uninstallInstance(entryId),
                       onInstallToAdobe: (entryId) => void installInstanceToAdobe(entryId),
+                      onUninstallFromAdobe: (entryId) => void uninstallInstanceFromAdobe(entryId),
                       adobeAvailable,
                       onFormatSwap: (entryId) => void swapInstanceFormat(entryId),
                       onOpen: setSelectedEntryId,
@@ -1962,6 +2022,7 @@ function AppShell() {
                 if (!selectedGroup) return
                 void uninstallAndRemoveFor([selectedGroup])
               }}
+              onUninstallFromAdobe={() => selectedGroup && void uninstallFromAdobeFor([selectedGroup])}
               onDeactivate={() =>
                 selectedGroup &&
                 void run(() => deactivateGroup(selectedGroup), actionCopy('deactivate', selectedGroup.familyName))
@@ -2092,6 +2153,7 @@ function AppShell() {
                         onDeactivate: () => void deactivateSelected(),
                         onUninstall: () => void uninstallSelected(),
                         onUninstallAndRemove: () => void uninstallAndRemoveSelected(),
+                        onUninstallFromAdobe: () => void uninstallFromAdobeFor(catalogSelection),
                         onReinstall: () => void reinstallSelected(),
                         onRepair: () => void repairSelected(),
                         onForget: () => void forgetSelected(),
@@ -2289,5 +2351,6 @@ function AppShell() {
         <MarqueeOverlay rect={marqueeRect} />
         <Toaster theme={settings?.theme ?? 'system'} />
       </div>
+    </LatinPreviewProvider>
   )
 }

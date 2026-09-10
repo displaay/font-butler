@@ -5,6 +5,7 @@ import {
   actionCopy,
   actionCopyFor,
   adobeInstallCopy,
+  adobeUninstallCopy,
   emptyImportError,
   importDoneCopy,
   remainingActionCopy,
@@ -95,6 +96,17 @@ test('adobeInstallCopy singularizes a single placement', () => {
   assert.deepEqual(adobeInstallCopy(3), {
     pending: 'Placing 3 Adobe testing copies…',
     done: 'Placed 3 Adobe testing copies',
+  })
+})
+
+test('adobeUninstallCopy singularizes a single removal', () => {
+  assert.deepEqual(adobeUninstallCopy(1), {
+    pending: 'Removing Adobe testing copy…',
+    done: 'Removed Adobe testing copy',
+  })
+  assert.deepEqual(adobeUninstallCopy(3), {
+    pending: 'Removing 3 Adobe testing copies…',
+    done: 'Removed 3 Adobe testing copies',
   })
 })
 

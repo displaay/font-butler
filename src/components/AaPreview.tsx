@@ -1,8 +1,20 @@
-import { useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import { Loader2 } from 'lucide-react'
 import { usePreviewFontReady } from '@/hooks/usePreviewFontReady'
-import { resolvedPreviewSample } from '@/lib/previewSample'
+import { applyLatinPreviewSample, DEFAULT_LATIN_PREVIEW_TEXT } from '@/lib/latinPreview'
 import { cn } from '@/lib/utils'
+
+const LatinPreviewContext = createContext(DEFAULT_LATIN_PREVIEW_TEXT)
+
+export function LatinPreviewProvider({
+  text,
+  children,
+}: {
+  text: string
+  children: ReactNode
+}) {
+  return <LatinPreviewContext.Provider value={text}>{children}</LatinPreviewContext.Provider>
+}
 
 const CYCLE_MS = 600
 
@@ -37,7 +49,9 @@ function useHoverCycle(length: number, active: boolean, restIndex: number) {
 }
 
 function previewBoxClass(size: 'sm' | 'md') {
-  return size === 'sm' ? 'size-8 text-[17px] rounded-md' : 'size-11 text-[24px] rounded-md'
+  return size === 'sm'
+    ? 'size-8 overflow-hidden text-[17px] rounded-md'
+    : 'size-11 overflow-hidden text-[24px] rounded-md'
 }
 
 function PreviewPending({ size }: { size: 'sm' | 'md' | 'glyph' }) {
@@ -78,10 +92,11 @@ function AaGlyph({
   sample?: string
 }) {
   const ready = usePreviewFontReady(family, weight, italic, wait)
+  const latinText = useContext(LatinPreviewContext)
   if (!ready) return <PreviewPending size={pendingSize} />
   return (
     <span
-      className="font-preview translate-y-px select-none"
+      className="font-preview translate-y-px select-none overflow-hidden whitespace-nowrap"
       dir="auto"
       style={{
         fontFamily: `"${family}"`,
@@ -91,7 +106,7 @@ function AaGlyph({
         fontVariationSettings: variation || undefined,
       }}
     >
-      {resolvedPreviewSample(sample)}
+      {applyLatinPreviewSample(sample, latinText)}
     </span>
   )
 }

@@ -9,7 +9,9 @@ export function allUpdateGroups(entries: CatalogEntry[], sortMode: SortMode): Fa
 }
 
 export function visibleUpdateGroups(groups: FamilyGroup[], query: string): FamilyGroup[] {
-  return groups.filter((group) => matchesQuery(group.familyName, query))
+  return groups.filter((group) =>
+    matchesQuery(`${group.familyName} ${group.faces.map((face) => face.styleName).join(' ')}`, query),
+  )
 }
 
 export function updateGroupsForIds(groups: FamilyGroup[], ids: string[]): FamilyGroup[] {

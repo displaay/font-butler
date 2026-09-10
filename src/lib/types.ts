@@ -193,6 +193,13 @@ export type PreviewPreferences = {
   preset: 'headline' | 'paragraph' | 'numerals' | 'custom'
 }
 
+export type LatinPreviewPreset = 'Aa' | 'Ag' | 'Ta' | 'ag' | 'custom'
+
+export type LatinPreviewPreferences = {
+  preset: LatinPreviewPreset
+  custom: string
+}
+
 export type OperationItem = {
   id: string
   entryId?: string
@@ -327,6 +334,7 @@ export type AppSettings = {
   activityRetentionDays?: number
   activityMaxOperations?: number
   specimen?: PreviewPreferences
+  latinPreview?: LatinPreviewPreferences
   defaultDestination?: DefaultDestinationId
   savedFilters?: SavedLibraryFilter[]
 }

@@ -7,6 +7,11 @@ import { isFullyUnderAnyRoot, isUnderAnyRoot } from './containment.ts'
 import { type AppPaths, isMac } from './paths.ts'
 import type { SystemFace } from './types.ts'
 
+/** Apple hides UI/PUA system faces whose family name begins with a period. */
+export function isHiddenSystemFamily(name: string): boolean {
+  return name.startsWith('.')
+}
+
 function walkFonts(root: string, acc: string[]): void {
   if (!fs.existsSync(root)) {
     return
@@ -18,6 +23,7 @@ function walkFonts(root: string, acc: string[]): void {
     return
   }
   for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue
     const full = path.join(root, entry.name)
     if (entry.isDirectory()) {
       walkFonts(full, acc)
@@ -103,18 +109,21 @@ export function scanSystemFonts(paths: AppPaths): SystemFace[] {
     const cached = cachedByPath.get(filePath) ?? []
     if (cache.stamps[filePath] === mtime && cached.length > 0) {
       nextFaces.push(
-        ...cached.map((face) => ({
-          ...face,
-          managedId: byInstall.get(path.resolve(filePath)) ?? bySource.get(path.resolve(filePath)),
-          protected: isProtectedPath(filePath, paths),
-          writable: isWritable(filePath) && !isProtectedPath(filePath, paths),
-        })),
+        ...cached
+          .filter((face) => !isHiddenSystemFamily(face.familyName))
+          .map((face) => ({
+            ...face,
+            managedId: byInstall.get(path.resolve(filePath)) ?? bySource.get(path.resolve(filePath)),
+            protected: isProtectedPath(filePath, paths),
+            writable: isWritable(filePath) && !isProtectedPath(filePath, paths),
+          })),
       )
       continue
     }
     try {
       const parsed = parseFontFile(filePath)
       for (const face of parsed.faces) {
+        if (isHiddenSystemFamily(face.familyName)) continue
         nextFaces.push({
           path: filePath,
           familyName: face.familyName,
@@ -149,6 +158,7 @@ export function scanSystemFonts(paths: AppPaths): SystemFace[] {
     if (seenPaths.has(path.resolve(entry.disabledPath))) continue
     seenPaths.add(path.resolve(entry.disabledPath))
     for (const face of entry.faces) {
+      if (isHiddenSystemFamily(face.familyName)) continue
       nextFaces.push({
         path: entry.disabledPath,
         familyName: face.familyName,

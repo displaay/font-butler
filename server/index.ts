@@ -162,6 +162,7 @@ app.post('/api/settings', async (c) => {
     activityMaxOperations?: number
     folders?: AppSettings['folders']
     specimen?: AppSettings['specimen']
+    latinPreview?: AppSettings['latinPreview']
     defaultDestination?: AppSettings['defaultDestination']
     savedFilters?: AppSettings['savedFilters']
   }>()

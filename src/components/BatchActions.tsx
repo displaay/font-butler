@@ -35,6 +35,7 @@ export function CatalogBatchButtons({
   onDeactivate,
   onUninstall,
   onUninstallAndRemove,
+  onUninstallFromAdobe,
   onReinstall,
   onRepair,
   onForget,
@@ -50,6 +51,7 @@ export function CatalogBatchButtons({
   onDeactivate: () => void
   onUninstall: () => void
   onUninstallAndRemove?: () => void
+  onUninstallFromAdobe?: () => void
   onReinstall: () => void
   onRepair?: () => void
   onForget: () => void
@@ -62,6 +64,14 @@ export function CatalogBatchButtons({
   const multi = plan.count > 1
   const installVerb = plan.installMissing ? 'Install missing' : 'Install'
   const uninstallExtras = [
+    plan.adobeUninstall > 0 && onUninstallFromAdobe
+      ? {
+          key: 'uninstall-adobe',
+          label: actionLabel('Uninstall from Adobe testing folder', plan.adobeUninstall, multi),
+          onSelect: onUninstallFromAdobe,
+          icon: <AdobeLogo className="size-4 shrink-0" />,
+        }
+      : null,
     plan.uninstallAndRemove > 0 && onUninstallAndRemove
       ? {
           key: 'uninstall-and-delete',
@@ -76,7 +86,7 @@ export function CatalogBatchButtons({
           onSelect: onDeleteFiles,
         }
       : null,
-  ].filter((item): item is { key: string; label: string; onSelect: () => void } => Boolean(item))
+  ].filter((item): item is { key: string; label: string; onSelect: () => void; icon?: ReactNode } => Boolean(item))
   const extrasOnSplit = plan.uninstall > 0
   return (
     <div className="flex flex-wrap gap-2">
@@ -263,6 +273,7 @@ export function CatalogMenuItems({
   onDeactivate,
   onUninstall,
   onUninstallAndRemove,
+  onUninstallFromAdobe,
   onActivate,
   onSwitch,
   onForget,
@@ -283,6 +294,7 @@ export function CatalogMenuItems({
   onDeactivate: () => void
   onUninstall: () => void
   onUninstallAndRemove?: () => void
+  onUninstallFromAdobe?: () => void
   onActivate: () => void
   /** Passed only when a same-format occupying sibling exists (`canSwitchTo`). */
   onSwitch?: () => void
@@ -303,6 +315,7 @@ export function CatalogMenuItems({
     plan.activate > 0 ||
     plan.deactivate > 0 ||
     plan.uninstall > 0 ||
+    plan.adobeUninstall > 0 ||
     plan.uninstallAndRemove > 0 ||
     formatUninstalls.length >= 2 ||
     Boolean(formatSwap)
@@ -362,6 +375,15 @@ export function CatalogMenuItems({
           <CircleMinus /> Uninstall
         </ContextMenuItem>
       )}
+      {plan.adobeUninstall > 0 && onUninstallFromAdobe ? (
+        <ContextMenuItem
+          disabled={busy}
+          className={destructiveMenuItemClass}
+          onSelect={onUninstallFromAdobe}
+        >
+          <AdobeLogo /> Uninstall from Adobe testing folder
+        </ContextMenuItem>
+      ) : null}
       {formatUninstalls.length >= 2 && onUninstallFormat ? (
         <ContextMenuSub>
           <ContextMenuSubTrigger disabled={busy} className={destructiveMenuItemClass}>
@@ -449,6 +471,7 @@ export function InstanceMenuItems({
   onDeactivate,
   onUninstall,
   onInstallToAdobe,
+  onUninstallFromAdobe,
   onFormatSwap,
 }: {
   plan: InstanceMenuPlan
@@ -459,6 +482,7 @@ export function InstanceMenuItems({
   onDeactivate: () => void
   onUninstall: () => void
   onInstallToAdobe: () => void
+  onUninstallFromAdobe?: () => void
   onFormatSwap?: () => void
 }) {
   if (!hasInstanceMenuActions(plan)) return null
@@ -496,6 +520,15 @@ export function InstanceMenuItems({
           onSelect={onUninstall}
         >
           <CircleMinus /> Uninstall instance
+        </ContextMenuItem>
+      ) : null}
+      {plan.adobeUninstall && onUninstallFromAdobe ? (
+        <ContextMenuItem
+          disabled={busy}
+          className={destructiveMenuItemClass}
+          onSelect={onUninstallFromAdobe}
+        >
+          <AdobeLogo /> Uninstall from Adobe testing folder
         </ContextMenuItem>
       ) : null}
     </>

@@ -226,6 +226,13 @@ export type RetailSyncSettings = {
   folderId: string | null
 }
 
+export type LatinPreviewPreset = 'Aa' | 'Ag' | 'Ta' | 'ag' | 'custom'
+
+export type LatinPreviewPreferences = {
+  preset: LatinPreviewPreset
+  custom: string
+}
+
 export type AppSettings = {
   version: 1
   watchFolders: string[]
@@ -247,6 +254,7 @@ export type AppSettings = {
   activityRetentionDays: number
   activityMaxOperations: number
   specimen?: PreviewPreferences
+  latinPreview?: LatinPreviewPreferences
   defaultDestination?: DefaultDestinationId
   savedFilters: SavedLibraryFilter[]
   retailSync?: RetailSyncSettings
