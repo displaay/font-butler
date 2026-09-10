@@ -9,7 +9,7 @@ Drop a font file into Font Buttler and it remembers the original path. When that
 - Shows Font Book’s **My Fonts** (`~/Library/Fonts`) on the Fonts tab as soon as the app opens
 - Tracks a separate source file when you drop or watch one. A **Source** badge means that original file is still on disk; removing it does not uninstall the font
 - Groups families, counts instances, and marks variable fonts with a **VF** badge
-- Shows a live **Aa** preview on every card
+- Shows a live preview glyph on every card from cmap coverage: Latin-primary faces use **Aa**; Arabic/Hebrew/Hangul/Thai/Indic faces keep their script glyph even if they also contain Latin; emoji, Braille, and symbol faces use a specialty sample
 - Installs, uninstalls, and deactivates user fonts in place, like Font Book. Uninstalling removes the file from `~/Library/Fonts`. If a separate source file is still on disk, the family stays on the Fonts list as **Not installed**; otherwise it leaves the list
 - **Install as…** rewrites the family name across OpenType name (and CFF) tables, then installs a copy. The original file is never mutated
 - **On this Mac** lists computer and system fonts and lets you remove ones that are not protected

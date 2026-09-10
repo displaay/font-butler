@@ -18,6 +18,7 @@ import { systemBatchPlan, type SystemBatchPlan } from '@/lib/batch'
 import { countFormats } from '@/lib/formats'
 import { systemInstanceRows } from '@/lib/instances'
 import type { SystemFamilyGroup, ViewLayout } from '@/lib/types'
+import { resolvedPreviewSample } from '@/lib/previewSample'
 import { cn } from '@/lib/utils'
 
 export function SystemCard({
@@ -54,6 +55,7 @@ export function SystemCard({
   const instances = useMemo(() => systemInstanceRows(group), [group])
   const showInstances = instances.length > 0 && layout === 'list'
   const previewFamily = systemFontFamily(face.path)
+  const previewSample = resolvedPreviewSample(face.previewSample)
   const previewFaces = useMemo(
     () =>
       instances.map((row) => ({
@@ -134,6 +136,7 @@ export function SystemCard({
                 }}
                 active={hovered}
                 size={previewSize}
+                sample={previewSample}
               />
               <div className={previewSize < 3.25 ? 'p-2' : 'p-3'}>{metadata}</div>
             </button>
@@ -151,6 +154,7 @@ export function SystemCard({
                     family={previewFamily}
                     weight={face.weight}
                     italic={face.italic}
+                    sample={previewSample}
                   />
                   <div className="min-w-0 flex-1">{metadata}</div>
                 </button>
