@@ -59,7 +59,7 @@ const emptySettings = (): AppSettings => ({
   installAfterUpload: true,
   installWatchFolderFonts: true,
   theme: 'system',
-  appIcon: 'bright',
+  appIcon: 'classic',
   menuBarIcon: true,
   openAtLogin: false,
   clearOfficeFontCache: true,

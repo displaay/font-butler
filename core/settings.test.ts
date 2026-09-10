@@ -150,7 +150,7 @@ test('loadSettings fills installAfterUpload on older settings files', () => {
     assert.equal(settings.defaultView, 'grid')
     assert.equal(settings.defaultSort, 'added')
     assert.equal(settings.theme, 'system')
-    assert.equal(settings.appIcon, 'bright')
+    assert.equal(settings.appIcon, 'classic')
     assert.equal(settings.menuBarIcon, true)
     assert.equal(settings.openAtLogin, false)
     assert.equal(settings.clearOfficeFontCache, true)
@@ -199,17 +199,17 @@ test('loadSettings fills theme on older settings files', () => {
       }),
     )
     assert.equal(loadSettings(paths).theme, 'system')
-    assert.equal(loadSettings(paths).appIcon, 'bright')
+    assert.equal(loadSettings(paths).appIcon, 'classic')
     assert.equal(loadSettings(paths).menuBarIcon, true)
   } finally {
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
 })
 
-test('loadSettings defaults appIcon to bright', () => {
+test('loadSettings defaults appIcon to classic', () => {
   const paths = tempPaths()
   try {
-    assert.equal(loadSettings(paths).appIcon, 'bright')
+    assert.equal(loadSettings(paths).appIcon, 'classic')
   } finally {
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
@@ -241,7 +241,7 @@ test('loadSettings ignores junk appIcon values', () => {
         appIcon: 'neon',
       }),
     )
-    assert.equal(loadSettings(paths).appIcon, 'bright')
+    assert.equal(loadSettings(paths).appIcon, 'classic')
   } finally {
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }

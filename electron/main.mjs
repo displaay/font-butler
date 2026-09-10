@@ -39,7 +39,7 @@ function applyThemeSetting(theme) {
 }
 
 function parseAppIconStyle(value) {
-  return value === 'mono' ? 'mono' : 'bright'
+  return value === 'bright' || value === 'mono' ? value : 'classic'
 }
 
 function iconPackDir(style) {
@@ -47,6 +47,8 @@ function iconPackDir(style) {
 }
 
 function trayIconPaths() {
+  // 'classic' has no icon pack: build/icons/classic does not exist, so the
+  // existsSync checks below fall back to the original bundled icons.
   const quiet = path.join(iconPackDir(appIconStyle), 'tray.png')
   return {
     quiet: fs.existsSync(quiet) ? quiet : MENUBAR_ICON_PATH,
@@ -77,7 +79,7 @@ let apiToken = null
 let catalogEntries = []
 let activityOperations = []
 let menuBarIconEnabled = true
-let appIconStyle = 'bright'
+let appIconStyle = 'classic'
 let clearOfficeFontCacheEnabled = true
 let clearAdobeFontCacheEnabled = true
 let nativeNotificationsEnabled = false

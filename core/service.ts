@@ -140,6 +140,7 @@ import {
 import { postscriptPreview } from './rename.ts'
 import { revealInFileManager } from './reveal.ts'
 import { loadSettings, saveSettings } from './settings.ts'
+import { isAppIconStyle } from '../shared/appIcon.ts'
 import { parseLatinPreview } from '../shared/latinPreview.ts'
 import { isLatinPreviewSample } from '../shared/previewSample.ts'
 import { normalizeSavedFilters } from './saved-filters.ts'
@@ -462,7 +463,7 @@ export class FontButlerService {
     if (patch.theme === 'light' || patch.theme === 'dark' || patch.theme === 'system') {
       next.theme = patch.theme
     }
-    if (patch.appIcon === 'bright' || patch.appIcon === 'mono') {
+    if (isAppIconStyle(patch.appIcon)) {
       next.appIcon = patch.appIcon
     }
     if (typeof patch.menuBarIcon === 'boolean') {

@@ -116,7 +116,7 @@ export function OnboardingDialog({
   const [destinationId, setDestinationId] = useState<DefaultDestinationId>('macos')
   const [installAfterUpload, setInstallAfterUpload] = useState(true)
   const [autoReinstallOnUpdate, setAutoReinstallOnUpdate] = useState(false)
-  const [appIcon, setAppIcon] = useState<AppIconStyle>('bright')
+  const [appIcon, setAppIcon] = useState<AppIconStyle>('classic')
   const isDesktop = Boolean(window.fontButlerDesktop)
   const folders = settings?.folders ?? []
   const steps = visibleSteps(adobeAvailable)

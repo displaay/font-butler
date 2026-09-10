@@ -1,16 +1,17 @@
-export const APP_ICON_STYLES = ['bright', 'mono'] as const
+export const APP_ICON_STYLES = ['classic', 'bright', 'mono'] as const
 
 export type AppIconStyle = (typeof APP_ICON_STYLES)[number]
 
-export const DEFAULT_APP_ICON_STYLE: AppIconStyle = 'bright'
+export const DEFAULT_APP_ICON_STYLE: AppIconStyle = 'classic'
 
 export const APP_ICON_OPTIONS: { id: AppIconStyle; label: string }[] = [
+  { id: 'classic', label: 'Classic' },
   { id: 'bright', label: 'Bright' },
   { id: 'mono', label: 'Black & grey' },
 ]
 
 export function isAppIconStyle(value: unknown): value is AppIconStyle {
-  return value === 'bright' || value === 'mono'
+  return value === 'classic' || value === 'bright' || value === 'mono'
 }
 
 export function parseAppIconStyle(value: unknown): AppIconStyle {
