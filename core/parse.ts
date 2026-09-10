@@ -2,6 +2,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { create, openSync } from 'fontkit'
 import type { Font, FontCollection } from 'fontkit'
+import {
+  DEFAULT_PREVIEW_SAMPLE,
+  PREVIEW_PROBE_CODE_POINTS,
+  previewSampleFromCoverage,
+} from '../shared/previewSample.ts'
 import { FONT_EXTENSIONS, WEB_FONT_EXTENSIONS, type FontAxisInfo, type FontFaceInfo, type NamedInstanceInfo } from './types.ts'
 
 export function isFontFile(filePath: string): boolean {
@@ -107,6 +112,7 @@ export type ParsedFont = {
   namedInstances?: NamedInstanceInfo[]
   features?: string[]
   characterSet?: number[]
+  previewSample?: string
 }
 
 export type ParseFontOptions = {
@@ -137,6 +143,40 @@ export function glyphNameForCodePoint(filePath: string, code: number): string | 
   return name
 }
 
+function fontCoversCodePoint(font: Font, code: number): boolean {
+  const hasGlyph = (font as Font & { hasGlyphForCodePoint?: (value: number) => boolean }).hasGlyphForCodePoint
+  if (typeof hasGlyph !== 'function') return false
+  try {
+    return Boolean(hasGlyph.call(font, code))
+  } catch {
+    return false
+  }
+}
+
+function previewSampleFromFont(font?: Font): string {
+  if (!font) return DEFAULT_PREVIEW_SAMPLE
+  const probed = new Set<number>()
+  for (const code of PREVIEW_PROBE_CODE_POINTS) {
+    if (fontCoversCodePoint(font, code)) probed.add(code)
+  }
+  const sample = previewSampleFromCoverage(probed)
+  if (sample !== DEFAULT_PREVIEW_SAMPLE || probed.has(0x41) || probed.has(0x61)) {
+    return sample
+  }
+  const full = Array.isArray(font.characterSet) ? font.characterSet : []
+  if (full.length === 0) return sample
+  return previewSampleFromCoverage(full)
+}
+
+export function applyParsedFont(
+  target: { faces: FontFaceInfo[]; format: string; previewSample?: string },
+  parsed: ParsedFont,
+): void {
+  target.faces = parsed.faces
+  target.format = parsed.format
+  if (parsed.previewSample) target.previewSample = parsed.previewSample
+}
+
 function parseOpened(opened: Font | FontCollection, format: string, options?: ParseFontOptions): ParsedFont {
   const preview = options?.previewMeta
   if (isCollection(opened)) {
@@ -144,6 +184,7 @@ function parseOpened(opened: Font | FontCollection, format: string, options?: Pa
     return {
       format: format || 'ttc',
       faces: opened.fonts.map((font) => faceFromFont(font)),
+      previewSample: previewSampleFromFont(first),
       ...(preview ? previewMetaFromFont(first) : {}),
     }
   }
@@ -151,6 +192,7 @@ function parseOpened(opened: Font | FontCollection, format: string, options?: Pa
   return {
     format: detected === 'woff' || detected === 'woff2' ? detected : format || 'ttf',
     faces: [faceFromFont(opened)],
+    previewSample: previewSampleFromFont(opened),
     ...(preview ? previewMetaFromFont(opened) : {}),
   }
 }
@@ -189,6 +231,35 @@ export function missingCodePoints(text: string, characterSet: number[] | undefin
 export function readFileStat(filePath: string): { mtimeMs: number; size: number } {
   const stat = fs.statSync(filePath)
   return { mtimeMs: stat.mtimeMs, size: stat.size }
+}
+
+function existingFontPath(entry: {
+  installedPath?: string
+  disabledPath?: string
+  sourcePath?: string
+}): string | undefined {
+  for (const file of [entry.installedPath, entry.disabledPath, entry.sourcePath]) {
+    if (file && fs.existsSync(file)) return file
+  }
+}
+
+export function fillEntryPreviewSample(entry: {
+  previewSample?: string
+  installedPath?: string
+  disabledPath?: string
+  sourcePath?: string
+}): boolean {
+  if (entry.previewSample) return false
+  const file = existingFontPath(entry)
+  if (!file) return false
+  try {
+    const sample = parseFontFile(file).previewSample
+    if (!sample) return false
+    entry.previewSample = sample
+    return true
+  } catch {
+    return false
+  }
 }
 
 export function mimeForFont(filePath: string): string {

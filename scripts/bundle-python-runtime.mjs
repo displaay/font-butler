@@ -11,7 +11,7 @@ const vendorDir = path.join(project, 'vendor')
 const destDir = path.join(vendorDir, 'python')
 const cacheDir = path.join(vendorDir, 'cache')
 const requirementsPath = path.join(project, 'scripts/fonttools-requirements.txt')
-const scriptPath = path.join(project, 'scripts/rename_family.py')
+const pythonScripts = ['rename_family.py', 'materialise_feature.py', '_remove_ot_features.py']
 const markerPath = path.join(destDir, '.bundle-id')
 
 function targetTriple() {
@@ -44,8 +44,11 @@ function pythonBin() {
   return path.join(destDir, 'bin', 'python3')
 }
 
-function copyRenameScript() {
-  fs.copyFileSync(scriptPath, path.join(destDir, 'rename_family.py'))
+function copyPythonScripts() {
+  fs.mkdirSync(destDir, { recursive: true })
+  for (const name of pythonScripts) {
+    fs.copyFileSync(path.join(project, 'scripts', name), path.join(destDir, name))
+  }
 }
 
 function alreadyBundled() {
@@ -140,7 +143,7 @@ function pruneRuntime() {
 }
 
 if (alreadyBundled()) {
-  copyRenameScript()
+  copyPythonScripts()
   console.log(`[font-butler] bundled Python is current (${assetName()})`)
 } else {
   fs.mkdirSync(cacheDir, { recursive: true })
@@ -153,7 +156,7 @@ if (alreadyBundled()) {
   extract(archive)
   installFonttools()
   pruneRuntime()
-  copyRenameScript()
+  copyPythonScripts()
   fs.writeFileSync(markerPath, bundleId())
   console.log(`[font-butler] bundled Python + fonttools at ${destDir}`)
 }

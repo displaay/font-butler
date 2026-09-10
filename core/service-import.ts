@@ -14,7 +14,7 @@ import { occupyingSiblingsForIncoming } from './identity.ts'
 import { assertNotWebFont, isWebFontFile, isWebFontFormat } from './formats.ts'
 import { tryFingerprintFile } from './fingerprint.ts'
 import { folderForPath, isExcluded, mostSpecificOwner } from './folders.ts'
-import { isFontFile, isPreviewableFontFile, parseFontFile, readFileStat } from './parse.ts'
+import { applyParsedFont, isFontFile, isPreviewableFontFile, parseFontFile, readFileStat } from './parse.ts'
 import { classifyImportFile, isWatchIdentityDuplicate } from './planner.ts'
 import type { AppPaths } from './paths.ts'
 import { applyEntryFacts } from './state.ts'
@@ -64,8 +64,7 @@ export function importOneUnlocked(
       existing.installedPath = resolved
       existing.status = 'installed'
     }
-    existing.faces = parsed.faces
-    existing.format = parsed.format
+    applyParsedFont(existing, parsed)
     if (fingerprint) existing.sourceFingerprint = existing.sourceFingerprint ?? fingerprint
     if (!inUserFonts || isExternalSource(existing)) {
       existing.sourceMtimeMs = stat.mtimeMs
@@ -109,6 +108,7 @@ export function importOneUnlocked(
     installedPath: web ? undefined : inUserFonts ? resolved : undefined,
     faces: parsed.faces,
     format: parsed.format,
+    previewSample: parsed.previewSample,
     addedAt: now(),
     updatedAt: now(),
   }

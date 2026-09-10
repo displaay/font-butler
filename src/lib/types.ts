@@ -102,6 +102,8 @@ export type CatalogEntry = {
   customFamilyName?: string
   faces: FontFaceInfo[]
   format: string
+  /** Font Book-style library-card glyph(s), derived from cmap coverage. */
+  previewSample?: string
   addedAt: number
   updatedAt: number
 }
@@ -118,6 +120,7 @@ export type SystemFace = {
   weight?: number
   italic?: boolean
   format: string
+  previewSample?: string
   protected: boolean
   writable: boolean
   managedId?: string

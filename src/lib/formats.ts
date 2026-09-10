@@ -205,14 +205,14 @@ export type FormatSwap = {
   occupying: boolean
 }
 
-export function formatSwapLabel(swap: Pick<FormatSwap, 'from' | 'to' | 'occupying'>): string {
+export function formatSwapLabel(swap: Pick<FormatSwap, 'from' | 'to'> & { occupying?: boolean }): string {
   if (!swap.occupying) return `Install ${swap.to.toUpperCase()}`
   return `Swap ${swap.from.toUpperCase()} for ${swap.to.toUpperCase()}`
 }
 
-function deactivatedEntries<
-  T extends Pick<CatalogEntry, 'status' | 'previewOnly' | 'format' | 'sourcePath' | 'faces'>,
->(entries: T[]): T[] {
+function deactivatedEntries<T extends Pick<CatalogEntry, 'status' | 'previewOnly'>>(
+  entries: T[],
+): T[] {
   return entries.filter((entry) => entry.status === 'deactivated' && !entry.previewOnly)
 }
 

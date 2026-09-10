@@ -90,6 +90,8 @@ import {
   isPreviewableFontFile,
   mimeForFont,
   parseFontBuffer,
+  applyParsedFont,
+  fillEntryPreviewSample,
   parseFontFile,
   readFileStat,
 } from './parse.ts'
@@ -203,9 +205,12 @@ import {
 import { importInboxFiles as importInboxFilesFn, importOneUnlocked as importOneUnlockedFn } from './service-import.ts'
 import {
   activateEntry as activateEntryFn,
+  bakeFeatures as bakeFeaturesFn,
   deactivateEntry as deactivateEntryFn,
   installEntry as installEntryFn,
   reinstallEntry as reinstallEntryFn,
+  type BakeFeaturesMode,
+  type BakeFeaturesResult,
   type ServiceLifecycleHost,
   uninstallEntry as uninstallEntryFn,
 } from './service-lifecycle.ts'
@@ -266,6 +271,7 @@ export class FontButlerService {
     await this.adoptUserFonts()
     await this.detachRenamedInstallSources()
     await this.seedIfEmpty()
+    await runCatalogTask(() => this.fillMissingPreviewSamplesUnlocked())
     await this.refreshSourceStatuses()
     await this.reinstallCurrentlyOutdated()
     await syncWatchers(this.paths)
@@ -882,6 +888,35 @@ export class FontButlerService {
     })
   }
 
+  async bakeFeatures(
+    id: string,
+    features: string[],
+    mode: BakeFeaturesMode,
+    familyName?: string,
+  ): Promise<BakeFeaturesResult> {
+    return runCatalogTask(async () => {
+      const result = await bakeFeaturesFn(this.asLifecycleHost(), id, features, mode, familyName)
+      if (mode === 'new-copy') {
+        const catalog = loadCatalog(this.paths)
+        const latest = findById(catalog, result.entry.id)
+        if (latest) {
+          addManualOwner(latest)
+          touchEntry(latest)
+          saveCatalog(this.paths, catalog)
+          result.entry = latest
+        }
+      }
+      this.commitManualOperation(
+        mode === 'new-copy' ? 'install' : 'reinstall',
+        [this.operationItem(result.entry, 'succeeded')],
+        displayFamily(result.entry),
+      )
+      await syncWatchers(this.paths)
+      emitCatalog(this.paths)
+      return result
+    })
+  }
+
   async reinstallMany(ids: string[], options?: InstallOptions): Promise<CatalogEntry[]> {
     return runCatalogTask(async () => {
       const entries: CatalogEntry[] = []
@@ -1092,6 +1127,7 @@ export class FontButlerService {
         disabledPath: dest,
         faces: parsed.faces,
         format: parsed.format,
+        previewSample: parsed.previewSample,
         addedAt: now(),
         updatedAt: now(),
       }
@@ -1739,8 +1775,7 @@ export class FontButlerService {
           catalog = loadCatalog(this.paths)
           entry = findById(catalog, id)
           if (!entry) throw new Error('Font is not in the library.')
-          entry.faces = staged.parsed.faces
-          entry.format = staged.parsed.format
+          applyParsedFont(entry, staged.parsed)
           entry.installedFingerprint = target
           entry.installedSnapshotMtimeMs = staged.stat.mtimeMs
           entry.installedSnapshotSize = staged.stat.size
@@ -2435,8 +2470,7 @@ export class FontButlerService {
         if (sourceFileExists(entry.sourcePath)) {
           try {
             const parsed = parseFontFile(entry.sourcePath)
-            entry.faces = parsed.faces
-            entry.format = parsed.format
+            applyParsedFont(entry, parsed)
           } catch {
             // Keep stored names if the original file cannot be parsed.
           }
@@ -2897,6 +2931,15 @@ export class FontButlerService {
     return runCatalogTask(() => this.refreshSourceStatusesUnlocked())
   }
 
+  private fillMissingPreviewSamplesUnlocked(): void {
+    const catalog = loadCatalog(this.paths)
+    let changed = false
+    for (const entry of catalog.entries) {
+      if (fillEntryPreviewSample(entry)) changed = true
+    }
+    if (changed) saveCatalog(this.paths, catalog)
+  }
+
   private refreshSourceStatusesUnlocked(): void {
     const catalog = loadCatalog(this.paths)
     let changed = false
@@ -2927,8 +2970,10 @@ export class FontButlerService {
         try {
           const parsed = parseFontFile(entry.sourcePath)
           if (JSON.stringify(entry.faces) !== JSON.stringify(parsed.faces)) {
-            entry.faces = parsed.faces
-            entry.format = parsed.format
+            applyParsedFont(entry, parsed)
+            changed = true
+          } else if (parsed.previewSample && entry.previewSample !== parsed.previewSample) {
+            entry.previewSample = parsed.previewSample
             changed = true
           }
         } catch {
@@ -3207,6 +3252,7 @@ export class FontButlerService {
           installedPath: resolved,
           faces: parsed.faces,
           format: parsed.format,
+          previewSample: parsed.previewSample,
           addedAt: now(),
           updatedAt: now(),
         })

@@ -228,6 +228,22 @@ export const api = {
     json<{ entries: CatalogEntry[] }>(
       post('/api/reinstall', { ids, expectedSourceFingerprint: options?.expectedSourceFingerprint }),
     ),
+  bakeFeatures: (
+    id: string,
+    features: string[],
+    mode: 'reinstall' | 'new-copy',
+    familyName?: string,
+  ) =>
+    json<{
+      entry: CatalogEntry
+      report: {
+        appliedFeatures: string[]
+        skippedWarnings: string[]
+        warnings: string[]
+        errors: string[]
+        changed: boolean
+      }
+    }>(post('/api/bake-features', { id, features, mode, familyName })),
   forget: (id: string, options?: { deleteFiles?: boolean }) =>
     json<{ removed: number }>(post('/api/forget', { id, deleteFiles: options?.deleteFiles })),
   forgetMany: (ids: string[], options?: { deleteFiles?: boolean }) =>

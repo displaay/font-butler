@@ -14,27 +14,33 @@ import { useSetActionStatus } from '@/components/NotifyProvider'
 import { api } from '@/lib/api'
 import type { CatalogEntry } from '@/lib/types'
 import { familyNameOf } from '@/lib/group'
+import { bakeReportWarnings, suggestedBakeFamilyName } from '@/lib/otFeatures'
 
 export function RenameDialog({
   entry,
   open,
   onOpenChange,
   onDone,
+  bakeFeatures,
 }: {
   entry: CatalogEntry | null
   open: boolean
   onOpenChange: (open: boolean) => void
   onDone: (entry: CatalogEntry) => void
+  bakeFeatures?: string[] | null
 }) {
   const setActionStatus = useSetActionStatus()
   const original = entry ? familyNameOf(entry) : ''
-  const [name, setName] = useState(original)
+  const suggested = entry && bakeFeatures?.length
+    ? suggestedBakeFamilyName(original, bakeFeatures)
+    : original
+  const [name, setName] = useState(suggested)
   const [preview, setPreview] = useState({ fullName: '', postscriptName: '' })
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    setName(original)
-  }, [original, open])
+    setName(suggested)
+  }, [suggested, open])
 
   useEffect(() => {
     if (!entry || !name.trim()) return
@@ -47,11 +53,22 @@ export function RenameDialog({
   async function install() {
     if (!entry || !name.trim()) return
     setBusy(true)
-    setActionStatus(`Installing as ${name.trim()}…`)
+    const family = name.trim()
+    setActionStatus(
+      bakeFeatures?.length ? `Installing baked copy as ${family}…` : `Installing as ${family}…`,
+    )
     try {
-      const result = await api.install(entry.id, name.trim())
-      toast.success(`Installed as ${name.trim()}`)
-      onDone(result.entry)
+      if (bakeFeatures?.length) {
+        const result = await api.bakeFeatures(entry.id, bakeFeatures, 'new-copy', family)
+        toast.success(`Installed ${family} with ${bakeFeatures.join(', ')} baked in`)
+        const warnings = bakeReportWarnings(result.report)
+        if (warnings.length) toast.warning(warnings.join('\n'))
+        onDone(result.entry)
+      } else {
+        const result = await api.install(entry.id, family)
+        toast.success(`Installed as ${family}`)
+        onDone(result.entry)
+      }
       onOpenChange(false)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Install as failed')
@@ -67,8 +84,9 @@ export function RenameDialog({
         <DialogHeader>
           <DialogTitle>Install as a different name</DialogTitle>
           <DialogDescription>
-            Font Buttler writes a copy with a new family name in the name and CFF
-            tables. Your source file stays unchanged.
+            {bakeFeatures?.length
+              ? 'Font Buttler bakes the selected OpenType features into default glyphs, then writes a copy with a new family name. Your source file stays unchanged.'
+              : 'Font Buttler writes a copy with a new family name in the name and CFF tables. Your source file stays unchanged.'}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">

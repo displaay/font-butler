@@ -219,6 +219,7 @@ test('formatSwap offers installing the other format while a copy is parked', () 
     occupying: false,
   })
   assert.equal(formatSwapLabel(formatSwap([otf, ttf])!), 'Install TTF')
+  assert.equal(formatSwapLabel({ from: 'otf', to: 'ttf' }), 'Install TTF')
 })
 
 test('formatSwap offers the non-preferred parked format when both are deactivated', () => {

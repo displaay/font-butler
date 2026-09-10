@@ -4,7 +4,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { assertSafeShellPath } from './auth.ts'
-import { projectRoot } from './paths.ts'
+import {
+  pythonScriptArgv,
+  resolvePythonRuntime,
+  type PythonRuntime,
+} from './python-runtime.ts'
 
 const execFileAsync = promisify(execFile)
 
@@ -201,50 +205,13 @@ function rewriteNameTable(file: Buffer, family: string): Buffer {
   return packSfnt(sfntVersion, tables)
 }
 
-export type RenameRuntime = {
-  command: string
-  script: string
-  source: 'bundled' | 'system'
-}
+export type RenameRuntime = PythonRuntime
 
-function processResourcesPath(): string {
-  const value = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
-  return typeof value === 'string' ? value : ''
-}
-
-export function resolveRenameRuntime({
-  resourcesPath = processResourcesPath(),
-  root = projectRoot,
-}: {
+export function resolveRenameRuntime(options?: {
   resourcesPath?: string
   root?: string
-} = {}): RenameRuntime | null {
-  const projectScript = path.join(root, 'scripts/rename_family.py')
-  const candidates: RenameRuntime[] = [
-    {
-      command: path.join(resourcesPath, 'python', 'bin', 'python3'),
-      script: path.join(resourcesPath, 'python', 'rename_family.py'),
-      source: 'bundled',
-    },
-    {
-      command: path.join(root, 'vendor/python/bin/python3'),
-      script: path.join(root, 'vendor/python/rename_family.py'),
-      source: 'bundled',
-    },
-    {
-      command: 'python3',
-      script: projectScript,
-      source: 'system',
-    },
-  ]
-  for (const candidate of candidates) {
-    const commandReady =
-      candidate.command === 'python3' || fs.existsSync(candidate.command)
-    if (commandReady && fs.existsSync(candidate.script)) {
-      return candidate
-    }
-  }
-  return null
+}): RenameRuntime | null {
+  return resolvePythonRuntime('rename_family.py', options)
 }
 
 export function renamePythonArgv(
@@ -253,15 +220,11 @@ export function renamePythonArgv(
   destPath: string,
   family: string,
 ): string[] {
-  const isolated = runtime.source === 'bundled' ? ['-I'] : []
-  return [
-    ...isolated,
-    runtime.script,
-    '--',
+  return pythonScriptArgv(runtime, [
     assertSafeShellPath(sourcePath),
     assertSafeShellPath(destPath),
     family,
-  ]
+  ])
 }
 
 async function renameWithPython(

@@ -100,6 +100,7 @@ export function applyInstalledMetadata(
   entry.disabledPath = undefined
   entry.faces = staged.parsed.faces
   entry.format = staged.parsed.format
+  if (staged.parsed.previewSample) entry.previewSample = staged.parsed.previewSample
   entry.installedSnapshotMtimeMs = staged.stat.mtimeMs
   entry.installedSnapshotSize = staged.stat.size
   if (options.sourcePath) {

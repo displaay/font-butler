@@ -395,6 +395,30 @@ app.post('/api/activate', async (c) => {
   }
 })
 
+app.post('/api/bake-features', async (c) => {
+  const body = await c.req.json<{
+    id?: string
+    features?: string[]
+    mode?: 'reinstall' | 'new-copy'
+    familyName?: string
+  }>()
+  if (!body.id) {
+    return c.json({ error: 'Missing id' }, 400)
+  }
+  if (body.mode !== 'reinstall' && body.mode !== 'new-copy') {
+    return c.json({ error: 'Missing bake mode' }, 400)
+  }
+  try {
+    const result = await service.bakeFeatures(body.id, body.features ?? [], body.mode, body.familyName)
+    return c.json(result)
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : 'Bake failed' },
+      400,
+    )
+  }
+})
+
 app.post('/api/reinstall', async (c) => {
   const body = await c.req.json<{
     id?: string
