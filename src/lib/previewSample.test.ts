@@ -14,6 +14,14 @@ function latin(): number[] {
   return codes('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz')
 }
 
+function european(): number[] {
+  return [
+    ...latin(),
+    0x0391, 0x03b1, 0x0392, 0x03b2, 0x0393, 0x03b3,
+    0x0410, 0x0430, 0x0411, 0x0431, 0x0412, 0x0432,
+  ]
+}
+
 /** Locked product matrix: primary-script glyph, including with incidental Latin. */
 const PRODUCT_MATRIX: Array<{ name: string; coverage: string; sample: string }> = [
   { name: 'Arabic', coverage: 'ابتجدرسعلمني', sample: 'ع' },
@@ -60,6 +68,14 @@ test('Latin-primary faces use Aa, including pan-Unicode like Arial Unicode MS', 
     ]),
     'Aa',
   )
+})
+
+test('Latin + Greek/Cyrillic wins Aa even when the file also covers Devanagari', () => {
+  assert.equal(
+    previewSampleFromCoverage([...european(), ...codes('कखगघङचजटडण')]),
+    'Aa',
+  )
+  assert.equal(previewSampleFromCoverage([...latin(), ...codes('कखगघङचजटडण')]), 'क')
 })
 
 test('grid and list resolve missing coverage to Aa', () => {

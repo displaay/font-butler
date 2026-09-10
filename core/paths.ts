@@ -214,6 +214,14 @@ export function plansDir(paths: AppPaths): string {
   return path.join(paths.dataRoot, 'plans')
 }
 
+export function retailManifestPath(paths: AppPaths): string {
+  return path.join(paths.dataRoot, 'retail-manifest.json')
+}
+
+export function retailTokenPath(paths: AppPaths): string {
+  return path.join(paths.dataRoot, 'retail-token')
+}
+
 export function journalPath(paths: AppPaths): string {
   return path.join(paths.dataRoot, 'mutation-journal.json')
 }

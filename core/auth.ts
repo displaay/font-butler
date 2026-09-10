@@ -32,6 +32,39 @@ export function getOrCreateApiToken(tokenPath: string): string {
   return token
 }
 
+/**
+ * The DISPLAAY worker API token, kept in its own 0600 file rather than in settings.json.
+ *
+ * AppSettings is broadcast to the renderer on `/api/bootstrap`, on `/api/settings` and on every
+ * `settings` event, so a token stored there would leak into the UI payload. Same reasoning and same
+ * file mode as the local API token above.
+ */
+export function readRetailToken(tokenPath: string): string {
+  try {
+    if (!fs.existsSync(tokenPath)) return ''
+    return fs.readFileSync(tokenPath, 'utf8').trim()
+  } catch {
+    return ''
+  }
+}
+
+export function writeRetailToken(tokenPath: string, token: string): void {
+  const value = token.trim()
+  if (!value) {
+    try {
+      fs.rmSync(tokenPath, { force: true })
+    } catch {
+      // Nothing to clear.
+    }
+    return
+  }
+  fs.mkdirSync(path.dirname(tokenPath), { recursive: true })
+  // `mode` applies only when the file is created, and this rewrites on every token update, so an
+  // existing file left at 0644 by an earlier build would silently stay world-readable.
+  fs.rmSync(tokenPath, { force: true })
+  fs.writeFileSync(tokenPath, value, { mode: 0o600 })
+}
+
 export function contentDisposition(filename: string): string {
   const safe = filename.replace(/[^\w.-]+/g, '_') || 'font.bin'
   const encoded = encodeURIComponent(filename)

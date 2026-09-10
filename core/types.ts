@@ -1,3 +1,5 @@
+import type { RetailSyncStatus } from '../shared/retail.ts'
+
 export const FONT_EXTENSIONS = ['.ttf', '.otf', '.ttc', '.otc'] as const
 export const WEB_FONT_EXTENSIONS = ['.woff', '.woff2'] as const
 
@@ -212,6 +214,27 @@ export type PreviewPreferences = {
   preset: SpecimenPreset
 }
 
+/**
+ * Optional DISPLAAY retail collection sync. The worker API token is deliberately NOT here: AppSettings
+ * is broadcast to the renderer on bootstrap and on every settings event, so the token lives in a 0600
+ * file next to the local API token instead (see `retailTokenPath`).
+ */
+export type RetailSyncSettings = {
+  enabled: boolean
+  workerBaseUrl: string
+  /** Background check interval in minutes; `0` means the app never checks on its own. */
+  autoCheckMinutes: number
+  /** Id of the WatchFolder that holds the collection, once configured. */
+  folderId: string | null
+}
+
+export type LatinPreviewPreset = 'Aa' | 'Ag' | 'Ta' | 'ag' | 'custom'
+
+export type LatinPreviewPreferences = {
+  preset: LatinPreviewPreset
+  custom: string
+}
+
 export type AppSettings = {
   version: 1
   watchFolders: string[]
@@ -233,8 +256,10 @@ export type AppSettings = {
   activityRetentionDays: number
   activityMaxOperations: number
   specimen?: PreviewPreferences
+  latinPreview?: LatinPreviewPreferences
   defaultDestination?: DefaultDestinationId
   savedFilters: SavedLibraryFilter[]
+  retailSync?: RetailSyncSettings
 }
 
 export type OfficeFontCacheInfo = {
@@ -276,7 +301,16 @@ export type OperationItem = {
   expectedSourcePath?: string
   previousRevision?: string
   previousSourcePath?: string
+  previousSourceMtimeMs?: number
+  previousSourceSize?: number
+  previousSourcePresent?: boolean
+  previousSourceAvailability?: SourceAvailability
+  previousSourceFingerprint?: string
+  previousStatus?: FontStatus
+  previousUpdateHold?: UpdateHold | null
+  previousUpdatePolicy?: UpdatePolicy | null
   relatedEntryId?: string
+  previousEntry?: CatalogEntry
 }
 
 export type Operation = {
@@ -489,3 +523,4 @@ export type ServiceEvent =
   | { type: 'projects'; projects: ProjectSet[] }
   | { type: 'duplicates'; duplicates: DuplicateWarning[] }
   | { type: 'app-update'; update: AppUpdateStatus }
+  | { type: 'retail'; status: RetailSyncStatus }

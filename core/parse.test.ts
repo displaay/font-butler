@@ -116,6 +116,17 @@ test('parseFontFile picks a Font Book-style preview sample from cmap coverage', 
       codePoints: [65, 97, 0x05d0, 0x05d1, 0x05d2, 0x05d3, 0x05d4, 0x05d5],
     })
     assert.equal(parseFontFile(hebrew).previewSample, 'א')
+
+    const noto = path.join(dir, 'Noto.ttf')
+    writeTestFont(noto, 'Noto', 'Noto-Regular', {
+      codePoints: [
+        65, 97,
+        0x0391, 0x03b1, 0x0392, 0x03b2, 0x0393, 0x03b3,
+        0x0410, 0x0430, 0x0411, 0x0431, 0x0412, 0x0432,
+        0x0915, 0x0916, 0x0917, 0x0918, 0x0919,
+      ],
+    })
+    assert.equal(parseFontFile(noto).previewSample, 'Aa')
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }

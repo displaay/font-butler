@@ -62,6 +62,15 @@ Electron + Vite + React + TypeScript. Font metadata comes from `fontkit`. Family
 
 The packaged macOS app ships its own CPython and `fonttools`, so “Install as…” does not need a system Python. `npm run dist` downloads that runtime into `vendor/python`. From source, install fonttools (`python3 -m pip install fonttools`) or run `npm run bundle:python`.
 
+## DISPLAAY retail collection
+
+An optional watch folder can be kept in step with the DISPLAAY retail collection. Turn it on in
+**Settings → DISPLAAY retail**: pick a watch folder, give it the worker address and a token, then use
+**Check** to see what changed on the server and **Sync** to pull it down. Nothing happens automatically
+and nothing runs at startup. Files land as `<folder>/<GlyphsFile name>/<font>`, so a regenerated font
+replaces the file in place and shows up as a normal update. See
+[docs/retail-sync.md](docs/retail-sync.md).
+
 ## App updates
 
 Font Buttler compares its running version to the latest [GitHub Release](https://github.com/displaay/font-butler/releases). When a newer release exists, Settings, the Updates tab, and the menu bar show the version, notes, **Download**, and **Open release**. Nothing is downloaded or installed automatically. The check is not on the cold-start path and times out after a few seconds so a hung GitHub fetch cannot stall first paint. Offline or GitHub failures stay quiet. A public repo needs no token; a private repo needs a read-only `FONT_BUTLER_GITHUB_TOKEN` until Releases are public (see [docs/releases.md](docs/releases.md)).

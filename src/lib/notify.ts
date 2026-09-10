@@ -99,6 +99,19 @@ export function adobeInstallCopy(count: number): { pending: string; done: string
   }
 }
 
+export function adobeUninstallCopy(count: number): { pending: string; done: string } {
+  if (count <= 1) {
+    return {
+      pending: 'Removing Adobe testing copy…',
+      done: 'Removed Adobe testing copy',
+    }
+  }
+  return {
+    pending: `Removing ${count} Adobe testing copies…`,
+    done: `Removed ${count} Adobe testing copies`,
+  }
+}
+
 export function emptyImportError(visibleErrors: string[], ignored = 0): string {
   if (visibleErrors.length) return visibleErrors.join('\n')
   if (ignored > 0) return WOFF_INSTALL_ERROR

@@ -64,3 +64,14 @@ test('cold start does not await appUpdate in the boot Promise.all', async () => 
   assert.equal(/api\.appUpdate\(/.test(bootAll[1]), false)
   assert.match(source, /setLoading\(false\)[\s\S]*void loadAppUpdate\(\)/)
 })
+
+test('settings button shows a blue Update badge when an app release is available', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const { fileURLToPath } = await import('node:url')
+  const source = await readFile(fileURLToPath(new URL('../components/Sidebar.tsx', import.meta.url)), 'utf8')
+  const settings = source.match(/onClick=\{onOpenSettings\}[\s\S]*?<\/Button>/)
+  assert.ok(settings, 'expected Settings button in the sidebar')
+  assert.match(settings[0], /hasAppUpdate \?/)
+  assert.match(settings[0], /tone="info"/)
+  assert.match(settings[0], />\s*Update\s*</)
+})

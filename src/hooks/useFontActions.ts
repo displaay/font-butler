@@ -5,6 +5,7 @@ import { api } from '@/lib/api'
 import {
   activatableIds,
   adobeInstallableIds,
+  adobeRemovableIds,
   deactivatableIds,
   installableIds,
   reinstallableIds,
@@ -36,7 +37,7 @@ import {
   uniquePaths,
 } from '@/lib/group'
 import { canSwitchTo } from '@/lib/identity'
-import { actionCopy, actionCopyFor, adobeInstallCopy, remainingActionCopy } from '@/lib/notify'
+import { actionCopy, actionCopyFor, adobeInstallCopy, adobeUninstallCopy, remainingActionCopy } from '@/lib/notify'
 import { batchResultCopy, type BatchOutcome } from '@/lib/results'
 import { doneToastAction, latestUndoableOperationId } from '@/lib/toastAction'
 import { updateGroupsForIds } from '@/lib/updateInventory'
@@ -436,6 +437,24 @@ export function useFontActions({
     )
   }
 
+  // Only `entries` is ever read, and `adobeRemovableIds` already takes that shape. Asking for a whole
+  // FamilyGroup would force callers with a single entry to fabricate the other eight fields.
+  async function uninstallFromAdobeFor(groups: Array<Pick<FamilyGroup, 'entries'>>) {
+    const ids = groups.flatMap((group) => adobeRemovableIds(group))
+    if (ids.length === 0) return
+    await run(async () => {
+      for (const id of ids) {
+        await api.removeDestinationCopy(id, 'adobe-shared')
+      }
+    }, adobeUninstallCopy(ids.length))
+  }
+
+  async function uninstallInstanceFromAdobe(id: string) {
+    const entry = entries.find((item) => item.id === id)
+    if (!entry) return
+    await uninstallFromAdobeFor([{ entries: [entry] }])
+  }
+
   async function activateGroupGuarded(group: FamilyGroup) {
     const prepared = await prepareInstall(activatableIds(group).length ? activatableIds(group) : entryIds(group))
     if (!prepared) return
@@ -722,6 +741,8 @@ export function useFontActions({
     deactivateInstance,
     uninstallInstance,
     installInstanceToAdobe,
+    uninstallFromAdobeFor,
+    uninstallInstanceFromAdobe,
     activateGroupGuarded,
     reinstallSelected,
     repairSelected,

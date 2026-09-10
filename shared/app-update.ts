@@ -232,8 +232,16 @@ export function appUpdateRowLabel(status: Pick<AppUpdateStatus, 'updateAvailable
   return `Font Buttler ${status.latestVersion}`
 }
 
-export function shouldShowUpdatesTab(fontUpdateCount: number, hasAppUpdate: boolean): boolean {
-  return fontUpdateCount > 0 || hasAppUpdate
+/**
+ * `otherUpdateCount` covers updates that are neither a catalog entry nor the app itself — today the
+ * retail collection, where the newer bytes are still on the server and no local file has changed yet.
+ */
+export function shouldShowUpdatesTab(
+  fontUpdateCount: number,
+  hasAppUpdate: boolean,
+  otherUpdateCount = 0,
+): boolean {
+  return fontUpdateCount > 0 || hasAppUpdate || otherUpdateCount > 0
 }
 
 /** Resolve `work` or reject after `timeoutMs`. A hung fetch must not block boot. */

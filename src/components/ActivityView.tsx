@@ -9,6 +9,7 @@ import type { CatalogEntry, Operation } from '@/lib/types'
 
 export function ActivityView({
   operations,
+  query = '',
   entries = [],
   highlightId,
   onUndo,
@@ -16,6 +17,7 @@ export function ActivityView({
   onClearAll,
 }: {
   operations: Operation[]
+  query?: string
   entries?: CatalogEntry[]
   highlightId?: string | null
   onUndo: (id: string) => void
@@ -33,7 +35,9 @@ export function ActivityView({
   if (operations.length === 0) {
     return (
       <div className="flex flex-1 items-center justify-center p-8 text-sm text-muted-foreground">
-        Activity appears here after imports, updates, restores, repairs, and activation changes.
+        {query.trim()
+          ? 'No activity matches this search.'
+          : 'Activity appears here after imports, updates, restores, repairs, and activation changes.'}
       </div>
     )
   }

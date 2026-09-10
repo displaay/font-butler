@@ -55,6 +55,10 @@ const queuedFiles = []
 /** @type {null | { updateAvailable?: boolean, latestVersion?: string, htmlUrl?: string | null, releaseNotes?: string | null }} */
 let appUpdate = null
 const APP_UPDATE_POLL_MS = 6 * 60 * 60 * 1000
+// The retail interval is a user setting, so this only decides how often we re-read it. The tick is a
+// no-op unless the collection is on and a check is actually due.
+const RETAIL_TICK_MS = 60 * 1000
+let retailStatus = null
 
 function apiHeaders(extra = {}) {
   const headers = { ...extra }
@@ -688,6 +692,9 @@ function handleApiEvent(event) {
   if (!event || typeof event !== 'object') {
     return
   }
+  if (event.type === 'retail' && event.status && typeof event.status === 'object') {
+    retailStatus = event.status
+  }
   if (event.type === 'catalog' && Array.isArray(event.entries)) {
     catalogEntries = event.entries
     refreshTrayMenu()
@@ -776,6 +783,50 @@ async function loadAppUpdate(refresh = false) {
     }
   } catch (error) {
     console.error('Failed to check GitHub Releases', error)
+  }
+}
+
+/**
+ * Background check for the DISPLAAY retail collection.
+ *
+ * Lives here rather than in the renderer so it keeps running with the window closed, the same reason
+ * the app-update poll does. Deliberately sends no `refresh`, so the worker answers from its cached
+ * manifest — the regenerate webhook purges that cache, so a new generation still surfaces promptly
+ * without every client rebuilding the manifest on its own schedule.
+ */
+async function retailTick() {
+  const status = retailStatus
+  if (!status || !status.enabled || !status.folderRoot || !status.hasToken) return
+  const minutes = Number(status.autoCheckMinutes)
+  if (!Number.isFinite(minutes) || minutes <= 0) return
+
+  const lastAt = status.checkedAt ? Date.parse(status.checkedAt) : Number.NaN
+  const due = !Number.isFinite(lastAt) || Date.now() - lastAt >= minutes * 60 * 1000
+  if (!due) return
+
+  try {
+    await ensureApiToken()
+    // The response also arrives as a `retail` event, which refreshes `retailStatus` and the renderer.
+    await fetch(`${API}/api/retail/check`, {
+      method: 'POST',
+      headers: apiHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({}),
+    })
+  } catch {
+    // Quiet: a background check must never interrupt, and the next tick retries.
+  }
+}
+
+async function loadRetailStatus() {
+  try {
+    await ensureApiToken()
+    const response = await fetch(`${API}/api/retail/status`, { headers: apiHeaders() })
+    const data = await response.json()
+    if (data && data.status && typeof data.status === 'object') {
+      retailStatus = data.status
+    }
+  } catch {
+    // The next tick picks it up once the server is reachable.
   }
 }
 
@@ -973,6 +1024,10 @@ if (!gotLock) {
     setInterval(() => {
       if (!isQuitting) void loadAppUpdate()
     }, APP_UPDATE_POLL_MS)
+    void loadRetailStatus()
+    setInterval(() => {
+      if (!isQuitting) void retailTick()
+    }, RETAIL_TICK_MS)
     const fromArgv = process.argv.filter((arg) =>
       /\.(ttf|otf|ttc|otc|woff2?)$/i.test(arg),
     )

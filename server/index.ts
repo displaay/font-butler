@@ -162,6 +162,7 @@ app.post('/api/settings', async (c) => {
     activityMaxOperations?: number
     folders?: AppSettings['folders']
     specimen?: AppSettings['specimen']
+    latinPreview?: AppSettings['latinPreview']
     defaultDestination?: AppSettings['defaultDestination']
     savedFilters?: AppSettings['savedFilters']
   }>()
@@ -283,7 +284,17 @@ app.post('/api/install', async (c) => {
   try {
     if (body.ids?.length) {
       const entries = await service.installMany(body.ids, body.familyName, options)
-      return c.json({ entries })
+      const batch = entries as typeof entries & Partial<import('../core/types.ts').BatchActionResult>
+      return c.json({
+        entries,
+        operationId: batch.operationId,
+        succeeded: batch.succeeded,
+        failed: batch.failed,
+        skipped: batch.skipped,
+        canceled: batch.canceled,
+        errors: batch.errors,
+        failedIds: batch.failedIds,
+      })
     }
     if (!body.id) {
       return c.json({ error: 'Missing id or ids' }, 400)
@@ -429,7 +440,17 @@ app.post('/api/reinstall', async (c) => {
   try {
     if (body.ids?.length) {
       const entries = await service.reinstallMany(body.ids, options)
-      return c.json({ entries })
+      const batch = entries as typeof entries & Partial<import('../core/types.ts').BatchActionResult>
+      return c.json({
+        entries,
+        operationId: batch.operationId,
+        succeeded: batch.succeeded,
+        failed: batch.failed,
+        skipped: batch.skipped,
+        canceled: batch.canceled,
+        errors: batch.errors,
+        failedIds: batch.failedIds,
+      })
     }
     if (!body.id) {
       return c.json({ error: 'Missing id or ids' }, 400)
@@ -663,6 +684,41 @@ app.post('/api/import/apply', async (c) => {
     return c.json(await service.applyPlan(body.planId, body.choices, body))
   } catch (error) {
     return c.json(fail(error, 'Could not apply import'), 400)
+  }
+})
+
+app.get('/api/retail/status', (c) => c.json({ status: service.retailStatus() }))
+
+app.post('/api/retail/configure', async (c) => {
+  const body = await c.req.json<{
+    enabled?: boolean
+    workerBaseUrl?: string
+    autoCheckMinutes?: number
+    token?: string
+    folderId?: string | null
+  }>()
+  try {
+    // The token goes in on this route and never comes back out: status reports `hasToken` only.
+    return c.json({ status: service.configureRetailSync(body) })
+  } catch (error) {
+    return c.json(fail(error, 'Could not save the retail collection settings'), 400)
+  }
+})
+
+app.post('/api/retail/check', async (c) => {
+  const body = await c.req.json<{ refresh?: boolean }>().catch(() => ({}) as { refresh?: boolean })
+  try {
+    return c.json({ status: await service.checkRetail({ refresh: body.refresh }) })
+  } catch (error) {
+    return c.json(fail(error, 'Could not check the retail collection'), 400)
+  }
+})
+
+app.post('/api/retail/sync', async (c) => {
+  try {
+    return c.json({ status: await service.syncRetail() })
+  } catch (error) {
+    return c.json(fail(error, 'Could not sync the retail collection'), 400)
   }
 })
 

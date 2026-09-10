@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import {
   activatableIds,
   adobeInstallableIds,
+  adobeRemovableIds,
   deactivatableIds,
   familyHasAction,
   familyHasSwitch,
@@ -185,6 +186,59 @@ test('Adobe install is offered until a testing-folder copy is present', () => {
   assert.deepEqual(adobeInstallableIds(web), [])
 })
 
+test('Adobe uninstall is offered only when a Mac copy would remain', () => {
+  const adobeOnly = group([
+    {
+      ...entry('adobe', 'installed'),
+      installations: [
+        { destinationId: 'adobe-shared', path: '/tmp/adobe-dest.ttf', verification: 'file-present' },
+      ],
+    },
+  ])
+  const both = group([
+    {
+      ...entry('both', 'installed'),
+      installedPath: '/Library/Fonts/Both.ttf',
+      installations: [
+        { destinationId: 'macos', path: '/Library/Fonts/Both.ttf', verification: 'file-present' },
+        { destinationId: 'adobe-shared', path: '/tmp/adobe-dest.ttf', verification: 'file-present' },
+      ],
+    },
+  ])
+  const mixedFamily = group([
+    {
+      ...entry('mac', 'installed', 'Regular'),
+      installedPath: '/Library/Fonts/Mixed-Regular.ttf',
+    },
+    {
+      ...entry('adobe', 'installed', 'Bold'),
+      installations: [
+        { destinationId: 'adobe-shared', path: '/tmp/mixed-adobe.ttf', verification: 'file-present' },
+      ],
+    },
+  ])
+  const regularBoth = group([
+    {
+      ...entry('regular', 'installed', 'Regular'),
+      installedPath: '/Library/Fonts/Family-Regular.ttf',
+      installations: [
+        { destinationId: 'macos', path: '/Library/Fonts/Family-Regular.ttf', verification: 'file-present' },
+        { destinationId: 'adobe-shared', path: '/tmp/family-regular-adobe.ttf', verification: 'file-present' },
+      ],
+    },
+    {
+      ...entry('bold-adobe', 'installed', 'Bold'),
+      installations: [
+        { destinationId: 'adobe-shared', path: '/tmp/family-bold-adobe.ttf', verification: 'file-present' },
+      ],
+    },
+  ])
+  assert.deepEqual(adobeRemovableIds(adobeOnly), [])
+  assert.deepEqual(adobeRemovableIds(both), ['both'])
+  assert.deepEqual(adobeRemovableIds(mixedFamily), [])
+  assert.deepEqual(adobeRemovableIds(regularBoth), ['regular'])
+})
+
 test('Adobe install is hidden when the testing folder is unavailable', () => {
   const installed = entry('on', 'installed', 'Bold')
   assert.deepEqual(adobeInstallableIds(group([entry('plain', 'installed')]), false), [])
@@ -281,6 +335,20 @@ test('instance menu is scoped to that catalog entry', () => {
     ],
   }
   assert.deepEqual(instanceMenuLabels(withAdobe), ['Deactivate instance', 'Uninstall instance'])
+
+  const bothDests = {
+    ...installed,
+    installedPath: '/Library/Fonts/Bold.ttf',
+    installations: [
+      { destinationId: 'macos' as const, path: '/Library/Fonts/Bold.ttf', verification: 'file-present' as const },
+      { destinationId: 'adobe-shared' as const, path: '/tmp/adobe.ttf', verification: 'file-present' as const },
+    ],
+  }
+  assert.deepEqual(instanceMenuLabels(bothDests), [
+    'Deactivate instance',
+    'Uninstall instance',
+    'Uninstall from Adobe testing folder',
+  ])
 
   const deactivated = entry('off', 'deactivated', 'Light')
   assert.deepEqual(instanceMenuLabels(deactivated), [

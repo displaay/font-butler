@@ -21,7 +21,7 @@ import {
   stageFontFile,
 } from './install.ts'
 import { identityMutexMessage, occupiedDestinations, occupyingSiblings, occupiesDestination } from './identity.ts'
-import { recordMutationDestination, withMutationJournal } from './journal.ts'
+import { extendMutationJournal, recordMutationDestination, withMutationJournal } from './journal.ts'
 import { ensureFontActivation, getFontNative } from './native.ts'
 import { applyParsedFont, parseFontFile, readFileStat } from './parse.ts'
 import type { AppPaths } from './paths.ts'
@@ -82,8 +82,10 @@ export async function installEntry(
   if (entry.previewOnly || isWebFontFormat(entry.format) || isWebFontFile(entry.sourcePath)) {
     throw new Error(WOFF_INSTALL_ERROR)
   }
-  host.assertPinnedInstall(entry)
   const sourcePath = options?.sourcePathOverride ?? entry.sourcePath
+  host.assertPinnedInstall(
+    options?.sourcePathOverride ? { ...entry, sourcePath } : entry,
+  )
   if (!sourceFileExists(sourcePath)) {
     applySourcePresence(entry)
     saveCatalog(host.paths, catalog)
@@ -112,6 +114,9 @@ export async function installEntry(
     const conflicts = installMacos || options?.replace
       ? await host.resolveFormatConflicts(entry, catalog.entries, options?.replace, targets)
       : []
+    // A bake operation can already own the outer journal. Extend it with
+    // lazily discovered conflicts before any of them are removed.
+    extendMutationJournal(host.paths, [entry, ...conflicts])
     catalog = loadCatalog(host.paths)
     entry = findById(catalog, id)
     if (!entry) {
@@ -127,12 +132,19 @@ export async function installEntry(
       !targets.includes('adobe-shared') &&
       !options?.sourcePathOverride
     ) {
-      const current = readFileStat(sourcePath)
-      if (
-        current.mtimeMs === entry.installedSnapshotMtimeMs &&
-        current.size === entry.installedSnapshotSize
-      ) {
-        entry.sourcePresent = isExternalSource(entry)
+      const stagedFingerprint = tryFingerprintFile(staged.stagedPath)
+      if (stagedFingerprint && stagedFingerprint === entry.installedFingerprint) {
+        await ensureFontActivation(getFontNative(), entry.installedPath, true)
+        if (isExternalSource(entry)) {
+          const sourceStat = readFileStat(entry.sourcePath)
+          entry.sourceMtimeMs = sourceStat.mtimeMs
+          entry.sourceSize = sourceStat.size
+          entry.sourceFingerprint = stagedFingerprint
+          entry.sourcePresent = true
+          applyEntryFacts(entry)
+          touchEntry(entry)
+          saveCatalog(host.paths, catalog)
+        }
         return entry
       }
     }
@@ -258,7 +270,7 @@ async function installRenamedCopy(
   host: ServiceLifecycleHost,
   sourceEntry: CatalogEntry,
   familyName: string,
-  options?: { replace?: boolean; sourcePath?: string },
+  options?: InstallOptions & { sourcePath?: string },
 ): Promise<CatalogEntry> {
   const temp = await renameFamilyCopy(options?.sourcePath ?? sourceEntry.sourcePath, familyName)
   try {
@@ -271,14 +283,16 @@ async function installRenamedCopy(
       sourceSize: 0,
       sourcePresent: false,
       status: 'uninstalled',
+      ownerFolderId: sourceEntry.ownerFolderId,
       faces: parsed.faces,
       format: parsed.format,
       previewSample: parsed.previewSample,
       addedAt: now(),
       updatedAt: now(),
     }
-    host.assertNoOccupyingSibling(draft, catalog.entries)
-    const conflicts = await host.resolveFormatConflicts(draft, catalog.entries, options?.replace)
+    const targets = installTargets(host.paths, draft, options)
+    host.assertNoOccupyingSibling(draft, catalog.entries, targets)
+    const conflicts = await host.resolveFormatConflicts(draft, catalog.entries, options?.replace, targets)
     const conflictSnapshots: Array<{ entry: CatalogEntry; file: string }> = []
     try {
       return await withMutationJournal(
@@ -292,16 +306,42 @@ async function installRenamedCopy(
       if (conflicts.length) {
         conflictSnapshots.push(...await host.snapshotAndRemoveConflicts(conflicts))
       }
-      const dest = destinationForInstall(host.paths, draft, temp, { reuseInstalled: false })
-      recordMutationDestination(host.paths, draft.id, dest)
-      await commitInstalledFile({
-        dest,
-        stagedPath: temp,
-        rollbackDir: path.join(host.paths.dataRoot, 'rollback'),
-        native: getFontNative(),
-      })
-      bindEntryToInstalledFile(draft, dest)
       applyParsedFont(draft, parsed)
+      const installMacos = targets.includes('macos')
+      if (installMacos) {
+        const dest = destinationForInstall(host.paths, draft, temp, { reuseInstalled: false })
+        recordMutationDestination(host.paths, draft.id, dest)
+        await commitInstalledFile({
+          dest,
+          stagedPath: temp,
+          rollbackDir: path.join(host.paths.dataRoot, 'rollback'),
+          native: getFontNative(),
+        })
+        bindEntryToInstalledFile(draft, dest)
+        applyParsedFont(draft, parsed)
+      }
+      if (targets.includes('adobe-shared')) {
+        try {
+          placeAdobeCopy(host.paths, draft, temp, parsed.format, parsed.faces)
+        } catch (error) {
+          if (!installMacos) throw error
+          const existing = copyAt(draft, 'adobe-shared')
+          if (existing) existing.verification = 'unavailable'
+        }
+      }
+      if (!installMacos) {
+        const adobe = copyAt(draft, 'adobe-shared')
+        if (!adobe?.path) throw new Error('No installation destination is available.')
+        const fingerprint = tryFingerprintFile(adobe.path)
+        draft.sourcePath = adobe.path
+        draft.sourcePresent = false
+        draft.installedFingerprint = fingerprint
+        draft.sourceMtimeMs = readFileStat(adobe.path).mtimeMs
+        draft.sourceSize = readFileStat(adobe.path).size
+        draft.status = 'installed'
+      }
+      applyEntryFacts(draft)
+      touchEntry(draft)
       const next = loadCatalog(host.paths)
       upsertEntry(next, draft)
       saveCatalog(host.paths, next)
@@ -510,7 +550,7 @@ export async function activateEntry(
 export async function reinstallEntry(
   host: ServiceLifecycleHost,
   id: string,
-  options?: InstallOptions,
+  options?: InstallOptions & { skipCacheClear?: boolean },
 ): Promise<CatalogEntry> {
   const catalog = loadCatalog(host.paths)
   const entry = findById(catalog, id)
@@ -520,7 +560,9 @@ export async function reinstallEntry(
   if (entry.status === 'deactivated') {
     return activateEntry(host, id, { owner: 'manual' })
   }
-  await host.clearCachesAfterInstall()
+  if (!options?.skipCacheClear) {
+    await host.clearCachesAfterInstall()
+  }
   const updated = await installEntry(host, id, entry.customFamilyName, options)
   emitNotice({
     kind: 'reinstalled',
@@ -541,6 +583,10 @@ function resolveBakeInput(entry: CatalogEntry): string {
   if (sourceFileExists(entry.sourcePath)) return entry.sourcePath
   if (entry.installedPath && fs.existsSync(entry.installedPath)) return entry.installedPath
   if (entry.disabledPath && fs.existsSync(entry.disabledPath)) return entry.disabledPath
+  for (const copy of entry.installations ?? []) {
+    if (copy.path && fs.existsSync(copy.path)) return copy.path
+    if (copy.parkedPath && fs.existsSync(copy.parkedPath)) return copy.parkedPath
+  }
   throw new Error('The source file is missing.')
 }
 
@@ -575,6 +621,12 @@ export async function bakeFeatures(
           : 'None of the selected features could be baked into default glyphs.',
       )
     }
+    // Validate the exact transformed bytes against active project pins. The
+    // original source may match a pin while the baked output necessarily does
+    // not, so checking only before materialisation is insufficient.
+    if (mode === 'reinstall') {
+      host.assertPinnedInstall({ ...entry, sourcePath: bakedPath })
+    }
     if (mode === 'new-copy') {
       const renameTo = familyName?.trim()
       if (!renameTo) {
@@ -596,25 +648,29 @@ export async function bakeFeatures(
     if (hadTrackedSource) {
       storeRevision(host.paths, trackedSource, { faces: entry.faces, format: entry.format })
     }
-    await host.clearCachesAfterInstall()
-    let updated = await installEntry(host, id, entry.customFamilyName, { sourcePathOverride: bakedPath })
-    if (hadTrackedSource && path.resolve(trackedSource) !== path.resolve(bakedPath)) {
-      fs.copyFileSync(bakedPath, trackedSource)
-      const catalogAfter = loadCatalog(host.paths)
-      const latest = findById(catalogAfter, updated.id)
-      if (latest) {
-        const stat = readFileStat(trackedSource)
-        latest.sourceMtimeMs = stat.mtimeMs
-        latest.sourceSize = stat.size
-        const fingerprint = tryFingerprintFile(trackedSource)
-        if (fingerprint) latest.sourceFingerprint = fingerprint
-        latest.sourcePresent = true
-        applyEntryFacts(latest)
-        touchEntry(latest)
-        saveCatalog(host.paths, catalogAfter)
-        updated = latest
+    let updated: CatalogEntry
+    await withMutationJournal(host.paths, { kind: 'replace', entries: [entry] }, async () => {
+      await host.clearCachesAfterInstall()
+      updated = await installEntry(host, id, entry.customFamilyName, { sourcePathOverride: bakedPath })
+      if (hadTrackedSource && path.resolve(trackedSource) !== path.resolve(bakedPath)) {
+        recordMutationDestination(host.paths, id, trackedSource)
+        fs.copyFileSync(bakedPath, trackedSource)
+        const catalogAfter = loadCatalog(host.paths)
+        const latest = findById(catalogAfter, updated.id)
+        if (latest) {
+          const stat = readFileStat(trackedSource)
+          latest.sourceMtimeMs = stat.mtimeMs
+          latest.sourceSize = stat.size
+          const fingerprint = tryFingerprintFile(trackedSource)
+          if (fingerprint) latest.sourceFingerprint = fingerprint
+          latest.sourcePresent = true
+          applyEntryFacts(latest)
+          touchEntry(latest)
+          saveCatalog(host.paths, catalogAfter)
+          updated = latest
+        }
       }
-    }
+    })
     emitNotice({
       kind: 'reinstalled',
       message: `Baked features into ${displayFamily(updated)}`,

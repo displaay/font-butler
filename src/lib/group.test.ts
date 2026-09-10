@@ -233,11 +233,19 @@ test('catalogRevealEntry prefers selected install, else any install or tracked s
   parked.disabledPath = '/Library/Fonts/Booton-Italic.otf'
   const sourceOnly = entry('src', 'Booton', 3, 'uninstalled')
   sourceOnly.sourcePresent = true
-  const selfSourced = entry('self', 'Booton', 4, 'installed')
+  const adobeOnly = entry('adobe', 'Booton', 4, 'installed')
+  adobeOnly.installedPath = undefined
+  adobeOnly.installations = [{
+    destinationId: 'adobe-shared',
+    path: '/Library/Application Support/Adobe/Fonts/Booton.otf',
+    verification: 'file-present',
+  }]
+  const selfSourced = entry('self', 'Booton', 5, 'installed')
   selfSourced.installedPath = selfSourced.sourcePath
-  const group = groupCatalog([sourceOnly, installed, parked, selfSourced])[0]!
+  const group = groupCatalog([sourceOnly, installed, parked, adobeOnly, selfSourced])[0]!
   assert.equal(catalogRevealEntry(group, parked, 'installed')?.id, 'off')
   assert.equal(catalogRevealEntry(group, sourceOnly, 'installed')?.id, 'in')
+  assert.equal(catalogRevealEntry(group, adobeOnly, 'installed')?.id, 'adobe')
   assert.equal(catalogRevealEntry(group, sourceOnly, 'source')?.id, 'src')
   assert.equal(catalogRevealEntry(group, selfSourced, 'source')?.id, 'src')
 })

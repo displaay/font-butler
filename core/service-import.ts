@@ -19,13 +19,13 @@ import { classifyImportFile, isWatchIdentityDuplicate } from './planner.ts'
 import type { AppPaths } from './paths.ts'
 import { applyEntryFacts } from './state.ts'
 import { loadSettings } from './settings.ts'
-import type { CatalogEntry } from './types.ts'
+import type { CatalogEntry, CatalogFile } from './types.ts'
 import { displayFamily, emitDuplicates, emitNotice, newId, now, touchEntry } from './service-helpers.ts'
 
 export function importOneUnlocked(
   paths: AppPaths,
   filePath: string,
-  options: { forceNew?: boolean } = {},
+  options: { forceNew?: boolean; catalog?: CatalogFile; persist?: boolean } = {},
 ): CatalogEntry {
   const resolved = path.resolve(filePath)
   if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
@@ -45,7 +45,8 @@ export function importOneUnlocked(
   if (isWebFontFormat(parsed.format)) {
     // Parsed content wins over a misleading extension.
   }
-  const catalog = loadCatalog(paths)
+  const catalog = options.catalog ?? loadCatalog(paths)
+  const persist = options.persist !== false
   const fingerprint = tryFingerprintFile(resolved)
   const samePath =
     findByInstalledPath(catalog, resolved) ?? findBySourcePath(catalog, resolved)
@@ -90,7 +91,7 @@ export function importOneUnlocked(
     }
     applyEntryFacts(existing)
     touchEntry(existing)
-    saveCatalog(paths, catalog)
+    if (persist) saveCatalog(paths, catalog)
     return existing
   }
   const web = previewOnly || isWebFontFormat(parsed.format)
@@ -114,7 +115,7 @@ export function importOneUnlocked(
   }
   applyEntryFacts(entry)
   upsertEntry(catalog, entry)
-  saveCatalog(paths, catalog)
+  if (persist) saveCatalog(paths, catalog)
   return entry
 }
 
@@ -134,7 +135,7 @@ export async function importInboxFiles(host: InboxImportHost, filePaths: string[
   const allowed = filePaths.filter((filePath) => {
     const folder = folderForPath(settings.folders, filePath)
     if (!folder) return true
-    if (!folder.watching) return false
+    if (!folder.watching || folder.paused || isExcluded(folder, filePath)) return false
     return true
   })
   const catalog = loadCatalog(host.paths)

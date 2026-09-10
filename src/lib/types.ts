@@ -193,6 +193,13 @@ export type PreviewPreferences = {
   preset: 'headline' | 'paragraph' | 'numerals' | 'custom'
 }
 
+export type LatinPreviewPreset = 'Aa' | 'Ag' | 'Ta' | 'ag' | 'custom'
+
+export type LatinPreviewPreferences = {
+  preset: LatinPreviewPreset
+  custom: string
+}
+
 export type OperationItem = {
   id: string
   entryId?: string
@@ -201,10 +208,19 @@ export type OperationItem = {
   reason?: string
   previousRevision?: string
   previousSourcePath?: string
+  previousSourceMtimeMs?: number
+  previousSourceSize?: number
+  previousSourcePresent?: boolean
+  previousSourceAvailability?: SourceAvailability
+  previousSourceFingerprint?: string
+  previousStatus?: FontStatus
+  previousUpdateHold?: UpdateHold | null
+  previousUpdatePolicy?: UpdatePolicy | null
   expectedRevision?: string
   expectedStatus?: FontStatus
   expectedSourcePath?: string
   relatedEntryId?: string
+  previousEntry?: CatalogEntry
 }
 
 export type Operation = {
@@ -319,6 +335,7 @@ export type AppSettings = {
   activityRetentionDays?: number
   activityMaxOperations?: number
   specimen?: PreviewPreferences
+  latinPreview?: LatinPreviewPreferences
   defaultDestination?: DefaultDestinationId
   savedFilters?: SavedLibraryFilter[]
 }
@@ -371,3 +388,17 @@ export type AppUpdateStatus = {
   checkedAt: number
   error?: string
 }
+
+export type {
+  RetailDriftItem,
+  RetailDriftKind,
+  RetailFile,
+  RetailSkip,
+  RetailSkipReason,
+  RetailSyncStatus,
+} from '../../shared/retail'
+export {
+  DEFAULT_RETAIL_AUTOCHECK_MINUTES,
+  RETAIL_AUTOCHECK_CHOICES,
+  retailDriftSummary,
+} from '../../shared/retail'

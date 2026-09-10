@@ -243,18 +243,21 @@ function existingFontPath(entry: {
   }
 }
 
-export function fillEntryPreviewSample(entry: {
-  previewSample?: string
-  installedPath?: string
-  disabledPath?: string
-  sourcePath?: string
-}): boolean {
-  if (entry.previewSample) return false
+export function fillEntryPreviewSample(
+  entry: {
+    previewSample?: string
+    installedPath?: string
+    disabledPath?: string
+    sourcePath?: string
+  },
+  options?: { refresh?: boolean },
+): boolean {
+  if (entry.previewSample && !options?.refresh) return false
   const file = existingFontPath(entry)
   if (!file) return false
   try {
     const sample = parseFontFile(file).previewSample
-    if (!sample) return false
+    if (!sample || sample === entry.previewSample) return false
     entry.previewSample = sample
     return true
   } catch {

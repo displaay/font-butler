@@ -5,7 +5,7 @@ function Badge({
   className,
   tone = 'muted',
   ...props
-}: ComponentProps<'span'> & { tone?: 'muted' | 'accent' | 'ink' | 'warn' }) {
+}: ComponentProps<'span'> & { tone?: 'muted' | 'accent' | 'ink' | 'info' | 'warn' }) {
   return (
     <span
       className={cn(
@@ -13,6 +13,7 @@ function Badge({
         tone === 'muted' && 'bg-muted text-muted-foreground',
         tone === 'accent' && 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-400',
         tone === 'ink' && 'bg-muted text-foreground',
+        tone === 'info' && 'bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-400',
         tone === 'warn' && 'bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-400',
         className,
       )}

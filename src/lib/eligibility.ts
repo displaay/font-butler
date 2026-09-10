@@ -139,6 +139,17 @@ function adobeCopyPresent(entry: CatalogEntry): boolean {
   )
 }
 
+/** Live Adobe copies on entries that also keep a Mac copy. */
+export function adobeRemovableEntries(group: { entries: CatalogEntry[] }): CatalogEntry[] {
+  return group.entries.filter(
+    (entry) => !entry.previewOnly && adobeCopyPresent(entry) && hasLiveMacCopy(entry),
+  )
+}
+
+export function adobeRemovableIds(group: { entries: CatalogEntry[] }): string[] {
+  return adobeRemovableEntries(group).map((entry) => entry.id)
+}
+
 export function adobeInstallableEntries(
   group: { entries: CatalogEntry[] },
   adobeAvailable = true,
@@ -183,6 +194,7 @@ export type InstanceMenuPlan = {
   deactivate: boolean
   uninstall: boolean
   adobeInstall: boolean
+  adobeUninstall: boolean
   formatSwap: FormatSwap | null
 }
 
@@ -199,6 +211,7 @@ export function instanceMenuPlan(
       deactivate: false,
       uninstall: false,
       adobeInstall: false,
+      adobeUninstall: false,
       formatSwap: null,
     }
   }
@@ -212,6 +225,7 @@ export function instanceMenuPlan(
       entry.status === 'outdated' ||
       entry.status === 'deactivated',
     adobeInstall: adobeAvailable && !adobeCopyPresent(entry),
+    adobeUninstall: adobeCopyPresent(entry) && hasLiveMacCopy(entry),
     formatSwap,
   }
 }
@@ -223,6 +237,7 @@ export function hasInstanceMenuActions(plan: InstanceMenuPlan): boolean {
     plan.deactivate ||
     plan.uninstall ||
     plan.adobeInstall ||
+    plan.adobeUninstall ||
     Boolean(plan.formatSwap)
   )
 }
@@ -240,6 +255,7 @@ export function instanceMenuLabels(
   if (plan.adobeInstall) labels.push('Install to Adobe testing folder')
   if (plan.deactivate) labels.push('Deactivate instance')
   if (plan.uninstall) labels.push('Uninstall instance')
+  if (plan.adobeUninstall) labels.push('Uninstall from Adobe testing folder')
   return labels
 }
 

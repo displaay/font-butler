@@ -9,6 +9,7 @@ import { Slider } from '@/components/ui/slider'
 import { usePreviewFontReady } from '@/hooks/usePreviewFontReady'
 import { api } from '@/lib/api'
 import { formatMissingCharacters, missingCodePoints } from '@/lib/coverage'
+import { hasManagedInstall } from '@/lib/group'
 import { bakeableEnabledTags, groupOtFeatures } from '@/lib/otFeatures'
 import { DEFAULT_SPECIMEN, SPECIMEN_PRESETS } from '@/lib/specimen'
 import type { CatalogEntry, FontAxisInfo, PreviewPreferences } from '@/lib/types'
@@ -115,11 +116,12 @@ export function SpecimenWorkspace({
   const liveSourceFamily = catalogFontFamily(entry.id, 'source')
   const otherFamily = compareEntry ? catalogFontFamily(compareEntry.id, 'installed') : ''
   const compareFamilies = compare === 'families' && Boolean(compareEntry)
+  const previewWhich = hasManagedInstall(entry) ? 'installed' : 'source'
 
   useEffect(() => {
     let cancelled = false
     void api
-      .previewMeta(entry.id, entry.installedPath ? 'installed' : 'source')
+      .previewMeta(entry.id, previewWhich)
       .then((result) => {
         if (cancelled) return
         setMeta(result)
@@ -145,6 +147,8 @@ export function SpecimenWorkspace({
     entry.id,
     entry.installedPath,
     entry.disabledPath,
+    entry.installations,
+    previewWhich,
     entry.sourceFingerprint,
     entry.sourceMtimeMs,
     entry.sourceSize,

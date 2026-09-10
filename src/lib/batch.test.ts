@@ -75,6 +75,7 @@ test('catalogBatchPlan uses entry-level eligibility for a mixed family', () => {
     install: 1,
     installMissing: true,
     adobeInstall: 2,
+    adobeUninstall: 0,
     activate: 0,
     deactivate: 1,
     uninstall: 1,
@@ -137,6 +138,7 @@ test('catalogBatchPlan counts each action by family status', () => {
     install: 1,
     installMissing: false,
     adobeInstall: 5,
+    adobeUninstall: 0,
     activate: 1,
     deactivate: 2,
     uninstall: 3,
@@ -240,6 +242,25 @@ test('catalogBatchPlan counts Activate by family, not files', () => {
   assert.equal(activateActionLabel(plan, true), 'Activate 2 fonts')
 })
 
+test('catalogBatchPlan counts Adobe uninstalls only when a Mac copy would remain', () => {
+  const both = {
+    ...entry('a', 'Able', 'installed'),
+    installedPath: '/Library/Fonts/Able.otf',
+    installations: [
+      { destinationId: 'macos' as const, path: '/Library/Fonts/Able.otf', verification: 'file-present' as const },
+      { destinationId: 'adobe-shared' as const, path: '/tmp/able-adobe.otf', verification: 'file-present' as const },
+    ],
+  }
+  const adobeOnly = {
+    ...entry('b', 'Baker', 'installed'),
+    installations: [
+      { destinationId: 'adobe-shared' as const, path: '/tmp/baker-adobe.otf', verification: 'file-present' as const },
+    ],
+  }
+  assert.equal(catalogBatchPlan(groupCatalog([both])).adobeUninstall, 1)
+  assert.equal(catalogBatchPlan(groupCatalog([adobeOnly])).adobeUninstall, 0)
+})
+
 test('actionLabel adds a count for multi-select', () => {
   assert.equal(actionLabel('Install', 1, false), 'Install')
   assert.equal(actionLabel('Install', 1, true), 'Install 1 font')
@@ -255,6 +276,7 @@ test('actionLabel adds a count for multi-select', () => {
   assert.equal(activateActionLabel({ activate: 1, activateFormat: 'otf' }), 'Activate OTF')
   assert.equal(actionLabel('Install to Adobe testing folder', 1, false), 'Install to Adobe testing folder')
   assert.equal(actionLabel('Install to Adobe testing folder', 3, true), 'Install to Adobe testing folder')
+  assert.equal(actionLabel('Uninstall from Adobe testing folder', 1, false), 'Uninstall from Adobe testing folder')
   assert.equal(actionLabel('Uninstall and delete sources', 1, false), 'Uninstall and delete sources')
   assert.equal(
     actionLabel('Uninstall and delete sources', 2, true),

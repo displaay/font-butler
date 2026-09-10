@@ -290,6 +290,9 @@ export function Sidebar({
   counts,
   activityUnread = 0,
   hasAppUpdate = false,
+  hasFontUpdates = false,
+  searching = false,
+  retailPending = 0,
   onReinstallAllUpdates,
   onOpenSettings,
 }: {
@@ -327,6 +330,10 @@ export function Sidebar({
   counts: { library: number; system: number; updates: number; activity?: number }
   activityUnread?: number
   hasAppUpdate?: boolean
+  hasFontUpdates?: boolean
+  searching?: boolean
+  /** Retail fonts whose newer version is still on the server. */
+  retailPending?: number
   onReinstallAllUpdates?: () => void
   onOpenSettings: () => void
 }) {
@@ -497,7 +504,12 @@ export function Sidebar({
         </div>
       </div>
       <nav className="flex min-h-0 flex-1 flex-row flex-wrap gap-0.5 overflow-y-auto px-2 pb-2 md:flex-col md:flex-nowrap">
-        {TABS.filter((item) => item.id !== 'updates' || shouldShowUpdatesTab(counts.updates, hasAppUpdate)).map((item) => {
+        {TABS.filter(
+          (item) =>
+            item.id !== 'updates' ||
+            shouldShowUpdatesTab(counts.updates, hasAppUpdate, retailPending) ||
+            (searching && hasFontUpdates),
+        ).map((item) => {
           if (item.id === 'library') {
             return (
               <div key={item.id} className="flex w-full flex-col gap-0.5">
@@ -506,7 +518,7 @@ export function Sidebar({
                   icon={item.icon}
                   label={item.label}
                   count={counts.library}
-                  showTotal={Boolean(showTotals.library)}
+                  showTotal={searching || Boolean(showTotals.library)}
                   onShowTotalChange={(value) => changeShowTotal('library', value)}
                   onClick={() => onSelectWatchFolder(null)}
                   className="w-full"
@@ -554,16 +566,18 @@ export function Sidebar({
                   : item.id === 'activity'
                     ? counts.activity ?? 0
                     : item.id === 'updates'
-                      ? counts.updates + (hasAppUpdate ? 1 : 0)
+                      ? counts.updates +
+                        (hasAppUpdate && !searching ? 1 : 0) +
+                        (searching ? 0 : retailPending)
                       : counts.updates
               }
-              showTotal={item.id === 'updates' ? true : Boolean(showTotals[item.id])}
+              showTotal={item.id === 'updates' || searching || Boolean(showTotals[item.id])}
               lockTotal={item.id === 'updates'}
               onShowTotalChange={(value) => changeShowTotal(item.id, value)}
               onClick={() => onTabChange(item.id)}
               className="flex-1 md:flex-none"
               badgeTone={item.id === 'updates' ? 'warn' : 'muted'}
-              unreadCount={item.id === 'activity' ? activityUnread : 0}
+              unreadCount={item.id === 'activity' && !searching ? activityUnread : 0}
               hoverAction={
                 item.id === 'updates' && counts.updates > 0 && onReinstallAllUpdates
                   ? {
@@ -577,7 +591,9 @@ export function Sidebar({
                   ? `${activityUnread} unread`
                   : item.id === 'updates' && hasAppUpdate
                     ? 'App update available'
-                    : undefined
+                    : item.id === 'updates' && retailPending > 0
+                      ? `${retailPending} retail ${retailPending === 1 ? 'font has' : 'fonts have'} a newer version`
+                      : undefined
               }
             />
           )
@@ -980,10 +996,16 @@ export function Sidebar({
         <Button
           variant="ghost"
           className={navButtonClass(false, 'w-full')}
+          title={hasAppUpdate ? 'App update available' : undefined}
           onClick={onOpenSettings}
         >
           <Settings className="size-3.5 opacity-70" />
-          Settings
+          <span className="min-w-0 truncate">Settings</span>
+          {hasAppUpdate ? (
+            <Badge tone="info" className="ml-auto">
+              Update
+            </Badge>
+          ) : null}
         </Button>
       </div>
     </aside>

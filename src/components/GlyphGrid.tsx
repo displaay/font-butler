@@ -35,6 +35,7 @@ import {
   readGlyphCellSize,
   visibleGlyphRowRange,
 } from '@/lib/glyphs'
+import { hasManagedInstall } from '@/lib/group'
 import type { CatalogEntry } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
@@ -55,7 +56,7 @@ export function GlyphGrid({ entry }: { entry: CatalogEntry }) {
   const searchRef = useRef<HTMLInputElement>(null)
   const scrollerRef = useRef<HTMLDivElement>(null)
   const [viewport, setViewport] = useState({ width: 0, height: 0, scrollTop: 0 })
-  const which = entry.installedPath || entry.disabledPath ? 'installed' : 'source'
+  const which = hasManagedInstall(entry) ? 'installed' : 'source'
 
   useEffect(() => {
     let cancelled = false

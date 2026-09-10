@@ -16,6 +16,7 @@ import type {
   Operation,
   ProjectSet,
   RelinkPreview,
+  RetailSyncStatus,
   SortMode,
   SystemFace,
   ThemeMode,
@@ -165,7 +166,16 @@ export const api = {
       expectedSourceFingerprint?: string
     },
   ) =>
-    json<{ entries: CatalogEntry[] }>(
+    json<{
+      entries: CatalogEntry[]
+      operationId?: string
+      succeeded?: number
+      failed?: number
+      skipped?: number
+      canceled?: number
+      errors?: string[]
+      failedIds?: string[]
+    }>(
       post('/api/install', {
         ids,
         familyName,
@@ -225,7 +235,16 @@ export const api = {
       post('/api/reinstall', { id, expectedSourceFingerprint: options?.expectedSourceFingerprint }),
     ),
   reinstallMany: (ids: string[], options?: { expectedSourceFingerprint?: string }) =>
-    json<{ entries: CatalogEntry[] }>(
+    json<{
+      entries: CatalogEntry[]
+      operationId?: string
+      succeeded?: number
+      failed?: number
+      skipped?: number
+      canceled?: number
+      errors?: string[]
+      failedIds?: string[]
+    }>(
       post('/api/reinstall', { ids, expectedSourceFingerprint: options?.expectedSourceFingerprint }),
     ),
   bakeFeatures: (
@@ -285,6 +304,7 @@ export const api = {
     onboardingCompleted?: boolean
     folders?: WatchFolder[]
     specimen?: AppSettings['specimen']
+    latinPreview?: AppSettings['latinPreview']
     defaultDestination?: DefaultDestinationId
     savedFilters?: AppSettings['savedFilters']
   }) =>
@@ -317,6 +337,20 @@ export const api = {
   startWatching: (id: string) => json<{ folder: WatchFolder }>(post('/api/folders/start', { id })),
   pauseFolder: (id: string) => json<{ folder: WatchFolder }>(post('/api/folders/pause', { id })),
   resumeFolder: (id: string) => json<{ folder: WatchFolder }>(post('/api/folders/resume', { id })),
+  retail: {
+    status: () => get<{ status: RetailSyncStatus }>('/api/retail/status'),
+    // `token` is write-only: the server stores it in a 0600 file and only ever reports `hasToken`.
+    configure: (input: {
+      enabled?: boolean
+      workerBaseUrl?: string
+      autoCheckMinutes?: number
+      token?: string
+      folderId?: string | null
+    }) => json<{ status: RetailSyncStatus }>(post('/api/retail/configure', input)),
+    check: (refresh = false) =>
+      json<{ status: RetailSyncStatus }>(post('/api/retail/check', { refresh })),
+    sync: () => json<{ status: RetailSyncStatus }>(post('/api/retail/sync', {})),
+  },
   planImport: (paths: string[]) => json<ImportPlan>(post('/api/import/plan', { paths })),
   applyPlan: (
     planId: string,
@@ -463,6 +497,14 @@ export function isDuplicatesEvent(
 ): value is { type: 'duplicates'; duplicates: DuplicateWarning[] } {
   return Boolean(
     value && typeof value === 'object' && (value as { type?: string }).type === 'duplicates',
+  )
+}
+
+export function isRetailEvent(
+  value: unknown,
+): value is { type: 'retail'; status: RetailSyncStatus } {
+  return Boolean(
+    value && typeof value === 'object' && (value as { type?: string }).type === 'retail',
   )
 }
 

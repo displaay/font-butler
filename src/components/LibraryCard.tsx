@@ -52,6 +52,7 @@ export function LibraryCard({
   onDeactivateInstance,
   onUninstallInstance,
   onInstallInstanceToAdobe,
+  onUninstallInstanceFromAdobe,
   onSwapInstanceFormat,
   adobeAvailable = true,
   onReinstall,
@@ -59,6 +60,7 @@ export function LibraryCard({
   onUninstall,
   onUninstallFormat,
   onUninstallAndRemove,
+  onUninstallFromAdobe,
   onDeactivate,
   onActivate,
   onSwitch,
@@ -99,6 +101,7 @@ export function LibraryCard({
   onDeactivateInstance: (entryId: string) => void
   onUninstallInstance: (entryId: string) => void
   onInstallInstanceToAdobe: (entryId: string) => void
+  onUninstallInstanceFromAdobe?: (entryId: string) => void
   onSwapInstanceFormat?: (entryId: string) => void
   adobeAvailable?: boolean
   onReinstall: () => void
@@ -106,6 +109,7 @@ export function LibraryCard({
   onUninstall: () => void
   onUninstallFormat: (format: string) => void
   onUninstallAndRemove: () => void
+  onUninstallFromAdobe?: () => void
   onDeactivate: () => void
   onActivate: () => void
   onSwitch?: () => void
@@ -192,9 +196,21 @@ export function LibraryCard({
 
   const dest = familyCopyDestinations(group.entries)
   const showDestIcons = !hideDestinations && (dest.macos || dest.adobe)
-  const showIconRow =
-    showDestIcons || hasTrackedSource(group) || (layout === 'grid' && notInstalled)
-  const showCorner = showIconRow || Boolean(mixedWarning) || (deactivated && layout === 'grid')
+  const showSourceIcon = hasTrackedSource(group)
+  const overlayDeactivated = layout === 'grid' && deactivated
+  const overlayMixed = layout === 'grid' && Boolean(mixedWarning)
+  const showOverlayIcons =
+    layout === 'grid' && (showDestIcons || showSourceIcon || notInstalled)
+  const showCorner = showOverlayIcons || overlayDeactivated || overlayMixed
+  const locationBadges =
+    showDestIcons || showSourceIcon ? (
+      <>
+        {showDestIcons ? (
+          <DestinationIcons macos={dest.macos} adobe={dest.adobe} overlay />
+        ) : null}
+        {showSourceIcon ? <SourceBadge className="shrink-0" /> : null}
+      </>
+    ) : null
   const addedLabel = showAddedAt ? formatAddedAt(group.addedAt) : ''
   const identity = (
     <>
@@ -202,6 +218,15 @@ export function LibraryCard({
         <span className="truncate font-medium">{group.familyName}</span>
         <VfBadge show={group.isVariable} />
         <FormatBadges formats={uniqueEntryFormats(group.entries)} occupying={mixedFormats} />
+        {layout === 'list' && mixedWarning ? (
+          <Badge
+            tone="accent"
+            className="max-w-full truncate"
+            title="OpenType and TrueType copies of this family are installed. Uninstall one format."
+          >
+            {mixedWarning}
+          </Badge>
+        ) : null}
         <StateBadges
           entry={badgeEntry}
           hideInstalled
@@ -258,11 +283,10 @@ export function LibraryCard({
             data-no-marquee=""
             className="pointer-events-none absolute top-1.5 left-1.5 z-10 flex max-w-[calc(100%-0.75rem)] flex-col items-start gap-1"
           >
-            {showIconRow || (deactivated && layout === 'grid') ? (
+            {showOverlayIcons || overlayDeactivated ? (
               <div className="flex items-center gap-1">
-                {showDestIcons ? <DestinationIcons macos={dest.macos} adobe={dest.adobe} overlay /> : null}
-                {hasTrackedSource(group) ? <SourceBadge /> : null}
-                {deactivated && layout === 'grid' ? (
+                {locationBadges}
+                {overlayDeactivated ? (
                   <Badge tone="muted" title="Deactivated">
                     Deactivated
                   </Badge>
@@ -274,7 +298,7 @@ export function LibraryCard({
                 ) : null}
               </div>
             ) : null}
-            {mixedWarning ? (
+            {overlayMixed ? (
               <Badge
                 tone="accent"
                 className="max-w-full truncate"
@@ -345,6 +369,19 @@ export function LibraryCard({
                     ) : null}
                   </div>
                   <div className="min-w-0 flex-1">{identity}</div>
+                  {locationBadges ? (
+                    <span
+                      className={cn(
+                        'ml-auto flex shrink-0 items-center gap-1',
+                        !batch &&
+                          (selected
+                            ? 'invisible'
+                            : 'group-hover:invisible group-focus-within:invisible'),
+                      )}
+                    >
+                      {locationBadges}
+                    </span>
+                  ) : null}
                 </button>
                 {showInstances && (
                   <button
@@ -378,6 +415,7 @@ export function LibraryCard({
                   onDeactivate: onDeactivateInstance,
                   onUninstall: onUninstallInstance,
                   onInstallToAdobe: onInstallInstanceToAdobe,
+                  onUninstallFromAdobe: onUninstallInstanceFromAdobe,
                   adobeAvailable,
                   onFormatSwap: onSwapInstanceFormat,
                   onOpen: (entryId) => {
@@ -472,6 +510,7 @@ export function LibraryCard({
           onDeactivate={onDeactivate}
           onUninstall={onUninstall}
           onUninstallAndRemove={onUninstallAndRemove}
+          onUninstallFromAdobe={onUninstallFromAdobe}
           onActivate={onActivate}
           onSwitch={onSwitch}
           onForget={onForget}

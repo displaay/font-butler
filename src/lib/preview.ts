@@ -1,11 +1,12 @@
 import { signFontAccess, withFontAccessQuery } from './font-access'
+import { hasManagedInstall } from './group'
 import type { CatalogEntry, SystemFace } from './types'
 
 export type PreviewWhich = 'source' | 'installed' | 'revision'
 export type PreviewUrlCache = Map<string, string>
 
 export function catalogPreviewWhich(entry: CatalogEntry): PreviewWhich {
-  if (entry.installedPath || entry.disabledPath) return 'installed'
+  if (hasManagedInstall(entry)) return 'installed'
   return 'source'
 }
 
@@ -15,7 +16,7 @@ export function catalogPreviewRevision(
   revision?: string,
 ): string {
   if (which === 'revision' && revision) return revision
-  const liveInstall = Boolean(entry.installedPath || entry.disabledPath)
+  const liveInstall = hasManagedInstall(entry)
   if (which === 'source' || (which === 'installed' && !liveInstall)) {
     return `${entry.sourceFingerprint ?? `${entry.sourceMtimeMs}-${entry.sourceSize}`}-${entry.updatedAt}`
   }
@@ -102,7 +103,7 @@ function faceDescriptorKey(
 function catalogEntryPreviewUrls(entry: CatalogEntry): string[] {
   const which = catalogPreviewWhich(entry)
   const urls = [catalogFontUrl(entry, which), catalogFontUrl(entry, 'installed')]
-  if (entry.sourcePath && entry.sourcePath !== entry.installedPath) {
+  if (entry.sourcePath && entry.sourcePath !== entry.installedPath && entry.sourcePresent !== false) {
     urls.push(catalogFontUrl(entry, 'source'))
   }
   return urls

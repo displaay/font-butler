@@ -8,8 +8,48 @@ import {
   syncWatchFolderPaths,
 } from './folders.ts'
 import { parseDefaultDestination } from './destinations.ts'
+import { parseLatinPreview } from '../shared/latinPreview.ts'
 import { normalizeSavedFilters } from './saved-filters.ts'
-import type { AppSettings, PreviewPreferences, SortMode, ThemeMode, ViewLayout } from './types.ts'
+import {
+  DEFAULT_RETAIL_AUTOCHECK_MINUTES,
+  normalizeAutoCheckMinutes,
+} from '../shared/retail.ts'
+import type {
+  AppSettings,
+  PreviewPreferences,
+  RetailSyncSettings,
+  SortMode,
+  ThemeMode,
+  ViewLayout,
+} from './types.ts'
+
+/** Production worker (`wrangler.toml` production route). Dev is opt-in via the settings field. */
+export const DEFAULT_RETAIL_WORKER_BASE_URL = 'https://w.displaay.net'
+
+export function defaultRetailSync(): RetailSyncSettings {
+  return {
+    enabled: false,
+    workerBaseUrl: DEFAULT_RETAIL_WORKER_BASE_URL,
+    autoCheckMinutes: DEFAULT_RETAIL_AUTOCHECK_MINUTES,
+    folderId: null,
+  }
+}
+
+function readRetailSync(value: unknown): RetailSyncSettings {
+  const defaults = defaultRetailSync()
+  if (!value || typeof value !== 'object') return defaults
+  const row = value as Partial<RetailSyncSettings>
+  const workerBaseUrl =
+    typeof row.workerBaseUrl === 'string' && row.workerBaseUrl.trim()
+      ? row.workerBaseUrl.trim()
+      : defaults.workerBaseUrl
+  return {
+    enabled: row.enabled === true,
+    workerBaseUrl,
+    autoCheckMinutes: normalizeAutoCheckMinutes(row.autoCheckMinutes),
+    folderId: typeof row.folderId === 'string' && row.folderId ? row.folderId : null,
+  }
+}
 
 const emptySettings = (): AppSettings => ({
   version: 1,
@@ -33,6 +73,7 @@ const emptySettings = (): AppSettings => ({
   activityMaxOperations: DEFAULT_ACTIVITY_MAX_OPERATIONS,
   defaultDestination: 'macos',
   savedFilters: [],
+  retailSync: defaultRetailSync(),
 })
 
 function isViewLayout(value: unknown): value is ViewLayout {
@@ -163,8 +204,10 @@ export function loadSettings(paths: AppPaths): AppSettings {
           ? parsed.activityMaxOperations
           : defaults.activityMaxOperations,
       specimen: readSpecimen(parsed.specimen),
+      latinPreview: parseLatinPreview(parsed.latinPreview),
       defaultDestination: parseDefaultDestination(parsed.defaultDestination),
       savedFilters: normalizeSavedFilters(parsed.savedFilters),
+      retailSync: readRetailSync(parsed.retailSync),
     }
     return syncWatchFolderPaths(settings)
   } catch {

@@ -14,7 +14,9 @@
  *   emoji 😀-class · ornaments/symbols a covered dingbat
  *
  * Pan-Unicode (many distinct scripts + Latin) still defaults to Aa, matching
- * Font Book’s Arial Unicode MS card. Greek/Cyrillic ride with Latin.
+ * Font Book’s Arial Unicode MS card. Greek/Cyrillic ride with Latin, so a
+ * Latin-primary face that also covers one extra script (Noto Sans + Devanagari)
+ * still uses Aa. Script-specific faces with incidental Latin must not flash Aa.
  */
 
 export const DEFAULT_PREVIEW_SAMPLE = 'Aa'
@@ -209,6 +211,10 @@ function hasLatin(set: Set<number>): boolean {
   return set.has(LATIN_A) || set.has(LATIN_a)
 }
 
+export function isLatinPreviewSample(sample: string): boolean {
+  return sample === 'Aa' || sample === 'AA' || sample === 'aa'
+}
+
 function bestScript(set: Set<number>, scripts: PreviewScript[]): PreviewScript | undefined {
   return [...scripts].sort((left, right) => {
     const ratio = coverageRatio(set, right) - coverageRatio(set, left)
@@ -275,7 +281,14 @@ export function previewSampleFromCoverage(coverage: Iterable<number> | undefined
     distinct.push(braille)
   }
 
+  const specialty = distinct.some((script) => script.kind === 'emoji' || script.kind === 'braille')
+
   if (distinct.length >= PAN_UNICODE_DISTINCT && latin) {
+    return latinSample(set)
+  }
+  // Latin + Greek/Cyrillic is a Latin-primary face even when the file also
+  // covers a full extra script (Noto Sans upright ships Devanagari).
+  if (latin && companions.length > 0 && !specialty) {
     return latinSample(set)
   }
   if (distinct.length > 0) {

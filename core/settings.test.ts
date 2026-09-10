@@ -525,3 +525,50 @@ test('loadSettings drops invalid savedFilters entries', () => {
   }
 })
 
+test('loadSettings keeps a stored latinPreview', () => {
+  const paths = tempPaths()
+  try {
+    saveSettings(paths, sampleSettings({ latinPreview: { preset: 'Ag', custom: 'Hi' } }))
+    assert.deepEqual(loadSettings(paths).latinPreview, { preset: 'Ag', custom: 'Hi' })
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings ignores junk latinPreview values', () => {
+  const paths = tempPaths()
+  try {
+    fs.mkdirSync(paths.dataRoot, { recursive: true })
+    fs.writeFileSync(
+      paths.settingsPath,
+      JSON.stringify({
+        version: 1,
+        latinPreview: { preset: 'nope', custom: 'Hello' },
+      }),
+    )
+    assert.equal(loadSettings(paths).latinPreview, undefined)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings normalizes latinPreview custom text', () => {
+  const paths = tempPaths()
+  try {
+    fs.mkdirSync(paths.dataRoot, { recursive: true })
+    fs.writeFileSync(
+      paths.settingsPath,
+      JSON.stringify({
+        version: 1,
+        latinPreview: { preset: 'custom', custom: '  Hello world  ' },
+      }),
+    )
+    assert.deepEqual(loadSettings(paths).latinPreview, {
+      preset: 'custom',
+      custom: 'Hello wo',
+    })
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+

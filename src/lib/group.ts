@@ -263,6 +263,14 @@ export function hasSourceMissing(group: { entries: CatalogEntry[] }): boolean {
   return group.entries.some((entry) => entry.status === 'source-missing')
 }
 
+export function hasManagedInstall(entry: CatalogEntry): boolean {
+  return Boolean(
+    entry.installedPath ||
+      entry.disabledPath ||
+      (entry.installations ?? []).some((copy) => copy.path || copy.parkedPath),
+  )
+}
+
 function isSelfSourced(entry: CatalogEntry): boolean {
   if (!entry.sourcePath) return true
   if (entry.installedPath && entry.sourcePath === entry.installedPath) return true
@@ -304,7 +312,7 @@ export function catalogRevealEntry(
       ? selected
       : group.entries[0]
   if (which === 'installed') {
-    const hasInstall = (entry: CatalogEntry) => Boolean(entry.installedPath || entry.disabledPath)
+    const hasInstall = hasManagedInstall
     if (preferred && hasInstall(preferred)) return preferred
     return group.entries.find(hasInstall) ?? preferred
   }

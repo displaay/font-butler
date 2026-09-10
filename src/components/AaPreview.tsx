@@ -1,8 +1,30 @@
-import { useEffect, useState } from 'react'
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react'
 import { Loader2 } from 'lucide-react'
 import { usePreviewFontReady } from '@/hooks/usePreviewFontReady'
-import { resolvedPreviewSample } from '@/lib/previewSample'
+import { fitPreviewTransform } from '@/lib/fitPreview'
+import { applyLatinPreviewSample, DEFAULT_LATIN_PREVIEW_TEXT } from '@/lib/latinPreview'
 import { cn } from '@/lib/utils'
+
+const LatinPreviewContext = createContext(DEFAULT_LATIN_PREVIEW_TEXT)
+
+export function LatinPreviewProvider({
+  text,
+  children,
+}: {
+  text: string
+  children: ReactNode
+}) {
+  return <LatinPreviewContext.Provider value={text}>{children}</LatinPreviewContext.Provider>
+}
 
 const CYCLE_MS = 600
 
@@ -37,7 +59,9 @@ function useHoverCycle(length: number, active: boolean, restIndex: number) {
 }
 
 function previewBoxClass(size: 'sm' | 'md') {
-  return size === 'sm' ? 'size-8 text-[17px] rounded-md' : 'size-11 text-[24px] rounded-md'
+  return size === 'sm'
+    ? 'size-8 overflow-hidden text-[17px] rounded-md'
+    : 'size-11 overflow-hidden text-[24px] rounded-md'
 }
 
 function PreviewPending({ size }: { size: 'sm' | 'md' | 'glyph' }) {
@@ -68,6 +92,7 @@ function AaGlyph({
   pendingSize = 'md',
   wait = true,
   sample,
+  fit = false,
 }: {
   family: string
   weight?: number
@@ -76,12 +101,68 @@ function AaGlyph({
   pendingSize?: 'sm' | 'md' | 'glyph'
   wait?: boolean
   sample?: string
+  fit?: boolean
 }) {
-  const ready = usePreviewFontReady(family, weight, italic, wait)
+  const ready = usePreviewFontReady(family, weight, italic, wait || fit)
+  const latinText = useContext(LatinPreviewContext)
+  const text = applyLatinPreviewSample(sample, latinText)
+  const glyphRef = useRef<HTMLSpanElement>(null)
+  const [fitStyle, setFitStyle] = useState<CSSProperties>({})
+
+  useLayoutEffect(() => {
+    if (!fit || !ready) {
+      setFitStyle({})
+      return
+    }
+    const el = glyphRef.current
+    const box = el?.parentElement
+    if (!el || !box) return
+    let frame = 0
+
+    function applyFit() {
+      if (!el || !box) return
+      el.style.transform = 'none'
+      el.style.transformOrigin = '0 0'
+      const range = document.createRange()
+      range.selectNodeContents(el)
+      const ink = range.getBoundingClientRect()
+      const frameRect = box.getBoundingClientRect()
+      const element = el.getBoundingClientRect()
+      if (ink.width <= 0 || ink.height <= 0 || frameRect.width <= 0 || frameRect.height <= 0) return
+      const next = fitPreviewTransform(ink, frameRect, element)
+      const transform = `translate(${next.translateX}px, ${next.translateY}px) scale(${next.scale})`
+      const transformOrigin = `${next.originX}px ${next.originY}px`
+      el.style.transformOrigin = transformOrigin
+      el.style.transform = transform
+      setFitStyle((current) =>
+        current.transform === transform && current.transformOrigin === transformOrigin
+          ? current
+          : { transform, transformOrigin },
+      )
+    }
+
+    applyFit()
+    frame = requestAnimationFrame(applyFit)
+    const observer = new ResizeObserver(applyFit)
+    observer.observe(box)
+    observer.observe(el)
+    document.fonts?.addEventListener('loadingdone', applyFit)
+    void document.fonts?.ready.then(applyFit)
+    return () => {
+      cancelAnimationFrame(frame)
+      observer.disconnect()
+      document.fonts?.removeEventListener('loadingdone', applyFit)
+    }
+  }, [fit, ready, family, weight, italic, variation, text])
+
   if (!ready) return <PreviewPending size={pendingSize} />
   return (
     <span
-      className="font-preview translate-y-px select-none"
+      ref={glyphRef}
+      className={cn(
+        'font-preview select-none whitespace-nowrap',
+        !fit && 'translate-y-px overflow-hidden',
+      )}
       dir="auto"
       style={{
         fontFamily: `"${family}"`,
@@ -89,9 +170,10 @@ function AaGlyph({
         fontStyle: italic ? 'italic' : 'normal',
         fontSynthesis: 'none',
         fontVariationSettings: variation || undefined,
+        ...fitStyle,
       }}
     >
-      {resolvedPreviewSample(sample)}
+      {text}
     </span>
   )
 }
@@ -178,6 +260,7 @@ export function CyclingAaPreview({
             pendingSize="glyph"
             wait={faceIndex === visibleIndex}
             sample={sample}
+            fit
           />
           {cycling ? <PreviewLabel>{face.label}</PreviewLabel> : null}
         </div>
