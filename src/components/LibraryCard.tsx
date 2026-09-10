@@ -231,7 +231,7 @@ export function LibraryCard({
           entry={badgeEntry}
           hideInstalled
           hideNotInstalled={layout === 'grid'}
-          hideDeactivated={layout === 'grid'}
+          hideDeactivated
         />
         {mixedSummary ? (
           <Badge tone="muted" title={mixedSummary}>
@@ -351,12 +351,23 @@ export function LibraryCard({
                   onDoubleClick={onInspect}
                   className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left"
                 >
-                  <AaPreview
-                    family={previewFamily}
-                    weight={previewWeight}
-                    italic={previewItalic}
-                    sample={previewSample}
-                  />
+                  <div className="relative shrink-0">
+                    <AaPreview
+                      family={previewFamily}
+                      weight={previewWeight}
+                      italic={previewItalic}
+                      sample={previewSample}
+                    />
+                    {deactivated ? (
+                      <Badge
+                        tone="muted"
+                        title="Deactivated"
+                        className="absolute left-0 top-0 z-10"
+                      >
+                        Deactivated
+                      </Badge>
+                    ) : null}
+                  </div>
                   <div className="min-w-0 flex-1">{identity}</div>
                   {locationBadges ? (
                     <span
