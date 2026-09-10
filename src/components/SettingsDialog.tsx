@@ -19,6 +19,7 @@ import {
 import { FolderRelinkDialog } from '@/components/FolderRelinkDialog'
 import { FolderSetupDialog } from '@/components/FolderSetupDialog'
 import { AppUpdateCard } from '@/components/AppUpdateCard'
+import { RetailPane } from '@/components/RetailPane'
 import { SettingsRow, SettingsSection } from '@/components/SettingsRow'
 import { Button } from '@/components/ui/button'
 import {
@@ -45,7 +46,7 @@ import type {
 import { cn } from '@/lib/utils'
 import { DESTINATIONS, FOLDER_POLICIES, adobeTestingFolderAvailable, destinationLabel, destinationNeedsAdobe, folderAvailabilityLabel, folderPolicyLabel } from '@/lib/folders'
 import { watchFolderName } from '@/lib/watchFolders'
-import type { FolderPolicyPreset, WatchFolder } from '@/lib/types'
+import type { FolderPolicyPreset, RetailSyncStatus, WatchFolder } from '@/lib/types'
 
 const selectClass =
   'h-8 w-auto min-w-[9.5rem] max-w-full rounded-md border bg-background px-2 text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring/30'
@@ -61,6 +62,7 @@ const THEME_OPTIONS: { id: ThemeMode; label: string; icon: typeof Sun }[] = [
 type SettingsCategoryId =
   | 'general'
   | 'folders'
+  | 'retail'
   | 'fonts'
   | 'destinations'
   | 'caches'
@@ -83,6 +85,12 @@ const CATEGORIES: {
     label: 'Watch folders',
     icon: Folder,
     description: 'Watch folders for new fonts and choose a policy for each one.',
+  },
+  {
+    id: 'retail',
+    label: 'DISPLAAY retail',
+    icon: FolderOpen,
+    description: 'Optionally keep a watch folder in step with the DISPLAAY retail collection.',
   },
   {
     id: 'fonts',
@@ -148,6 +156,8 @@ export function SettingsDialog({
   checkingAppUpdate = false,
   onCheckAppUpdate,
   highlightAppUpdate = false,
+  retail = null,
+  onRetailChange,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -158,6 +168,8 @@ export function SettingsDialog({
   checkingAppUpdate?: boolean
   onCheckAppUpdate?: (refresh?: boolean) => void
   highlightAppUpdate?: boolean
+  retail?: RetailSyncStatus | null
+  onRetailChange?: (status: RetailSyncStatus) => void
 }) {
   const setActionStatus = useSetActionStatus()
   const tablistId = useId()
@@ -384,6 +396,15 @@ export function SettingsDialog({
                   onAddFolder={() => setSetupOpen(true)}
                   onRelink={(root) => setRelinkRoot(root)}
                   onSettingsChange={onSettingsChange}
+                />
+              )}
+              {category === 'retail' && (
+                <RetailPane
+                  status={retail}
+                  folders={folders}
+                  busy={busy}
+                  onStatus={(next) => onRetailChange?.(next)}
+                  onAddFolder={() => setSetupOpen(true)}
                 />
               )}
               {category === 'fonts' && (

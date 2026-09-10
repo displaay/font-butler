@@ -16,6 +16,7 @@ import type {
   Operation,
   ProjectSet,
   RelinkPreview,
+  RetailSyncStatus,
   SortMode,
   SystemFace,
   ThemeMode,
@@ -335,6 +336,19 @@ export const api = {
   startWatching: (id: string) => json<{ folder: WatchFolder }>(post('/api/folders/start', { id })),
   pauseFolder: (id: string) => json<{ folder: WatchFolder }>(post('/api/folders/pause', { id })),
   resumeFolder: (id: string) => json<{ folder: WatchFolder }>(post('/api/folders/resume', { id })),
+  retail: {
+    status: () => get<{ status: RetailSyncStatus }>('/api/retail/status'),
+    // `token` is write-only: the server stores it in a 0600 file and only ever reports `hasToken`.
+    configure: (input: {
+      enabled?: boolean
+      workerBaseUrl?: string
+      token?: string
+      folderId?: string | null
+    }) => json<{ status: RetailSyncStatus }>(post('/api/retail/configure', input)),
+    check: (refresh = false) =>
+      json<{ status: RetailSyncStatus }>(post('/api/retail/check', { refresh })),
+    sync: () => json<{ status: RetailSyncStatus }>(post('/api/retail/sync', {})),
+  },
   planImport: (paths: string[]) => json<ImportPlan>(post('/api/import/plan', { paths })),
   applyPlan: (
     planId: string,
@@ -481,6 +495,14 @@ export function isDuplicatesEvent(
 ): value is { type: 'duplicates'; duplicates: DuplicateWarning[] } {
   return Boolean(
     value && typeof value === 'object' && (value as { type?: string }).type === 'duplicates',
+  )
+}
+
+export function isRetailEvent(
+  value: unknown,
+): value is { type: 'retail'; status: RetailSyncStatus } {
+  return Boolean(
+    value && typeof value === 'object' && (value as { type?: string }).type === 'retail',
   )
 }
 

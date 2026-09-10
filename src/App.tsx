@@ -39,7 +39,7 @@ import { NotifyProvider, useSetActionStatus } from '@/components/NotifyProvider'
 import { Toaster } from '@/components/ui/sonner'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useFontActions, type FormatPrompt, type ReplacePrompt } from '@/hooks/useFontActions'
-import { api, isAppUpdateEvent, isDuplicatesEvent, isNotice, isOperationsEvent, isProjectsEvent, isSettingsEvent, subscribeEvents } from '@/lib/api'
+import { api, isAppUpdateEvent, isDuplicatesEvent, isNotice, isOperationsEvent, isProjectsEvent, isRetailEvent, isSettingsEvent, subscribeEvents } from '@/lib/api'
 import {
   mergeUnreadFlags,
   unreadActivityCount,
@@ -111,7 +111,7 @@ import {
 } from '@/lib/inspector'
 import { applyTheme } from '@/lib/theme'
 import { allUpdateGroups, visibleUpdateGroups } from '@/lib/updateInventory'
-import type { AppSettings, AppUpdateStatus, CatalogEntry, DestinationCapability, DuplicateWarning, FamilyGroup, ImportPlan, ImportPlanItem, LibraryFilter, Operation, PreviewPreferences, ProjectSet, SavedLibraryFilter, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
+import type { AppSettings, AppUpdateStatus, CatalogEntry, DestinationCapability, DuplicateWarning, FamilyGroup, ImportPlan, ImportPlanItem, LibraryFilter, Operation, PreviewPreferences, ProjectSet, RetailSyncStatus, SavedLibraryFilter, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { isPathUnderFolder, isWatchFolderEntry, watchFolderName } from '@/lib/watchFolders'
 
@@ -147,6 +147,7 @@ function AppShell() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsFocusAppUpdate, setSettingsFocusAppUpdate] = useState(false)
   const [appUpdate, setAppUpdate] = useState<AppUpdateStatus | null>(null)
+  const [retail, setRetail] = useState<RetailSyncStatus | null>(null)
   const [checkingAppUpdate, setCheckingAppUpdate] = useState(false)
   const [onboardingOpen, setOnboardingOpen] = useState(false)
   const [settings, setSettings] = useState<AppSettings | null>(null)
@@ -360,6 +361,10 @@ function AppShell() {
       }
       if (isAppUpdateEvent(event)) {
         setAppUpdate(event.update)
+        return
+      }
+      if (isRetailEvent(event)) {
+        setRetail(event.status)
         return
       }
       if (isOperationsEvent(event)) {
@@ -2278,6 +2283,8 @@ function AppShell() {
           checkingAppUpdate={checkingAppUpdate}
           onCheckAppUpdate={(refresh) => void loadAppUpdate(refresh)}
           highlightAppUpdate={settingsFocusAppUpdate}
+          retail={retail}
+          onRetailChange={setRetail}
         />
         <MarqueeOverlay rect={marqueeRect} />
         <Toaster theme={settings?.theme ?? 'system'} />

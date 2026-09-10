@@ -379,3 +379,13 @@ export type AppUpdateStatus = {
   checkedAt: number
   error?: string
 }
+
+export type {
+  RetailDriftItem,
+  RetailDriftKind,
+  RetailFile,
+  RetailSkip,
+  RetailSkipReason,
+  RetailSyncStatus,
+} from '../../shared/retail'
+export { retailDriftSummary } from '../../shared/retail'
