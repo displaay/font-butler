@@ -376,101 +376,130 @@ function isStubRetailFaces(entry: CatalogEntry | undefined): boolean {
   return !entry?.faces?.some((face) => Boolean(face.postscriptName))
 }
 
+function recordedFingerprintForDest(entry: CatalogEntry | undefined, dest: string): string | undefined {
+  if (!entry) return undefined
+  const resolved = path.resolve(dest)
+  const macos = copyAt(entry, 'macos')
+  if (entry.installedPath && path.resolve(entry.installedPath) === resolved) {
+    return macos?.fingerprint ?? entry.installedFingerprint
+  }
+  if (entry.disabledPath && path.resolve(entry.disabledPath) === resolved) {
+    return macos?.fingerprint ?? entry.installedFingerprint
+  }
+  if (entry.sourcePath && path.resolve(entry.sourcePath) === resolved) {
+    return entry.sourceFingerprint ?? macos?.fingerprint ?? entry.installedFingerprint
+  }
+  return macos?.fingerprint ?? entry.installedFingerprint ?? entry.sourceFingerprint
+}
+
+/** True when faces are stubs or the dest bytes are not the revision the catalog last recorded. */
+function destNeedsFaceParse(entry: CatalogEntry | undefined, dest: string): boolean {
+  if (isStubRetailFaces(entry)) return true
+  const live = tryFingerprintFile(dest)
+  if (!live) return false
+  return live !== recordedFingerprintForDest(entry, dest)
+}
+
 async function catalogRetailWrites(
   paths: AppPaths,
   written: Array<{ relativePath: string; dest: string; parked: boolean }>,
-  options: { parse?: 'always' | 'if-stub' } = {},
+  options: { parse?: 'always' | 'if-unconfirmed' } = {},
 ): Promise<void> {
   if (written.length === 0) return
-  const parse = options.parse ?? 'always'
-  const catalog = loadCatalog(paths)
-  let dirty = false
-  for (let index = 0; index < written.length; index += 1) {
-    await yieldEventLoop()
-    const item = written[index]!
-    let entry = findRetailEntry(catalog, item.relativePath)
-    const pathOccupant = catalog.entries.find((candidate) => {
-      if (candidate.id === entry?.id || candidate.retailRelativePath) return false
-      const pathsToCheck = [candidate.installedPath, candidate.disabledPath, ...(candidate.installations ?? []).flatMap((copy) => [copy.path, copy.parkedPath])]
-      return pathsToCheck.some((candidatePath) => candidatePath && path.resolve(candidatePath) === path.resolve(item.dest) && fs.existsSync(candidatePath))
-    })
-    if (!entry && pathOccupant) entry = pathOccupant
-    if (entry && pathOccupant && pathOccupant.id !== entry.id) {
-      removeEntryById(catalog, pathOccupant.id)
-    }
-    const wasDeactivated = Boolean(
-      entry &&
-        (entry.status === 'deactivated' ||
-          (entry.disabledPath && fs.existsSync(entry.disabledPath)) ||
-          copyAt(entry, 'macos')?.parkedPath && fs.existsSync(copyAt(entry, 'macos')!.parkedPath!)),
-    )
-    const previousMacos = entry ? copyAt(entry, 'macos') : undefined
-    const shouldParse = parse === 'always' || isStubRetailFaces(entry)
-    try {
-      if (shouldParse && fs.existsSync(item.dest)) {
-        const parsed = parseFontFile(item.dest)
-        if (parsed.faces.length > 0) {
-          if (entry) applyParsedFont(entry, parsed)
-          else entry = importOneUnlocked(paths, item.dest, { catalog, persist: false })
+  // Held across yields so a concurrent uninstall/import cannot save a newer catalog that we then
+  // overwrite with this snapshot. Nested persist callers already hold the lock; runCatalogTask
+  // runs those immediately.
+  await runCatalogTask(async () => {
+    const parse = options.parse ?? 'always'
+    const catalog = loadCatalog(paths)
+    let dirty = false
+    for (let index = 0; index < written.length; index += 1) {
+      await yieldEventLoop()
+      const item = written[index]!
+      let entry = findRetailEntry(catalog, item.relativePath)
+      const pathOccupant = catalog.entries.find((candidate) => {
+        if (candidate.id === entry?.id || candidate.retailRelativePath) return false
+        const pathsToCheck = [candidate.installedPath, candidate.disabledPath, ...(candidate.installations ?? []).flatMap((copy) => [copy.path, copy.parkedPath])]
+        return pathsToCheck.some((candidatePath) => candidatePath && path.resolve(candidatePath) === path.resolve(item.dest) && fs.existsSync(candidatePath))
+      })
+      if (!entry && pathOccupant) entry = pathOccupant
+      if (entry && pathOccupant && pathOccupant.id !== entry.id) {
+        removeEntryById(catalog, pathOccupant.id)
+      }
+      const wasDeactivated = Boolean(
+        entry &&
+          (entry.status === 'deactivated' ||
+            (entry.disabledPath && fs.existsSync(entry.disabledPath)) ||
+            copyAt(entry, 'macos')?.parkedPath && fs.existsSync(copyAt(entry, 'macos')!.parkedPath!)),
+      )
+      const previousMacos = entry ? copyAt(entry, 'macos') : undefined
+      const shouldParse = parse === 'always' || destNeedsFaceParse(entry, item.dest)
+      try {
+        if (shouldParse && fs.existsSync(item.dest)) {
+          const parsed = parseFontFile(item.dest)
+          if (parsed.faces.length > 0) {
+            if (entry) applyParsedFont(entry, parsed)
+            else entry = importOneUnlocked(paths, item.dest, { catalog, persist: false })
+          }
         }
+      } catch {
+        // Dummy or unreadable bytes still keep the listing.
       }
-    } catch {
-      // Dummy or unreadable bytes still keep the listing.
+      if (!entry) continue
+      entry.retailRelativePath = item.relativePath
+      const fingerprint = fs.existsSync(item.dest) ? tryFingerprintFile(item.dest) : undefined
+      if (item.parked && wasDeactivated) {
+        const livePath = entry.installedPath ?? previousMacos?.path ?? resolveRetailInstallPath(paths.userFontsDir, item.relativePath) ?? item.dest
+        entry.sourcePath = entry.sourcePath || livePath
+        entry.installedPath = livePath
+        entry.disabledPath = item.dest
+        entry.status = 'deactivated'
+        upsertCopy(entry, {
+          destinationId: 'macos',
+          path: livePath,
+          parkedPath: item.dest,
+          fingerprint,
+          verification: 'unavailable',
+        })
+        if (fingerprint) entry.installedFingerprint = fingerprint
+      } else if (item.parked) {
+        // A cached copy is still the source used when the user explicitly installs the listing.
+        entry.sourcePath = item.dest
+        entry.sourcePresent = true
+        entry.installedPath = undefined
+        entry.disabledPath = undefined
+        entry.status = 'uninstalled'
+        if (previousMacos) {
+          entry.installations = (entry.installations ?? []).filter((copy) => copy.destinationId !== 'macos')
+        }
+      } else {
+        entry.installedPath = item.dest
+        entry.disabledPath = undefined
+        entry.sourcePath = item.dest
+        entry.status = 'installed'
+        entry.sourcePresent = false
+        entry.installedFingerprint = fingerprint
+        if (fingerprint) {
+          const stat = fs.statSync(item.dest)
+          entry.installedSnapshotMtimeMs = stat.mtimeMs
+          entry.installedSnapshotSize = stat.size
+        }
+        upsertCopy(entry, {
+          destinationId: 'macos',
+          path: item.dest,
+          fingerprint,
+          verification: 'file-present',
+        })
+      }
+      upsertEntry(catalog, entry)
+      applyEntryFacts(entry)
+      dirty = true
     }
-    if (!entry) continue
-    entry.retailRelativePath = item.relativePath
-    const fingerprint = fs.existsSync(item.dest) ? tryFingerprintFile(item.dest) : undefined
-    if (item.parked && wasDeactivated) {
-      const livePath = entry.installedPath ?? previousMacos?.path ?? resolveRetailInstallPath(paths.userFontsDir, item.relativePath) ?? item.dest
-      entry.sourcePath = entry.sourcePath || livePath
-      entry.installedPath = livePath
-      entry.disabledPath = item.dest
-      entry.status = 'deactivated'
-      upsertCopy(entry, {
-        destinationId: 'macos',
-        path: livePath,
-        parkedPath: item.dest,
-        fingerprint,
-        verification: 'unavailable',
-      })
-      if (fingerprint) entry.installedFingerprint = fingerprint
-    } else if (item.parked) {
-      // A cached copy is still the source used when the user explicitly installs the listing.
-      entry.sourcePath = item.dest
-      entry.sourcePresent = true
-      entry.installedPath = undefined
-      entry.disabledPath = undefined
-      entry.status = 'uninstalled'
-      if (previousMacos) {
-        entry.installations = (entry.installations ?? []).filter((copy) => copy.destinationId !== 'macos')
-      }
-    } else {
-      entry.installedPath = item.dest
-      entry.disabledPath = undefined
-      entry.sourcePath = item.dest
-      entry.status = 'installed'
-      entry.sourcePresent = false
-      entry.installedFingerprint = fingerprint
-      if (fingerprint) {
-        const stat = fs.statSync(item.dest)
-        entry.installedSnapshotMtimeMs = stat.mtimeMs
-        entry.installedSnapshotSize = stat.size
-      }
-      upsertCopy(entry, {
-        destinationId: 'macos',
-        path: item.dest,
-        fingerprint,
-        verification: 'file-present',
-      })
+    if (dirty) {
+      saveCatalog(paths, catalog)
+      emitEvent({ type: 'catalog', entries: catalog.entries })
     }
-    upsertEntry(catalog, entry)
-    applyEntryFacts(entry)
-    dirty = true
-  }
-  if (dirty) {
-    saveCatalog(paths, catalog)
-    emitEvent({ type: 'catalog', entries: catalog.entries })
-  }
+  })
 }
 
 async function reconcileRetailCatalog(
@@ -483,8 +512,8 @@ async function reconcileRetailCatalog(
     const parked = Boolean(file.parked)
     return [{ relativePath: file.relativePath, dest, parked }]
   })
-  // Restart reconnect only: already-parsed listings skip fontkit so Check cannot freeze the app.
-  await catalogRetailWrites(paths, written, { parse: 'if-stub' })
+  // Restart reconnect: skip fontkit when faces exist and dest bytes already match the catalog.
+  await catalogRetailWrites(paths, written, { parse: 'if-unconfirmed' })
 }
 
 /**
@@ -568,7 +597,7 @@ async function runSync(
       persist: async (next, written) => {
         saveRetailManifest(paths, next)
         if (written?.length) {
-          await runCatalogTask(() => catalogRetailWrites(paths, written))
+          await catalogRetailWrites(paths, written)
         }
       },
       destFor: (relativePath) => destForRelativePath(paths, relativePath),
