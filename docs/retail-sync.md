@@ -127,6 +127,9 @@ already synced and then regenerated do not appear on Updates as a collection car
 - `removed` on the server is reported only — Fonts copies are never deleted automatically.
 - Only one sync runs at a time. A second request joins the run in progress rather than competing over
   the same `.part` files.
+- The initial sync does not run on the UI process. The packaged app forks the API as a child process
+  (`utilityProcess`), matching `npm run electron`. Cataloging yields between files so the API event
+  loop keeps serving the running app.
 - A failed check does not update "last checked" and does not report "Up to date" — the previous drift
   is left as-is and the error is shown.
 

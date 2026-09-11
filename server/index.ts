@@ -959,6 +959,11 @@ app.get('/api/events', (c) => {
 const invokedAsCli = process.argv[1]
   ? path.normalize(process.argv[1]).includes(`${path.sep}server${path.sep}index`)
   : false
-if (invokedAsCli) {
-  await startFontButlerServer()
+// Packaged Electron forks this bundle as a child process so retail sync (and other API work)
+// cannot freeze the UI process. FONT_BUTLER_SERVE is set only by that worker, never by import.
+if (invokedAsCli || process.env.FONT_BUTLER_SERVE === '1') {
+  await startFontButlerServer({
+    staticDir: process.env.FONT_BUTLER_STATIC_DIR,
+    port: process.env.FONT_BUTLER_API_PORT ? Number(process.env.FONT_BUTLER_API_PORT) : undefined,
+  })
 }

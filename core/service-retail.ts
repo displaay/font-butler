@@ -11,6 +11,7 @@ import { applyParsedFont, parseFontFile } from './parse.ts'
 import { retailTokenPath } from './paths.ts'
 import { loadProjects } from './projects.ts'
 import type { AppPaths } from './paths.ts'
+import { yieldEventLoop } from './event-loop.ts'
 import { applyRetailSync } from './retail-apply.ts'
 import { fetchRetailFile, fetchRetailManifest, isAllowedRetailBaseUrl } from './retail-client.ts'
 import {
@@ -371,13 +372,22 @@ function measureDrift(paths: AppPaths, manifest: RetailManifest): RetailDriftIte
   return diffRetailManifest(manifest, loadRetailManifest(paths), statRetailInstall(paths))
 }
 
-function catalogRetailWrites(
+function isStubRetailFaces(entry: CatalogEntry | undefined): boolean {
+  return !entry?.faces?.some((face) => Boolean(face.postscriptName))
+}
+
+async function catalogRetailWrites(
   paths: AppPaths,
   written: Array<{ relativePath: string; dest: string; parked: boolean }>,
-): void {
+  options: { parse?: 'always' | 'if-stub' } = {},
+): Promise<void> {
   if (written.length === 0) return
-  for (const item of written) {
-    const catalog = loadCatalog(paths)
+  const parse = options.parse ?? 'always'
+  const catalog = loadCatalog(paths)
+  let dirty = false
+  for (let index = 0; index < written.length; index += 1) {
+    await yieldEventLoop()
+    const item = written[index]!
     let entry = findRetailEntry(catalog, item.relativePath)
     const pathOccupant = catalog.entries.find((candidate) => {
       if (candidate.id === entry?.id || candidate.retailRelativePath) return false
@@ -395,8 +405,9 @@ function catalogRetailWrites(
           copyAt(entry, 'macos')?.parkedPath && fs.existsSync(copyAt(entry, 'macos')!.parkedPath!)),
     )
     const previousMacos = entry ? copyAt(entry, 'macos') : undefined
+    const shouldParse = parse === 'always' || isStubRetailFaces(entry)
     try {
-      if (fs.existsSync(item.dest)) {
+      if (shouldParse && fs.existsSync(item.dest)) {
         const parsed = parseFontFile(item.dest)
         if (parsed.faces.length > 0) {
           if (entry) applyParsedFont(entry, parsed)
@@ -454,19 +465,26 @@ function catalogRetailWrites(
     }
     upsertEntry(catalog, entry)
     applyEntryFacts(entry)
-    saveCatalog(paths, catalog)
+    dirty = true
   }
-  emitEvent({ type: 'catalog', entries: loadCatalog(paths).entries })
+  if (dirty) {
+    saveCatalog(paths, catalog)
+    emitEvent({ type: 'catalog', entries: catalog.entries })
+  }
 }
 
-function reconcileRetailCatalog(paths: AppPaths, manifest: ReturnType<typeof loadRetailManifest>): void {
+async function reconcileRetailCatalog(
+  paths: AppPaths,
+  manifest: ReturnType<typeof loadRetailManifest>,
+): Promise<void> {
   const written = Object.values(manifest.files).flatMap((file) => {
     const dest = file.installedPath ?? resolveRetailInstallPath(paths.userFontsDir, file.relativePath)
     if (!dest || !fs.existsSync(dest)) return []
     const parked = Boolean(file.parked)
     return [{ relativePath: file.relativePath, dest, parked }]
   })
-  catalogRetailWrites(paths, written)
+  // Restart reconnect only: already-parsed listings skip fontkit so Check cannot freeze the app.
+  await catalogRetailWrites(paths, written, { parse: 'if-stub' })
 }
 
 /**
@@ -480,7 +498,7 @@ export async function checkRetail(
   try {
     const { manifest } = await readManifest(paths, options)
     ensureRetailListings(paths, manifest)
-    reconcileRetailCatalog(paths, loadRetailManifest(paths))
+    await reconcileRetailCatalog(paths, loadRetailManifest(paths))
     const drift = measureDrift(paths, manifest)
     cache.checkedAt = new Date().toISOString()
     cache.drift = drift
@@ -527,7 +545,7 @@ async function runSync(
       fetchManifest: options.fetchManifest,
     })
     ensureRetailListings(paths, manifest)
-    reconcileRetailCatalog(paths, loadRetailManifest(paths))
+    await reconcileRetailCatalog(paths, loadRetailManifest(paths))
 
     const drift = measureDrift(paths, manifest)
     cache.fonts = retailFontsFromCollections(manifest.collections, [], manifest.skipped).map((font) => ({
@@ -559,7 +577,8 @@ async function runSync(
       download: (key, expectedSize) => download({ workerBaseUrl, token, key, expectedSize }),
     })
 
-    catalogRetailWrites(paths, result.writtenDests)
+    // persist already cataloged each batch under the lock; replaying writtenDests would
+    // overwrite an uninstall or deactivate that landed between persist and this point.
 
     cache.checkedAt = new Date().toISOString()
     cache.drift = measureDrift(paths, manifest)
