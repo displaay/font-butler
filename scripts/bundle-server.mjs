@@ -8,6 +8,9 @@ await build({
   root: project,
   configFile: false,
   logLevel: 'warn',
+  ssr: {
+    noExternal: true,
+  },
   build: {
     ssr: path.join(project, 'server/index.ts'),
     outDir: path.join(project, 'electron'),

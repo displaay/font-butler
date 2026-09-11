@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 
 const PYTHON_RELEASE = '20260901'
 const PYTHON_VERSION = '3.13.15'
-const BUNDLE_REVISION = '2'
+const BUNDLE_REVISION = '3'
 const project = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const vendorDir = path.join(project, 'vendor')
 const destDir = path.join(vendorDir, 'python')
@@ -102,6 +102,23 @@ function installFonttools() {
   )
 }
 
+function walkAndRemove(root, predicate) {
+  if (!fs.existsSync(root)) return
+  const entries = fs.readdirSync(root, { withFileTypes: true })
+  for (const entry of entries) {
+    const full = path.join(root, entry.name)
+    if (entry.isDirectory()) {
+      if (predicate(full, entry)) {
+        fs.rmSync(full, { recursive: true, force: true })
+      } else {
+        walkAndRemove(full, predicate)
+      }
+    } else if (predicate(full, entry)) {
+      fs.rmSync(full, { force: true })
+    }
+  }
+}
+
 function pruneRuntime() {
   for (const extra of ['include', 'share']) {
     fs.rmSync(path.join(destDir, extra), { recursive: true, force: true })
@@ -123,8 +140,31 @@ function pruneRuntime() {
     'ensurepip',
     'pydoc_data',
     'unittest',
+    'xmlrpc',
+    'wsgiref',
+    '_pyrepl',
+    'turtle.py',
+    'pydoc.py',
+    'doctest.py',
+    'this.py',
+    'antigravity.py',
+    'cgi.py',
+    'cgitb.py',
   ]) {
     fs.rmSync(path.join(pyDir, extra), { recursive: true, force: true })
+  }
+  for (const name of fs.readdirSync(pyDir)) {
+    if (name.startsWith('config-')) {
+      fs.rmSync(path.join(pyDir, name), { recursive: true, force: true })
+    }
+  }
+  const dynload = path.join(pyDir, 'lib-dynload')
+  if (fs.existsSync(dynload)) {
+    for (const name of fs.readdirSync(dynload)) {
+      if (/^(_tkinter|_dbm|_sqlite3|_lsprof|_curses)/.test(name)) {
+        fs.rmSync(path.join(dynload, name), { force: true })
+      }
+    }
   }
   const site = path.join(pyDir, 'site-packages')
   if (fs.existsSync(site)) {
@@ -134,12 +174,43 @@ function pruneRuntime() {
         fs.rmSync(path.join(site, name), { recursive: true, force: true })
       }
     }
+    const fontTools = path.join(site, 'fontTools')
+    if (fs.existsSync(fontTools)) {
+      for (const extra of [
+        'cu2qu',
+        'qu2cu',
+        'ufoLib',
+        'voltLib',
+        'mtiLib',
+        't1Lib',
+        'svgLib',
+        'diff',
+        'merge',
+        'fontBuilder.py',
+        'help.py',
+        'ttx.py',
+        'afmLib.py',
+        'tfmLib.py',
+      ]) {
+        fs.rmSync(path.join(fontTools, extra), { recursive: true, force: true })
+      }
+    }
   }
   for (const name of fs.readdirSync(path.join(destDir, 'bin'))) {
-    if (name.startsWith('pip') || name.startsWith('idle')) {
+    if (
+      name.startsWith('pip') ||
+      name.startsWith('idle') ||
+      name.startsWith('pydoc') ||
+      name.endsWith('-config') ||
+      name === 'fonttools' ||
+      name === 'pyftmerge' ||
+      name === 'pyftsubset' ||
+      name === 'ttx'
+    ) {
       fs.rmSync(path.join(destDir, 'bin', name), { force: true })
     }
   }
+  walkAndRemove(destDir, (_full, entry) => entry.name === '__pycache__' || entry.name.endsWith('.pyc'))
 }
 
 if (alreadyBundled()) {
