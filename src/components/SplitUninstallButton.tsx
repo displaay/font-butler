@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { createPortal } from 'react-dom'
 import { ChevronDown, CircleMinus, FolderOpen, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -11,27 +12,111 @@ export type SplitUninstallExtra = {
   separatorBefore?: boolean
 }
 
-function useDismissibleMenu() {
+type MenuAlign = 'start' | 'end'
+type MenuPlacement = 'up' | 'down'
+type MenuCoords = { top: number; left: number }
+
+const MENU_GAP = 4
+const VIEWPORT_PAD = 8
+
+function anchoredMenuCoords(
+  trigger: DOMRect,
+  menuSize: { width: number; height: number },
+  placement: MenuPlacement,
+  align: MenuAlign,
+): MenuCoords {
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  const width = Math.min(menuSize.width, vw - VIEWPORT_PAD * 2)
+  const height = Math.min(menuSize.height, vh - VIEWPORT_PAD * 2)
+  let left = align === 'start' ? trigger.left : trigger.right - menuSize.width
+  left = Math.min(Math.max(VIEWPORT_PAD, left), vw - width - VIEWPORT_PAD)
+
+  const below = trigger.bottom + MENU_GAP
+  const above = trigger.top - height - MENU_GAP
+  const preferUp = placement === 'up'
+  const fitsBelow = below + height <= vh - VIEWPORT_PAD
+  const fitsAbove = above >= VIEWPORT_PAD
+  let top = preferUp
+    ? fitsAbove || !fitsBelow
+      ? above
+      : below
+    : fitsBelow || !fitsAbove
+      ? below
+      : above
+  top = Math.min(Math.max(VIEWPORT_PAD, top), vh - height - VIEWPORT_PAD)
+  return { top, left }
+}
+
+function useAnchoredMenu(placement: MenuPlacement, align: MenuAlign) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const [coords, setCoords] = useState<MenuCoords>({ top: 0, left: 0 })
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) return
+    function place() {
+      const trigger = rootRef.current?.getBoundingClientRect()
+      if (!trigger) return
+      const menu = menuRef.current?.getBoundingClientRect()
+      setCoords(
+        anchoredMenuCoords(
+          trigger,
+          { width: menu?.width || 176, height: menu?.height || 72 },
+          placement,
+          align,
+        ),
+      )
+    }
+    place()
     function onDoc(event: MouseEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+      const target = event.target as Node
+      if (rootRef.current?.contains(target) || menuRef.current?.contains(target)) return
+      setOpen(false)
     }
     function onKey(event: KeyboardEvent) {
       if (event.key === 'Escape') setOpen(false)
     }
     document.addEventListener('mousedown', onDoc)
     document.addEventListener('keydown', onKey)
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', place, true)
     return () => {
       document.removeEventListener('mousedown', onDoc)
       document.removeEventListener('keydown', onKey)
+      window.removeEventListener('resize', place)
+      window.removeEventListener('scroll', place, true)
     }
-  }, [open])
+  }, [open, placement, align])
 
-  return { open, setOpen, rootRef }
+  return { open, setOpen, rootRef, menuRef, coords }
+}
+
+function PortaledMenu({
+  menuRef,
+  coords,
+  className,
+  children,
+}: {
+  menuRef: RefObject<HTMLDivElement | null>
+  coords: MenuCoords
+  className?: string
+  children: ReactNode
+}) {
+  return createPortal(
+    <div
+      ref={menuRef}
+      role="menu"
+      data-keep-selection=""
+      style={{ top: coords.top, left: coords.left }}
+      className={cn('fixed z-50 min-w-44 rounded-md border bg-popover p-1 shadow-sm', className)}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      {children}
+    </div>,
+    document.body,
+  )
 }
 
 export function SplitUninstallButton({
@@ -47,7 +132,7 @@ export function SplitUninstallButton({
   onUninstall: () => void
   menuPlacement?: 'up' | 'down'
 }) {
-  const { open, setOpen, rootRef } = useDismissibleMenu()
+  const { open, setOpen, rootRef, menuRef, coords } = useAnchoredMenu(menuPlacement, 'end')
 
   if (extras.length === 0) {
     return (
@@ -58,7 +143,7 @@ export function SplitUninstallButton({
   }
 
   return (
-    <div ref={rootRef} data-keep-selection="" className="relative inline-flex">
+    <div ref={rootRef} data-keep-selection="" className="inline-flex">
       <Button
         size="sm"
         variant="destructive"
@@ -81,13 +166,7 @@ export function SplitUninstallButton({
         <ChevronDown />
       </Button>
       {open ? (
-        <div
-          role="menu"
-          className={cn(
-            'absolute right-0 z-50 min-w-52 rounded-md border bg-popover p-1 shadow-sm',
-            menuPlacement === 'up' ? 'bottom-full mb-1' : 'top-full mt-1',
-          )}
-        >
+        <PortaledMenu menuRef={menuRef} coords={coords} className="min-w-52">
           {extras.map((item) => (
             <div key={item.key}>
               {item.separatorBefore ? <div className="my-1 h-px bg-border" role="separator" /> : null}
@@ -105,7 +184,7 @@ export function SplitUninstallButton({
               </button>
             </div>
           ))}
-        </div>
+        </PortaledMenu>
       ) : null}
     </div>
   )
@@ -130,7 +209,7 @@ export function DropdownActionButton({
   items: DropdownActionItem[]
   menuPlacement?: 'up' | 'down'
 }) {
-  const { open, setOpen, rootRef } = useDismissibleMenu()
+  const { open, setOpen, rootRef, menuRef, coords } = useAnchoredMenu(menuPlacement, 'start')
 
   if (items.length === 0) return null
   if (items.length === 1) {
@@ -142,7 +221,7 @@ export function DropdownActionButton({
   }
 
   return (
-    <div ref={rootRef} data-keep-selection="" className="relative inline-flex">
+    <div ref={rootRef} data-keep-selection="" className="inline-flex">
       <Button
         size="sm"
         variant="outline"
@@ -155,13 +234,7 @@ export function DropdownActionButton({
         <ChevronDown />
       </Button>
       {open ? (
-        <div
-          role="menu"
-          className={cn(
-            'absolute right-0 z-50 min-w-44 rounded-md border bg-popover p-1 shadow-sm',
-            menuPlacement === 'up' ? 'bottom-full mb-1' : 'top-full mt-1',
-          )}
-        >
+        <PortaledMenu menuRef={menuRef} coords={coords}>
           {items.map((item) => (
             <button
               key={item.key}
@@ -176,7 +249,7 @@ export function DropdownActionButton({
               {item.label}
             </button>
           ))}
-        </div>
+        </PortaledMenu>
       ) : null}
     </div>
   )
