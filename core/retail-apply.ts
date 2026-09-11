@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { yieldEventLoop } from './event-loop.ts'
 import { commitInstalledFile } from './install.ts'
 import { getFontNative, type FontNative } from './native.ts'
 import { resolveRetailInstallPath } from './retail-sync.ts'
@@ -107,13 +108,13 @@ async function writeOne(options: ApplyRetailSyncOptions, item: RetailDriftItem):
     throw new Error(`expected ${remote.size} bytes, got ${bytes.byteLength}.`)
   }
 
-  fs.mkdirSync(options.stagingDir, { recursive: true })
+  await fs.promises.mkdir(options.stagingDir, { recursive: true })
   const ext = path.extname(initialTarget.dest) || '.otf'
   const stagedPath = path.join(options.stagingDir, `${crypto.randomUUID()}${ext}`)
   const partial = `${stagedPath}${RETAIL_PART_SUFFIX}`
   try {
-    fs.writeFileSync(partial, bytes)
-    fs.renameSync(partial, stagedPath)
+    await fs.promises.writeFile(partial, bytes)
+    await fs.promises.rename(partial, stagedPath)
     const commit = async () => {
       const target = options.destFor
         ? options.destFor(item.relativePath)
@@ -221,6 +222,9 @@ export async function applyRetailSync(options: ApplyRetailSyncOptions): Promise<
       manifest.syncedAt = now()
       await options.persist(manifest, batchWritten)
     }
+    // Downloads are concurrent; cataloging and native installs are not. Yield so the API that
+    // owns this loop can keep serving the running app between batches of an initial sync.
+    await yieldEventLoop()
   }
 
   if (todo.length === 0) {

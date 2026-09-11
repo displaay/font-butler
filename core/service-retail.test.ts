@@ -16,6 +16,7 @@ import {
   syncRetail,
 } from './service-retail.ts'
 import { loadSettings } from './settings.ts'
+import { RETAIL_DOWNLOAD_CONCURRENCY } from './retail-apply.ts'
 import { withService, writeTestFont } from './test-util.ts'
 import {
   filterDisabledRetailDrift,
@@ -36,6 +37,12 @@ function setup(): AppPaths {
 }
 
 function manifestWith(size: number, etag: string): RetailManifest {
+  return manifestWithFiles([{ basename: 'RecklessVF.otf', size, etag }])
+}
+
+function manifestWithFiles(
+  files: Array<{ basename: string; size: number; etag: string }>,
+): RetailManifest {
   return {
     generatedAt: '2026-01-01T00:00:00.000Z',
     collections: [
@@ -43,15 +50,13 @@ function manifestWith(size: number, etag: string): RetailManifest {
         glyphsFile: 'Reckless',
         revisionId: 'rev-1',
         lastRegeneratedAt: '2026-01-01T00:00:00.000Z',
-        files: [
-          {
-            key: 'Reckless/rev-1/RecklessVF.otf',
-            relativePath: 'Reckless/RecklessVF.otf',
-            size,
-            etag,
-            uploaded: '2026-01-01T00:00:00.000Z',
-          },
-        ],
+        files: files.map((file) => ({
+          key: `Reckless/rev-1/${file.basename}`,
+          relativePath: `Reckless/${file.basename}`,
+          size: file.size,
+          etag: file.etag,
+          uploaded: '2026-01-01T00:00:00.000Z',
+        })),
       },
     ],
     skipped: [],
@@ -517,4 +522,90 @@ test('installing a retail listing replaces the catalogue font that occupies Font
       false,
     )
   })
+})
+
+test('an uninstall during a later retail batch is not overwritten by stale catalog writes', async () => {
+  resetRetailCache()
+  await withService(async (service, paths) => {
+    const size = 4
+    const files = Array.from({ length: RETAIL_DOWNLOAD_CONCURRENCY + 1 }, (_, index) => ({
+      basename: `Face${index}.otf`,
+      size,
+      etag: `e-${index}`,
+    }))
+    const firstRelative = `Reckless/${files[0]!.basename}`
+    const lastKey = `Reckless/rev-1/${files.at(-1)!.basename}`
+    configureRetailSync(paths, { enabled: true, token: 't' })
+    await checkRetail(paths, { fetchManifest: async () => manifestWithFiles(files) })
+    const listing = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath === firstRelative)
+    assert.ok(listing)
+
+    const status = await syncRetail(paths, {
+      fetchManifest: async () => manifestWithFiles(files),
+      fetchFile: async (options) => {
+        if (options.key === lastKey) {
+          const persisted = loadCatalog(paths).entries.find((entry) => entry.id === listing.id)
+          assert.equal(persisted?.status, 'installed')
+          await service.uninstall(listing.id)
+        }
+        return new Uint8Array(size).fill(1)
+      },
+    })
+    assert.equal(status.error, null)
+    const after = loadCatalog(paths).entries.find((entry) => entry.id === listing.id)
+    assert.ok(after)
+    assert.equal(after.status, 'uninstalled')
+    assert.equal(fs.existsSync(path.join(paths.userFontsDir, files[0]!.basename)), false)
+  })
+})
+
+test('a large retail sync yields so other work on the same event loop can run', async () => {
+  const paths = setup()
+  const fixture = path.join(paths.dataRoot, 'fixture.otf')
+  writeTestFont(fixture, 'Reckless', 'RecklessVF', { format: 'otf' })
+  const bytes = fs.readFileSync(fixture)
+  const files = Array.from({ length: 24 }, (_, index) => ({
+    basename: `Face${index}.otf`,
+    size: bytes.length,
+    etag: `e-${index}`,
+  }))
+  configureRetailSync(paths, { enabled: true, token: 't' })
+
+  let catalogSaves = 0
+  const renameSync = fs.renameSync
+  fs.renameSync = function (from, to, ...rest) {
+    if (to === paths.catalogPath) catalogSaves += 1
+    return renameSync.call(fs, from, to, ...rest)
+  }
+
+  const started = Date.now()
+  let timerDelay = Number.POSITIVE_INFINITY
+  const timer = new Promise<void>((resolve) => {
+    setTimeout(() => {
+      timerDelay = Date.now() - started
+      resolve()
+    }, 0)
+  })
+  try {
+    const status = await syncRetail(paths, {
+      fetchManifest: async () => manifestWithFiles(files),
+      fetchFile: async () => new Uint8Array(bytes),
+    })
+    assert.equal(status.error, null)
+    await timer
+  } finally {
+    fs.renameSync = renameSync
+  }
+
+  assert.ok(
+    timerDelay < 200,
+    `retail sync blocked the event loop for ${timerDelay}ms`,
+  )
+  // Listings once, then one save per download batch — not one rewrite per file.
+  const expectedBatches = Math.ceil(files.length / RETAIL_DOWNLOAD_CONCURRENCY)
+  assert.ok(
+    catalogSaves <= expectedBatches + 2,
+    `catalog was rewritten ${catalogSaves} times for ${files.length} files`,
+  )
+  assert.equal(loadCatalog(paths).entries.filter((entry) => entry.retailRelativePath).length, files.length)
 })

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, nativeImage, nativeTheme, shell, Tray } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, nativeImage, nativeTheme, shell, Tray, utilityProcess } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -76,6 +76,7 @@ function applyAppIconSetting(style) {
 let mainWindow = null
 let tray = null
 let apiToken = null
+let apiChild = null
 let catalogEntries = []
 let activityOperations = []
 let menuBarIconEnabled = true
@@ -1006,19 +1007,89 @@ if (!gotLock) {
 
   app.on('before-quit', () => {
     isQuitting = true
+    if (apiChild) {
+      apiChild.kill()
+      apiChild = null
+    }
   })
+
+  /**
+   * Run the Hono API in a child process, not in this UI process.
+   *
+   * Dev (`npm run electron`) already starts `npm run server` separately. The packaged app used to
+   * import the bundle into Electron main, so an initial Displaay retail sync froze the window.
+   */
+  function spawnApiWorker({ serverPath, staticDir, port }) {
+    return new Promise((resolve, reject) => {
+      const child = utilityProcess.fork(serverPath, [], {
+        stdio: 'pipe',
+        env: {
+          ...process.env,
+          FONT_BUTLER_SERVE: '1',
+          FONT_BUTLER_API_PORT: String(port),
+          FONT_BUTLER_STATIC_DIR: staticDir,
+        },
+      })
+      apiChild = child
+      let settled = false
+      let buffer = ''
+      const timeout = setTimeout(() => {
+        if (settled) return
+        settled = true
+        child.kill()
+        apiChild = null
+        reject(new Error('Font Buttler API worker did not start'))
+      }, 20_000)
+
+      function finish(error, info) {
+        if (settled) return
+        settled = true
+        clearTimeout(timeout)
+        if (error) {
+          child.kill()
+          apiChild = null
+          reject(error)
+          return
+        }
+        resolve(info)
+      }
+
+      child.on('exit', (code) => {
+        if (!settled) {
+          const error = new Error(`Font Buttler API worker exited (${code ?? 'unknown'})`)
+          if (code) error.code = code === 1 ? 'EADDRINUSE' : code
+          finish(error)
+          return
+        }
+        apiChild = null
+      })
+
+      child.stdout?.on('data', (chunk) => {
+        buffer += String(chunk)
+        const match = buffer.match(/Font Buttler API on http:\/\/127\.0\.0\.1:(\d+)/)
+        if (!match) return
+        finish(null, { port: Number(match[1]), token: readApiTokenFile() })
+      })
+      child.stderr?.on('data', (chunk) => {
+        console.error(String(chunk).trimEnd())
+      })
+    })
+  }
 
   async function startPackagedBackend() {
     if (!app.isPackaged) {
       return
     }
     const staticDir = path.join(__dirname, '../dist')
-    const { startFontButlerServer } = await import('./server.bundle.mjs')
+    const serverPath = path.join(__dirname, 'server.bundle.mjs')
+    if (!fs.existsSync(serverPath)) {
+      throw new Error('Packaged API worker is missing (electron/server.bundle.mjs).')
+    }
     const preferred = Number(new URL(API).port || DEFAULT_API_PORT)
     let lastError
     for (let port = preferred; port < preferred + 20; port += 1) {
       try {
-        const info = await startFontButlerServer({ staticDir, port })
+        const info = await spawnApiWorker({ serverPath, staticDir, port })
         API = `http://127.0.0.1:${info.port}`
         if (info.token) {
           apiToken = info.token
