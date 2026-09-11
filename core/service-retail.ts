@@ -393,11 +393,14 @@ function recordedFingerprintForDest(entry: CatalogEntry | undefined, dest: strin
 }
 
 /** True when faces are stubs or the dest bytes are not the revision the catalog last recorded. */
-function destNeedsFaceParse(entry: CatalogEntry | undefined, dest: string): boolean {
+function destNeedsFaceParse(
+  entry: CatalogEntry | undefined,
+  dest: string,
+  liveFingerprint: string | undefined,
+): boolean {
   if (isStubRetailFaces(entry)) return true
-  const live = tryFingerprintFile(dest)
-  if (!live) return false
-  return live !== recordedFingerprintForDest(entry, dest)
+  if (!liveFingerprint) return false
+  return liveFingerprint !== recordedFingerprintForDest(entry, dest)
 }
 
 async function catalogRetailWrites(
@@ -433,7 +436,8 @@ async function catalogRetailWrites(
             copyAt(entry, 'macos')?.parkedPath && fs.existsSync(copyAt(entry, 'macos')!.parkedPath!)),
       )
       const previousMacos = entry ? copyAt(entry, 'macos') : undefined
-      const shouldParse = parse === 'always' || destNeedsFaceParse(entry, item.dest)
+      const fingerprint = tryFingerprintFile(item.dest)
+      const shouldParse = parse === 'always' || destNeedsFaceParse(entry, item.dest, fingerprint)
       try {
         if (shouldParse && fs.existsSync(item.dest)) {
           const parsed = parseFontFile(item.dest)
@@ -447,7 +451,6 @@ async function catalogRetailWrites(
       }
       if (!entry) continue
       entry.retailRelativePath = item.relativePath
-      const fingerprint = fs.existsSync(item.dest) ? tryFingerprintFile(item.dest) : undefined
       if (item.parked && wasDeactivated) {
         const livePath = entry.installedPath ?? previousMacos?.path ?? resolveRetailInstallPath(paths.userFontsDir, item.relativePath) ?? item.dest
         entry.sourcePath = entry.sourcePath || livePath
@@ -469,6 +472,7 @@ async function catalogRetailWrites(
         entry.installedPath = undefined
         entry.disabledPath = undefined
         entry.status = 'uninstalled'
+        if (fingerprint) entry.sourceFingerprint = fingerprint
         if (previousMacos) {
           entry.installations = (entry.installations ?? []).filter((copy) => copy.destinationId !== 'macos')
         }

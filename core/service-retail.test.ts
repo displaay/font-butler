@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { readRetailToken } from './auth.ts'
-import { loadCatalog } from './catalog.ts'
+import { loadCatalog, saveCatalog } from './catalog.ts'
 import { fingerprintFile } from './fingerprint.ts'
 import { noopFontNative, setFontNative } from './native.ts'
 import { buildPaths, retailTokenPath } from './paths.ts'
@@ -691,4 +691,37 @@ test('a check reparses dest bytes that landed after an interrupted catalog write
   assert.ok(after)
   assert.equal(after.faces[0]?.familyName, 'NewReckless')
   assert.equal(after.installedFingerprint, fingerprintFile(dest))
+})
+
+test('a parked retail cache records its fingerprint so later checks skip reparse', async () => {
+  const paths = setup()
+  const occupying = path.join(paths.userFontsDir, 'RecklessVF.otf')
+  writeTestFont(occupying, 'LocalReckless', 'LocalRecklessVF', { format: 'otf' })
+  const fixture = path.join(paths.dataRoot, 'fixture.otf')
+  writeTestFont(fixture, 'Reckless', 'RecklessVF', { format: 'otf', version: 'Version 2.000' })
+  const bytes = fs.readFileSync(fixture)
+  configureRetailSync(paths, { enabled: true, token: 't' })
+  await syncRetail(paths, {
+    fetchManifest: async () => manifestWith(bytes.length, 'e1'),
+    fetchFile: async () => new Uint8Array(bytes),
+  })
+
+  const listing = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath === 'Reckless/RecklessVF.otf')
+  assert.ok(listing)
+  assert.equal(listing.status, 'uninstalled')
+  assert.ok(listing.sourcePath)
+  assert.equal(listing.sourceFingerprint, fingerprintFile(listing.sourcePath))
+  assert.equal(listing.faces[0]?.familyName, 'Reckless')
+
+  const catalog = loadCatalog(paths)
+  const stale = catalog.entries.find((entry) => entry.id === listing.id)
+  assert.ok(stale?.faces[0])
+  stale.faces[0].familyName = 'StaleName'
+  saveCatalog(paths, catalog)
+
+  await checkRetail(paths, { fetchManifest: async () => manifestWith(bytes.length, 'e1') })
+  const after = loadCatalog(paths).entries.find((entry) => entry.id === listing.id)
+  assert.ok(after)
+  assert.equal(after.sourceFingerprint, fingerprintFile(listing.sourcePath))
+  assert.equal(after.faces[0]?.familyName, 'StaleName', 'matching cache bytes must not reparse')
 })
