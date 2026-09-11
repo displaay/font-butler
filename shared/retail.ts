@@ -98,6 +98,15 @@ export type RetailDriftItem = {
   note?: string
 }
 
+export type RetailSyncFont = {
+  glyphsFile: string
+  fileCount: number
+  /** False when this family is in `disabledGlyphsFiles`. */
+  enabled: boolean
+  /** False when the last check said this family is not ready to sync. */
+  available: boolean
+}
+
 export type RetailSyncStatus = {
   enabled: boolean
   /** Background check interval in minutes; `0` means the app never checks on its own. */
@@ -112,6 +121,9 @@ export type RetailSyncStatus = {
   drift: RetailDriftItem[]
   skipped: RetailSkip[]
   error: string | null
+  /** Families from the last successful check (or catalog listings after a restart). */
+  fonts: RetailSyncFont[]
+  disabledGlyphsFiles: string[]
 }
 
 /**
@@ -151,6 +163,63 @@ export const SYNCABLE_DRIFT_KINDS: readonly RetailDriftKind[] = [
 
 export function isSyncableDrift(item: RetailDriftItem): boolean {
   return SYNCABLE_DRIFT_KINDS.includes(item.kind)
+}
+
+export function normalizeDisabledGlyphsFiles(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  const names: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string') continue
+    const name = item.trim()
+    if (!name || seen.has(name)) continue
+    seen.add(name)
+    names.push(name)
+  }
+  return names.sort((left, right) => left.localeCompare(right))
+}
+
+export function filterDisabledRetailDrift(
+  drift: RetailDriftItem[],
+  disabledGlyphsFiles: readonly string[],
+): RetailDriftItem[] {
+  if (disabledGlyphsFiles.length === 0) return drift
+  const disabled = new Set(disabledGlyphsFiles)
+  return drift.filter((item) => !disabled.has(item.glyphsFile))
+}
+
+export function retailFontsFromCollections(
+  collections: Array<{ glyphsFile?: string; files?: unknown[] }> | undefined,
+  disabledGlyphsFiles: readonly string[] = [],
+  skipped: Array<{ glyphsFile?: string }> | undefined = undefined,
+): RetailSyncFont[] {
+  const disabled = new Set(disabledGlyphsFiles)
+  const fonts: RetailSyncFont[] = []
+  const seen = new Set<string>()
+  for (const collection of collections ?? []) {
+    const glyphsFile = typeof collection.glyphsFile === 'string' ? collection.glyphsFile.trim() : ''
+    if (!glyphsFile || seen.has(glyphsFile)) continue
+    seen.add(glyphsFile)
+    fonts.push({
+      glyphsFile,
+      fileCount: Array.isArray(collection.files) ? collection.files.length : 0,
+      enabled: !disabled.has(glyphsFile),
+      available: true,
+    })
+  }
+  for (const skip of skipped ?? []) {
+    const glyphsFile = typeof skip.glyphsFile === 'string' ? skip.glyphsFile.trim() : ''
+    if (!glyphsFile || seen.has(glyphsFile)) continue
+    seen.add(glyphsFile)
+    fonts.push({
+      glyphsFile,
+      fileCount: 0,
+      enabled: !disabled.has(glyphsFile),
+      available: false,
+    })
+  }
+  fonts.sort((left, right) => left.glyphsFile.localeCompare(right.glyphsFile))
+  return fonts
 }
 
 export function emptyRetailLocalManifest(): RetailLocalManifest {

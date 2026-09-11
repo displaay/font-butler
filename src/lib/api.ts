@@ -347,6 +347,7 @@ export const api = {
       autoCheckMinutes?: number
       token?: string
       folderId?: string | null
+      disabledGlyphsFiles?: string[]
     }) => json<{ status: RetailSyncStatus }>(post('/api/retail/configure', input)),
     check: (refresh = false) =>
       json<{ status: RetailSyncStatus }>(post('/api/retail/check', { refresh })),

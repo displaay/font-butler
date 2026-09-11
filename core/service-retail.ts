@@ -26,8 +26,19 @@ import { newId, now } from './service-helpers.ts'
 import { DEFAULT_RETAIL_WORKER_BASE_URL, defaultRetailSync, loadSettings, saveSettings } from './settings.ts'
 import { applyEntryFacts } from './state.ts'
 import type { AppSettings, CatalogEntry, FontFaceInfo, RetailSyncSettings } from './types.ts'
-import { normalizeAutoCheckMinutes } from '../shared/retail.ts'
-import type { RetailDriftItem, RetailManifest, RetailSkip, RetailSyncStatus } from '../shared/retail.ts'
+import {
+  filterDisabledRetailDrift,
+  normalizeAutoCheckMinutes,
+  normalizeDisabledGlyphsFiles,
+  retailFontsFromCollections,
+} from '../shared/retail.ts'
+import type {
+  RetailDriftItem,
+  RetailManifest,
+  RetailSkip,
+  RetailSyncFont,
+  RetailSyncStatus,
+} from '../shared/retail.ts'
 
 /** In-memory only: the last check's result, so `status` is cheap and never touches the network. */
 type RetailCache = {
@@ -35,9 +46,11 @@ type RetailCache = {
   drift: RetailDriftItem[]
   skipped: RetailSkip[]
   error: string | null
+  /** `null` until a successful check this process; catalog listings cover a restart. */
+  fonts: Array<{ glyphsFile: string; fileCount: number; available: boolean }> | null
 }
 
-const cache: RetailCache = { checkedAt: null, drift: [], skipped: [], error: null }
+const cache: RetailCache = { checkedAt: null, drift: [], skipped: [], error: null, fonts: null }
 
 /**
  * Two overlapping syncs would fight over the same `.part` files: the second one's entry sweep deletes
@@ -51,15 +64,64 @@ export function resetRetailCache(): void {
   cache.drift = []
   cache.skipped = []
   cache.error = null
+  cache.fonts = null
+}
+
+function applyFontEnabled(
+  fonts: Array<{ glyphsFile: string; fileCount: number; available?: boolean }>,
+  disabledGlyphsFiles: readonly string[],
+): RetailSyncFont[] {
+  const disabled = new Set(disabledGlyphsFiles)
+  return fonts
+    .slice()
+    .sort((left, right) => left.glyphsFile.localeCompare(right.glyphsFile))
+    .map((font) => ({
+      glyphsFile: font.glyphsFile,
+      fileCount: font.fileCount,
+      enabled: !disabled.has(font.glyphsFile),
+      available: font.available !== false,
+    }))
+}
+
+function fontsFromCatalog(paths: AppPaths, disabledGlyphsFiles: readonly string[]): RetailSyncFont[] {
+  const counts = new Map<string, number>()
+  for (const entry of loadCatalog(paths).entries) {
+    const relative = entry.retailRelativePath
+    if (!relative) continue
+    const slash = relative.indexOf('/')
+    const glyphsFile = (slash === -1 ? relative : relative.slice(0, slash)).trim()
+    if (!glyphsFile) continue
+    counts.set(glyphsFile, (counts.get(glyphsFile) ?? 0) + 1)
+  }
+  return applyFontEnabled(
+    [...counts.entries()].map(([glyphsFile, fileCount]) => ({ glyphsFile, fileCount })),
+    disabledGlyphsFiles,
+  )
+}
+
+function listRetailFonts(paths: AppPaths, disabledGlyphsFiles: readonly string[]): RetailSyncFont[] {
+  if (cache.fonts) return applyFontEnabled(cache.fonts, disabledGlyphsFiles)
+  return fontsFromCatalog(paths, disabledGlyphsFiles)
+}
+
+function visibleDrift(config: RetailSyncSettings): RetailDriftItem[] {
+  return filterDisabledRetailDrift(cache.drift, config.disabledGlyphsFiles)
 }
 
 function retailSettings(settings: AppSettings): RetailSyncSettings {
-  return settings.retailSync ?? defaultRetailSync()
+  const current = settings.retailSync
+  if (!current) return defaultRetailSync()
+  return {
+    ...defaultRetailSync(),
+    ...current,
+    disabledGlyphsFiles: current.disabledGlyphsFiles ?? [],
+  }
 }
 
 export function retailStatus(paths: AppPaths, settings = loadSettings(paths)): RetailSyncStatus {
   const config = retailSettings(settings)
   const local = loadRetailManifest(paths)
+  const drift = visibleDrift(config)
   return {
     enabled: config.enabled,
     autoCheckMinutes: config.autoCheckMinutes,
@@ -69,10 +131,12 @@ export function retailStatus(paths: AppPaths, settings = loadSettings(paths)): R
     workerBaseUrl: config.workerBaseUrl || DEFAULT_RETAIL_WORKER_BASE_URL,
     checkedAt: cache.checkedAt,
     syncedAt: local.syncedAt,
-    pending: countPendingDrift(cache.drift),
-    drift: cache.drift,
+    pending: countPendingDrift(drift),
+    drift,
     skipped: cache.skipped,
     error: cache.error,
+    fonts: listRetailFonts(paths, config.disabledGlyphsFiles),
+    disabledGlyphsFiles: config.disabledGlyphsFiles,
   }
 }
 
@@ -90,6 +154,7 @@ export function configureRetailSync(
     autoCheckMinutes?: number
     token?: string
     folderId?: string | null
+    disabledGlyphsFiles?: string[]
   },
 ): RetailSyncStatus {
   const settings = loadSettings(paths)
@@ -107,6 +172,10 @@ export function configureRetailSync(
       input.autoCheckMinutes === undefined
         ? current.autoCheckMinutes
         : normalizeAutoCheckMinutes(input.autoCheckMinutes),
+    disabledGlyphsFiles:
+      input.disabledGlyphsFiles === undefined
+        ? (current.disabledGlyphsFiles ?? [])
+        : normalizeDisabledGlyphsFiles(input.disabledGlyphsFiles),
   }
   // Cached drift describes one server. If the address or credentials change, it is no longer a
   // statement about anything — serving it would report the old server's files as pending.
@@ -417,6 +486,11 @@ export async function checkRetail(
     cache.drift = drift
     cache.skipped = manifest.skipped
     cache.error = null
+    cache.fonts = retailFontsFromCollections(manifest.collections, [], manifest.skipped).map((font) => ({
+      glyphsFile: font.glyphsFile,
+      fileCount: font.fileCount,
+      available: font.available,
+    }))
   } catch (error) {
     // Deliberately does NOT bump `checkedAt`: nothing was measured, and a fresh timestamp next to
     // stale drift would read as a successful check.
@@ -456,13 +530,22 @@ async function runSync(
     reconcileRetailCatalog(paths, loadRetailManifest(paths))
 
     const drift = measureDrift(paths, manifest)
+    cache.fonts = retailFontsFromCollections(manifest.collections, [], manifest.skipped).map((font) => ({
+      glyphsFile: font.glyphsFile,
+      fileCount: font.fileCount,
+      available: font.available,
+    }))
     const download = options.fetchFile ?? fetchRetailFile
+    const syncDrift = filterDisabledRetailDrift(
+      drift,
+      retailSettings(loadSettings(paths)).disabledGlyphsFiles,
+    )
 
     const result = await applyRetailSync({
       userFontsDir: paths.userFontsDir,
       stagingDir: path.join(paths.dataRoot, 'staging'),
       rollbackDir: path.join(paths.dataRoot, 'rollback'),
-      drift,
+      drift: syncDrift,
       manifest: loadRetailManifest(paths),
       persist: async (next, written) => {
         saveRetailManifest(paths, next)

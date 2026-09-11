@@ -401,6 +401,7 @@ export type {
   RetailFile,
   RetailSkip,
   RetailSkipReason,
+  RetailSyncFont,
   RetailSyncStatus,
 } from '../../shared/retail'
 export {

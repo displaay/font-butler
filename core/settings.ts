@@ -14,6 +14,7 @@ import { normalizeSavedFilters } from './saved-filters.ts'
 import {
   DEFAULT_RETAIL_AUTOCHECK_MINUTES,
   normalizeAutoCheckMinutes,
+  normalizeDisabledGlyphsFiles,
 } from '../shared/retail.ts'
 import type {
   AppSettings,
@@ -32,6 +33,7 @@ export function defaultRetailSync(): RetailSyncSettings {
     enabled: false,
     workerBaseUrl: DEFAULT_RETAIL_WORKER_BASE_URL,
     autoCheckMinutes: DEFAULT_RETAIL_AUTOCHECK_MINUTES,
+    disabledGlyphsFiles: [],
   }
 }
 
@@ -47,6 +49,7 @@ function readRetailSync(value: unknown): RetailSyncSettings {
     enabled: row.enabled === true,
     workerBaseUrl,
     autoCheckMinutes: normalizeAutoCheckMinutes(row.autoCheckMinutes),
+    disabledGlyphsFiles: normalizeDisabledGlyphsFiles(row.disabledGlyphsFiles),
   }
 }
 

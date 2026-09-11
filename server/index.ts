@@ -697,6 +697,7 @@ app.post('/api/retail/configure', async (c) => {
     autoCheckMinutes?: number
     token?: string
     folderId?: string | null
+    disabledGlyphsFiles?: string[]
   }>()
   try {
     // The token goes in on this route and never comes back out: status reports `hasToken` only.

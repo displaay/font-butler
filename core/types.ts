@@ -228,6 +228,8 @@ export type RetailSyncSettings = {
   workerBaseUrl: string
   /** Background check interval in minutes; `0` means the app never checks on its own. */
   autoCheckMinutes: number
+  /** GlyphsFile names the user turned off. Empty means every loaded family syncs. */
+  disabledGlyphsFiles: string[]
 }
 
 export type LatinPreviewPreset = 'Aa' | 'Ag' | 'Ta' | 'ag' | 'custom'

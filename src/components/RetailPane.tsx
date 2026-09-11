@@ -9,11 +9,134 @@ import {
   RETAIL_AUTOCHECK_CHOICES,
   retailDriftSummary,
   type RetailSkipReason,
+  type RetailSyncFont,
   type RetailSyncStatus,
 } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 const BLOCKED_KINDS = new Set(['conflict', 'refused'])
+
+function SyncToggle({
+  enabled,
+  disabled,
+  ariaLabel,
+  onChange,
+}: {
+  enabled: boolean
+  disabled: boolean
+  ariaLabel: string
+  onChange: (enabled: boolean) => void
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label={ariaLabel}
+      className="inline-flex items-center gap-0.5 rounded-md border bg-background p-0.5"
+    >
+      {(
+        [
+          { id: false, label: 'Off' },
+          { id: true, label: 'On' },
+        ] as const
+      ).map((option) => {
+        const selected = enabled === option.id
+        return (
+          <Button
+            key={option.label}
+            type="button"
+            size="sm"
+            variant="ghost"
+            role="radio"
+            aria-checked={selected}
+            disabled={disabled}
+            className={cn(
+              'h-7 px-2.5',
+              selected ? 'bg-muted font-medium' : 'text-muted-foreground',
+            )}
+            onClick={() => {
+              if (!selected) onChange(option.id)
+            }}
+          >
+            {option.label}
+          </Button>
+        )
+      })}
+    </div>
+  )
+}
+
+function nextDisabledGlyphsFiles(fonts: RetailSyncFont[], glyphsFile: string, enabled: boolean): string[] {
+  return fonts
+    .filter((font) => (font.glyphsFile === glyphsFile ? !enabled : !font.enabled))
+    .map((font) => font.glyphsFile)
+}
+
+function RetailFontList({
+  fonts,
+  disabled,
+  onToggle,
+  onSetAll,
+}: {
+  fonts: RetailSyncFont[]
+  disabled: boolean
+  onToggle: (glyphsFile: string, enabled: boolean) => void
+  onSetAll: (enabled: boolean) => void
+}) {
+  const synced = fonts.filter((font) => font.enabled).length
+  return (
+    <div className="rounded-lg border bg-muted/30">
+      <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
+        <p className="text-[13px] leading-5 text-muted-foreground">
+          {synced === fonts.length
+            ? `${fonts.length} ${fonts.length === 1 ? 'family' : 'families'} syncing`
+            : `${synced} of ${fonts.length} families syncing`}
+        </p>
+        <div className="flex items-center gap-1">
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            disabled={disabled || synced === fonts.length}
+            onClick={() => onSetAll(true)}
+          >
+            All
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            disabled={disabled || synced === 0}
+            onClick={() => onSetAll(false)}
+          >
+            None
+          </Button>
+        </div>
+      </div>
+      <div className="max-h-64 divide-y overflow-y-auto">
+        {fonts.map((font) => (
+          <div key={font.glyphsFile} className="flex items-center justify-between gap-3 px-3 py-2">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium leading-5">{font.glyphsFile}</div>
+              <p className="text-[13px] leading-5 text-muted-foreground">
+                {font.available === false
+                  ? 'Not available yet'
+                  : font.fileCount === 1
+                    ? '1 file'
+                    : `${font.fileCount} files`}
+              </p>
+            </div>
+            <SyncToggle
+              enabled={font.enabled}
+              disabled={disabled}
+              ariaLabel={`Sync ${font.glyphsFile}`}
+              onChange={(next) => onToggle(font.glyphsFile, next)}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 function skipLabel(reason: RetailSkipReason): string {
   switch (reason) {
@@ -91,6 +214,7 @@ export function RetailPane({
 
   const blocked = (status?.drift ?? []).filter((item) => BLOCKED_KINDS.has(item.kind))
   const lastError = error ?? status?.error ?? null
+  const fonts = status?.fonts ?? []
 
   return (
     <SettingsSection
@@ -103,42 +227,14 @@ export function RetailPane({
     >
       <SettingsRow
         label="Sync"
-        description="Keep the latest versions of all fonts from the Displaay retail collection."
+        description="Keep the latest versions of selected fonts from the Displaay retail collection."
       >
-        <div
-          role="radiogroup"
-          aria-label="Displaay retail sync"
-          className="inline-flex items-center gap-0.5 rounded-md border bg-background p-0.5"
-        >
-          {(
-            [
-              { id: false, label: 'Off' },
-              { id: true, label: 'On' },
-            ] as const
-          ).map((option) => {
-            const selected = enabled === option.id
-            return (
-              <Button
-                key={option.label}
-                type="button"
-                size="sm"
-                variant="ghost"
-                role="radio"
-                aria-checked={selected}
-                disabled={disabled}
-                className={cn(
-                  'h-7 px-2.5',
-                  selected ? 'bg-muted font-medium' : 'text-muted-foreground',
-                )}
-                onClick={() => {
-                  if (!selected) void run(() => api.retail.configure({ enabled: option.id }))
-                }}
-              >
-                {option.label}
-              </Button>
-            )
-          })}
-        </div>
+        <SyncToggle
+          enabled={enabled}
+          disabled={disabled}
+          ariaLabel="Displaay retail sync"
+          onChange={(next) => void run(() => api.retail.configure({ enabled: next }))}
+        />
       </SettingsRow>
 
       {enabled ? (
@@ -248,7 +344,7 @@ export function RetailPane({
                 {status?.checkedAt
                   ? `Last checked ${new Date(status.checkedAt).toLocaleString()}.`
                   : status?.enabled
-                    ? 'Check to compare the collection on the server against this Mac.'
+                    ? 'Check to load the collection and choose which families to sync.'
                     : 'Turn sync on to check the collection.'}
               </p>
             </div>
@@ -297,6 +393,33 @@ export function RetailPane({
           ) : null}
         </div>
       </div>
+
+      {fonts.length > 0 ? (
+        <SettingsRow
+          label="Fonts"
+          description="Choose which families stay in sync. Turn a family off to leave it listed without downloading updates."
+          extra={
+            <RetailFontList
+              fonts={fonts}
+              disabled={disabled}
+              onToggle={(glyphsFile, nextEnabled) =>
+                void run(() =>
+                  api.retail.configure({
+                    disabledGlyphsFiles: nextDisabledGlyphsFiles(fonts, glyphsFile, nextEnabled),
+                  }),
+                )
+              }
+              onSetAll={(syncEnabled) =>
+                void run(() =>
+                  api.retail.configure({
+                    disabledGlyphsFiles: syncEnabled ? [] : fonts.map((font) => font.glyphsFile),
+                  }),
+                )
+              }
+            />
+          }
+        />
+      ) : null}
         </>
       ) : null}
     </SettingsSection>

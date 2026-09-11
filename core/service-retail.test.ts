@@ -17,7 +17,13 @@ import {
 } from './service-retail.ts'
 import { loadSettings } from './settings.ts'
 import { withService, writeTestFont } from './test-util.ts'
-import { retailDriftSummary, type RetailManifest } from '../shared/retail.ts'
+import {
+  filterDisabledRetailDrift,
+  normalizeDisabledGlyphsFiles,
+  retailDriftSummary,
+  retailFontsFromCollections,
+  type RetailManifest,
+} from '../shared/retail.ts'
 
 function setup(): AppPaths {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-retail-svc-'))
@@ -287,6 +293,174 @@ test('a check lists every remote retail font even before a sync', async () => {
   const listing = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath === 'Reckless/RecklessVF.otf')
   assert.ok(listing)
   assert.equal(listing.status, 'uninstalled')
+})
+
+test('a check lists loaded families so each can be toggled', async () => {
+  const paths = setup()
+  configureRetailSync(paths, { enabled: true, token: 't' })
+  const status = await checkRetail(paths, {
+    fetchManifest: async () => ({
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      collections: [
+        {
+          glyphsFile: 'Reckless',
+          revisionId: 'rev-1',
+          lastRegeneratedAt: '2026-01-01T00:00:00.000Z',
+          files: [
+            {
+              key: 'Reckless/rev-1/RecklessVF.otf',
+              relativePath: 'Reckless/RecklessVF.otf',
+              size: 4,
+              etag: 'e1',
+              uploaded: '2026-01-01T00:00:00.000Z',
+            },
+          ],
+        },
+        {
+          glyphsFile: 'Zangezi',
+          revisionId: 'rev-1',
+          lastRegeneratedAt: '2026-01-01T00:00:00.000Z',
+          files: [
+            {
+              key: 'Zangezi/rev-1/ZangeziVF.otf',
+              relativePath: 'Zangezi/ZangeziVF.otf',
+              size: 4,
+              etag: 'e2',
+              uploaded: '2026-01-01T00:00:00.000Z',
+            },
+          ],
+        },
+      ],
+      skipped: [],
+    }),
+  })
+  assert.deepEqual(
+    status.fonts.map((font) => ({ glyphsFile: font.glyphsFile, enabled: font.enabled, fileCount: font.fileCount })),
+    [
+      { glyphsFile: 'Reckless', enabled: true, fileCount: 1 },
+      { glyphsFile: 'Zangezi', enabled: true, fileCount: 1 },
+    ],
+  )
+  assert.equal(status.pending, 2)
+
+  const disabled = configureRetailSync(paths, { disabledGlyphsFiles: ['Zangezi'] })
+  assert.equal(disabled.pending, 1)
+  assert.equal(disabled.fonts.find((font) => font.glyphsFile === 'Zangezi')?.enabled, false)
+  assert.equal(disabled.fonts.find((font) => font.glyphsFile === 'Reckless')?.enabled, true)
+  assert.deepEqual(loadSettings(paths).retailSync?.disabledGlyphsFiles, ['Zangezi'])
+})
+
+test('sync skips families the user turned off', async () => {
+  const paths = setup()
+  configureRetailSync(paths, { enabled: true, token: 't', disabledGlyphsFiles: ['Zangezi'] })
+  const keys: string[] = []
+  await syncRetail(paths, {
+    fetchManifest: async () => ({
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      collections: [
+        {
+          glyphsFile: 'Reckless',
+          revisionId: 'rev-1',
+          lastRegeneratedAt: '2026-01-01T00:00:00.000Z',
+          files: [
+            {
+              key: 'Reckless/rev-1/RecklessVF.otf',
+              relativePath: 'Reckless/RecklessVF.otf',
+              size: 4,
+              etag: 'e1',
+              uploaded: '2026-01-01T00:00:00.000Z',
+            },
+          ],
+        },
+        {
+          glyphsFile: 'Zangezi',
+          revisionId: 'rev-1',
+          lastRegeneratedAt: '2026-01-01T00:00:00.000Z',
+          files: [
+            {
+              key: 'Zangezi/rev-1/ZangeziVF.otf',
+              relativePath: 'Zangezi/ZangeziVF.otf',
+              size: 4,
+              etag: 'e2',
+              uploaded: '2026-01-01T00:00:00.000Z',
+            },
+          ],
+        },
+      ],
+      skipped: [],
+    }),
+    fetchFile: async ({ key }) => {
+      keys.push(key)
+      return new Uint8Array(4).fill(1)
+    },
+  })
+  assert.deepEqual(keys, ['Reckless/rev-1/RecklessVF.otf'])
+  assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'RecklessVF.otf')), true)
+  assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'ZangeziVF.otf')), false)
+})
+
+test('a restart still lists families from catalog listings', async () => {
+  const paths = setup()
+  configureRetailSync(paths, { enabled: true, token: 't' })
+  await checkRetail(paths, { fetchManifest: async () => manifestWith(4, 'e1') })
+  resetRetailCache()
+  const status = retailStatus(paths)
+  assert.deepEqual(
+    status.fonts.map((font) => font.glyphsFile),
+    ['Reckless'],
+  )
+})
+
+test('a check lists skipped families so they can still be toggled', async () => {
+  const paths = setup()
+  configureRetailSync(paths, { enabled: true, token: 't' })
+  const status = await checkRetail(paths, {
+    fetchManifest: async () => ({
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      collections: [],
+      skipped: [{ glyphsFile: 'Aguzzo', reason: 'incomplete' }],
+    }),
+  })
+  assert.deepEqual(status.fonts, [
+    { glyphsFile: 'Aguzzo', fileCount: 0, enabled: true, available: false },
+  ])
+})
+
+test('normalizeDisabledGlyphsFiles trims, drops blanks, and sorts', () => {
+  assert.deepEqual(normalizeDisabledGlyphsFiles([' Zangezi ', '', 'Reckless', 'Zangezi']), [
+    'Reckless',
+    'Zangezi',
+  ])
+  assert.deepEqual(normalizeDisabledGlyphsFiles(undefined), [])
+})
+
+test('filterDisabledRetailDrift hides opted-out families', () => {
+  const drift = [
+    { kind: 'added' as const, relativePath: 'Reckless/a.otf', glyphsFile: 'Reckless' },
+    { kind: 'added' as const, relativePath: 'Zangezi/b.otf', glyphsFile: 'Zangezi' },
+  ]
+  assert.deepEqual(
+    filterDisabledRetailDrift(drift, ['Zangezi']).map((item) => item.glyphsFile),
+    ['Reckless'],
+  )
+})
+
+test('retailFontsFromCollections sorts and marks disabled families', () => {
+  assert.deepEqual(
+    retailFontsFromCollections(
+      [
+        { glyphsFile: 'Zangezi', files: [1, 2] },
+        { glyphsFile: 'Reckless', files: [1] },
+      ],
+      ['Zangezi'],
+      [{ glyphsFile: 'Aguzzo' }],
+    ),
+    [
+      { glyphsFile: 'Aguzzo', fileCount: 0, enabled: true, available: false },
+      { glyphsFile: 'Reckless', fileCount: 1, enabled: true, available: true },
+      { glyphsFile: 'Zangezi', fileCount: 2, enabled: false, available: true },
+    ],
+  )
 })
 
 test('uninstalling a retail font keeps the listing', async () => {

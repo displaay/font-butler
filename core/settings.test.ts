@@ -501,10 +501,30 @@ test('readWatchFolders ignores blanks and dedupes', () => {
   assert.deepEqual(readWatchFolders({}), [])
 })
 
-test('loadSettings defaults savedFilters to an empty list', () => {
+test('loadSettings keeps stored retail disabled families', () => {
   const paths = tempPaths()
   try {
-    assert.deepEqual(loadSettings(paths).savedFilters, [])
+    saveSettings(
+      paths,
+      sampleSettings({
+        retailSync: {
+          enabled: true,
+          workerBaseUrl: 'https://w.displaay.net',
+          autoCheckMinutes: 60,
+          disabledGlyphsFiles: [' Zangezi ', 'Reckless', 'Zangezi'],
+        },
+      }),
+    )
+    assert.deepEqual(loadSettings(paths).retailSync?.disabledGlyphsFiles, ['Reckless', 'Zangezi'])
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings defaults retail disabled families to none', () => {
+  const paths = tempPaths()
+  try {
+    assert.deepEqual(loadSettings(paths).retailSync?.disabledGlyphsFiles, [])
   } finally {
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }

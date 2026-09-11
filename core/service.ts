@@ -2260,6 +2260,7 @@ export class FontButlerService {
     autoCheckMinutes?: number
     token?: string
     folderId?: string | null
+    disabledGlyphsFiles?: string[]
   }): Promise<RetailSyncStatus> {
     return configureRetailSyncFn(this.paths, input)
   }
