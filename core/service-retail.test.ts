@@ -15,6 +15,7 @@ import {
   retailStatus,
   syncRetail,
 } from './service-retail.ts'
+import { RETAIL_DOWNLOAD_CONCURRENCY } from './retail-apply.ts'
 import { loadSettings } from './settings.ts'
 import { withService, writeTestFont } from './test-util.ts'
 import { retailDriftSummary, type RetailManifest } from '../shared/retail.ts'
@@ -29,7 +30,9 @@ function setup(): AppPaths {
   return paths
 }
 
-function manifestWith(size: number, etag: string): RetailManifest {
+function manifestWithFiles(
+  files: Array<{ basename: string; size: number; etag: string }>,
+): RetailManifest {
   return {
     generatedAt: '2026-01-01T00:00:00.000Z',
     collections: [
@@ -37,19 +40,21 @@ function manifestWith(size: number, etag: string): RetailManifest {
         glyphsFile: 'Reckless',
         revisionId: 'rev-1',
         lastRegeneratedAt: '2026-01-01T00:00:00.000Z',
-        files: [
-          {
-            key: 'Reckless/rev-1/RecklessVF.otf',
-            relativePath: 'Reckless/RecklessVF.otf',
-            size,
-            etag,
-            uploaded: '2026-01-01T00:00:00.000Z',
-          },
-        ],
+        files: files.map((file) => ({
+          key: `Reckless/rev-1/${file.basename}`,
+          relativePath: `Reckless/${file.basename}`,
+          size: file.size,
+          etag: file.etag,
+          uploaded: '2026-01-01T00:00:00.000Z',
+        })),
       },
     ],
     skipped: [],
   }
+}
+
+function manifestWith(size: number, etag: string): RetailManifest {
+  return manifestWithFiles([{ basename: 'RecklessVF.otf', size, etag }])
 }
 
 test('the worker token is stored outside settings.json and never reported back', () => {
@@ -342,5 +347,119 @@ test('installing a retail listing replaces the catalogue font that occupies Font
       loadCatalog(paths).entries.some((entry) => entry.id === imported.entries[0]?.id),
       false,
     )
+  })
+})
+
+test('an Adobe-only install of a cached retail listing leaves the Fonts occupant in place', async () => {
+  resetRetailCache()
+  await withService(async (service, paths) => {
+    const dest = path.join(paths.userFontsDir, 'RecklessVF.otf')
+    writeTestFont(dest, 'LocalReckless', 'LocalRecklessVF', { format: 'otf', version: 'Version 1.000' })
+    const imported = await service.importPaths([dest])
+    assert.equal(imported.entries[0]?.status, 'installed')
+    const occupantId = imported.entries[0]!.id
+    const occupantBytes = fs.readFileSync(dest)
+
+    await service.updateSettings({ defaultDestination: 'adobe-shared' })
+
+    const incoming = path.join(paths.dataRoot, 'incoming.otf')
+    writeTestFont(incoming, 'Reckless', 'RecklessVF', { format: 'otf', version: 'Version 2.000' })
+    const bytes = fs.readFileSync(incoming)
+    configureRetailSync(paths, { enabled: true, token: 't' })
+    await checkRetail(paths, { fetchManifest: async () => manifestWith(bytes.length, 'e2') })
+    const listing = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath === 'Reckless/RecklessVF.otf')
+    assert.ok(listing)
+    assert.equal(listing.status, 'uninstalled')
+
+    await syncRetail(paths, {
+      fetchManifest: async () => manifestWith(bytes.length, 'e2'),
+      fetchFile: async () => new Uint8Array(bytes),
+    })
+    assert.equal(fs.readFileSync(dest).equals(bytes), false, 'sync must not overwrite the occupied Fonts file')
+
+    const installed = await service.install(listing.id)
+    assert.equal(installed.status, 'installed')
+    assert.equal(installed.retailRelativePath, 'Reckless/RecklessVF.otf')
+    assert.ok(installed.installations?.some((copy) => copy.destinationId === 'adobe-shared'))
+    assert.equal(
+      installed.installations?.some((copy) => copy.destinationId === 'macos'),
+      false,
+    )
+    assert.equal(fs.readFileSync(dest).equals(occupantBytes), true)
+    const occupant = loadCatalog(paths).entries.find((entry) => entry.id === occupantId)
+    assert.ok(occupant)
+    assert.equal(occupant.status, 'installed')
+    assert.equal(occupant.installedPath, dest)
+  })
+})
+
+test('an uninstall during a later retail batch is not overwritten by stale catalog writes', async () => {
+  resetRetailCache()
+  await withService(async (service, paths) => {
+    const size = 4
+    const files = Array.from({ length: RETAIL_DOWNLOAD_CONCURRENCY + 1 }, (_, index) => ({
+      basename: `Face${index}.otf`,
+      size,
+      etag: `e-${index}`,
+    }))
+    const firstRelative = `Reckless/${files[0]!.basename}`
+    const lastKey = `Reckless/rev-1/${files.at(-1)!.basename}`
+    configureRetailSync(paths, { enabled: true, token: 't' })
+    await checkRetail(paths, { fetchManifest: async () => manifestWithFiles(files) })
+    const listing = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath === firstRelative)
+    assert.ok(listing)
+
+    const status = await syncRetail(paths, {
+      fetchManifest: async () => manifestWithFiles(files),
+      fetchFile: async (options) => {
+        if (options.key === lastKey) {
+          const persisted = loadCatalog(paths).entries.find((entry) => entry.id === listing.id)
+          assert.equal(persisted?.status, 'installed')
+          await service.uninstall(listing.id)
+        }
+        return new Uint8Array(size).fill(1)
+      },
+    })
+    assert.equal(status.error, null)
+    const after = loadCatalog(paths).entries.find((entry) => entry.id === listing.id)
+    assert.ok(after)
+    assert.equal(after.status, 'uninstalled')
+    assert.equal(fs.existsSync(path.join(paths.userFontsDir, files[0]!.basename)), false)
+  })
+})
+
+test('a deactivate during a later retail batch keeps the parked copy', async () => {
+  resetRetailCache()
+  await withService(async (service, paths) => {
+    const size = 4
+    const files = Array.from({ length: RETAIL_DOWNLOAD_CONCURRENCY + 1 }, (_, index) => ({
+      basename: `Park${index}.otf`,
+      size,
+      etag: `p-${index}`,
+    }))
+    const firstRelative = `Reckless/${files[0]!.basename}`
+    const lastKey = `Reckless/rev-1/${files.at(-1)!.basename}`
+    configureRetailSync(paths, { enabled: true, token: 't' })
+    await checkRetail(paths, { fetchManifest: async () => manifestWithFiles(files) })
+    const listing = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath === firstRelative)
+    assert.ok(listing)
+
+    const status = await syncRetail(paths, {
+      fetchManifest: async () => manifestWithFiles(files),
+      fetchFile: async (options) => {
+        if (options.key === lastKey) {
+          const persisted = loadCatalog(paths).entries.find((entry) => entry.id === listing.id)
+          assert.equal(persisted?.status, 'installed')
+          await service.deactivate(listing.id)
+        }
+        return new Uint8Array(size).fill(1)
+      },
+    })
+    assert.equal(status.error, null)
+    const after = loadCatalog(paths).entries.find((entry) => entry.id === listing.id)
+    assert.ok(after)
+    assert.equal(after.status, 'deactivated')
+    assert.ok(after.disabledPath && fs.existsSync(after.disabledPath))
+    assert.equal(fs.existsSync(path.join(paths.userFontsDir, files[0]!.basename)), false)
   })
 })
