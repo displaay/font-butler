@@ -36,7 +36,7 @@ test('main process never auto-downloads or auto-installs GitHub assets', () => {
   assert.doesNotMatch(main, /autoInstallOnAppQuit/)
   assert.match(main, /Check for Updates/)
   const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
-  assert.ok(pkg.build.files.includes('shared/**/*'))
+  assert.ok(pkg.build.files.includes('electron/**/*'))
   assert.equal(pkg.build.publish.provider, 'github')
   assert.equal(pkg.build.publish.owner, 'displaay')
   assert.equal(pkg.build.publish.repo, 'font-butler')
