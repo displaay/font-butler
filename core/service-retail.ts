@@ -28,6 +28,13 @@ import { DEFAULT_RETAIL_WORKER_BASE_URL, defaultRetailSync, loadSettings, saveSe
 import { applyEntryFacts } from './state.ts'
 import type { AppSettings, CatalogEntry, FontFaceInfo, RetailSyncSettings } from './types.ts'
 import {
+  findOutsideCollisionsForRetailFamilies,
+  findRetailCollisionsForIncomingFamilies,
+  retailFamiliesPendingSync,
+  retailOwnedInstallContext,
+  uninstallCollisionEntries,
+} from './retail-collisions.ts'
+import {
   applyRetailFontSelection,
   filterDisabledRetailDrift,
   isRetailFamilyOptedOut,
@@ -41,6 +48,8 @@ import {
   selectedFormatsFromFonts,
   selectedRetailFormat,
   isSelectedRetailFormat,
+  type RetailCollisionAction,
+  type RetailFamilyCollision,
   type RetailFontFormat,
   type RetailOptOutMode,
 } from '../shared/retail.ts'
@@ -69,9 +78,17 @@ type RetailCache = {
   error: string | null
   /** `null` until a successful check this process; catalog listings cover a restart. */
   fonts: CachedRetailFont[] | null
+  collisions: RetailFamilyCollision[]
 }
 
-const cache: RetailCache = { checkedAt: null, drift: [], skipped: [], error: null, fonts: null }
+const cache: RetailCache = {
+  checkedAt: null,
+  drift: [],
+  skipped: [],
+  error: null,
+  fonts: null,
+  collisions: [],
+}
 
 /**
  * Two overlapping syncs would fight over the same `.part` files: the second one's entry sweep deletes
@@ -86,6 +103,7 @@ export function resetRetailCache(): void {
   cache.skipped = []
   cache.error = null
   cache.fonts = null
+  cache.collisions = []
 }
 
 function cacheFontsFromSync(fonts: RetailSyncFont[]): CachedRetailFont[] {
@@ -224,6 +242,7 @@ export function retailStatus(paths: AppPaths, settings = loadSettings(paths)): R
     fonts,
     disabledGlyphsFiles: config.disabledGlyphsFiles,
     familyFormats: config.familyFormats,
+    collisions: cache.collisions,
   }
 }
 
@@ -693,10 +712,23 @@ async function reconcileRetailCatalog(
  */
 export async function checkRetail(
   paths: AppPaths,
-  options: { refresh?: boolean; fetchManifest?: typeof fetchRetailManifest } = {},
+  options: {
+    refresh?: boolean
+    credentialsOnly?: boolean
+    fetchManifest?: typeof fetchRetailManifest
+  } = {},
 ): Promise<RetailSyncStatus> {
   try {
     const { manifest } = await readManifest(paths, options)
+    if (options.credentialsOnly) {
+      cache.checkedAt = new Date().toISOString()
+      cache.drift = []
+      cache.skipped = []
+      cache.error = null
+      cache.fonts = null
+      cache.collisions = []
+      return emitRetail(paths)
+    }
     ensureRetailListings(paths, manifest)
     await reconcileRetailCatalog(paths, loadRetailManifest(paths))
     const drift = measureDrift(paths, manifest)
@@ -715,15 +747,87 @@ export async function checkRetail(
   return emitRetail(paths)
 }
 
+export function optOutRetailFamilies(paths: AppPaths, familyNames: readonly string[]): RetailSyncStatus {
+  const unique = [...new Set(familyNames.map((name) => name.trim()).filter(Boolean))]
+  if (unique.length === 0) return emitRetail(paths)
+  const settings = loadSettings(paths)
+  const current = retailSettings(settings)
+  const fonts = listRetailFonts(
+    paths,
+    current.disabledGlyphsFiles,
+    current.familyFormats,
+    optOutModeOf(current),
+  )
+  const disabled = new Set(current.disabledGlyphsFiles)
+  if (!current.familyOptOuts) {
+    for (const font of fonts) {
+      if (isRetailFamilyOptedOut(font.familyName, font.typefaceName, disabled, 'typeface')) {
+        disabled.add(font.familyName)
+      }
+    }
+  }
+  for (const name of unique) disabled.add(name)
+  settings.retailSync = {
+    ...current,
+    disabledGlyphsFiles: normalizeDisabledGlyphsFiles([...disabled]),
+    familyOptOuts: true,
+  }
+  saveSettings(paths, settings)
+  emitEvent({ type: 'settings', settings })
+  return emitRetail(paths)
+}
+
+export function listDropRetailCollisions(
+  paths: AppPaths,
+  incoming: ReadonlyArray<string | { familyName?: string; path?: string }>,
+): RetailFamilyCollision[] {
+  const catalog = loadCatalog(paths).entries
+  return findRetailCollisionsForIncomingFamilies(
+    catalog,
+    incoming,
+    retailOwnedInstallContext(paths, catalog),
+  )
+}
+
+export async function resolveDropRetailCollisions(
+  paths: AppPaths,
+  choices: Record<string, RetailCollisionAction>,
+): Promise<RetailSyncStatus> {
+  const replaceIds: string[] = []
+  const optOut: string[] = []
+  const catalog = loadCatalog(paths).entries
+  const owned = retailOwnedInstallContext(paths, catalog)
+  const collisions = findRetailCollisionsForIncomingFamilies(
+    catalog,
+    Object.keys(choices),
+    owned,
+  )
+  for (const collision of collisions) {
+    const action = choices[collision.familyName]
+    if (action === 'replace') {
+      optOut.push(collision.familyName)
+      replaceIds.push(...collision.entryIds)
+    }
+  }
+  if (optOut.length) optOutRetailFamilies(paths, optOut)
+  if (replaceIds.length) await uninstallCollisionEntries(paths, replaceIds)
+  cache.collisions = []
+  return emitRetail(paths)
+}
+
 export async function syncRetail(
   paths: AppPaths,
   options: {
     fetchManifest?: typeof fetchRetailManifest
     fetchFile?: typeof fetchRetailFile
+    choices?: Record<string, RetailCollisionAction>
   } = {},
 ): Promise<RetailSyncStatus> {
-  // A second request joins the run already in progress rather than starting a competing one.
-  if (inflightSync) return inflightSync
+  const hasChoices = Boolean(options.choices && Object.keys(options.choices).length > 0)
+  if (inflightSync) {
+    if (!hasChoices) return inflightSync
+    await inflightSync
+  }
   inflightSync = runSync(paths, options).finally(() => {
     inflightSync = null
   })
@@ -735,6 +839,7 @@ async function runSync(
   options: {
     fetchManifest?: typeof fetchRetailManifest
     fetchFile?: typeof fetchRetailFile
+    choices?: Record<string, RetailCollisionAction>
   },
 ): Promise<RetailSyncStatus> {
   try {
@@ -744,6 +849,28 @@ async function runSync(
     })
     ensureRetailListings(paths, manifest)
     await reconcileRetailCatalog(paths, loadRetailManifest(paths))
+
+    const choices = options.choices ?? {}
+    const keepFamilies = Object.entries(choices)
+      .filter(([, action]) => action === 'keep')
+      .map(([familyName]) => familyName)
+    if (keepFamilies.length) optOutRetailFamilies(paths, keepFamilies)
+
+    const replaceIds: string[] = []
+    const catalogForReplace = loadCatalog(paths).entries
+    const ownedForReplace = retailOwnedInstallContext(paths, catalogForReplace)
+    const replaceFamilies = Object.entries(choices)
+      .filter(([, action]) => action === 'replace')
+      .map(([familyName]) => familyName)
+    if (replaceFamilies.length) {
+      const collisions = findOutsideCollisionsForRetailFamilies(
+        catalogForReplace,
+        replaceFamilies.map((familyName) => ({ familyName, typefaceName: familyName })),
+        ownedForReplace,
+      )
+      for (const collision of collisions) replaceIds.push(...collision.entryIds)
+      if (replaceIds.length) await uninstallCollisionEntries(paths, replaceIds)
+    }
 
     const drift = measureDrift(paths, manifest)
     const config = retailSettings(loadSettings(paths))
@@ -763,6 +890,21 @@ async function runSync(
       selectedFormats: selectedFormatsFromFonts(fonts),
       optOutMode: optOutModeOf(config),
     })
+    const pendingFamilies = retailFamiliesPendingSync(fonts, syncDrift)
+    const remaining = findOutsideCollisionsForRetailFamilies(
+      loadCatalog(paths).entries,
+      pendingFamilies,
+      retailOwnedInstallContext(paths),
+    )
+    cache.collisions = remaining
+    if (remaining.length > 0) {
+      cache.checkedAt = new Date().toISOString()
+      cache.drift = drift
+      cache.skipped = manifest.skipped
+      cache.error = null
+      return emitRetail(paths)
+    }
+
     await uninstallUnselectedRetailFormats(paths, config)
 
     const result = await applyRetailSync({
@@ -790,6 +932,7 @@ async function runSync(
     cache.drift = measureDrift(paths, manifest)
     cache.skipped = manifest.skipped
     cache.error = result.errors.length ? result.errors.slice(0, 5).join(' ') : null
+    cache.collisions = []
   } catch (error) {
     cache.error = error instanceof Error ? error.message : 'Could not sync the retail collection.'
   }

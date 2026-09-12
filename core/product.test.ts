@@ -191,6 +191,7 @@ test('F02-A and F02-C folder policies and uninstall intent', async () => {
       policy: 'install-new-and-updates',
     })
     assert.equal(service.listCatalog().length, 0)
+    await service.updateSettings({ onboardingCompleted: true })
     await service.startWatching(archiveFolder.folder.id)
     await service.startWatching(exportFolder.folder.id)
     const catalog = service.listCatalog()

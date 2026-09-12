@@ -17,6 +17,7 @@ import type {
   ProjectSet,
   RelinkPreview,
   RetailSyncStatus,
+  RetailCollisionAction,
   SortMode,
   SystemFace,
   ThemeMode,
@@ -352,7 +353,12 @@ export const api = {
     }) => json<{ status: RetailSyncStatus }>(post('/api/retail/configure', input)),
     check: (refresh = false) =>
       json<{ status: RetailSyncStatus }>(post('/api/retail/check', { refresh })),
-    sync: () => json<{ status: RetailSyncStatus }>(post('/api/retail/sync', {})),
+    sync: (choices?: Record<string, RetailCollisionAction>) =>
+      json<{ status: RetailSyncStatus }>(post('/api/retail/sync', { choices })),
+    resolveDropCollisions: (choices: Record<string, RetailCollisionAction>) =>
+      json<{ status: RetailSyncStatus }>(post('/api/retail/collisions/drop', { choices })),
+    optOut: (familyNames: string[]) =>
+      json<{ status: RetailSyncStatus }>(post('/api/retail/opt-out', { familyNames })),
   },
   planImport: (paths: string[]) => json<ImportPlan>(post('/api/import/plan', { paths })),
   applyPlan: (

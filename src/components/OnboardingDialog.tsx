@@ -190,15 +190,12 @@ export function OnboardingDialog({
   async function finish() {
     if (finishedRef.current) return
     finishedRef.current = true
-    setBusy(true)
+    onComplete()
     try {
       await persist({ onboardingCompleted: true })
-      onComplete()
     } catch (error) {
       finishedRef.current = false
       toast.error(error instanceof Error ? error.message : 'Could not finish setup')
-    } finally {
-      setBusy(false)
     }
   }
 
@@ -215,8 +212,9 @@ export function OnboardingDialog({
   }
 
   async function persistRetail() {
+    const turningOn = retailEnabled
     const result = await api.retail.configure(
-      retailEnabled
+      turningOn
         ? {
             enabled: true,
             workerBaseUrl: workerUrl.trim() || DEFAULT_WORKER_URL,
@@ -228,6 +226,14 @@ export function OnboardingDialog({
     setHasRetailToken(result.status.hasToken)
     setWorkerUrl(result.status.workerBaseUrl || DEFAULT_WORKER_URL)
     if (retailToken.trim()) setRetailToken('')
+    if (turningOn) {
+      const checked = await api.retail.check()
+      if (checked.status.error) {
+        throw new Error(checked.status.error)
+      }
+      onRetailChangeRef.current?.(checked.status)
+      return
+    }
     onRetailChangeRef.current?.(result.status)
   }
 
@@ -670,6 +676,7 @@ export function OnboardingDialog({
       <FolderSetupDialog
         open={setupOpen}
         roots={setupRoots}
+        deferInstall
         onOpenChange={(next) => {
           setSetupOpen(next)
           if (!next) setSetupRoots(undefined)

@@ -242,10 +242,13 @@ import { importInboxFiles as importInboxFilesFn, importOneUnlocked as importOneU
 import {
   checkRetail as checkRetailFn,
   configureRetailSync as configureRetailSyncFn,
+  listDropRetailCollisions as listDropRetailCollisionsFn,
+  optOutRetailFamilies as optOutRetailFamiliesFn,
+  resolveDropRetailCollisions as resolveDropRetailCollisionsFn,
   retailStatus as retailStatusFn,
   syncRetail as syncRetailFn,
 } from './service-retail.ts'
-import type { RetailSyncStatus } from '../shared/retail.ts'
+import type { RetailCollisionAction, RetailFamilyCollision, RetailSyncStatus } from '../shared/retail.ts'
 import {
   activateEntry as activateEntryFn,
   bakeFeatures as bakeFeaturesFn,
@@ -284,6 +287,11 @@ export class FontButlerService {
   private autoReinstallTimer: ReturnType<typeof setTimeout> | null = null
   private autoReinstallPending = new Set<string>()
   private rememberedDecisions = new Map<string, ImportPlanChoice>()
+  /**
+   * Test seam: stub Displaay worker HTTP for this instance so onboarding follow-up
+   * can sync without the network.
+   */
+  retailFetch?: Omit<NonNullable<Parameters<typeof syncRetailFn>[1]>, 'choices'>
 
   constructor(paths: AppPaths = getPaths()) {
     this.paths = paths
@@ -542,11 +550,15 @@ export class FontButlerService {
     if (patch.savedFilters) {
       next.savedFilters = normalizeSavedFilters(patch.savedFilters)
     }
+    const completingOnboarding = current.onboardingCompleted === false && next.onboardingCompleted === true
     syncWatchFolderPaths(next)
     saveSettings(this.paths, next)
     emitEvent({ type: 'settings', settings: next })
-    if ('watchFolders' in patch || folderPatch) {
+    if ('watchFolders' in patch || folderPatch || completingOnboarding) {
       await this.refreshInboxWatcher(this.watchingFolderRoots(next), { importExisting: true })
+    }
+    if (completingOnboarding && next.retailSync?.enabled) {
+      await this.syncRetail()
     }
     if (next.autoReinstallOnUpdate && !current.autoReinstallOnUpdate) {
       await this.refreshSourceStatuses()
@@ -1638,10 +1650,12 @@ export class FontButlerService {
 
   planImport(filePaths: string[], trigger: OperationTrigger = 'import'): ImportPlan {
     const expanded = expandImportPaths(filePaths)
-    return savePlan(
+    const plan = buildImportPlan(expanded.files, loadCatalog(this.paths), { trigger, paths: this.paths })
+    plan.retailCollisions = listDropRetailCollisionsFn(
       this.paths,
-      buildImportPlan(expanded.files, loadCatalog(this.paths), { trigger, paths: this.paths }),
+      plan.items.map((item) => ({ familyName: item.familyName, path: item.path })),
     )
+    return savePlan(this.paths, plan)
   }
 
   async applyPlan(
@@ -2266,12 +2280,37 @@ export class FontButlerService {
     return configureRetailSyncFn(this.paths, input)
   }
 
-  async checkRetail(options: { refresh?: boolean } = {}): Promise<RetailSyncStatus> {
-    return checkRetailFn(this.paths, options)
+  async checkRetail(options: { refresh?: boolean; credentialsOnly?: boolean } = {}): Promise<RetailSyncStatus> {
+    const credentialsOnly =
+      options.credentialsOnly ?? this.onboardingWorkDeferred()
+    return checkRetailFn(this.paths, {
+      refresh: options.refresh,
+      credentialsOnly,
+      fetchManifest: this.retailFetch?.fetchManifest,
+    })
   }
 
-  async syncRetail(): Promise<RetailSyncStatus> {
-    return syncRetailFn(this.paths)
+  async syncRetail(choices?: Record<string, RetailCollisionAction>): Promise<RetailSyncStatus> {
+    if (this.onboardingWorkDeferred()) {
+      return retailStatusFn(this.paths)
+    }
+    return syncRetailFn(this.paths, { choices, ...this.retailFetch })
+  }
+
+  listDropRetailCollisions(
+    incoming: ReadonlyArray<string | { familyName?: string; path?: string }>,
+  ): RetailFamilyCollision[] {
+    return listDropRetailCollisionsFn(this.paths, incoming)
+  }
+
+  async resolveDropRetailCollisions(
+    choices: Record<string, RetailCollisionAction>,
+  ): Promise<RetailSyncStatus> {
+    return resolveDropRetailCollisionsFn(this.paths, choices)
+  }
+
+  optOutRetailFamilies(familyNames: readonly string[]): RetailSyncStatus {
+    return optOutRetailFamiliesFn(this.paths, familyNames)
   }
 
   listProjects(): ProjectSet[] {
@@ -3358,10 +3397,18 @@ export class FontButlerService {
     return settings.folders.filter((folder) => folder.watching).map((folder) => folder.root)
   }
 
+  private onboardingWorkDeferred(settings = loadSettings(this.paths)): boolean {
+    return settings.onboardingCompleted === false
+  }
+
   private async refreshInboxWatcher(
     folders: string[],
     options: { importExisting: boolean },
   ): Promise<void> {
+    if (this.onboardingWorkDeferred()) {
+      await syncInboxWatcher([], () => {})
+      return
+    }
     await syncInboxWatcher(folders, (filePaths) => {
       void this.importInboxFiles(filePaths)
     })

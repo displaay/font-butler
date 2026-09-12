@@ -12,9 +12,16 @@ import {
   checkRetail,
   configureRetailSync,
   resetRetailCache,
+  resolveDropRetailCollisions,
   retailStatus,
   syncRetail,
 } from './service-retail.ts'
+import {
+  catalogEntryFamilyNames,
+  isRetailOwnedInstall,
+  findOutsideCollisionsForRetailFamilies,
+  findRetailCollisionsForIncomingFamilies,
+} from './retail-collisions.ts'
 import { loadSettings, saveSettings } from './settings.ts'
 import { RETAIL_DOWNLOAD_CONCURRENCY } from './retail-apply.ts'
 import { withService, writeTestFont } from './test-util.ts'
@@ -128,6 +135,59 @@ test('a check without a token reports an error rather than throwing', async () =
   await configureRetailSync(paths, { enabled: true })
   const status = await checkRetail(paths, { fetchManifest: async () => manifestWith(4, 'e1') })
   assert.match(status.error ?? '', /token/i)
+})
+
+test('a credentials-only check validates the worker without writing listings', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 't' })
+  const status = await checkRetail(paths, {
+    credentialsOnly: true,
+    fetchManifest: async () => manifestWith(4, 'e1'),
+  })
+  assert.equal(status.error, null)
+  assert.equal(status.hasToken, true)
+  assert.equal(status.pending, 0)
+  assert.equal(loadCatalog(paths).entries.length, 0)
+  assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'RecklessVF.otf')), false)
+})
+
+test('a credentials-only check still reports a worker error without writing listings', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 't' })
+  const status = await checkRetail(paths, {
+    credentialsOnly: true,
+    fetchManifest: async () => {
+      throw new Error('bad token')
+    },
+  })
+  assert.match(status.error ?? '', /bad token/)
+  assert.equal(loadCatalog(paths).entries.length, 0)
+  assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'RecklessVF.otf')), false)
+})
+
+test('retail stays check-only during onboarding and syncs after setup is finished', async () => {
+  resetRetailCache()
+  await withService(async (service, paths) => {
+    assert.equal(service.getSettings().onboardingCompleted, false)
+    await service.configureRetailSync({ enabled: true, token: 't' })
+    service.retailFetch = {
+      fetchManifest: async () => manifestWith(4, 'e1'),
+      fetchFile: async () => new Uint8Array(4).fill(1),
+    }
+
+    const checked = await service.checkRetail()
+    assert.equal(checked.error, null)
+    assert.equal(loadCatalog(paths).entries.length, 0)
+    assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'RecklessVF.otf')), false)
+
+    const skipped = await service.syncRetail()
+    assert.equal(skipped.error, null)
+    assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'RecklessVF.otf')), false)
+
+    await service.updateSettings({ onboardingCompleted: true })
+    assert.equal(fs.readFileSync(path.join(paths.userFontsDir, 'RecklessVF.otf')).length, 4)
+    assert.ok(loadCatalog(paths).entries.some((entry) => entry.retailRelativePath === 'Reckless/RecklessVF.otf'))
+  })
 })
 
 test('a check reports pending files, and a sync writes them into Fonts', async () => {
@@ -559,6 +619,7 @@ test('installing a retail listing replaces the catalogue font that occupies Font
       fetchFile: async () => new Uint8Array(bytes),
     })
     assert.equal(fs.readFileSync(dest).equals(bytes), false, 'sync must not overwrite the occupied Fonts file')
+    assert.equal(retailStatus(paths).collisions.length, 0, 'a different family occupying Fonts is not a retail collision')
 
     const installed = await service.install(listing.id)
     assert.equal(installed.status, 'installed')
@@ -1018,3 +1079,307 @@ test('format cleanup waits for in-flight catalog writes', async () => {
   assert.equal(entry.status, 'uninstalled')
   assert.equal(entry.sourceAvailability, 'none')
 })
+
+function emptyOwned() {
+  return { ownedPaths: new Set<string>(), cacheRoot: path.resolve(os.tmpdir(), 'font-butler-no-retail-cache') }
+}
+
+function stubEntry(patch: Partial<import('./types.ts').CatalogEntry>): import('./types.ts').CatalogEntry {
+  return {
+    id: 'x',
+    sourcePath: '/tmp/Reckless-Regular.otf',
+    sourceMtimeMs: 1,
+    sourceSize: 1,
+    status: 'installed',
+    faces: [
+      {
+        familyName: 'Reckless',
+        styleName: 'Regular',
+        fullName: 'Reckless Regular',
+        postscriptName: 'Reckless-Regular',
+        isVariable: false,
+        instanceCount: 1,
+        instanceNames: [],
+        weight: 400,
+        italic: false,
+      },
+    ],
+    format: 'otf',
+    addedAt: 1,
+    updatedAt: 1,
+    installedPath: '/tmp/Fonts/Reckless-Regular.otf',
+    ...patch,
+  }
+}
+
+test('familyName alone does not make a catalog entry retail-owned', () => {
+  const outside = stubEntry({})
+  assert.equal(isRetailOwnedInstall(outside, emptyOwned()), false)
+  assert.equal(
+    isRetailOwnedInstall(stubEntry({ retailRelativePath: 'Reckless/Reckless-Regular.otf' }), emptyOwned()),
+    true,
+  )
+  assert.deepEqual(catalogEntryFamilyNames(outside), ['Reckless'])
+})
+
+test('outside Reckless collides with pending retail Reckless, not a LocalReckless occupant', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-collision-'))
+  const outsidePath = path.join(dir, 'Reckless-Regular.otf')
+  const localPath = path.join(dir, 'RecklessVF.otf')
+  fs.writeFileSync(outsidePath, 'x')
+  fs.writeFileSync(localPath, 'x')
+  try {
+    const outside = stubEntry({
+      id: 'out',
+      installedPath: outsidePath,
+    })
+    const local = stubEntry({
+      id: 'local',
+      installedPath: localPath,
+      faces: [
+        {
+          familyName: 'LocalReckless',
+          styleName: 'Regular',
+          fullName: 'LocalReckless Regular',
+          postscriptName: 'LocalRecklessVF',
+          isVariable: false,
+          instanceCount: 1,
+          instanceNames: [],
+          weight: 400,
+          italic: false,
+        },
+      ],
+    })
+    const collisions = findOutsideCollisionsForRetailFamilies(
+      [outside, local],
+      [{ familyName: 'Reckless', typefaceName: 'Reckless' }],
+      emptyOwned(),
+    )
+    assert.equal(collisions.length, 1)
+    assert.equal(collisions[0]?.familyName, 'Reckless')
+    assert.deepEqual(collisions[0]?.entryIds, ['out'])
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('retail sync pauses when a same-family font is already installed from outside', async () => {
+  resetRetailCache()
+  await withService(async (service, paths) => {
+    const dest = path.join(paths.userFontsDir, 'Reckless-Regular.otf')
+    writeTestFont(dest, 'Reckless', 'Reckless-Regular', { format: 'otf' })
+    await service.importPaths([dest])
+    await configureRetailSync(paths, { enabled: true, token: 't' })
+
+    const paused = await syncRetail(paths, {
+      fetchManifest: async () => manifestWith(4, 'e1'),
+      fetchFile: async () => new Uint8Array(4).fill(1),
+    })
+    assert.equal(paused.error, null)
+    assert.equal(paused.pending, 1)
+    assert.equal(paused.collisions.length, 1)
+    assert.equal(paused.collisions[0]?.familyName, 'Reckless')
+    assert.match(paused.collisions[0]?.installedLabel ?? '', /Reckless/i)
+    assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'RecklessVF.otf')), false)
+
+    const replaced = await syncRetail(paths, {
+      fetchManifest: async () => manifestWith(4, 'e1'),
+      fetchFile: async () => new Uint8Array(4).fill(1),
+      choices: { Reckless: 'replace' },
+    })
+    assert.equal(replaced.error, null)
+    assert.equal(replaced.collisions.length, 0)
+    assert.equal(replaced.pending, 0)
+    assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'RecklessVF.otf')), true)
+
+    const remaining = loadCatalog(paths).entries.filter((entry) => catalogEntryFamilyNames(entry).includes('Reckless'))
+    const installed = remaining.filter((entry) => entry.status === 'installed')
+    assert.equal(installed.length, 1)
+    assert.ok(installed[0]?.retailRelativePath)
+    assert.equal(
+      remaining.some((entry) => !entry.retailRelativePath && (entry.status === 'installed' || entry.status === 'outdated')),
+      false,
+    )
+  })
+})
+
+test('retail sync keep-old opts the family out of sync without downloading', async () => {
+  resetRetailCache()
+  await withService(async (service, paths) => {
+    const dest = path.join(paths.userFontsDir, 'Reckless-Regular.otf')
+    writeTestFont(dest, 'Reckless', 'Reckless-Regular', { format: 'otf' })
+    await service.importPaths([dest])
+    await configureRetailSync(paths, { enabled: true, token: 't' })
+
+    const kept = await syncRetail(paths, {
+      fetchManifest: async () => manifestWith(4, 'e1'),
+      fetchFile: async () => new Uint8Array(4).fill(1),
+      choices: { Reckless: 'keep' },
+    })
+    assert.equal(kept.error, null)
+    assert.equal(kept.pending, 0)
+    assert.equal(kept.collisions.length, 0)
+    assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'RecklessVF.otf')), false)
+    assert.deepEqual(loadSettings(paths).retailSync?.disabledGlyphsFiles, ['Reckless'])
+    assert.equal(loadSettings(paths).retailSync?.familyOptOuts, true)
+
+    const remaining = loadCatalog(paths).entries.filter((entry) => catalogEntryFamilyNames(entry).includes('Reckless'))
+    const installed = remaining.filter((entry) => entry.status === 'installed')
+    assert.equal(installed.length, 1)
+    assert.equal(installed[0]?.retailRelativePath ?? '', '')
+  })
+})
+
+test('already-synced retail fonts do not collide with themselves on the next sync', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 't' })
+  const first = await syncRetail(paths, {
+    fetchManifest: async () => manifestWith(4, 'e1'),
+    fetchFile: async () => new Uint8Array(4).fill(1),
+  })
+  assert.equal(first.error, null)
+  assert.equal(first.pending, 0)
+  assert.equal(first.collisions.length, 0)
+  assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'RecklessVF.otf')), true)
+
+  const second = await syncRetail(paths, {
+    fetchManifest: async () => manifestWith(4, 'e1'),
+    fetchFile: async () => new Uint8Array(4).fill(1),
+  })
+  assert.equal(second.error, null)
+  assert.equal(second.pending, 0)
+  assert.equal(second.collisions.length, 0)
+})
+
+test('retail sync apply-all replace resolves every outside family collision', async () => {
+  resetRetailCache()
+  await withService(async (service, paths) => {
+    const azeret = path.join(paths.userFontsDir, 'Azeret-Regular.otf')
+    const mono = path.join(paths.userFontsDir, 'AzeretMono-Regular.otf')
+    writeTestFont(azeret, 'Azeret', 'Azeret-Regular', { format: 'otf' })
+    writeTestFont(mono, 'Azeret Mono', 'AzeretMono-Regular', { format: 'otf' })
+    await service.importPaths([azeret, mono])
+    await configureRetailSync(paths, { enabled: true, token: 't' })
+
+    const paused = await syncRetail(paths, {
+      fetchManifest: async () => azeretManifest(),
+      fetchFile: async () => new Uint8Array(4).fill(1),
+    })
+    assert.equal(paused.collisions.length, 2)
+    assert.deepEqual(paused.collisions.map((item) => item.familyName).sort(), ['Azeret', 'Azeret Mono'])
+    assert.notEqual(fs.statSync(path.join(paths.userFontsDir, 'Azeret-Regular.otf')).size, 4)
+
+    const choices: Record<string, 'replace' | 'keep'> = {}
+    for (const collision of paused.collisions) choices[collision.familyName] = 'replace'
+    const resolved = await syncRetail(paths, {
+      fetchManifest: async () => azeretManifest(),
+      fetchFile: async () => new Uint8Array(4).fill(1),
+      choices,
+    })
+    assert.equal(resolved.error, null)
+    assert.equal(resolved.collisions.length, 0)
+    assert.equal(resolved.pending, 0)
+    assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'Azeret-Regular.otf')), true)
+    assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'AzeretMono-Regular.otf')), true)
+  })
+})
+
+test('dropping a same-family font over an installed retail copy uninstalls retail after replace', async () => {
+  resetRetailCache()
+  await withService(async (service, paths) => {
+    const fixture = path.join(paths.dataRoot, 'fixture.otf')
+    writeTestFont(fixture, 'Reckless', 'RecklessVF', { format: 'otf' })
+    const bytes = fs.readFileSync(fixture)
+    await configureRetailSync(paths, { enabled: true, token: 't' })
+    const synced = await syncRetail(paths, {
+      fetchManifest: async () => manifestWith(bytes.length, 'e1'),
+      fetchFile: async () => new Uint8Array(bytes),
+    })
+    assert.equal(synced.pending, 0)
+    assert.ok(loadCatalog(paths).entries.some((entry) => entry.retailRelativePath && entry.status === 'installed'))
+
+    const dropped = path.join(paths.dataRoot, 'drop', 'Reckless-Regular.otf')
+    writeTestFont(dropped, 'Reckless', 'Reckless-Regular', { format: 'otf', version: 'Version 2.000' })
+    const planned = service.planImport([dropped])
+    assert.equal(planned.retailCollisions?.length, 1)
+    assert.equal(planned.retailCollisions?.[0]?.familyName, 'Reckless')
+    const incoming = findRetailCollisionsForIncomingFamilies(
+      loadCatalog(paths).entries,
+      [{ familyName: 'Reckless', path: dropped }],
+      { ownedPaths: new Set(), cacheRoot: path.resolve(os.tmpdir(), 'font-butler-no-retail-cache') },
+    )
+    assert.equal(incoming.length, 1)
+
+    await resolveDropRetailCollisions(paths, { Reckless: 'replace' })
+    assert.deepEqual(loadSettings(paths).retailSync?.disabledGlyphsFiles, ['Reckless'])
+    assert.equal(loadSettings(paths).retailSync?.familyOptOuts, true)
+
+    const remaining = loadCatalog(paths).entries.filter((entry) => catalogEntryFamilyNames(entry).includes('Reckless'))
+    assert.ok(remaining.every((entry) => entry.status !== 'installed' && entry.status !== 'outdated'))
+
+    const plannedAgain = service.planImport([dropped])
+    assert.equal(plannedAgain.retailCollisions?.length ?? 0, 0)
+    const applied = await service.applyPlan(plannedAgain.id)
+    assert.equal(applied.entries.length, 1)
+    assert.equal(applied.entries[0]?.status, 'installed')
+    assert.equal(applied.entries[0]?.retailRelativePath ?? '', '')
+  })
+})
+
+test('dropping keep cancels the import and leaves the retail copy installed', async () => {
+  resetRetailCache()
+  await withService(async (service, paths) => {
+    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await syncRetail(paths, {
+      fetchManifest: async () => manifestWith(4, 'e1'),
+      fetchFile: async () => new Uint8Array(4).fill(1),
+    })
+
+    const dropped = path.join(paths.dataRoot, 'drop', 'Reckless-Regular.otf')
+    writeTestFont(dropped, 'Reckless', 'Reckless-Regular', { format: 'otf' })
+    const planned = service.planImport([dropped])
+    assert.equal(planned.retailCollisions?.length, 1)
+
+    await resolveDropRetailCollisions(paths, { Reckless: 'keep' })
+    assert.equal(loadSettings(paths).retailSync?.disabledGlyphsFiles.includes('Reckless'), false)
+
+    const remaining = loadCatalog(paths).entries.filter(
+      (entry) => catalogEntryFamilyNames(entry).includes('Reckless') && entry.status === 'installed',
+    )
+    assert.equal(remaining.length, 1)
+    assert.ok(remaining[0]?.retailRelativePath)
+    assert.equal(fs.existsSync(dropped), true)
+  })
+})
+
+test('turning sync off from a retail listing uses the keep-old opt-out path', async () => {
+  resetRetailCache()
+  await withService(async (service, paths) => {
+    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await syncRetail(paths, {
+      fetchManifest: async () => manifestWith(4, 'e1'),
+      fetchFile: async () => new Uint8Array(4).fill(1),
+    })
+    const listing = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath)
+    assert.ok(listing)
+    assert.equal(listing.status, 'installed')
+
+    const status = service.optOutRetailFamilies(['Reckless'])
+    assert.deepEqual(status.disabledGlyphsFiles, ['Reckless'])
+    assert.equal(status.fonts.find((font) => font.familyName === 'Reckless')?.enabled, false)
+    assert.equal(loadSettings(paths).retailSync?.familyOptOuts, true)
+
+    const after = loadCatalog(paths).entries.find((entry) => entry.id === listing.id)
+    assert.equal(after?.status, 'installed')
+    assert.ok(after?.retailRelativePath)
+
+    const again = await syncRetail(paths, {
+      fetchManifest: async () => manifestWith(6, 'e2'),
+      fetchFile: async () => new Uint8Array(6).fill(2),
+    })
+    assert.equal(again.pending, 0)
+    assert.equal(again.collisions.length, 0)
+    assert.equal(fs.readFileSync(path.join(paths.userFontsDir, 'RecklessVF.otf')).length, 4)
+  })
+})
+

@@ -718,10 +718,31 @@ app.post('/api/retail/check', async (c) => {
 })
 
 app.post('/api/retail/sync', async (c) => {
+  const body = await c.req
+    .json<{ choices?: Record<string, 'replace' | 'keep'> }>()
+    .catch(() => ({}) as { choices?: Record<string, 'replace' | 'keep'> })
   try {
-    return c.json({ status: await service.syncRetail() })
+    return c.json({ status: await service.syncRetail(body.choices) })
   } catch (error) {
     return c.json(fail(error, 'Could not sync the retail collection'), 400)
+  }
+})
+
+app.post('/api/retail/collisions/drop', async (c) => {
+  const body = await c.req.json<{ choices?: Record<string, 'replace' | 'keep'> }>()
+  try {
+    return c.json({ status: await service.resolveDropRetailCollisions(body.choices ?? {}) })
+  } catch (error) {
+    return c.json(fail(error, 'Could not resolve that retail collision'), 400)
+  }
+})
+
+app.post('/api/retail/opt-out', async (c) => {
+  const body = await c.req.json<{ familyNames?: string[] }>()
+  try {
+    return c.json({ status: service.optOutRetailFamilies(body.familyNames ?? []) })
+  } catch (error) {
+    return c.json(fail(error, 'Could not turn sync off for that font'), 400)
   }
 })
 
