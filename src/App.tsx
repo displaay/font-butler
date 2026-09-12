@@ -116,6 +116,7 @@ import { applyTheme } from '@/lib/theme'
 import { allUpdateGroups, visibleUpdateGroups } from '@/lib/updateInventory'
 import { operationMatchesQuery, tabWithSearchHits } from '@/lib/search'
 import type { AppSettings, AppUpdateStatus, CatalogEntry, DestinationCapability, DuplicateWarning, FamilyGroup, ImportPlan, ImportPlanItem, LibraryFilter, Operation, PreviewPreferences, ProjectSet, RetailSyncStatus, SavedLibraryFilter, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
+import { retailLibraryEntryVisible } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { isPathUnderFolder, isRetailLibraryFilter, isWatchFolderEntry, libraryFolderFilterLabel, matchesLibraryFolderFilter, RETAIL_LIBRARY_FILTER, watchFolderName } from '@/lib/watchFolders'
 
@@ -504,12 +505,13 @@ function AppShell() {
   const librarySourceEntries = useMemo(
     () =>
       entries.filter((entry) => {
+        if (!retailLibraryEntryVisible(entry, retail?.fonts ?? [])) return false
         if (searching) return true
         if (watchFolderFilter && !matchesLibraryFolderFilter(entry, watchFolderFilter)) return false
         if (projectFilter && !projectMemberIds.has(entry.id)) return false
         return true
       }),
-    [entries, watchFolderFilter, projectFilter, projectMemberIds, searching],
+    [entries, watchFolderFilter, projectFilter, projectMemberIds, searching, retail],
   )
   const libraryGroups = useMemo(
     () =>
@@ -537,10 +539,14 @@ function AppShell() {
       counts[folder] = countFamilyNames(entries.filter((entry) => isWatchFolderEntry(entry, folder)))
     }
     counts[RETAIL_LIBRARY_FILTER] = countFamilyNames(
-      entries.filter((entry) => matchesLibraryFolderFilter(entry, RETAIL_LIBRARY_FILTER)),
+      entries.filter(
+        (entry) =>
+          matchesLibraryFolderFilter(entry, RETAIL_LIBRARY_FILTER) &&
+          retailLibraryEntryVisible(entry, retail?.fonts ?? []),
+      ),
     )
     return counts
-  }, [entries, watchFolders])
+  }, [entries, watchFolders, retail])
   const allUpdates = useMemo(() => allUpdateGroups(entries, sortMode), [entries, sortMode])
   const updateGroups = useMemo(() => visibleUpdateGroups(allUpdates, query), [allUpdates, query])
   const systemGroups = useMemo(

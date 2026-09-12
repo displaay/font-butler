@@ -6,6 +6,8 @@ import type { AppPaths } from './paths.ts'
 import {
   emptyRetailLocalManifest,
   isSyncableDrift,
+  retailFileFamilyName,
+  retailTypefaceName,
   type RetailDriftItem,
   type RetailFile,
   type RetailLocalFile,
@@ -157,7 +159,9 @@ export function diffRetailManifest(
   }
 
   for (const collection of remote.collections ?? []) {
+    const typefaceName = retailTypefaceName(collection)
     for (const file of collection.files ?? []) {
+      const familyName = retailFileFamilyName(file ?? {}, collection)
       if (!isValidRemoteFile(file) || !isSafeRelativePath(file.relativePath)) {
         const named = typeof file?.relativePath === 'string' ? file.relativePath : '(unnamed)'
         // Claim the path even though we refuse it, so a local copy of the same file is not ALSO
@@ -167,7 +171,8 @@ export function diffRetailManifest(
         drift.push({
           kind: 'refused',
           relativePath: named,
-          glyphsFile: collection.glyphsFile,
+          glyphsFile: typefaceName,
+          familyName: familyName || typefaceName,
           note: 'The server described this file in a way Font Buttler will not act on.',
         })
         continue
@@ -175,18 +180,19 @@ export function diffRetailManifest(
 
       const identity = pathIdentity(file.relativePath)
       const owner = claimed.get(identity)
-      if (owner && owner.glyphsFile !== collection.glyphsFile) {
+      if (owner && owner.glyphsFile !== typefaceName) {
         drift.push({
           kind: 'conflict',
           relativePath: file.relativePath,
-          glyphsFile: collection.glyphsFile,
+          glyphsFile: typefaceName,
+          familyName,
           remote: file,
-          note: `${collection.glyphsFile} and ${owner.glyphsFile} both want ${owner.relativePath}.`,
+          note: `${typefaceName} and ${owner.glyphsFile} both want ${owner.relativePath}.`,
         })
         continue
       }
       if (owner) continue
-      claimed.set(identity, { glyphsFile: collection.glyphsFile, relativePath: file.relativePath })
+      claimed.set(identity, { glyphsFile: typefaceName, relativePath: file.relativePath })
 
       const destName = retailInstallBasename(file.relativePath)
       if (destName) {
@@ -197,13 +203,14 @@ export function diffRetailManifest(
           drift.push({
             kind: 'conflict',
             relativePath: file.relativePath,
-            glyphsFile: collection.glyphsFile,
+            glyphsFile: typefaceName,
+            familyName,
             remote: file,
-            note: `${collection.glyphsFile} and ${destOwner.glyphsFile} both want ${destName} in Fonts.`,
+            note: `${typefaceName} and ${destOwner.glyphsFile} both want ${destName} in Fonts.`,
           })
           continue
         }
-        destClaimed.set(destId, { glyphsFile: collection.glyphsFile, relativePath: file.relativePath })
+        destClaimed.set(destId, { glyphsFile: typefaceName, relativePath: file.relativePath })
       }
       seen.add(file.relativePath)
 
@@ -213,7 +220,8 @@ export function diffRetailManifest(
         drift.push({
           kind: 'added',
           relativePath: file.relativePath,
-          glyphsFile: collection.glyphsFile,
+          glyphsFile: typefaceName,
+          familyName,
           remote: file,
         })
         continue
@@ -223,7 +231,8 @@ export function diffRetailManifest(
         drift.push({
           kind: 'changed',
           relativePath: file.relativePath,
-          glyphsFile: collection.glyphsFile,
+          glyphsFile: typefaceName,
+          familyName,
           remote: file,
           local: current,
         })
@@ -235,7 +244,8 @@ export function diffRetailManifest(
         drift.push({
           kind: 'missing-locally',
           relativePath: file.relativePath,
-          glyphsFile: collection.glyphsFile,
+          glyphsFile: typefaceName,
+          familyName,
           remote: file,
           local: current,
         })
@@ -245,7 +255,8 @@ export function diffRetailManifest(
         drift.push({
           kind: 'corrupt-locally',
           relativePath: file.relativePath,
-          glyphsFile: collection.glyphsFile,
+          glyphsFile: typefaceName,
+          familyName,
           remote: file,
           local: current,
         })
@@ -259,6 +270,7 @@ export function diffRetailManifest(
       kind: 'removed',
       relativePath: current.relativePath,
       glyphsFile: current.glyphsFile,
+      familyName: current.familyName?.trim() || current.glyphsFile,
       local: current,
     })
   }
