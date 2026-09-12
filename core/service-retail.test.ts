@@ -5,6 +5,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 import { readRetailToken } from './auth.ts'
 import { loadCatalog, runCatalogTask, saveCatalog } from './catalog.ts'
+import { fingerprintFile } from './fingerprint.ts'
 import { noopFontNative, setFontNative } from './native.ts'
 import { buildPaths, retailTokenPath } from './paths.ts'
 import type { AppPaths } from './paths.ts'
@@ -26,6 +27,7 @@ import {
 } from './retail-collisions.ts'
 import { loadSettings, saveSettings } from './settings.ts'
 import { RETAIL_DOWNLOAD_CONCURRENCY } from './retail-apply.ts'
+import { loadRetailManifest, saveRetailManifest } from './retail-sync.ts'
 import { withService, writeTestFont } from './test-util.ts'
 import {
   filterDisabledRetailDrift,
@@ -64,8 +66,8 @@ function emptyManifest(): RetailManifest {
   }
 }
 
-function manifestWith(size: number, etag: string): RetailManifest {
-  return manifestWithFiles([{ basename: 'RecklessVF.otf', size, etag }])
+function manifestWith(size: number, etag: string, basename = 'RecklessVF.otf'): RetailManifest {
+  return manifestWithFiles([{ basename, size, etag }])
 }
 
 function manifestWithFiles(
@@ -296,6 +298,24 @@ test('a failed check keeps the old checkedAt rather than claiming a fresh measur
   assert.equal(failed.checkedAt, good.checkedAt, 'a failed check must not look freshly measured')
   assert.match(failed.error ?? '', /worker is down/)
   assert.equal(retailDriftSummary(failed), 'Could not check the collection.')
+})
+
+test('skipped families are not reported as up to date', async () => {
+  const paths = setup()
+  configureRetailSync(paths, { enabled: true, token: 't' })
+  const status = await checkRetail(paths, {
+    fetchManifest: async () => ({
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      collections: [],
+      skipped: [
+        { glyphsFile: 'Reckless', reason: 'incomplete' },
+        { glyphsFile: 'Vinila', reason: 'incomplete' },
+      ],
+    }),
+  })
+  assert.equal(status.pending, 0)
+  assert.equal(status.skipped.length, 2)
+  assert.equal(retailDriftSummary(status), '2 families are not available on the worker.')
 })
 
 test('overlapping syncs share one run instead of fighting over the same files', async () => {
@@ -1563,3 +1583,116 @@ test('turning sync off from a retail listing uses the keep-old opt-out path', as
   })
 })
 
+test('a check does not revert an uninstall that queued during reconcile', async () => {
+  resetRetailCache()
+  await withService(async (service, paths) => {
+    const fixture = path.join(paths.dataRoot, 'fixture.otf')
+    writeTestFont(fixture, 'Reckless', 'RecklessVF', { format: 'otf' })
+    const bytes = fs.readFileSync(fixture)
+    const files = Array.from({ length: 8 }, (_, index) => ({
+      basename: `Face${index}.otf`,
+      size: bytes.length,
+      etag: `e-${index}`,
+    }))
+    configureRetailSync(paths, { enabled: true, token: 't' })
+    await syncRetail(paths, {
+      fetchManifest: async () => manifestWithFiles(files),
+      fetchFile: async () => new Uint8Array(bytes),
+    })
+    const listing = loadCatalog(paths).entries.find(
+      (entry) => entry.retailRelativePath === `Reckless/${files[0]!.basename}`,
+    )
+    assert.ok(listing)
+    assert.equal(listing.status, 'installed')
+
+    let uninstalling: Promise<unknown> | undefined
+    await checkRetail(paths, {
+      fetchManifest: async () => {
+        uninstalling = new Promise((resolve, reject) => {
+          setImmediate(() => {
+            service.uninstall(listing.id).then(resolve, reject)
+          })
+        })
+        return manifestWithFiles(files)
+      },
+    })
+    assert.ok(uninstalling)
+    await uninstalling
+
+    const after = loadCatalog(paths).entries.find((entry) => entry.id === listing.id)
+    assert.ok(after)
+    assert.equal(after.status, 'uninstalled')
+    assert.equal(fs.existsSync(path.join(paths.userFontsDir, files[0]!.basename)), false)
+  })
+})
+
+test('a check reparses dest bytes that landed after an interrupted catalog write', async () => {
+  const paths = setup()
+  const fixture = path.join(paths.dataRoot, 'fixture.otf')
+  writeTestFont(fixture, 'Reckless', 'RecklessVF', { format: 'otf', version: 'Version 1.000' })
+  const first = fs.readFileSync(fixture)
+  configureRetailSync(paths, { enabled: true, token: 't' })
+  await syncRetail(paths, {
+    fetchManifest: async () => manifestWith(first.length, 'e1'),
+    fetchFile: async () => new Uint8Array(first),
+  })
+  const dest = path.join(paths.userFontsDir, 'RecklessVF.otf')
+  const before = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath === 'Reckless/RecklessVF.otf')
+  assert.ok(before)
+  assert.equal(before.status, 'installed')
+  assert.equal(before.installedPath, dest)
+  assert.equal(before.faces[0]?.familyName, 'Reckless')
+  const staleFingerprint = before.installedFingerprint
+  assert.ok(staleFingerprint)
+
+  // Persist already wrote dest + manifest; catalog faces still describe the previous revision.
+  writeTestFont(dest, 'NewReckless', 'NewRecklessVF', { format: 'otf', version: 'Version 2.000' })
+  const next = fs.readFileSync(dest)
+  assert.notEqual(fingerprintFile(dest), staleFingerprint)
+  const local = loadRetailManifest(paths)
+  const row = local.files['Reckless/RecklessVF.otf']
+  assert.ok(row)
+  row.size = next.length
+  row.etag = 'e2'
+  row.revisionId = 'rev-2'
+  saveRetailManifest(paths, local)
+
+  await checkRetail(paths, { fetchManifest: async () => manifestWith(next.length, 'e2') })
+  const after = loadCatalog(paths).entries.find((entry) => entry.id === before.id)
+  assert.ok(after)
+  assert.equal(after.faces[0]?.familyName, 'NewReckless')
+  assert.equal(after.installedFingerprint, fingerprintFile(dest))
+})
+
+test('a parked retail cache records its fingerprint so later checks skip reparse', async () => {
+  const paths = setup()
+  const occupying = path.join(paths.userFontsDir, 'RecklessVF.otf')
+  writeTestFont(occupying, 'LocalReckless', 'LocalRecklessVF', { format: 'otf' })
+  const fixture = path.join(paths.dataRoot, 'fixture.otf')
+  writeTestFont(fixture, 'Reckless', 'RecklessVF', { format: 'otf', version: 'Version 2.000' })
+  const bytes = fs.readFileSync(fixture)
+  configureRetailSync(paths, { enabled: true, token: 't' })
+  await syncRetail(paths, {
+    fetchManifest: async () => manifestWith(bytes.length, 'e1'),
+    fetchFile: async () => new Uint8Array(bytes),
+  })
+
+  const listing = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath === 'Reckless/RecklessVF.otf')
+  assert.ok(listing)
+  assert.equal(listing.status, 'uninstalled')
+  assert.ok(listing.sourcePath)
+  assert.equal(listing.sourceFingerprint, fingerprintFile(listing.sourcePath))
+  assert.equal(listing.faces[0]?.familyName, 'Reckless')
+
+  const catalog = loadCatalog(paths)
+  const stale = catalog.entries.find((entry) => entry.id === listing.id)
+  assert.ok(stale?.faces[0])
+  stale.faces[0].familyName = 'StaleName'
+  saveCatalog(paths, catalog)
+
+  await checkRetail(paths, { fetchManifest: async () => manifestWith(bytes.length, 'e1') })
+  const after = loadCatalog(paths).entries.find((entry) => entry.id === listing.id)
+  assert.ok(after)
+  assert.equal(after.sourceFingerprint, fingerprintFile(listing.sourcePath))
+  assert.equal(after.faces[0]?.familyName, 'StaleName', 'matching cache bytes must not reparse')
+})

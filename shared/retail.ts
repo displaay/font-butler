@@ -35,7 +35,7 @@ export type RetailSkipReason =
   | 'no-active-revision'
   | 'no-transaction'
   | 'transaction-not-succeeded'
-  /** transaction.json and the bucket listing disagree, so the generation is still landing. */
+  /** Declared desktop fonts that are neither loose R2 objects nor members of fonts.zip. */
   | 'incomplete'
   /** No desktop fonts in this revision at all. */
   | 'no-files'
@@ -551,6 +551,7 @@ export function retailDriftSummary(status: {
   pending: number
   drift: RetailDriftItem[]
   error?: string | null
+  skipped?: RetailSkip[]
 }): string {
   // An error means the numbers below were never measured, or are left over from an earlier check.
   // Saying "Up to date." here would be the one wording that actively misleads.
@@ -559,6 +560,11 @@ export function retailDriftSummary(status: {
   }
   if (status.pending > 0) {
     return `${status.pending} ${status.pending === 1 ? 'file' : 'files'} to sync.`
+  }
+  // Skipped families never become pending, so an empty drift list is not "up to date".
+  const skipped = status.skipped?.length ?? 0
+  if (skipped > 0) {
+    return `${skipped} ${skipped === 1 ? 'family is' : 'families are'} not available on the worker.`
   }
   // A blocked file must never read as "up to date" — that is the one wording that would hide it.
   const blocked = status.drift.filter(
