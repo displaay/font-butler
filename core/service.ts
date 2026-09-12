@@ -2305,8 +2305,12 @@ export class FontButlerService {
 
   async resolveDropRetailCollisions(
     choices: Record<string, RetailCollisionAction>,
+    options: {
+      planId?: string
+      incoming?: ReadonlyArray<string | { familyName?: string; path?: string }>
+    } = {},
   ): Promise<RetailSyncStatus> {
-    return resolveDropRetailCollisionsFn(this.paths, choices)
+    return resolveDropRetailCollisionsFn(this.paths, choices, options)
   }
 
   optOutRetailFamilies(familyNames: readonly string[]): RetailSyncStatus {

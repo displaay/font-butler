@@ -18,6 +18,8 @@ import {
 } from './service-retail.ts'
 import {
   catalogEntryFamilyNames,
+  familyHasValidDropReplacement,
+  incomingPathStillMatchesFamily,
   isRetailOwnedInstall,
   findOutsideCollisionsForRetailFamilies,
   findRetailCollisionsForIncomingFamilies,
@@ -52,6 +54,14 @@ function setup(): AppPaths {
   setFontNative(noopFontNative())
   resetRetailCache()
   return paths
+}
+
+function emptyManifest(): RetailManifest {
+  return {
+    generatedAt: '2026-01-01T00:00:00.000Z',
+    collections: [],
+    skipped: [],
+  }
 }
 
 function manifestWith(size: number, etag: string): RetailManifest {
@@ -1163,6 +1173,30 @@ test('outside Reckless collides with pending retail Reckless, not a LocalReckles
   }
 })
 
+test('incoming drop replacements must still exist and still belong to that family', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-drop-valid-'))
+  const file = path.join(dir, 'Reckless-Regular.otf')
+  writeTestFont(file, 'Reckless', 'Reckless-Regular', { format: 'otf' })
+  try {
+    assert.equal(incomingPathStillMatchesFamily(file, 'Reckless'), true)
+    assert.equal(incomingPathStillMatchesFamily(file, 'Azeret'), false)
+    assert.equal(incomingPathStillMatchesFamily(path.join(dir, 'gone.otf'), 'Reckless'), false)
+    assert.equal(
+      familyHasValidDropReplacement([{ familyName: 'Reckless', path: file }], 'Reckless'),
+      true,
+    )
+    writeTestFont(file, 'Azeret', 'Azeret-Regular', { format: 'otf' })
+    assert.equal(incomingPathStillMatchesFamily(file, 'Reckless'), false)
+    assert.equal(
+      familyHasValidDropReplacement([{ familyName: 'Reckless', path: file }], 'Reckless'),
+      false,
+    )
+    assert.equal(familyHasValidDropReplacement(['Reckless'], 'Reckless'), false)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('retail sync pauses when a same-family font is already installed from outside', async () => {
   resetRetailCache()
   await withService(async (service, paths) => {
@@ -1200,6 +1234,36 @@ test('retail sync pauses when a same-family font is already installed from outsi
       remaining.some((entry) => !entry.retailRelativePath && (entry.status === 'installed' || entry.status === 'outdated')),
       false,
     )
+  })
+})
+
+test('sync replace does not uninstall an outside font when the family left the current manifest', async () => {
+  resetRetailCache()
+  await withService(async (service, paths) => {
+    const dest = path.join(paths.userFontsDir, 'Reckless-Regular.otf')
+    writeTestFont(dest, 'Reckless', 'Reckless-Regular', { format: 'otf' })
+    await service.importPaths([dest])
+    await configureRetailSync(paths, { enabled: true, token: 't' })
+
+    const paused = await syncRetail(paths, {
+      fetchManifest: async () => manifestWith(4, 'e1'),
+      fetchFile: async () => new Uint8Array(4).fill(1),
+    })
+    assert.equal(paused.collisions.length, 1)
+    assert.equal(paused.collisions[0]?.familyName, 'Reckless')
+
+    const afterGone = await syncRetail(paths, {
+      fetchManifest: async () => emptyManifest(),
+      fetchFile: async () => new Uint8Array(4).fill(1),
+      choices: { Reckless: 'replace' },
+    })
+    assert.equal(afterGone.error, null)
+    assert.equal(fs.existsSync(dest), true)
+    const remaining = loadCatalog(paths).entries.filter((entry) => catalogEntryFamilyNames(entry).includes('Reckless'))
+    const installed = remaining.filter((entry) => entry.status === 'installed' || entry.status === 'outdated')
+    assert.equal(installed.length, 1)
+    assert.equal(installed[0]?.retailRelativePath ?? '', '')
+    assert.equal(afterGone.collisions.some((item) => item.familyName === 'Reckless'), false)
   })
 })
 
@@ -1310,7 +1374,7 @@ test('dropping a same-family font over an installed retail copy uninstalls retai
     )
     assert.equal(incoming.length, 1)
 
-    await resolveDropRetailCollisions(paths, { Reckless: 'replace' })
+    await resolveDropRetailCollisions(paths, { Reckless: 'replace' }, { planId: planned.id })
     assert.deepEqual(loadSettings(paths).retailSync?.disabledGlyphsFiles, ['Reckless'])
     assert.equal(loadSettings(paths).retailSync?.familyOptOuts, true)
 
@@ -1323,6 +1387,86 @@ test('dropping a same-family font over an installed retail copy uninstalls retai
     assert.equal(applied.entries.length, 1)
     assert.equal(applied.entries[0]?.status, 'installed')
     assert.equal(applied.entries[0]?.retailRelativePath ?? '', '')
+  })
+})
+
+test('drop replace does not uninstall retail when the dropped file is gone', async () => {
+  resetRetailCache()
+  await withService(async (service, paths) => {
+    const fixture = path.join(paths.dataRoot, 'fixture.otf')
+    writeTestFont(fixture, 'Reckless', 'RecklessVF', { format: 'otf' })
+    const bytes = fs.readFileSync(fixture)
+    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await syncRetail(paths, {
+      fetchManifest: async () => manifestWith(bytes.length, 'e1'),
+      fetchFile: async () => new Uint8Array(bytes),
+    })
+    const retail = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath)
+    assert.equal(retail?.status, 'installed')
+
+    const dropped = path.join(paths.dataRoot, 'drop', 'Reckless-Regular.otf')
+    writeTestFont(dropped, 'Reckless', 'Reckless-Regular', { format: 'otf', version: 'Version 2.000' })
+    const planned = service.planImport([dropped])
+    assert.equal(planned.retailCollisions?.length, 1)
+    fs.rmSync(dropped)
+
+    await resolveDropRetailCollisions(paths, { Reckless: 'replace' }, { planId: planned.id })
+    const after = loadCatalog(paths).entries.find((entry) => entry.id === retail?.id)
+    assert.equal(after?.status, 'installed')
+    assert.ok(after?.retailRelativePath)
+    assert.equal(loadSettings(paths).retailSync?.disabledGlyphsFiles.includes('Reckless'), false)
+  })
+})
+
+test('drop replace does not uninstall retail when the dropped file is no longer that family', async () => {
+  resetRetailCache()
+  await withService(async (service, paths) => {
+    const fixture = path.join(paths.dataRoot, 'fixture.otf')
+    writeTestFont(fixture, 'Reckless', 'RecklessVF', { format: 'otf' })
+    const bytes = fs.readFileSync(fixture)
+    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await syncRetail(paths, {
+      fetchManifest: async () => manifestWith(bytes.length, 'e1'),
+      fetchFile: async () => new Uint8Array(bytes),
+    })
+    const retail = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath)
+    assert.equal(retail?.status, 'installed')
+
+    const dropped = path.join(paths.dataRoot, 'drop', 'Reckless-Regular.otf')
+    writeTestFont(dropped, 'Reckless', 'Reckless-Regular', { format: 'otf', version: 'Version 2.000' })
+    const planned = service.planImport([dropped])
+    writeTestFont(dropped, 'Azeret', 'Azeret-Regular', { format: 'otf', version: 'Version 3.000' })
+
+    await resolveDropRetailCollisions(paths, { Reckless: 'replace' }, {
+      planId: planned.id,
+      incoming: planned.items.map((item) => ({ familyName: item.familyName, path: item.path })),
+    })
+    const after = loadCatalog(paths).entries.find((entry) => entry.id === retail?.id)
+    assert.equal(after?.status, 'installed')
+    assert.ok(after?.retailRelativePath)
+    assert.equal(loadSettings(paths).retailSync?.disabledGlyphsFiles.includes('Reckless'), false)
+  })
+})
+
+test('drop replace without planned incoming files leaves retail installed', async () => {
+  resetRetailCache()
+  await withService(async (service, paths) => {
+    const fixture = path.join(paths.dataRoot, 'fixture.otf')
+    writeTestFont(fixture, 'Reckless', 'RecklessVF', { format: 'otf' })
+    const bytes = fs.readFileSync(fixture)
+    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await syncRetail(paths, {
+      fetchManifest: async () => manifestWith(bytes.length, 'e1'),
+      fetchFile: async () => new Uint8Array(bytes),
+    })
+    const dropped = path.join(paths.dataRoot, 'drop', 'Reckless-Regular.otf')
+    writeTestFont(dropped, 'Reckless', 'Reckless-Regular', { format: 'otf' })
+    service.planImport([dropped])
+
+    await resolveDropRetailCollisions(paths, { Reckless: 'replace' })
+    const retail = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath)
+    assert.equal(retail?.status, 'installed')
+    assert.equal(loadSettings(paths).retailSync?.disabledGlyphsFiles.includes('Reckless'), false)
   })
 })
 
@@ -1344,7 +1488,7 @@ test('drop replace into a new project does not watch the dropped folder', async 
     writeTestFont(dropped, 'Reckless', 'Reckless-Regular', { format: 'otf', version: 'Version 2.000' })
     const planned = service.planImport([folder])
     assert.equal(planned.retailCollisions?.length, 1)
-    await resolveDropRetailCollisions(paths, { Reckless: 'replace' })
+    await resolveDropRetailCollisions(paths, { Reckless: 'replace' }, { planId: planned.id })
 
     const plannedAgain = service.planImport([folder])
     assert.equal(plannedAgain.retailCollisions?.length ?? 0, 0)

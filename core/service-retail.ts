@@ -9,6 +9,7 @@ import { importOneUnlocked } from './service-import.ts'
 import { getFontNative } from './native.ts'
 import { applyParsedFont, parseFontFile } from './parse.ts'
 import { retailTokenPath } from './paths.ts'
+import { loadPlan } from './planner.ts'
 import { loadProjects } from './projects.ts'
 import type { AppPaths } from './paths.ts'
 import { yieldEventLoop } from './event-loop.ts'
@@ -28,11 +29,13 @@ import { DEFAULT_RETAIL_WORKER_BASE_URL, defaultRetailSync, loadSettings, saveSe
 import { applyEntryFacts } from './state.ts'
 import type { AppSettings, CatalogEntry, FontFaceInfo, RetailSyncSettings } from './types.ts'
 import {
+  familyHasValidDropReplacement,
   findOutsideCollisionsForRetailFamilies,
   findRetailCollisionsForIncomingFamilies,
   retailFamiliesPendingSync,
   retailOwnedInstallContext,
   uninstallCollisionEntries,
+  type DropReplacementIncoming,
 } from './retail-collisions.ts'
 import {
   applyRetailFontSelection,
@@ -792,7 +795,12 @@ export function listDropRetailCollisions(
 export async function resolveDropRetailCollisions(
   paths: AppPaths,
   choices: Record<string, RetailCollisionAction>,
+  options: {
+    planId?: string
+    incoming?: ReadonlyArray<DropReplacementIncoming>
+  } = {},
 ): Promise<RetailSyncStatus> {
+  const incoming = collectDropReplacementIncoming(paths, options)
   const replaceIds: string[] = []
   const optOut: string[] = []
   const catalog = loadCatalog(paths).entries
@@ -804,15 +812,38 @@ export async function resolveDropRetailCollisions(
   )
   for (const collision of collisions) {
     const action = choices[collision.familyName]
-    if (action === 'replace') {
-      optOut.push(collision.familyName)
-      replaceIds.push(...collision.entryIds)
-    }
+    if (action !== 'replace') continue
+    if (!familyHasValidDropReplacement(incoming, collision.familyName, owned)) continue
+    optOut.push(collision.familyName)
+    replaceIds.push(...collision.entryIds)
   }
   if (optOut.length) optOutRetailFamilies(paths, optOut)
   if (replaceIds.length) await uninstallCollisionEntries(paths, replaceIds)
   cache.collisions = []
   return emitRetail(paths)
+}
+
+function collectDropReplacementIncoming(
+  paths: AppPaths,
+  options: {
+    planId?: string
+    incoming?: ReadonlyArray<DropReplacementIncoming>
+  },
+): Array<{ familyName?: string; path?: string }> {
+  const items: Array<{ familyName?: string; path?: string }> = []
+  if (options.planId) {
+    const plan = loadPlan(paths, options.planId)
+    if (plan) {
+      for (const item of plan.items) {
+        if (item.path) items.push({ familyName: item.familyName, path: item.path })
+      }
+    }
+  }
+  for (const raw of options.incoming ?? []) {
+    if (typeof raw === 'string' || !raw.path?.trim()) continue
+    items.push({ familyName: raw.familyName, path: raw.path })
+  }
+  return items
 }
 
 export async function syncRetail(
@@ -856,22 +887,6 @@ async function runSync(
       .map(([familyName]) => familyName)
     if (keepFamilies.length) optOutRetailFamilies(paths, keepFamilies)
 
-    const replaceIds: string[] = []
-    const catalogForReplace = loadCatalog(paths).entries
-    const ownedForReplace = retailOwnedInstallContext(paths, catalogForReplace)
-    const replaceFamilies = Object.entries(choices)
-      .filter(([, action]) => action === 'replace')
-      .map(([familyName]) => familyName)
-    if (replaceFamilies.length) {
-      const collisions = findOutsideCollisionsForRetailFamilies(
-        catalogForReplace,
-        replaceFamilies.map((familyName) => ({ familyName, typefaceName: familyName })),
-        ownedForReplace,
-      )
-      for (const collision of collisions) replaceIds.push(...collision.entryIds)
-      if (replaceIds.length) await uninstallCollisionEntries(paths, replaceIds)
-    }
-
     const drift = measureDrift(paths, manifest)
     const config = retailSettings(loadSettings(paths))
     cache.fonts = cacheFontsFromSync(
@@ -891,6 +906,25 @@ async function runSync(
       optOutMode: optOutModeOf(config),
     })
     const pendingFamilies = retailFamiliesPendingSync(fonts, syncDrift)
+    const replaceNames = new Set(
+      Object.entries(choices)
+        .filter(([, action]) => action === 'replace')
+        .map(([familyName]) => familyName),
+    )
+    if (replaceNames.size) {
+      const catalogForReplace = loadCatalog(paths).entries
+      const currentCollisions = findOutsideCollisionsForRetailFamilies(
+        catalogForReplace,
+        pendingFamilies,
+        retailOwnedInstallContext(paths, catalogForReplace),
+      )
+      const replaceIds: string[] = []
+      for (const collision of currentCollisions) {
+        if (replaceNames.has(collision.familyName)) replaceIds.push(...collision.entryIds)
+      }
+      if (replaceIds.length) await uninstallCollisionEntries(paths, replaceIds)
+    }
+
     const remaining = findOutsideCollisionsForRetailFamilies(
       loadCatalog(paths).entries,
       pendingFamilies,

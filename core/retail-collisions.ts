@@ -12,6 +12,7 @@ import {
 } from './catalog.ts'
 import { isUnderAnyRoot } from './containment.ts'
 import { copyAt } from './destinations.ts'
+import { parseFontFile } from './parse.ts'
 import { emitEvent } from './events.ts'
 import { retailCacheDir } from './paths.ts'
 import type { AppPaths } from './paths.ts'
@@ -178,6 +179,56 @@ export function findRetailCollisionsForIncomingFamilies(
     collisions.push(collisionFromEntries(familyName, typefaceName, retail))
   }
   return collisions
+}
+
+export type DropReplacementIncoming = string | { familyName?: string; path?: string }
+
+function incomingReplacementPath(raw: DropReplacementIncoming): { familyName: string; path: string } | null {
+  if (typeof raw === 'string') return null
+  const filePath = raw.path?.trim()
+  if (!filePath) return null
+  return { familyName: (raw.familyName ?? '').trim(), path: filePath }
+}
+
+/** True when the dropped file is still on disk and still parses as that family. */
+export function incomingPathStillMatchesFamily(
+  filePath: string,
+  familyName: string,
+  owned?: RetailOwnedInstallContext,
+): boolean {
+  const wanted = familyName.trim()
+  if (!wanted || !filePath.trim()) return false
+  const resolved = path.resolve(filePath)
+  if (owned) {
+    if (owned.ownedPaths.has(resolved) || isUnderAnyRoot(resolved, [owned.cacheRoot])) return false
+  }
+  if (!fileIsPresent(resolved)) return false
+  try {
+    const parsed = parseFontFile(resolved)
+    return parsed.faces.some((face) => face.familyName?.trim() === wanted)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Replace may uninstall retail only when at least one planned incoming file still exists
+ * and still belongs to that family.
+ */
+export function familyHasValidDropReplacement(
+  incoming: ReadonlyArray<DropReplacementIncoming>,
+  familyName: string,
+  owned?: RetailOwnedInstallContext,
+): boolean {
+  const wanted = familyName.trim()
+  if (!wanted) return false
+  for (const raw of incoming) {
+    const item = incomingReplacementPath(raw)
+    if (!item) continue
+    if (item.familyName && item.familyName !== wanted) continue
+    if (incomingPathStillMatchesFamily(item.path, wanted, owned)) return true
+  }
+  return false
 }
 
 export function retailFamiliesPendingSync(

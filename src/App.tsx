@@ -1399,7 +1399,10 @@ function AppShell() {
             else replaceChoices[familyName] = 'replace'
           }
           if (Object.keys(replaceChoices).length) {
-            const resolved = await api.retail.resolveDropCollisions(replaceChoices)
+            const resolved = await api.retail.resolveDropCollisions(replaceChoices, {
+              planId: plan.id,
+              incoming: plan.items.map((item) => ({ familyName: item.familyName, path: item.path })),
+            })
             setRetail(resolved.status)
             setEntries((await api.catalog()).entries)
           }

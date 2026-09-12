@@ -729,9 +729,18 @@ app.post('/api/retail/sync', async (c) => {
 })
 
 app.post('/api/retail/collisions/drop', async (c) => {
-  const body = await c.req.json<{ choices?: Record<string, 'replace' | 'keep'> }>()
+  const body = await c.req.json<{
+    choices?: Record<string, 'replace' | 'keep'>
+    planId?: string
+    incoming?: Array<{ familyName?: string; path?: string }>
+  }>()
   try {
-    return c.json({ status: await service.resolveDropRetailCollisions(body.choices ?? {}) })
+    return c.json({
+      status: await service.resolveDropRetailCollisions(body.choices ?? {}, {
+        planId: body.planId,
+        incoming: body.incoming,
+      }),
+    })
   } catch (error) {
     return c.json(fail(error, 'Could not resolve that retail collision'), 400)
   }

@@ -355,8 +355,16 @@ export const api = {
       json<{ status: RetailSyncStatus }>(post('/api/retail/check', { refresh })),
     sync: (choices?: Record<string, RetailCollisionAction>) =>
       json<{ status: RetailSyncStatus }>(post('/api/retail/sync', { choices })),
-    resolveDropCollisions: (choices: Record<string, RetailCollisionAction>) =>
-      json<{ status: RetailSyncStatus }>(post('/api/retail/collisions/drop', { choices })),
+    resolveDropCollisions: (
+      choices: Record<string, RetailCollisionAction>,
+      extra?: {
+        planId?: string
+        incoming?: Array<{ familyName?: string; path?: string }>
+      },
+    ) =>
+      json<{ status: RetailSyncStatus }>(
+        post('/api/retail/collisions/drop', { choices, ...extra }),
+      ),
     optOut: (familyNames: string[]) =>
       json<{ status: RetailSyncStatus }>(post('/api/retail/opt-out', { familyNames })),
   },
