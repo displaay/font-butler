@@ -299,7 +299,7 @@ function retailFamilyOfEntry(entry: CatalogEntry): string {
 
 function retailTypefaceOfEntry(entry: CatalogEntry): string {
   const relative = entry.retailRelativePath ?? ''
-  return (entry.retailTypefaceName ?? firstRelativeSegment(relative) || retailFamilyOfEntry(entry)).trim()
+  return (entry.retailTypefaceName ?? (firstRelativeSegment(relative) || retailFamilyOfEntry(entry))).trim()
 }
 
 function resetRetailListingSource(entry: CatalogEntry, removedPaths: string[]): void {
