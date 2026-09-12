@@ -23,13 +23,14 @@ import {
   saveRetailManifest,
   statRetailFile,
 } from './retail-sync.ts'
-import { newId, now } from './service-helpers.ts'
+import { newId, now, removeInstalledCopy, touchEntry } from './service-helpers.ts'
 import { DEFAULT_RETAIL_WORKER_BASE_URL, defaultRetailSync, loadSettings, saveSettings } from './settings.ts'
 import { applyEntryFacts } from './state.ts'
 import type { AppSettings, CatalogEntry, FontFaceInfo, RetailSyncSettings } from './types.ts'
 import {
   applyRetailFontSelection,
   filterDisabledRetailDrift,
+  isRetailFamilyOptedOut,
   normalizeAutoCheckMinutes,
   normalizeDisabledGlyphsFiles,
   normalizeFamilyFormats,
@@ -41,6 +42,7 @@ import {
   selectedRetailFormat,
   isSelectedRetailFormat,
   type RetailFontFormat,
+  type RetailOptOutMode,
 } from '../shared/retail.ts'
 import type {
   RetailDriftItem,
@@ -106,6 +108,7 @@ function fontsFromCatalog(
   paths: AppPaths,
   disabledGlyphsFiles: readonly string[],
   familyFormats: Readonly<Record<string, RetailFontFormat>>,
+  optOutMode: RetailOptOutMode,
 ): RetailSyncFont[] {
   const families = new Map<
     string,
@@ -154,6 +157,7 @@ function fontsFromCatalog(
     }),
     disabledGlyphsFiles,
     familyFormats,
+    optOutMode,
   )
 }
 
@@ -161,9 +165,16 @@ function listRetailFonts(
   paths: AppPaths,
   disabledGlyphsFiles: readonly string[],
   familyFormats: Readonly<Record<string, RetailFontFormat>>,
+  optOutMode: RetailOptOutMode,
 ): RetailSyncFont[] {
-  if (cache.fonts) return applyRetailFontSelection(cache.fonts, disabledGlyphsFiles, familyFormats)
-  return fontsFromCatalog(paths, disabledGlyphsFiles, familyFormats)
+  if (cache.fonts) {
+    return applyRetailFontSelection(cache.fonts, disabledGlyphsFiles, familyFormats, optOutMode)
+  }
+  return fontsFromCatalog(paths, disabledGlyphsFiles, familyFormats, optOutMode)
+}
+
+function optOutModeOf(config: RetailSyncSettings): RetailOptOutMode {
+  return config.familyOptOuts ? 'family' : 'typeface'
 }
 
 function visibleDrift(config: RetailSyncSettings, fonts: RetailSyncFont[]): RetailDriftItem[] {
@@ -171,6 +182,7 @@ function visibleDrift(config: RetailSyncSettings, fonts: RetailSyncFont[]): Reta
     disabledFamilyNames: config.disabledGlyphsFiles,
     familyFormats: config.familyFormats,
     selectedFormats: selectedFormatsFromFonts(fonts),
+    optOutMode: optOutModeOf(config),
   })
 }
 
@@ -182,13 +194,19 @@ function retailSettings(settings: AppSettings): RetailSyncSettings {
     ...current,
     disabledGlyphsFiles: current.disabledGlyphsFiles ?? [],
     familyFormats: current.familyFormats ?? {},
+    familyOptOuts: current.familyOptOuts === true,
   }
 }
 
 export function retailStatus(paths: AppPaths, settings = loadSettings(paths)): RetailSyncStatus {
   const config = retailSettings(settings)
   const local = loadRetailManifest(paths)
-  const fonts = listRetailFonts(paths, config.disabledGlyphsFiles, config.familyFormats)
+  const fonts = listRetailFonts(
+    paths,
+    config.disabledGlyphsFiles,
+    config.familyFormats,
+    optOutModeOf(config),
+  )
   const drift = visibleDrift(config, fonts)
   return {
     enabled: config.enabled,
@@ -215,7 +233,7 @@ function emitRetail(paths: AppPaths): RetailSyncStatus {
   return status
 }
 
-export function configureRetailSync(
+export async function configureRetailSync(
   paths: AppPaths,
   input: {
     enabled?: boolean
@@ -226,7 +244,7 @@ export function configureRetailSync(
     disabledGlyphsFiles?: string[]
     familyFormats?: Record<string, RetailFontFormat>
   },
-): RetailSyncStatus {
+): Promise<RetailSyncStatus> {
   const settings = loadSettings(paths)
   const current = retailSettings(settings)
 
@@ -250,6 +268,7 @@ export function configureRetailSync(
       input.familyFormats === undefined
         ? (current.familyFormats ?? {})
         : normalizeFamilyFormats(input.familyFormats),
+    familyOptOuts: input.disabledGlyphsFiles === undefined ? current.familyOptOuts : true,
   }
   // Cached drift describes one server. If the address or credentials change, it is no longer a
   // statement about anything — serving it would report the old server's files as pending.
@@ -268,7 +287,7 @@ export function configureRetailSync(
   emitEvent({ type: 'settings', settings })
   const formatsChanged = JSON.stringify(next.familyFormats) !== JSON.stringify(current.familyFormats)
   if (formatsChanged) {
-    void uninstallUnselectedRetailFormats(paths, next)
+    await uninstallUnselectedRetailFormats(paths, next)
   }
   return emitRetail(paths)
 }
@@ -278,46 +297,70 @@ function retailFamilyOfEntry(entry: CatalogEntry): string {
   return (entry.retailFamilyName ?? entry.faces[0]?.familyName ?? firstRelativeSegment(relative)).trim()
 }
 
-function uninstallUnselectedRetailFormats(paths: AppPaths, config: RetailSyncSettings): void {
-  const fonts = listRetailFonts(paths, config.disabledGlyphsFiles, config.familyFormats)
-  const disabled = new Set(config.disabledGlyphsFiles)
-  const selected = selectedFormatsFromFonts(fonts)
-  const catalog = loadCatalog(paths)
-  let dirty = false
-  for (const entry of catalog.entries) {
-    const relative = entry.retailRelativePath
-    if (!relative) continue
-    const familyName = retailFamilyOfEntry(entry)
-    if (!familyName || disabled.has(familyName)) continue
-    const want = selected[familyName]
-    const format = retailFileFormat(relative)
-    if (!want || !format || format === want) continue
-    const installed =
-      entry.status === 'installed' ||
-      Boolean(entry.installedPath && fs.existsSync(entry.installedPath))
-    if (installed || entry.disabledPath) {
-      if (entry.installedPath) {
-        void getFontNative().unregisterFont(entry.installedPath)
-        if (fs.existsSync(entry.installedPath)) {
-          fs.rmSync(entry.installedPath, { force: true })
+function retailTypefaceOfEntry(entry: CatalogEntry): string {
+  const relative = entry.retailRelativePath ?? ''
+  return (entry.retailTypefaceName ?? firstRelativeSegment(relative) || retailFamilyOfEntry(entry)).trim()
+}
+
+function resetRetailListingSource(entry: CatalogEntry, removedPaths: string[]): void {
+  const removed = new Set(removedPaths.filter(Boolean).map((item) => path.resolve(item)))
+  const source = entry.sourcePath
+  if (source && (removed.has(path.resolve(source)) || !fs.existsSync(source))) {
+    entry.sourcePath = ''
+    entry.sourceMtimeMs = 0
+    entry.sourceSize = 0
+  }
+  entry.sourcePresent = false
+  entry.sourceAvailability = 'none'
+  entry.status = 'uninstalled'
+  touchEntry(entry)
+}
+
+async function uninstallUnselectedRetailFormats(paths: AppPaths, config: RetailSyncSettings): Promise<void> {
+  await runCatalogTask(async () => {
+    const fonts = listRetailFonts(
+      paths,
+      config.disabledGlyphsFiles,
+      config.familyFormats,
+      optOutModeOf(config),
+    )
+    const mode = optOutModeOf(config)
+    const selected = selectedFormatsFromFonts(fonts)
+    const catalog = loadCatalog(paths)
+    let dirty = false
+    for (const entry of catalog.entries) {
+      const relative = entry.retailRelativePath
+      if (!relative) continue
+      const familyName = retailFamilyOfEntry(entry)
+      const typefaceName = retailTypefaceOfEntry(entry)
+      if (!familyName || isRetailFamilyOptedOut(familyName, typefaceName, config.disabledGlyphsFiles, mode)) {
+        continue
+      }
+      const want = selected[familyName]
+      const format = retailFileFormat(relative)
+      if (!want || !format || format === want) continue
+      const installed =
+        entry.status === 'installed' ||
+        Boolean(entry.installedPath && fs.existsSync(entry.installedPath))
+      if (installed || entry.disabledPath) {
+        const livePath = entry.installedPath
+        const parkedPath = entry.disabledPath
+        await removeInstalledCopy(entry)
+        if (parkedPath && fs.existsSync(parkedPath)) {
+          fs.rmSync(parkedPath, { force: true })
         }
+        entry.disabledPath = undefined
+        entry.installations = []
+        resetRetailListingSource(entry, [livePath ?? '', parkedPath ?? ''])
+        upsertEntry(catalog, entry)
+        dirty = true
       }
-      entry.installedPath = undefined
-      if (entry.disabledPath && fs.existsSync(entry.disabledPath)) {
-        fs.rmSync(entry.disabledPath, { force: true })
-      }
-      entry.disabledPath = undefined
-      entry.installations = []
-      entry.status = 'uninstalled'
-      applyEntryFacts(entry)
-      upsertEntry(catalog, entry)
-      dirty = true
     }
-  }
-  if (dirty) {
-    saveCatalog(paths, catalog)
-    emitEvent({ type: 'catalog', entries: catalog.entries })
-  }
+    if (dirty) {
+      saveCatalog(paths, catalog)
+      emitEvent({ type: 'catalog', entries: catalog.entries })
+    }
+  })
 }
 
 function requireReady(paths: AppPaths): {
@@ -372,11 +415,18 @@ function destForRelativePath(paths: AppPaths, relativePath: string): { dest: str
   const catalog = loadCatalog(paths)
   const existing = findRetailEntry(catalog, relativePath)
   const config = retailSettings(loadSettings(paths))
-  const fonts = listRetailFonts(paths, config.disabledGlyphsFiles, config.familyFormats)
+  const optOutMode = optOutModeOf(config)
+  const fonts = listRetailFonts(
+    paths,
+    config.disabledGlyphsFiles,
+    config.familyFormats,
+    optOutMode,
+  )
   const familyName = existing ? retailFamilyOfEntry(existing) : firstRelativeSegment(relativePath)
+  const typefaceName = existing ? retailTypefaceOfEntry(existing) : firstRelativeSegment(relativePath)
   if (
     familyName &&
-    (config.disabledGlyphsFiles.includes(familyName) ||
+    (isRetailFamilyOptedOut(familyName, typefaceName, config.disabledGlyphsFiles, optOutMode) ||
       !isSelectedRetailFormat(relativePath, familyName, {
         selectedFormats: selectedFormatsFromFonts(fonts),
       }))
@@ -700,14 +750,20 @@ async function runSync(
     cache.fonts = cacheFontsFromSync(
       retailFontsFromCollections(manifest.collections, [], manifest.skipped, config.familyFormats),
     )
-    const fonts = listRetailFonts(paths, config.disabledGlyphsFiles, config.familyFormats)
+    const fonts = listRetailFonts(
+      paths,
+      config.disabledGlyphsFiles,
+      config.familyFormats,
+      optOutModeOf(config),
+    )
     const download = options.fetchFile ?? fetchRetailFile
     const syncDrift = filterDisabledRetailDrift(drift, config.disabledGlyphsFiles, {
       disabledFamilyNames: config.disabledGlyphsFiles,
       familyFormats: config.familyFormats,
       selectedFormats: selectedFormatsFromFonts(fonts),
+      optOutMode: optOutModeOf(config),
     })
-    uninstallUnselectedRetailFormats(paths, config)
+    await uninstallUnselectedRetailFormats(paths, config)
 
     const result = await applyRetailSync({
       userFontsDir: paths.userFontsDir,

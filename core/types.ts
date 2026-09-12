@@ -236,6 +236,12 @@ export type RetailSyncSettings = {
   disabledGlyphsFiles: string[]
   /** Per-family desktop format when both otf and ttf exist. Missing keys default to otf. */
   familyFormats: Record<string, RetailFontFormat>
+  /**
+   * When true, `disabledGlyphsFiles` are family names from the Settings rows.
+   * When false or absent, they also match `typefaceName` so a saved `['Azeret']` still
+   * covers Azeret Mono / Azeret VF after the worker started sending child families.
+   */
+  familyOptOuts: boolean
 }
 
 export type LatinPreviewPreset = 'Aa' | 'Ag' | 'Ta' | 'ag' | 'custom'

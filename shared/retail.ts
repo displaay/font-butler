@@ -276,6 +276,25 @@ export type RetailSyncSelection = {
   disabledFamilyNames?: readonly string[]
   familyFormats?: Readonly<Record<string, RetailFontFormat>>
   selectedFormats?: Readonly<Record<string, RetailFontFormat>>
+  /** `typeface` also matches collection names saved before family rows existed. */
+  optOutMode?: RetailOptOutMode
+}
+
+/** How `disabledGlyphsFiles` is interpreted. `typeface` is the pre-family-row meaning. */
+export type RetailOptOutMode = 'family' | 'typeface'
+
+export function isRetailFamilyOptedOut(
+  familyName: string,
+  typefaceName: string,
+  disabledNames: readonly string[] | ReadonlySet<string>,
+  mode: RetailOptOutMode = 'family',
+): boolean {
+  const disabled = disabledNames instanceof Set ? disabledNames : new Set(disabledNames)
+  if (familyName && disabled.has(familyName)) return true
+  // Saved collection opt-outs used the typeface/glyphsFile name. Matching only familyName would
+  // re-enable Azeret Mono / Azeret VF when the user had turned off Azeret.
+  if (mode === 'typeface' && typefaceName && disabled.has(typefaceName)) return true
+  return false
 }
 
 export function selectedRetailFormat(
@@ -310,9 +329,11 @@ export function filterDisabledRetailDrift(
     selection.selectedFormats && Object.keys(selection.selectedFormats).length > 0,
   ) || Boolean(selection.familyFormats && Object.keys(selection.familyFormats).length > 0)
   if (disabled.size === 0 && !hasFormatFilter) return drift
+  const mode = selection.optOutMode ?? 'family'
   return drift.filter((item) => {
     const family = retailDriftFamilyName(item)
-    if (family && disabled.has(family)) return false
+    const typeface = item.glyphsFile?.trim() || family
+    if (isRetailFamilyOptedOut(family, typeface, disabled, mode)) return false
     if (!hasFormatFilter) return true
     return isSelectedRetailFormat(item.relativePath, family, selection)
   })
@@ -365,6 +386,7 @@ function finishFamilies(
   families: Map<string, RetailFontAccumulator>,
   disabledFamilyNames: readonly string[],
   familyFormats: Readonly<Record<string, RetailFontFormat>>,
+  optOutMode: RetailOptOutMode = 'family',
 ): RetailSyncFont[] {
   const disabled = new Set(disabledFamilyNames)
   const fonts: RetailSyncFont[] = []
@@ -380,7 +402,7 @@ function finishFamilies(
       typefaceName: family.typefaceName,
       glyphsFile: family.familyName,
       fileCount,
-      enabled: !disabled.has(family.familyName),
+      enabled: !isRetailFamilyOptedOut(family.familyName, family.typefaceName, disabled, optOutMode),
       available: family.available,
       formats,
       selectedFormat,
@@ -403,6 +425,7 @@ export function retailFontsFromCollections(
   disabledGlyphsFiles: readonly string[] = [],
   skipped: Array<{ glyphsFile?: string; typefaceName?: string }> | undefined = undefined,
   familyFormats: Readonly<Record<string, RetailFontFormat>> = {},
+  optOutMode: RetailOptOutMode = 'family',
 ): RetailSyncFont[] {
   const families = new Map<string, RetailFontAccumulator>()
   for (const collection of collections ?? []) {
@@ -429,7 +452,7 @@ export function retailFontsFromCollections(
     const family = takeFamily(families, name, name)
     family.available = false
   }
-  return finishFamilies(families, disabledGlyphsFiles, familyFormats)
+  return finishFamilies(families, disabledGlyphsFiles, familyFormats, optOutMode)
 }
 
 export function applyRetailFontSelection(
@@ -444,6 +467,7 @@ export function applyRetailFontSelection(
   }>,
   disabledGlyphsFiles: readonly string[] = [],
   familyFormats: Readonly<Record<string, RetailFontFormat>> = {},
+  optOutMode: RetailOptOutMode = 'family',
 ): RetailSyncFont[] {
   const disabled = new Set(disabledGlyphsFiles)
   return fonts
@@ -457,7 +481,7 @@ export function applyRetailFontSelection(
         typefaceName,
         glyphsFile: familyName,
         fileCount: font.fileCount,
-        enabled: Boolean(familyName) && !disabled.has(familyName),
+        enabled: Boolean(familyName) && !isRetailFamilyOptedOut(familyName, typefaceName, disabled, optOutMode),
         available: font.available !== false,
         formats,
         selectedFormat,

@@ -36,6 +36,7 @@ export function defaultRetailSync(): RetailSyncSettings {
     autoCheckMinutes: DEFAULT_RETAIL_AUTOCHECK_MINUTES,
     disabledGlyphsFiles: [],
     familyFormats: {},
+    familyOptOuts: true,
   }
 }
 
@@ -53,6 +54,7 @@ function readRetailSync(value: unknown): RetailSyncSettings {
     autoCheckMinutes: normalizeAutoCheckMinutes(row.autoCheckMinutes),
     disabledGlyphsFiles: normalizeDisabledGlyphsFiles(row.disabledGlyphsFiles),
     familyFormats: normalizeFamilyFormats(row.familyFormats),
+    familyOptOuts: row.familyOptOuts === true,
   }
 }
 
