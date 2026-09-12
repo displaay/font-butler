@@ -191,6 +191,7 @@ test('F02-A and F02-C folder policies and uninstall intent', async () => {
       policy: 'install-new-and-updates',
     })
     assert.equal(service.listCatalog().length, 0)
+    await service.updateSettings({ onboardingCompleted: true })
     await service.startWatching(archiveFolder.folder.id)
     await service.startWatching(exportFolder.folder.id)
     const catalog = service.listCatalog()
@@ -513,6 +514,35 @@ test('uninstall retains enough data for undo', async () => {
     const restored = service.listCatalog().find((item) => item.id === installed.id)!
     assert.equal(restored.status, 'installed')
     assert.equal(fingerprintFile(restored.installedPath!), original)
+  })
+})
+
+test('dropped folder fonts can join a new project without becoming a watch folder', async () => {
+  await withService(async (service, paths) => {
+    const folder = path.join(paths.dataRoot, 'Acme Brand')
+    const regular = path.join(folder, 'Brand-Regular.ttf')
+    const bold = path.join(folder, 'Brand-Bold.ttf')
+    writeTestFont(regular, 'Brand', 'Brand-Regular')
+    writeTestFont(bold, 'Brand', 'Brand-Bold', { style: 'Bold', weight: 700 })
+    const plan = service.planImport([folder])
+    assert.equal(plan.items.length, 2)
+    const applied = await service.applyPlan(plan.id)
+    assert.equal(applied.succeeded, 2)
+    assert.ok(applied.entries.every((item) => item.status === 'installed'))
+    assert.ok(applied.entries.every((item) => !item.ownerFolderId))
+    const project = await service.createProject(path.basename(folder), applied.entries.map((item) => item.id))
+    assert.equal(project.name, 'Acme Brand')
+    assert.deepEqual(
+      [...project.members.map((member) => member.assetId)].sort(),
+      [...applied.entries.map((item) => item.id)].sort(),
+    )
+    const settings = service.getSettings()
+    assert.deepEqual(settings.watchFolders, [])
+    assert.deepEqual(settings.folders, [])
+    assert.equal(
+      service.listCatalog().some((item) => item.ownerFolderId),
+      false,
+    )
   })
 })
 

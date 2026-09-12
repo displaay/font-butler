@@ -25,6 +25,7 @@ import { OnboardingDialog } from '@/components/OnboardingDialog'
 import { RelinkDialog } from '@/components/RelinkDialog'
 import { RenameDialog } from '@/components/RenameDialog'
 import { ReplaceFormatDialog } from '@/components/ReplaceFormatDialog'
+import { RetailCollisionDialog } from '@/components/RetailCollisionDialog'
 import { LatinPreviewProvider } from '@/components/AaPreview'
 import { SettingsDialog } from '@/components/SettingsDialog'
 import { Sidebar, type Tab } from '@/components/Sidebar'
@@ -51,10 +52,12 @@ import { desktopPathForFile, hasInsetTrafficLights } from '@/lib/desktop'
 import {
   collectDropPayload,
   commonDroppedFolder,
+  droppedFolderProjectName,
   importPathsForProjectDrop,
   partitionDropPayload,
   planPathsForImport,
 } from '@/lib/drop'
+import { fontActionQueue } from '@/lib/actionQueue'
 import { familyHasSwitch, switchableEntries } from '@/lib/eligibility'
 import { adobeTestingFolderAvailable } from '@/lib/folders'
 import { canSwitchTo } from '@/lib/identity'
@@ -65,7 +68,7 @@ import {
   renameSavedFilter,
   savedFilterMatches,
 } from '@/lib/savedFilters'
-import { familyNameOf, catalogEntriesMatch, catalogRevealEntry, countFamilyNames, countLibraryFilters, entryIds, familyStatusSummary, groupCatalog, groupSystem, matchesLibraryFilter, matchesQuery, sortFamilyGroups, uniquePaths } from '@/lib/group'
+import { familyNameOf, catalogEntriesMatch, catalogRevealEntry, countFamilyNames, countLibraryFilters, entryIds, familyStatusSummary, groupCatalog, groupSystem, matchesLibraryFilter, matchesQuery, retailFamiliesToOptOut, sortFamilyGroups, uniquePaths } from '@/lib/group'
 import {
   LIBRARY_FILTERS_KEY,
   readLibraryFilters,
@@ -115,7 +118,7 @@ import {
 import { applyTheme } from '@/lib/theme'
 import { allUpdateGroups, visibleUpdateGroups } from '@/lib/updateInventory'
 import { operationMatchesQuery, tabWithSearchHits } from '@/lib/search'
-import type { AppSettings, AppUpdateStatus, CatalogEntry, DestinationCapability, DuplicateWarning, FamilyGroup, ImportPlan, ImportPlanItem, LibraryFilter, Operation, PreviewPreferences, ProjectSet, RetailSyncStatus, SavedLibraryFilter, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
+import type { AppSettings, AppUpdateStatus, CatalogEntry, DestinationCapability, DuplicateWarning, FamilyGroup, ImportPlan, ImportPlanItem, LibraryFilter, Operation, PreviewPreferences, ProjectSet, RetailCollisionAction, RetailFamilyCollision, RetailSyncStatus, SavedLibraryFilter, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
 import { retailLibraryEntryVisible } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { isPathUnderFolder, isRetailLibraryFilter, isWatchFolderEntry, libraryFolderFilterLabel, matchesLibraryFolderFilter, RETAIL_LIBRARY_FILTER, watchFolderName } from '@/lib/watchFolders'
@@ -155,6 +158,12 @@ function AppShell() {
   const [appUpdate, setAppUpdate] = useState<AppUpdateStatus | null>(null)
   const [retail, setRetail] = useState<RetailSyncStatus | null>(null)
   const [retailBusy, setRetailBusy] = useState(false)
+  const [syncCollisions, setSyncCollisions] = useState<RetailFamilyCollision[]>([])
+  const [dropRetailPrompt, setDropRetailPrompt] = useState<{
+    remaining: RetailFamilyCollision[]
+    choices: Record<string, RetailCollisionAction>
+    resolve: (choices: Record<string, RetailCollisionAction> | null) => void
+  } | null>(null)
   const [checkingAppUpdate, setCheckingAppUpdate] = useState(false)
   const [onboardingOpen, setOnboardingOpen] = useState(false)
   const [settings, setSettings] = useState<AppSettings | null>(null)
@@ -283,16 +292,47 @@ function AppShell() {
     }
   }
 
-  async function syncRetail() {
+  async function syncRetail(choices?: Record<string, RetailCollisionAction>) {
     setRetailBusy(true)
     try {
-      const result = await api.retail.sync()
+      const result = await api.retail.sync(choices)
       setRetail(result.status)
+      setSyncCollisions(result.status.collisions ?? [])
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not sync the retail collection')
     } finally {
       setRetailBusy(false)
     }
+  }
+
+  function retailOptOutNames(entries: CatalogEntry[]): string[] {
+    return retailFamiliesToOptOut(entries, retail?.fonts ?? [], retail?.disabledGlyphsFiles ?? [])
+  }
+
+  async function turnRetailSyncOff(familyNames: string[]) {
+    if (familyNames.length === 0) return
+    setRetailBusy(true)
+    try {
+      const result = await api.retail.optOut(familyNames)
+      setRetail(result.status)
+      toast.success(
+        familyNames.length === 1
+          ? `Turned sync off for ${familyNames[0]}`
+          : `Turned sync off for ${familyNames.length} fonts`,
+      )
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not turn sync off')
+    } finally {
+      setRetailBusy(false)
+    }
+  }
+
+  function askDropRetailCollisions(
+    collisions: RetailFamilyCollision[],
+  ): Promise<Record<string, RetailCollisionAction> | null> {
+    return new Promise((resolve) => {
+      setDropRetailPrompt({ remaining: collisions, choices: {}, resolve })
+    })
   }
 
   useEffect(() => {
@@ -398,6 +438,7 @@ function AppShell() {
       }
       if (isRetailEvent(event)) {
         setRetail(event.status)
+        if (event.status.collisions) setSyncCollisions(event.status.collisions)
         return
       }
       if (isOperationsEvent(event)) {
@@ -1016,9 +1057,9 @@ function AppShell() {
     }
   }
 
-  async function createProjectWith(ids: string[], familyNames: string[]) {
+  async function createProjectWith(ids: string[], familyNames: string[], name = defaultProjectName(familyNames)) {
     try {
-      const result = await api.createProject(defaultProjectName(familyNames), ids)
+      const result = await api.createProject(name, ids)
       setProjects((current) => [result.project, ...current.filter((item) => item.id !== result.project.id)])
       setProjectFilter(result.project.id)
       setTab('library')
@@ -1324,7 +1365,13 @@ function AppShell() {
     return result
   }
 
-  async function importDropped(paths: string[], files: File[], projectId?: string) {
+  async function importDropped(
+    paths: string[],
+    files: File[],
+    target?: string | { projectId?: string; newProjectName?: string },
+  ) {
+    const projectId = typeof target === 'string' ? target : target?.projectId
+    const newProjectName = typeof target === 'object' ? target?.newProjectName : undefined
     const partitioned = partitionDropPayload(paths, files)
     const planPaths = planPathsForImport(paths, partitioned.paths)
     if (planPaths.length === 0 && partitioned.files.length === 0) {
@@ -1339,18 +1386,55 @@ function AppShell() {
       if (planPaths.length) {
         const plan = await api.planImport(planPaths)
         let imported: CatalogEntry[] = []
-        if (planNeedsReview(plan)) {
+        let activePlan = plan
+        const dropCollisions = plan.retailCollisions ?? []
+        if (dropCollisions.length > 0) {
           setActionStatus(null)
-          const decision = await askImportPlan(plan)
+          const decisions = await askDropRetailCollisions(dropCollisions)
+          if (!decisions) return
+          const replaceChoices: Record<string, RetailCollisionAction> = {}
+          const skipped = new Set<string>()
+          for (const [familyName, action] of Object.entries(decisions)) {
+            if (action === 'keep') skipped.add(familyName)
+            else replaceChoices[familyName] = 'replace'
+          }
+          if (Object.keys(replaceChoices).length) {
+            const resolved = await api.retail.resolveDropCollisions(replaceChoices, {
+              planId: plan.id,
+              incoming: plan.items.map((item) => ({ familyName: item.familyName, path: item.path })),
+            })
+            setRetail(resolved.status)
+            setEntries((await api.catalog()).entries)
+          }
+          const remainingPaths = plan.items
+            .filter((item) => !skipped.has(item.familyName ?? ''))
+            .map((item) => item.path)
+          if (remainingPaths.length === 0) return
+          activePlan = await api.planImport(remainingPaths)
+        }
+        if (planNeedsReview(activePlan)) {
+          setActionStatus(null)
+          const decision = await askImportPlan(activePlan)
           if (!decision) return
           setActionStatus('Adding fonts…')
-          imported = (await applyImportPlan(plan, decision.choices, decision.familyName)).entries
-        } else if (!projectId || plan.items.some((item) => item.defaultChoice !== 'skip')) {
+          imported = (await applyImportPlan(activePlan, decision.choices, decision.familyName)).entries
+        } else if (!projectId || activePlan.items.some((item) => item.defaultChoice !== 'skip')) {
           setActionStatus('Adding fonts…')
-          imported = (await applyImportPlan(plan)).entries
+          imported = (await applyImportPlan(activePlan)).entries
         }
-        if (projectId) {
-          const ids = memberIdsForProjectImport(plan, imported)
+        if (newProjectName) {
+          const ids = memberIdsForProjectImport(activePlan, imported)
+          if (ids.length === 0) {
+            toast.error(emptyImportError([], partitioned.skippedWeb))
+            return
+          }
+          await createProjectWith(
+            ids,
+            imported.map((entry) => familyNameOf(entry)),
+            newProjectName,
+          )
+        } else if (projectId) {
+          const ids = memberIdsForProjectImport(activePlan, imported)
           if (ids.length === 0) {
             toast.error(emptyImportError([], partitioned.skippedWeb))
             return
@@ -1383,7 +1467,13 @@ function AppShell() {
         }),
       )
       setEntries((await api.catalog()).entries)
-      if (projectId) {
+      if (newProjectName) {
+        await createProjectWith(
+          result.entries.map((entry) => entry.id),
+          names,
+          newProjectName,
+        )
+      } else if (projectId) {
         await addImportedFontsToProject(
           projectId,
           result.entries.map((entry) => entry.id),
@@ -1914,6 +2004,27 @@ function AppShell() {
                             }
                             void deleteFilesFor([group])
                           }}
+                          onTurnRetailSyncOff={
+                            retailOptOutNames(group.entries).length
+                              ? () =>
+                                  void turnRetailSyncOff(
+                                    retailOptOutNames(
+                                      useBatch
+                                        ? catalogSelection.flatMap((item) => item.entries)
+                                        : group.entries,
+                                    ),
+                                  )
+                              : undefined
+                          }
+                          onTurnInstanceRetailSyncOff={
+                            retailOptOutNames(group.entries).length
+                              ? (entryId) => {
+                                  const entry = group.entries.find((item) => item.id === entryId)
+                                  if (!entry) return
+                                  void turnRetailSyncOff(retailOptOutNames([entry]))
+                                }
+                              : undefined
+                          }
                           projects={projects}
                           projectFilter={projectFilter}
                           dragIds={useBatch ? catalogSelection.flatMap(entryIds) : entryIds(group)}
@@ -2038,6 +2149,13 @@ function AppShell() {
                       adobeAvailable,
                       onFormatSwap: (entryId) => void swapInstanceFormat(entryId),
                       onOpen: setSelectedEntryId,
+                      onTurnRetailSyncOff: retailOptOutNames(selectedGroup.entries).length
+                        ? (entryId) => {
+                            const entry = selectedGroup.entries.find((item) => item.id === entryId)
+                            if (!entry) return
+                            void turnRetailSyncOff(retailOptOutNames([entry]))
+                          }
+                        : undefined,
                     }
                   : undefined
               }
@@ -2259,7 +2377,18 @@ function AppShell() {
           onAddFonts={() => {
             const pending = folderDrop
             setFolderDrop(null)
-            if (pending) void importDropped(pending.paths, pending.files)
+            if (pending) void fontActionQueue.enqueue(() => importDropped(pending.paths, pending.files))
+          }}
+          onAddAsProject={() => {
+            const pending = folderDrop
+            setFolderDrop(null)
+            if (!pending) return
+            const paths = importPathsForProjectDrop(pending.paths, pending.folders)
+            void fontActionQueue.enqueue(() =>
+              importDropped(paths, pending.files, {
+                newProjectName: droppedFolderProjectName(pending.folders),
+              }),
+            )
           }}
           onWatch={() => {
             const pending = folderDrop
@@ -2424,6 +2553,44 @@ function AppShell() {
           highlightWatchFolders={settingsFocusWatchFolders}
           retail={retail}
           onRetailChange={setRetail}
+          onRetailSync={() => void syncRetail()}
+        />
+        <RetailCollisionDialog
+          open={syncCollisions.length > 0}
+          mode="sync"
+          collision={syncCollisions[0] ?? null}
+          remaining={syncCollisions.length}
+          busy={retailBusy}
+          onDismiss={() => setSyncCollisions([])}
+          onChoose={(action, applyToAll) => {
+            const targets = applyToAll ? syncCollisions : syncCollisions.slice(0, 1)
+            const choices: Record<string, RetailCollisionAction> = {}
+            for (const item of targets) choices[item.familyName] = action
+            void syncRetail(choices)
+          }}
+        />
+        <RetailCollisionDialog
+          open={Boolean(dropRetailPrompt?.remaining.length)}
+          mode="drop"
+          collision={dropRetailPrompt?.remaining[0] ?? null}
+          remaining={dropRetailPrompt?.remaining.length ?? 0}
+          onDismiss={() => {
+            dropRetailPrompt?.resolve(null)
+            setDropRetailPrompt(null)
+          }}
+          onChoose={(action, applyToAll) => {
+            if (!dropRetailPrompt) return
+            const assigned = applyToAll ? dropRetailPrompt.remaining : dropRetailPrompt.remaining.slice(0, 1)
+            const choices = { ...dropRetailPrompt.choices }
+            for (const item of assigned) choices[item.familyName] = action
+            const leftover = applyToAll ? [] : dropRetailPrompt.remaining.slice(1)
+            if (leftover.length === 0) {
+              dropRetailPrompt.resolve(choices)
+              setDropRetailPrompt(null)
+              return
+            }
+            setDropRetailPrompt({ ...dropRetailPrompt, remaining: leftover, choices })
+          }}
         />
         <MarqueeOverlay rect={marqueeRect} />
         <Toaster theme={settings?.theme ?? 'system'} />

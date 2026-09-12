@@ -21,6 +21,35 @@ export function familyNameOf(entry: CatalogEntry): string {
   return entry.customFamilyName || entry.faces[0]?.familyName || 'Unknown'
 }
 
+export function retailFamilyNameOf(entry: CatalogEntry): string {
+  return (entry.retailFamilyName || familyNameOf(entry)).trim()
+}
+
+export function hasRetailSyncedSource(group: { entries: CatalogEntry[] }): boolean {
+  return group.entries.some((entry) => Boolean(entry.retailRelativePath))
+}
+
+/** Family names still in Displaay retail sync for these catalog entries. */
+export function retailFamiliesToOptOut(
+  entries: CatalogEntry[],
+  fonts: ReadonlyArray<{ familyName: string; enabled: boolean }> = [],
+  disabledFamilyNames: readonly string[] = [],
+): string[] {
+  const enabledByName = new Map(fonts.map((font) => [font.familyName, font.enabled]))
+  const names = new Set<string>()
+  for (const entry of entries) {
+    if (!entry.retailRelativePath) continue
+    const name = retailFamilyNameOf(entry)
+    if (!name) continue
+    const enabled = enabledByName.has(name)
+      ? Boolean(enabledByName.get(name))
+      : !disabledFamilyNames.includes(name)
+    if (!enabled) continue
+    names.add(name)
+  }
+  return [...names]
+}
+
 export function countFamilyNames(entries: CatalogEntry[]): number {
   const names = new Set<string>()
   for (const entry of entries) names.add(familyNameOf(entry))

@@ -253,10 +253,12 @@ export function RetailPane({
   status,
   busy,
   onStatus,
+  onSync,
 }: {
   status: RetailSyncStatus | null
   busy: boolean
   onStatus: (status: RetailSyncStatus) => void
+  onSync?: () => void
 }) {
   const urlId = useId()
   const tokenId = useId()
@@ -448,7 +450,13 @@ export function RetailPane({
                 type="button"
                 size="sm"
                 disabled={disabled || !status?.enabled || !status?.pending}
-                onClick={() => void run(() => api.retail.sync())}
+                onClick={() => {
+                  if (onSync) {
+                    onSync()
+                    return
+                  }
+                  void run(() => api.retail.sync())
+                }}
               >
                 {status?.pending ? `Sync ${status.pending}` : 'Sync'}
               </Button>

@@ -443,6 +443,7 @@ export type ImportPlan = {
     review: number
     preview: number
   }
+  retailCollisions?: import('../shared/retail.ts').RetailFamilyCollision[]
 }
 
 export type RelinkMatchKind = 'fingerprint' | 'identity' | 'ambiguous' | 'mismatch' | 'missing'

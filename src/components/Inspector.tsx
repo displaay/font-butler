@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { ArrowLeftRight, CircleMinus, CirclePlus, FolderOpen, Link2, ListX, Loader2, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
 import { CatalogBatchButtons, SystemBatchButtons } from '@/components/BatchActions'
-import { SourceBadge, StateBadges, FormatBadges, AdobeLogo } from '@/components/Badges'
+import { SourceBadge, RetailBadge, StateBadges, FormatBadges, AdobeLogo } from '@/components/Badges'
 import { Badge } from '@/components/ui/badge'
 import { systemFontFamily } from '@/components/FontFaceStyles'
 import { GlyphGrid } from '@/components/GlyphGrid'
@@ -17,7 +17,7 @@ import { catalogInstanceRows, systemInstanceRows } from '@/lib/instances'
 import { mixedFormatWarning, occupyingFormats, formatSwap, formatSwapLabel, uniqueEntryFormats } from '@/lib/formats'
 import { collectionScopeLabel, displayStateLabel, familyCopyDestinations, needsLocateSource } from '@/lib/state'
 import { formatBytes, formatRelativeTime } from '@/lib/utils'
-import { entryHasTrackedSource, familyBadgeEntry, familyNameOf, hasTrackedSource } from '@/lib/group'
+import { entryHasTrackedSource, familyBadgeEntry, familyNameOf, hasRetailSyncedSource, hasTrackedSource } from '@/lib/group'
 import type { CatalogBatchPlan, SystemBatchPlan } from '@/lib/batch'
 import type { CatalogEntry, FamilyGroup, PreviewPreferences, ProjectSet, SystemFamilyGroup } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -250,6 +250,7 @@ export function Inspector({
     <div>
       <div className="flex items-center gap-2">
         <h2 className="text-base font-semibold tracking-tight">{familyNameOf(entry)}</h2>
+        {hasRetailSyncedSource(group) ? <RetailBadge /> : null}
         {hasTrackedSource(group) ? <SourceBadge /> : null}
       </div>
       <p className="mt-1 text-sm text-muted-foreground">
@@ -291,7 +292,9 @@ export function Inspector({
           <span className="truncate" title={entry.sourcePath}>
             {entry.sourcePath}
           </span>
-          {entryHasTrackedSource(entry) ? (
+          {entry.retailRelativePath ? (
+            <RetailBadge className="bg-transparent shadow-none" />
+          ) : entryHasTrackedSource(entry) ? (
             <SourceBadge className="bg-transparent shadow-none" />
           ) : null}
         </dd>

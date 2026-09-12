@@ -185,6 +185,7 @@ test('watch folder same-identity files queue Duplicates and do not auto-replace'
     writeTestFont(duplicate, 'Release', 'Release-Regular', { version: 'Version 2.000' })
 
     await service.updateSettings({
+      onboardingCompleted: true,
       folders: [
         createWatchFolder(inbox, { policy: 'install-new-and-updates', watching: true }),
       ],
@@ -263,6 +264,7 @@ test('Duplicates review Install as installs a renamed copy without replacing the
     const duplicate = path.join(inbox, 'WIP.ttf')
     writeTestFont(duplicate, 'Release', 'Release-Regular', { version: 'Version 2.000' })
     await service.updateSettings({
+      onboardingCompleted: true,
       folders: [createWatchFolder(inbox, { policy: 'install-new-and-updates', watching: true })],
     })
     const warning = service.listDuplicates()[0]!
