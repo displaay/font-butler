@@ -20,7 +20,9 @@ import { RETAIL_DOWNLOAD_CONCURRENCY } from './retail-apply.ts'
 import { withService, writeTestFont } from './test-util.ts'
 import {
   filterDisabledRetailDrift,
+  groupRetailFontsByTypeface,
   normalizeDisabledGlyphsFiles,
+  normalizeFamilyFormats,
   retailDriftSummary,
   retailFontsFromCollections,
   type RetailManifest,
@@ -427,7 +429,16 @@ test('a check lists skipped families so they can still be toggled', async () => 
     }),
   })
   assert.deepEqual(status.fonts, [
-    { glyphsFile: 'Aguzzo', fileCount: 0, enabled: true, available: false },
+    {
+      familyName: 'Aguzzo',
+      typefaceName: 'Aguzzo',
+      glyphsFile: 'Aguzzo',
+      fileCount: 0,
+      enabled: true,
+      available: false,
+      formats: [],
+      selectedFormat: 'otf',
+    },
   ])
 })
 
@@ -461,9 +472,36 @@ test('retailFontsFromCollections sorts and marks disabled families', () => {
       [{ glyphsFile: 'Aguzzo' }],
     ),
     [
-      { glyphsFile: 'Aguzzo', fileCount: 0, enabled: true, available: false },
-      { glyphsFile: 'Reckless', fileCount: 1, enabled: true, available: true },
-      { glyphsFile: 'Zangezi', fileCount: 2, enabled: false, available: true },
+      {
+        familyName: 'Aguzzo',
+        typefaceName: 'Aguzzo',
+        glyphsFile: 'Aguzzo',
+        fileCount: 0,
+        enabled: true,
+        available: false,
+        formats: [],
+        selectedFormat: 'otf',
+      },
+      {
+        familyName: 'Reckless',
+        typefaceName: 'Reckless',
+        glyphsFile: 'Reckless',
+        fileCount: 1,
+        enabled: true,
+        available: true,
+        formats: [],
+        selectedFormat: 'otf',
+      },
+      {
+        familyName: 'Zangezi',
+        typefaceName: 'Zangezi',
+        glyphsFile: 'Zangezi',
+        fileCount: 2,
+        enabled: false,
+        available: true,
+        formats: [],
+        selectedFormat: 'otf',
+      },
     ],
   )
 })
@@ -608,4 +646,218 @@ test('a large retail sync yields so other work on the same event loop can run', 
     `catalog was rewritten ${catalogSaves} times for ${files.length} files`,
   )
   assert.equal(loadCatalog(paths).entries.filter((entry) => entry.retailRelativePath).length, files.length)
+})
+
+function azeretFile(
+  familyName: string,
+  basename: string,
+  size = 4,
+  etag = `e-${basename}`,
+) {
+  return {
+    key: `Azeret/rev-1/${basename}`,
+    relativePath: `Azeret/${basename}`,
+    size,
+    etag,
+    uploaded: '2026-01-01T00:00:00.000Z',
+    familyName,
+  }
+}
+
+function azeretManifest(): RetailManifest {
+  return {
+    generatedAt: '2026-01-01T00:00:00.000Z',
+    collections: [
+      {
+        typefaceName: 'Azeret',
+        revisionId: 'rev-1',
+        lastRegeneratedAt: '2026-01-01T00:00:00.000Z',
+        files: [
+          azeretFile('Azeret', 'Azeret-Regular.otf'),
+          azeretFile('Azeret', 'Azeret-Regular.ttf'),
+          azeretFile('Azeret Mono', 'AzeretMono-Regular.otf'),
+          azeretFile('Azeret Mono', 'AzeretMono-Regular.ttf'),
+          azeretFile('Azeret VF', 'AzeretVF.ttf'),
+        ],
+      },
+    ],
+    skipped: [],
+  }
+}
+
+test('retailFontsFromCollections groups families under typefaceName and picks a format', () => {
+  const fonts = retailFontsFromCollections(azeretManifest().collections, ['Azeret Mono'], [], {
+    Azeret: 'ttf',
+  })
+  assert.deepEqual(
+    fonts.map((font) => ({
+      familyName: font.familyName,
+      typefaceName: font.typefaceName,
+      enabled: font.enabled,
+      formats: font.formats,
+      selectedFormat: font.selectedFormat,
+      fileCount: font.fileCount,
+    })),
+    [
+      {
+        familyName: 'Azeret',
+        typefaceName: 'Azeret',
+        enabled: true,
+        formats: ['otf', 'ttf'],
+        selectedFormat: 'ttf',
+        fileCount: 1,
+      },
+      {
+        familyName: 'Azeret Mono',
+        typefaceName: 'Azeret',
+        enabled: false,
+        formats: ['otf', 'ttf'],
+        selectedFormat: 'otf',
+        fileCount: 1,
+      },
+      {
+        familyName: 'Azeret VF',
+        typefaceName: 'Azeret',
+        enabled: true,
+        formats: ['ttf'],
+        selectedFormat: 'ttf',
+        fileCount: 1,
+      },
+    ],
+  )
+  assert.deepEqual(
+    groupRetailFontsByTypeface(fonts).map((group) => ({
+      typefaceName: group.typefaceName,
+      families: group.fonts.map((font) => font.familyName),
+    })),
+    [{ typefaceName: 'Azeret', families: ['Azeret', 'Azeret Mono', 'Azeret VF'] }],
+  )
+})
+
+test('normalizeFamilyFormats keeps only otf/ttf keys', () => {
+  assert.deepEqual(normalizeFamilyFormats({ ' Azeret ': 'ttf', Mono: 'woff', '': 'otf' }), {
+    Azeret: 'ttf',
+  })
+  assert.deepEqual(normalizeFamilyFormats(['otf']), {})
+})
+
+test('filterDisabledRetailDrift hides the unselected format as well as opted-out families', () => {
+  const drift = [
+    {
+      kind: 'added' as const,
+      relativePath: 'Azeret/Azeret-Regular.otf',
+      glyphsFile: 'Azeret',
+      familyName: 'Azeret',
+    },
+    {
+      kind: 'added' as const,
+      relativePath: 'Azeret/Azeret-Regular.ttf',
+      glyphsFile: 'Azeret',
+      familyName: 'Azeret',
+    },
+    {
+      kind: 'added' as const,
+      relativePath: 'Azeret/AzeretMono-Regular.otf',
+      glyphsFile: 'Azeret',
+      familyName: 'Azeret Mono',
+    },
+  ]
+  assert.deepEqual(
+    filterDisabledRetailDrift(drift, ['Azeret Mono'], {
+      selectedFormats: { Azeret: 'ttf', 'Azeret Mono': 'otf' },
+    }).map((item) => item.relativePath),
+    ['Azeret/Azeret-Regular.ttf'],
+  )
+})
+
+test('a check lists typeface children with format toggles', async () => {
+  const paths = setup()
+  configureRetailSync(paths, { enabled: true, token: 't' })
+  const status = await checkRetail(paths, { fetchManifest: async () => azeretManifest() })
+  assert.deepEqual(
+    status.fonts.map((font) => ({
+      familyName: font.familyName,
+      typefaceName: font.typefaceName,
+      formats: font.formats,
+      selectedFormat: font.selectedFormat,
+    })),
+    [
+      { familyName: 'Azeret', typefaceName: 'Azeret', formats: ['otf', 'ttf'], selectedFormat: 'otf' },
+      {
+        familyName: 'Azeret Mono',
+        typefaceName: 'Azeret',
+        formats: ['otf', 'ttf'],
+        selectedFormat: 'otf',
+      },
+      { familyName: 'Azeret VF', typefaceName: 'Azeret', formats: ['ttf'], selectedFormat: 'ttf' },
+    ],
+  )
+  assert.equal(status.pending, 3)
+})
+
+test('sync downloads only the selected format of enabled families', async () => {
+  const paths = setup()
+  configureRetailSync(paths, {
+    enabled: true,
+    token: 't',
+    disabledGlyphsFiles: ['Azeret Mono'],
+    familyFormats: { Azeret: 'ttf' },
+  })
+  const keys: string[] = []
+  await syncRetail(paths, {
+    fetchManifest: async () => azeretManifest(),
+    fetchFile: async ({ key }) => {
+      keys.push(key)
+      return new Uint8Array(4).fill(1)
+    },
+  })
+  assert.deepEqual(keys.sort(), ['Azeret/rev-1/Azeret-Regular.ttf', 'Azeret/rev-1/AzeretVF.ttf'])
+  assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'Azeret-Regular.ttf')), true)
+  assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'Azeret-Regular.otf')), false)
+  assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'AzeretMono-Regular.otf')), false)
+})
+
+test('switching format uninstalls the other format instead of installing both', async () => {
+  const paths = setup()
+  configureRetailSync(paths, { enabled: true, token: 't', familyFormats: { Azeret: 'otf' } })
+  const fetchManifest = async () => azeretManifest()
+  await syncRetail(paths, {
+    fetchManifest,
+    fetchFile: async ({ key }) => {
+      assert.equal(key.includes('.ttf') && key.includes('Azeret-Regular'), false)
+      return new Uint8Array(4).fill(1)
+    },
+  })
+  assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'Azeret-Regular.otf')), true)
+  assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'Azeret-Regular.ttf')), false)
+
+  const switched = configureRetailSync(paths, { familyFormats: { Azeret: 'ttf' } })
+  assert.equal(switched.fonts.find((font) => font.familyName === 'Azeret')?.selectedFormat, 'ttf')
+  assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'Azeret-Regular.otf')), false)
+
+  const keys: string[] = []
+  await syncRetail(paths, {
+    fetchManifest,
+    fetchFile: async ({ key }) => {
+      keys.push(key)
+      return new Uint8Array(4).fill(1)
+    },
+  })
+  assert.equal(keys.includes('Azeret/rev-1/Azeret-Regular.ttf'), true)
+  assert.equal(keys.includes('Azeret/rev-1/Azeret-Regular.otf'), false)
+  assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'Azeret-Regular.ttf')), true)
+  assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'Azeret-Regular.otf')), false)
+})
+
+test('a restart still lists typeface families from catalog listings', async () => {
+  const paths = setup()
+  configureRetailSync(paths, { enabled: true, token: 't' })
+  await checkRetail(paths, { fetchManifest: async () => azeretManifest() })
+  resetRetailCache()
+  const status = retailStatus(paths)
+  assert.deepEqual(
+    status.fonts.map((font) => font.familyName),
+    ['Azeret', 'Azeret Mono', 'Azeret VF'],
+  )
+  assert.equal(status.fonts.find((font) => font.familyName === 'Azeret')?.typefaceName, 'Azeret')
 })

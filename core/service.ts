@@ -2261,6 +2261,7 @@ export class FontButlerService {
     token?: string
     folderId?: string | null
     disabledGlyphsFiles?: string[]
+    familyFormats?: Record<string, import('../shared/retail.ts').RetailFontFormat>
   }): Promise<RetailSyncStatus> {
     return configureRetailSyncFn(this.paths, input)
   }

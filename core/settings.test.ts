@@ -512,10 +512,12 @@ test('loadSettings keeps stored retail disabled families', () => {
           workerBaseUrl: 'https://w.displaay.net',
           autoCheckMinutes: 60,
           disabledGlyphsFiles: [' Zangezi ', 'Reckless', 'Zangezi'],
+          familyFormats: { Reckless: 'ttf' },
         },
       }),
     )
     assert.deepEqual(loadSettings(paths).retailSync?.disabledGlyphsFiles, ['Reckless', 'Zangezi'])
+    assert.deepEqual(loadSettings(paths).retailSync?.familyFormats, { Reckless: 'ttf' })
   } finally {
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
@@ -525,6 +527,7 @@ test('loadSettings defaults retail disabled families to none', () => {
   const paths = tempPaths()
   try {
     assert.deepEqual(loadSettings(paths).retailSync?.disabledGlyphsFiles, [])
+    assert.deepEqual(loadSettings(paths).retailSync?.familyFormats, {})
   } finally {
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
