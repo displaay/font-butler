@@ -29,6 +29,14 @@ import {
   type RetailManifest,
 } from '../shared/retail.ts'
 
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void
+  const promise = new Promise<void>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
+
 function setup(): AppPaths {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-retail-svc-'))
   const paths = buildPaths({ override: dataRoot, mac: false })
@@ -955,8 +963,8 @@ test('format switch awaits native unregister before deleting the old file', asyn
   const otf = path.join(paths.userFontsDir, 'Azeret-Regular.otf')
   assert.equal(fs.existsSync(otf), true)
 
-  const unregisterStarted = Promise.withResolvers<void>()
-  const unregisterGate = Promise.withResolvers<void>()
+  const unregisterStarted = deferred()
+  const unregisterGate = deferred()
   setFontNative(
     noopFontNative({
       async unregisterFont() {
@@ -985,7 +993,7 @@ test('format cleanup waits for in-flight catalog writes', async () => {
   })
   const otf = path.join(paths.userFontsDir, 'Azeret-Regular.otf')
   const snapshot = JSON.parse(JSON.stringify(loadCatalog(paths)))
-  const gate = Promise.withResolvers<void>()
+  const gate = deferred()
   let holding = false
   const inFlight = runCatalogTask(async () => {
     holding = true
