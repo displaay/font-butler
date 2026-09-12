@@ -4,6 +4,7 @@ import {
   collectDropPayload,
   collectNativeFolderPaths,
   commonDroppedFolder,
+  droppedFolderProjectName,
   filterDropByFormat,
   inferDroppedFolderPath,
   inferFolderFromRelativePath,
@@ -190,6 +191,14 @@ test('inferDroppedFolderPath recovers the dropped folder from a child file path'
     inferDroppedFolderPath('/Users/you/Other/Regular.otf', '/Inbox/Regular.otf', '/Inbox'),
     undefined,
   )
+})
+
+test('droppedFolderProjectName uses a single folder name and not a watch folder', () => {
+  assert.equal(droppedFolderProjectName(['/Users/you/Fonts/Acme Brand']), 'Acme Brand')
+  assert.equal(droppedFolderProjectName(['/Users/you/Fonts/Acme Brand/']), 'Acme Brand')
+  assert.equal(droppedFolderProjectName(['/Users/you/Fonts/One', '/Users/you/Fonts/Two']), 'Untitled project')
+  assert.equal(droppedFolderProjectName([]), 'Untitled project')
+  assert.equal(droppedFolderProjectName(['   ']), 'Untitled project')
 })
 
 test('importPathsForProjectDrop prefers folder roots so nested fonts are imported', () => {

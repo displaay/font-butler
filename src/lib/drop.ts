@@ -1,4 +1,5 @@
 import { desktopPathForFile } from './desktop.ts'
+import { watchFolderName } from './watchFolders.ts'
 import {
   countFormats,
   formatFromName,
@@ -192,6 +193,12 @@ export function collectNativeFolderPaths(
 
 export function isDroppedFolderPath(filePath: string, fileName = filePath): boolean {
   return !isDroppedFontName(fileName) && !isDroppedFontName(filePath)
+}
+
+export function droppedFolderProjectName(folders: string[]): string {
+  if (folders.length !== 1) return 'Untitled project'
+  const name = watchFolderName(folders[0] ?? '').trim()
+  return name || 'Untitled project'
 }
 
 export function importPathsForProjectDrop(paths: string[], folders: string[]): string[] {

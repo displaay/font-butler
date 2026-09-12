@@ -13,20 +13,22 @@ export function DropFolderDialog({
   folders,
   onCancel,
   onAddFonts,
+  onAddAsProject,
   onWatch,
 }: {
   open: boolean
   folders: string[]
   onCancel: () => void
   onAddFonts: () => void
+  onAddAsProject: () => void
   onWatch: () => void
 }) {
   const names = folders.map(watchFolderName)
   const many = folders.length > 1
   const title = many ? `Add ${folders.length} folders?` : `Add ${names[0] ?? 'this folder'}?`
   const description = many
-    ? 'Install the fonts inside these folders once, or add them as watch folders so new fonts are imported automatically.'
-    : `Install the fonts in ${names[0] ?? 'this folder'} once, or add it as a watch folder so new fonts are imported automatically.`
+    ? 'Install the fonts once, install them into a new project, or add the folders as watch folders. A project does not watch these folders.'
+    : `Install the fonts in ${names[0] ?? 'this folder'} once, install them into a new project, or add it as a watch folder. A project does not watch the folder.`
 
   return (
     <Dialog
@@ -55,6 +57,9 @@ export function DropFolderDialog({
           </Button>
           <Button variant="outline" onClick={onAddFonts}>
             Install fonts
+          </Button>
+          <Button variant="outline" onClick={onAddAsProject}>
+            Install fonts and create a project
           </Button>
           <Button onClick={onWatch}>{many ? 'Add as watch folders' : 'Add as watch folder'}</Button>
         </div>

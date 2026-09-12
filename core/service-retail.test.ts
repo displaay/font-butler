@@ -1326,6 +1326,42 @@ test('dropping a same-family font over an installed retail copy uninstalls retai
   })
 })
 
+test('drop replace into a new project does not watch the dropped folder', async () => {
+  resetRetailCache()
+  await withService(async (service, paths) => {
+    const fixture = path.join(paths.dataRoot, 'fixture.otf')
+    writeTestFont(fixture, 'Reckless', 'RecklessVF', { format: 'otf' })
+    const bytes = fs.readFileSync(fixture)
+    await configureRetailSync(paths, { enabled: true, token: 't' })
+    const synced = await syncRetail(paths, {
+      fetchManifest: async () => manifestWith(bytes.length, 'e1'),
+      fetchFile: async () => new Uint8Array(bytes),
+    })
+    assert.equal(synced.pending, 0)
+
+    const folder = path.join(paths.dataRoot, 'Incoming')
+    const dropped = path.join(folder, 'Reckless-Regular.otf')
+    writeTestFont(dropped, 'Reckless', 'Reckless-Regular', { format: 'otf', version: 'Version 2.000' })
+    const planned = service.planImport([folder])
+    assert.equal(planned.retailCollisions?.length, 1)
+    await resolveDropRetailCollisions(paths, { Reckless: 'replace' })
+
+    const plannedAgain = service.planImport([folder])
+    assert.equal(plannedAgain.retailCollisions?.length ?? 0, 0)
+    const applied = await service.applyPlan(plannedAgain.id)
+    assert.equal(applied.entries.length, 1)
+    assert.equal(applied.entries[0]?.status, 'installed')
+    assert.equal(applied.entries[0]?.retailRelativePath ?? '', '')
+    const project = await service.createProject(path.basename(folder), applied.entries.map((item) => item.id))
+    assert.equal(project.name, 'Incoming')
+    assert.equal(project.members.length, 1)
+    assert.equal(project.members[0]?.assetId, applied.entries[0]?.id)
+    const settings = service.getSettings()
+    assert.deepEqual(settings.watchFolders, [])
+    assert.deepEqual(settings.folders, [])
+  })
+})
+
 test('dropping keep cancels the import and leaves the retail copy installed', async () => {
   resetRetailCache()
   await withService(async (service, paths) => {

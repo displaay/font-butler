@@ -52,10 +52,12 @@ import { desktopPathForFile, hasInsetTrafficLights } from '@/lib/desktop'
 import {
   collectDropPayload,
   commonDroppedFolder,
+  droppedFolderProjectName,
   importPathsForProjectDrop,
   partitionDropPayload,
   planPathsForImport,
 } from '@/lib/drop'
+import { fontActionQueue } from '@/lib/actionQueue'
 import { familyHasSwitch, switchableEntries } from '@/lib/eligibility'
 import { adobeTestingFolderAvailable } from '@/lib/folders'
 import { canSwitchTo } from '@/lib/identity'
@@ -1055,9 +1057,9 @@ function AppShell() {
     }
   }
 
-  async function createProjectWith(ids: string[], familyNames: string[]) {
+  async function createProjectWith(ids: string[], familyNames: string[], name = defaultProjectName(familyNames)) {
     try {
-      const result = await api.createProject(defaultProjectName(familyNames), ids)
+      const result = await api.createProject(name, ids)
       setProjects((current) => [result.project, ...current.filter((item) => item.id !== result.project.id)])
       setProjectFilter(result.project.id)
       setTab('library')
@@ -1363,7 +1365,13 @@ function AppShell() {
     return result
   }
 
-  async function importDropped(paths: string[], files: File[], projectId?: string) {
+  async function importDropped(
+    paths: string[],
+    files: File[],
+    target?: string | { projectId?: string; newProjectName?: string },
+  ) {
+    const projectId = typeof target === 'string' ? target : target?.projectId
+    const newProjectName = typeof target === 'object' ? target?.newProjectName : undefined
     const partitioned = partitionDropPayload(paths, files)
     const planPaths = planPathsForImport(paths, partitioned.paths)
     if (planPaths.length === 0 && partitioned.files.length === 0) {
@@ -1411,7 +1419,18 @@ function AppShell() {
           setActionStatus('Adding fonts…')
           imported = (await applyImportPlan(activePlan)).entries
         }
-        if (projectId) {
+        if (newProjectName) {
+          const ids = memberIdsForProjectImport(activePlan, imported)
+          if (ids.length === 0) {
+            toast.error(emptyImportError([], partitioned.skippedWeb))
+            return
+          }
+          await createProjectWith(
+            ids,
+            imported.map((entry) => familyNameOf(entry)),
+            newProjectName,
+          )
+        } else if (projectId) {
           const ids = memberIdsForProjectImport(activePlan, imported)
           if (ids.length === 0) {
             toast.error(emptyImportError([], partitioned.skippedWeb))
@@ -1445,7 +1464,13 @@ function AppShell() {
         }),
       )
       setEntries((await api.catalog()).entries)
-      if (projectId) {
+      if (newProjectName) {
+        await createProjectWith(
+          result.entries.map((entry) => entry.id),
+          names,
+          newProjectName,
+        )
+      } else if (projectId) {
         await addImportedFontsToProject(
           projectId,
           result.entries.map((entry) => entry.id),
@@ -2349,7 +2374,18 @@ function AppShell() {
           onAddFonts={() => {
             const pending = folderDrop
             setFolderDrop(null)
-            if (pending) void importDropped(pending.paths, pending.files)
+            if (pending) void fontActionQueue.enqueue(() => importDropped(pending.paths, pending.files))
+          }}
+          onAddAsProject={() => {
+            const pending = folderDrop
+            setFolderDrop(null)
+            if (!pending) return
+            const paths = importPathsForProjectDrop(pending.paths, pending.folders)
+            void fontActionQueue.enqueue(() =>
+              importDropped(paths, pending.files, {
+                newProjectName: droppedFolderProjectName(pending.folders),
+              }),
+            )
           }}
           onWatch={() => {
             const pending = folderDrop
