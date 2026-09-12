@@ -23,8 +23,8 @@ the collection is defined by what has been generated, not by what the website sh
 carries a `typefaceName`; each file carries a `familyName` used to group and install styles.
 
 A typeface is skipped, and reported in `skipped`, when it is mid-regeneration, has no active
-revision, has no `transaction.json`, whose last generation did not succeed, whose listing does not yet
-match what `transaction.json` declares, or that contains no desktop fonts.
+revision, has no `transaction.json`, whose last generation did not succeed, whose declared desktop fonts
+are in neither the R2 listing nor `fonts.zip`, or that contains no desktop fonts.
 
 ### Freshness
 
@@ -40,9 +40,11 @@ revision and overwrites in place.
 
 ### Membership
 
-`transaction.json` decides which files belong to the current generation; `list()` supplies their size and
-etag. Only keys present in **both** are served: a regeneration overwrites in place without deleting what
-it no longer produces, so a bare listing also returns stale leftovers.
+`transaction.json` decides which files belong to the current generation. Loose R2 objects supply size
+and etag when they exist. Production regenerate often writes those bytes only into `fonts.zip`
+(basename entries) and still records the full keys in `transaction.json`; the worker then serves those
+keys from the zip. A bare listing also returns stale leftovers from earlier generations, so undeclared
+objects are ignored.
 
 ## Local layout
 
