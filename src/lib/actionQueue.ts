@@ -29,3 +29,20 @@ export function createSerialQueue(): SerialQueue {
 }
 
 export const fontActionQueue = createSerialQueue()
+
+/**
+ * Enqueue font-file work and return immediately so the renderer stays interactive.
+ * Callers must not await native install/uninstall; progress and errors surface from the job.
+ */
+export function startQueuedAction(queue: SerialQueue, task: () => Promise<unknown>): void {
+  void queue.enqueue(task)
+}
+
+export function startQueuedFontAction(task: () => Promise<unknown>): void {
+  startQueuedAction(fontActionQueue, task)
+}
+
+/** True when this is the last job currently counted on the queue (including the running one). */
+export function isLastQueuedFontAction(): boolean {
+  return fontActionQueue.pending <= 1
+}

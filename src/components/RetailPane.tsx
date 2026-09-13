@@ -4,6 +4,7 @@ import { SettingsRow, SettingsSection, settingsSelectClass } from '@/components/
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { api } from '@/lib/api'
+import { startQueuedFontAction } from '@/lib/actionQueue'
 import {
   DEFAULT_RETAIL_AUTOCHECK_MINUTES,
   RETAIL_AUTOCHECK_CHOICES,
@@ -268,10 +269,9 @@ export function RetailPane({
   // value wins, otherwise fall back to whatever the server reports.
   const [editedUrl, setEditedUrl] = useState<string | null>(null)
   const workerBaseUrl = editedUrl ?? status?.workerBaseUrl ?? ''
-  const [working, setWorking] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const disabled = busy || working
+  const disabled = busy
   const loadedRef = useRef(false)
   const enabled = Boolean(status?.enabled)
 
@@ -288,16 +288,15 @@ export function RetailPane({
       })
   }, [status, onStatus])
 
-  const run = async (action: () => Promise<{ status: RetailSyncStatus }>) => {
-    setWorking(true)
+  const run = (action: () => Promise<{ status: RetailSyncStatus }>) => {
     setError(null)
-    try {
-      onStatus((await action()).status)
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Something went wrong.')
-    } finally {
-      setWorking(false)
-    }
+    startQueuedFontAction(async () => {
+      try {
+        onStatus((await action()).status)
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : 'Something went wrong.')
+      }
+    })
   }
 
   const blocked = (status?.drift ?? []).filter((item) => BLOCKED_KINDS.has(item.kind))

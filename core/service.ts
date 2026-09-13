@@ -57,6 +57,7 @@ import {
   uniquePathFromOriginal,
   uniqueSiblingPath,
 } from './install.ts'
+import { yieldEventLoop } from './event-loop.ts'
 import { ensureFontActivation, getFontNative } from './native.ts'
 import { fingerprintFile, tryFingerprintFile } from './fingerprint.ts'
 import {
@@ -1243,8 +1244,9 @@ export class FontButlerService {
       } catch {
         throw new Error('Protected system fonts cannot be removed.')
       }
+      await yieldEventLoop()
       await getFontNative().unregisterFont(resolved)
-      fs.rmSync(resolved, { force: true })
+      await fs.promises.rm(resolved, { force: true })
       emitEvent({ type: 'system', faces: scanSystemFonts(this.paths) })
     })
   }
@@ -1276,6 +1278,7 @@ export class FontButlerService {
       } catch {
         throw new Error('Protected system fonts cannot be deactivated.')
       }
+      await yieldEventLoop()
       await getFontNative().unregisterFont(resolved)
       fs.mkdirSync(this.paths.disabledDir, { recursive: true })
       const dest = uniquePathFromOriginal(this.paths.disabledDir, resolved)

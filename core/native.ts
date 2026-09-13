@@ -11,6 +11,7 @@ import {
   unregisterFont as realUnregisterFont,
   type ActivationQuery,
 } from './caches.ts'
+import { serializeFontNative } from './font-file-queue.ts'
 
 export type { ActivationQuery }
 
@@ -99,7 +100,7 @@ function defaultNative(): FontNative {
 let current: FontNative | null = null
 
 export function getFontNative(): FontNative {
-  return current ?? defaultNative()
+  return serializeFontNative(current ?? defaultNative())
 }
 
 export function setFontNative(adapter: FontNative | null): void {

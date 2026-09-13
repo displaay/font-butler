@@ -57,7 +57,7 @@ import {
   partitionDropPayload,
   planPathsForImport,
 } from '@/lib/drop'
-import { fontActionQueue } from '@/lib/actionQueue'
+import { isLastQueuedFontAction, startQueuedFontAction } from '@/lib/actionQueue'
 import { familyHasSwitch, switchableEntries } from '@/lib/eligibility'
 import { adobeTestingFolderAvailable } from '@/lib/folders'
 import { canSwitchTo } from '@/lib/identity'
@@ -147,7 +147,8 @@ function AppShell() {
   const [dragging, setDragging] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
+  // Font-file work is queued in the background so library, settings, and dialogs stay usable.
+  const busy = false
   const busyRef = useRef(false)
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null)
   const [renameEntry, setRenameEntry] = useState<CatalogEntry | null>(null)
@@ -157,7 +158,7 @@ function AppShell() {
   const [settingsFocusWatchFolders, setSettingsFocusWatchFolders] = useState(false)
   const [appUpdate, setAppUpdate] = useState<AppUpdateStatus | null>(null)
   const [retail, setRetail] = useState<RetailSyncStatus | null>(null)
-  const [retailBusy, setRetailBusy] = useState(false)
+  const retailBusy = false
   const [syncCollisions, setSyncCollisions] = useState<RetailFamilyCollision[]>([])
   const [dropRetailPrompt, setDropRetailPrompt] = useState<{
     remaining: RetailFamilyCollision[]
@@ -292,39 +293,58 @@ function AppShell() {
     }
   }
 
-  async function syncRetail(choices?: Record<string, RetailCollisionAction>) {
-    setRetailBusy(true)
-    try {
-      const result = await api.retail.sync(choices)
-      setRetail(result.status)
-      setSyncCollisions(result.status.collisions ?? [])
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not sync the retail collection')
-    } finally {
-      setRetailBusy(false)
-    }
+  function queueFontWork(work: () => Promise<void>) {
+    busyRef.current = true
+    startQueuedFontAction(async () => {
+      try {
+        await work()
+      } finally {
+        if (isLastQueuedFontAction()) {
+          busyRef.current = false
+          setActionStatus(null)
+        }
+      }
+    })
+  }
+
+  function syncRetail(choices?: Record<string, RetailCollisionAction>) {
+    if (choices) setSyncCollisions([])
+    queueFontWork(async () => {
+      setActionStatus('Syncing Displaay retail…')
+      try {
+        const result = await api.retail.sync(choices)
+        setRetail(result.status)
+        setSyncCollisions(result.status.collisions ?? [])
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Could not sync the retail collection')
+      }
+    })
   }
 
   function retailOptOutNames(entries: CatalogEntry[]): string[] {
     return retailFamiliesToOptOut(entries, retail?.fonts ?? [], retail?.disabledGlyphsFiles ?? [])
   }
 
-  async function turnRetailSyncOff(familyNames: string[]) {
+  function turnRetailSyncOff(familyNames: string[]) {
     if (familyNames.length === 0) return
-    setRetailBusy(true)
-    try {
-      const result = await api.retail.optOut(familyNames)
-      setRetail(result.status)
-      toast.success(
+    queueFontWork(async () => {
+      setActionStatus(
         familyNames.length === 1
-          ? `Turned sync off for ${familyNames[0]}`
-          : `Turned sync off for ${familyNames.length} fonts`,
+          ? `Turning sync off for ${familyNames[0]}…`
+          : `Turning sync off for ${familyNames.length} fonts…`,
       )
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not turn sync off')
-    } finally {
-      setRetailBusy(false)
-    }
+      try {
+        const result = await api.retail.optOut(familyNames)
+        setRetail(result.status)
+        toast.success(
+          familyNames.length === 1
+            ? `Turned sync off for ${familyNames[0]}`
+            : `Turned sync off for ${familyNames.length} fonts`,
+        )
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Could not turn sync off')
+      }
+    })
   }
 
   function askDropRetailCollisions(
@@ -1017,7 +1037,6 @@ function AppShell() {
     operations,
     setOperations,
     busyRef,
-    setBusy,
     setActionStatus,
     setTab,
     setWatchFolderFilter,
@@ -1206,7 +1225,7 @@ function AppShell() {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (busy || renameEntry) return
+      if (renameEntry) return
       if (document.querySelector('[role="dialog"]')) return
       const action = shortcutAction(event)
       if (!action) return
@@ -1243,12 +1262,12 @@ function AppShell() {
     return () => window.removeEventListener('keydown', onKeyDown)
   })
 
-  async function handleFiles(fileList: FileList | File[]) {
+  function handleFiles(fileList: FileList | File[]) {
     const files = Array.from(fileList)
     const paths = files
       .map((file) => desktopPathForFile(file))
       .filter((value): value is string => Boolean(value))
-    await importDropped(paths, files, libraryProjectTarget())
+    queueFontWork(() => importDropped(paths, files, libraryProjectTarget()))
   }
 
   function libraryProjectTarget(): string | undefined {
@@ -1283,10 +1302,12 @@ function AppShell() {
         if (fallback) folders = [fallback]
       }
       if (targetProjectId) {
-        await importDropped(
-          importPathsForProjectDrop(paths, folders),
-          payload.files,
-          targetProjectId,
+        queueFontWork(() =>
+          importDropped(
+            importPathsForProjectDrop(paths, folders),
+            payload.files,
+            targetProjectId,
+          ),
         )
         return
       }
@@ -1294,7 +1315,7 @@ function AppShell() {
         setFolderDrop({ folders, paths, files: payload.files })
         return
       }
-      await importDropped(paths, payload.files)
+      queueFontWork(() => importDropped(paths, payload.files))
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not add fonts')
       setDragging(false)
@@ -1314,7 +1335,7 @@ function AppShell() {
       (filePath) => !folders.some((folder) => isPathUnderFolder(filePath, folder)),
     )
     if (loosePaths.length || leftover.files.length) {
-      await importDropped(loosePaths, leftover.files)
+      queueFontWork(() => importDropped(loosePaths, leftover.files))
     }
   }
 
@@ -1380,7 +1401,6 @@ function AppShell() {
       return
     }
     busyRef.current = true
-    setBusy(true)
     setActionStatus('Planning import…')
     try {
       if (planPaths.length) {
@@ -1482,9 +1502,10 @@ function AppShell() {
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not add fonts')
     } finally {
-      busyRef.current = false
-      setBusy(false)
-      setActionStatus(null)
+      if (isLastQueuedFontAction()) {
+        busyRef.current = false
+        setActionStatus(null)
+      }
       setDragging(false)
     }
   }
@@ -2377,14 +2398,14 @@ function AppShell() {
           onAddFonts={() => {
             const pending = folderDrop
             setFolderDrop(null)
-            if (pending) void fontActionQueue.enqueue(() => importDropped(pending.paths, pending.files))
+            if (pending) queueFontWork(() => importDropped(pending.paths, pending.files))
           }}
           onAddAsProject={() => {
             const pending = folderDrop
             setFolderDrop(null)
             if (!pending) return
             const paths = importPathsForProjectDrop(pending.paths, pending.folders)
-            void fontActionQueue.enqueue(() =>
+            queueFontWork(() =>
               importDropped(paths, pending.files, {
                 newProjectName: droppedFolderProjectName(pending.folders),
               }),
