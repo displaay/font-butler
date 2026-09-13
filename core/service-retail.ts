@@ -852,7 +852,10 @@ export async function resolveDropRetailCollisions(
   }
   if (optOut.length) optOutRetailFamilies(paths, optOut)
   if (replaceIds.length) await uninstallCollisionEntries(paths, replaceIds)
-  cache.collisions = []
+  if (optOut.length) {
+    const resolved = new Set(optOut)
+    cache.collisions = cache.collisions.filter((item) => !resolved.has(item.familyName))
+  }
   return emitRetail(paths)
 }
 

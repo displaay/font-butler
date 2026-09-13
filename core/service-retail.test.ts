@@ -1552,6 +1552,36 @@ test('dropping keep cancels the import and leaves the retail copy installed', as
   })
 })
 
+test('resolving a drop collision does not clear pending retail-sync collisions', async () => {
+  resetRetailCache()
+  await withService(async (service, paths) => {
+    const dest = path.join(paths.userFontsDir, 'Reckless-Regular.otf')
+    writeTestFont(dest, 'Reckless', 'Reckless-Regular', { format: 'otf' })
+    await service.importPaths([dest])
+    await configureRetailSync(paths, { enabled: true, token: 't' })
+    const paused = await syncRetail(paths, {
+      fetchManifest: async () => manifestWith(4, 'e1'),
+      fetchFile: async () => new Uint8Array(4).fill(1),
+    })
+    assert.equal(paused.collisions.length, 1)
+    assert.equal(paused.collisions[0]?.familyName, 'Reckless')
+
+    const dropped = path.join(paths.dataRoot, 'drop', 'Azeret-Regular.otf')
+    writeTestFont(dropped, 'Azeret', 'Azeret-Regular', { format: 'otf' })
+    const planned = service.planImport([dropped])
+    const afterDrop = await resolveDropRetailCollisions(
+      paths,
+      { Azeret: 'replace' },
+      { planId: planned.id },
+    )
+    assert.equal(afterDrop.collisions.length, 1)
+    assert.equal(afterDrop.collisions[0]?.familyName, 'Reckless')
+    assert.equal(retailStatus(paths).collisions.length, 1)
+    assert.equal(retailStatus(paths).collisions[0]?.familyName, 'Reckless')
+    assert.equal(fs.existsSync(dest), true)
+  })
+})
+
 test('turning sync off from a retail listing uses the keep-old opt-out path', async () => {
   resetRetailCache()
   await withService(async (service, paths) => {
