@@ -1,4 +1,5 @@
 import type { AppIconStyle } from '../../shared/appIcon.ts'
+import type { RetailFamilyCollision } from '../../shared/retail.ts'
 
 export type FontStatus =
   | 'installed'
@@ -270,6 +271,7 @@ export type ImportPlan = {
   id: string
   items: ImportPlanItem[]
   summary: { add: number; install: number; unchanged: number; review: number; preview: number }
+  retailCollisions?: RetailFamilyCollision[]
 }
 
 export type ProjectMember = {
@@ -402,6 +404,8 @@ export type {
   RetailDriftKind,
   RetailFile,
   RetailFontFormat,
+  RetailFamilyCollision,
+  RetailCollisionAction,
   RetailSkip,
   RetailSkipReason,
   RetailSyncFont,

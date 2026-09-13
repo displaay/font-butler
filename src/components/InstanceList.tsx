@@ -1,11 +1,14 @@
 import type { MouseEvent, PointerEvent, ReactNode } from 'react'
 import { AaPreview } from '@/components/AaPreview'
-import { DestinationIcons, FormatBadge, InstanceInstallBadge, SourceBadge } from '@/components/Badges'
+import { DestinationIcons, FormatBadge, InstanceInstallBadge, RetailBadge, SourceBadge } from '@/components/Badges'
 import { InstanceMenuItems } from '@/components/BatchActions'
+import { DisplaayMark } from '@/components/DisplaayMark'
 import { catalogFontFamily, systemFontFamily } from '@/components/FontFaceStyles'
 import {
   ContextMenu,
   ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
 import { hasInstanceMenuActions, instanceMenuPlan } from '@/lib/eligibility'
@@ -26,6 +29,7 @@ export type InstanceActions = {
   adobeAvailable?: boolean
   onFormatSwap?: (entryId: string) => void
   onOpen?: (entryId: string) => void
+  onTurnRetailSyncOff?: (entryId: string) => void
 }
 
 function stopFamilyMenu(event: MouseEvent | PointerEvent) {
@@ -46,6 +50,7 @@ function InstanceRowMenu({
   onUninstallFromAdobe,
   onFormatSwap,
   onOpen,
+  onTurnRetailSyncOff,
 }: {
   entry: CatalogEntry
   family: CatalogEntry[]
@@ -60,9 +65,11 @@ function InstanceRowMenu({
   onUninstallFromAdobe?: (entryId: string) => void
   onFormatSwap?: (entryId: string) => void
   onOpen?: (entryId: string) => void
+  onTurnRetailSyncOff?: (entryId: string) => void
 }) {
   const plan = instanceMenuPlan(entry, family, adobeAvailable)
-  if (!hasInstanceMenuActions(plan)) return children
+  const showTurnSyncOff = Boolean(onTurnRetailSyncOff && entry.retailRelativePath)
+  if (!hasInstanceMenuActions(plan) && !showTurnSyncOff) return children
   return (
     <ContextMenu
       onOpenChange={(open) => {
@@ -73,6 +80,14 @@ function InstanceRowMenu({
         {children}
       </ContextMenuTrigger>
       <ContextMenuContent>
+        {showTurnSyncOff ? (
+          <>
+            <ContextMenuItem disabled={busy} onSelect={() => onTurnRetailSyncOff?.(entry.id)}>
+              <DisplaayMark /> Turn sync off
+            </ContextMenuItem>
+            {hasInstanceMenuActions(plan) ? <ContextMenuSeparator /> : null}
+          </>
+        ) : null}
         <InstanceMenuItems
           plan={plan}
           entryId={entry.id}
@@ -148,6 +163,7 @@ export function InstanceList({
                 <div className="truncate text-xs text-muted-foreground">{row.sublabel}</div>
               )}
             </div>
+            {row.retailSynced ? <RetailBadge className="shrink-0" /> : null}
             {row.hasSource ? <SourceBadge className="shrink-0" /> : null}
             {row.installState && row.installState !== 'installed' ? (
               <InstanceInstallBadge state={row.installState} />
@@ -175,6 +191,7 @@ export function InstanceList({
                 adobeAvailable={instanceActions.adobeAvailable}
                 onFormatSwap={instanceActions.onFormatSwap}
                 onOpen={instanceActions.onOpen}
+                onTurnRetailSyncOff={instanceActions.onTurnRetailSyncOff}
               >
                 {button}
               </InstanceRowMenu>

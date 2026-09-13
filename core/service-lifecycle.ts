@@ -14,6 +14,7 @@ import {
 import { copyAt, upsertCopy } from './destinations.ts'
 import { tryFingerprintFile } from './fingerprint.ts'
 import { assertExpectedSourceFingerprint } from './comparison.ts'
+import { yieldEventLoop } from './event-loop.ts'
 import { isWebFontFile, isWebFontFormat, WOFF_INSTALL_ERROR } from './formats.ts'
 import {
   applyInstalledMetadata,
@@ -100,6 +101,7 @@ export async function installEntry(
   if (installAs && renameTo) {
     return installRenamedCopy(host, entry, renameTo, options)
   }
+  await yieldEventLoop()
   const staged = stageFontFile(sourcePath, path.join(host.paths.dataRoot, 'staging'))
   const targets = installTargets(host.paths, entry, options)
   const retailReplace = Boolean(entry.retailRelativePath)

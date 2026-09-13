@@ -67,9 +67,9 @@ test('variable-font instance rows carry named-instance variation settings', () =
   assert.deepEqual(
     rows.map((row) => [row.format, row.installState, row.hasSource, row.macosCopy, row.adobeCopy]),
     [
-      [undefined, undefined, undefined, undefined, undefined],
-      [undefined, undefined, undefined, undefined, undefined],
-      [undefined, undefined, undefined, undefined, undefined],
+      [undefined, undefined, true, undefined, undefined],
+      [undefined, undefined, true, undefined, undefined],
+      [undefined, undefined, true, undefined, undefined],
     ],
   )
 })
@@ -140,6 +140,21 @@ test('catalog instance rows keep live vs inactive styles when the source is miss
     rows.map((row) => row.hasSource),
     [true, true, false],
   )
+})
+
+test('retail-synced instance rows carry the Displaay source instead of a disk source', () => {
+  const groups = groupCatalog([
+    staticEntry('retail', 'Regular', 'installed', {
+      retailRelativePath: 'Plex/Plex-Regular.otf',
+      retailFamilyName: 'Plex',
+      sourcePresent: false,
+      installedPath: '/tmp/Fonts/Plex-Regular.otf',
+    }),
+  ])
+  const rows = catalogInstanceRows(groups[0]!)
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0]?.retailSynced, true)
+  assert.equal(rows[0]?.hasSource, false)
 })
 
 test('system variable-font instance rows omit format and computer tags', () => {

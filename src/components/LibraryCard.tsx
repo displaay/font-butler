@@ -1,9 +1,10 @@
 import { useMemo, useRef, useState, type DragEvent, type MouseEvent } from 'react'
 import { Check, ChevronDown, FolderMinus, FolderOpen, Plus } from 'lucide-react'
 import { AaPreview, CyclingAaPreview } from '@/components/AaPreview'
-import { FormatBadges, SourceBadge, StateBadges, VfBadge, DestinationIcons } from '@/components/Badges'
+import { FormatBadges, RetailBadge, SourceBadge, StateBadges, VfBadge, DestinationIcons } from '@/components/Badges'
 import { Badge } from '@/components/ui/badge'
 import { CatalogMenuItems } from '@/components/BatchActions'
+import { DisplaayMark } from '@/components/DisplaayMark'
 import { CatalogCardActions } from '@/components/FontCardActions'
 import { catalogFontFamily } from '@/components/FontFaceStyles'
 import { InstanceList } from '@/components/InstanceList'
@@ -21,7 +22,7 @@ import { familyCardPlan, type CatalogBatchPlan } from '@/lib/batch'
 import { applyFontDragImage } from '@/lib/dragPreview'
 import { formatAddedAt } from '@/lib/dates'
 import { mixedFormatWarning, occupyingFormats, uniqueEntryFormats, formatSwap } from '@/lib/formats'
-import { familyBadgeEntry, familyStatusSummary, hasSourceMissing, hasTrackedSource } from '@/lib/group'
+import { familyBadgeEntry, familyStatusSummary, hasRetailSyncedSource, hasSourceMissing, hasTrackedSource } from '@/lib/group'
 import { catalogInstanceRows } from '@/lib/instances'
 import { projectContainsAll, writeFontButlerEntries } from '@/lib/projects'
 import { displayStateParts, familyCopyDestinations, isNotInstalledLabel, needsLocateSource } from '@/lib/state'
@@ -69,6 +70,8 @@ export function LibraryCard({
   onRevealSource,
   onForget,
   onDeleteFiles,
+  onTurnRetailSyncOff,
+  onTurnInstanceRetailSyncOff,
   projects,
   projectFilter,
   dragIds,
@@ -118,6 +121,8 @@ export function LibraryCard({
   onRevealSource: () => void
   onForget: () => void
   onDeleteFiles: () => void
+  onTurnRetailSyncOff?: () => void
+  onTurnInstanceRetailSyncOff?: (entryId: string) => void
   projects: ProjectSet[]
   projectFilter: string | null
   dragIds: string[]
@@ -197,17 +202,19 @@ export function LibraryCard({
   const dest = familyCopyDestinations(group.entries)
   const showDestIcons = !hideDestinations && (dest.macos || dest.adobe)
   const showSourceIcon = hasTrackedSource(group)
+  const showRetailIcon = hasRetailSyncedSource(group)
   const overlayDeactivated = layout === 'grid' && deactivated
   const overlayMixed = layout === 'grid' && Boolean(mixedWarning)
   const showOverlayIcons =
-    layout === 'grid' && (showDestIcons || showSourceIcon || notInstalled)
+    layout === 'grid' && (showDestIcons || showSourceIcon || showRetailIcon || notInstalled)
   const showCorner = showOverlayIcons || overlayDeactivated || overlayMixed
   const locationBadges =
-    showDestIcons || showSourceIcon ? (
+    showDestIcons || showSourceIcon || showRetailIcon ? (
       <>
         {showDestIcons ? (
           <DestinationIcons macos={dest.macos} adobe={dest.adobe} overlay />
         ) : null}
+        {showRetailIcon ? <RetailBadge className="shrink-0" /> : null}
         {showSourceIcon ? <SourceBadge className="shrink-0" /> : null}
       </>
     ) : null
@@ -422,6 +429,7 @@ export function LibraryCard({
                     onEnsureSelected()
                     onSelectEntry(entryId)
                   },
+                  onTurnRetailSyncOff: onTurnInstanceRetailSyncOff,
                 }}
               />
             )}
@@ -465,6 +473,11 @@ export function LibraryCard({
         {onLocateSource && group.entries.some(needsLocateSource) ? (
           <ContextMenuItem onSelect={onLocateSource}>
             <FolderOpen /> {preview.sourceAvailability === 'none' ? 'Link source…' : 'Locate source…'}
+          </ContextMenuItem>
+        ) : null}
+        {onTurnRetailSyncOff ? (
+          <ContextMenuItem disabled={busy} onSelect={onTurnRetailSyncOff}>
+            <DisplaayMark /> Turn sync off
           </ContextMenuItem>
         ) : null}
         <ContextMenuSeparator />

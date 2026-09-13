@@ -21,6 +21,7 @@ export type InstanceRow = {
   variation?: string
   installState?: InstanceInstallState
   hasSource?: boolean
+  retailSynced?: boolean
   macosCopy?: boolean
   adobeCopy?: boolean
   previewSample?: string
@@ -70,6 +71,7 @@ function rowsFromFace(
   >,
   installState: InstanceInstallState,
   hasSource = false,
+  retailSynced = false,
 ): InstanceRow[] {
   const format = entryFormatOf(entry) || undefined
   const dest = entryCopyDestinations(entry)
@@ -85,6 +87,8 @@ function rowsFromFace(
         italic: italicFromStyleName(name, face.italic),
         variation: variationSettings(named?.coordinates),
         previewSample: entry.previewSample,
+        hasSource,
+        retailSynced,
       }
     })
   }
@@ -99,6 +103,7 @@ function rowsFromFace(
       italic: face.italic,
       installState,
       hasSource,
+      retailSynced,
       macosCopy: dest.macos,
       adobeCopy: dest.adobe,
       previewSample: entry.previewSample,
@@ -111,8 +116,9 @@ export function catalogInstanceRows(group: FamilyGroup): InstanceRow[] {
   for (const entry of group.entries) {
     const installState = instanceInstallState(entry)
     const hasSource = entryHasTrackedSource(entry)
+    const retailSynced = Boolean(entry.retailRelativePath)
     for (const face of entry.faces) {
-      rows.push(...rowsFromFace(face, entry, installState, hasSource))
+      rows.push(...rowsFromFace(face, entry, installState, hasSource, retailSynced))
     }
   }
   return rows

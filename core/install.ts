@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { sourceFileExists } from './catalog.ts'
+import { yieldEventLoop } from './event-loop.ts'
 import { normalizeFormat } from './formats.ts'
 import { parseFontFile, readFileStat, type ParsedFont } from './parse.ts'
 import type { CatalogEntry } from './types.ts'
@@ -49,15 +50,16 @@ export async function commitInstalledFile(options: {
   native: FontNative
 }): Promise<void> {
   const { dest, stagedPath, rollbackDir, native } = options
+  await yieldEventLoop()
   fs.mkdirSync(path.dirname(dest), { recursive: true })
   fs.mkdirSync(rollbackDir, { recursive: true })
   let rollback: string | undefined
   if (fs.existsSync(dest)) {
     rollback = path.join(rollbackDir, `${crypto.randomUUID()}${path.extname(dest) || '.ttf'}`)
-    fs.copyFileSync(dest, rollback)
+    await fs.promises.copyFile(dest, rollback)
   }
   try {
-    fs.copyFileSync(stagedPath, dest)
+    await fs.promises.copyFile(stagedPath, dest)
     await ensureFontActivation(native, dest, true)
     if (rollback) {
       fs.rmSync(rollback, { force: true })
@@ -65,7 +67,7 @@ export async function commitInstalledFile(options: {
     }
   } catch (error) {
     if (rollback && fs.existsSync(rollback)) {
-      fs.copyFileSync(rollback, dest)
+      await fs.promises.copyFile(rollback, dest)
       try {
         await ensureFontActivation(native, dest, true).catch(() => {
           // Restoring the previous bytes is best-effort after a failed activation.

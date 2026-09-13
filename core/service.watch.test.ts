@@ -111,7 +111,11 @@ test('watch folder import installs new fonts when the setting is on', async () =
   writeTestFont(font, 'WatchMe', 'WatchMe-Regular')
   const service = new FontButlerService(paths)
   try {
-    await service.updateSettings({ watchFolders: [inbox], installWatchFolderFonts: true })
+    await service.updateSettings({
+      watchFolders: [inbox],
+      installWatchFolderFonts: true,
+      onboardingCompleted: true,
+    })
     const [entry] = service.listCatalog()
     assert.ok(entry)
     assert.equal(entry.status, 'installed')
@@ -130,7 +134,11 @@ test('watch folder import leaves new fonts uninstalled when the setting is off',
   writeTestFont(font, 'LeaveMe', 'LeaveMe-Regular')
   const service = new FontButlerService(paths)
   try {
-    await service.updateSettings({ watchFolders: [inbox], installWatchFolderFonts: false })
+    await service.updateSettings({
+      watchFolders: [inbox],
+      installWatchFolderFonts: false,
+      onboardingCompleted: true,
+    })
     const [entry] = service.listCatalog()
     assert.ok(entry)
     assert.equal(entry.status, 'uninstalled')
@@ -228,6 +236,61 @@ test('reinstall succeeds when cache clearing is turned off', async () => {
     assert.equal(settings.skipCacheClearOnReinstall, true)
     const again = await service.reinstall(entry.id)
     assert.equal(again.status, 'installed')
+  } finally {
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('watch folder add during onboarding does not import until setup is finished', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  const font = path.join(inbox, 'Later.ttf')
+  writeTestFont(font, 'Later', 'Later-Regular')
+  const service = new FontButlerService(paths)
+  try {
+    assert.equal(service.getSettings().onboardingCompleted, false)
+    const configured = await service.configureFolder({
+      root: inbox,
+      policy: 'install-new',
+    })
+    await service.startWatching(configured.folder.id)
+    assert.equal(service.getSettings().folders[0]?.watching, true)
+    assert.equal(service.listCatalog().length, 0)
+
+    const restarted = new FontButlerService(paths)
+    await restarted.init()
+    assert.equal(restarted.listCatalog().length, 0)
+    restarted.dispose()
+
+    await service.updateSettings({ onboardingCompleted: true })
+    const [entry] = service.listCatalog()
+    assert.ok(entry)
+    assert.equal(entry.status, 'installed')
+    assert.ok(entry.installedPath)
+    assert.notEqual(path.resolve(entry.installedPath), path.resolve(font))
+  } finally {
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('watchFolders patch during onboarding does not import until setup is finished', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  const font = path.join(inbox, 'Deferred.ttf')
+  writeTestFont(font, 'Deferred', 'Deferred-Regular')
+  const service = new FontButlerService(paths)
+  try {
+    await service.updateSettings({ watchFolders: [inbox], installWatchFolderFonts: true })
+    assert.equal(service.getSettings().onboardingCompleted, false)
+    assert.equal(service.listCatalog().length, 0)
+    await service.updateSettings({ onboardingCompleted: true })
+    const [entry] = service.listCatalog()
+    assert.ok(entry)
+    assert.equal(entry.status, 'installed')
   } finally {
     service.dispose()
     await closeAllWatchers()

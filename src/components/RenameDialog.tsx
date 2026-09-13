@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useSetActionStatus } from '@/components/NotifyProvider'
 import { api } from '@/lib/api'
+import { isLastQueuedFontAction, startQueuedFontAction } from '@/lib/actionQueue'
 import type { CatalogEntry } from '@/lib/types'
 import { familyNameOf } from '@/lib/group'
 import { bakeReportWarnings, suggestedBakeFamilyName } from '@/lib/otFeatures'
@@ -36,7 +37,6 @@ export function RenameDialog({
     : original
   const [name, setName] = useState(suggested)
   const [preview, setPreview] = useState({ fullName: '', postscriptName: '' })
-  const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     setName(suggested)
@@ -50,32 +50,34 @@ export function RenameDialog({
     return () => window.clearTimeout(handle)
   }, [entry, name])
 
-  async function install() {
+  function install() {
     if (!entry || !name.trim()) return
-    setBusy(true)
     const family = name.trim()
-    setActionStatus(
-      bakeFeatures?.length ? `Installing baked copy as ${family}…` : `Installing as ${family}…`,
-    )
-    try {
-      if (bakeFeatures?.length) {
-        const result = await api.bakeFeatures(entry.id, bakeFeatures, 'new-copy', family)
-        toast.success(`Installed ${family} with ${bakeFeatures.join(', ')} baked in`)
-        const warnings = bakeReportWarnings(result.report)
-        if (warnings.length) toast.warning(warnings.join('\n'))
-        onDone(result.entry)
-      } else {
-        const result = await api.install(entry.id, family)
-        toast.success(`Installed as ${family}`)
-        onDone(result.entry)
+    const current = entry
+    const features = bakeFeatures
+    onOpenChange(false)
+    startQueuedFontAction(async () => {
+      setActionStatus(
+        features?.length ? `Installing baked copy as ${family}…` : `Installing as ${family}…`,
+      )
+      try {
+        if (features?.length) {
+          const result = await api.bakeFeatures(current.id, features, 'new-copy', family)
+          toast.success(`Installed ${family} with ${features.join(', ')} baked in`)
+          const warnings = bakeReportWarnings(result.report)
+          if (warnings.length) toast.warning(warnings.join('\n'))
+          onDone(result.entry)
+        } else {
+          const result = await api.install(current.id, family)
+          toast.success(`Installed as ${family}`)
+          onDone(result.entry)
+        }
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Install as failed')
+      } finally {
+        if (isLastQueuedFontAction()) setActionStatus(null)
       }
-      onOpenChange(false)
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Install as failed')
-    } finally {
-      setBusy(false)
-      setActionStatus(null)
-    }
+    })
   }
 
   return (
@@ -112,8 +114,8 @@ export function RenameDialog({
             <Button variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button onClick={() => void install()} disabled={busy || !name.trim()}>
-              {busy ? 'Installing…' : 'Install renamed copy'}
+            <Button onClick={() => void install()} disabled={!name.trim()}>
+              Install renamed copy
             </Button>
           </div>
         </div>

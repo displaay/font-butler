@@ -21,11 +21,14 @@ export function FolderSetupDialog({
   roots,
   onOpenChange,
   onDone,
+  deferInstall = false,
 }: {
   open: boolean
   roots?: string[]
   onOpenChange: (open: boolean) => void
   onDone: (folders: WatchFolder[]) => void
+  /** Record the folder without watching or installing; used while onboarding is open. */
+  deferInstall?: boolean
 }) {
   const [root, setRoot] = useState(roots?.[0] ?? '')
   const extraRoots = roots?.slice(1) ?? []
@@ -111,8 +114,9 @@ export function FolderSetupDialog({
         <DialogHeader>
           <DialogTitle>Watch folder</DialogTitle>
           <DialogDescription>
-            Choose a policy before Font Buttler scans or installs anything. Starting watch applies
-            only the operations shown below.
+            {deferInstall
+              ? 'Choose a policy. Fonts from this folder are not installed until you finish setup.'
+              : 'Choose a policy before Font Buttler scans or installs anything. Starting watch applies only the operations shown below.'}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
@@ -229,7 +233,7 @@ export function FolderSetupDialog({
               Preview scan
             </Button>
             <Button disabled={busy || !root.trim()} onClick={() => void start()}>
-              Start watching
+              {deferInstall ? 'Add folder' : 'Start watching'}
             </Button>
           </div>
         </div>

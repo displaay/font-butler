@@ -10,10 +10,12 @@ import {
   familyStatusSummary,
   forgettableIds,
   groupCatalog,
+  hasRetailSyncedSource,
   hasTrackedSource,
   isForgettableOnlyGroup,
   isUninstallableGroup,
   matchesLibraryFilter,
+  retailFamiliesToOptOut,
   sortFamilyGroups,
   uniquePaths,
 } from './group.ts'
@@ -168,6 +170,11 @@ test('Displaay retail listings cannot be forgotten', () => {
   assert.deepEqual(forgettableIds({ entries: [retail] }), [])
   assert.equal(isForgettableOnlyGroup({ status: 'uninstalled', entries: [retail] }), false)
   assert.equal(entryHasTrackedSource(retail), false)
+  assert.equal(hasRetailSyncedSource({ entries: [retail] }), true)
+  assert.equal(hasTrackedSource({ entries: [retail] }), false)
+  assert.deepEqual(retailFamiliesToOptOut([retail]), ['Reckless'])
+  assert.deepEqual(retailFamiliesToOptOut([retail], [{ familyName: 'Reckless', enabled: false }]), [])
+  assert.deepEqual(retailFamiliesToOptOut([entry('local', 'Reckless', 1)]), [])
 })
 
 test('groupCatalog merges installed and uninstalled styles onto one Fonts card', () => {

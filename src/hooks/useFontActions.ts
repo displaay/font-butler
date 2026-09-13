@@ -2,6 +2,7 @@ import { toast } from 'sonner'
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
 import type { Tab } from '@/components/Sidebar'
 import { api } from '@/lib/api'
+import { isLastQueuedFontAction, startQueuedFontAction } from '@/lib/actionQueue'
 import {
   activatableIds,
   adobeInstallableIds,
@@ -70,7 +71,6 @@ export type FontActionInput = {
   operations: Operation[]
   setOperations: Dispatch<SetStateAction<Operation[]>>
   busyRef: MutableRefObject<boolean>
-  setBusy: Dispatch<SetStateAction<boolean>>
   setActionStatus: (message: string | null) => void
   setTab: Dispatch<SetStateAction<Tab>>
   setWatchFolderFilter: Dispatch<SetStateAction<string | null>>
@@ -90,7 +90,6 @@ export function useFontActions({
   operations,
   setOperations,
   busyRef,
-  setBusy,
   setActionStatus,
   setTab,
   setWatchFolderFilter,
@@ -522,10 +521,6 @@ export function useFontActions({
   }
 
   function reinstallFromMenuBar(ids: string[]) {
-    if (busyRef.current) {
-      toast.message('Wait for the current action to finish.')
-      return
-    }
     const groups = updateGroupsForIds(allUpdates, ids)
     if (groups.length === 0) {
       const leftover = ids.filter((id) => entries.some((entry) => entry.id === id && entry.status === 'outdated'))
@@ -535,7 +530,7 @@ export function useFontActions({
       }
       setTab('updates')
       setWatchFolderFilter(null)
-      void run(() => (leftover.length > 1 ? api.reinstallMany(leftover) : api.reinstall(leftover[0])), {
+      run(() => (leftover.length > 1 ? api.reinstallMany(leftover) : api.reinstall(leftover[0])), {
         pending: 'Reinstalling fonts…',
         done: 'Reinstalled fonts',
       })
@@ -543,7 +538,7 @@ export function useFontActions({
     }
     setTab('updates')
     setWatchFolderFilter(null)
-    void run(async () => {
+    run(async () => {
       const results: unknown[] = []
       for (const group of groups) {
         results.push(await reinstallGroup(group))
@@ -705,54 +700,55 @@ export function useFontActions({
     }, { pending: 'Retrying failed items…', done: 'Retried failed items' })
   }
 
-  async function run(
+  function run(
     action: () => Promise<unknown>,
     copy: { pending: string; done: string },
     options?: { undo?: 'uninstall' },
   ) {
     busyRef.current = true
-    setBusy(true)
     setActionStatus(copy.pending)
-    try {
-      const result = await action()
-      setActionStatus(null)
-      const outcome = result && typeof result === 'object' ? (result as BatchOutcome) : undefined
-      const { message, failedIds } = batchResultCopy(copy.done, outcome)
-      const catalog = await api.catalog()
-      setEntries(catalog.entries)
-      const activity = await api.activity().catch(() => ({ operations }))
-      setOperations(activity.operations)
-      const operationId =
-        (result as { operationId?: string } | undefined)?.operationId ??
-        (options?.undo === 'uninstall'
-          ? latestUndoableOperationId(activity.operations, 'uninstall')
-          : undefined)
-      const undoable =
-        (result as { undoable?: boolean } | undefined)?.undoable ??
-        Boolean(options?.undo && operationId)
-      showDoneToast(message, failedIds, {
-        operationId,
-        undo: undoable ? options?.undo : undefined,
-      })
-    } catch (err) {
-      setActionStatus(null)
-      toast.error(err instanceof Error ? err.message : 'Something went wrong', {
-        action: {
-          label: 'Activity',
-          onClick: () => setTab('activity'),
-        },
-      })
+    startQueuedFontAction(async () => {
+      setActionStatus(copy.pending)
       try {
+        const result = await action()
+        const outcome = result && typeof result === 'object' ? (result as BatchOutcome) : undefined
+        const { message, failedIds } = batchResultCopy(copy.done, outcome)
         const catalog = await api.catalog()
         setEntries(catalog.entries)
-      } catch {
-        // Keep the last known catalog if the refresh fails.
+        const activity = await api.activity().catch(() => ({ operations }))
+        setOperations(activity.operations)
+        const operationId =
+          (result as { operationId?: string } | undefined)?.operationId ??
+          (options?.undo === 'uninstall'
+            ? latestUndoableOperationId(activity.operations, 'uninstall')
+            : undefined)
+        const undoable =
+          (result as { undoable?: boolean } | undefined)?.undoable ??
+          Boolean(options?.undo && operationId)
+        showDoneToast(message, failedIds, {
+          operationId,
+          undo: undoable ? options?.undo : undefined,
+        })
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Something went wrong', {
+          action: {
+            label: 'Activity',
+            onClick: () => setTab('activity'),
+          },
+        })
+        try {
+          const catalog = await api.catalog()
+          setEntries(catalog.entries)
+        } catch {
+          // Keep the last known catalog if the refresh fails.
+        }
+      } finally {
+        if (isLastQueuedFontAction()) {
+          busyRef.current = false
+          setActionStatus(null)
+        }
       }
-    } finally {
-      busyRef.current = false
-      setBusy(false)
-      setActionStatus(null)
-    }
+    })
   }
 
   return {

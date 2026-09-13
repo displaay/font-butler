@@ -124,6 +124,16 @@ export type RetailSyncFont = {
   selectedFormat: RetailFontFormat
 }
 
+/** Replace the other copy, or keep it and stop acting on that family. */
+export type RetailCollisionAction = 'replace' | 'keep'
+
+export type RetailFamilyCollision = {
+  familyName: string
+  typefaceName: string
+  entryIds: string[]
+  installedLabel: string
+}
+
 export type RetailSyncStatus = {
   enabled: boolean
   /** Background check interval in minutes; `0` means the app never checks on its own. */
@@ -142,6 +152,8 @@ export type RetailSyncStatus = {
   fonts: RetailSyncFont[]
   disabledGlyphsFiles: string[]
   familyFormats: Record<string, RetailFontFormat>
+  /** Outside installs that share a family with a pending retail sync. Empty when none. */
+  collisions: RetailFamilyCollision[]
 }
 
 /**

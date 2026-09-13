@@ -158,6 +158,7 @@ export function SettingsDialog({
   highlightWatchFolders = false,
   retail = null,
   onRetailChange,
+  onRetailSync,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -171,6 +172,7 @@ export function SettingsDialog({
   highlightWatchFolders?: boolean
   retail?: RetailSyncStatus | null
   onRetailChange?: (status: RetailSyncStatus) => void
+  onRetailSync?: () => void
 }) {
   const setActionStatus = useSetActionStatus()
   const tablistId = useId()
@@ -400,6 +402,7 @@ export function SettingsDialog({
                   busy={busy}
                   retail={retail}
                   onRetailChange={onRetailChange}
+                  onRetailSync={onRetailSync}
                   onSave={save}
                   onAddFolder={() => setSetupOpen(true)}
                   onRelink={(root) => setRelinkRoot(root)}
@@ -777,6 +780,7 @@ function FoldersPane({
   busy,
   retail,
   onRetailChange,
+  onRetailSync,
   onSave,
   onAddFolder,
   onRelink,
@@ -788,6 +792,7 @@ function FoldersPane({
   busy: boolean
   retail?: RetailSyncStatus | null
   onRetailChange?: (status: RetailSyncStatus) => void
+  onRetailSync?: () => void
   onSave: (patch: SettingsPatch) => Promise<void>
   onAddFolder: () => void
   onRelink: (root: string) => void
@@ -854,6 +859,7 @@ function FoldersPane({
         status={retail ?? null}
         busy={busy}
         onStatus={(next) => onRetailChange?.(next)}
+        onSync={onRetailSync}
       />
     </div>
   )

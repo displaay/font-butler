@@ -19,6 +19,13 @@ import type {
 
 const PLAN_TTL_MS = 60 * 60 * 1000
 
+/** Uninstalled Displaay listings stay in the catalog; they must not block an outside import. */
+export function isInactiveRetailListing(
+  entry: Pick<CatalogEntry, 'retailRelativePath' | 'status'>,
+): boolean {
+  return Boolean(entry.retailRelativePath) && entry.status !== 'installed' && entry.status !== 'outdated'
+}
+
 export function classifyImportFile(
   filePath: string,
   catalog: CatalogFile,
@@ -50,15 +57,26 @@ export function classifyImportFile(
   }
   const fingerprint = tryFingerprintFile(resolved)
   const previewOnly = isWebFontFormat(parsed.format)
-  const samePath =
-    findByInstalledPath(catalog, resolved) ?? findBySourcePath(catalog, resolved)
-  const identityMatches = findAllByFaceIdentity(catalog, parsed.faces, parsed.format)
-  const sameFaceAnyFormat = findAllByFaceIdentity(catalog, parsed.faces)[0]
+  const samePath = (() => {
+    const found = findByInstalledPath(catalog, resolved) ?? findBySourcePath(catalog, resolved)
+    return found && isInactiveRetailListing(found) ? undefined : found
+  })()
+  const identityMatches = findAllByFaceIdentity(catalog, parsed.faces, parsed.format).filter(
+    (entry) => !isInactiveRetailListing(entry),
+  )
+  const sameFaceAnyFormat = findAllByFaceIdentity(catalog, parsed.faces).find(
+    (entry) => !isInactiveRetailListing(entry),
+  )
   const sameBytes = fingerprint
-    ? catalog.entries.find((entry) => entry.sourceFingerprint === fingerprint || entry.installedFingerprint === fingerprint)
+    ? catalog.entries.find(
+        (entry) =>
+          !isInactiveRetailListing(entry) &&
+          (entry.sourceFingerprint === fingerprint || entry.installedFingerprint === fingerprint),
+      )
     : undefined
   const family = parsed.faces[0]?.familyName
   const sameFamilyDifferentFace = catalog.entries.find((entry) => {
+    if (isInactiveRetailListing(entry)) return false
     if (identityMatches.some((match) => match.id === entry.id)) return false
     const entryFamily = entry.customFamilyName || entry.faces[0]?.familyName
     if (!family || !entryFamily || entryFamily !== family) return false

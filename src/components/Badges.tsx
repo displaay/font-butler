@@ -1,5 +1,6 @@
 import type { SVGProps } from 'react'
 import { Link2, Monitor } from 'lucide-react'
+import { DisplaayMark } from '@/components/DisplaayMark'
 import { Badge } from '@/components/ui/badge'
 import { formatLabel, normalizeFormat } from '@/lib/formats'
 import {
@@ -162,6 +163,18 @@ export function SourceBadge({ className }: { className?: string }) {
       className={cn(overlayChipClassName, className)}
     >
       <Link2 className="size-3" />
+    </span>
+  )
+}
+
+export function RetailBadge({ className }: { className?: string }) {
+  return (
+    <span
+      title="Displaay retail"
+      aria-label="Displaay retail"
+      className={cn(overlayChipClassName, className)}
+    >
+      <DisplaayMark className="size-3" />
     </span>
   )
 }

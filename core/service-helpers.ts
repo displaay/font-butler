@@ -6,6 +6,7 @@ import { isUnderAnyRoot } from './containment.ts'
 import { pruneStaleDuplicates } from './duplicates.ts'
 import { emitEvent } from './events.ts'
 import { entryFormat } from './formats.ts'
+import { yieldEventLoop } from './event-loop.ts'
 import { getFontNative } from './native.ts'
 import { readFileStat } from './parse.ts'
 import type { AppPaths } from './paths.ts'
@@ -115,9 +116,10 @@ export function touchEntry(entry: CatalogEntry): void {
 
 export async function removeInstalledCopy(entry: CatalogEntry): Promise<void> {
   if (entry.installedPath) {
+    await yieldEventLoop()
     await getFontNative().unregisterFont(entry.installedPath)
     if (fs.existsSync(entry.installedPath)) {
-      fs.rmSync(entry.installedPath, { force: true })
+      await fs.promises.rm(entry.installedPath, { force: true })
     }
   }
   entry.installedPath = undefined

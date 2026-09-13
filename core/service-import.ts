@@ -15,7 +15,7 @@ import { assertNotWebFont, isWebFontFile, isWebFontFormat } from './formats.ts'
 import { tryFingerprintFile } from './fingerprint.ts'
 import { folderForPath, isExcluded, mostSpecificOwner } from './folders.ts'
 import { applyParsedFont, isFontFile, isPreviewableFontFile, parseFontFile, readFileStat } from './parse.ts'
-import { classifyImportFile, isWatchIdentityDuplicate } from './planner.ts'
+import { classifyImportFile, isInactiveRetailListing, isWatchIdentityDuplicate } from './planner.ts'
 import type { AppPaths } from './paths.ts'
 import { applyEntryFacts } from './state.ts'
 import { loadSettings } from './settings.ts'
@@ -48,11 +48,15 @@ export function importOneUnlocked(
   const catalog = options.catalog ?? loadCatalog(paths)
   const persist = options.persist !== false
   const fingerprint = tryFingerprintFile(resolved)
-  const samePath =
-    findByInstalledPath(catalog, resolved) ?? findBySourcePath(catalog, resolved)
+  const samePath = (() => {
+    const found = findByInstalledPath(catalog, resolved) ?? findBySourcePath(catalog, resolved)
+    return found && isInactiveRetailListing(found) ? undefined : found
+  })()
   const sameBytes = fingerprint
     ? catalog.entries.find(
-        (item) => item.sourceFingerprint === fingerprint || item.installedFingerprint === fingerprint,
+        (item) =>
+          !isInactiveRetailListing(item) &&
+          (item.sourceFingerprint === fingerprint || item.installedFingerprint === fingerprint),
       )
     : undefined
   const existing = options.forceNew ? samePath : (samePath ?? sameBytes)
