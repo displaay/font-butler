@@ -1,4 +1,4 @@
-import type { RetailSyncStatus } from '../shared/retail.ts'
+import type { RetailFontFormat, RetailSyncStatus } from '../shared/retail.ts'
 import type { AppIconStyle } from '../shared/appIcon.ts'
 
 export const FONT_EXTENSIONS = ['.ttf', '.otf', '.ttc', '.otc'] as const
@@ -120,6 +120,10 @@ export type CatalogEntry = {
   ownerFolderId?: string | null
   /** Stable key in the Displaay retail collection (`Family/File.otf`). Self-sourced when set. */
   retailRelativePath?: string | null
+  /** API family this retail file belongs to. Survives parse, which may rewrite `faces[0].familyName`. */
+  retailFamilyName?: string | null
+  /** Parent typeface for Settings grouping (e.g. Azeret). */
+  retailTypefaceName?: string | null
   previewOnly?: boolean
   storageVolumeId?: string
   sourceRoot?: string
@@ -228,8 +232,16 @@ export type RetailSyncSettings = {
   workerBaseUrl: string
   /** Background check interval in minutes; `0` means the app never checks on its own. */
   autoCheckMinutes: number
-  /** GlyphsFile names the user turned off. Empty means every loaded family syncs. */
+  /** Family names the user turned off. Empty means every loaded family syncs. */
   disabledGlyphsFiles: string[]
+  /** Per-family desktop format when both otf and ttf exist. Missing keys default to otf. */
+  familyFormats: Record<string, RetailFontFormat>
+  /**
+   * When true, `disabledGlyphsFiles` are family names from the Settings rows.
+   * When false or absent, they also match `typefaceName` so a saved `['Azeret']` still
+   * covers Azeret Mono / Azeret VF after the worker started sending child families.
+   */
+  familyOptOuts: boolean
 }
 
 export type LatinPreviewPreset = 'Aa' | 'Ag' | 'Ta' | 'ag' | 'custom'

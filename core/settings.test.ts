@@ -512,10 +512,14 @@ test('loadSettings keeps stored retail disabled families', () => {
           workerBaseUrl: 'https://w.displaay.net',
           autoCheckMinutes: 60,
           disabledGlyphsFiles: [' Zangezi ', 'Reckless', 'Zangezi'],
+          familyFormats: { Reckless: 'ttf' },
+          familyOptOuts: true,
         },
       }),
     )
     assert.deepEqual(loadSettings(paths).retailSync?.disabledGlyphsFiles, ['Reckless', 'Zangezi'])
+    assert.deepEqual(loadSettings(paths).retailSync?.familyFormats, { Reckless: 'ttf' })
+    assert.equal(loadSettings(paths).retailSync?.familyOptOuts, true)
   } finally {
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
@@ -525,6 +529,31 @@ test('loadSettings defaults retail disabled families to none', () => {
   const paths = tempPaths()
   try {
     assert.deepEqual(loadSettings(paths).retailSync?.disabledGlyphsFiles, [])
+    assert.deepEqual(loadSettings(paths).retailSync?.familyFormats, {})
+    assert.equal(loadSettings(paths).retailSync?.familyOptOuts, true)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings treats a stored retailSync without familyOptOuts as typeface matching', () => {
+  const paths = tempPaths()
+  try {
+    fs.mkdirSync(paths.dataRoot, { recursive: true })
+    fs.writeFileSync(
+      paths.settingsPath,
+      JSON.stringify({
+        version: 1,
+        retailSync: {
+          enabled: true,
+          workerBaseUrl: 'https://w.displaay.net',
+          autoCheckMinutes: 60,
+          disabledGlyphsFiles: ['Azeret'],
+        },
+      }),
+    )
+    assert.deepEqual(loadSettings(paths).retailSync?.disabledGlyphsFiles, ['Azeret'])
+    assert.equal(loadSettings(paths).retailSync?.familyOptOuts, false)
   } finally {
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }

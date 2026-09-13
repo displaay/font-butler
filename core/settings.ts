@@ -15,6 +15,7 @@ import {
   DEFAULT_RETAIL_AUTOCHECK_MINUTES,
   normalizeAutoCheckMinutes,
   normalizeDisabledGlyphsFiles,
+  normalizeFamilyFormats,
 } from '../shared/retail.ts'
 import type {
   AppSettings,
@@ -34,6 +35,8 @@ export function defaultRetailSync(): RetailSyncSettings {
     workerBaseUrl: DEFAULT_RETAIL_WORKER_BASE_URL,
     autoCheckMinutes: DEFAULT_RETAIL_AUTOCHECK_MINUTES,
     disabledGlyphsFiles: [],
+    familyFormats: {},
+    familyOptOuts: true,
   }
 }
 
@@ -50,6 +53,8 @@ function readRetailSync(value: unknown): RetailSyncSettings {
     workerBaseUrl,
     autoCheckMinutes: normalizeAutoCheckMinutes(row.autoCheckMinutes),
     disabledGlyphsFiles: normalizeDisabledGlyphsFiles(row.disabledGlyphsFiles),
+    familyFormats: normalizeFamilyFormats(row.familyFormats),
+    familyOptOuts: row.familyOptOuts === true,
   }
 }
 

@@ -201,6 +201,7 @@ export async function applyRetailSync(options: ApplyRetailSyncOptions): Promise<
         size: remote.size,
         etag: remote.etag,
         glyphsFile: item.glyphsFile,
+        familyName: item.familyName || item.remote?.familyName,
         // Keys are `<glyphsFile>/<revisionId>/<basename>`; counting from the end survives a glyphs
         // file name that itself contains a separator.
         revisionId: remote.key.split('/').at(-2) ?? '',

@@ -19,9 +19,10 @@ directly — it goes through two endpoints on the admin worker, both behind `req
 ### What counts as retail
 
 Every `GlyphsFile` that has an active revision. There is deliberately **no `publishedAt` filter** —
-the collection is defined by what has been generated, not by what the website shows.
+the collection is defined by what has been generated, not by what the website shows. Each collection
+carries a `typefaceName`; each file carries a `familyName` used to group and install styles.
 
-A glyphs file is skipped, and reported in `skipped`, when it is mid-regeneration, has no active
+A typeface is skipped, and reported in `skipped`, when it is mid-regeneration, has no active
 revision, has no `transaction.json`, whose last generation did not succeed, whose declared desktop fonts
 are in neither the R2 listing nor `fonts.zip`, or that contains no desktop fonts.
 
@@ -57,9 +58,18 @@ data root (`.part` never appears in Fonts), then `commitInstalledFile` flattens 
   VinilaVF.otf
 ```
 
-The stable key remains `Reckless/RecklessVF.otf` on the catalog entry. Two glyphs files that flatten to
+The stable key remains `Reckless/RecklessVF.otf` on the catalog entry. Two typefaces that flatten to
 the same basename are `conflict` drift and are not written. The revision id is deliberately **not** in
 the path. A regeneration therefore rewrites the same Fonts file.
+
+Settings groups the collection by `typefaceName` (parent) and lists each `familyName` as a child row.
+When a family has both `.otf` and `.ttf` files, that row has a format toggle; variable families usually
+have one format and only an on/off switch. Sync downloads and installs **only** the selected format.
+Switching format uninstalls the other format rather than leaving both in Fonts. Turning a family off
+still leaves any already-installed copy in place and only skips further downloads.
+
+The **Displaay retail** library view hides the unselected format so both weights of Azeret do not show
+as duplicate families. Watch-folder foundries are unchanged.
 
 Do not register `~/Library/Fonts` as a watch folder. Leftover Application Support `DISPLAAY Retail`
 directories from earlier builds are ignored and are not deleted automatically.

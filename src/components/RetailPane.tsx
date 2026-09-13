@@ -7,7 +7,10 @@ import { api } from '@/lib/api'
 import {
   DEFAULT_RETAIL_AUTOCHECK_MINUTES,
   RETAIL_AUTOCHECK_CHOICES,
+  groupRetailFontsByTypeface,
   retailDriftSummary,
+  type RetailFontFormat,
+  type RetailSkip,
   type RetailSkipReason,
   type RetailSyncFont,
   type RetailSyncStatus,
@@ -65,24 +68,87 @@ function SyncToggle({
   )
 }
 
-function nextDisabledGlyphsFiles(fonts: RetailSyncFont[], glyphsFile: string, enabled: boolean): string[] {
+function FormatToggle({
+  formats,
+  selected,
+  disabled,
+  ariaLabel,
+  onChange,
+}: {
+  formats: RetailFontFormat[]
+  selected: RetailFontFormat
+  disabled: boolean
+  ariaLabel: string
+  onChange: (format: RetailFontFormat) => void
+}) {
+  if (formats.length < 2) return null
+  return (
+    <div
+      role="radiogroup"
+      aria-label={ariaLabel}
+      className="inline-flex items-center gap-0.5 rounded-md border bg-background p-0.5"
+    >
+      {formats.map((format) => {
+        const active = selected === format
+        return (
+          <Button
+            key={format}
+            type="button"
+            size="sm"
+            variant="ghost"
+            role="radio"
+            aria-checked={active}
+            disabled={disabled}
+            className={cn(
+              'h-7 px-2.5 uppercase',
+              active ? 'bg-muted font-medium' : 'text-muted-foreground',
+            )}
+            onClick={() => {
+              if (!active) onChange(format)
+            }}
+          >
+            {format}
+          </Button>
+        )
+      })}
+    </div>
+  )
+}
+
+function nextDisabledFamilyNames(fonts: RetailSyncFont[], familyName: string, enabled: boolean): string[] {
   return fonts
-    .filter((font) => (font.glyphsFile === glyphsFile ? !enabled : !font.enabled))
-    .map((font) => font.glyphsFile)
+    .filter((font) => (font.familyName === familyName ? !enabled : !font.enabled))
+    .map((font) => font.familyName)
+}
+
+function nextFamilyFormats(
+  fonts: RetailSyncFont[],
+  familyName: string,
+  format: RetailFontFormat,
+): Record<string, RetailFontFormat> {
+  const next: Record<string, RetailFontFormat> = {}
+  for (const font of fonts) {
+    if (font.formats.length < 2) continue
+    next[font.familyName] = font.familyName === familyName ? format : font.selectedFormat
+  }
+  return next
 }
 
 function RetailFontList({
   fonts,
   disabled,
   onToggle,
+  onFormat,
   onSetAll,
 }: {
   fonts: RetailSyncFont[]
   disabled: boolean
-  onToggle: (glyphsFile: string, enabled: boolean) => void
+  onToggle: (familyName: string, enabled: boolean) => void
+  onFormat: (familyName: string, format: RetailFontFormat) => void
   onSetAll: (enabled: boolean) => void
 }) {
   const synced = fonts.filter((font) => font.enabled).length
+  const groups = groupRetailFontsByTypeface(fonts)
   return (
     <div className="rounded-lg border bg-muted/30">
       <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
@@ -112,30 +178,50 @@ function RetailFontList({
           </Button>
         </div>
       </div>
-      <div className="max-h-64 divide-y overflow-y-auto">
-        {fonts.map((font) => (
-          <div key={font.glyphsFile} className="flex items-center justify-between gap-3 px-3 py-2">
-            <div className="min-w-0">
-              <div className="truncate text-sm font-medium leading-5">{font.glyphsFile}</div>
-              <p className="text-[13px] leading-5 text-muted-foreground">
-                {font.available === false
-                  ? 'Not available yet'
-                  : font.fileCount === 1
-                    ? '1 file'
-                    : `${font.fileCount} files`}
-              </p>
+      <div className="max-h-80 overflow-y-auto">
+        {groups.map((group) => (
+          <div key={group.typefaceName} className="border-b last:border-b-0">
+            <div className="px-3 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              {group.typefaceName}
             </div>
-            <SyncToggle
-              enabled={font.enabled}
-              disabled={disabled}
-              ariaLabel={`Sync ${font.glyphsFile}`}
-              onChange={(next) => onToggle(font.glyphsFile, next)}
-            />
+            {group.fonts.map((font) => (
+              <div key={font.familyName} className="flex items-center justify-between gap-3 px-3 py-2">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium leading-5">{font.familyName}</div>
+                  <p className="text-[13px] leading-5 text-muted-foreground">
+                    {font.available === false
+                      ? 'Not available yet'
+                      : font.fileCount === 1
+                        ? '1 file'
+                        : `${font.fileCount} files`}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <FormatToggle
+                    formats={font.formats}
+                    selected={font.selectedFormat}
+                    disabled={disabled}
+                    ariaLabel={`Format for ${font.familyName}`}
+                    onChange={(format) => onFormat(font.familyName, format)}
+                  />
+                  <SyncToggle
+                    enabled={font.enabled}
+                    disabled={disabled}
+                    ariaLabel={`Sync ${font.familyName}`}
+                    onChange={(next) => onToggle(font.familyName, next)}
+                  />
+                </div>
+              </div>
+            ))}
           </div>
         ))}
       </div>
     </div>
   )
+}
+
+function skipName(skip: RetailSkip): string {
+  return skip.typefaceName?.trim() || skip.glyphsFile?.trim() || 'Family'
 }
 
 function skipLabel(reason: RetailSkipReason): string {
@@ -387,7 +473,7 @@ export function RetailPane({
               {' · '}
               {status.skipped
                 .slice(0, 4)
-                .map((skip) => `${skip.glyphsFile} ${skipLabel(skip.reason)}`)
+                .map((skip) => `${skipName(skip)} ${skipLabel(skip.reason)}`)
                 .join(' · ')}
             </p>
           ) : null}
@@ -397,22 +483,29 @@ export function RetailPane({
       {fonts.length > 0 ? (
         <SettingsRow
           label="Fonts"
-          description="Choose which families stay in sync. Turn a family off to leave it listed without downloading updates."
+          description="Choose which families stay in sync. When a family has both otf and ttf, only the selected format is downloaded."
           extra={
             <RetailFontList
               fonts={fonts}
               disabled={disabled}
-              onToggle={(glyphsFile, nextEnabled) =>
+              onToggle={(familyName, nextEnabled) =>
                 void run(() =>
                   api.retail.configure({
-                    disabledGlyphsFiles: nextDisabledGlyphsFiles(fonts, glyphsFile, nextEnabled),
+                    disabledGlyphsFiles: nextDisabledFamilyNames(fonts, familyName, nextEnabled),
+                  }),
+                )
+              }
+              onFormat={(familyName, format) =>
+                void run(() =>
+                  api.retail.configure({
+                    familyFormats: nextFamilyFormats(fonts, familyName, format),
                   }),
                 )
               }
               onSetAll={(syncEnabled) =>
                 void run(() =>
                   api.retail.configure({
-                    disabledGlyphsFiles: syncEnabled ? [] : fonts.map((font) => font.glyphsFile),
+                    disabledGlyphsFiles: syncEnabled ? [] : fonts.map((font) => font.familyName),
                   }),
                 )
               }

@@ -348,6 +348,7 @@ export const api = {
       token?: string
       folderId?: string | null
       disabledGlyphsFiles?: string[]
+      familyFormats?: Record<string, 'otf' | 'ttf'>
     }) => json<{ status: RetailSyncStatus }>(post('/api/retail/configure', input)),
     check: (refresh = false) =>
       json<{ status: RetailSyncStatus }>(post('/api/retail/check', { refresh })),

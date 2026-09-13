@@ -94,6 +94,8 @@ export type CatalogEntry = {
   ownerFolderId?: string | null
   /** Stable key in the Displaay retail collection (`Family/File.otf`). Self-sourced when set. */
   retailRelativePath?: string | null
+  retailFamilyName?: string | null
+  retailTypefaceName?: string | null
   previewOnly?: boolean
   activationOwners?: ActivationOwner[]
   destinationId?: DestinationId
@@ -399,6 +401,7 @@ export type {
   RetailDriftItem,
   RetailDriftKind,
   RetailFile,
+  RetailFontFormat,
   RetailSkip,
   RetailSkipReason,
   RetailSyncFont,
@@ -407,5 +410,8 @@ export type {
 export {
   DEFAULT_RETAIL_AUTOCHECK_MINUTES,
   RETAIL_AUTOCHECK_CHOICES,
+  groupRetailFontsByTypeface,
   retailDriftSummary,
+  retailFileFormat,
+  retailLibraryEntryVisible,
 } from '../../shared/retail'
