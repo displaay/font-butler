@@ -521,6 +521,4 @@ export async function closeAllWatchers(): Promise<void> {
   }
   await syncInboxWatcher([], () => {})
   await syncUserFontsWatcher('', () => {})
-  const { closeFontAnalysisWorker } = await import('./font-analysis.ts')
-  await closeFontAnalysisWorker()
 }

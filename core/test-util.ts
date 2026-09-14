@@ -6,7 +6,7 @@ import type { AppPaths } from './paths.ts'
 import { setFontNative, noopFontNative, type FontNative } from './native.ts'
 import { setDesktopShell, testDesktopShell } from './reveal.ts'
 import { FontButlerService } from './service.ts'
-import { resetFontAnalysisCache, closeFontAnalysisWorker } from './font-analysis.ts'
+import { resetFontAnalysisCache } from './font-analysis.ts'
 import { closeAllWatchers } from './watch.ts'
 
 export function tempPaths(prefix = 'font-butler-'): AppPaths {
@@ -212,7 +212,6 @@ export async function withService<T>(
   } finally {
     service.dispose()
     await closeAllWatchers()
-    await closeFontAnalysisWorker()
     resetFontAnalysisCache()
     setFontNative(previous ?? null)
     setDesktopShell(null)
