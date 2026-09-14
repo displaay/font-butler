@@ -224,11 +224,13 @@ function bestScript(set: Set<number>, scripts: PreviewScript[]): PreviewScript |
 }
 
 const COMBINING = /\p{M}/u
+const INVISIBLE_FALLBACK = /\p{Z}|\p{Cc}|\p{Cf}/u
 
 function isInterestingFallback(code: number): boolean {
   if (!Number.isInteger(code) || code < 33 || code === 127) return false
   try {
-    if (COMBINING.test(String.fromCodePoint(code))) return false
+    const char = String.fromCodePoint(code)
+    if (COMBINING.test(char) || INVISIBLE_FALLBACK.test(char)) return false
   } catch {
     return false
   }

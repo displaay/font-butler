@@ -83,3 +83,10 @@ test('grid and list resolve missing coverage to Aa', () => {
   assert.equal(resolvedPreviewSample(undefined, 'א'), 'א')
   assert.equal(resolvedPreviewSample(undefined, null, ''), DEFAULT_PREVIEW_SAMPLE)
 })
+
+test('fallback sample skips separators, controls, and format characters', () => {
+  assert.equal(previewSampleFromCoverage([0x00a0, 0x0f40]), '\u0f40')
+  assert.notEqual(previewSampleFromCoverage([0x00a0, 0x0f40]), '\u00a0')
+  assert.equal(previewSampleFromCoverage([0x00a0]), DEFAULT_PREVIEW_SAMPLE)
+  assert.equal(previewSampleFromCoverage([0x200b, 0x0f40]), '\u0f40')
+})
