@@ -5,7 +5,14 @@ import { faceIdentityKey, findByInstalledPath, findBySourcePath } from './catalo
 import { occupyingSiblingsForIncoming, isBoundSourcePath, findAllByFaceIdentity } from './identity.ts'
 import { tryFingerprintFile } from './fingerprint.ts'
 import { instancesOverlap, isWebFontFormat, normalizeFormat } from './formats.ts'
-import { isFontFile, isPreviewableFontFile, parseFontFile } from './parse.ts'
+import {
+  analyzeFontFile,
+  analyzeFontFileSync,
+  peekFontAnalysis,
+  rememberFontAnalysis,
+  type FontAnalysis,
+} from './font-analysis.ts'
+import { isFontFile, isPreviewableFontFile } from './parse.ts'
 import { plansDir } from './paths.ts'
 import type { AppPaths } from './paths.ts'
 import type {
@@ -29,7 +36,7 @@ export function isInactiveRetailListing(
 export function classifyImportFile(
   filePath: string,
   catalog: CatalogFile,
-  options: { paths?: AppPaths } = {},
+  options: { paths?: AppPaths; analysis?: FontAnalysis } = {},
 ): ImportPlanItem {
   const resolved = path.resolve(filePath)
   const id = crypto.randomUUID()
@@ -46,16 +53,21 @@ export function classifyImportFile(
   if (!isPreviewableFontFile(resolved) && !isFontFile(resolved)) {
     return { ...base, reason: 'Not a font file.' }
   }
-  let parsed
-  try {
-    parsed = parseFontFile(resolved)
-  } catch (error) {
-    return {
-      ...base,
-      reason: error instanceof Error ? error.message : 'Could not read that font.',
+  let analysis = options.analysis ?? peekFontAnalysis(resolved)
+  if (!analysis) {
+    try {
+      analysis = analyzeFontFileSync(resolved)
+    } catch (error) {
+      return {
+        ...base,
+        reason: error instanceof Error ? error.message : 'Could not read that font.',
+      }
     }
+  } else {
+    rememberFontAnalysis(analysis)
   }
-  const fingerprint = tryFingerprintFile(resolved)
+  const parsed = analysis.parsed
+  const fingerprint = analysis.fingerprint || tryFingerprintFile(resolved)
   const previewOnly = isWebFontFormat(parsed.format)
   const samePath = (() => {
     const found = findByInstalledPath(catalog, resolved) ?? findBySourcePath(catalog, resolved)
@@ -92,9 +104,11 @@ export function classifyImportFile(
     format: parsed.format,
     fingerprint,
     faces: parsed.faces,
+    previewSample: parsed.previewSample,
     previewOnly,
     affectedFaces: uniqueFaceLabels(parsed.faces),
-    sourceMtimeMs: stat.mtimeMs,
+    sourceMtimeMs: analysis.mtimeMs || stat.mtimeMs,
+    sourceSize: analysis.size || stat.size,
   }
 
   if (previewOnly) {
@@ -281,12 +295,21 @@ function finishRevision(
   }
 }
 
-export function buildImportPlan(
+export async function buildImportPlan(
   filePaths: string[],
   catalog: CatalogFile,
   options: { trigger?: OperationTrigger; folderId?: string; paths?: AppPaths } = {},
-): ImportPlan {
-  const items = filePaths.map((filePath) => classifyImportFile(filePath, catalog, { paths: options.paths }))
+): Promise<ImportPlan> {
+  const items: ImportPlanItem[] = []
+  for (const filePath of filePaths) {
+    let analysis: FontAnalysis | undefined
+    try {
+      analysis = await analyzeFontFile(filePath)
+    } catch {
+      analysis = undefined
+    }
+    items.push(classifyImportFile(filePath, catalog, { paths: options.paths, analysis }))
+  }
   const review = items.filter((item) =>
     item.classification === 'alt-format' ||
     item.classification === 'collection-overlap' ||

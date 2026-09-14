@@ -237,7 +237,7 @@ test('F05 planner keeps unique TTF and OTF and flags alt-format conflicts', asyn
     const otf = path.join(paths.dataRoot, 'Unique.otf')
     writeTestFont(ttf, 'UniqueTtf', 'UniqueTtf-Regular')
     writeTestFont(otf, 'UniqueOtf', 'UniqueOtf-Regular', { format: 'otf' })
-    const plan = service.planImport([ttf, otf])
+    const plan = await service.planImport([ttf, otf])
     assert.equal(plan.items.length, 2)
     assert.ok(plan.items.every((item) => item.classification === 'new'))
     const applied = await service.applyPlan(plan.id, {}, { idempotencyKey: 'drop-1' })
@@ -257,7 +257,7 @@ test('F05 planner keeps unique TTF and OTF and flags alt-format conflicts', asyn
     assert.ok(conflict.choices.includes('replace'))
     assert.ok(conflict.choices.includes('install-as'))
     assert.equal(conflict.choices.includes('switch'), false)
-    const replacePlan = service.planImport([altOtf])
+    const replacePlan = await service.planImport([altOtf])
     const replaceItem = replacePlan.items.find((item) => item.classification === 'alt-format')
     assert.ok(replaceItem)
     await service.applyPlan(replacePlan.id, { [replaceItem.id]: 'replace' })
@@ -468,12 +468,12 @@ test('keep and undo preserve the installed revision', async () => {
     const original = fingerprintFile(installed.installedPath!)
 
     writeTestFont(source, 'Keep', 'Keep-Regular', { version: 'Version 2.000' })
-    const plan = service.planImport([source])
+    const plan = await service.planImport([source])
     const kept = await service.applyPlan(plan.id, { [plan.items[0]!.id]: 'keep' })
     assert.equal(kept.succeeded, 1)
     assert.equal(fingerprintFile(service.listCatalog()[0]!.installedPath!), original)
 
-    const replacement = service.planImport([source])
+    const replacement = await service.planImport([source])
     const replaced = await service.applyPlan(replacement.id, {
       [replacement.items[0]!.id]: 'replace',
     })
@@ -524,7 +524,7 @@ test('dropped folder fonts can join a new project without becoming a watch folde
     const bold = path.join(folder, 'Brand-Bold.ttf')
     writeTestFont(regular, 'Brand', 'Brand-Regular')
     writeTestFont(bold, 'Brand', 'Brand-Bold', { style: 'Bold', weight: 700 })
-    const plan = service.planImport([folder])
+    const plan = await service.planImport([folder])
     assert.equal(plan.items.length, 2)
     const applied = await service.applyPlan(plan.id)
     assert.equal(applied.succeeded, 2)

@@ -118,11 +118,45 @@ export type ParsedFont = {
 export type ParseFontOptions = {
   /** When true, also read cmap/features/axes. Catalog import only needs faces. */
   previewMeta?: boolean
+  /**
+   * When false, skip cmap probing so callers can paint faces first and fill
+   * `previewSample` in a second pass without reopening the file.
+   */
+  previewSample?: boolean
+}
+
+export type FontParseSession = {
+  parsed: ParsedFont
+  completePreview(): ParsedFont
+}
+
+export function beginParseFontFile(filePath: string, options?: ParseFontOptions): FontParseSession {
+  const opened = openSync(filePath)
+  const parsed = parseOpened(opened, path.extname(filePath).slice(1).toLowerCase(), {
+    ...options,
+    previewSample: false,
+    previewMeta: false,
+  })
+  let completed = false
+  return {
+    parsed,
+    completePreview() {
+      if (completed) return parsed
+      completed = true
+      const font = isCollection(opened) ? opened.fonts[0] : opened
+      parsed.previewSample = previewSampleFromFont(font)
+      if (options?.previewMeta) Object.assign(parsed, previewMetaFromFont(font))
+      return parsed
+    },
+  }
 }
 
 export function parseFontFile(filePath: string, options?: ParseFontOptions): ParsedFont {
-  const opened = openSync(filePath)
-  return parseOpened(opened, path.extname(filePath).slice(1).toLowerCase(), options)
+  const session = beginParseFontFile(filePath, options)
+  if (options?.previewSample === false && !options.previewMeta) {
+    return session.parsed
+  }
+  return session.completePreview()
 }
 
 export function parseFontBuffer(buffer: Buffer, formatHint = 'ttf', options?: ParseFontOptions): ParsedFont {
@@ -179,21 +213,22 @@ export function applyParsedFont(
 
 function parseOpened(opened: Font | FontCollection, format: string, options?: ParseFontOptions): ParsedFont {
   const preview = options?.previewMeta
+  const wantSample = options?.previewSample !== false
   if (isCollection(opened)) {
     const first = opened.fonts[0]
     return {
       format: format || 'ttc',
       faces: opened.fonts.map((font) => faceFromFont(font)),
-      previewSample: previewSampleFromFont(first),
-      ...(preview ? previewMetaFromFont(first) : {}),
+      ...(wantSample ? { previewSample: previewSampleFromFont(first) } : {}),
+      ...(preview && wantSample ? previewMetaFromFont(first) : {}),
     }
   }
   const detected = opened.type?.toLowerCase()
   return {
     format: detected === 'woff' || detected === 'woff2' ? detected : format || 'ttf',
     faces: [faceFromFont(opened)],
-    previewSample: previewSampleFromFont(opened),
-    ...(preview ? previewMetaFromFont(opened) : {}),
+    ...(wantSample ? { previewSample: previewSampleFromFont(opened) } : {}),
+    ...(preview && wantSample ? previewMetaFromFont(opened) : {}),
   }
 }
 
@@ -233,7 +268,7 @@ export function readFileStat(filePath: string): { mtimeMs: number; size: number 
   return { mtimeMs: stat.mtimeMs, size: stat.size }
 }
 
-function existingFontPath(entry: {
+export function existingFontPath(entry: {
   installedPath?: string
   disabledPath?: string
   sourcePath?: string
@@ -285,13 +320,13 @@ export function fillEntryPreviewSample(
     disabledPath?: string
     sourcePath?: string
   },
-  options?: { refresh?: boolean },
+  options?: { refresh?: boolean; sample?: string },
 ): boolean {
   if (entry.previewSample && !options?.refresh) return false
   const file = existingFontPath(entry)
   if (!file) return false
   try {
-    const sample = parseFontFile(file).previewSample
+    const sample = options?.sample ?? parseFontFile(file).previewSample
     if (!sample || sample === entry.previewSample) return false
     entry.previewSample = sample
     return true

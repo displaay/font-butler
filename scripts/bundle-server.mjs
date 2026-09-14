@@ -24,3 +24,24 @@ await build({
     },
   },
 })
+
+await build({
+  root: project,
+  configFile: false,
+  logLevel: 'warn',
+  ssr: {
+    noExternal: true,
+  },
+  build: {
+    ssr: path.join(project, 'core/font-analysis-worker.ts'),
+    outDir: path.join(project, 'electron'),
+    emptyOutDir: false,
+    sourcemap: false,
+    rollupOptions: {
+      output: {
+        format: 'es',
+        entryFileNames: 'font-analysis-worker.mjs',
+      },
+    },
+  },
+})

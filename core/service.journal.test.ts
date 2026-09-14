@@ -165,7 +165,7 @@ test('startup reconcile restores the previous working copy after a crash mid-swi
     const installed = await service.install(first.id)
     const dest = installed.installedPath!
     const releaseBytes = fs.readFileSync(dest)
-    const plan = service.planImport([wip])
+    const plan = await service.planImport([wip])
     await service.applyPlan(plan.id, { [plan.items[0]!.id]: 'add-inactive' })
     const inactive = service.listCatalog().find((entry) => entry.id !== first.id)!
 
@@ -216,7 +216,7 @@ test('successful install, park, and switch leave no incomplete journals', async 
     await service.install(first.id)
     assert.equal(loadIncompleteJournals(paths).length, 0)
 
-    const plan = service.planImport([wip])
+    const plan = await service.planImport([wip])
     await service.applyPlan(plan.id, { [plan.items[0]!.id]: 'add-inactive' })
     const inactive = service.listCatalog().find((entry) => entry.id !== first.id)!
     await service.switchTo(inactive.id)

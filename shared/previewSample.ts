@@ -306,6 +306,18 @@ export function previewSampleFromCoverage(coverage: Iterable<number> | undefined
   return fallbackSample(set) ?? DEFAULT_PREVIEW_SAMPLE
 }
 
+/**
+ * Catalog/grid sample while cmap probing is still in flight.
+ * Unlike `resolvedPreviewSample`, this does not fall back to Aa (that would tofu
+ * a Hebrew/Arabic face whose @font-face is already mounted).
+ */
+export function pendingPreviewSample(...values: Array<string | undefined | null>): string | undefined {
+  for (const value of values) {
+    if (value) return value
+  }
+  return undefined
+}
+
 /** Grid and list cards share this so missing coverage still renders Aa. */
 export function resolvedPreviewSample(...values: Array<string | undefined | null>): string {
   for (const value of values) {
