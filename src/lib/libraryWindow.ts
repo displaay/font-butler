@@ -342,6 +342,26 @@ export function libraryItemScrollTop(
   return row * libraryRowStride(rowHeight, gap)
 }
 
+export type ScrollToFamilyResolution =
+  | { action: 'computed'; index: number }
+  | { action: 'dom' }
+  | { action: 'defer' }
+
+export function resolveScrollToFamily(options: {
+  target: string
+  groups: Array<{ familyName: string }>
+  hasViewport: boolean
+  rowHeight: number
+  nodePresent: boolean
+}): ScrollToFamilyResolution {
+  const index = options.groups.findIndex((group) => group.familyName === options.target)
+  if (index >= 0 && options.hasViewport && options.rowHeight > 0) {
+    return { action: 'computed', index }
+  }
+  if (options.nodePresent) return { action: 'dom' }
+  return { action: 'defer' }
+}
+
 export function sameLibraryWindow(
   left: Pick<
     LibraryWindowMetrics,

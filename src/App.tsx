@@ -121,6 +121,7 @@ import {
   contentOffsetTop,
   libraryCardRects,
   libraryItemScrollTop,
+  resolveScrollToFamily,
   sliceLibraryWindow,
   systemFacesForPreviewCss,
 } from '@/lib/libraryWindow'
@@ -898,13 +899,21 @@ function AppShell() {
   useEffect(() => {
     if (!scrollToFamily) return
     const groups = tab === 'system' ? shownSystemGroups : visibleGroups
-    const index = groups.findIndex((group) => group.familyName === scrollToFamily)
     const viewport = libraryViewportRef.current
     const grid = libraryGridRef.current
     const layout = libraryWindow.layoutRef.current
-    if (index >= 0 && viewport && layout.rowHeight > 0) {
+    const node = document.querySelector(`[data-family-key="${CSS.escape(scrollToFamily)}"]`)
+    const resolution = resolveScrollToFamily({
+      target: scrollToFamily,
+      groups,
+      hasViewport: Boolean(viewport),
+      rowHeight: layout.rowHeight,
+      nodePresent: node instanceof HTMLElement,
+    })
+    if (resolution.action === 'defer') return
+    if (resolution.action === 'computed' && viewport) {
       const top = libraryItemScrollTop(
-        index,
+        resolution.index,
         layout.columns,
         layout.rowHeight,
         layout.gap,
@@ -913,7 +922,6 @@ function AppShell() {
       const offset = grid ? contentOffsetTop(grid, viewport) : 0
       viewport.scrollTo({ top: offset + top, behavior: 'smooth' })
     } else {
-      const node = document.querySelector(`[data-family-key="${CSS.escape(scrollToFamily)}"]`)
       node?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
     }
     setScrollToFamily(null)

@@ -14,6 +14,7 @@ import {
   libraryWindowPads,
   libraryWindowRange,
   libraryWindowRangeFromHeights,
+  resolveScrollToFamily,
   sameLibraryWindow,
   sliceLibraryWindow,
   systemFacesForPreviewCss,
@@ -371,4 +372,58 @@ test('marquee and scrollToFamily use measured list tops instead of uniform strid
   assert.equal(libraryItemScrollTop(2, 1, 72, gap, tops), tops[2])
   assert.equal(libraryItemScrollTop(3, 1, 72, gap, tops), tops[3])
   assert.ok(libraryItemScrollTop(3, 1, 72, gap) < tops[3]!)
+})
+
+test('scrollToFamily stays pending until the family is in the catalog or DOM', () => {
+  const groups = [{ familyName: 'Already here' }]
+  assert.equal(
+    resolveScrollToFamily({
+      target: 'New Family',
+      groups,
+      hasViewport: true,
+      rowHeight: 80,
+      nodePresent: false,
+    }).action,
+    'defer',
+  )
+  assert.deepEqual(
+    resolveScrollToFamily({
+      target: 'New Family',
+      groups: [...groups, { familyName: 'New Family' }],
+      hasViewport: true,
+      rowHeight: 80,
+      nodePresent: false,
+    }),
+    { action: 'computed', index: 1 },
+  )
+  assert.equal(
+    resolveScrollToFamily({
+      target: 'New Family',
+      groups: [{ familyName: 'New Family' }],
+      hasViewport: false,
+      rowHeight: 80,
+      nodePresent: false,
+    }).action,
+    'defer',
+  )
+  assert.equal(
+    resolveScrollToFamily({
+      target: 'New Family',
+      groups: [{ familyName: 'New Family' }],
+      hasViewport: true,
+      rowHeight: 0,
+      nodePresent: false,
+    }).action,
+    'defer',
+  )
+  assert.equal(
+    resolveScrollToFamily({
+      target: 'New Family',
+      groups,
+      hasViewport: false,
+      rowHeight: 0,
+      nodePresent: true,
+    }).action,
+    'dom',
+  )
 })
