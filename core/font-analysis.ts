@@ -10,11 +10,13 @@
  * If the worker cannot start (tests without a TS loader, etc.), we fall back to
  * the same staged parse on the API thread, still yielding between files.
  *
- * Worker `execArgv` is only tsx loader flags (never a copy of `process.execArgv`).
- * Node 24 rejects inherited flags such as `--node-snapshot` with
- * `ERR_WORKER_INVALID_EXEC_ARGV`, which used to silently fall back to the API thread.
+ * Worker `execArgv` is resolved tsx loader flags only (never a copy of
+ * `process.execArgv`). Node 24 rejects inherited flags such as `--node-snapshot`
+ * with `ERR_WORKER_INVALID_EXEC_ARGV`, which used to silently fall back to the
+ * API thread. Jobs wait for the worker `online` event before `postMessage`.
  */
 import { existsSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Worker } from 'node:worker_threads'
@@ -66,6 +68,7 @@ const stats: FontAnalysisStats = {
 
 let worker: Worker | null = null
 let workerFailed = process.env.FONT_BUTLER_PARSE_WORKER === '0'
+let workerReady: Promise<boolean> = Promise.resolve(false)
 let nextJobId = 0
 let failAfterPartialOnce = false
 const workerJobs = new Map<
@@ -144,6 +147,29 @@ function workerUrl(): URL {
   return new URL('./font-analysis-worker.ts', import.meta.url)
 }
 
+const require = createRequire(import.meta.url)
+
+function tsxLoaderExecArgv(): string[] {
+  try {
+    const root = path.dirname(require.resolve('tsx/package.json'))
+    return [
+      '--require',
+      path.join(root, 'dist/preflight.cjs'),
+      '--import',
+      pathToFileURL(path.join(root, 'dist/loader.mjs')).href,
+    ]
+  } catch {
+    return ['--import', 'tsx']
+  }
+}
+
+function workerThreadExecArgv(url: URL): string[] {
+  // Never inherit `process.execArgv` (Node 24 `--node-snapshot` →
+  // ERR_WORKER_INVALID_EXEC_ARGV). Packaged `.mjs` needs no loader.
+  if (url.pathname.endsWith('.ts')) return tsxLoaderExecArgv()
+  return []
+}
+
 function failWorkerJobs(error: Error): void {
   const pending = [...workerJobs.values()]
   workerJobs.clear()
@@ -166,26 +192,28 @@ function isTsxLoaderSpec(value: string): boolean {
 /** tsx loader flags only — never forward the parent's full `process.execArgv`. */
 export function execArgvForFontAnalysisWorker(execArgv: readonly string[]): string[] {
   const filtered: string[] = []
+  const seen = new Set<string>()
+  const push = (...flags: string[]) => {
+    const key = flags.join('\0')
+    if (seen.has(key)) return
+    seen.add(key)
+    filtered.push(...flags)
+  }
   for (let i = 0; i < execArgv.length; i += 1) {
     const arg = execArgv[i]!
     const equals = arg.indexOf('=')
     if (equals > 0 && TSX_LOADER_FLAGS.has(arg.slice(0, equals))) {
-      if (isTsxLoaderSpec(arg.slice(equals + 1))) filtered.push(arg)
+      if (isTsxLoaderSpec(arg.slice(equals + 1))) push(arg)
       continue
     }
     if (!TSX_LOADER_FLAGS.has(arg)) continue
     const next = execArgv[i + 1]
     if (next && isTsxLoaderSpec(next)) {
-      filtered.push(arg, next)
+      push(arg, next)
       i += 1
     }
   }
   return filtered.length > 0 ? filtered : ['--import', 'tsx']
-}
-
-function workerThreadExecArgv(url: URL): string[] {
-  if (!url.pathname.endsWith('.ts')) return []
-  return execArgvForFontAnalysisWorker(process.execArgv)
 }
 
 function ensureWorker(): Worker | null {
@@ -194,7 +222,22 @@ function ensureWorker(): Worker | null {
   try {
     const url = workerUrl()
     const next = new Worker(url, { execArgv: workerThreadExecArgv(url) })
-    next.unref()
+    workerReady = new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), 5000)
+      const onOnline = () => {
+        clearTimeout(timer)
+        next.off('error', onError)
+        next.unref()
+        resolve(true)
+      }
+      const onError = () => {
+        clearTimeout(timer)
+        next.off('online', onOnline)
+        resolve(false)
+      }
+      next.once('online', onOnline)
+      next.once('error', onError)
+    })
     next.on('message', (message: FontAnalysisWorkerMessage) => {
       const job = workerJobs.get(message.id)
       if (!job) return
@@ -272,11 +315,16 @@ function analyzeOnThisThread(filePath: string, options?: AnalyzeFontOptions): Fo
   }
 }
 
-function postWorkerJob(
+async function postWorkerJob(
   thread: Worker,
   filePath: string,
   options?: AnalyzeFontOptions,
 ): Promise<FontAnalysis> {
+  const online = await workerReady
+  if (!online || worker !== thread) {
+    workerFailed = true
+    throw new Error('Font analysis worker failed to start')
+  }
   stats.workerJobs += 1
   stats.parses += 1
   stats.fingerprints += 1
@@ -395,6 +443,7 @@ export function analysisFromPlanItem(item: {
 export async function closeFontAnalysisWorker(): Promise<void> {
   const current = worker
   worker = null
+  workerReady = Promise.resolve(false)
   workerFailed = process.env.FONT_BUTLER_PARSE_WORKER === '0'
   failWorkerJobs(new Error('Font analysis worker closed'))
   if (!current) return
