@@ -63,6 +63,7 @@ const stats: FontAnalysisStats = {
 let worker: Worker | null = null
 let workerFailed = process.env.FONT_BUTLER_PARSE_WORKER === '0'
 let nextJobId = 0
+let failAfterPartialOnce = false
 const workerJobs = new Map<
   string,
   {
@@ -71,6 +72,11 @@ const workerJobs = new Map<
     reject: (error: Error) => void
   }
 >()
+
+/** Test-only: reject after faces/onPartial so import can prove catalog rollback. */
+export function __failAfterPartialOnceForTests(): void {
+  failAfterPartialOnce = true
+}
 
 function cacheKey(
   filePath: string,
@@ -164,7 +170,16 @@ function ensureWorker(): Worker | null {
         parsed: message.parsed,
       }
       if (message.stage === 'faces') {
-        job.onPartial?.(analysis)
+        try {
+          job.onPartial?.(analysis)
+          if (failAfterPartialOnce) {
+            failAfterPartialOnce = false
+            throw new Error('test: fail after partial')
+          }
+        } catch (error) {
+          workerJobs.delete(message.id)
+          job.reject(error instanceof Error ? error : new Error(String(error)))
+        }
         return
       }
       workerJobs.delete(message.id)
@@ -205,17 +220,21 @@ function analyzeOnThisThread(filePath: string, options?: AnalyzeFontOptions): Fo
     parsed: session.parsed,
   }
   options?.onPartial?.(partial)
+  if (failAfterPartialOnce) {
+    failAfterPartialOnce = false
+    throw new Error('test: fail after partial')
+  }
   return {
     ...partial,
     parsed: session.completePreview(),
   }
 }
 
-function analyzeOnWorker(filePath: string, options?: AnalyzeFontOptions): Promise<FontAnalysis> {
-  const thread = ensureWorker()
-  if (!thread) {
-    return Promise.resolve(analyzeOnThisThread(filePath, options))
-  }
+function postWorkerJob(
+  thread: Worker,
+  filePath: string,
+  options?: AnalyzeFontOptions,
+): Promise<FontAnalysis> {
   stats.workerJobs += 1
   stats.parses += 1
   stats.fingerprints += 1
@@ -251,18 +270,23 @@ export async function analyzeFontFile(
     return running
   }
   const job = (async () => {
+    const thread = ensureWorker()
     try {
-      const analysis = await analyzeOnWorker(resolved, {
-        previewMeta: options?.previewMeta,
-        onPartial(partial) {
-          remember(key, partial)
-          options?.onPartial?.(partial)
-        },
-      })
+      const analysis = thread
+        ? await postWorkerJob(thread, resolved, {
+            previewMeta: options?.previewMeta,
+            onPartial(partial) {
+              remember(key, partial)
+              options?.onPartial?.(partial)
+            },
+          })
+        : analyzeOnThisThread(resolved, options)
       remember(key, analysis)
       return analysis
     } catch (error) {
-      if (workerFailed || workerJobs.size === 0) {
+      // Per-file worker errors must not retry on the API thread.
+      // Only fall back when a posted worker job died with the worker itself.
+      if (thread && workerFailed) {
         const analysis = analyzeOnThisThread(resolved, options)
         remember(key, analysis)
         return analysis
@@ -302,10 +326,21 @@ export function analysisFromPlanItem(item: {
   sourceSize?: number
 }): FontAnalysis | undefined {
   if (!item.faces?.length || !item.format) return undefined
+  if (item.sourceMtimeMs == null || item.sourceSize == null) return undefined
+  const resolved = path.resolve(item.path)
+  let stat: { mtimeMs: number; size: number }
+  try {
+    stat = readFileStat(resolved)
+  } catch {
+    return undefined
+  }
+  if (stat.mtimeMs !== item.sourceMtimeMs || stat.size !== item.sourceSize) {
+    return undefined
+  }
   return {
-    path: path.resolve(item.path),
-    mtimeMs: item.sourceMtimeMs ?? 0,
-    size: item.sourceSize ?? 0,
+    path: resolved,
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
     fingerprint: item.fingerprint ?? '',
     parsed: {
       faces: item.faces,
@@ -318,7 +353,9 @@ export function analysisFromPlanItem(item: {
 export async function closeFontAnalysisWorker(): Promise<void> {
   const current = worker
   worker = null
+  workerFailed = process.env.FONT_BUTLER_PARSE_WORKER === '0'
   failWorkerJobs(new Error('Font analysis worker closed'))
   if (!current) return
+  current.removeAllListeners()
   await current.terminate()
 }

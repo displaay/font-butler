@@ -1,15 +1,24 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import path from 'node:path'
-import { test } from 'node:test'
+import { after, test } from 'node:test'
 import { onEvent } from './events.ts'
 import {
+  __failAfterPartialOnceForTests,
+  analysisFromPlanItem,
   analyzeFontFile,
+  closeFontAnalysisWorker,
   fontAnalysisStats,
   resetFontAnalysisCache,
 } from './font-analysis.ts'
 import { withService, writeTestFont } from './test-util.ts'
 
 const HEBREW = [65, 97, 0x05d0, 0x05d1, 0x05d2, 0x05d3, 0x05d4, 0x05d5]
+const ARABIC = [65, 97, 0x0627, 0x0628, 0x062a, 0x062c, 0x062f, 0x0631, 0x0633, 0x0639, 0x0644, 0x0645, 0x0646, 0x064a]
+
+after(async () => {
+  await closeFontAnalysisWorker()
+})
 
 test('analyzeFontFile caches parse and fingerprint by path+mtime+size', async () => {
   await withService(async (_service, paths) => {
@@ -107,5 +116,87 @@ test('startup does not re-parse a stored non-Latin sample when the stamp is unch
     const after = fontAnalysisStats()
     assert.equal(service.listCatalog()[0]?.previewSample, 'א')
     assert.equal(after.parses, before.parses)
+  })
+})
+
+test('analysisFromPlanItem does not reuse faces when mtime or size changed', async () => {
+  await withService(async (_service, paths) => {
+    const file = path.join(paths.dataRoot, 'Swap.ttf')
+    writeTestFont(file, 'Swap', 'Swap-Regular', { codePoints: HEBREW })
+    const first = await analyzeFontFile(file)
+    const item = {
+      path: file,
+      faces: first.parsed.faces,
+      format: first.parsed.format,
+      previewSample: first.parsed.previewSample,
+      fingerprint: first.fingerprint,
+      sourceMtimeMs: first.mtimeMs,
+      sourceSize: first.size,
+    }
+    assert.equal(analysisFromPlanItem(item)?.parsed.previewSample, 'א')
+    writeTestFont(file, 'Swap', 'Swap-Regular', { codePoints: ARABIC })
+    const later = Date.now() / 1000 + 5
+    fs.utimesSync(file, later, later)
+    assert.equal(analysisFromPlanItem(item), undefined)
+  })
+})
+
+test('applyPlan re-analyzes when the file changes after planImport', async () => {
+  await withService(async (service, paths) => {
+    await service.init()
+    await service.updateSettings({ installAfterUpload: false })
+    const file = path.join(paths.dataRoot, 'Swap.ttf')
+    writeTestFont(file, 'Swap', 'Swap-Regular', { codePoints: HEBREW })
+    const plan = await service.planImport([file])
+    assert.equal(plan.items[0]?.previewSample, 'א')
+    const afterPlan = fontAnalysisStats()
+    writeTestFont(file, 'Swap', 'Swap-Regular', { codePoints: ARABIC })
+    const later = Date.now() / 1000 + 5
+    fs.utimesSync(file, later, later)
+    const applied = await service.applyPlan(plan.id)
+    const afterApply = fontAnalysisStats()
+    assert.equal(applied.entries[0]?.previewSample, 'ع')
+    assert.ok(afterApply.parses > afterPlan.parses)
+  })
+})
+
+test('a worker job error does not retry parse on the API thread', async () => {
+  await withService(async (_service, paths) => {
+    const file = path.join(paths.dataRoot, 'Bad.ttf')
+    fs.writeFileSync(file, 'not a font')
+    resetFontAnalysisCache()
+    const before = fontAnalysisStats()
+    await assert.rejects(() => analyzeFontFile(file))
+    const after = fontAnalysisStats()
+    if (after.workerJobs > before.workerJobs) {
+      assert.equal(after.fallbackJobs, before.fallbackJobs)
+    }
+  })
+})
+
+test('importPaths rolls back a catalog card if preview fails after faces', async () => {
+  await withService(async (service, paths) => {
+    await service.init()
+    const file = path.join(paths.dataRoot, 'Partial.ttf')
+    writeTestFont(file, 'Partial', 'Partial-Regular', { codePoints: HEBREW })
+    __failAfterPartialOnceForTests()
+    const result = await service.importPaths([file])
+    assert.equal(result.entries.length, 0)
+    assert.ok(result.errors.some((error) => error.includes('fail after partial')))
+    assert.equal(service.listCatalog().length, 0)
+  })
+})
+
+test('closeFontAnalysisWorker terminates so a later analyze can respawn', async () => {
+  await withService(async (_service, paths) => {
+    const file = path.join(paths.dataRoot, 'Again.ttf')
+    writeTestFont(file, 'Again', 'Again-Regular', { codePoints: HEBREW })
+    const first = await analyzeFontFile(file)
+    assert.equal(first.parsed.previewSample, 'א')
+    await closeFontAnalysisWorker()
+    resetFontAnalysisCache()
+    const second = await analyzeFontFile(file)
+    assert.equal(second.parsed.previewSample, 'א')
+    await closeFontAnalysisWorker()
   })
 })

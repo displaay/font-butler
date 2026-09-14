@@ -9,6 +9,8 @@ import { isFullyUnderAnyRoot } from '../core/containment.ts'
 import { denyRemoteRequest, isAuthorizedApiRequest, resolveStaticAsset } from '../core/http.ts'
 import { checkAppUpdate } from '../core/app-update.ts'
 import { FontButlerService } from '../core/service.ts'
+import { closeFontAnalysisWorker } from '../core/font-analysis.ts'
+import { closeAllWatchers } from '../core/watch.ts'
 import type { AppSettings } from '../core/types.ts'
 
 function mimeForStatic(filePath: string): string {
@@ -984,6 +986,25 @@ app.get('/api/events', (c) => {
       resolve({ port: info.port, token: apiToken })
     })
     server.once('error', reject)
+    let shuttingDown = false
+    const shutdown = () => {
+      if (shuttingDown) return
+      shuttingDown = true
+      void (async () => {
+        try {
+          await closeFontAnalysisWorker()
+          await closeAllWatchers()
+          service.dispose()
+          await new Promise<void>((resolve) => {
+            server.close(() => resolve())
+          })
+        } finally {
+          process.exit(0)
+        }
+      })()
+    }
+    process.once('SIGINT', shutdown)
+    process.once('SIGTERM', shutdown)
   })
 }
 

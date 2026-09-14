@@ -1724,9 +1724,15 @@ export class FontButlerService {
           if (choice === 'relink' && item.entryId) {
             entries.push(await this.applyRelink(item.entryId, item.path))
           } else if (choice === 'add-inactive') {
-            entries.push(this.importOneUnlocked(item.path, { forceNew: true, analysis: this.analysisForPlanItem(item) }))
+            entries.push(this.importOneUnlocked(item.path, {
+              forceNew: true,
+              analysis: await this.analysisForPlanItem(item),
+            }))
           } else if (choice === 'switch') {
-            const imported = this.importOneUnlocked(item.path, { forceNew: true, analysis: this.analysisForPlanItem(item) })
+            const imported = this.importOneUnlocked(item.path, {
+              forceNew: true,
+              analysis: await this.analysisForPlanItem(item),
+            })
             relatedEntryId = occupyingSiblings(loadCatalog(this.paths).entries, imported, this.paths)[0]?.id
             entries.push(await this.switchToEntry(imported.id))
           } else if (
@@ -1738,19 +1744,20 @@ export class FontButlerService {
             // Keep the current installation while still recording the incoming source in the catalog.
             entries.push(this.importOneUnlocked(item.path, {
               forceNew: item.parallelCopy ? true : undefined,
-              analysis: this.analysisForPlanItem(item),
+              analysis: await this.analysisForPlanItem(item),
             }))
           } else if (choice === 'replace' && item.entryId) {
             const catalog = loadCatalog(this.paths)
             const latest = findById(catalog, item.entryId)
             if (latest && path.resolve(latest.sourcePath) !== path.resolve(item.path)) {
               latest.sourcePath = item.path
-              const stat = item.sourceMtimeMs != null && item.sourceSize != null
-                ? { mtimeMs: item.sourceMtimeMs, size: item.sourceSize }
+              const analysis = await this.analysisForPlanItem(item)
+              const stat = analysis
+                ? { mtimeMs: analysis.mtimeMs, size: analysis.size }
                 : readFileStat(item.path)
               latest.sourceMtimeMs = stat.mtimeMs
               latest.sourceSize = stat.size
-              latest.sourceFingerprint = item.fingerprint ?? tryFingerprintFile(item.path)
+              latest.sourceFingerprint = analysis?.fingerprint || tryFingerprintFile(item.path)
               applyEntryFacts(latest)
               touchEntry(latest)
               saveCatalog(this.paths, catalog)
@@ -1767,11 +1774,11 @@ export class FontButlerService {
             }
             const imported = this.importOneUnlocked(item.path, {
               forceNew: item.parallelCopy ? true : undefined,
-              analysis: this.analysisForPlanItem(item),
+              analysis: await this.analysisForPlanItem(item),
             })
             entries.push(await this.installEntry(imported.id, familyName))
           } else {
-            const imported = this.importOneUnlocked(item.path, { analysis: this.analysisForPlanItem(item) })
+            const imported = this.importOneUnlocked(item.path, { analysis: await this.analysisForPlanItem(item) })
             const settings = loadSettings(this.paths)
             const folder = settings.folders.find((row) => row.id === imported.ownerFolderId)
             const shouldInstall =
@@ -3212,10 +3219,15 @@ export class FontButlerService {
     return first
   }
 
-  private analysisForPlanItem(item: ImportPlan['items'][number]): FontAnalysis | undefined {
-    const analysis = analysisFromPlanItem(item)
-    if (analysis) rememberFontAnalysis(analysis)
-    return analysis
+  private async analysisForPlanItem(item: ImportPlan['items'][number]): Promise<FontAnalysis | undefined> {
+    const reused = analysisFromPlanItem(item)
+    if (reused) {
+      rememberFontAnalysis(reused)
+      return reused
+    }
+    const fresh = await analyzeFontFile(item.path)
+    rememberFontAnalysis(fresh)
+    return fresh
   }
 
   private importOneUnlocked(
@@ -3240,32 +3252,42 @@ export class FontButlerService {
   ): Promise<CatalogEntry> {
     const catalog = options.catalog ?? loadCatalog(this.paths)
     const persist = options.persist !== false
+    const knownIds = new Set(catalog.entries.map((entry) => entry.id))
     let entry: CatalogEntry | undefined
-    const analysis = await analyzeFontFile(filePath, {
-      onPartial: (partial) => {
-        rememberFontAnalysis(partial)
-        entry = this.importOneUnlocked(filePath, {
-          ...options,
-          catalog,
-          persist: false,
-          analysis: partial,
-        })
+    try {
+      const analysis = await analyzeFontFile(filePath, {
+        onPartial: (partial) => {
+          rememberFontAnalysis(partial)
+          entry = this.importOneUnlocked(filePath, {
+            ...options,
+            catalog,
+            persist: false,
+            analysis: partial,
+          })
+          if (persist) saveCatalog(this.paths, catalog)
+          emitEvent({ type: 'catalog', entries: catalog.entries })
+        },
+      })
+      rememberFontAnalysis(analysis)
+      if (!entry) {
+        return this.importOneUnlocked(filePath, { ...options, catalog, analysis })
+      }
+      if (analysis.parsed.previewSample && entry.previewSample !== analysis.parsed.previewSample) {
+        applyParsedFont(entry, analysis.parsed)
+        entry.previewSample = analysis.parsed.previewSample
+        touchEntry(entry)
         if (persist) saveCatalog(this.paths, catalog)
         emitEvent({ type: 'catalog', entries: catalog.entries })
-      },
-    })
-    rememberFontAnalysis(analysis)
-    if (!entry) {
-      return this.importOneUnlocked(filePath, { ...options, catalog, analysis })
+      }
+      return entry
+    } catch (error) {
+      if (entry && !knownIds.has(entry.id)) {
+        removeEntryById(catalog, entry.id)
+        if (persist) saveCatalog(this.paths, catalog)
+        emitEvent({ type: 'catalog', entries: catalog.entries })
+      }
+      throw error
     }
-    if (analysis.parsed.previewSample && entry.previewSample !== analysis.parsed.previewSample) {
-      applyParsedFont(entry, analysis.parsed)
-      entry.previewSample = analysis.parsed.previewSample
-      touchEntry(entry)
-      if (persist) saveCatalog(this.paths, catalog)
-      emitEvent({ type: 'catalog', entries: catalog.entries })
-    }
-    return entry
   }
 
   private async refreshSourceStatuses(forceFingerprint = false): Promise<void> {
