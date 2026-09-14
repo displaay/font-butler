@@ -23,6 +23,8 @@ export type LibraryWindowMetrics = {
   padTop: number
   padBottom: number
   totalHeight: number
+  tops?: number[]
+  heights?: number[]
 }
 
 export type LibraryWindowLayout = {
@@ -33,6 +35,8 @@ export type LibraryWindowLayout = {
   gap: number
   originLeft: number
   originTop: number
+  tops?: number[]
+  heights?: number[]
 }
 
 export function libraryGapPx(layout: ViewLayout, rootFontSize: number): number {
@@ -58,6 +62,7 @@ export function libraryGridRowHeightPx(
 }
 
 export function libraryListRowHeightPx(rootFontSize: number, extraLines = 0): number {
+  // Collapsed estimate only. Expanded InstanceList rows are measured via itemHeights.
   const padY = 0.625 * 2 * rootFontSize
   const preview = 2.75 * rootFontSize
   const text = (1.25 + 0.125 + 1 + extraLines * 1.1) * rootFontSize
@@ -130,6 +135,67 @@ export function libraryWindowRange(options: {
   }
 }
 
+export function libraryItemOffsets(heights: number[], gap: number): { tops: number[]; totalHeight: number } {
+  const tops: number[] = []
+  let y = 0
+  for (let i = 0; i < heights.length; i++) {
+    if (i > 0) y += gap
+    tops.push(y)
+    y += Math.max(0, heights[i] ?? 0)
+  }
+  return { tops, totalHeight: y }
+}
+
+export function libraryWindowRangeFromHeights(options: {
+  heights: number[]
+  tops: number[]
+  scrollTop: number
+  viewportHeight: number
+  overscanPx?: number
+}): { start: number; end: number } {
+  const count = options.heights.length
+  if (count === 0) return { start: 0, end: 0 }
+  const from = options.scrollTop - Math.max(0, options.overscanPx ?? 0)
+  const to = options.scrollTop + Math.max(0, options.viewportHeight) + Math.max(0, options.overscanPx ?? 0)
+  let start = 0
+  while (start < count) {
+    if ((options.tops[start] ?? 0) + (options.heights[start] ?? 0) >= from) break
+    start += 1
+  }
+  let end = start
+  while (end < count && (options.tops[end] ?? 0) < to) end += 1
+  return { start, end }
+}
+
+export function libraryWindowPads(options: {
+  start: number
+  end: number
+  tops: number[]
+  heights: number[]
+  totalHeight: number
+}): { padTop: number; padBottom: number } {
+  const { start, end, tops, heights, totalHeight } = options
+  if (heights.length === 0 || end <= start) {
+    return { padTop: 0, padBottom: Math.max(0, totalHeight) }
+  }
+  const padTop = tops[start] ?? 0
+  const last = end - 1
+  const renderedBottom = (tops[last] ?? 0) + (heights[last] ?? 0)
+  return { padTop, padBottom: Math.max(0, totalHeight - renderedBottom) }
+}
+
+export function applyMeasuredCardHeights(
+  keys: string[],
+  estimated: number,
+  measured: ReadonlyMap<string, number> = new Map(),
+): number[] {
+  const fallback = Math.max(0, estimated)
+  return keys.map((key) => {
+    const height = measured.get(key)
+    return Number.isFinite(height) && (height as number) > 0 ? (height as number) : fallback
+  })
+}
+
 export function libraryWindowMetrics(options: {
   count: number
   layout: ViewLayout
@@ -141,6 +207,7 @@ export function libraryWindowMetrics(options: {
   scrollTop: number
   viewportHeight: number
   overscanRows?: number
+  itemHeights?: number[]
 }): LibraryWindowMetrics {
   const gap = libraryGapPx(options.layout, options.rootFontSize)
   const columns =
@@ -153,6 +220,45 @@ export function libraryWindowMetrics(options: {
   )
   const columnWidth =
     columns <= 1 ? Math.max(0, options.width) : (Math.max(0, options.width) - gap * (columns - 1)) / columns
+  // List view only: expanded InstanceList rows are taller than the collapsed estimate.
+  if (columns === 1 && options.itemHeights && options.itemHeights.length > 0) {
+    const heights = Array.from({ length: options.count }, (_, index) => {
+      const value = options.itemHeights![index]
+      return Number.isFinite(value) && (value as number) > 0 ? (value as number) : rowHeight
+    })
+    const { tops, totalHeight } = libraryItemOffsets(heights, gap)
+    const overscanPx = (options.overscanRows ?? LIBRARY_OVERSCAN_ROWS) * libraryRowStride(rowHeight, gap)
+    const range = libraryWindowRangeFromHeights({
+      heights,
+      tops,
+      scrollTop: options.scrollTop,
+      viewportHeight: options.viewportHeight,
+      overscanPx,
+    })
+    const pads = libraryWindowPads({
+      start: range.start,
+      end: range.end,
+      tops,
+      heights,
+      totalHeight,
+    })
+    return {
+      columns,
+      columnWidth,
+      rowHeight,
+      gap,
+      start: range.start,
+      end: range.end,
+      startRow: range.start,
+      endRow: range.end,
+      totalRows: options.count,
+      padTop: pads.padTop,
+      padBottom: pads.padBottom,
+      totalHeight,
+      tops,
+      heights,
+    }
+  }
   const range = libraryWindowRange({
     count: options.count,
     columns,
@@ -182,13 +288,21 @@ export function libraryWindowMetrics(options: {
 
 export function libraryItemRect(
   index: number,
-  layout: Pick<LibraryWindowLayout, 'columns' | 'columnWidth' | 'rowHeight' | 'gap' | 'originLeft' | 'originTop'>,
+  layout: Pick<
+    LibraryWindowLayout,
+    'columns' | 'columnWidth' | 'rowHeight' | 'gap' | 'originLeft' | 'originTop' | 'tops' | 'heights'
+  >,
 ): { left: number; top: number; right: number; bottom: number } {
   const cols = Math.max(1, layout.columns)
-  const row = Math.floor(Math.max(0, index) / cols)
   const col = Math.max(0, index) % cols
-  const stride = libraryRowStride(layout.rowHeight, layout.gap)
   const left = layout.originLeft + col * (layout.columnWidth + layout.gap)
+  if (layout.tops && layout.heights && index >= 0 && index < layout.heights.length) {
+    const top = layout.originTop + (layout.tops[index] ?? 0)
+    const height = layout.heights[index] ?? layout.rowHeight
+    return { left, top, right: left + layout.columnWidth, bottom: top + height }
+  }
+  const row = Math.floor(Math.max(0, index) / cols)
+  const stride = libraryRowStride(layout.rowHeight, layout.gap)
   const top = layout.originTop + row * stride
   return {
     left,
@@ -220,15 +334,23 @@ export function libraryItemScrollTop(
   columns: number,
   rowHeight: number,
   gap: number,
+  tops?: number[],
 ): number {
+  if (tops && index >= 0 && index < tops.length) return tops[index] ?? 0
   const cols = Math.max(1, columns)
   const row = Math.floor(Math.max(0, index) / cols)
   return row * libraryRowStride(rowHeight, gap)
 }
 
 export function sameLibraryWindow(
-  left: Pick<LibraryWindowMetrics, 'start' | 'end' | 'columns' | 'rowHeight' | 'gap' | 'padTop' | 'padBottom'>,
-  right: Pick<LibraryWindowMetrics, 'start' | 'end' | 'columns' | 'rowHeight' | 'gap' | 'padTop' | 'padBottom'>,
+  left: Pick<
+    LibraryWindowMetrics,
+    'start' | 'end' | 'columns' | 'rowHeight' | 'gap' | 'padTop' | 'padBottom' | 'totalHeight'
+  >,
+  right: Pick<
+    LibraryWindowMetrics,
+    'start' | 'end' | 'columns' | 'rowHeight' | 'gap' | 'padTop' | 'padBottom' | 'totalHeight'
+  >,
 ): boolean {
   return (
     left.start === right.start &&
@@ -237,7 +359,8 @@ export function sameLibraryWindow(
     left.rowHeight === right.rowHeight &&
     left.gap === right.gap &&
     left.padTop === right.padTop &&
-    left.padBottom === right.padBottom
+    left.padBottom === right.padBottom &&
+    left.totalHeight === right.totalHeight
   )
 }
 

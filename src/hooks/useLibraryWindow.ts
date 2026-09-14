@@ -5,8 +5,10 @@ import {
   LIBRARY_OVERSCAN_ROWS,
   LIBRARY_WINDOW_FALLBACK_HEIGHT,
   LIBRARY_WINDOW_FALLBACK_WIDTH,
+  applyMeasuredCardHeights,
   contentOffsetTop,
   gridCardMinWidthRem,
+  libraryRowHeightPx,
   libraryWindowMetrics,
   sameLibraryWindow,
   type LibraryWindowLayout,
@@ -56,6 +58,7 @@ function fallbackWindow(
 
 export function useLibraryWindow(options: {
   count: number
+  itemKeys?: readonly string[]
   layout: ViewLayout
   previewSize: number
   extraLines?: number
@@ -70,6 +73,7 @@ export function useLibraryWindow(options: {
 } {
   const {
     count,
+    itemKeys,
     layout,
     previewSize,
     extraLines = 0,
@@ -118,6 +122,19 @@ export function useLibraryWindow(options: {
       const rootFontSize = readRootFontSize()
       const minCardWidth = gridCardMinWidthRem(previewSize) * rootFontSize
       const gridOffsetTop = contentOffsetTop(gridNode, viewportNode)
+      const estimatedRowHeight = libraryRowHeightPx(layout, previewSize, rootFontSize, extraLines)
+      let itemHeights: number[] | undefined
+      if (layout === 'list' && itemKeys && itemKeys.length === count) {
+        const measured = new Map<string, number>()
+        for (const node of Array.from(gridNode.querySelectorAll('[data-family-key]'))) {
+          if (!(node instanceof HTMLElement)) continue
+          const key = node.getAttribute('data-family-key')
+          if (!key) continue
+          const boxHeight = Math.ceil(node.getBoundingClientRect().height)
+          if (boxHeight > 0) measured.set(key, boxHeight)
+        }
+        itemHeights = applyMeasuredCardHeights([...itemKeys], estimatedRowHeight, measured)
+      }
       const next = libraryWindowMetrics({
         count,
         layout,
@@ -129,6 +146,7 @@ export function useLibraryWindow(options: {
         scrollTop: Math.max(0, viewportNode.scrollTop - gridOffsetTop),
         viewportHeight: height,
         overscanRows: LIBRARY_OVERSCAN_ROWS,
+        itemHeights,
       })
       const origin = gridNode.getBoundingClientRect()
       layoutRef.current = {
@@ -139,6 +157,8 @@ export function useLibraryWindow(options: {
         gap: next.gap,
         originLeft: origin.left,
         originTop: origin.top,
+        tops: next.tops,
+        heights: next.heights,
       }
       setMeasured((current) =>
         sameLibraryWindow(current, next) && current.columnWidth === next.columnWidth ? current : next,
@@ -163,7 +183,7 @@ export function useLibraryWindow(options: {
       observer.disconnect()
       viewport.removeEventListener('scroll', onScroll)
     }
-  }, [count, enabled, extraLines, frozen, layout, previewSize, gridRef, viewportRef])
+  }, [count, enabled, extraLines, frozen, itemKeys, layout, previewSize, gridRef, viewportRef])
 
   const gridStyle = useMemo<CSSProperties>(() => {
     const columns =

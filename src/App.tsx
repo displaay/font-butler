@@ -851,8 +851,13 @@ function AppShell() {
   const hideBrowseGrid = inspectorHidesBrowseGrid(showInspector)
   const insetTrafficLights = hasInsetTrafficLights()
   const browseCount = tab === 'system' ? shownSystemGroups.length : visibleGroups.length
+  const browseKeys = useMemo(
+    () => (tab === 'system' ? shownSystemGroups : visibleGroups).map((group) => group.familyName),
+    [tab, shownSystemGroups, visibleGroups],
+  )
   const libraryWindow = useLibraryWindow({
     count: browseCount,
+    itemKeys: browseKeys,
     layout: viewLayout,
     previewSize: gridPreviewSize,
     extraLines: showSources ? 1 : 0,
@@ -898,7 +903,13 @@ function AppShell() {
     const grid = libraryGridRef.current
     const layout = libraryWindow.layoutRef.current
     if (index >= 0 && viewport && layout.rowHeight > 0) {
-      const top = libraryItemScrollTop(index, layout.columns, layout.rowHeight, layout.gap)
+      const top = libraryItemScrollTop(
+        index,
+        layout.columns,
+        layout.rowHeight,
+        layout.gap,
+        layout.tops,
+      )
       const offset = grid ? contentOffsetTop(grid, viewport) : 0
       viewport.scrollTo({ top: offset + top, behavior: 'smooth' })
     } else {

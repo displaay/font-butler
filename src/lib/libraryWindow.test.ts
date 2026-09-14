@@ -2,14 +2,18 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   alignLibraryWindowToRows,
+  applyMeasuredCardHeights,
   catalogEntriesForPreviewCss,
   libraryCardRects,
   libraryGridColumns,
+  libraryItemOffsets,
   libraryItemRect,
   libraryItemScrollTop,
   libraryTotalHeight,
   libraryWindowMetrics,
+  libraryWindowPads,
   libraryWindowRange,
+  libraryWindowRangeFromHeights,
   sameLibraryWindow,
   sliceLibraryWindow,
   systemFacesForPreviewCss,
@@ -248,4 +252,123 @@ test('sameLibraryWindow ignores scroll-only identity so sibling cards can stay m
   })
   assert.equal(sameLibraryWindow(metrics, { ...metrics }), true)
   assert.equal(sameLibraryWindow(metrics, { ...metrics, start: metrics.start + 4 }), false)
+})
+
+test('expanded list row stays mounted while scrolling through its instance rows', () => {
+  const estimated = 72
+  const gap = 8
+  const heights = Array.from({ length: 30 }, () => estimated)
+  heights[4] = estimated + 18 * 40
+  const { tops, totalHeight } = libraryItemOffsets(heights, gap)
+  const nominalBottom = (tops[4] ?? 0) + estimated
+  const scrollTop = nominalBottom + estimated * 5
+  const variable = libraryWindowRangeFromHeights({
+    heights,
+    tops,
+    scrollTop,
+    viewportHeight: 240,
+    overscanPx: estimated * 2,
+  })
+  assert.ok(variable.start <= 4)
+  assert.ok(variable.end > 4)
+
+  const uniform = libraryWindowRange({
+    count: 30,
+    columns: 1,
+    rowHeight: estimated,
+    gap,
+    scrollTop,
+    viewportHeight: 240,
+    overscanRows: 2,
+  })
+  assert.ok(uniform.start > 4)
+
+  const metrics = libraryWindowMetrics({
+    count: 30,
+    layout: 'list',
+    width: 720,
+    minCardWidth: 180,
+    previewSize: 4,
+    rootFontSize: 16,
+    scrollTop,
+    viewportHeight: 240,
+    overscanRows: 2,
+    itemHeights: heights,
+  })
+  assert.ok(metrics.start <= 4)
+  assert.ok(metrics.end > 4)
+  assert.equal(metrics.heights?.[4], heights[4])
+  assert.ok(metrics.totalHeight > libraryTotalHeight(30, 1, estimated, metrics.gap))
+  assert.equal(metrics.totalHeight, totalHeight)
+  const pads = libraryWindowPads({
+    start: metrics.start,
+    end: metrics.end,
+    tops,
+    heights,
+    totalHeight,
+  })
+  assert.equal(metrics.padTop, pads.padTop)
+  assert.equal(libraryItemScrollTop(4, 1, estimated, gap, tops), tops[4])
+})
+
+test('grid windowing stays uniform even when a list-style height map is present', () => {
+  const heights = Array.from({ length: 40 }, (_, index) => (index === 2 ? 800 : 180))
+  const withHeights = libraryWindowMetrics({
+    count: 40,
+    layout: 'grid',
+    width: 960,
+    minCardWidth: 180,
+    previewSize: 4.25,
+    rootFontSize: 16,
+    scrollTop: 800,
+    viewportHeight: 640,
+    overscanRows: 2,
+    itemHeights: heights,
+  })
+  const without = libraryWindowMetrics({
+    count: 40,
+    layout: 'grid',
+    width: 960,
+    minCardWidth: 180,
+    previewSize: 4.25,
+    rootFontSize: 16,
+    scrollTop: 800,
+    viewportHeight: 640,
+    overscanRows: 2,
+  })
+  assert.equal(withHeights.columns, without.columns)
+  assert.ok(withHeights.columns > 1)
+  assert.equal(withHeights.start, without.start)
+  assert.equal(withHeights.end, without.end)
+  assert.equal(withHeights.heights, undefined)
+})
+
+test('applyMeasuredCardHeights keeps a measured expanded row and estimates the rest', () => {
+  assert.deepEqual(
+    applyMeasuredCardHeights(['A', 'B', 'C'], 72, new Map([['B', 640]])),
+    [72, 640, 72],
+  )
+})
+
+test('marquee and scrollToFamily use measured list tops instead of uniform strides', () => {
+  const heights = [72, 72, 640, 72]
+  const gap = 8
+  const { tops } = libraryItemOffsets(heights, gap)
+  const layout = {
+    count: 4,
+    columns: 1,
+    columnWidth: 400,
+    rowHeight: 72,
+    gap,
+    originLeft: 0,
+    originTop: 10,
+    tops,
+    heights,
+  }
+  const expanded = libraryItemRect(2, layout)
+  assert.equal(expanded.top, 10 + tops[2]!)
+  assert.equal(expanded.bottom - expanded.top, 640)
+  assert.equal(libraryItemScrollTop(2, 1, 72, gap, tops), tops[2])
+  assert.equal(libraryItemScrollTop(3, 1, 72, gap, tops), tops[3])
+  assert.ok(libraryItemScrollTop(3, 1, 72, gap) < tops[3]!)
 })
