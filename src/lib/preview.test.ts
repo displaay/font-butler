@@ -194,6 +194,15 @@ test('cached signed preview URLs are reused until the unsigned catalog URL chang
   assert.notEqual(other, refreshed)
 })
 
+test('catalogEntriesNeedingPreviewCss for a viewport window stays far below catalog size', () => {
+  const catalog = Array.from({ length: 500 }, (_, index) => entry({ id: `bulk-${index}` }))
+  const windowed = catalog.slice(12, 40)
+  const needed = catalogEntriesNeedingPreviewCss(windowed, new Map())
+  assert.equal(needed.keep.size, 28)
+  assert.equal(needed.changed.length, 28)
+  assert.ok(needed.keep.size < catalog.length / 10)
+})
+
 test('uninstalling one catalog entry does not change a sibling preview fingerprint', () => {
   const kept = entry({ id: 'kept' })
   const removed = entry({

@@ -3,6 +3,7 @@ import { ArrowDownAZ, CalendarPlus, Ellipsis, LayoutGrid, List } from 'lucide-re
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import type { SortMode, ViewLayout } from '@/lib/types'
+import { gridCardMinWidthRem } from '@/lib/libraryWindow'
 import { cn, CONTROL_H } from '@/lib/utils'
 
 export const GRID_PREVIEW_SIZE_KEY = 'font-butler-grid-preview-size'
@@ -11,9 +12,7 @@ export const GRID_PREVIEW_SIZE_MAX = 6.5
 export const GRID_PREVIEW_SIZE_DEFAULT = 4.25
 export const GRID_PREVIEW_SIZE_STEP = 0.25
 
-export function gridCardMinWidthRem(previewSize: number): number {
-  return 5.25 + previewSize * 1.85
-}
+export { gridCardMinWidthRem }
 
 export function readGridPreviewSize(): number {
   const raw = localStorage.getItem(GRID_PREVIEW_SIZE_KEY)

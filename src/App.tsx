@@ -33,7 +33,6 @@ import { SystemCard } from '@/components/SystemCard'
 import {
   GRID_PREVIEW_SIZE_KEY,
   ViewOptions,
-  gridCardMinWidthRem,
   readGridPreviewSize,
 } from '@/components/ViewOptions'
 import { Button } from '@/components/ui/button'
@@ -42,6 +41,7 @@ import { NotifyProvider, useSetActionStatus } from '@/components/NotifyProvider'
 import { Toaster } from '@/components/ui/sonner'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useFontActions, type FormatPrompt, type ReplacePrompt } from '@/hooks/useFontActions'
+import { useLibraryWindow } from '@/hooks/useLibraryWindow'
 import { api, isAppUpdateEvent, isDuplicatesEvent, isNotice, isOperationsEvent, isProjectsEvent, isRetailEvent, isSettingsEvent, subscribeEvents } from '@/lib/api'
 import {
   mergeUnreadFlags,
@@ -116,6 +116,15 @@ import {
   type InspectorDensity,
 } from '@/lib/inspector'
 import { applyTheme } from '@/lib/theme'
+import {
+  catalogEntriesForPreviewCss,
+  contentOffsetTop,
+  libraryCardRects,
+  libraryItemScrollTop,
+  resolveScrollToFamily,
+  sliceLibraryWindow,
+  systemFacesForPreviewCss,
+} from '@/lib/libraryWindow'
 import { allUpdateGroups, visibleUpdateGroups } from '@/lib/updateInventory'
 import { operationMatchesQuery, tabWithSearchHits } from '@/lib/search'
 import type { AppSettings, AppUpdateStatus, CatalogEntry, DestinationCapability, DuplicateWarning, FamilyGroup, ImportPlan, ImportPlanItem, LibraryFilter, Operation, PreviewPreferences, ProjectSet, RetailCollisionAction, RetailFamilyCollision, RetailSyncStatus, SavedLibraryFilter, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
@@ -125,6 +134,7 @@ import { isPathUnderFolder, isRetailLibraryFilter, isWatchFolderEntry, libraryFo
 
 const EMPTY_WATCH_FOLDERS: string[] = []
 const EMPTY_SYSTEM_FACES: SystemFace[] = []
+const EMPTY_CATALOG_ENTRIES: CatalogEntry[] = []
 
 export default function App() {
   return (
@@ -214,6 +224,8 @@ function AppShell() {
   const fontDragRef = useRef(false)
   const applyMarqueeKeysRef = useRef<(keys: string[]) => void>(() => {})
   const reinstallFromMenuBarRef = useRef<(ids: string[]) => void>(() => {})
+  const libraryViewportRef = useRef<HTMLDivElement>(null)
+  const libraryGridRef = useRef<HTMLDivElement>(null)
   const [scrollToFamily, setScrollToFamily] = useState<string | null>(null)
   const [libraryFilters, setLibraryFilters] = useState<LibraryFilter[]>(readLibraryFilters)
   const [gridPreviewSize, setGridPreviewSize] = useState(readGridPreviewSize)
@@ -621,10 +633,6 @@ function AppShell() {
     () => (query.trim() ? systemGroups : systemGroups.slice(0, 80)),
     [query, systemGroups],
   )
-  const previewSystemFaces = useMemo(
-    () => (tab === 'system' ? shownSystemGroups.flatMap((group) => group.faces) : EMPTY_SYSTEM_FACES),
-    [tab, shownSystemGroups],
-  )
   const missingSourceCount = useMemo(
     () => entries.filter((entry) => entry.status === 'source-missing').length,
     [entries],
@@ -748,14 +756,6 @@ function AppShell() {
     })
   }, [selectedGroup])
 
-  useEffect(() => {
-    if (!scrollToFamily) return
-    const node = document.querySelector(`[data-family-key="${CSS.escape(scrollToFamily)}"]`)
-    if (!node) return
-    node.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-    setScrollToFamily(null)
-  }, [scrollToFamily, visibleGroups, tab])
-
   function selectGroup(group: FamilyGroup) {
     setSelectedFamily(group.familyName)
     setSelectedFamilyKeys([group.familyName])
@@ -851,6 +851,81 @@ function AppShell() {
   const showBatchBar = selectionCount > 1 || (selectionCount === 1 && !inspectSelection)
   const hideBrowseGrid = inspectorHidesBrowseGrid(showInspector)
   const insetTrafficLights = hasInsetTrafficLights()
+  const browseCount = tab === 'system' ? shownSystemGroups.length : visibleGroups.length
+  const browseKeys = useMemo(
+    () => (tab === 'system' ? shownSystemGroups : visibleGroups).map((group) => group.familyName),
+    [tab, shownSystemGroups, visibleGroups],
+  )
+  const libraryWindow = useLibraryWindow({
+    count: browseCount,
+    itemKeys: browseKeys,
+    layout: viewLayout,
+    previewSize: gridPreviewSize,
+    extraLines: showSources ? 1 : 0,
+    viewportRef: libraryViewportRef,
+    gridRef: libraryGridRef,
+    enabled: tab !== 'activity',
+    frozen: hideBrowseGrid,
+  })
+  const mountedCatalogGroups = useMemo(
+    () =>
+      tab === 'system' || tab === 'activity'
+        ? []
+        : sliceLibraryWindow(visibleGroups, libraryWindow.window.start, libraryWindow.window.end),
+    [tab, visibleGroups, libraryWindow.window.start, libraryWindow.window.end],
+  )
+  const mountedSystemGroups = useMemo(
+    () =>
+      tab === 'system'
+        ? sliceLibraryWindow(shownSystemGroups, libraryWindow.window.start, libraryWindow.window.end)
+        : [],
+    [tab, shownSystemGroups, libraryWindow.window.start, libraryWindow.window.end],
+  )
+  const previewCatalogEntries = useMemo(() => {
+    if (tab === 'system') return EMPTY_CATALOG_ENTRIES
+    const pinned = selectedFamily
+      ? visibleGroups.filter((group) => group.familyName === selectedFamily)
+      : []
+    return catalogEntriesForPreviewCss(mountedCatalogGroups, pinned)
+  }, [tab, mountedCatalogGroups, visibleGroups, selectedFamily])
+  const previewSystemFaces = useMemo(() => {
+    if (tab !== 'system') return EMPTY_SYSTEM_FACES
+    const pinned = selectedSystem
+      ? shownSystemGroups.filter((group) => group.familyName === selectedSystem)
+      : []
+    return systemFacesForPreviewCss(mountedSystemGroups, pinned)
+  }, [tab, mountedSystemGroups, shownSystemGroups, selectedSystem])
+
+  useEffect(() => {
+    if (!scrollToFamily) return
+    const groups = tab === 'system' ? shownSystemGroups : visibleGroups
+    const viewport = libraryViewportRef.current
+    const grid = libraryGridRef.current
+    const layout = libraryWindow.layoutRef.current
+    const node = document.querySelector(`[data-family-key="${CSS.escape(scrollToFamily)}"]`)
+    const resolution = resolveScrollToFamily({
+      target: scrollToFamily,
+      groups,
+      hasViewport: Boolean(viewport),
+      rowHeight: layout.rowHeight,
+      nodePresent: node instanceof HTMLElement,
+    })
+    if (resolution.action === 'defer') return
+    if (resolution.action === 'computed' && viewport) {
+      const top = libraryItemScrollTop(
+        resolution.index,
+        layout.columns,
+        layout.rowHeight,
+        layout.gap,
+        layout.tops,
+      )
+      const offset = grid ? contentOffsetTop(grid, viewport) : 0
+      viewport.scrollTo({ top: offset + top, behavior: 'smooth' })
+    } else {
+      node?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    }
+    setScrollToFamily(null)
+  }, [scrollToFamily, visibleGroups, shownSystemGroups, tab, libraryWindow.layoutRef])
 
   function closeInspector() {
     setInspectSelection(false)
@@ -916,7 +991,28 @@ function AppShell() {
       }
       const rect = clientRect(session.startX, session.startY, x, y)
       setMarqueeRect(rect)
-      const hit = keysInMarquee(collectFamilyCardRects(), rect)
+      const groups: Array<{ familyName: string }> = tab === 'system' ? shownSystemGroups : visibleGroups
+      const grid = libraryGridRef.current
+      const layout = { ...libraryWindow.layoutRef.current }
+      if (grid) {
+        const origin = grid.getBoundingClientRect()
+        layout.originLeft = origin.left
+        layout.originTop = origin.top
+      }
+      const hit = keysInMarquee(
+        libraryCardRects(
+          groups,
+          layout,
+          collectFamilyCardRects().map((item) => ({
+            key: item.key,
+            left: item.rect.left,
+            top: item.rect.top,
+            right: item.rect.right,
+            bottom: item.rect.bottom,
+          })),
+        ),
+        rect,
+      )
       applyMarqueeKeysRef.current(mergeMarqueeSelection(session.baseKeys, hit, session.additive))
     }
 
@@ -1580,7 +1676,7 @@ function AppShell() {
         }}
       >
         <FontFaceStyles
-          entries={entries}
+          entries={previewCatalogEntries}
           systemFaces={previewSystemFaces}
         />
         <Sidebar
@@ -1747,7 +1843,7 @@ function AppShell() {
                 )}
               </div>
             )}
-            <ScrollArea className="min-h-0 flex-1">
+            <ScrollArea className="min-h-0 flex-1" viewportRef={libraryViewportRef}>
               <div className={cn('flex min-h-full flex-col p-3', showBatchBar && 'pb-24')}>
                 {!loading && tab === 'updates' && (retail?.pending ?? 0) > 0 && retail ? (
                   <div className="pt-3">
@@ -1843,18 +1939,9 @@ function AppShell() {
                     </Button>
                   </div>
                 )}
-                <div
-                  className={cn('grid', viewLayout === 'grid' ? 'gap-3' : 'gap-2')}
-                  style={
-                    viewLayout === 'grid'
-                      ? {
-                          gridTemplateColumns: `repeat(auto-fill, minmax(${gridCardMinWidthRem(gridPreviewSize)}rem, 1fr))`,
-                        }
-                      : undefined
-                  }
-                >
+                <div ref={libraryGridRef} style={libraryWindow.gridStyle}>
                   {tab === 'system'
-                    ? shownSystemGroups.map((group) => {
+                    ? mountedSystemGroups.map((group) => {
                         const inSelection = systemSelection.some((item) => item.key === group.key)
                         return (
                         <SystemCard
@@ -1895,7 +1982,7 @@ function AppShell() {
                         />
                         )
                       })
-                    : visibleGroups.map((group) => {
+                    : mountedCatalogGroups.map((group) => {
                         const inSelection = catalogSelection.some((item) => item.key === group.key)
                         const useBatch = catalogSelection.length > 1 && inSelection
                         return (

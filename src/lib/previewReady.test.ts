@@ -8,11 +8,14 @@ import {
 
 type MockFace = { family: string }
 
-function mockFonts(options: { check?: boolean; faces?: MockFace[] }): () => void {
+function mockFonts(options: { check?: boolean; faces?: MockFace[]; onLoad?: () => void }): () => void {
   const faces = options.faces ?? []
   const fonts = {
     check: () => Boolean(options.check),
-    load: async () => [],
+    load: async () => {
+      options.onLoad?.()
+      return []
+    },
     addEventListener() {},
     removeEventListener() {},
     forEach(callback: (face: MockFace) => void) {
@@ -73,6 +76,25 @@ test('matching FontFace still waits while fonts.check() is false', () => {
   const restore = mockFonts({ check: false, faces: [{ family: 'fc-abc' }] })
   try {
     assert.equal(isPreviewFontReady('fc-abc'), false)
+  } finally {
+    restore()
+  }
+})
+
+test('fonts.load is skipped until a card family is actually checked', () => {
+  let loads = 0
+  const restore = mockFonts({
+    check: false,
+    faces: [],
+    onLoad: () => {
+      loads += 1
+    },
+  })
+  try {
+    assert.equal(isPreviewFontReady('ui-sans-serif'), true)
+    assert.equal(loads, 0)
+    assert.equal(isPreviewFontReady('fc-visible'), false)
+    assert.equal(loads, 1)
   } finally {
     restore()
   }
