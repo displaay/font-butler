@@ -243,6 +243,19 @@ function existingFontPath(entry: {
   }
 }
 
+/** Matches `catalogPreviewWhich()`: cards paint installed bytes when a managed copy exists. */
+export function previewUsesInstalledBytes(entry: {
+  installedPath?: string
+  disabledPath?: string
+  installations?: Array<{ path?: string; parkedPath?: string }>
+}): boolean {
+  return Boolean(
+    entry.installedPath ||
+      entry.disabledPath ||
+      entry.installations?.some((copy) => copy.path || copy.parkedPath),
+  )
+}
+
 export function fillEntryPreviewSample(
   entry: {
     previewSample?: string

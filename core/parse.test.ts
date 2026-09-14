@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { parseFontFile, glyphNameForCodePoint, resolveFamilyNames } from './parse.ts'
+import { glyphNameForCodePoint, parseFontFile, previewUsesInstalledBytes, resolveFamilyNames } from './parse.ts'
 import { writeTestCollection, writeTestFont, withService } from './test-util.ts'
 
 test('resolveFamilyNames prefers typographic family and style', () => {
@@ -132,6 +132,13 @@ test('parseFontFile picks a Font Book-style preview sample from cmap coverage', 
   }
 })
 
+test('previewUsesInstalledBytes is true when catalog cards paint installed bytes', () => {
+  assert.equal(previewUsesInstalledBytes({}), false)
+  assert.equal(previewUsesInstalledBytes({ installedPath: '/tmp/installed.ttf' }), true)
+  assert.equal(previewUsesInstalledBytes({ disabledPath: '/tmp/disabled.ttf' }), true)
+  assert.equal(previewUsesInstalledBytes({ installations: [{ path: '/tmp/adobe.ttf' }] }), true)
+})
+
 test('glyphNameForCodePoint reads the PostScript glyph name', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-glyph-name-'))
   try {
@@ -152,5 +159,61 @@ test('import persists the cmap preview sample on the catalog entry', async () =>
     })
     const result = await service.importPaths([file])
     assert.equal(result.entries[0]?.previewSample, 'א')
+  })
+})
+
+test('source cmap change does not overwrite preview sample while installed bytes are shown', async () => {
+  await withService(async (service, paths) => {
+    const source = path.join(paths.dataRoot, 'Live.ttf')
+    writeTestFont(source, 'Live', 'Live-Regular', {
+      codePoints: [65, 66, 67, 97, 98, 99],
+    })
+    const imported = await service.importPaths([source])
+    const installed = await service.install(imported.entries[0]!.id)
+    assert.equal(installed.previewSample, 'Aa')
+    assert.equal(previewUsesInstalledBytes(installed), true)
+    assert.ok(installed.installedPath)
+    assert.notEqual(installed.installedPath, source)
+
+    writeTestFont(source, 'Live', 'Live-Regular', {
+      codePoints: [65, 97, 0x05d0, 0x05d1, 0x05d2, 0x05d3, 0x05d4, 0x05d5],
+    })
+    const later = Date.now() / 1000 + 2
+    fs.utimesSync(source, later, later)
+    assert.equal(parseFontFile(source).previewSample, 'א')
+    assert.equal(parseFontFile(installed.installedPath!).previewSample, 'Aa')
+
+    await service.init()
+    const [entry] = service.listCatalog()
+    assert.ok(entry)
+    assert.equal(entry.status, 'outdated')
+    assert.equal(previewUsesInstalledBytes(entry), true)
+    assert.equal(entry.previewSample, 'Aa')
+  })
+})
+
+test('uninstalled source cmap change updates the preview sample', async () => {
+  await withService(async (service, paths) => {
+    const source = path.join(paths.dataRoot, 'Idle.ttf')
+    writeTestFont(source, 'Idle', 'Idle-Regular', {
+      codePoints: [65, 66, 67, 97, 98, 99],
+    })
+    const imported = await service.importPaths([source])
+    assert.equal(imported.entries[0]?.status, 'uninstalled')
+    assert.equal(imported.entries[0]?.previewSample, 'Aa')
+    assert.equal(previewUsesInstalledBytes(imported.entries[0]!), false)
+
+    writeTestFont(source, 'Idle', 'Idle-Regular', {
+      codePoints: [65, 97, 0x05d0, 0x05d1, 0x05d2, 0x05d3, 0x05d4, 0x05d5],
+    })
+    const later = Date.now() / 1000 + 2
+    fs.utimesSync(source, later, later)
+
+    await service.init()
+    const [entry] = service.listCatalog()
+    assert.ok(entry)
+    assert.equal(entry.status, 'uninstalled')
+    assert.equal(previewUsesInstalledBytes(entry), false)
+    assert.equal(entry.previewSample, 'א')
   })
 })
