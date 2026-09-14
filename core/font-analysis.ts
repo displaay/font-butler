@@ -9,6 +9,10 @@
  *
  * If the worker cannot start (tests without a TS loader, etc.), we fall back to
  * the same staged parse on the API thread, still yielding between files.
+ *
+ * Worker `execArgv` is only tsx loader flags (never a copy of `process.execArgv`).
+ * Node 24 rejects inherited flags such as `--node-snapshot` with
+ * `ERR_WORKER_INVALID_EXEC_ARGV`, which used to silently fall back to the API thread.
  */
 import { existsSync } from 'node:fs'
 import path from 'node:path'
@@ -150,17 +154,46 @@ class FontAnalysisWorkerJobError extends Error {
   override name = 'FontAnalysisWorkerJobError'
 }
 
+const TSX_LOADER_FLAGS = new Set(['--import', '--require', '-r', '--loader', '--experimental-loader'])
+
+function isTsxLoaderSpec(value: string): boolean {
+  const normalized = value.replace(/\\/g, '/').toLowerCase()
+  if (normalized === 'tsx' || normalized.startsWith('tsx/')) return true
+  if (normalized.includes('/node_modules/tsx/')) return true
+  return /\/tsx\/dist\/(?:loader|preflight|esm|cjs)/.test(normalized)
+}
+
+/** tsx loader flags only — never forward the parent's full `process.execArgv`. */
+export function execArgvForFontAnalysisWorker(execArgv: readonly string[]): string[] {
+  const filtered: string[] = []
+  for (let i = 0; i < execArgv.length; i += 1) {
+    const arg = execArgv[i]!
+    const equals = arg.indexOf('=')
+    if (equals > 0 && TSX_LOADER_FLAGS.has(arg.slice(0, equals))) {
+      if (isTsxLoaderSpec(arg.slice(equals + 1))) filtered.push(arg)
+      continue
+    }
+    if (!TSX_LOADER_FLAGS.has(arg)) continue
+    const next = execArgv[i + 1]
+    if (next && isTsxLoaderSpec(next)) {
+      filtered.push(arg, next)
+      i += 1
+    }
+  }
+  return filtered.length > 0 ? filtered : ['--import', 'tsx']
+}
+
+function workerThreadExecArgv(url: URL): string[] {
+  if (!url.pathname.endsWith('.ts')) return []
+  return execArgvForFontAnalysisWorker(process.execArgv)
+}
+
 function ensureWorker(): Worker | null {
   if (workerFailed) return null
   if (worker) return worker
   try {
     const url = workerUrl()
-    const execArgv = url.pathname.endsWith('.ts')
-      ? process.execArgv.length > 0
-        ? [...process.execArgv]
-        : ['--import', 'tsx']
-      : undefined
-    const next = new Worker(url, { execArgv })
+    const next = new Worker(url, { execArgv: workerThreadExecArgv(url) })
     next.unref()
     next.on('message', (message: FontAnalysisWorkerMessage) => {
       const job = workerJobs.get(message.id)

@@ -8,6 +8,7 @@ import {
   analysisFromPlanItem,
   analyzeFontFile,
   closeFontAnalysisWorker,
+  execArgvForFontAnalysisWorker,
   fontAnalysisStats,
   resetFontAnalysisCache,
 } from './font-analysis.ts'
@@ -20,6 +21,31 @@ after(async () => {
   await closeFontAnalysisWorker()
 })
 
+test('execArgvForFontAnalysisWorker keeps tsx loader flags and drops --node-snapshot', () => {
+  assert.deepEqual(
+    execArgvForFontAnalysisWorker([
+      '--require',
+      '/workspace/node_modules/tsx/dist/preflight.cjs',
+      '--import',
+      'file:///workspace/node_modules/tsx/dist/loader.mjs',
+      '--enable-source-maps',
+      '--node-snapshot',
+      '/tmp/node.snapshot',
+    ]),
+    [
+      '--require',
+      '/workspace/node_modules/tsx/dist/preflight.cjs',
+      '--import',
+      'file:///workspace/node_modules/tsx/dist/loader.mjs',
+    ],
+  )
+  assert.deepEqual(execArgvForFontAnalysisWorker(['--node-snapshot', '/tmp/node.snapshot']), [
+    '--import',
+    'tsx',
+  ])
+  assert.deepEqual(execArgvForFontAnalysisWorker(['--import=tsx', '--inspect']), ['--import=tsx'])
+})
+
 test('analyzeFontFile caches parse and fingerprint by path+mtime+size', async () => {
   await withService(async (_service, paths) => {
     const file = path.join(paths.dataRoot, 'Cache.ttf')
@@ -27,6 +53,8 @@ test('analyzeFontFile caches parse and fingerprint by path+mtime+size', async ()
     resetFontAnalysisCache()
     const first = await analyzeFontFile(file)
     const afterFirst = fontAnalysisStats()
+    assert.ok(afterFirst.workerJobs >= 1, 'font analysis worker must start')
+    assert.equal(afterFirst.fallbackJobs, 0)
     const second = await analyzeFontFile(file)
     const afterSecond = fontAnalysisStats()
     assert.equal(first.parsed.previewSample, 'א')
@@ -167,7 +195,11 @@ test('a worker job error does not retry parse on the API thread', async () => {
     resetFontAnalysisCache()
     await analyzeFontFile(good)
     const afterGood = fontAnalysisStats()
-    if (afterGood.workerJobs === 0 || afterGood.fallbackJobs > 0) return
+    assert.ok(
+      afterGood.workerJobs >= 1,
+      'font analysis worker must start; API-thread fallback is not this test',
+    )
+    assert.equal(afterGood.fallbackJobs, 0)
     const file = path.join(paths.dataRoot, 'Bad.ttf')
     fs.writeFileSync(file, 'not a font')
     const before = fontAnalysisStats()
