@@ -1,15 +1,21 @@
-import type { ComponentProps } from 'react'
+import type { ComponentProps, Ref } from 'react'
 import * as ScrollAreaPrimitive from '@radix-ui/react-scroll-area'
 import { cn } from '@/lib/utils'
 
 function ScrollArea({
   className,
   children,
+  viewportRef,
   ...props
-}: ComponentProps<typeof ScrollAreaPrimitive.Root>) {
+}: ComponentProps<typeof ScrollAreaPrimitive.Root> & {
+  viewportRef?: Ref<HTMLDivElement>
+}) {
   return (
     <ScrollAreaPrimitive.Root className={cn('overflow-hidden', className)} {...props}>
-      <ScrollAreaPrimitive.Viewport className="h-full w-full [&>div]:flex [&>div]:min-h-full [&>div]:flex-col">
+      <ScrollAreaPrimitive.Viewport
+        ref={viewportRef}
+        className="h-full w-full [&>div]:flex [&>div]:min-h-full [&>div]:flex-col"
+      >
         {children}
       </ScrollAreaPrimitive.Viewport>
       <ScrollAreaPrimitive.Scrollbar

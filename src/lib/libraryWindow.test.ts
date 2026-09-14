@@ -1,0 +1,251 @@
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+import {
+  alignLibraryWindowToRows,
+  catalogEntriesForPreviewCss,
+  libraryCardRects,
+  libraryGridColumns,
+  libraryItemRect,
+  libraryItemScrollTop,
+  libraryTotalHeight,
+  libraryWindowMetrics,
+  libraryWindowRange,
+  sameLibraryWindow,
+  sliceLibraryWindow,
+  systemFacesForPreviewCss,
+} from './libraryWindow.ts'
+import { catalogEntriesNeedingPreviewCss, catalogPreviewFingerprint } from './preview.ts'
+import type { CatalogEntry, FontFaceInfo, SystemFace } from './types.ts'
+
+function face(familyName: string): FontFaceInfo {
+  return {
+    familyName,
+    styleName: 'Regular',
+    fullName: `${familyName} Regular`,
+    postscriptName: `${familyName}-Regular`,
+    isVariable: false,
+    instanceCount: 1,
+    instanceNames: [],
+    weight: 400,
+    italic: false,
+  }
+}
+
+function entry(id: string, familyName = id): CatalogEntry {
+  return {
+    id,
+    sourcePath: `/tmp/${id}.ttf`,
+    sourceMtimeMs: 10,
+    sourceSize: 100,
+    status: 'installed',
+    installedPath: `/tmp/installed/${id}.ttf`,
+    installedSnapshotMtimeMs: 1,
+    installedSnapshotSize: 50,
+    faces: [face(familyName)],
+    format: 'ttf',
+    addedAt: 1,
+    updatedAt: 1,
+  }
+}
+
+function group(id: string) {
+  const catalog = entry(id)
+  return { key: id, familyName: id, entries: [catalog] }
+}
+
+test('libraryGridColumns fills auto-fit tracks from the min card width', () => {
+  assert.equal(libraryGridColumns(400, 180, 12), 2)
+  assert.equal(libraryGridColumns(900, 180, 12), 4)
+  assert.equal(libraryGridColumns(0, 180, 12), 1)
+})
+
+test('libraryWindowRange only covers visible rows plus overscan, not the full catalog', () => {
+  const range = libraryWindowRange({
+    count: 400,
+    columns: 4,
+    rowHeight: 180,
+    gap: 12,
+    scrollTop: 0,
+    viewportHeight: 600,
+    overscanRows: 2,
+  })
+  assert.equal(range.start, 0)
+  assert.ok(range.end < 400)
+  assert.ok(range.end <= 4 * (Math.ceil(600 / 192) + 2))
+
+  const scrolled = libraryWindowRange({
+    count: 400,
+    columns: 4,
+    rowHeight: 180,
+    gap: 12,
+    scrollTop: 1920,
+    viewportHeight: 600,
+    overscanRows: 2,
+  })
+  assert.ok(scrolled.start > 0)
+  assert.ok(scrolled.end < 400)
+  assert.ok(scrolled.end - scrolled.start < 80)
+})
+
+test('library window aligns to full rows so CSS grid columns stay stable', () => {
+  const aligned = alignLibraryWindowToRows(5, 14, 40, 4)
+  assert.equal(aligned.start, 4)
+  assert.equal(aligned.end, 16)
+  assert.equal(aligned.startRow, 1)
+  assert.equal(aligned.endRow, 4)
+})
+
+test('libraryWindowMetrics pads off-screen rows instead of mounting them', () => {
+  const metrics = libraryWindowMetrics({
+    count: 200,
+    layout: 'grid',
+    width: 960,
+    minCardWidth: 180,
+    previewSize: 4.25,
+    rootFontSize: 16,
+    scrollTop: 800,
+    viewportHeight: 640,
+    overscanRows: 2,
+  })
+  assert.equal(metrics.columns > 1, true)
+  assert.ok(metrics.end - metrics.start < 200)
+  assert.ok(metrics.padTop > 0)
+  assert.ok(metrics.padBottom > 0)
+  assert.equal(
+    metrics.totalHeight,
+    libraryTotalHeight(200, metrics.columns, metrics.rowHeight, metrics.gap),
+  )
+  const list = libraryWindowMetrics({
+    count: 200,
+    layout: 'list',
+    width: 960,
+    minCardWidth: 180,
+    previewSize: 4.25,
+    rootFontSize: 16,
+    scrollTop: 0,
+    viewportHeight: 640,
+    overscanRows: 2,
+  })
+  assert.equal(list.columns, 1)
+  assert.ok(list.end < 200)
+})
+
+test('catalogEntriesForPreviewCss is bounded by the mounted window, not catalog size', () => {
+  const catalog = Array.from({ length: 120 }, (_, index) => group(`f${index}`))
+  const mounted = catalog.slice(8, 20)
+  const pinned = [catalog[90]!]
+  const preview = catalogEntriesForPreviewCss(mounted, pinned)
+  assert.equal(preview.length, 13)
+  assert.deepEqual(
+    preview.map((item) => item.id),
+    [...mounted.map((item) => item.familyName), 'f90'],
+  )
+  const needed = catalogEntriesNeedingPreviewCss(preview, new Map())
+  assert.equal(needed.keep.size, 13)
+  assert.equal(needed.changed.length, 13)
+  assert.equal(needed.keep.has('f0'), false)
+  assert.equal(needed.keep.has('f90'), true)
+})
+
+test('sliceLibraryWindow falls back to a first page when the range is empty', () => {
+  const items = Array.from({ length: 80 }, (_, index) => index)
+  assert.deepEqual(sliceLibraryWindow(items, 4, 10), [4, 5, 6, 7, 8, 9])
+  assert.equal(sliceLibraryWindow(items, 0, 0).length, 48)
+  assert.equal(sliceLibraryWindow(items, 90, 100).length, 48)
+  assert.deepEqual(sliceLibraryWindow([1, 2], 0, 0), [1, 2])
+})
+
+test('sliding the preview window does not remount CSS for overlapping cards', () => {
+  const catalog = Array.from({ length: 30 }, (_, index) => entry(`f${index}`))
+  const first = catalogEntriesNeedingPreviewCss(catalog.slice(0, 8), new Map())
+  const scrolled = catalogEntriesNeedingPreviewCss(catalog.slice(4, 12), first.fingerprints, {
+    mounted: first.keep,
+  })
+  assert.deepEqual(
+    scrolled.changed.map((item) => item.id),
+    ['f8', 'f9', 'f10', 'f11'],
+  )
+  assert.equal(scrolled.fingerprints.get('f4'), first.fingerprints.get('f4'))
+  assert.deepEqual([...scrolled.keep].sort(), catalog.slice(4, 12).map((item) => item.id).sort())
+})
+
+test('pinning a selected off-screen family does not change sibling preview fingerprints', () => {
+  const kept = entry('kept')
+  const other = entry('other')
+  const selected = entry('selected')
+  const first = catalogEntriesNeedingPreviewCss([kept, other], new Map())
+  const afterSelect = catalogEntriesNeedingPreviewCss([kept, other, selected], first.fingerprints, {
+    mounted: first.keep,
+  })
+  assert.deepEqual(
+    afterSelect.changed.map((item) => item.id),
+    ['selected'],
+  )
+  assert.equal(afterSelect.fingerprints.get('kept'), first.fingerprints.get('kept'))
+  assert.equal(catalogPreviewFingerprint(kept), catalogPreviewFingerprint(entry('kept')))
+  assert.equal(catalogPreviewFingerprint(other), catalogPreviewFingerprint(entry('other')))
+})
+
+test('systemFacesForPreviewCss only keeps faces from the mounted window', () => {
+  const faceAt = (path: string): SystemFace => ({
+    path,
+    familyName: path,
+    styleName: 'Regular',
+    fullName: path,
+    postscriptName: path,
+    isVariable: false,
+    instanceCount: 1,
+    weight: 400,
+    italic: false,
+    format: 'ttf',
+    protected: true,
+    writable: false,
+  })
+  const groups = Array.from({ length: 40 }, (_, index) => ({
+    faces: [faceAt(`/System/Library/Fonts/${index}.ttf`)],
+  }))
+  const preview = systemFacesForPreviewCss(groups.slice(0, 6), [groups[30]!])
+  assert.equal(preview.length, 7)
+})
+
+test('libraryCardRects prefer live mounted boxes so select does not invent a remount rect', () => {
+  const items = [{ familyName: 'A' }, { familyName: 'B' }, { familyName: 'C' }]
+  const layout = {
+    count: 3,
+    columns: 3,
+    columnWidth: 100,
+    rowHeight: 80,
+    gap: 12,
+    originLeft: 10,
+    originTop: 20,
+  }
+  const estimated = libraryCardRects(items, layout)
+  assert.deepEqual(estimated[1]?.rect, libraryItemRect(1, layout))
+  const live = libraryCardRects(items, layout, [
+    { key: 'B', left: 11, top: 21, right: 111, bottom: 101 },
+  ])
+  assert.deepEqual(live[1]?.rect, { left: 11, top: 21, right: 111, bottom: 101 })
+  assert.deepEqual(live[0]?.rect, estimated[0]?.rect)
+})
+
+test('libraryItemScrollTop keeps a stable offset for a family index', () => {
+  assert.equal(libraryItemScrollTop(0, 4, 180, 12), 0)
+  assert.equal(libraryItemScrollTop(4, 4, 180, 12), 192)
+  assert.equal(libraryItemScrollTop(9, 4, 180, 12), 384)
+})
+
+test('sameLibraryWindow ignores scroll-only identity so sibling cards can stay mounted', () => {
+  const metrics = libraryWindowMetrics({
+    count: 80,
+    layout: 'grid',
+    width: 800,
+    minCardWidth: 200,
+    previewSize: 4,
+    rootFontSize: 16,
+    scrollTop: 0,
+    viewportHeight: 500,
+    overscanRows: 1,
+  })
+  assert.equal(sameLibraryWindow(metrics, { ...metrics }), true)
+  assert.equal(sameLibraryWindow(metrics, { ...metrics, start: metrics.start + 4 }), false)
+})
