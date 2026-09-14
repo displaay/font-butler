@@ -59,6 +59,9 @@ test('parseFontFile reads every face from a synthetic TTC and OTC', () => {
     assert.equal(catalogParse.characterSet, undefined)
     assert.equal(catalogParse.features, undefined)
     assert.equal(catalogParse.previewSample, 'AA')
+    const facesOnly = parseFontFile(otc, { previewSample: false })
+    assert.equal(facesOnly.previewSample, undefined)
+    assert.equal(facesOnly.faces.length, 2)
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }

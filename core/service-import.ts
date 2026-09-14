@@ -12,9 +12,10 @@ import { isUnderAnyRoot } from './containment.ts'
 import { duplicateNotifyKey, upsertDuplicateWarning } from './duplicates.ts'
 import { occupyingSiblingsForIncoming } from './identity.ts'
 import { assertNotWebFont, isWebFontFile, isWebFontFormat } from './formats.ts'
+import { analyzeFontFile, analyzeFontFileSync, peekFontAnalysis, type FontAnalysis } from './font-analysis.ts'
 import { tryFingerprintFile } from './fingerprint.ts'
 import { folderForPath, isExcluded, mostSpecificOwner } from './folders.ts'
-import { applyParsedFont, isFontFile, isPreviewableFontFile, parseFontFile, readFileStat } from './parse.ts'
+import { applyParsedFont, isFontFile, isPreviewableFontFile, readFileStat } from './parse.ts'
 import { classifyImportFile, isInactiveRetailListing, isWatchIdentityDuplicate } from './planner.ts'
 import type { AppPaths } from './paths.ts'
 import { applyEntryFacts } from './state.ts'
@@ -25,7 +26,12 @@ import { displayFamily, emitDuplicates, emitNotice, newId, now, touchEntry } fro
 export function importOneUnlocked(
   paths: AppPaths,
   filePath: string,
-  options: { forceNew?: boolean; catalog?: CatalogFile; persist?: boolean } = {},
+  options: {
+    forceNew?: boolean
+    catalog?: CatalogFile
+    persist?: boolean
+    analysis?: FontAnalysis
+  } = {},
 ): CatalogEntry {
   const resolved = path.resolve(filePath)
   if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
@@ -38,7 +44,8 @@ export function importOneUnlocked(
   if (!isFontFile(resolved) && !isPreviewableFontFile(resolved)) {
     throw new Error('Not a font file.')
   }
-  const parsed = parseFontFile(resolved)
+  const analysis = options.analysis ?? peekFontAnalysis(resolved) ?? analyzeFontFileSync(resolved)
+  const parsed = analysis.parsed
   if (parsed.faces.length === 0) {
     throw new Error('Could not read any faces in that font.')
   }
@@ -47,7 +54,7 @@ export function importOneUnlocked(
   }
   const catalog = options.catalog ?? loadCatalog(paths)
   const persist = options.persist !== false
-  const fingerprint = tryFingerprintFile(resolved)
+  const fingerprint = analysis.fingerprint || tryFingerprintFile(resolved)
   const samePath = (() => {
     const found = findByInstalledPath(catalog, resolved) ?? findBySourcePath(catalog, resolved)
     return found && isInactiveRetailListing(found) ? undefined : found
@@ -60,7 +67,9 @@ export function importOneUnlocked(
       )
     : undefined
   const existing = options.forceNew ? samePath : (samePath ?? sameBytes)
-  const stat = readFileStat(resolved)
+  const stat = analysis?.mtimeMs != null && analysis.size != null
+    ? { mtimeMs: analysis.mtimeMs, size: analysis.size }
+    : readFileStat(resolved)
   const inUserFonts = isUnderAnyRoot(resolved, [paths.userFontsDir, paths.installDir])
   const settings = loadSettings(paths)
   const owner = mostSpecificOwner(settings.folders, resolved)
@@ -146,7 +155,13 @@ export async function importInboxFiles(host: InboxImportHost, filePaths: string[
   const auto: string[] = []
   let notified = 0
   for (const filePath of allowed) {
-    const item = classifyImportFile(filePath, catalog, { paths: host.paths })
+    let analysis
+    try {
+      analysis = await analyzeFontFile(filePath)
+    } catch {
+      analysis = undefined
+    }
+    const item = classifyImportFile(filePath, catalog, { paths: host.paths, analysis })
     if (isWatchIdentityDuplicate(item)) {
       const occupying = occupyingSiblingsForIncoming(
         catalog.entries,

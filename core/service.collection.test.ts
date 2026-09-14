@@ -33,7 +33,7 @@ test('F05-D a TTC with one overlapping face lists every collection face and inst
     assert.equal(new Set(conflict.affectedFaces).size, conflict.affectedFaces?.length)
     assert.match(conflict.reason ?? '', /every face|collection/i)
 
-    const plan = service.planImport([collection])
+    const plan = await service.planImport([collection])
     const overlap = plan.items.find((item) => item.classification === 'collection-overlap')
     assert.ok(overlap)
     assert.ok(plan.summary.review >= 1)
@@ -73,7 +73,7 @@ test('a new TTC imports and installs once with every face exposed', async () => 
       { family: 'Family', psName: 'Family-Regular', style: 'Regular' },
       { family: 'Family', psName: 'Family-Bold', style: 'Bold' },
     ])
-    const plan = service.planImport([collection])
+    const plan = await service.planImport([collection])
     assert.equal(plan.items[0]!.classification, 'new')
     assert.equal(plan.items[0]!.faces?.length, 2)
     const imported = await service.importPaths([collection])

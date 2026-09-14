@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   DEFAULT_PREVIEW_SAMPLE,
+  pendingPreviewSample,
   previewSampleFromCoverage,
   resolvedPreviewSample,
 } from './previewSample.ts'
@@ -82,6 +83,12 @@ test('grid and list resolve missing coverage to Aa', () => {
   assert.equal(resolvedPreviewSample('ع'), 'ع')
   assert.equal(resolvedPreviewSample(undefined, 'א'), 'א')
   assert.equal(resolvedPreviewSample(undefined, null, ''), DEFAULT_PREVIEW_SAMPLE)
+})
+
+test('pending catalog samples stay empty so cards do not flash Aa tofu', () => {
+  assert.equal(pendingPreviewSample('א'), 'א')
+  assert.equal(pendingPreviewSample(undefined, 'ع'), 'ع')
+  assert.equal(pendingPreviewSample(undefined, null, ''), undefined)
 })
 
 test('fallback sample skips separators, controls, and format characters', () => {

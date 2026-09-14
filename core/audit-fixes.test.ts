@@ -298,7 +298,7 @@ test('removing an inactive project does not park an independently installed font
     const source = path.join(paths.dataRoot, 'source/Automatic.ttf')
     writeTestFont(source, 'Automatic', 'Automatic-Regular')
     await service.updateSettings({ installAfterUpload: true })
-    const plan = service.planImport([source])
+    const plan = await service.planImport([source])
     const entry = (await service.applyPlan(plan.id)).entries[0]!
     const project = await service.createProject('Inactive', [entry.id])
     await service.deleteProject(project.id)
@@ -319,7 +319,7 @@ test('matching import idempotency keys share one queued operation', async () => 
   await withService(async (service, paths) => {
     const source = path.join(paths.dataRoot, 'source/Concurrent.ttf')
     writeTestFont(source, 'Concurrent', 'Concurrent-Regular')
-    const plan = service.planImport([source])
+    const plan = await service.planImport([source])
     const [first, second] = await Promise.all([
       service.applyPlan(plan.id, {}, { idempotencyKey: 'same-request' }),
       service.applyPlan(plan.id, {}, { idempotencyKey: 'same-request' }),

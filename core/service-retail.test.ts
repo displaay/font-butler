@@ -1384,7 +1384,7 @@ test('dropping a same-family font over an installed retail copy uninstalls retai
 
     const dropped = path.join(paths.dataRoot, 'drop', 'Reckless-Regular.otf')
     writeTestFont(dropped, 'Reckless', 'Reckless-Regular', { format: 'otf', version: 'Version 2.000' })
-    const planned = service.planImport([dropped])
+    const planned = await service.planImport([dropped])
     assert.equal(planned.retailCollisions?.length, 1)
     assert.equal(planned.retailCollisions?.[0]?.familyName, 'Reckless')
     const incoming = findRetailCollisionsForIncomingFamilies(
@@ -1401,7 +1401,7 @@ test('dropping a same-family font over an installed retail copy uninstalls retai
     const remaining = loadCatalog(paths).entries.filter((entry) => catalogEntryFamilyNames(entry).includes('Reckless'))
     assert.ok(remaining.every((entry) => entry.status !== 'installed' && entry.status !== 'outdated'))
 
-    const plannedAgain = service.planImport([dropped])
+    const plannedAgain = await service.planImport([dropped])
     assert.equal(plannedAgain.retailCollisions?.length ?? 0, 0)
     const applied = await service.applyPlan(plannedAgain.id)
     assert.equal(applied.entries.length, 1)
@@ -1426,7 +1426,7 @@ test('drop replace does not uninstall retail when the dropped file is gone', asy
 
     const dropped = path.join(paths.dataRoot, 'drop', 'Reckless-Regular.otf')
     writeTestFont(dropped, 'Reckless', 'Reckless-Regular', { format: 'otf', version: 'Version 2.000' })
-    const planned = service.planImport([dropped])
+    const planned = await service.planImport([dropped])
     assert.equal(planned.retailCollisions?.length, 1)
     fs.rmSync(dropped)
 
@@ -1454,7 +1454,7 @@ test('drop replace does not uninstall retail when the dropped file is no longer 
 
     const dropped = path.join(paths.dataRoot, 'drop', 'Reckless-Regular.otf')
     writeTestFont(dropped, 'Reckless', 'Reckless-Regular', { format: 'otf', version: 'Version 2.000' })
-    const planned = service.planImport([dropped])
+    const planned = await service.planImport([dropped])
     writeTestFont(dropped, 'Azeret', 'Azeret-Regular', { format: 'otf', version: 'Version 3.000' })
 
     await resolveDropRetailCollisions(paths, { Reckless: 'replace' }, {
@@ -1481,7 +1481,7 @@ test('drop replace without planned incoming files leaves retail installed', asyn
     })
     const dropped = path.join(paths.dataRoot, 'drop', 'Reckless-Regular.otf')
     writeTestFont(dropped, 'Reckless', 'Reckless-Regular', { format: 'otf' })
-    service.planImport([dropped])
+    await service.planImport([dropped])
 
     await resolveDropRetailCollisions(paths, { Reckless: 'replace' })
     const retail = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath)
@@ -1506,11 +1506,11 @@ test('drop replace into a new project does not watch the dropped folder', async 
     const folder = path.join(paths.dataRoot, 'Incoming')
     const dropped = path.join(folder, 'Reckless-Regular.otf')
     writeTestFont(dropped, 'Reckless', 'Reckless-Regular', { format: 'otf', version: 'Version 2.000' })
-    const planned = service.planImport([folder])
+    const planned = await service.planImport([folder])
     assert.equal(planned.retailCollisions?.length, 1)
     await resolveDropRetailCollisions(paths, { Reckless: 'replace' }, { planId: planned.id })
 
-    const plannedAgain = service.planImport([folder])
+    const plannedAgain = await service.planImport([folder])
     assert.equal(plannedAgain.retailCollisions?.length ?? 0, 0)
     const applied = await service.applyPlan(plannedAgain.id)
     assert.equal(applied.entries.length, 1)
@@ -1537,7 +1537,7 @@ test('dropping keep cancels the import and leaves the retail copy installed', as
 
     const dropped = path.join(paths.dataRoot, 'drop', 'Reckless-Regular.otf')
     writeTestFont(dropped, 'Reckless', 'Reckless-Regular', { format: 'otf' })
-    const planned = service.planImport([dropped])
+    const planned = await service.planImport([dropped])
     assert.equal(planned.retailCollisions?.length, 1)
 
     await resolveDropRetailCollisions(paths, { Reckless: 'keep' })
@@ -1568,7 +1568,7 @@ test('resolving a drop collision does not clear pending retail-sync collisions',
 
     const dropped = path.join(paths.dataRoot, 'drop', 'Azeret-Regular.otf')
     writeTestFont(dropped, 'Azeret', 'Azeret-Regular', { format: 'otf' })
-    const planned = service.planImport([dropped])
+    const planned = await service.planImport([dropped])
     const afterDrop = await resolveDropRetailCollisions(
       paths,
       { Azeret: 'replace' },

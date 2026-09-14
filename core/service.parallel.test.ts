@@ -59,7 +59,7 @@ test('two active same-identity installs are impossible and activate without swit
     const first = (await service.importPaths([release])).entries[0]!
     await service.install(first.id)
 
-    const plan = service.planImport([wip])
+    const plan = await service.planImport([wip])
     const item = plan.items[0]!
     assert.equal(item.parallelCopy, true)
     assert.ok(item.choices.includes('add-inactive'))
@@ -107,7 +107,7 @@ test('switch parks the release, installs the WIP copy, and can switch back', asy
     const first = (await service.importPaths([release])).entries[0]!
     const installed = await service.install(first.id)
     const releaseBytes = fs.readFileSync(installed.installedPath!)
-    const plan = service.planImport([wip])
+    const plan = await service.planImport([wip])
     await service.applyPlan(plan.id, { [plan.items[0]!.id]: 'add-inactive' })
     const inactive = service.listCatalog().find((entry) => entry.id !== first.id)!
 
@@ -144,7 +144,7 @@ test('failure mid-switch restores the previously active copy', async () => {
       const installed = await service.install(first.id)
       const releaseDest = installed.installedPath!
       const releaseBytes = fs.readFileSync(releaseDest)
-      const plan = service.planImport([wip])
+      const plan = await service.planImport([wip])
       await service.applyPlan(plan.id, { [plan.items[0]!.id]: 'add-inactive' })
       const inactive = service.listCatalog().find((entry) => entry.id !== first.id)!
 
@@ -237,7 +237,7 @@ test('Install as from a parallel copy installs a renamed face alongside the rele
     const originalSource = parseFontFile(wip)
     assert.equal(originalSource.faces[0]?.familyName, 'Release')
 
-    const plan = service.planImport([wip])
+    const plan = await service.planImport([wip])
     const item = plan.items[0]!
     assert.ok(item.choices.includes('install-as'))
     const applied = await service.applyPlan(plan.id, { [item.id]: 'install-as' }, { familyName: 'Release WIP' })
@@ -309,7 +309,7 @@ test('switch parks a Mac+Adobe release without placing a Mac-only WIP on Adobe',
     const adobePath = installed.installations?.find((item) => item.destinationId === 'adobe-shared')?.path
     assert.ok(adobePath)
 
-    const plan = service.planImport([wip])
+    const plan = await service.planImport([wip])
     await service.applyPlan(plan.id, { [plan.items[0]!.id]: 'add-inactive' })
     const inactive = service.listCatalog().find((entry) => entry.id !== first.id)!
     assert.deepEqual(recordedDestinationIds(inactive), ['macos'])

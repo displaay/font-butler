@@ -265,6 +265,8 @@ export type ImportPlanItem = {
   parallelCopy?: boolean
   siblingEntryIds?: string[]
   sourceMtimeMs?: number
+  sourceSize?: number
+  previewSample?: string
 }
 
 export type ImportPlan = {

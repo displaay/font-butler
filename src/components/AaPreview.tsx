@@ -155,6 +155,7 @@ function AaGlyph({
     }
   }, [fit, ready, family, weight, italic, variation, text])
 
+  if (sample == null) return <PreviewPending size={pendingSize} />
   if (!ready) return <PreviewPending size={pendingSize} />
   return (
     <span

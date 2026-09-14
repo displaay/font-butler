@@ -671,7 +671,7 @@ app.post('/api/folders/resume', async (c) => {
 
 app.post('/api/import/plan', async (c) => {
   const body = await c.req.json<{ paths?: string[] }>()
-  return c.json(service.planImport(body.paths ?? []))
+  return c.json(await service.planImport(body.paths ?? []))
 })
 
 app.post('/api/import/apply', async (c) => {

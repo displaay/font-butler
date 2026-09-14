@@ -3,6 +3,7 @@ export {
   PREVIEW_PROBE_CODE_POINTS,
   PREVIEW_SCRIPTS,
   isLatinPreviewSample,
+  pendingPreviewSample,
   previewSampleFromCoverage,
   resolvedPreviewSample,
 } from '../../shared/previewSample.ts'
