@@ -94,6 +94,7 @@ import {
   applyParsedFont,
   fillEntryPreviewSample,
   parseFontFile,
+  previewUsesInstalledBytes,
   readFileStat,
 } from './parse.ts'
 import { isUnderAnyRoot } from './containment.ts'
@@ -3252,10 +3253,17 @@ export class FontButlerService {
         }
         try {
           const parsed = parseFontFile(entry.sourcePath)
+          const keepInstalledSample = previewUsesInstalledBytes(entry)
           if (JSON.stringify(entry.faces) !== JSON.stringify(parsed.faces)) {
+            const installedSample = entry.previewSample
             applyParsedFont(entry, parsed)
+            if (keepInstalledSample) entry.previewSample = installedSample
             changed = true
-          } else if (parsed.previewSample && entry.previewSample !== parsed.previewSample) {
+          } else if (
+            !keepInstalledSample &&
+            parsed.previewSample &&
+            entry.previewSample !== parsed.previewSample
+          ) {
             entry.previewSample = parsed.previewSample
             changed = true
           }

@@ -66,6 +66,17 @@ test('Adobe-only installs use the retained destination for default previews', ()
   )
 })
 
+test('outdated entries still preview installed bytes after a source cmap change', () => {
+  const outdated = entry({
+    status: 'outdated',
+    sourceMtimeMs: 99,
+    sourceSize: 999,
+    previewSample: 'Aa',
+  })
+  assert.equal(catalogPreviewWhich(outdated), 'installed')
+  assert.match(catalogFontUrl(outdated, catalogPreviewWhich(outdated)), /which=installed/)
+})
+
 test('installed preview URLs version from the installed revision, not the source mtime', () => {
   const installed = entry()
   const sourceChanged = entry({ sourceMtimeMs: 99, sourceSize: 999 })
