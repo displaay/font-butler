@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { glyphNameForCodePoint, parseFontFile, previewUsesInstalledBytes, resolveFamilyNames } from './parse.ts'
+import { loadCatalog, saveCatalog } from './catalog.ts'
 import { writeTestCollection, writeTestFont, withService } from './test-util.ts'
 
 test('resolveFamilyNames prefers typographic family and style', () => {
@@ -132,11 +133,38 @@ test('parseFontFile picks a Font Book-style preview sample from cmap coverage', 
   }
 })
 
-test('previewUsesInstalledBytes is true when catalog cards paint installed bytes', () => {
-  assert.equal(previewUsesInstalledBytes({}), false)
-  assert.equal(previewUsesInstalledBytes({ installedPath: '/tmp/installed.ttf' }), true)
-  assert.equal(previewUsesInstalledBytes({ disabledPath: '/tmp/disabled.ttf' }), true)
-  assert.equal(previewUsesInstalledBytes({ installations: [{ path: '/tmp/adobe.ttf' }] }), true)
+test('previewUsesInstalledBytes requires a live managed or parked file', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-preview-bytes-'))
+  try {
+    const live = path.join(dir, 'Live.ttf')
+    const missing = path.join(dir, 'Gone.ttf')
+    fs.writeFileSync(live, 'font')
+    assert.equal(previewUsesInstalledBytes({}), false)
+    assert.equal(previewUsesInstalledBytes({ installedPath: missing }), false)
+    assert.equal(previewUsesInstalledBytes({ disabledPath: missing }), false)
+    assert.equal(
+      previewUsesInstalledBytes({
+        installations: [{ path: missing, verification: 'unavailable' }],
+      }),
+      false,
+    )
+    assert.equal(previewUsesInstalledBytes({ installedPath: live }), true)
+    assert.equal(previewUsesInstalledBytes({ disabledPath: live }), true)
+    assert.equal(
+      previewUsesInstalledBytes({
+        installations: [{ path: live, verification: 'file-present' }],
+      }),
+      true,
+    )
+    assert.equal(
+      previewUsesInstalledBytes({
+        installations: [{ path: missing, parkedPath: live, verification: 'unavailable' }],
+      }),
+      true,
+    )
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('glyphNameForCodePoint reads the PostScript glyph name', () => {
@@ -189,6 +217,42 @@ test('source cmap change does not overwrite preview sample while installed bytes
     assert.equal(entry.status, 'outdated')
     assert.equal(previewUsesInstalledBytes(entry), true)
     assert.equal(entry.previewSample, 'Aa')
+  })
+})
+
+test('unavailable or missing managed copies follow the source preview sample', async () => {
+  await withService(async (service, paths) => {
+    const source = path.join(paths.dataRoot, 'Stale.ttf')
+    writeTestFont(source, 'Stale', 'Stale-Regular', {
+      codePoints: [65, 66, 67, 97, 98, 99],
+    })
+    const imported = await service.importPaths([source])
+    const catalog = loadCatalog(paths)
+    const stale = catalog.entries.find((item) => item.id === imported.entries[0]!.id)
+    assert.ok(stale)
+    stale.previewSample = 'Aa'
+    stale.installations = [
+      {
+        destinationId: 'adobe-shared',
+        path: path.join(paths.adobeFontsDir, 'missing', 'Stale.ttf'),
+        verification: 'unavailable',
+      },
+    ]
+    saveCatalog(paths, catalog)
+    assert.equal(previewUsesInstalledBytes(stale), false)
+
+    writeTestFont(source, 'Stale', 'Stale-Regular', {
+      codePoints: [65, 97, 0x05d0, 0x05d1, 0x05d2, 0x05d3, 0x05d4, 0x05d5],
+    })
+    const later = Date.now() / 1000 + 2
+    fs.utimesSync(source, later, later)
+    assert.equal(parseFontFile(source).previewSample, 'א')
+
+    await service.init()
+    const [entry] = service.listCatalog()
+    assert.ok(entry)
+    assert.equal(previewUsesInstalledBytes(entry), false)
+    assert.equal(entry.previewSample, 'א')
   })
 })
 

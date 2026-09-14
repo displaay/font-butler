@@ -243,16 +243,38 @@ function existingFontPath(entry: {
   }
 }
 
-/** Matches `catalogPreviewWhich()`: cards paint installed bytes when a managed copy exists. */
+function isExistingFontFile(filePath?: string): boolean {
+  if (!filePath) return false
+  try {
+    return fs.statSync(filePath).isFile()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * True when catalog cards still paint a managed/parked file that exists on disk.
+ * Catalog path fields alone are not enough: `verification: unavailable` or a missing
+ * copy means `existingManagedFontPath()` falls through to source bytes.
+ */
 export function previewUsesInstalledBytes(entry: {
   installedPath?: string
   disabledPath?: string
-  installations?: Array<{ path?: string; parkedPath?: string }>
+  installations?: Array<{
+    path?: string
+    parkedPath?: string
+    verification?: 'file-present' | 'unavailable'
+  }>
 }): boolean {
+  if (isExistingFontFile(entry.installedPath) || isExistingFontFile(entry.disabledPath)) {
+    return true
+  }
   return Boolean(
-    entry.installedPath ||
-      entry.disabledPath ||
-      entry.installations?.some((copy) => copy.path || copy.parkedPath),
+    entry.installations?.some(
+      (copy) =>
+        isExistingFontFile(copy.parkedPath) ||
+        (copy.verification !== 'unavailable' && isExistingFontFile(copy.path)),
+    ),
   )
 }
 
