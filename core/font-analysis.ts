@@ -146,12 +146,20 @@ function failWorkerJobs(error: Error): void {
   for (const job of pending) job.reject(error)
 }
 
+class FontAnalysisWorkerJobError extends Error {
+  override name = 'FontAnalysisWorkerJobError'
+}
+
 function ensureWorker(): Worker | null {
   if (workerFailed) return null
   if (worker) return worker
   try {
     const url = workerUrl()
-    const execArgv = url.pathname.endsWith('.ts') ? ['--import', 'tsx'] : undefined
+    const execArgv = url.pathname.endsWith('.ts')
+      ? process.execArgv.length > 0
+        ? [...process.execArgv]
+        : ['--import', 'tsx']
+      : undefined
     const next = new Worker(url, { execArgv })
     next.unref()
     next.on('message', (message: FontAnalysisWorkerMessage) => {
@@ -159,7 +167,7 @@ function ensureWorker(): Worker | null {
       if (!job) return
       if (message.stage === 'error') {
         workerJobs.delete(message.id)
-        job.reject(new Error(message.error))
+        job.reject(new FontAnalysisWorkerJobError(message.error))
         return
       }
       const analysis: FontAnalysis = {
@@ -193,6 +201,7 @@ function ensureWorker(): Worker | null {
     next.on('exit', (code) => {
       if (!worker) return
       worker = null
+      if (code !== 0) workerFailed = true
       if (workerJobs.size === 0) return
       failWorkerJobs(new Error(`Font analysis worker exited (${code ?? 'unknown'})`))
     })
@@ -286,7 +295,7 @@ export async function analyzeFontFile(
     } catch (error) {
       // Per-file worker errors must not retry on the API thread.
       // Only fall back when a posted worker job died with the worker itself.
-      if (thread && workerFailed) {
+      if (thread && workerFailed && !(error instanceof FontAnalysisWorkerJobError)) {
         const analysis = analyzeOnThisThread(resolved, options)
         remember(key, analysis)
         return analysis
@@ -358,4 +367,5 @@ export async function closeFontAnalysisWorker(): Promise<void> {
   if (!current) return
   current.removeAllListeners()
   await current.terminate()
+  await yieldEventLoop()
 }

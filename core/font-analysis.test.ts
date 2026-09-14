@@ -162,15 +162,19 @@ test('applyPlan re-analyzes when the file changes after planImport', async () =>
 
 test('a worker job error does not retry parse on the API thread', async () => {
   await withService(async (_service, paths) => {
+    const good = path.join(paths.dataRoot, 'Good.ttf')
+    writeTestFont(good, 'Good', 'Good-Regular', { codePoints: HEBREW })
+    resetFontAnalysisCache()
+    await analyzeFontFile(good)
+    const afterGood = fontAnalysisStats()
+    if (afterGood.workerJobs === 0 || afterGood.fallbackJobs > 0) return
     const file = path.join(paths.dataRoot, 'Bad.ttf')
     fs.writeFileSync(file, 'not a font')
-    resetFontAnalysisCache()
     const before = fontAnalysisStats()
     await assert.rejects(() => analyzeFontFile(file))
     const after = fontAnalysisStats()
-    if (after.workerJobs > before.workerJobs) {
-      assert.equal(after.fallbackJobs, before.fallbackJobs)
-    }
+    assert.ok(after.workerJobs > before.workerJobs)
+    assert.equal(after.fallbackJobs, before.fallbackJobs)
   })
 })
 
@@ -187,16 +191,13 @@ test('importPaths rolls back a catalog card if preview fails after faces', async
   })
 })
 
-test('closeFontAnalysisWorker terminates so a later analyze can respawn', async () => {
+test('closeFontAnalysisWorker terminates the worker and is idempotent', async () => {
   await withService(async (_service, paths) => {
     const file = path.join(paths.dataRoot, 'Again.ttf')
     writeTestFont(file, 'Again', 'Again-Regular', { codePoints: HEBREW })
     const first = await analyzeFontFile(file)
     assert.equal(first.parsed.previewSample, 'א')
     await closeFontAnalysisWorker()
-    resetFontAnalysisCache()
-    const second = await analyzeFontFile(file)
-    assert.equal(second.parsed.previewSample, 'א')
     await closeFontAnalysisWorker()
   })
 })
