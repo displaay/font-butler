@@ -243,6 +243,73 @@ test('catalogEntriesNeedingPreviewCss skips unchanged fingerprints until refresh
   assert.deepEqual(removed.changed, [])
 })
 
+test('catalog preview fingerprint changes when install verification flips at the same path', () => {
+  const path = '/tmp/installed/Preview.ttf'
+  const unavailable = entry({
+    id: 'flip',
+    sourcePath: '',
+    sourcePresent: false,
+    installedPath: path,
+    disabledPath: undefined,
+    installations: [{ destinationId: 'macos', path, verification: 'unavailable' }],
+    retailRelativePath: 'Preview/Preview.otf',
+    status: 'uninstalled',
+  })
+  const present = {
+    ...unavailable,
+    installations: [{ destinationId: 'macos', path, verification: 'file-present' as const }],
+  }
+  assert.notEqual(catalogPreviewFingerprint(unavailable), catalogPreviewFingerprint(present))
+  const first = catalogEntriesNeedingPreviewCss([unavailable], new Map())
+  assert.deepEqual([...first.keep], [])
+  const after = catalogEntriesNeedingPreviewCss([present], first.fingerprints, { mounted: first.keep })
+  assert.deepEqual([...after.keep], ['flip'])
+  assert.deepEqual(after.changed.map((item) => item.id), ['flip'])
+  const gone = catalogEntriesNeedingPreviewCss([unavailable], after.fingerprints, { mounted: after.keep })
+  assert.deepEqual([...gone.keep], [])
+  assert.deepEqual(gone.changed, [])
+})
+
+test('catalogEntriesNeedingPreviewCss skips listings with no file to load', () => {
+  const installed = entry({ id: 'on' })
+  const stub = entry({
+    id: 'stub',
+    sourcePath: '',
+    sourcePresent: false,
+    installedPath: undefined,
+    disabledPath: undefined,
+    installations: [],
+    retailRelativePath: 'Reckless/Reckless-Regular.otf',
+    status: 'uninstalled',
+  })
+  const stale = entry({
+    id: 'stale',
+    sourcePath: '',
+    sourcePresent: false,
+    installedPath: '/tmp/installed/Gone.ttf',
+    disabledPath: undefined,
+    installations: [{ destinationId: 'macos', path: '/tmp/installed/Gone.ttf', verification: 'unavailable' }],
+    retailRelativePath: 'Reckless/Reckless-Bold.otf',
+    status: 'uninstalled',
+  })
+  const pathOnly = entry({
+    id: 'path-only',
+    sourcePath: '',
+    sourcePresent: false,
+    installedPath: '/tmp/installed/Gone.ttf',
+    disabledPath: undefined,
+    installations: [],
+    retailRelativePath: 'Reckless/Reckless-Light.otf',
+    status: 'uninstalled',
+  })
+  const needed = catalogEntriesNeedingPreviewCss([installed, stub, stale, pathOnly], new Map())
+  assert.deepEqual([...needed.keep], ['on'])
+  assert.deepEqual(needed.changed.map((item) => item.id), ['on'])
+  assert.equal(needed.fingerprints.has('stub'), false)
+  assert.equal(needed.fingerprints.has('stale'), false)
+  assert.equal(needed.fingerprints.has('path-only'), false)
+})
+
 test('system path fingerprints cover every TTC/OTC face on the shared file', () => {
   const ttc = '/System/Library/Fonts/Collection.ttc'
   const regular = { path: ttc, weight: 400, italic: false, isVariable: false }

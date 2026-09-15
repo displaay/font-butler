@@ -35,7 +35,7 @@ import {
   readGlyphCellSize,
   visibleGlyphRowRange,
 } from '@/lib/glyphs'
-import { hasManagedInstall } from '@/lib/group'
+import { entryHasPreviewFile, hasManagedInstall } from '@/lib/group'
 import type { CatalogEntry } from '@/lib/types'
 import { cn, CONTROL_H } from '@/lib/utils'
 
@@ -45,7 +45,12 @@ const OVERSCAN = 3
 export function GlyphGrid({ entry }: { entry: CatalogEntry }) {
   const family = catalogFontFamily(entry.id)
   const face = entry.faces[0]
-  const ready = usePreviewFontReady(family, face?.weight ?? 400, Boolean(face?.italic))
+  const ready = usePreviewFontReady(
+    family,
+    face?.weight ?? 400,
+    Boolean(face?.italic),
+    entryHasPreviewFile(entry),
+  )
   const [points, setPoints] = useState<number[] | null>(null)
   const [failed, setFailed] = useState(false)
   const [cell, setCell] = useState(readGlyphCellSize)

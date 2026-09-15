@@ -9,7 +9,7 @@ import { Slider } from '@/components/ui/slider'
 import { usePreviewFontReady } from '@/hooks/usePreviewFontReady'
 import { api } from '@/lib/api'
 import { formatMissingCharacters, missingCodePoints } from '@/lib/coverage'
-import { hasManagedInstall } from '@/lib/group'
+import { entryHasPreviewFile, hasManagedInstall } from '@/lib/group'
 import { bakeableEnabledTags, groupOtFeatures } from '@/lib/otFeatures'
 import { DEFAULT_SPECIMEN, SPECIMEN_PRESETS } from '@/lib/specimen'
 import type { CatalogEntry, FontAxisInfo, PreviewPreferences } from '@/lib/types'
@@ -117,8 +117,17 @@ export function SpecimenWorkspace({
   const otherFamily = compareEntry ? catalogFontFamily(compareEntry.id, 'installed') : ''
   const compareFamilies = compare === 'families' && Boolean(compareEntry)
   const previewWhich = hasManagedInstall(entry) ? 'installed' : 'source'
+  const hasPreviewFile = entryHasPreviewFile(entry)
+  const compareHasPreviewFile = compareEntry ? entryHasPreviewFile(compareEntry) : false
 
   useEffect(() => {
+    if (!hasPreviewFile) {
+      setMeta(null)
+      setAxes({})
+      setFeatures({})
+      setInstanceName('Default')
+      return
+    }
     let cancelled = false
     void api
       .previewMeta(entry.id, previewWhich)
@@ -153,6 +162,7 @@ export function SpecimenWorkspace({
     entry.sourceMtimeMs,
     entry.sourceSize,
     entry.installedFingerprint,
+    hasPreviewFile,
   ])
 
   const missing = useMemo(
@@ -231,6 +241,7 @@ export function SpecimenWorkspace({
             features={featureSettings}
             format={entry.format}
             large={size === 'large'}
+            wait={hasPreviewFile}
             sliders={{ size: liveSize, lineHeight: liveLineHeight }}
             onSliderChange={setLiveSlider}
             onSliderCommit={persistLiveSliders}
@@ -246,6 +257,7 @@ export function SpecimenWorkspace({
             features={featureSettings}
             format={compareEntry?.format}
             large={size === 'large'}
+            wait={compareHasPreviewFile}
             onTextChange={setSpecimenText}
           />
         </div>
@@ -260,6 +272,7 @@ export function SpecimenWorkspace({
           features={featureSettings}
           format={entry.format}
           large={size === 'large'}
+          wait={hasPreviewFile}
           sliders={{ size: liveSize, lineHeight: liveLineHeight }}
           onSliderChange={setLiveSlider}
           onSliderCommit={persistLiveSliders}
@@ -431,6 +444,7 @@ function SpecimenPane({
   onSliderChange,
   onSliderCommit,
   onTextChange,
+  wait = true,
 }: {
   label: string
   family: string
@@ -441,12 +455,13 @@ function SpecimenPane({
   features: string
   format?: string
   large?: boolean
+  wait?: boolean
   sliders?: { size: number; lineHeight: number }
   onSliderChange?: (patch: { size?: number; lineHeight?: number }) => void
   onSliderCommit?: () => void
   onTextChange: (text: string) => void
 }) {
-  const ready = usePreviewFontReady(family)
+  const ready = usePreviewFontReady(family, 400, false, wait)
   const textRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {

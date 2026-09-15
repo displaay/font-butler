@@ -34,6 +34,7 @@ export type PreviewFace = {
   italic?: boolean
   label: string
   variation?: string
+  wait?: boolean
 }
 
 function useHoverCycle(length: number, active: boolean, restIndex: number) {
@@ -103,7 +104,7 @@ function AaGlyph({
   sample?: string
   fit?: boolean
 }) {
-  const ready = usePreviewFontReady(family, weight, italic, wait || fit)
+  const ready = usePreviewFontReady(family, weight, italic, wait)
   const latinText = useContext(LatinPreviewContext)
   const text = applyLatinPreviewSample(sample, latinText)
   const glyphRef = useRef<HTMLSpanElement>(null)
@@ -193,12 +194,14 @@ export function AaPreview({
   italic = false,
   size = 'md',
   sample,
+  wait,
 }: {
   family: string
   weight?: number
   italic?: boolean
   size?: 'sm' | 'md'
   sample?: string
+  wait?: boolean
 }) {
   return (
     <div
@@ -207,7 +210,7 @@ export function AaPreview({
         previewBoxClass(size),
       )}
     >
-      <AaGlyph family={family} weight={weight} italic={italic} pendingSize={size} sample={sample} />
+      <AaGlyph family={family} weight={weight} italic={italic} pendingSize={size} sample={sample} wait={wait} />
     </div>
   )
 }
@@ -259,7 +262,7 @@ export function CyclingAaPreview({
             italic={face.italic}
             variation={face.variation}
             pendingSize="glyph"
-            wait={faceIndex === visibleIndex}
+            wait={face.wait !== false && faceIndex === visibleIndex}
             sample={sample}
             fit
           />

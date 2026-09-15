@@ -151,10 +151,35 @@ test('retail-synced instance rows carry the Displaay source instead of a disk so
       installedPath: '/tmp/Fonts/Plex-Regular.otf',
     }),
   ])
-  const rows = catalogInstanceRows(groups[0]!)
+  const rows = catalogInstanceRows(groups[0]!, {
+    enabled: true,
+    fonts: [{ familyName: 'Plex', enabled: true }],
+  })
   assert.equal(rows.length, 1)
   assert.equal(rows[0]?.retailSynced, true)
   assert.equal(rows[0]?.hasSource, false)
+})
+
+test('retail instance rows hide the Displaay mark when sync is off', () => {
+  const groups = groupCatalog([
+    staticEntry('retail', 'Regular', 'installed', {
+      retailRelativePath: 'Plex/Plex-Regular.otf',
+      retailFamilyName: 'Plex',
+      sourcePresent: false,
+      installedPath: '/tmp/Fonts/Plex-Regular.otf',
+    }),
+  ])
+  const off = catalogInstanceRows(groups[0]!, {
+    enabled: false,
+    fonts: [{ familyName: 'Plex', enabled: true }],
+  })
+  assert.equal(off[0]?.retailSynced, false)
+  const disabledFamily = catalogInstanceRows(groups[0]!, {
+    enabled: true,
+    fonts: [{ familyName: 'Plex', enabled: false }],
+    disabledGlyphsFiles: ['Plex'],
+  })
+  assert.equal(disabledFamily[0]?.retailSynced, false)
 })
 
 test('system variable-font instance rows omit format and computer tags', () => {

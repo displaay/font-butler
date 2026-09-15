@@ -334,7 +334,7 @@ function AppShell() {
   }
 
   function retailOptOutNames(entries: CatalogEntry[]): string[] {
-    return retailFamiliesToOptOut(entries, retail?.fonts ?? [], retail?.disabledGlyphsFiles ?? [])
+    return retailFamiliesToOptOut(entries, retail)
   }
 
   function turnRetailSyncOff(familyNames: string[]) {
@@ -578,7 +578,7 @@ function AppShell() {
   const librarySourceEntries = useMemo(
     () =>
       entries.filter((entry) => {
-        if (!retailLibraryEntryVisible(entry, retail?.fonts ?? [])) return false
+        if (!retailLibraryEntryVisible(entry, retail?.fonts ?? [], retail?.enabled !== false)) return false
         if (searching) return true
         if (watchFolderFilter && !matchesLibraryFolderFilter(entry, watchFolderFilter)) return false
         if (projectFilter && !projectMemberIds.has(entry.id)) return false
@@ -615,7 +615,7 @@ function AppShell() {
       entries.filter(
         (entry) =>
           matchesLibraryFolderFilter(entry, RETAIL_LIBRARY_FILTER) &&
-          retailLibraryEntryVisible(entry, retail?.fonts ?? []),
+          retailLibraryEntryVisible(entry, retail?.fonts ?? [], retail?.enabled !== false),
       ),
     )
     return counts
@@ -1991,6 +1991,7 @@ function AppShell() {
                           layout={viewLayout}
                           previewSize={gridPreviewSize}
                           group={group}
+                          retail={retail}
                           showSourcePath={showSources}
                           showAddedAt={showAdded}
                           hideDestinations={hideDestinations}
@@ -2239,6 +2240,7 @@ function AppShell() {
               onPaneChange={setInspectorPane}
               tablistId={inspectorTablistId}
               group={tab === 'system' ? null : selectedGroup}
+              retail={retail}
               entry={tab === 'system' ? null : selectedEntry}
               statusSummary={selectedGroup ? familyStatusSummary(selectedGroup) : null}
               selectedEntryId={selectedEntryId}

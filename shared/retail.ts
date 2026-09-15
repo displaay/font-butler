@@ -156,6 +156,29 @@ export type RetailSyncStatus = {
   collisions: RetailFamilyCollision[]
 }
 
+/** Subset the library uses to decide badges, instance marks, and stub visibility. */
+export type RetailSyncView = {
+  enabled: boolean
+  fonts: ReadonlyArray<Pick<RetailSyncFont, 'familyName' | 'enabled'>>
+  disabledGlyphsFiles?: readonly string[]
+}
+
+export type RetailLibraryEntry = {
+  retailRelativePath?: string | null
+  retailFamilyName?: string | null
+  faces?: Array<{ familyName?: string }>
+  installedPath?: string | null
+  disabledPath?: string | null
+  installations?: Array<{
+    path?: string
+    parkedPath?: string
+    verification?: 'file-present' | 'unavailable'
+  }>
+  sourcePath?: string | null
+  sourcePresent?: boolean
+  sourceAvailability?: 'none' | 'present' | 'missing' | 'offline' | 'unreadable'
+}
+
 /**
  * How often the app re-checks the collection in the background, in minutes. `0` turns it off.
  *
@@ -524,18 +547,69 @@ export function groupRetailFontsByTypeface(
   return groups
 }
 
+function retailFamilyNameOf(entry: RetailLibraryEntry): string {
+  return (entry.retailFamilyName ?? entry.faces?.[0]?.familyName ?? '').trim()
+}
+
+function copyHasVerifiedBytes(copy: {
+  path?: string
+  parkedPath?: string
+  verification?: 'file-present' | 'unavailable'
+}): boolean {
+  if (copy.parkedPath) return true
+  return copy.verification === 'file-present' && Boolean(copy.path)
+}
+
+/**
+ * Verified managed/parked bytes, or a source the catalog still marks present.
+ * Live Fonts/Adobe paths count only as `verification: 'file-present'`. A parked
+ * vault is `parkedPath` / `disabledPath`. `installedPath` or `copy.path` alone
+ * is not enough — same spirit as `previewUsesInstalledBytes` in core.
+ */
+function sourceHasLiveBytes(entry: RetailLibraryEntry): boolean {
+  const source = entry.sourcePath?.trim()
+  if (!source) return false
+  if (entry.sourcePresent === false) return false
+  // Defined availability wins over a leftover `sourcePresent: true`. Undefined
+  // keeps the legacy "path is present" case used by older catalog rows.
+  if (entry.sourceAvailability && entry.sourceAvailability !== 'present') return false
+  return true
+}
+
+export function retailListingHasLocalFile(entry: RetailLibraryEntry): boolean {
+  if (entry.disabledPath) return true
+  const copies = entry.installations ?? []
+  if (copies.some(copyHasVerifiedBytes)) return true
+  return sourceHasLiveBytes(entry)
+}
+
+/**
+ * Badge / synced mark only when collection sync is on and this family is still
+ * in the sync set (`fonts[].enabled`). An unlisted family is inactive, including
+ * when `fonts` is empty after a successful empty check.
+ */
+export function entryHasActiveRetailSync(
+  entry: RetailLibraryEntry,
+  retail?: RetailSyncView | null,
+): boolean {
+  if (!entry.retailRelativePath) return false
+  if (!retail?.enabled) return false
+  const familyName = retailFamilyNameOf(entry)
+  if (!familyName) return false
+  const font = retail.fonts.find((item) => item.familyName === familyName)
+  return Boolean(font?.enabled)
+}
+
 export function retailLibraryEntryVisible(
-  entry: {
-    retailRelativePath?: string | null
-    retailFamilyName?: string | null
-    faces?: Array<{ familyName?: string }>
-  },
+  entry: RetailLibraryEntry,
   fonts: readonly RetailSyncFont[],
+  syncEnabled = true,
 ): boolean {
   const relative = entry.retailRelativePath
   if (!relative) return true
+  if (!syncEnabled) return retailListingHasLocalFile(entry)
   if (fonts.length === 0) return true
-  const familyName = (entry.retailFamilyName ?? entry.faces?.[0]?.familyName ?? '').trim()
+  const familyName = retailFamilyNameOf(entry)
   const font = fonts.find((item) => item.familyName === familyName)
   if (!font || font.formats.length < 2) return true
   const format = retailFileFormat(relative)
