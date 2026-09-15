@@ -13,6 +13,7 @@ import {
 import {
   actionLabel,
   activateActionLabel,
+  deactivateActionLabel,
   deleteSourcesLabel,
   forgetSourcesLabel,
   hasCatalogBatchActions,
@@ -67,7 +68,7 @@ export function CatalogBatchButtons({
     plan.adobeUninstall > 0 && onUninstallFromAdobe
       ? {
           key: 'uninstall-adobe',
-          label: actionLabel('Uninstall from Adobe testing folder', plan.adobeUninstall, multi),
+          label: actionLabel('Uninstall from Adobe folder', plan.adobeUninstall, multi),
           onSelect: onUninstallFromAdobe,
           icon: <AdobeLogo className="size-4 shrink-0" />,
         }
@@ -117,7 +118,7 @@ export function CatalogBatchButtons({
       ) : null}
       {plan.deactivate > 0 && (
         <Button size="sm" variant="outline" disabled={busy} onClick={onDeactivate}>
-          <PowerOff /> Deactivate
+          <PowerOff /> {deactivateActionLabel(plan, multi)}
         </Button>
       )}
       {plan.uninstall > 0 && (
@@ -353,7 +354,7 @@ export function CatalogMenuItems({
       ) : null}
       {plan.adobeInstall > 0 && onInstallToAdobe && (
         <ContextMenuItem disabled={busy} onSelect={onInstallToAdobe}>
-          <AdobeLogo /> {actionLabel('Install to Adobe testing folder', plan.adobeInstall, multi)}
+          <AdobeLogo /> {actionLabel('Install to Adobe folder', plan.adobeInstall, multi)}
         </ContextMenuItem>
       )}
       {onSwitch && (
@@ -363,7 +364,7 @@ export function CatalogMenuItems({
       )}
       {plan.deactivate > 0 && (
         <ContextMenuItem disabled={busy} onSelect={onDeactivate}>
-          <PowerOff /> Deactivate
+          <PowerOff /> {deactivateActionLabel(plan, multi)}
         </ContextMenuItem>
       )}
       {plan.uninstall > 0 && (
@@ -381,7 +382,7 @@ export function CatalogMenuItems({
           className={destructiveMenuItemClass}
           onSelect={onUninstallFromAdobe}
         >
-          <AdobeLogo /> Uninstall from Adobe testing folder
+          <AdobeLogo /> Uninstall from Adobe folder
         </ContextMenuItem>
       ) : null}
       {formatUninstalls.length >= 2 && onUninstallFormat ? (
@@ -506,7 +507,7 @@ export function InstanceMenuItems({
       ) : null}
       {plan.adobeInstall ? (
         <ContextMenuItem disabled={busy} onSelect={onInstallToAdobe}>
-          <AdobeLogo /> Install to Adobe testing folder
+          <AdobeLogo /> Install to Adobe folder
         </ContextMenuItem>
       ) : null}
       {plan.deactivate ? (
@@ -529,7 +530,7 @@ export function InstanceMenuItems({
           className={destructiveMenuItemClass}
           onSelect={onUninstallFromAdobe}
         >
-          <AdobeLogo /> Uninstall from Adobe testing folder
+          <AdobeLogo /> Uninstall from Adobe folder
         </ContextMenuItem>
       ) : null}
     </>

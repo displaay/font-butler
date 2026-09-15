@@ -2238,7 +2238,7 @@ export class FontButlerService {
           ? verifyManagedCopy(this.paths, 'adobe-shared', adobe.path, adobe.fingerprint)
           : 'unavailable'
         fonts.push({
-          target: `${displayEntry(entry)} · Adobe testing folder`,
+          target: `${displayEntry(entry)} · Adobe folder`,
           kind: 'font',
           outcome: dest.supported
             ? adobe.verification === 'file-present'

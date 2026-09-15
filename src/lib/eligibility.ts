@@ -252,10 +252,10 @@ export function instanceMenuLabels(
   if (plan.install) labels.push('Install instance')
   if (plan.activate) labels.push('Activate instance')
   if (plan.formatSwap) labels.push(instanceSwapLabel(plan.formatSwap, entry.id))
-  if (plan.adobeInstall) labels.push('Install to Adobe testing folder')
+  if (plan.adobeInstall) labels.push('Install to Adobe folder')
   if (plan.deactivate) labels.push('Deactivate instance')
   if (plan.uninstall) labels.push('Uninstall instance')
-  if (plan.adobeUninstall) labels.push('Uninstall from Adobe testing folder')
+  if (plan.adobeUninstall) labels.push('Uninstall from Adobe folder')
   return labels
 }
 

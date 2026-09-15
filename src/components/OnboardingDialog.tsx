@@ -63,7 +63,7 @@ const COPY: Record<Step, { title: string; description: string }> = {
   destinations: {
     title: 'Destinations',
     description:
-      'Choose where new installs go. Adobe is a testing folder for apps to pick up — not the same as installing for macOS.',
+      'Choose where new installs go. Adobe is a folder for apps to pick up — not the same as installing for macOS.',
   },
   notify: {
     title: 'Allow notifications',

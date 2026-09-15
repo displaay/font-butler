@@ -42,7 +42,7 @@ export function DestinationIcons({
         </span>
       ) : null}
       {adobe ? (
-        <span title="Adobe testing folder" className={chip}>
+        <span title="Adobe folder" className={chip}>
           <AdobeLogo className="size-3" />
         </span>
       ) : null}

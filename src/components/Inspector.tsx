@@ -11,7 +11,7 @@ import { DropdownActionButton, SplitUninstallButton, type SplitUninstallExtra } 
 import { Button } from '@/components/ui/button'
 import { usePreviewFontReady } from '@/hooks/usePreviewFontReady'
 import { api } from '@/lib/api'
-import { activateActionLabel, catalogBatchPlan, deleteSourcesLabel, forgetSourcesLabel } from '@/lib/batch'
+import { activateActionLabel, catalogBatchPlan, deactivateActionLabel, deleteSourcesLabel, forgetSourcesLabel } from '@/lib/batch'
 import type { InspectorDensity } from '@/lib/inspector'
 import { catalogInstanceRows, systemInstanceRows } from '@/lib/instances'
 import { mixedFormatWarning, occupyingFormats, formatSwap, formatSwapLabel, uniqueEntryFormats } from '@/lib/formats'
@@ -345,7 +345,7 @@ export function Inspector({
     plan.adobeUninstall > 0 && onUninstallFromAdobe
       ? {
           key: 'uninstall-adobe',
-          label: 'Uninstall from Adobe testing folder',
+          label: 'Uninstall from Adobe folder',
           icon: <AdobeLogo className="size-4 shrink-0" />,
           onSelect: onUninstallFromAdobe,
         }
@@ -444,7 +444,7 @@ export function Inspector({
             ) : null}
             {plan.adobeInstall > 0 && onInstallToAdobe ? (
               <Button size="sm" variant="outline" disabled={busy} onClick={onInstallToAdobe}>
-                <AdobeLogo className="size-3.5" /> Install to Adobe testing folder
+                <AdobeLogo className="size-3.5" /> Install to Adobe folder
               </Button>
             ) : null}
             {plan.install > 0 && (
@@ -464,7 +464,7 @@ export function Inspector({
             )}
             {plan.deactivate > 0 && (
               <Button size="sm" variant="outline" disabled={busy} onClick={onDeactivate}>
-                <PowerOff /> Deactivate
+                <PowerOff /> {deactivateActionLabel(plan)}
               </Button>
             )}
             {plan.uninstall > 0 && (

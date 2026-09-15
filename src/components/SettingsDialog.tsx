@@ -99,7 +99,7 @@ const CATEGORIES: {
     id: 'destinations',
     label: 'Destinations',
     icon: Layers,
-    description: 'Where Font Buttler places installed copies, including the Adobe testing folder.',
+    description: 'Where Font Buttler places installed copies, including the Adobe folder.',
   },
   {
     id: 'caches',
@@ -246,7 +246,7 @@ export function SettingsDialog({
     setBusy(true)
     try {
       applyDestinations(await api.createAdobeTestingFolder())
-      toast.success('Created the Adobe testing folder')
+      toast.success('Created the Adobe folder')
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not create that folder')
     } finally {
@@ -259,9 +259,9 @@ export function SettingsDialog({
     try {
       const destinations = applyDestinations(await api.destinations())
       if (adobeTestingFolderAvailable(destinations)) {
-        toast.success('Adobe testing folder is available')
+        toast.success('Adobe folder is available')
       } else {
-        toast.message('Adobe testing folder is still not available')
+        toast.message('Adobe folder is still not available')
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not check that folder')
@@ -938,7 +938,7 @@ function DestinationsPane({
     <SettingsSection>
       <SettingsRow
         label="Default install destination"
-        description="Choose where new installs go. Adobe is a testing folder for apps to pick up — not the same as installing for macOS."
+        description="Choose where new installs go. Adobe is a folder for apps to pick up — not the same as installing for macOS."
         htmlFor="default-destination"
       >
         <select
@@ -963,7 +963,7 @@ function DestinationsPane({
         </select>
       </SettingsRow>
       <SettingsRow
-        label="Adobe testing folder"
+        label="Adobe folder"
         description={
           adobe?.supported
             ? 'Available for file placement on this Mac.'
