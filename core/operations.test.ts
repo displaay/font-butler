@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import fs from 'node:fs'
 import {
   clearOperations,
   createOperation,
@@ -7,9 +8,11 @@ import {
   loadOperations,
   markAllOperationsRead,
   markOperationsUnread,
+  pruneOperations,
   unreadOperationCount,
   upsertOperation,
 } from './operations.ts'
+import { operationsPath } from './paths.ts'
 import { tempPaths } from './test-util.ts'
 
 test('finishOperation marks watch and startup activity unread', () => {
@@ -70,5 +73,30 @@ test('clearOperations wipes persisted activity history', () => {
   upsertOperation(paths, install)
   assert.equal(loadOperations(paths).length, 1)
   assert.deepEqual(clearOperations(paths), [])
+  assert.deepEqual(loadOperations(paths), [])
+})
+
+test('pruneOperations skips rewrite when nothing expired', () => {
+  const paths = tempPaths('font-butler-ops-prune-skip-')
+  const install = finishOperation(
+    createOperation({ trigger: 'manual', action: 'install', familyName: 'Inter' }),
+    [{ id: '1', label: 'Inter', outcome: 'succeeded' }],
+  )
+  upsertOperation(paths, install)
+  const file = operationsPath(paths)
+  const before = fs.readFileSync(file, 'utf8')
+  pruneOperations(paths, { maxAgeMs: 24 * 60 * 60 * 1000, maxCount: 10_000 })
+  assert.equal(fs.readFileSync(file, 'utf8'), before)
+})
+
+test('pruneOperations rewrites when entries are dropped', () => {
+  const paths = tempPaths('font-butler-ops-prune-write-')
+  const stale = finishOperation(
+    createOperation({ trigger: 'manual', action: 'install', familyName: 'Old' }),
+    [{ id: '1', label: 'Old', outcome: 'succeeded' }],
+  )
+  stale.startedAt = Date.now() - 10_000
+  upsertOperation(paths, stale)
+  pruneOperations(paths, { maxAgeMs: 1000, maxCount: 10_000 })
   assert.deepEqual(loadOperations(paths), [])
 })

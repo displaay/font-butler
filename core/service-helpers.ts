@@ -114,8 +114,52 @@ export function touchEntry(entry: CatalogEntry): void {
   entry.updatedAt = now()
 }
 
-export async function removeInstalledCopy(entry: CatalogEntry): Promise<void> {
-  if (entry.installedPath) {
+export function parkedBytesPath(entry: CatalogEntry): string | undefined {
+  if (entry.disabledPath && fs.existsSync(entry.disabledPath)) return entry.disabledPath
+  for (const copy of entry.installations ?? []) {
+    if (copy.parkedPath && fs.existsSync(copy.parkedPath)) return copy.parkedPath
+  }
+  return undefined
+}
+
+export function livePathOccupiedByOther(
+  catalog: CatalogEntry[],
+  filePath: string,
+  excludeId: string,
+): boolean {
+  const resolved = path.resolve(filePath)
+  return catalog.some((other) => {
+    if (other.id === excludeId) return false
+    if (other.status !== 'installed' && other.status !== 'outdated') return false
+    if (parkedBytesPath(other)) return false
+    const livePaths = [
+      other.installedPath,
+      ...(other.installations ?? [])
+        .filter((copy) => !copy.parkedPath)
+        .map((copy) => copy.path),
+    ]
+    return livePaths.some(
+      (candidate) =>
+        Boolean(candidate) && path.resolve(candidate!) === resolved && fs.existsSync(candidate!),
+    )
+  })
+}
+
+export function ownsLiveInstalledCopy(entry: CatalogEntry, catalog: CatalogEntry[] = []): boolean {
+  const livePath = entry.installedPath
+  if (!livePath || !fs.existsSync(livePath)) return false
+  if (entry.status !== 'installed' && entry.status !== 'outdated') return false
+  const parked = parkedBytesPath(entry)
+  if (parked && path.resolve(parked) !== path.resolve(livePath)) return false
+  if (catalog.length === 0) return true
+  return !livePathOccupiedByOther(catalog, livePath, entry.id)
+}
+
+export async function removeInstalledCopy(
+  entry: CatalogEntry,
+  catalog: CatalogEntry[] = [],
+): Promise<void> {
+  if (ownsLiveInstalledCopy(entry, catalog) && entry.installedPath) {
     await yieldEventLoop()
     await getFontNative().unregisterFont(entry.installedPath)
     if (fs.existsSync(entry.installedPath)) {

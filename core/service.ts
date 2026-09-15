@@ -182,17 +182,28 @@ import type {
   WatchFolder,
 } from './types.ts'
 
-function existingManagedFontPath(entry: CatalogEntry, which: 'source' | 'installed' = 'installed'): string | undefined {
+function existingManagedFontPath(
+  entry: CatalogEntry,
+  which: 'source' | 'installed' = 'installed',
+  catalog: CatalogEntry[] = [],
+): string | undefined {
   const candidates = which === 'source'
     ? [entry.sourcePath]
-    : [
-        entry.installedPath,
-        entry.installations?.find((copy) => copy.destinationId === 'macos')?.path,
-        entry.installations?.find((copy) => copy.destinationId === 'adobe-shared')?.path,
-        entry.disabledPath,
-        ...(entry.installations ?? []).map((copy) => copy.parkedPath),
-        entry.sourcePath,
-      ]
+    : (() => {
+        const parked = [
+          entry.disabledPath,
+          ...(entry.installations ?? []).map((copy) => copy.parkedPath),
+        ]
+        const live = [
+          entry.installedPath,
+          entry.installations?.find((copy) => copy.destinationId === 'macos')?.path,
+          entry.installations?.find((copy) => copy.destinationId === 'adobe-shared')?.path,
+        ]
+        const fallback = [entry.sourcePath]
+        return parkedBytesPath(entry)
+          ? [...parked, ...live, ...fallback]
+          : [...live, ...parked, ...fallback]
+      })()
   const seen = new Set<string>()
   return candidates.find((candidate) => {
     if (!candidate) return false
@@ -200,12 +211,18 @@ function existingManagedFontPath(entry: CatalogEntry, which: 'source' | 'install
     if (seen.has(resolved)) return false
     seen.add(resolved)
     try {
-      return fs.statSync(resolved).isFile()
+      if (!fs.statSync(resolved).isFile()) return false
     } catch {
       return false
     }
+    if (catalog.length && livePathOccupiedByOther(catalog, resolved, entry.id)) return false
+    return true
   })
 }
+
+const REMEMBERED_DECISIONS_LIMIT = 256
+const APPLY_PLAN_EMIT_EVERY = 16
+const MAX_UPLOAD_BATCH_BYTES = 8 * MAX_UPLOAD_BYTES
 
 async function yieldDuringBulkImport(_index?: number): Promise<void> {
   await yieldEventLoop()
@@ -232,8 +249,10 @@ import {
   emitCatalog,
   emitDuplicates,
   emitNotice,
+  livePathOccupiedByOther,
   newId,
   now,
+  parkedBytesPath,
   removeInstalledCopy,
   touchEntry,
 } from './service-helpers.ts'
@@ -292,6 +311,7 @@ export class FontButlerService {
   private autoReinstallTimer: ReturnType<typeof setTimeout> | null = null
   private autoReinstallPending = new Set<string>()
   private rememberedDecisions = new Map<string, ImportPlanChoice>()
+  private destinationFailures: Array<{ destinationId: DestinationId; reason: string }> = []
   /**
    * Test seam: stub Displaay worker HTTP for this instance so onboarding follow-up
    * can sync without the network.
@@ -314,6 +334,22 @@ export class FontButlerService {
       this.autoReinstallTimer = null
     }
     this.autoReinstallPending.clear()
+  }
+
+  private rememberDecision(key: string, choice: ImportPlanChoice): void {
+    if (this.rememberedDecisions.has(key)) this.rememberedDecisions.delete(key)
+    this.rememberedDecisions.set(key, choice)
+    while (this.rememberedDecisions.size > REMEMBERED_DECISIONS_LIMIT) {
+      const oldest = this.rememberedDecisions.keys().next().value
+      if (oldest === undefined) break
+      this.rememberedDecisions.delete(oldest)
+    }
+  }
+
+  private takeDestinationFailures(): Array<{ destinationId: DestinationId; reason: string }> {
+    const failures = this.destinationFailures
+    this.destinationFailures = []
+    return failures
   }
 
   async init(): Promise<void> {
@@ -639,6 +675,10 @@ export class FontButlerService {
     files: { filename: string; data: Buffer }[],
   ): Promise<{ entries: CatalogEntry[]; errors: string[]; ignored: number }> {
     return runCatalogTask(async () => {
+      const totalBytes = files.reduce((sum, file) => sum + file.data.length, 0)
+      if (totalBytes > MAX_UPLOAD_BATCH_BYTES) {
+        throw new Error(`Upload batch exceeds ${MAX_UPLOAD_BATCH_BYTES / (1024 * 1024)}MB limit`)
+      }
       fs.mkdirSync(this.paths.uploadsDir, { recursive: true })
       const saved: string[] = []
       const errors: string[] = []
@@ -737,7 +777,8 @@ export class FontButlerService {
   }
 
   async captureComparison(id: string): Promise<ComparisonCapture> {
-    const entry = findById(loadCatalog(this.paths), id)
+    const catalog = loadCatalog(this.paths)
+    const entry = findById(catalog, id)
     if (!entry) {
       throw new Error('Font is not in the library.')
     }
@@ -747,7 +788,7 @@ export class FontButlerService {
     const sourceFingerprint = fingerprintFile(entry.sourcePath)
     storeRevision(this.paths, entry.sourcePath, { faces: entry.faces, format: entry.format })
     let installedFingerprint: string | null = null
-    const installedPath = existingManagedFontPath(entry)
+    const installedPath = existingManagedFontPath(entry, 'installed', catalog.entries)
     if (installedPath) {
       installedFingerprint = fingerprintFile(installedPath)
       storeRevision(this.paths, installedPath, { faces: entry.faces, format: entry.format })
@@ -767,7 +808,9 @@ export class FontButlerService {
         before && requestedFamilyName && requestedFamilyName !== displayFamily(before),
       )
       const previousRevision = installAs ? undefined : this.previousRevisionBeforeChange(before)
+      this.destinationFailures = []
       const entry = await this.installEntry(id, familyName, options)
+      const destinationFailures = this.takeDestinationFailures()
       const catalog = loadCatalog(this.paths)
       const latest = findById(catalog, entry.id)
       if (latest) {
@@ -779,7 +822,7 @@ export class FontButlerService {
       item.previousRevision = previousRevision
       this.commitManualOperation(
         options?.replace ? 'install-update' : 'install',
-        [item],
+        this.withDestinationFailures(entry, item, destinationFailures),
         displayFamily(entry),
       )
       await syncWatchers(this.paths)
@@ -819,7 +862,9 @@ export class FontButlerService {
       for (const entry of toInstall) {
         try {
           const previousRevision = this.previousRevisionBeforeChange(entry)
+          this.destinationFailures = []
           const installed = await this.installEntry(entry.id, familyName, options)
+          const destinationFailures = this.takeDestinationFailures()
           const catalog = loadCatalog(this.paths)
           const latest = findById(catalog, installed.id)
           if (latest) {
@@ -831,7 +876,8 @@ export class FontButlerService {
           entries.push(completed)
           const item = this.operationItem(completed, 'succeeded')
           item.previousRevision = previousRevision
-          items.push(item)
+          items.push(...this.withDestinationFailures(completed, item, destinationFailures))
+          for (const failure of destinationFailures) errors.push(failure.reason)
         } catch (error) {
           const reason = error instanceof Error ? error.message : String(error)
           errors.push(reason)
@@ -892,30 +938,55 @@ export class FontButlerService {
     return runCatalogTask(async () => {
       const entries: CatalogEntry[] = []
       const familyNames = new Map<string, string>()
-      const previousRevisions = new Map<string, string | undefined>()
-      const previousEntries = new Map<string, CatalogEntry>()
+      const items: OperationItem[] = []
+      const errors: string[] = []
       for (const id of ids) {
         const current = findById(loadCatalog(this.paths), id)
-        if (current) previousEntries.set(id, structuredClone(current))
-        previousRevisions.set(id, this.retainInstalledRevision(id))
-        const entry = await this.uninstallEntry(id, options)
-        familyNames.set(entry.id, displayFamily(entry))
-        entries.push(entry)
-      }
-      this.commitManualOperation(
-        'uninstall',
-        entries.map((entry) => {
+        if (current) familyNames.set(id, displayFamily(current))
+        try {
+          const previousEntry = current ? structuredClone(current) : undefined
+          const previousRevision = this.retainInstalledRevision(id)
+          const entry = await this.uninstallEntry(id, options)
+          familyNames.set(entry.id, displayFamily(entry))
+          entries.push(entry)
           const item = this.operationItem(entry, 'succeeded')
-          item.previousRevision = previousRevisions.get(entry.id)
-          item.previousEntry = previousEntries.get(entry.id)
-          return item
-        }),
+          item.previousRevision = previousRevision
+          item.previousEntry = previousEntry
+          items.push(item)
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error)
+          errors.push(reason)
+          if (current) {
+            items.push(this.operationItem(current, 'failed', reason))
+          } else {
+            items.push({ id: crypto.randomUUID(), entryId: id, label: id, outcome: 'failed', reason })
+          }
+        }
+      }
+      const operation = this.commitManualOperation(
+        'uninstall',
+        items,
         entries[0] ? displayFamily(entries[0]) : undefined,
         !options?.deleteSource,
         familyNames,
       )
       await syncWatchers(this.paths)
       emitCatalog(this.paths)
+      if (entries.length === 0 && errors.length) {
+        throw new Error(errors.join('\n'))
+      }
+      if (operation) {
+        const result = entries as CatalogEntry[] & Partial<BatchActionResult>
+        Object.assign(result, {
+          operationId: operation.id,
+          ...operationCounts(operation),
+          errors,
+          failedIds: items
+            .filter((item) => item.outcome === 'failed' && item.entryId)
+            .map((item) => item.entryId!),
+        })
+        return result
+      }
       return entries
     })
   }
@@ -987,25 +1058,51 @@ export class FontButlerService {
       assertSingleInstallableFormat(toActivate)
       const entries: CatalogEntry[] = []
       const items: OperationItem[] = []
+      const errors: string[] = []
       for (const id of ids) {
         const current = findById(loadCatalog(this.paths), id)
-        const relatedId = current
-          ? occupyingSiblings(loadCatalog(this.paths).entries, current, this.paths)[0]?.id
-          : undefined
-        const next = options?.switch
-          ? await this.switchToEntry(id)
-          : await this.activateEntry(id, { ...options, owner: 'manual' })
-        const item = this.operationItem(next, 'succeeded')
-        if (options?.switch) item.relatedEntryId = relatedId
-        entries.push(next)
-        items.push(item)
+        try {
+          const relatedId = current
+            ? occupyingSiblings(loadCatalog(this.paths).entries, current, this.paths)[0]?.id
+            : undefined
+          const next = options?.switch
+            ? await this.switchToEntry(id)
+            : await this.activateEntry(id, { ...options, owner: 'manual' })
+          const item = this.operationItem(next, 'succeeded')
+          if (options?.switch) item.relatedEntryId = relatedId
+          entries.push(next)
+          items.push(item)
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error)
+          errors.push(reason)
+          if (current) {
+            items.push(this.operationItem(current, 'failed', reason))
+          } else {
+            items.push({ id: crypto.randomUUID(), entryId: id, label: id, outcome: 'failed', reason })
+          }
+        }
       }
-      this.commitManualOperation(
+      const operation = this.commitManualOperation(
         options?.switch ? 'switch' : 'activate',
         items,
         entries[0] ? displayFamily(entries[0]) : undefined,
       )
       emitCatalog(this.paths)
+      if (entries.length === 0 && errors.length) {
+        throw new Error(errors.join('\n'))
+      }
+      if (operation) {
+        const result = entries as CatalogEntry[] & Partial<BatchActionResult>
+        Object.assign(result, {
+          operationId: operation.id,
+          ...operationCounts(operation),
+          errors,
+          failedIds: items
+            .filter((item) => item.outcome === 'failed' && item.entryId)
+            .map((item) => item.entryId!),
+        })
+        return result
+      }
       return entries
     })
   }
@@ -1154,12 +1251,22 @@ export class FontButlerService {
     options: { deleteFiles?: boolean } = {},
   ): Promise<{ removed: number }> {
     return runCatalogTask(async () => {
+      const errors: string[] = []
+      let removed = 0
       for (const id of ids) {
-        await this.forgetEntry(id, options)
+        try {
+          await this.forgetEntry(id, options)
+          removed += 1
+        } catch (error) {
+          errors.push(error instanceof Error ? error.message : String(error))
+        }
       }
       await syncWatchers(this.paths)
       emitCatalog(this.paths)
-      return { removed: ids.length }
+      if (removed === 0 && errors.length) {
+        throw new Error(errors.join('\n'))
+      }
+      return { removed }
     })
   }
 
@@ -1318,13 +1425,14 @@ export class FontButlerService {
   }
 
   async reveal(id: string, which: 'source' | 'installed'): Promise<string> {
-    const entry = findById(loadCatalog(this.paths), id)
+    const catalog = loadCatalog(this.paths)
+    const entry = findById(catalog, id)
     if (!entry) {
       throw new Error('Font is not in the library.')
     }
     const target =
       which === 'installed'
-        ? existingManagedFontPath(entry)
+        ? existingManagedFontPath(entry, 'installed', catalog.entries)
         : entry.sourcePath
     if (!target) {
       throw new Error('There is no file to show.')
@@ -1349,12 +1457,18 @@ export class FontButlerService {
     return resolved
   }
 
-  fontBytesForEntry(id: string): { buffer: Buffer; mime: string; filename: string } {
-    const entry = findById(loadCatalog(this.paths), id)
+  fontBytesForEntry(
+    id: string,
+    resolvedEntry?: CatalogEntry,
+    catalogEntries?: CatalogEntry[],
+  ): { buffer: Buffer; mime: string; filename: string } {
+    const loaded = resolvedEntry && catalogEntries ? undefined : loadCatalog(this.paths)
+    const catalog = catalogEntries ?? loaded!.entries
+    const entry = resolvedEntry ?? findById(loaded!, id)
     if (!entry) {
       throw new Error('Font is not in the library.')
     }
-    const filePath = existingManagedFontPath(entry)
+    const filePath = existingManagedFontPath(entry, 'installed', catalog)
     if (!filePath) {
       throw new Error('No font file is available to preview.')
     }
@@ -1677,7 +1791,7 @@ export class FontButlerService {
       }
       const plan = loadPlan(this.paths, planId)
       if (!plan) throw new Error('That import plan is no longer available.')
-      const catalog = loadCatalog(this.paths)
+      let catalog = loadCatalog(this.paths)
       if (plan.expectedCatalogRevision !== catalogRevision(catalog)) {
         throw new Error('The library changed. Review the import again.')
       }
@@ -1689,18 +1803,19 @@ export class FontButlerService {
       const items: OperationItem[] = []
       const entries: CatalogEntry[] = []
       const failedIds: string[] = []
+      let processed = 0
       for (const item of plan.items) {
         const remembered = this.rememberedDecisions.get(rememberedDecisionKey(item))
         const choice = choices[item.id] ?? remembered ?? item.defaultChoice
         const previousInstalledFingerprint = item.entryId
-          ? findById(loadCatalog(this.paths), item.entryId)?.installedFingerprint
+          ? findById(catalog, item.entryId)?.installedFingerprint
           : undefined
         if (
           item.classification === 'alt-format' ||
           item.classification === 'collection-overlap' ||
           item.classification === 'revision'
         ) {
-          this.rememberedDecisions.set(rememberedDecisionKey(item), choice)
+          this.rememberDecision(rememberedDecisionKey(item), choice)
         }
         if (choice === 'skip') {
           items.push({
@@ -1723,18 +1838,22 @@ export class FontButlerService {
           }
           if (choice === 'relink' && item.entryId) {
             entries.push(await this.applyRelink(item.entryId, item.path))
+            catalog = loadCatalog(this.paths)
           } else if (choice === 'add-inactive') {
             entries.push(this.importOneUnlocked(item.path, {
               forceNew: true,
+              catalog,
               analysis: await this.analysisForPlanItem(item),
             }))
           } else if (choice === 'switch') {
             const imported = this.importOneUnlocked(item.path, {
               forceNew: true,
+              catalog,
               analysis: await this.analysisForPlanItem(item),
             })
-            relatedEntryId = occupyingSiblings(loadCatalog(this.paths).entries, imported, this.paths)[0]?.id
+            relatedEntryId = occupyingSiblings(catalog.entries, imported, this.paths)[0]?.id
             entries.push(await this.switchToEntry(imported.id))
+            catalog = loadCatalog(this.paths)
           } else if (
             choice === 'keep' &&
             (item.classification === 'revision' ||
@@ -1744,10 +1863,10 @@ export class FontButlerService {
             // Keep the current installation while still recording the incoming source in the catalog.
             entries.push(this.importOneUnlocked(item.path, {
               forceNew: item.parallelCopy ? true : undefined,
+              catalog,
               analysis: await this.analysisForPlanItem(item),
             }))
           } else if (choice === 'replace' && item.entryId) {
-            const catalog = loadCatalog(this.paths)
             const latest = findById(catalog, item.entryId)
             if (latest && path.resolve(latest.sourcePath) !== path.resolve(item.path)) {
               latest.sourcePath = item.path
@@ -1767,6 +1886,7 @@ export class FontButlerService {
             } else {
               entries.push(await this.installEntry(item.entryId))
             }
+            catalog = loadCatalog(this.paths)
           } else if (choice === 'install-as') {
             const familyName = options.familyName?.trim()
             if (!familyName) {
@@ -1774,11 +1894,16 @@ export class FontButlerService {
             }
             const imported = this.importOneUnlocked(item.path, {
               forceNew: item.parallelCopy ? true : undefined,
+              catalog,
               analysis: await this.analysisForPlanItem(item),
             })
             entries.push(await this.installEntry(imported.id, familyName))
+            catalog = loadCatalog(this.paths)
           } else {
-            const imported = this.importOneUnlocked(item.path, { analysis: await this.analysisForPlanItem(item) })
+            const imported = this.importOneUnlocked(item.path, {
+              catalog,
+              analysis: await this.analysisForPlanItem(item),
+            })
             const settings = loadSettings(this.paths)
             const folder = settings.folders.find((row) => row.id === imported.ownerFolderId)
             const shouldInstall =
@@ -1788,11 +1913,11 @@ export class FontButlerService {
                 : Boolean(folder?.installNew || (!folder && settings.installWatchFolderFonts)))
             if (shouldInstall && imported.status !== 'installed') {
               const installed = await this.installEntry(imported.id)
-              const latest = findById(loadCatalog(this.paths), installed.id)
+              catalog = loadCatalog(this.paths)
+              const latest = findById(catalog, installed.id)
               if (latest) {
                 addManualOwner(latest)
                 touchEntry(latest)
-                const catalog = loadCatalog(this.paths)
                 upsertEntry(catalog, latest)
                 saveCatalog(this.paths, catalog)
               }
@@ -1822,8 +1947,10 @@ export class FontButlerService {
             relatedEntryId,
           })
           await yieldEventLoop()
-          emitCatalog(this.paths)
+          processed += 1
+          if (processed % APPLY_PLAN_EMIT_EVERY === 0) emitCatalog(this.paths)
         } catch (error) {
+          catalog = loadCatalog(this.paths)
           failedIds.push(item.entryId || item.id)
           items.push({
             id: item.id,
@@ -1840,10 +1967,11 @@ export class FontButlerService {
         }
       }
       finishOperation(operation, items)
+      catalog = loadCatalog(this.paths)
       if (
         items.some((row) => {
           if (row.outcome !== 'succeeded' || !row.entryId) return false
-          const applied = findById(loadCatalog(this.paths), row.entryId)
+          const applied = findById(catalog, row.entryId)
           return !applied || applied.previewOnly || applied.status === 'uninstalled' || applied.status === 'source-missing'
         })
       ) {
@@ -1870,7 +1998,6 @@ export class FontButlerService {
       maxAgeMs: settings.activityRetentionDays * 24 * 60 * 60 * 1000,
       maxCount: settings.activityMaxOperations,
     })
-    this.revisionStorage()
     return loadOperations(this.paths)
   }
 
@@ -2231,14 +2358,17 @@ export class FontButlerService {
       } else {
         fonts.push({ target: displayEntry(entry), kind: 'font', outcome: 'not-found', reason: 'Installed copy is missing.' })
       }
-      const adobe = copyAt(entry, 'adobe-shared')
+      const latestCatalog = loadCatalog(this.paths)
+      const latest = findById(latestCatalog, entry.id)
+      if (!latest) continue
+      const adobe = copyAt(latest, 'adobe-shared')
       if (adobe) {
         const dest = inspectDestination(this.paths, 'adobe-shared')
         adobe.verification = dest.supported
           ? verifyManagedCopy(this.paths, 'adobe-shared', adobe.path, adobe.fingerprint)
           : 'unavailable'
         fonts.push({
-          target: `${displayEntry(entry)} · Adobe testing folder`,
+          target: `${displayEntry(latest)} · Adobe testing folder`,
           kind: 'font',
           outcome: dest.supported
             ? adobe.verification === 'file-present'
@@ -2247,7 +2377,7 @@ export class FontButlerService {
             : 'unavailable',
           reason: dest.supported ? adobe.verification === 'file-present' ? undefined : 'Adobe testing copy is missing.' : dest.reason,
         })
-        saveCatalog(this.paths, catalog)
+        saveCatalog(this.paths, latestCatalog)
       }
     }
     const caches: RepairItemResult[] = []
@@ -2551,12 +2681,13 @@ export class FontButlerService {
   }
 
   previewMeta(id: string, which: 'source' | 'installed' | 'revision' = 'installed', fingerprint?: string) {
-    const entry = findById(loadCatalog(this.paths), id)
+    const catalog = loadCatalog(this.paths)
+    const entry = findById(catalog, id)
     if (!entry) throw new Error('Font is not in the library.')
     const filePath =
       which === 'revision' && fingerprint
         ? revisionFilePath(this.paths, fingerprint)
-        : existingManagedFontPath(entry, which === 'source' ? 'source' : 'installed')
+        : existingManagedFontPath(entry, which === 'source' ? 'source' : 'installed', catalog.entries)
     if (!filePath || !fs.existsSync(filePath)) {
       throw new Error('No font file is available to preview.')
     }
@@ -2575,12 +2706,13 @@ export class FontButlerService {
     which: 'source' | 'installed' | 'revision' = 'installed',
     fingerprint?: string,
   ) {
-    const entry = findById(loadCatalog(this.paths), id)
+    const catalog = loadCatalog(this.paths)
+    const entry = findById(catalog, id)
     if (!entry) throw new Error('Font is not in the library.')
     const filePath =
       which === 'revision' && fingerprint
         ? revisionFilePath(this.paths, fingerprint)
-        : existingManagedFontPath(entry, which === 'source' ? 'source' : 'installed')
+        : existingManagedFontPath(entry, which === 'source' ? 'source' : 'installed', catalog.entries)
     if (!filePath || !fs.existsSync(filePath)) {
       throw new Error('No font file is available to preview.')
     }
@@ -2595,7 +2727,8 @@ export class FontButlerService {
     which: 'source' | 'installed' | 'revision' = 'installed',
     fingerprint?: string,
   ): { buffer: Buffer; mime: string; filename: string } {
-    const entry = findById(loadCatalog(this.paths), id)
+    const catalog = loadCatalog(this.paths)
+    const entry = findById(catalog, id)
     if (!entry) throw new Error('Font is not in the library.')
     if (which === 'revision' && fingerprint) {
       const bytes = readRevisionBytes(this.paths, fingerprint)
@@ -2613,7 +2746,7 @@ export class FontButlerService {
         filename: path.basename(entry.sourcePath),
       }
     }
-    return this.fontBytesForEntry(id)
+    return this.fontBytesForEntry(id, entry, catalog.entries)
   }
 
   revisionStorage() {
@@ -2738,6 +2871,9 @@ export class FontButlerService {
       unparkManagedCopies: (entry, dests) => this.unparkManagedCopies(entry, dests),
       clearCachesAfterInstall: () => this.clearCachesAfterInstall(),
       isLiveDestPath: (filePath) => this.isLiveDestPath(filePath),
+      recordDestinationFailure: (destinationId, reason) => {
+        this.destinationFailures.push({ destinationId, reason })
+      },
     }
   }
 
@@ -2797,7 +2933,7 @@ export class FontButlerService {
       const entry = findById(catalog, id)
       if (!entry) throw new Error('Font is not in the library.')
       if (destinationId === 'macos') {
-        await removeInstalledCopy(entry)
+        await removeInstalledCopy(entry, catalog.entries)
         dropCopy(entry, 'macos')
         if (!copyAt(entry, 'adobe-shared')) {
           entry.status = sourceFileExists(entry.sourcePath) && isExternalSource(entry) ? 'uninstalled' : entry.status
@@ -3131,7 +3267,7 @@ export class FontButlerService {
     if (options.deleteFiles && entry.status === 'uninstalled') {
       await deleteSourceFile(entry.sourcePath, this.paths)
     }
-    await removeInstalledCopy(entry)
+    await removeInstalledCopy(entry, catalog.entries)
     this.removeAdobeCopy(entry)
     if (entry.disabledPath && fs.existsSync(entry.disabledPath)) {
       fs.rmSync(entry.disabledPath, { force: true })
@@ -3812,21 +3948,36 @@ export class FontButlerService {
   }
 
   private retainInstalledRevision(id: string): string | undefined {
-    const entry = findById(loadCatalog(this.paths), id)
+    const catalog = loadCatalog(this.paths)
+    const entry = findById(catalog, id)
     if (!entry) return undefined
     if (entry.installedFingerprint && readRevisionBytes(this.paths, entry.installedFingerprint)) {
       return entry.installedFingerprint
     }
-    const adobe = copyAt(entry, 'adobe-shared')
-    const candidates = [
-      entry.installedPath,
-      entry.disabledPath,
-      adobe?.path,
-      adobe?.parkedPath,
-    ]
-    const current = candidates.find((filePath) => Boolean(filePath && fs.existsSync(filePath)))
+    const current = existingManagedFontPath(entry, 'installed', catalog.entries)
     if (!current) return undefined
     return storeRevision(this.paths, current, { faces: entry.faces, format: entry.format })?.fingerprint
+  }
+
+  private withDestinationFailures(
+    entry: CatalogEntry,
+    succeeded: OperationItem,
+    failures: Array<{ destinationId: DestinationId; reason: string }>,
+  ): OperationItem[] {
+    if (failures.length === 0) return [succeeded]
+    return [
+      succeeded,
+      ...failures.map((failure) => ({
+        id: crypto.randomUUID(),
+        entryId: entry.id,
+        label:
+          failure.destinationId === 'adobe-shared'
+            ? `${displayEntry(entry)} · Adobe testing folder`
+            : displayEntry(entry),
+        outcome: 'failed' as const,
+        reason: failure.reason,
+      })),
+    ]
   }
 
   private commitManualOperation(

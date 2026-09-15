@@ -10,8 +10,10 @@ import {
   withMutationJournal,
 } from './journal.ts'
 import { noopFontNative, setFontNative } from './native.ts'
+import { parseFontBuffer } from './parse.ts'
 import { readRevisionBytes, storeRevision } from './revisions.ts'
 import { withService, writeTestFont } from './test-util.ts'
+import { refreshSourceStatus } from './watch.ts'
 
 async function importFont(
   service: Parameters<Parameters<typeof withService>[0]>[0],
@@ -337,5 +339,142 @@ test('revision restore retains facts about the actual external source', async ()
     const sourceFingerprint = fingerprintFile(entry.sourcePath)
     const restored = await service.restoreRevision(entry.id)
     assert.equal(restored.sourceFingerprint, sourceFingerprint)
+  })
+})
+
+test('uninstalling a parked font does not delete a reused live filename', async () => {
+  await withService(async (service, paths) => {
+    const sourceA = path.join(paths.dataRoot, 'a/Regular.ttf')
+    const sourceB = path.join(paths.dataRoot, 'b/Regular.ttf')
+    writeTestFont(sourceA, 'Parked A', 'ParkedA-Regular')
+    writeTestFont(sourceB, 'Live B', 'LiveB-Regular')
+    const importedA = (await service.importPaths([sourceA])).entries[0]!
+    await service.install(importedA.id)
+    const parked = await service.deactivate(importedA.id)
+    const importedB = (await service.importPaths([sourceB])).entries[0]!
+    const live = await service.install(importedB.id)
+    const preview = parseFontBuffer(service.fontBytesForEntry(parked.id).buffer)
+    assert.equal(preview.faces[0]?.postscriptName, 'ParkedA-Regular')
+    const revisionPreview = parseFontBuffer(service.fontBytesForRevision(parked.id).buffer)
+    assert.equal(revisionPreview.faces[0]?.postscriptName, 'ParkedA-Regular')
+    await service.uninstall(parked.id)
+    assert.equal(fs.existsSync(live.installedPath!), true)
+    assert.equal(service.listCatalog().find((entry) => entry.id === live.id)?.status, 'installed')
+    assert.equal(parseFontBuffer(fs.readFileSync(live.installedPath!)).faces[0]?.postscriptName, 'LiveB-Regular')
+  })
+})
+
+test('reinstall rejects a source that collides with another live identity', async () => {
+  await withService(async (service, paths) => {
+    const sourceA = path.join(paths.dataRoot, 'IdentityA.ttf')
+    const sourceB = path.join(paths.dataRoot, 'IdentityB.ttf')
+    writeTestFont(sourceA, 'Identity A', 'IdentityA-Regular')
+    writeTestFont(sourceB, 'Identity B', 'IdentityB-Regular')
+    const importedA = (await service.importPaths([sourceA])).entries[0]!
+    const importedB = (await service.importPaths([sourceB])).entries[0]!
+    const installedA = await service.install(importedA.id)
+    const installedB = await service.install(importedB.id)
+    writeTestFont(sourceA, 'Identity B', 'IdentityB-Regular')
+    await refreshSourceStatus(paths, sourceA)
+    await assert.rejects(service.reinstall(importedA.id), /already active/)
+    assert.equal(fs.existsSync(installedA.installedPath!), true)
+    assert.equal(fs.existsSync(installedB.installedPath!), true)
+    assert.equal(
+      parseFontBuffer(fs.readFileSync(installedA.installedPath!)).faces[0]?.postscriptName,
+      'IdentityA-Regular',
+    )
+    assert.equal(
+      parseFontBuffer(fs.readFileSync(installedB.installedPath!)).faces[0]?.postscriptName,
+      'IdentityB-Regular',
+    )
+    assert.equal(service.listCatalog().find((entry) => entry.id === importedB.id)?.status, 'installed')
+  })
+})
+
+test('uninstallMany keeps earlier successes when a later native removal fails', async () => {
+  await withService(async (service, paths) => {
+    const sourceA = path.join(paths.dataRoot, 'First.ttf')
+    const sourceB = path.join(paths.dataRoot, 'Second.ttf')
+    writeTestFont(sourceA, 'First', 'First-Regular')
+    writeTestFont(sourceB, 'Second', 'Second-Regular')
+    const first = (await service.importPaths([sourceA])).entries[0]!
+    const second = (await service.importPaths([sourceB])).entries[0]!
+    await service.install(first.id)
+    const installedSecond = await service.install(second.id)
+    setFontNative(
+      noopFontNative({
+        async unregisterFont(filePath) {
+          if (filePath === installedSecond.installedPath) {
+            throw new Error('Injected native unregister failure')
+          }
+          return { ok: true, native: false }
+        },
+      }),
+    )
+    const result = await service.uninstallMany([first.id, second.id])
+    assert.equal(service.listCatalog().find((entry) => entry.id === first.id)?.status, 'uninstalled')
+    assert.equal(service.listCatalog().find((entry) => entry.id === second.id)?.status, 'installed')
+    assert.equal(fs.existsSync(installedSecond.installedPath!), true)
+    const operation = service.listActivity().find((item) => item.action === 'uninstall')
+    assert.ok(operation)
+    assert.equal(operation.outcome, 'partial')
+    assert.equal(operation.undoable, true)
+    assert.equal((result as { operationId?: string }).operationId, operation.id)
+  })
+})
+
+test('uninstalling a parked Adobe font removes the parked file', async () => {
+  await withService(async (service, paths) => {
+    const source = path.join(paths.dataRoot, 'AdobeOnly.ttf')
+    writeTestFont(source, 'Adobe Park', 'AdobePark-Regular')
+    const imported = (await service.importPaths([source])).entries[0]!
+    await service.install(imported.id, undefined, { destinationId: 'adobe-shared' })
+    const parked = await service.deactivate(imported.id)
+    const retained = parked.installations?.find((copy) => copy.destinationId === 'adobe-shared')?.parkedPath
+    assert.ok(retained && fs.existsSync(retained))
+    await service.uninstall(imported.id)
+    assert.equal(fs.existsSync(retained), false)
+  })
+})
+
+test('repair reloads the catalog after restoring a missing Mac copy', async () => {
+  await withService(async (service, paths) => {
+    const source = path.join(paths.dataRoot, 'src/RepairA.ttf')
+    writeTestFont(source, 'RepairFam', 'RepairFam-Regular', { version: 'Version 1.000' })
+    const imported = (await service.importPaths([source])).entries[0]!
+    await service.install(imported.id, undefined, { destinationIds: ['macos', 'adobe-shared'] })
+    writeTestFont(source, 'RepairFam', 'RepairFam-Regular', { version: 'Version 2.000' })
+    const updated = await service.reinstall(imported.id)
+    const v1 = updated.previousRevisionId!
+    fs.rmSync(updated.installedPath!, { force: true })
+    await service.repair([imported.id])
+    const after = service.listCatalog().find((entry) => entry.id === imported.id)!
+    assert.ok(after.installedPath && fs.existsSync(after.installedPath))
+    assert.equal(fingerprintFile(after.installedPath), after.installedFingerprint)
+    const adobe = after.installations?.find((copy) => copy.destinationId === 'adobe-shared')
+    assert.ok(adobe?.path && fs.existsSync(adobe.path))
+    assert.equal(fingerprintFile(adobe.path), adobe.fingerprint)
+    assert.equal(after.installedFingerprint, adobe.fingerprint)
+    assert.equal(after.installedFingerprint, v1)
+  })
+})
+
+test('a failed Adobe destination is recorded as a partial install', async () => {
+  await withService(async (service, paths) => {
+    const source = path.join(paths.dataRoot, 'Both.ttf')
+    writeTestFont(source, 'Both Requested', 'BothRequested-Regular')
+    const imported = (await service.importPaths([source])).entries[0]!
+    fs.mkdirSync(paths.adobeFontsDir, { recursive: true })
+    fs.copyFileSync(source, path.join(paths.adobeFontsDir, 'Unmanaged.ttf'))
+    const installed = await service.install(imported.id, undefined, {
+      destinationIds: ['macos', 'adobe-shared'],
+    })
+    assert.ok(installed.installedPath && fs.existsSync(installed.installedPath))
+    const adobe = installed.installations?.find((copy) => copy.destinationId === 'adobe-shared')
+    assert.notEqual(adobe?.verification, 'file-present')
+    const operation = service.listActivity().find((item) => item.action === 'install')
+    assert.ok(operation)
+    assert.equal(operation.outcome, 'partial')
+    assert.ok(operation.items.some((item) => item.outcome === 'failed' && item.reason))
   })
 })

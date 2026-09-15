@@ -6,6 +6,7 @@ import path from 'node:path'
 import { contentDisposition, shouldIncludeBootstrapToken } from '../core/auth.ts'
 import { onEvent } from '../core/events.ts'
 import { isFullyUnderAnyRoot } from '../core/containment.ts'
+import { MAX_UPLOAD_BYTES } from '../core/constants.ts'
 import { denyRemoteRequest, isAuthorizedApiRequest, resolveStaticAsset } from '../core/http.ts'
 import { checkAppUpdate } from '../core/app-update.ts'
 import { FontButlerService } from '../core/service.ts'
@@ -40,6 +41,18 @@ function mimeForStatic(filePath: string): string {
 
 function mountStatic(app: Hono, staticDir: string): void {
   const root = path.resolve(staticDir)
+  const skipCache =
+    process.env.FONT_BUTLER_TEST === '1' || process.env.NODE_ENV === 'development'
+  const staticCache = new Map<string, Buffer>()
+  const readStatic = (target: string): Buffer => {
+    if (!skipCache) {
+      const cached = staticCache.get(target)
+      if (cached) return cached
+    }
+    const buf = fs.readFileSync(target)
+    if (!skipCache) staticCache.set(target, buf)
+    return buf
+  }
   app.get('*', async (c) => {
     const urlPath = new URL(c.req.url).pathname
     const resolved = resolveStaticAsset(root, urlPath)
@@ -55,7 +68,7 @@ function mountStatic(app: Hono, staticDir: string): void {
     if (!isFullyUnderAnyRoot(target, [root]) || !fs.existsSync(target) || !fs.statSync(target).isFile()) {
       return c.body('Not found', 404)
     }
-    return new Response(fs.readFileSync(target), {
+    return new Response(readStatic(target), {
       headers: { 'Content-Type': mimeForStatic(target) },
     })
   })
@@ -242,14 +255,26 @@ app.post('/api/import-files', async (c) => {
   const files = (Array.isArray(raw) ? raw : raw ? [raw] : []).filter(
     (item): item is File => item instanceof File,
   )
+  const oversized: string[] = []
+  const accepted: File[] = []
+  for (const file of files) {
+    if (file.size > MAX_UPLOAD_BYTES) {
+      oversized.push(`${file.name}: file exceeds ${MAX_UPLOAD_BYTES / (1024 * 1024)}MB limit`)
+      continue
+    }
+    accepted.push(file)
+  }
   const uploads = await Promise.all(
-    files.map(async (file) => ({
+    accepted.map(async (file) => ({
       filename: file.name,
       data: Buffer.from(await file.arrayBuffer()),
     })),
   )
   const result = await service.importUploads(uploads)
-  return c.json(result)
+  return c.json({
+    ...result,
+    errors: [...oversized, ...result.errors],
+  })
 })
 
 app.post('/api/open', async (c) => {

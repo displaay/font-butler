@@ -88,7 +88,6 @@ export function useFontActions({
   setEntries,
   setSystemFaces,
   operations,
-  setOperations,
   busyRef,
   setActionStatus,
   setTab,
@@ -713,14 +712,10 @@ export function useFontActions({
         const result = await action()
         const outcome = result && typeof result === 'object' ? (result as BatchOutcome) : undefined
         const { message, failedIds } = batchResultCopy(copy.done, outcome)
-        const catalog = await api.catalog()
-        setEntries(catalog.entries)
-        const activity = await api.activity().catch(() => ({ operations }))
-        setOperations(activity.operations)
         const operationId =
           (result as { operationId?: string } | undefined)?.operationId ??
           (options?.undo === 'uninstall'
-            ? latestUndoableOperationId(activity.operations, 'uninstall')
+            ? latestUndoableOperationId(operations, 'uninstall')
             : undefined)
         const undoable =
           (result as { undoable?: boolean } | undefined)?.undoable ??

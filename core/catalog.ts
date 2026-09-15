@@ -38,6 +38,38 @@ export class CatalogCorruptError extends Error {
   }
 }
 
+function catalogBackupPath(catalogPath: string): string {
+  return path.join(path.dirname(catalogPath), 'catalog.json.bak')
+}
+
+function hydrateCatalog(catalog: CatalogFile): CatalogFile {
+  for (const entry of catalog.entries) {
+    if (typeof entry.sourcePresent !== 'boolean') {
+      entry.sourcePresent = entry.status !== 'source-missing'
+    }
+    if (!entry.sourceAvailability) {
+      applyEntryFacts(entry)
+    }
+  }
+  return catalog
+}
+
+function writeCatalogBackup(catalogPath: string): void {
+  const backupPath = catalogBackupPath(catalogPath)
+  const tmp = `${backupPath}.${process.pid}.${process.hrtime.bigint()}.tmp`
+  try {
+    fs.copyFileSync(catalogPath, tmp)
+    fs.renameSync(tmp, backupPath)
+  } catch (error) {
+    try {
+      fs.rmSync(tmp, { force: true })
+    } catch {
+      // Best effort; the next save retries the backup.
+    }
+    throw error
+  }
+}
+
 function readCatalogFile(catalogPath: string): CatalogFile {
   let raw: string
   try {
@@ -84,26 +116,37 @@ export function loadCatalog(paths: AppPaths): CatalogFile {
   if (!fs.existsSync(paths.catalogPath)) {
     return emptyCatalog()
   }
-  const parsed = readCatalogFile(paths.catalogPath)
-  for (const entry of parsed.entries) {
-    if (typeof entry.sourcePresent !== 'boolean') {
-      entry.sourcePresent = entry.status !== 'source-missing'
-    }
-    if (!entry.sourceAvailability) {
-      applyEntryFacts(entry)
+  try {
+    return hydrateCatalog(readCatalogFile(paths.catalogPath))
+  } catch (error) {
+    const backupPath = catalogBackupPath(paths.catalogPath)
+    if (!fs.existsSync(backupPath)) throw error
+    try {
+      return hydrateCatalog(readCatalogFile(backupPath))
+    } catch {
+      throw error
     }
   }
-  return parsed
 }
 
 export function saveCatalog(paths: AppPaths, catalog: CatalogFile): void {
   fs.mkdirSync(paths.dataRoot, { recursive: true })
   if (fs.existsSync(paths.catalogPath)) {
-    readCatalogFile(paths.catalogPath)
+    try {
+      readCatalogFile(paths.catalogPath)
+    } catch {
+      // Existing file is missing or unreadable: replace it.
+    }
   }
   const tmp = `${paths.catalogPath}.${process.pid}.${process.hrtime.bigint()}.tmp`
   fs.writeFileSync(tmp, JSON.stringify(catalog, null, 2))
   fs.renameSync(tmp, paths.catalogPath)
+  try {
+    writeCatalogBackup(paths.catalogPath)
+  } catch {
+    // The primary rename already committed. A backup failure must not fail the
+    // save or trigger mutation-journal rollback against a catalog that landed.
+  }
 }
 
 export function upsertEntry(catalog: CatalogFile, entry: CatalogEntry): void {

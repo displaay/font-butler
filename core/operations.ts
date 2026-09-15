@@ -167,10 +167,17 @@ export function pruneOperations(
   paths: AppPaths,
   options: { maxAgeMs: number; maxCount: number },
 ): void {
+  const loaded = loadOperations(paths)
   const cutoff = Date.now() - options.maxAgeMs
-  let operations = loadOperations(paths).filter((item) => item.startedAt >= cutoff)
+  let operations = loaded.filter((item) => item.startedAt >= cutoff)
   if (operations.length > options.maxCount) {
     operations = operations.slice(0, options.maxCount)
+  }
+  if (
+    operations.length === loaded.length &&
+    operations.every((item, index) => item.id === loaded[index]?.id)
+  ) {
+    return
   }
   saveOperations(paths, operations)
 }

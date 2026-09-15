@@ -178,7 +178,7 @@ test('loadCatalog returns empty only when the catalog file is missing', () => {
   }
 })
 
-test('corrupt catalog JSON is not treated as empty and is not overwritten', () => {
+test('corrupt catalog JSON is not treated as empty', () => {
   const paths = tempPaths('font-butler-catalog-corrupt-')
   try {
     fs.mkdirSync(paths.dataRoot, { recursive: true })
@@ -186,12 +186,69 @@ test('corrupt catalog JSON is not treated as empty and is not overwritten', () =
     fs.writeFileSync(paths.catalogPath, garbage)
     assert.throws(() => loadCatalog(paths), CatalogCorruptError)
     assert.equal(fs.readFileSync(paths.catalogPath, 'utf8'), garbage)
-    assert.throws(
-      () => saveCatalog(paths, { version: 1, entries: [] }),
-      CatalogCorruptError,
-    )
-    assert.equal(fs.readFileSync(paths.catalogPath, 'utf8'), garbage)
   } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadCatalog recovers catalog.json.bak when primary JSON is corrupt', () => {
+  const paths = tempPaths('font-butler-catalog-bak-')
+  try {
+    fs.mkdirSync(paths.dataRoot, { recursive: true })
+    const recovered: CatalogFile = {
+      version: 1,
+      entries: [entry({ id: 'from-bak', sourcePath: '/tmp/FromBak.ttf' })],
+    }
+    fs.writeFileSync(paths.catalogPath, '{not json')
+    fs.writeFileSync(path.join(paths.dataRoot, 'catalog.json.bak'), JSON.stringify(recovered))
+    const catalog = loadCatalog(paths)
+    assert.equal(catalog.entries[0]?.id, 'from-bak')
+    assert.equal(fs.readFileSync(paths.catalogPath, 'utf8'), '{not json')
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('saveCatalog overwrites a corrupt primary and writes catalog.json.bak', () => {
+  const paths = tempPaths('font-butler-catalog-overwrite-')
+  try {
+    fs.mkdirSync(paths.dataRoot, { recursive: true })
+    fs.writeFileSync(paths.catalogPath, '{not json')
+    const next: CatalogFile = {
+      version: 1,
+      entries: [entry({ id: 'saved', sourcePath: '/tmp/Saved.ttf' })],
+    }
+    saveCatalog(paths, next)
+    const loaded = loadCatalog(paths)
+    assert.equal(loaded.entries[0]?.id, 'saved')
+    const bakPath = path.join(path.dirname(paths.catalogPath), 'catalog.json.bak')
+    assert.equal(fs.existsSync(bakPath), true)
+    const bak = JSON.parse(fs.readFileSync(bakPath, 'utf8')) as CatalogFile
+    assert.equal(bak.entries[0]?.id, 'saved')
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('saveCatalog keeps the primary write if the backup fails', () => {
+  const paths = tempPaths('font-butler-catalog-bak-fail-')
+  const renameSync = fs.renameSync
+  fs.renameSync = function (from, to) {
+    if (String(to).endsWith('catalog.json.bak')) {
+      throw new Error('Injected catalog backup failure')
+    }
+    return renameSync(from, to)
+  }
+  try {
+    const next: CatalogFile = {
+      version: 1,
+      entries: [entry({ id: 'committed', sourcePath: '/tmp/Committed.ttf' })],
+    }
+    saveCatalog(paths, next)
+    assert.equal(loadCatalog(paths).entries[0]?.id, 'committed')
+    assert.equal(fs.existsSync(path.join(paths.dataRoot, 'catalog.json.bak')), false)
+  } finally {
+    fs.renameSync = renameSync
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
 })

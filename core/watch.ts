@@ -19,6 +19,7 @@ import type { AppPaths } from './paths.ts'
 import type { CatalogEntry } from './types.ts'
 
 let watcher: FSWatcher | null = null
+let watchedSourcePaths = new Set<string>()
 let inboxWatcher: FSWatcher | null = null
 let userFontsWatcher: FSWatcher | null = null
 let userFontsTimer: ReturnType<typeof setTimeout> | null = null
@@ -127,30 +128,65 @@ export function reconcileWatchedSources(paths: AppPaths): Promise<CatalogEntry[]
   })
 }
 
-export async function syncWatchers(paths: AppPaths): Promise<void> {
-  const catalog = loadCatalog(paths)
-  const sources = catalog.entries
-    .filter((entry) => isExternalSource(entry) && entry.sourcePath)
-    .map((entry) => entry.sourcePath)
-  if (watcher) {
-    await watcher.close()
-    watcher = null
-  }
-  if (sources.length === 0) {
-    return
-  }
-  watcher = chokidar.watch(sources, {
-    ignoreInitial: true,
-    awaitWriteFinish: { stabilityThreshold: 250, pollInterval: 100 },
-  })
+const SOURCE_WATCH_OPTIONS = {
+  ignoreInitial: true,
+  awaitWriteFinish: { stabilityThreshold: 250, pollInterval: 100 },
+} as const
+
+function isLiveWatcher(value: FSWatcher | null): value is FSWatcher {
+  return Boolean(value) && !value.closed
+}
+
+function bindSourceWatcher(paths: AppPaths, instance: FSWatcher): void {
   const apply = (filePath: string) => {
     void refreshSourceStatus(paths, filePath).then((entry) => {
       if (entry) sourceStatusListener?.(entry)
     })
   }
-  watcher.on('change', apply)
-  watcher.on('unlink', apply)
-  watcher.on('add', apply)
+  instance.on('change', apply)
+  instance.on('unlink', apply)
+  instance.on('add', apply)
+}
+
+async function closeSourceWatcher(): Promise<void> {
+  if (watcher) {
+    try {
+      await watcher.close()
+    } catch {
+      // Already gone.
+    }
+    watcher = null
+  }
+  watchedSourcePaths.clear()
+}
+
+export async function syncWatchers(paths: AppPaths): Promise<void> {
+  const catalog = loadCatalog(paths)
+  const sources = [
+    ...new Set(
+      catalog.entries
+        .filter((entry) => isExternalSource(entry) && entry.sourcePath)
+        .map((entry) => path.resolve(entry.sourcePath!)),
+    ),
+  ]
+
+  if (!isLiveWatcher(watcher)) {
+    await closeSourceWatcher()
+    if (sources.length === 0) {
+      return
+    }
+    watcher = chokidar.watch(sources, SOURCE_WATCH_OPTIONS)
+    watchedSourcePaths = new Set(sources)
+    bindSourceWatcher(paths, watcher)
+    return
+  }
+
+  const next = new Set(sources)
+  const toAdd = sources.filter((filePath) => !watchedSourcePaths.has(filePath))
+  const toRemove = [...watchedSourcePaths].filter((filePath) => !next.has(filePath))
+  if (toAdd.length) watcher.add(toAdd)
+  if (toRemove.length) watcher.unwatch(toRemove)
+  watchedSourcePaths = next
 }
 
 export const FONT_TREE_MAX_DEPTH = 10
@@ -515,10 +551,7 @@ export async function syncUserFontsWatcher(
 
 export async function closeAllWatchers(): Promise<void> {
   sourceStatusListener = undefined
-  if (watcher) {
-    await watcher.close()
-    watcher = null
-  }
+  await closeSourceWatcher()
   await syncInboxWatcher([], () => {})
   await syncUserFontsWatcher('', () => {})
 }

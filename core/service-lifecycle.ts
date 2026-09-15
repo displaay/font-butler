@@ -22,7 +22,7 @@ import {
   removeStagedFile,
   stageFontFile,
 } from './install.ts'
-import { identityMutexMessage, occupiedDestinations, occupyingSiblings, occupiesDestination } from './identity.ts'
+import { identityMutexMessage, occupiedDestinations, occupyingSiblings, occupyingSiblingsForIncoming, occupiesDestination } from './identity.ts'
 import { extendMutationJournal, recordMutationDestination, withMutationJournal } from './journal.ts'
 import { ensureFontActivation, getFontNative } from './native.ts'
 import { applyParsedFont, parseFontFile, readFileStat } from './parse.ts'
@@ -68,6 +68,7 @@ export type ServiceLifecycleHost = {
   unparkManagedCopies(entry: CatalogEntry, dests?: DestinationId[]): Promise<void>
   clearCachesAfterInstall(): Promise<void>
   isLiveDestPath(filePath: string): boolean
+  recordDestinationFailure(destinationId: DestinationId, reason: string): void
 }
 
 export async function installEntry(
@@ -108,8 +109,15 @@ export async function installEntry(
   if (retailReplace) {
     options = { ...options, replace: true }
   }
+  applyParsedFont(entry, staged.parsed)
   if (!options?.switch && !retailReplace) {
-    const siblings = occupyingSiblings(catalog.entries, entry, host.paths, targets)
+    const siblings = occupyingSiblingsForIncoming(
+      catalog.entries,
+      staged.parsed.faces,
+      staged.parsed.format,
+      host.paths,
+      entry.id,
+    ).filter((other) => targets.some((dest) => occupiesDestination(other, dest, host.paths)))
     if (siblings[0]) {
       throw new Error(identityMutexMessage(siblings[0]))
     }
@@ -252,8 +260,15 @@ export async function installEntry(
         placeAdobeCopy(host.paths, entry, staged.stagedPath, staged.parsed.format, staged.parsed.faces)
       } catch (error) {
         if (!installMacos) throw error
+        const reason = error instanceof Error ? error.message : String(error)
         const existing = copyAt(entry, 'adobe-shared')
         if (existing) existing.verification = 'unavailable'
+        host.recordDestinationFailure('adobe-shared', reason)
+        emitNotice({
+          kind: 'error',
+          message: `Installed ${displayFamily(entry)} on this Mac, but Adobe placement failed: ${reason}`,
+          entryId: entry.id,
+        })
       }
     }
     if (!installMacos) {
@@ -349,8 +364,15 @@ async function installRenamedCopy(
           placeAdobeCopy(host.paths, draft, temp, parsed.format, parsed.faces)
         } catch (error) {
           if (!installMacos) throw error
+          const reason = error instanceof Error ? error.message : String(error)
           const existing = copyAt(draft, 'adobe-shared')
           if (existing) existing.verification = 'unavailable'
+          host.recordDestinationFailure('adobe-shared', reason)
+          emitNotice({
+            kind: 'error',
+            message: `Installed ${displayFamily(draft)} on this Mac, but Adobe placement failed: ${reason}`,
+            entryId: draft.id,
+          })
         }
       }
       if (!installMacos) {
@@ -403,7 +425,7 @@ export async function uninstallEntry(
   const sourcePath = entry.sourcePath
   const hasSource = isExternalSource(entry) && sourceFileExists(sourcePath)
   const deleteSource = Boolean(options?.deleteSource && hasSource)
-  await removeInstalledCopy(entry)
+  await removeInstalledCopy(entry, catalog.entries)
   removeAdobeCopy(host.paths, entry)
   entry.installations = []
   entry.destinationId = undefined

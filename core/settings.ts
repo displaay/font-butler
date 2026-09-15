@@ -58,6 +58,34 @@ function readRetailSync(value: unknown): RetailSyncSettings {
   }
 }
 
+const MIN_REVISION_BUDGET_BYTES = 1
+const MIN_ACTIVITY_RETENTION_DAYS = 1
+const MIN_ACTIVITY_MAX_OPERATIONS = 1
+
+function clampNumeric(value: unknown, floor: number, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return fallback
+  return Math.max(floor, Math.floor(value))
+}
+
+function clampNumericSettings(settings: AppSettings): AppSettings {
+  settings.revisionBudgetBytes = clampNumeric(
+    settings.revisionBudgetBytes,
+    MIN_REVISION_BUDGET_BYTES,
+    DEFAULT_REVISION_BUDGET_BYTES,
+  )
+  settings.activityRetentionDays = clampNumeric(
+    settings.activityRetentionDays,
+    MIN_ACTIVITY_RETENTION_DAYS,
+    DEFAULT_ACTIVITY_RETENTION_DAYS,
+  )
+  settings.activityMaxOperations = clampNumeric(
+    settings.activityMaxOperations,
+    MIN_ACTIVITY_MAX_OPERATIONS,
+    DEFAULT_ACTIVITY_MAX_OPERATIONS,
+  )
+  return settings
+}
+
 const emptySettings = (): AppSettings => ({
   version: 1,
   watchFolders: [],
@@ -200,18 +228,21 @@ export function loadSettings(paths: AppPaths): AppSettings {
           : defaults.nativeNotifications,
       onboardingCompleted:
         typeof parsed.onboardingCompleted === 'boolean' ? parsed.onboardingCompleted : true,
-      revisionBudgetBytes:
-        typeof parsed.revisionBudgetBytes === 'number'
-          ? parsed.revisionBudgetBytes
-          : defaults.revisionBudgetBytes,
-      activityRetentionDays:
-        typeof parsed.activityRetentionDays === 'number'
-          ? parsed.activityRetentionDays
-          : defaults.activityRetentionDays,
-      activityMaxOperations:
-        typeof parsed.activityMaxOperations === 'number'
-          ? parsed.activityMaxOperations
-          : defaults.activityMaxOperations,
+      revisionBudgetBytes: clampNumeric(
+        parsed.revisionBudgetBytes,
+        MIN_REVISION_BUDGET_BYTES,
+        defaults.revisionBudgetBytes,
+      ),
+      activityRetentionDays: clampNumeric(
+        parsed.activityRetentionDays,
+        MIN_ACTIVITY_RETENTION_DAYS,
+        defaults.activityRetentionDays,
+      ),
+      activityMaxOperations: clampNumeric(
+        parsed.activityMaxOperations,
+        MIN_ACTIVITY_MAX_OPERATIONS,
+        defaults.activityMaxOperations,
+      ),
       specimen: readSpecimen(parsed.specimen),
       latinPreview: parseLatinPreview(parsed.latinPreview),
       defaultDestination: parseDefaultDestination(parsed.defaultDestination),
@@ -226,6 +257,7 @@ export function loadSettings(paths: AppPaths): AppSettings {
 
 export function saveSettings(paths: AppPaths, settings: AppSettings): void {
   fs.mkdirSync(paths.dataRoot, { recursive: true })
+  clampNumericSettings(settings)
   const tmp = `${paths.settingsPath}.tmp`
   fs.writeFileSync(tmp, JSON.stringify(syncWatchFolderPaths({ ...settings }), null, 2))
   fs.renameSync(tmp, paths.settingsPath)

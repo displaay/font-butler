@@ -6,6 +6,11 @@ import { test } from 'node:test'
 import { loadSettings, readWatchFolders, saveSettings } from './settings.ts'
 import type { AppPaths } from './paths.ts'
 import type { AppSettings } from './types.ts'
+import {
+  DEFAULT_ACTIVITY_MAX_OPERATIONS,
+  DEFAULT_ACTIVITY_RETENTION_DAYS,
+  DEFAULT_REVISION_BUDGET_BYTES,
+} from './folders.ts'
 
 function tempPaths(): AppPaths {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-settings-'))
@@ -660,6 +665,91 @@ test('loadSettings normalizes latinPreview custom text', () => {
       preset: 'custom',
       custom: 'Hello wo',
     })
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings replaces negative numerics with defaults and floors zeros', () => {
+  const paths = tempPaths()
+  try {
+    fs.mkdirSync(paths.dataRoot, { recursive: true })
+    fs.writeFileSync(
+      paths.settingsPath,
+      JSON.stringify({
+        version: 1,
+        revisionBudgetBytes: -1,
+        activityRetentionDays: -5,
+        activityMaxOperations: 0,
+      }),
+    )
+    const settings = loadSettings(paths)
+    assert.equal(settings.revisionBudgetBytes, DEFAULT_REVISION_BUDGET_BYTES)
+    assert.equal(settings.activityRetentionDays, DEFAULT_ACTIVITY_RETENTION_DAYS)
+    assert.equal(settings.activityMaxOperations, 1)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings replaces non-finite numerics with defaults', () => {
+  const paths = tempPaths()
+  try {
+    fs.mkdirSync(paths.dataRoot, { recursive: true })
+    fs.writeFileSync(
+      paths.settingsPath,
+      `{
+        "version": 1,
+        "revisionBudgetBytes": null,
+        "activityRetentionDays": "nope",
+        "activityMaxOperations": true
+      }`,
+    )
+    const settings = loadSettings(paths)
+    assert.equal(settings.revisionBudgetBytes, DEFAULT_REVISION_BUDGET_BYTES)
+    assert.equal(settings.activityRetentionDays, DEFAULT_ACTIVITY_RETENTION_DAYS)
+    assert.equal(settings.activityMaxOperations, DEFAULT_ACTIVITY_MAX_OPERATIONS)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('saveSettings clamps NaN, Infinity, and negative numerics before write', () => {
+  const paths = tempPaths()
+  try {
+    const settings = sampleSettings({
+      revisionBudgetBytes: Number.POSITIVE_INFINITY,
+      activityRetentionDays: Number.NaN,
+      activityMaxOperations: -3,
+    })
+    saveSettings(paths, settings)
+    assert.equal(settings.revisionBudgetBytes, DEFAULT_REVISION_BUDGET_BYTES)
+    assert.equal(settings.activityRetentionDays, DEFAULT_ACTIVITY_RETENTION_DAYS)
+    assert.equal(settings.activityMaxOperations, DEFAULT_ACTIVITY_MAX_OPERATIONS)
+    const loaded = loadSettings(paths)
+    assert.equal(loaded.revisionBudgetBytes, DEFAULT_REVISION_BUDGET_BYTES)
+    assert.equal(loaded.activityRetentionDays, DEFAULT_ACTIVITY_RETENTION_DAYS)
+    assert.equal(loaded.activityMaxOperations, DEFAULT_ACTIVITY_MAX_OPERATIONS)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('saveSettings keeps small positive budgets used by revision eviction', () => {
+  const paths = tempPaths()
+  try {
+    saveSettings(
+      paths,
+      sampleSettings({
+        revisionBudgetBytes: 2048,
+        activityRetentionDays: 1,
+        activityMaxOperations: 1,
+      }),
+    )
+    const loaded = loadSettings(paths)
+    assert.equal(loaded.revisionBudgetBytes, 2048)
+    assert.equal(loaded.activityRetentionDays, 1)
+    assert.equal(loaded.activityMaxOperations, 1)
   } finally {
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }

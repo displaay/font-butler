@@ -445,6 +445,7 @@ export function subscribeEvents(onEvent: (event: unknown) => void): () => void {
   const abort = new AbortController()
   void (async () => {
     await ensureToken()
+    let delayMs = 2000
     while (!abort.signal.aborted) {
       try {
         const response = await fetch('/api/events', {
@@ -454,6 +455,7 @@ export function subscribeEvents(onEvent: (event: unknown) => void): () => void {
         if (!response.ok || !response.body) {
           throw new Error('events unavailable')
         }
+        delayMs = 2000
         const reader = response.body.getReader()
         const decoder = new TextDecoder()
         let buffer = ''
@@ -474,7 +476,9 @@ export function subscribeEvents(onEvent: (event: unknown) => void): () => void {
         if (abort.signal.aborted) {
           return
         }
-        await new Promise((resolve) => setTimeout(resolve, 2000))
+        const wait = delayMs + Math.random() * delayMs * 0.25
+        await new Promise((resolve) => setTimeout(resolve, wait))
+        delayMs = Math.min(delayMs * 2, 30_000)
       }
     }
   })()

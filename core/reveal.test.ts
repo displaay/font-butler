@@ -5,7 +5,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 import { moveToTrash, realDesktopShell, revealInFileManager, setDesktopShell } from './reveal.ts'
 
-test('Finder trash failure leaves the file and does not fall back to delete', async () => {
+test('Finder trash failure leaves the file and does not fall back to delete', { skip: process.platform !== 'darwin' }, async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-trash-'))
   const file = path.join(dir, 'Keep.ttf')
   try {
@@ -56,6 +56,27 @@ test('reveal records the requested path through the desktop shell', async () => 
     })
     await revealInFileManager(file)
     assert.deepEqual(revealed, [file])
+  } finally {
+    setDesktopShell(null)
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('non-Mac trash removes the file without osascript', { skip: process.platform === 'darwin' }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-trash-posix-'))
+  const file = path.join(dir, 'Gone.ttf')
+  const ran: string[] = []
+  try {
+    fs.writeFileSync(file, 'font')
+    setDesktopShell(
+      realDesktopShell(async (command) => {
+        ran.push(command)
+        return {}
+      }),
+    )
+    await moveToTrash(file)
+    assert.equal(fs.existsSync(file), false)
+    assert.deepEqual(ran, [])
   } finally {
     setDesktopShell(null)
     fs.rmSync(dir, { recursive: true, force: true })

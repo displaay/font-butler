@@ -160,7 +160,19 @@ test('a credentials-only check validates the worker without writing listings', a
   assert.equal(status.hasToken, true)
   assert.equal(status.pending, 0)
   assert.equal(loadCatalog(paths).entries.length, 0)
+  assert.equal(Object.keys(loadRetailManifest(paths).files).length, 0)
   assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'RecklessVF.otf')), false)
+})
+
+test('a credentials-only check does not fetch the remote manifest', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 't' })
+  const status = await checkRetail(paths, { credentialsOnly: true })
+  assert.equal(status.error, null)
+  assert.equal(status.hasToken, true)
+  assert.equal(status.pending, 0)
+  assert.equal(loadCatalog(paths).entries.length, 0)
+  assert.equal(Object.keys(loadRetailManifest(paths).files).length, 0)
 })
 
 test('a credentials-only check still reports a worker error without writing listings', async () => {
@@ -737,6 +749,63 @@ test('an uninstall during a later retail batch is not overwritten by stale catal
     assert.ok(after)
     assert.equal(after.status, 'uninstalled')
     assert.equal(fs.existsSync(path.join(paths.userFontsDir, files[0]!.basename)), false)
+  })
+})
+
+test('an uninstall during the same retail batch is not overwritten by stale catalog writes', async () => {
+  resetRetailCache()
+  await withService(async (service, paths) => {
+    const size = 4
+    const files = [
+      { basename: 'Face0.otf', size, etag: 'e-0' },
+      { basename: 'Face1.otf', size, etag: 'e-1' },
+    ]
+    const firstRelative = `Reckless/${files[0]!.basename}`
+    const secondKey = `Reckless/rev-1/${files[1]!.basename}`
+    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await checkRetail(paths, { fetchManifest: async () => manifestWithFiles(files) })
+    await syncRetail(paths, {
+      fetchManifest: async () => manifestWithFiles(files),
+      fetchFile: async () => new Uint8Array(size).fill(1),
+    })
+    const listing = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath === firstRelative)
+    assert.ok(listing)
+    assert.equal(listing.status, 'installed')
+
+    const dest = path.join(paths.userFontsDir, files[0]!.basename)
+    const before = Buffer.from(fs.readFileSync(dest))
+    const nextFiles = files.map((file) => ({ ...file, etag: `${file.etag}-next` }))
+    await checkRetail(paths, { fetchManifest: async () => manifestWithFiles(nextFiles) })
+
+    const status = await syncRetail(paths, {
+      fetchManifest: async () => manifestWithFiles(nextFiles),
+      fetchFile: async (options) => {
+        if (options.key === secondKey) {
+          const deadline = Date.now() + 5000
+          while (Date.now() < deadline && fs.readFileSync(dest).equals(before)) {
+            await new Promise((resolve) => setTimeout(resolve, 10))
+          }
+          assert.equal(
+            fs.readFileSync(dest).equals(before),
+            false,
+            'first dest write should finish before the second download proceeds',
+          )
+          const persisted = loadCatalog(paths).entries.find((entry) => entry.id === listing.id)
+          assert.equal(persisted?.status, 'installed')
+          await service.uninstall(listing.id)
+        }
+        return new Uint8Array(size).fill(2)
+      },
+    })
+    assert.equal(status.error, null)
+    const after = loadCatalog(paths).entries.find((entry) => entry.id === listing.id)
+    assert.ok(after)
+    assert.equal(after.status, 'uninstalled')
+    assert.equal(fs.existsSync(dest), false)
+    assert.equal(
+      after.installations?.some((copy) => copy.destinationId === 'macos' && copy.verification === 'file-present'),
+      false,
+    )
   })
 })
 
