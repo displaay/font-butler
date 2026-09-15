@@ -186,29 +186,70 @@ export async function cachedSignedSystemFontUrl(
   )
 }
 
+export type PreviewCssOptions<TCatalog> = {
+  refresh?: boolean
+  mounted?: ReadonlySet<string>
+  /**
+   * Live catalog used to keep already-loaded preview CSS in memory.
+   * Off-screen / unmounted-tab faces stay cached; missing ids are pruned;
+   * fingerprint changes rebuild only the affected faces.
+   */
+  catalog?: readonly TCatalog[]
+}
+
+function catalogAliveById(catalog: readonly CatalogEntry[]): Map<string, CatalogEntry> {
+  const alive = new Map<string, CatalogEntry>()
+  for (const entry of catalog) {
+    if (!entryHasPreviewFile(entry)) continue
+    alive.set(entry.id, entry)
+  }
+  return alive
+}
+
+function shouldRebuildPreviewCss(
+  refresh: boolean,
+  previous: string | undefined,
+  fingerprint: string,
+  mounted: ReadonlySet<string> | undefined,
+  key: string,
+): boolean {
+  return refresh || previous !== fingerprint || Boolean(mounted && !mounted.has(key))
+}
+
 export function catalogEntriesNeedingPreviewCss(
   entries: CatalogEntry[],
   previousFingerprints: ReadonlyMap<string, string>,
-  options: { refresh?: boolean; mounted?: ReadonlySet<string> } = {},
+  options: PreviewCssOptions<CatalogEntry> = {},
 ): { keep: Set<string>; changed: CatalogEntry[]; fingerprints: Map<string, string> } {
   const keep = new Set<string>()
   const fingerprints = new Map<string, string>()
   const changed: CatalogEntry[] = []
   const refresh = Boolean(options.refresh)
   const mounted = options.mounted
+  const seen = new Set<string>()
   for (const entry of entries) {
     if (!entryHasPreviewFile(entry)) continue
+    seen.add(entry.id)
     keep.add(entry.id)
     const fingerprint = catalogPreviewFingerprint(entry)
     fingerprints.set(entry.id, fingerprint)
-    if (
-      !refresh &&
-      previousFingerprints.get(entry.id) === fingerprint &&
-      (!mounted || mounted.has(entry.id))
-    ) {
+    if (!shouldRebuildPreviewCss(refresh, previousFingerprints.get(entry.id), fingerprint, mounted, entry.id)) {
       continue
     }
     changed.push(entry)
+  }
+  if (options.catalog) {
+    const alive = catalogAliveById(options.catalog)
+    for (const [id, previous] of previousFingerprints) {
+      if (seen.has(id)) continue
+      const live = alive.get(id)
+      if (!live) continue
+      const fingerprint = catalogPreviewFingerprint(live)
+      keep.add(id)
+      fingerprints.set(id, fingerprint)
+      if (!shouldRebuildPreviewCss(refresh, previous, fingerprint, mounted, id)) continue
+      changed.push(live)
+    }
   }
   return { keep, changed, fingerprints }
 }
@@ -218,34 +259,50 @@ export type SystemPathPreviewGroup<T extends SystemPreviewFace = SystemPreviewFa
   faces: T[]
 }
 
-export function systemFacesNeedingPreviewCss<T extends SystemPreviewFace>(
-  faces: T[],
-  previousFingerprints: ReadonlyMap<string, string>,
-  options: { refresh?: boolean; mounted?: ReadonlySet<string> } = {},
-): { keep: Set<string>; changed: Array<SystemPathPreviewGroup<T>>; fingerprints: Map<string, string> } {
+function groupSystemPreviewFaces<T extends SystemPreviewFace>(faces: readonly T[]): Map<string, T[]> {
   const groups = new Map<string, T[]>()
   for (const face of faces) {
     const group = groups.get(face.path)
     if (group) group.push(face)
     else groups.set(face.path, [face])
   }
+  return groups
+}
+
+export function systemFacesNeedingPreviewCss<T extends SystemPreviewFace>(
+  faces: T[],
+  previousFingerprints: ReadonlyMap<string, string>,
+  options: PreviewCssOptions<T> = {},
+): { keep: Set<string>; changed: Array<SystemPathPreviewGroup<T>>; fingerprints: Map<string, string> } {
+  const groups = groupSystemPreviewFaces(faces)
   const keep = new Set<string>()
   const fingerprints = new Map<string, string>()
   const changed: Array<SystemPathPreviewGroup<T>> = []
   const refresh = Boolean(options.refresh)
   const mounted = options.mounted
+  const seen = new Set<string>()
   for (const [filePath, group] of groups) {
+    seen.add(filePath)
     keep.add(filePath)
     const fingerprint = systemPathPreviewFingerprint(group)
     fingerprints.set(filePath, fingerprint)
-    if (
-      !refresh &&
-      previousFingerprints.get(filePath) === fingerprint &&
-      (!mounted || mounted.has(filePath))
-    ) {
+    if (!shouldRebuildPreviewCss(refresh, previousFingerprints.get(filePath), fingerprint, mounted, filePath)) {
       continue
     }
     changed.push({ path: filePath, faces: group })
+  }
+  if (options.catalog) {
+    const alive = groupSystemPreviewFaces(options.catalog)
+    for (const [filePath, previous] of previousFingerprints) {
+      if (seen.has(filePath)) continue
+      const live = alive.get(filePath)
+      if (!live) continue
+      const fingerprint = systemPathPreviewFingerprint(live)
+      keep.add(filePath)
+      fingerprints.set(filePath, fingerprint)
+      if (!shouldRebuildPreviewCss(refresh, previous, fingerprint, mounted, filePath)) continue
+      changed.push({ path: filePath, faces: live })
+    }
   }
   return { keep, changed, fingerprints }
 }

@@ -310,6 +310,126 @@ test('catalogEntriesNeedingPreviewCss skips listings with no file to load', () =
   assert.equal(needed.fingerprints.has('path-only'), false)
 })
 
+test('retained catalog CSS stays cached when the Fonts viewport unmounts', () => {
+  const catalog = Array.from({ length: 12 }, (_, index) => entry({ id: `keep-${index}` }))
+  const windowed = catalog.slice(0, 4)
+  const first = catalogEntriesNeedingPreviewCss(windowed, new Map(), { catalog })
+  assert.deepEqual(first.changed.map((item) => item.id), ['keep-0', 'keep-1', 'keep-2', 'keep-3'])
+  assert.equal(first.keep.size, 4)
+
+  const leftTab = catalogEntriesNeedingPreviewCss([], first.fingerprints, {
+    mounted: first.keep,
+    catalog,
+  })
+  assert.deepEqual(leftTab.changed, [])
+  assert.deepEqual([...leftTab.keep].sort(), [...first.keep].sort())
+  assert.equal(leftTab.fingerprints.get('keep-0'), first.fingerprints.get('keep-0'))
+
+  const back = catalogEntriesNeedingPreviewCss(windowed, leftTab.fingerprints, {
+    mounted: leftTab.keep,
+    catalog,
+  })
+  assert.deepEqual(back.changed, [])
+  assert.equal(back.keep.size, 4)
+})
+
+test('retained catalog CSS still only loads the viewport on first paint', () => {
+  const catalog = Array.from({ length: 80 }, (_, index) => entry({ id: `bulk-${index}` }))
+  const windowed = catalog.slice(12, 40)
+  const needed = catalogEntriesNeedingPreviewCss(windowed, new Map(), { catalog })
+  assert.equal(needed.keep.size, 28)
+  assert.equal(needed.changed.length, 28)
+  assert.equal(needed.keep.has('bulk-0'), false)
+  assert.equal(needed.fingerprints.has('bulk-0'), false)
+})
+
+test('install or uninstall of a cached off-screen font rebuilds only that preview', () => {
+  const kept = entry({ id: 'kept' })
+  const sibling = entry({
+    id: 'removed',
+    status: 'installed',
+    installedPath: '/tmp/installed/Removed.ttf',
+  })
+  const catalog = [kept, sibling]
+  const first = catalogEntriesNeedingPreviewCss([kept, sibling], new Map(), { catalog })
+  const leftTab = catalogEntriesNeedingPreviewCss([], first.fingerprints, {
+    mounted: first.keep,
+    catalog,
+  })
+  assert.deepEqual(leftTab.changed, [])
+
+  const after = entry({
+    id: 'removed',
+    status: 'uninstalled',
+    installedPath: undefined,
+    disabledPath: undefined,
+    installedFingerprint: 'b'.repeat(64),
+    sourceFingerprint: 'a'.repeat(64),
+    updatedAt: 9,
+  })
+  const nextCatalog = [kept, after]
+  const updated = catalogEntriesNeedingPreviewCss([], leftTab.fingerprints, {
+    mounted: leftTab.keep,
+    catalog: nextCatalog,
+  })
+  assert.deepEqual(updated.changed.map((item) => item.id), ['removed'])
+  assert.equal(updated.keep.has('kept'), true)
+  assert.equal(updated.keep.has('removed'), true)
+  assert.notEqual(updated.fingerprints.get('removed'), first.fingerprints.get('removed'))
+  assert.equal(updated.fingerprints.get('kept'), first.fingerprints.get('kept'))
+})
+
+test('deleting a cached font drops its retained preview CSS', () => {
+  const kept = entry({ id: 'kept' })
+  const removed = entry({ id: 'removed' })
+  const first = catalogEntriesNeedingPreviewCss([kept, removed], new Map(), { catalog: [kept, removed] })
+  const gone = catalogEntriesNeedingPreviewCss([], first.fingerprints, {
+    mounted: first.keep,
+    catalog: [kept],
+  })
+  assert.deepEqual([...gone.keep], ['kept'])
+  assert.deepEqual(gone.changed, [])
+  assert.equal(gone.fingerprints.has('removed'), false)
+})
+
+test('sliding the window with a live catalog keeps already-loaded CSS', () => {
+  const catalog = Array.from({ length: 30 }, (_, index) => entry({ id: `f${index}` }))
+  const first = catalogEntriesNeedingPreviewCss(catalog.slice(0, 8), new Map(), { catalog })
+  const scrolled = catalogEntriesNeedingPreviewCss(catalog.slice(4, 12), first.fingerprints, {
+    mounted: first.keep,
+    catalog,
+  })
+  assert.deepEqual(
+    scrolled.changed.map((item) => item.id),
+    ['f8', 'f9', 'f10', 'f11'],
+  )
+  assert.equal(scrolled.keep.has('f0'), true)
+  assert.equal(scrolled.keep.has('f3'), true)
+  assert.equal(scrolled.fingerprints.get('f0'), first.fingerprints.get('f0'))
+})
+
+test('system preview CSS stays cached when leaving the System tab', () => {
+  const ttc = '/System/Library/Fonts/Collection.ttc'
+  const other = '/System/Library/Fonts/Other.ttf'
+  const regular = { path: ttc, weight: 400, italic: false, isVariable: false }
+  const bold = { path: ttc, weight: 700, italic: false, isVariable: false }
+  const extra = { path: other, weight: 400, italic: false, isVariable: false }
+  const catalog = [regular, bold, extra]
+  const first = systemFacesNeedingPreviewCss([regular, bold], new Map(), { catalog })
+  assert.deepEqual([...first.keep], [ttc])
+  const leftTab = systemFacesNeedingPreviewCss([], first.fingerprints, {
+    mounted: first.keep,
+    catalog,
+  })
+  assert.deepEqual(leftTab.changed, [])
+  assert.deepEqual([...leftTab.keep], [ttc])
+  const back = systemFacesNeedingPreviewCss([regular, bold], leftTab.fingerprints, {
+    mounted: leftTab.keep,
+    catalog,
+  })
+  assert.deepEqual(back.changed, [])
+})
+
 test('system path fingerprints cover every TTC/OTC face on the shared file', () => {
   const ttc = '/System/Library/Fonts/Collection.ttc'
   const regular = { path: ttc, weight: 400, italic: false, isVariable: false }
