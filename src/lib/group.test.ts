@@ -186,6 +186,10 @@ test('Displaay retail listings cannot be forgotten', () => {
     retailFamiliesToOptOut([retail], { enabled: false, fonts: [{ familyName: 'Reckless', enabled: true }], disabledGlyphsFiles: [] }),
     [],
   )
+  assert.deepEqual(
+    retailFamiliesToOptOut([retail], { enabled: true, fonts: [], disabledGlyphsFiles: [] }),
+    [],
+  )
   assert.deepEqual(retailFamiliesToOptOut([entry('local', 'Reckless', 1)], active), [])
 })
 
@@ -203,7 +207,23 @@ test('groupCatalog prefers an entry with preview bytes over a file-less retail s
   }
   assert.equal(entryHasPreviewFile(stub), false)
   assert.equal(entryHasPreviewFile(installed), true)
-  const groups = groupCatalog([stub, installed])
+  const stale = {
+    ...entry('stale', 'Reckless', 1, 'uninstalled', 'Regular'),
+    sourcePath: '',
+    sourcePresent: false,
+    installedPath: '/Library/Fonts/Reckless-Regular.otf',
+    installations: [
+      {
+        destinationId: 'macos' as const,
+        path: '/Library/Fonts/Reckless-Regular.otf',
+        verification: 'unavailable' as const,
+      },
+    ],
+    retailRelativePath: 'Reckless/Reckless-Regular.otf',
+    retailFamilyName: 'Reckless',
+  }
+  assert.equal(entryHasPreviewFile(stale), false)
+  const groups = groupCatalog([stub, stale, installed])
   assert.equal(groups.length, 1)
   assert.equal(groups[0]?.previewEntryId, 'on')
 })

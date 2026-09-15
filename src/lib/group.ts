@@ -1,5 +1,5 @@
 import { uniqueStyleCount, occupyingStyleCount } from './formats.ts'
-import { entryHasActiveRetailSync, type RetailSyncView } from '../../shared/retail.ts'
+import { entryHasActiveRetailSync, retailEntryHasLocalFile, type RetailSyncView } from '../../shared/retail.ts'
 import type {
   CatalogEntry,
   FamilyGroup,
@@ -307,11 +307,9 @@ export function hasManagedInstall(entry: CatalogEntry): boolean {
   )
 }
 
-/** Bytes the preview FontFace can actually load: managed install/parked, or a present source. */
+/** Bytes the preview FontFace can actually load: verified install/parked, or a present source. */
 export function entryHasPreviewFile(entry: CatalogEntry): boolean {
-  if (hasManagedInstall(entry)) return true
-  if (!entry.sourcePath) return false
-  return entry.sourcePresent !== false
+  return retailEntryHasLocalFile(entry)
 }
 
 function isSelfSourced(entry: CatalogEntry): boolean {

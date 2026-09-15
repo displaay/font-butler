@@ -70,6 +70,10 @@ test('active retail sync is false when sync is off or the family is disabled', (
     ),
     false,
   )
+  assert.equal(
+    entryHasActiveRetailSync(stub, { enabled: true, fonts: [], disabledGlyphsFiles: [] }),
+    false,
+  )
 })
 
 test('file-less retail stubs hide when sync is off; installed and local entries stay visible', () => {
@@ -83,6 +87,39 @@ test('file-less retail stubs hide when sync is off; installed and local entries 
     true,
   )
   assert.equal(retailLibraryEntryVisible(stub, fonts, true), true)
+  const stale = {
+    ...stub,
+    installedPath: '/Library/Fonts/Reckless-Regular.otf',
+    installations: [
+      {
+        path: '/Library/Fonts/Reckless-Regular.otf',
+        verification: 'unavailable' as const,
+      },
+    ],
+  }
+  assert.equal(retailLibraryEntryVisible(stale, fonts, false), false)
+  const parkedUnavailable = {
+    ...stub,
+    disabledPath: '/Library/Fonts/.Font Buttler Parked/Reckless-Regular.otf',
+    installations: [
+      {
+        path: '/Library/Fonts/Reckless-Regular.otf',
+        parkedPath: '/Library/Fonts/.Font Buttler Parked/Reckless-Regular.otf',
+        verification: 'unavailable' as const,
+      },
+    ],
+  }
+  assert.equal(retailLibraryEntryVisible(parkedUnavailable, fonts, false), true)
+  const adobeOnly = {
+    ...stub,
+    installations: [
+      {
+        path: '/Library/Application Support/Adobe/Fonts/Reckless-Regular.otf',
+        verification: 'file-present' as const,
+      },
+    ],
+  }
+  assert.equal(retailLibraryEntryVisible(adobeOnly, fonts, false), true)
 })
 
 test('when sync is on, unselected retail formats stay hidden', () => {

@@ -255,10 +255,21 @@ test('catalogEntriesNeedingPreviewCss skips listings with no file to load', () =
     retailRelativePath: 'Reckless/Reckless-Regular.otf',
     status: 'uninstalled',
   })
-  const needed = catalogEntriesNeedingPreviewCss([installed, stub], new Map())
+  const stale = entry({
+    id: 'stale',
+    sourcePath: '',
+    sourcePresent: false,
+    installedPath: '/tmp/installed/Gone.ttf',
+    disabledPath: undefined,
+    installations: [{ destinationId: 'macos', path: '/tmp/installed/Gone.ttf', verification: 'unavailable' }],
+    retailRelativePath: 'Reckless/Reckless-Bold.otf',
+    status: 'uninstalled',
+  })
+  const needed = catalogEntriesNeedingPreviewCss([installed, stub, stale], new Map())
   assert.deepEqual([...needed.keep], ['on'])
   assert.deepEqual(needed.changed.map((item) => item.id), ['on'])
   assert.equal(needed.fingerprints.has('stub'), false)
+  assert.equal(needed.fingerprints.has('stale'), false)
 })
 
 test('system path fingerprints cover every TTC/OTC face on the shared file', () => {

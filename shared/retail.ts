@@ -169,9 +169,14 @@ export type RetailLibraryEntry = {
   faces?: Array<{ familyName?: string }>
   installedPath?: string | null
   disabledPath?: string | null
-  installations?: Array<{ path?: string; parkedPath?: string }>
+  installations?: Array<{
+    path?: string
+    parkedPath?: string
+    verification?: 'file-present' | 'unavailable'
+  }>
   sourcePath?: string | null
   sourcePresent?: boolean
+  sourceAvailability?: 'none' | 'present' | 'missing' | 'offline' | 'unreadable'
 }
 
 /**
@@ -546,18 +551,37 @@ function retailFamilyNameOf(entry: RetailLibraryEntry): string {
   return (entry.retailFamilyName ?? entry.faces?.[0]?.familyName ?? '').trim()
 }
 
-/** Managed install/parked copy, or a source path that is still present. */
+function copyHasVerifiedBytes(copy: {
+  path?: string
+  parkedPath?: string
+  verification?: 'file-present' | 'unavailable'
+}): boolean {
+  if (copy.parkedPath) return true
+  return copy.verification === 'file-present' && Boolean(copy.path)
+}
+
+/**
+ * Verified managed/parked bytes, or a source path that is still present.
+ * Catalog path fields alone are not enough: `verification: unavailable` matches
+ * `previewUsesInstalledBytes` in core and does not count as a local file.
+ */
 export function retailEntryHasLocalFile(entry: RetailLibraryEntry): boolean {
-  if (entry.installedPath || entry.disabledPath) return true
-  if ((entry.installations ?? []).some((copy) => copy.path || copy.parkedPath)) return true
+  if (entry.disabledPath) return true
+  const copies = entry.installations ?? []
+  if (copies.some(copyHasVerifiedBytes)) return true
+  if (!copies.some((copy) => copy.verification === 'unavailable') && entry.installedPath) {
+    return true
+  }
   const source = entry.sourcePath?.trim()
   if (!source) return false
-  return entry.sourcePresent !== false
+  if (entry.sourcePresent === false || entry.sourceAvailability === 'missing') return false
+  return true
 }
 
 /**
  * Badge / synced mark only when collection sync is on and this family is still
- * in the sync set (`fonts[].enabled`, falling back to `disabledGlyphsFiles`).
+ * in the sync set (`fonts[].enabled`). An unlisted family is inactive, including
+ * when `fonts` is empty after a successful empty check.
  */
 export function entryHasActiveRetailSync(
   entry: RetailLibraryEntry,
@@ -568,10 +592,7 @@ export function entryHasActiveRetailSync(
   const familyName = retailFamilyNameOf(entry)
   if (!familyName) return false
   const font = retail.fonts.find((item) => item.familyName === familyName)
-  if (font) return font.enabled
-  const disabled = retail.disabledGlyphsFiles ?? []
-  if (disabled.includes(familyName)) return false
-  return retail.fonts.length === 0
+  return Boolean(font?.enabled)
 }
 
 export function retailLibraryEntryVisible(
