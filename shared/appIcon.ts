@@ -5,9 +5,9 @@ export type AppIconStyle = (typeof APP_ICON_STYLES)[number]
 export const DEFAULT_APP_ICON_STYLE: AppIconStyle = 'classic'
 
 export const APP_ICON_OPTIONS: { id: AppIconStyle; label: string }[] = [
-  { id: 'classic', label: 'Classic' },
-  { id: 'bright', label: 'Bright' },
-  { id: 'mono', label: 'Black & grey' },
+  { id: 'classic', label: 'Butt' },
+  { id: 'bright', label: 'Suit' },
+  { id: 'mono', label: 'Dark' },
 ]
 
 export function isAppIconStyle(value: unknown): value is AppIconStyle {

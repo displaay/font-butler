@@ -23,9 +23,9 @@ test('app icon options and preview paths cover all packages', () => {
     APP_ICON_OPTIONS.map((option) => option.id),
     ['classic', 'bright', 'mono'],
   )
-  assert.equal(APP_ICON_OPTIONS[0]?.label, 'Classic')
-  assert.equal(APP_ICON_OPTIONS[1]?.label, 'Bright')
-  assert.equal(APP_ICON_OPTIONS[2]?.label, 'Black & grey')
+  assert.equal(APP_ICON_OPTIONS[0]?.label, 'Butt')
+  assert.equal(APP_ICON_OPTIONS[1]?.label, 'Suit')
+  assert.equal(APP_ICON_OPTIONS[2]?.label, 'Dark')
   assert.equal(appIconPreviewSrc('classic'), '/app-icons/classic.png')
   assert.equal(appIconPreviewSrc('bright'), '/app-icons/bright.png')
   assert.equal(appIconPreviewSrc('mono'), '/app-icons/mono.png')
