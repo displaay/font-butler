@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { test } from 'node:test'
-import { isHiddenSystemFamily, scanSystemFonts } from './system.ts'
+import { ensureSystemFontScan, isHiddenSystemFamily, scanSystemFonts } from './system.ts'
 import { tempPaths, writeTestCollection, writeTestFont } from './test-util.ts'
 
 test('isHiddenSystemFamily matches Apple’s period-prefixed UI families', () => {
@@ -36,6 +36,17 @@ test('scanSystemFonts skips hidden font files', () => {
     writeTestFont(path.join(paths.systemFontsDir, 'Public.ttf'), 'PublicFace', 'Public-Regular')
     const faces = scanSystemFonts(paths)
     assert.equal(faces.some((face) => face.familyName === 'HiddenFace'), false)
+    assert.equal(faces.some((face) => face.familyName === 'PublicFace'), true)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('ensureSystemFontScan finishes remaining uncached faces', async () => {
+  const paths = tempPaths()
+  try {
+    writeTestFont(path.join(paths.systemFontsDir, 'Public.ttf'), 'PublicFace', 'Public-Regular')
+    const faces = await ensureSystemFontScan(paths)
     assert.equal(faces.some((face) => face.familyName === 'PublicFace'), true)
   } finally {
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })

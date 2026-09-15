@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { faceIdentityKey, findByInstalledPath, findBySourcePath } from './catalog.ts'
+import { isFullyUnderAnyRoot } from './containment.ts'
 import { occupyingSiblingsForIncoming, isBoundSourcePath, findAllByFaceIdentity } from './identity.ts'
 import { tryFingerprintFile } from './fingerprint.ts'
 import { instancesOverlap, isWebFontFormat, normalizeFormat } from './formats.ts'
@@ -333,8 +334,19 @@ export async function buildImportPlan(
   }
 }
 
+function djb2(text: string, hash = 5381): number {
+  for (let i = 0; i < text.length; i++) {
+    hash = ((hash << 5) + hash + text.charCodeAt(i)) | 0
+  }
+  return hash
+}
+
 export function catalogRevision(catalog: CatalogFile): number {
-  return catalog.entries.reduce((sum, entry) => sum + (entry.updatedAt || 0), catalog.entries.length)
+  let hash = 5381
+  for (const entry of catalog.entries) {
+    hash = djb2(`${entry.id}:${entry.updatedAt || 0}`, hash)
+  }
+  return hash >>> 0
 }
 
 export function planNeedsReview(plan: ImportPlan): boolean {
@@ -360,8 +372,13 @@ export function savePlan(paths: AppPaths, plan: ImportPlan): ImportPlan {
   return plan
 }
 
+const PLAN_ID_RE = /^[0-9a-f-]{1,64}$/i
+
 export function loadPlan(paths: AppPaths, id: string): ImportPlan | undefined {
-  const file = path.join(plansDir(paths), `${id}.json`)
+  if (!PLAN_ID_RE.test(id)) return undefined
+  const dir = path.resolve(plansDir(paths))
+  const file = path.resolve(dir, `${id}.json`)
+  if (!isFullyUnderAnyRoot(file, [dir])) return undefined
   if (!fs.existsSync(file)) return undefined
   try {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as ImportPlan

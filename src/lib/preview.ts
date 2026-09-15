@@ -1,5 +1,5 @@
 import { signFontAccess, withFontAccessQuery } from './font-access'
-import { hasManagedInstall } from './group'
+import { entryHasPreviewFile, hasManagedInstall } from './group'
 import type { CatalogEntry, SystemFace } from './types'
 
 export type PreviewWhich = 'source' | 'installed' | 'revision'
@@ -110,7 +110,8 @@ function catalogEntryPreviewUrls(entry: CatalogEntry): string[] {
 }
 
 export function catalogPreviewFingerprint(entry: CatalogEntry): string {
-  return `${entry.id}\t${faceDescriptorKey(entry.faces)}\t${catalogEntryPreviewUrls(entry).join(' ')}`
+  const live = entryHasPreviewFile(entry) ? 'file' : 'none'
+  return `${entry.id}\t${faceDescriptorKey(entry.faces)}\t${catalogEntryPreviewUrls(entry).join(' ')}\t${live}`
 }
 
 export type SystemPreviewFace = Pick<SystemFace, 'path' | 'weight' | 'italic' | 'isVariable'>
@@ -196,6 +197,7 @@ export function catalogEntriesNeedingPreviewCss(
   const refresh = Boolean(options.refresh)
   const mounted = options.mounted
   for (const entry of entries) {
+    if (!entryHasPreviewFile(entry)) continue
     keep.add(entry.id)
     const fingerprint = catalogPreviewFingerprint(entry)
     fingerprints.set(entry.id, fingerprint)

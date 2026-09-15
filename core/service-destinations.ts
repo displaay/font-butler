@@ -138,12 +138,30 @@ export function placeAdobeCopy(
 export function removeAdobeCopy(paths: AppPaths, entry: CatalogEntry): void {
   const existing = copyAt(entry, 'adobe-shared')
   if (!existing) return
-  try {
-    removeManagedCopy(paths, 'adobe-shared', existing.path)
-  } catch (error) {
-    // A missing destination is already clean. Preserve metadata when removal failed for a
-    // real reason so callers can report the failure and retry instead of silently forgetting it.
-    if (fs.existsSync(existing.path)) throw error
+  const parked = existing.parkedPath
+  const parkedHoldsBytes = Boolean(parked && fs.existsSync(parked))
+  if (!parkedHoldsBytes) {
+    try {
+      removeManagedCopy(paths, 'adobe-shared', existing.path)
+    } catch (error) {
+      // A missing destination is already clean. Preserve metadata when removal failed for a
+      // real reason so callers can report the failure and retry instead of silently forgetting it.
+      if (existing.path && fs.existsSync(existing.path)) throw error
+    }
+  }
+  if (parked && fs.existsSync(parked)) {
+    const ownedParked =
+      isUnderAnyRoot(parked, [paths.disabledDir]) || isUnderAnyRoot(parked, [paths.adobeFontsDir])
+    if (ownedParked) {
+      try {
+        fs.rmSync(parked, { force: true })
+      } catch (error) {
+        if (fs.existsSync(parked)) throw error
+      }
+      if (fs.existsSync(parked)) {
+        throw new Error('Could not remove the parked Adobe copy.')
+      }
+    }
   }
   dropCopy(entry, 'adobe-shared')
 }

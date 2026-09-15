@@ -367,7 +367,7 @@ async function uninstallUnselectedRetailFormats(paths: AppPaths, config: RetailS
       if (installed || entry.disabledPath) {
         const livePath = entry.installedPath
         const parkedPath = entry.disabledPath
-        await removeInstalledCopy(entry)
+        await removeInstalledCopy(entry, catalog.entries)
         if (parkedPath && fs.existsSync(parkedPath)) {
           fs.rmSync(parkedPath, { force: true })
         }
@@ -590,6 +590,20 @@ async function readManifest(
   return { manifest, token, workerBaseUrl: config.workerBaseUrl }
 }
 
+/** Token + optional injected probe. Does not fetch or parse the full remote manifest. */
+async function validateRetailCredentials(
+  paths: AppPaths,
+  options: { refresh?: boolean; fetchManifest?: typeof fetchRetailManifest } = {},
+): Promise<void> {
+  const { config, token } = requireReady(paths)
+  if (!options.fetchManifest) return
+  await options.fetchManifest({
+    workerBaseUrl: config.workerBaseUrl,
+    token,
+    refresh: options.refresh,
+  })
+}
+
 function measureDrift(paths: AppPaths, manifest: RetailManifest): RetailDriftItem[] {
   return diffRetailManifest(manifest, loadRetailManifest(paths), statRetailInstall(paths))
 }
@@ -642,6 +656,11 @@ async function catalogRetailWrites(
       await yieldEventLoop()
       const item = written[index]!
       let entry = findRetailEntry(catalog, item.relativePath)
+      // writeOne drops the catalog lock after the dest lands; an uninstall in the rest of
+      // this batch can delete that file (and forget the listing) before we persist. Skip
+      // resurrecting status=installed / file-present when the dest or listing is gone.
+      if (!fs.existsSync(item.dest)) continue
+      if (!item.parked && !entry) continue
       const pathOccupant = catalog.entries.find((candidate) => {
         if (candidate.id === entry?.id || candidate.retailRelativePath) return false
         const pathsToCheck = [candidate.installedPath, candidate.disabledPath, ...(candidate.installations ?? []).flatMap((copy) => [copy.path, copy.parkedPath])]
@@ -755,8 +774,8 @@ export async function checkRetail(
   } = {},
 ): Promise<RetailSyncStatus> {
   try {
-    const { manifest } = await readManifest(paths, options)
     if (options.credentialsOnly) {
+      await validateRetailCredentials(paths, options)
       cache.checkedAt = new Date().toISOString()
       cache.drift = []
       cache.skipped = []
@@ -765,6 +784,7 @@ export async function checkRetail(
       cache.collisions = []
       return emitRetail(paths)
     }
+    const { manifest } = await readManifest(paths, options)
     ensureRetailListings(paths, manifest)
     await reconcileRetailCatalog(paths, loadRetailManifest(paths))
     const drift = measureDrift(paths, manifest)

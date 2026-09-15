@@ -6,6 +6,7 @@ import {
   catalogEntriesForPreviewCss,
   libraryCardRects,
   libraryGridColumns,
+  libraryGridRowHeights,
   libraryItemOffsets,
   libraryItemRect,
   libraryItemScrollTop,
@@ -62,6 +63,11 @@ test('libraryGridColumns fills auto-fit tracks from the min card width', () => {
   assert.equal(libraryGridColumns(400, 180, 12), 2)
   assert.equal(libraryGridColumns(900, 180, 12), 4)
   assert.equal(libraryGridColumns(0, 180, 12), 1)
+})
+
+test('libraryGridRowHeights uses the tallest card on each row', () => {
+  assert.deepEqual(libraryGridRowHeights([100, 180, 90, 120], 2, 80), [180, 120])
+  assert.deepEqual(libraryGridRowHeights([50], 3, 80), [80])
 })
 
 test('libraryWindowRange only covers visible rows plus overscan, not the full catalog', () => {
@@ -312,8 +318,10 @@ test('expanded list row stays mounted while scrolling through its instance rows'
   assert.equal(libraryItemScrollTop(4, 1, estimated, gap, tops), tops[4])
 })
 
-test('grid windowing stays uniform even when a list-style height map is present', () => {
-  const heights = Array.from({ length: 40 }, (_, index) => (index === 2 ? 800 : 180))
+test('grid windowing uses the tallest card in each row', () => {
+  const estimated = 180
+  const heights = Array.from({ length: 40 }, () => estimated)
+  heights[2] = 320
   const withHeights = libraryWindowMetrics({
     count: 40,
     layout: 'grid',
@@ -321,7 +329,7 @@ test('grid windowing stays uniform even when a list-style height map is present'
     minCardWidth: 180,
     previewSize: 4.25,
     rootFontSize: 16,
-    scrollTop: 800,
+    scrollTop: 0,
     viewportHeight: 640,
     overscanRows: 2,
     itemHeights: heights,
@@ -333,15 +341,29 @@ test('grid windowing stays uniform even when a list-style height map is present'
     minCardWidth: 180,
     previewSize: 4.25,
     rootFontSize: 16,
-    scrollTop: 800,
+    scrollTop: 0,
     viewportHeight: 640,
     overscanRows: 2,
   })
   assert.equal(withHeights.columns, without.columns)
   assert.ok(withHeights.columns > 1)
-  assert.equal(withHeights.start, without.start)
-  assert.equal(withHeights.end, without.end)
-  assert.equal(withHeights.heights, undefined)
+  assert.equal(withHeights.heights?.[2], 320)
+  for (let col = 0; col < withHeights.columns; col++) {
+    assert.equal(withHeights.heights?.[col], 320)
+    assert.equal(withHeights.tops?.[col], 0)
+  }
+  assert.ok(withHeights.totalHeight > without.totalHeight)
+  const rect = libraryItemRect(withHeights.columns, {
+    columns: withHeights.columns,
+    columnWidth: withHeights.columnWidth,
+    rowHeight: withHeights.rowHeight,
+    gap: withHeights.gap,
+    originLeft: 0,
+    originTop: 0,
+    tops: withHeights.tops,
+    heights: withHeights.heights,
+  })
+  assert.equal(rect.top, 320 + withHeights.gap)
 })
 
 test('applyMeasuredCardHeights keeps a measured expanded row and estimates the rest', () => {

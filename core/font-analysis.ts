@@ -170,9 +170,16 @@ function workerThreadExecArgv(url: URL): string[] {
   return []
 }
 
-function failWorkerJobs(error: Error): void {
+function syncWorkerRef(thread: Worker | null = worker): void {
+  if (!thread) return
+  if (workerJobs.size > 0) thread.ref()
+  else thread.unref()
+}
+
+function failWorkerJobs(error: Error, thread: Worker | null = worker): void {
   const pending = [...workerJobs.values()]
   workerJobs.clear()
+  if (thread) thread.unref()
   for (const job of pending) job.reject(error)
 }
 
@@ -227,7 +234,7 @@ function ensureWorker(): Worker | null {
       const onOnline = () => {
         clearTimeout(timer)
         next.off('error', onError)
-        next.unref()
+        syncWorkerRef(next)
         resolve(true)
       }
       const onError = () => {
@@ -243,6 +250,7 @@ function ensureWorker(): Worker | null {
       if (!job) return
       if (message.stage === 'error') {
         workerJobs.delete(message.id)
+        syncWorkerRef(next)
         job.reject(new FontAnalysisWorkerJobError(message.error))
         return
       }
@@ -262,24 +270,29 @@ function ensureWorker(): Worker | null {
           }
         } catch (error) {
           workerJobs.delete(message.id)
+          syncWorkerRef(next)
           job.reject(error instanceof Error ? error : new Error(String(error)))
         }
         return
       }
       workerJobs.delete(message.id)
+      syncWorkerRef(next)
       job.resolve(analysis)
     })
     next.on('error', (error) => {
       workerFailed = true
       worker = null
-      failWorkerJobs(error instanceof Error ? error : new Error(String(error)))
+      failWorkerJobs(error instanceof Error ? error : new Error(String(error)), next)
     })
     next.on('exit', (code) => {
       if (!worker) return
       worker = null
       if (code !== 0) workerFailed = true
-      if (workerJobs.size === 0) return
-      failWorkerJobs(new Error(`Font analysis worker exited (${code ?? 'unknown'})`))
+      if (workerJobs.size === 0) {
+        next.unref()
+        return
+      }
+      failWorkerJobs(new Error(`Font analysis worker exited (${code ?? 'unknown'})`), next)
     })
     worker = next
     return next
@@ -323,6 +336,7 @@ async function postWorkerJob(
   const online = await workerReady
   if (!online || worker !== thread) {
     workerFailed = true
+    thread.unref()
     throw new Error('Font analysis worker failed to start')
   }
   stats.workerJobs += 1
@@ -336,7 +350,14 @@ async function postWorkerJob(
   }
   return new Promise<FontAnalysis>((resolve, reject) => {
     workerJobs.set(id, { onPartial: options?.onPartial, resolve, reject })
-    thread.postMessage(request)
+    syncWorkerRef(thread)
+    try {
+      thread.postMessage(request)
+    } catch (error) {
+      workerJobs.delete(id)
+      syncWorkerRef(thread)
+      reject(error instanceof Error ? error : new Error(String(error)))
+    }
   })
 }
 
@@ -445,7 +466,7 @@ export async function closeFontAnalysisWorker(): Promise<void> {
   worker = null
   workerReady = Promise.resolve(false)
   workerFailed = process.env.FONT_BUTLER_PARSE_WORKER === '0'
-  failWorkerJobs(new Error('Font analysis worker closed'))
+  failWorkerJobs(new Error('Font analysis worker closed'), current)
   if (!current) return
   current.removeAllListeners()
   await current.terminate()

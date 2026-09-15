@@ -1,4 +1,5 @@
 import { uniqueStyleCount, occupyingStyleCount } from './formats.ts'
+import { entryHasActiveRetailSync, retailListingHasLocalFile, type RetailSyncView } from '../../shared/retail.ts'
 import type {
   CatalogEntry,
   FamilyGroup,
@@ -25,26 +26,24 @@ export function retailFamilyNameOf(entry: CatalogEntry): string {
   return (entry.retailFamilyName || familyNameOf(entry)).trim()
 }
 
-export function hasRetailSyncedSource(group: { entries: CatalogEntry[] }): boolean {
-  return group.entries.some((entry) => Boolean(entry.retailRelativePath))
+export function hasRetailSyncedSource(
+  group: { entries: CatalogEntry[] },
+  retail?: RetailSyncView | null,
+): boolean {
+  return group.entries.some((entry) => entryHasActiveRetailSync(entry, retail))
 }
 
 /** Family names still in Displaay retail sync for these catalog entries. */
 export function retailFamiliesToOptOut(
   entries: CatalogEntry[],
-  fonts: ReadonlyArray<{ familyName: string; enabled: boolean }> = [],
-  disabledFamilyNames: readonly string[] = [],
+  retail?: RetailSyncView | null,
 ): string[] {
-  const enabledByName = new Map(fonts.map((font) => [font.familyName, font.enabled]))
+  if (!retail?.enabled) return []
   const names = new Set<string>()
   for (const entry of entries) {
-    if (!entry.retailRelativePath) continue
+    if (!entryHasActiveRetailSync(entry, retail)) continue
     const name = retailFamilyNameOf(entry)
     if (!name) continue
-    const enabled = enabledByName.has(name)
-      ? Boolean(enabledByName.get(name))
-      : !disabledFamilyNames.includes(name)
-    if (!enabled) continue
     names.add(name)
   }
   return [...names]
@@ -95,14 +94,16 @@ export function groupCatalog(entries: CatalogEntry[]): FamilyGroup[] {
           statusRank[entry.status] < statusRank[best] ? entry.status : best,
         groupEntries[0].status,
       )
+      const previewPool = groupEntries.filter(entryHasPreviewFile)
+      const previewCandidates = previewPool.length > 0 ? previewPool : groupEntries
       const preview =
-        groupEntries.find((entry) =>
+        previewCandidates.find((entry) =>
           entry.faces.some(
             (face) => !face.italic && /regular|roman|book/i.test(face.styleName),
           ),
         ) ??
-        groupEntries.find((entry) => entry.faces.some((face) => !face.italic)) ??
-        groupEntries[0]
+        previewCandidates.find((entry) => entry.faces.some((face) => !face.italic)) ??
+        previewCandidates[0]
       return {
         key: familyName,
         familyName,
@@ -304,6 +305,11 @@ export function hasManagedInstall(entry: CatalogEntry): boolean {
       entry.disabledPath ||
       (entry.installations ?? []).some((copy) => copy.path || copy.parkedPath),
   )
+}
+
+/** Bytes the preview FontFace can actually load: verified install/parked, or a present source. */
+export function entryHasPreviewFile(entry: CatalogEntry): boolean {
+  return retailListingHasLocalFile(entry)
 }
 
 function isSelfSourced(entry: CatalogEntry): boolean {

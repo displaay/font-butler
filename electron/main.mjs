@@ -869,6 +869,7 @@ async function loadRetailStatus() {
 }
 
 async function listenForApiEvents() {
+  let delayMs = 2000
   while (!isQuitting) {
     try {
       const token = await ensureApiToken()
@@ -878,6 +879,7 @@ async function listenForApiEvents() {
       if (!response.ok || !response.body) {
         throw new Error('events unavailable')
       }
+      delayMs = 2000
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
@@ -903,7 +905,9 @@ async function listenForApiEvents() {
       if (isQuitting) {
         return
       }
-      await new Promise((resolve) => setTimeout(resolve, 2000))
+      const wait = delayMs + Math.random() * delayMs * 0.25
+      await new Promise((resolve) => setTimeout(resolve, wait))
+      delayMs = Math.min(delayMs * 2, 30_000)
     }
   }
 }
@@ -1057,7 +1061,11 @@ if (!gotLock) {
       child.on('exit', (code) => {
         if (!settled) {
           const error = new Error(`Font Buttler API worker exited (${code ?? 'unknown'})`)
-          if (code) error.code = code === 1 ? 'EADDRINUSE' : code
+          if (code === 1 && /EADDRINUSE|address already in use/i.test(buffer)) {
+            error.code = 'EADDRINUSE'
+          } else if (code) {
+            error.code = code
+          }
           finish(error)
           return
         }
@@ -1071,7 +1079,9 @@ if (!gotLock) {
         finish(null, { port: Number(match[1]), token: readApiTokenFile() })
       })
       child.stderr?.on('data', (chunk) => {
-        console.error(String(chunk).trimEnd())
+        const text = String(chunk)
+        buffer += text
+        console.error(text.trimEnd())
       })
     })
   }

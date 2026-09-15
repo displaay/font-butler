@@ -124,7 +124,7 @@ export function useLibraryWindow(options: {
       const gridOffsetTop = contentOffsetTop(gridNode, viewportNode)
       const estimatedRowHeight = libraryRowHeightPx(layout, previewSize, rootFontSize, extraLines)
       let itemHeights: number[] | undefined
-      if (layout === 'list' && itemKeys && itemKeys.length === count) {
+      if (itemKeys && itemKeys.length === count) {
         const measured = new Map<string, number>()
         for (const node of Array.from(gridNode.querySelectorAll('[data-family-key]'))) {
           if (!(node instanceof HTMLElement)) continue
@@ -192,14 +192,13 @@ export function useLibraryWindow(options: {
       display: 'grid',
       gap: `${layout === 'grid' ? LIBRARY_GRID_GAP_REM : LIBRARY_LIST_GAP_REM}rem`,
       gridTemplateColumns: columns,
-      gridAutoRows:
-        layout === 'grid' && metrics.rowHeight > 0 ? `${metrics.rowHeight}px` : undefined,
+      gridAutoRows: layout === 'grid' ? 'min-content' : undefined,
       paddingTop: metrics.padTop,
       paddingBottom: metrics.padBottom,
       alignItems: 'start',
       overflowAnchor: 'none',
     }
-  }, [layout, metrics.padBottom, metrics.padTop, metrics.rowHeight, previewSize])
+  }, [layout, metrics.padBottom, metrics.padTop, previewSize])
 
   return { window: metrics, layoutRef, gridStyle }
 }

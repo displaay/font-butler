@@ -99,8 +99,10 @@ export function occupyingSiblingsForIncoming(
   faces: FontFaceInfo[],
   format: string | undefined,
   paths: AppPaths,
+  excludeId?: string,
 ): CatalogEntry[] {
   return catalog.filter((other) => {
+    if (excludeId && other.id === excludeId) return false
     if (!matchesIncomingIdentity(other, faces, format)) return false
     return occupiedDestinations(other, paths).length > 0
   })

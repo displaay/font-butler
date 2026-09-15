@@ -1,3 +1,4 @@
+import { MAX_UPLOAD_BYTES } from './constants.ts'
 import type { RetailManifest } from '../shared/retail.ts'
 
 export const RETAIL_FETCH_TIMEOUT_MS = 15_000
@@ -181,23 +182,29 @@ export async function fetchRetailFile(
     }
     // Refuse an oversized body before reading it, so a misbehaving worker cannot push arbitrary bytes
     // into memory. `expectedSize` comes from the manifest the caller already validated.
-    const declared = Number(response.headers?.get('content-length') ?? '')
-    if (
+    const cap =
       typeof options.expectedSize === 'number' &&
-      Number.isFinite(declared) &&
-      declared > options.expectedSize
-    ) {
+      Number.isFinite(options.expectedSize) &&
+      options.expectedSize > 0
+        ? Math.min(options.expectedSize, MAX_UPLOAD_BYTES)
+        : MAX_UPLOAD_BYTES
+    const declared = Number(response.headers?.get('content-length') ?? '')
+    if (Number.isFinite(declared) && declared > cap) {
       throw new RetailRequestError(
-        `${options.key}: server offered ${declared} bytes, expected ${options.expectedSize}.`,
+        `${options.key}: server offered ${declared} bytes, expected ${cap}.`,
       )
     }
-    return new Uint8Array(
+    const bytes = new Uint8Array(
       await withTimeout(
         response.arrayBuffer(),
         options.timeoutMs ?? RETAIL_DOWNLOAD_TIMEOUT_MS,
         'The Displaay worker',
       ),
     )
+    if (bytes.byteLength > cap) {
+      throw new RetailRequestError(`${options.key}: download exceeded ${cap} bytes.`)
+    }
+    return bytes
   } catch (error) {
     controller.abort()
     throw error instanceof RetailRequestError

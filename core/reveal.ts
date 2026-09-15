@@ -40,13 +40,19 @@ export function realDesktopShell(run: ExecFileFn = execFileAsync): DesktopShell 
       await run('xdg-open', [folder])
     },
     async moveToTrash(filePath) {
-      try {
-        await run('osascript', [
-          '-e',
-          `tell application "Finder" to delete POSIX file ${JSON.stringify(filePath)}`,
-        ])
-      } catch {
-        throw new Error('Finder could not move that file to Trash.')
+      if (isMac()) {
+        try {
+          await run('osascript', [
+            '-e',
+            `tell application "Finder" to delete POSIX file ${JSON.stringify(filePath)}`,
+          ])
+        } catch {
+          throw new Error('Finder could not move that file to Trash.')
+        }
+        return
+      }
+      if (fs.existsSync(filePath)) {
+        fs.rmSync(filePath, { force: true })
       }
     },
   }

@@ -254,7 +254,7 @@ export async function uninstallCollisionEntries(paths: AppPaths, entryIds: reado
     for (const id of entryIds) {
       const entry = findById(catalog, id)
       if (!entry) continue
-      await removeInstalledCopy(entry)
+      await removeInstalledCopy(entry, catalog.entries)
       removeAdobeCopy(paths, entry)
       entry.installations = []
       entry.destinationId = undefined

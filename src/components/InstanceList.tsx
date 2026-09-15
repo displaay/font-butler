@@ -12,6 +12,7 @@ import {
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
 import { hasInstanceMenuActions, instanceMenuPlan } from '@/lib/eligibility'
+import { entryHasPreviewFile } from '@/lib/group'
 import type { InstanceRow } from '@/lib/instances'
 import { pendingPreviewSample } from '@/lib/previewSample'
 import type { CatalogEntry } from '@/lib/types'
@@ -51,6 +52,7 @@ function InstanceRowMenu({
   onFormatSwap,
   onOpen,
   onTurnRetailSyncOff,
+  retailSynced,
 }: {
   entry: CatalogEntry
   family: CatalogEntry[]
@@ -66,9 +68,10 @@ function InstanceRowMenu({
   onFormatSwap?: (entryId: string) => void
   onOpen?: (entryId: string) => void
   onTurnRetailSyncOff?: (entryId: string) => void
+  retailSynced?: boolean
 }) {
   const plan = instanceMenuPlan(entry, family, adobeAvailable)
-  const showTurnSyncOff = Boolean(onTurnRetailSyncOff && entry.retailRelativePath)
+  const showTurnSyncOff = Boolean(onTurnRetailSyncOff && retailSynced)
   if (!hasInstanceMenuActions(plan) && !showTurnSyncOff) return children
   return (
     <ContextMenu
@@ -151,6 +154,7 @@ export function InstanceList({
               weight={row.weight}
               italic={row.italic}
               sample={pendingPreviewSample(row.previewSample)}
+              wait={entry ? entryHasPreviewFile(entry) : true}
             />
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 items-center gap-1.5">
@@ -192,6 +196,7 @@ export function InstanceList({
                 onFormatSwap={instanceActions.onFormatSwap}
                 onOpen={instanceActions.onOpen}
                 onTurnRetailSyncOff={instanceActions.onTurnRetailSyncOff}
+                retailSynced={row.retailSynced}
               >
                 {button}
               </InstanceRowMenu>

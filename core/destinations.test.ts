@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { test } from 'node:test'
+import { mock, test } from 'node:test'
 import {
   adobeInvestigation,
   createAdobeTestingFolder,
@@ -84,11 +84,23 @@ test('F09-D same-face unmanaged files are disclosed and not deleted', () => {
 
 test('F09-E a missing Adobe destination stays unsupported', () => {
   const paths = tempPaths()
-  paths.adobeFontsDir = '/Library/Application Support/Adobe/Fonts'
-  const capability = inspectDestination(paths, 'adobe-shared')
-  assert.equal(capability.supported, false)
-  assert.ok(capability.remedy)
-  assert.equal(capability.remedy?.includes('will not create or chmod'), false)
+  const missing = path.join(paths.dataRoot, 'missing-adobe', 'Fonts')
+  paths.adobeFontsDir = missing
+  const mkdirSync = fs.mkdirSync.bind(fs)
+  const mkdirMock = mock.method(fs, 'mkdirSync', ((dir, options) => {
+    if (path.resolve(String(dir)) === path.resolve(missing)) return dir
+    return mkdirSync(dir, options as never)
+  }) as typeof fs.mkdirSync)
+  try {
+    const capability = inspectDestination(paths, 'adobe-shared')
+    assert.equal(fs.existsSync(missing), false)
+    assert.equal(capability.supported, false)
+    assert.ok(capability.remedy)
+    assert.equal(capability.remedy?.includes('will not create or chmod'), false)
+  } finally {
+    mkdirMock.mock.restore()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
 })
 
 test('createAdobeTestingFolder makes a missing Fonts folder when the parent exists', () => {
