@@ -135,6 +135,45 @@ export function libraryWindowRange(options: {
   }
 }
 
+export function libraryGridRowHeights(
+  itemHeights: number[],
+  columns: number,
+  fallback: number,
+): number[] {
+  const cols = Math.max(1, columns)
+  const estimated = Math.max(0, fallback)
+  const totalRows = Math.ceil(Math.max(0, itemHeights.length) / cols)
+  const rows: number[] = []
+  for (let row = 0; row < totalRows; row++) {
+    let height = estimated
+    for (let col = 0; col < cols; col++) {
+      const index = row * cols + col
+      if (index >= itemHeights.length) break
+      const value = itemHeights[index]
+      if (Number.isFinite(value) && (value as number) > 0) height = Math.max(height, value as number)
+    }
+    rows.push(height)
+  }
+  return rows
+}
+
+function itemLayoutFromRowHeights(
+  rowHeights: number[],
+  rowTops: number[],
+  count: number,
+  columns: number,
+): { heights: number[]; tops: number[] } {
+  const cols = Math.max(1, columns)
+  const heights: number[] = []
+  const tops: number[] = []
+  for (let index = 0; index < count; index++) {
+    const row = Math.floor(index / cols)
+    heights.push(rowHeights[row] ?? 0)
+    tops.push(rowTops[row] ?? 0)
+  }
+  return { heights, tops }
+}
+
 export function libraryItemOffsets(heights: number[], gap: number): { tops: number[]; totalHeight: number } {
   const tops: number[] = []
   let y = 0
@@ -220,24 +259,27 @@ export function libraryWindowMetrics(options: {
   )
   const columnWidth =
     columns <= 1 ? Math.max(0, options.width) : (Math.max(0, options.width) - gap * (columns - 1)) / columns
-  // List view only: expanded InstanceList rows are taller than the collapsed estimate.
-  if (columns === 1 && options.itemHeights && options.itemHeights.length > 0) {
-    const heights = Array.from({ length: options.count }, (_, index) => {
+  if (options.itemHeights && options.itemHeights.length > 0) {
+    const filled = Array.from({ length: options.count }, (_, index) => {
       const value = options.itemHeights![index]
       return Number.isFinite(value) && (value as number) > 0 ? (value as number) : rowHeight
     })
-    const { tops, totalHeight } = libraryItemOffsets(heights, gap)
+    const rowHeights = columns === 1 ? filled : libraryGridRowHeights(filled, columns, rowHeight)
+    const { tops: rowTops, totalHeight } = libraryItemOffsets(rowHeights, gap)
     const overscanPx = (options.overscanRows ?? LIBRARY_OVERSCAN_ROWS) * libraryRowStride(rowHeight, gap)
-    const range = libraryWindowRangeFromHeights({
-      heights,
-      tops,
+    const rowRange = libraryWindowRangeFromHeights({
+      heights: rowHeights,
+      tops: rowTops,
       scrollTop: options.scrollTop,
       viewportHeight: options.viewportHeight,
       overscanPx,
     })
+    const start = Math.min(options.count, rowRange.start * columns)
+    const end = Math.min(options.count, rowRange.end * columns)
+    const { heights, tops } = itemLayoutFromRowHeights(rowHeights, rowTops, options.count, columns)
     const pads = libraryWindowPads({
-      start: range.start,
-      end: range.end,
+      start,
+      end,
       tops,
       heights,
       totalHeight,
@@ -247,11 +289,11 @@ export function libraryWindowMetrics(options: {
       columnWidth,
       rowHeight,
       gap,
-      start: range.start,
-      end: range.end,
-      startRow: range.start,
-      endRow: range.end,
-      totalRows: options.count,
+      start,
+      end,
+      startRow: rowRange.start,
+      endRow: rowRange.end,
+      totalRows: rowHeights.length,
       padTop: pads.padTop,
       padBottom: pads.padBottom,
       totalHeight,
