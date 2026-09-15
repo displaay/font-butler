@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import {
   entryHasActiveRetailSync,
   retailLibraryEntryVisible,
+  retailListingHasLocalFile,
   type RetailSyncFont,
 } from '../../shared/retail.ts'
 
@@ -32,6 +33,12 @@ const installed = {
   ...stub,
   installedPath: '/Library/Fonts/Reckless-Regular.otf',
   sourcePresent: false,
+  installations: [
+    {
+      path: '/Library/Fonts/Reckless-Regular.otf',
+      verification: 'file-present' as const,
+    },
+  ],
 }
 
 const parked = {
@@ -87,6 +94,14 @@ test('file-less retail stubs hide when sync is off; installed and local entries 
     true,
   )
   assert.equal(retailLibraryEntryVisible(stub, fonts, true), true)
+  assert.equal(
+    retailLibraryEntryVisible(
+      { ...stub, installedPath: '/Library/Fonts/Reckless-Regular.otf' },
+      fonts,
+      false,
+    ),
+    false,
+  )
   const stale = {
     ...stub,
     installedPath: '/Library/Fonts/Reckless-Regular.otf',
@@ -97,7 +112,8 @@ test('file-less retail stubs hide when sync is off; installed and local entries 
       },
     ],
   }
-  assert.equal(retailLibraryEntryVisible(stale, fonts, false), false)
+  assert.equal(retailListingHasLocalFile(stale), false)
+  assert.equal(retailListingHasLocalFile({ ...stub, installedPath: '/Library/Fonts/Reckless-Regular.otf' }), false)
   const parkedUnavailable = {
     ...stub,
     disabledPath: '/Library/Fonts/.Font Buttler Parked/Reckless-Regular.otf',
@@ -139,7 +155,20 @@ test('when sync is on, unselected retail formats stay hidden', () => {
   assert.equal(retailLibraryEntryVisible(otf, fonts, true), true)
   assert.equal(retailLibraryEntryVisible(ttf, fonts, true), false)
   assert.equal(
-    retailLibraryEntryVisible({ ...ttf, installedPath: '/Library/Fonts/Azeret-Regular.ttf' }, fonts, false),
+    retailLibraryEntryVisible(
+      {
+        ...ttf,
+        installedPath: '/Library/Fonts/Azeret-Regular.ttf',
+        installations: [
+          {
+            path: '/Library/Fonts/Azeret-Regular.ttf',
+            verification: 'file-present' as const,
+          },
+        ],
+      },
+      fonts,
+      false,
+    ),
     true,
   )
 })

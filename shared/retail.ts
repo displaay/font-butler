@@ -561,17 +561,15 @@ function copyHasVerifiedBytes(copy: {
 }
 
 /**
- * Verified managed/parked bytes, or a source path that is still present.
- * Catalog path fields alone are not enough: `verification: unavailable` matches
- * `previewUsesInstalledBytes` in core and does not count as a local file.
+ * Verified managed/parked bytes, or a source the catalog still marks present.
+ * Live Fonts/Adobe paths count only as `verification: 'file-present'`. A parked
+ * vault is `parkedPath` / `disabledPath`. `installedPath` or `copy.path` alone
+ * is not enough — same spirit as `previewUsesInstalledBytes` in core.
  */
-export function retailEntryHasLocalFile(entry: RetailLibraryEntry): boolean {
+export function retailListingHasLocalFile(entry: RetailLibraryEntry): boolean {
   if (entry.disabledPath) return true
   const copies = entry.installations ?? []
   if (copies.some(copyHasVerifiedBytes)) return true
-  if (!copies.some((copy) => copy.verification === 'unavailable') && entry.installedPath) {
-    return true
-  }
   const source = entry.sourcePath?.trim()
   if (!source) return false
   if (entry.sourcePresent === false || entry.sourceAvailability === 'missing') return false
@@ -602,7 +600,7 @@ export function retailLibraryEntryVisible(
 ): boolean {
   const relative = entry.retailRelativePath
   if (!relative) return true
-  if (!syncEnabled) return retailEntryHasLocalFile(entry)
+  if (!syncEnabled) return retailListingHasLocalFile(entry)
   if (fonts.length === 0) return true
   const familyName = retailFamilyNameOf(entry)
   const font = fonts.find((item) => item.familyName === familyName)

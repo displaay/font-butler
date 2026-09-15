@@ -204,6 +204,13 @@ test('groupCatalog prefers an entry with preview bytes over a file-less retail s
   const installed = {
     ...entry('on', 'Reckless', 2, 'installed', 'Bold'),
     installedPath: '/Library/Fonts/Reckless-Bold.otf',
+    installations: [
+      {
+        destinationId: 'macos' as const,
+        path: '/Library/Fonts/Reckless-Bold.otf',
+        verification: 'file-present' as const,
+      },
+    ],
   }
   assert.equal(entryHasPreviewFile(stub), false)
   assert.equal(entryHasPreviewFile(installed), true)

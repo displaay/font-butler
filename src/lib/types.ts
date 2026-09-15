@@ -422,4 +422,5 @@ export {
   retailDriftSummary,
   retailFileFormat,
   retailLibraryEntryVisible,
+  retailListingHasLocalFile,
 } from '../../shared/retail'
