@@ -566,14 +566,21 @@ function copyHasVerifiedBytes(copy: {
  * vault is `parkedPath` / `disabledPath`. `installedPath` or `copy.path` alone
  * is not enough — same spirit as `previewUsesInstalledBytes` in core.
  */
+function sourceHasLiveBytes(entry: RetailLibraryEntry): boolean {
+  const source = entry.sourcePath?.trim()
+  if (!source) return false
+  if (entry.sourcePresent === false) return false
+  // Defined availability wins over a leftover `sourcePresent: true`. Undefined
+  // keeps the legacy "path is present" case used by older catalog rows.
+  if (entry.sourceAvailability && entry.sourceAvailability !== 'present') return false
+  return true
+}
+
 export function retailListingHasLocalFile(entry: RetailLibraryEntry): boolean {
   if (entry.disabledPath) return true
   const copies = entry.installations ?? []
   if (copies.some(copyHasVerifiedBytes)) return true
-  const source = entry.sourcePath?.trim()
-  if (!source) return false
-  if (entry.sourcePresent === false || entry.sourceAvailability === 'missing') return false
-  return true
+  return sourceHasLiveBytes(entry)
 }
 
 /**

@@ -136,6 +136,28 @@ test('file-less retail stubs hide when sync is off; installed and local entries 
     ],
   }
   assert.equal(retailLibraryEntryVisible(adobeOnly, fonts, false), true)
+  const offlineSource = {
+    ...stub,
+    sourcePath: '/Volumes/Offline/Reckless-Regular.otf',
+    sourcePresent: true,
+    sourceAvailability: 'offline' as const,
+  }
+  assert.equal(retailListingHasLocalFile(offlineSource), false)
+  assert.equal(retailLibraryEntryVisible(offlineSource, fonts, false), false)
+  const unreadableSource = {
+    ...stub,
+    sourcePath: '/Users/you/Fonts/Reckless-Regular.otf',
+    sourcePresent: true,
+    sourceAvailability: 'unreadable' as const,
+  }
+  assert.equal(retailListingHasLocalFile(unreadableSource), false)
+  assert.equal(
+    retailListingHasLocalFile({
+      ...localSource,
+      sourceAvailability: 'present',
+    }),
+    true,
+  )
 })
 
 test('when sync is on, unselected retail formats stay hidden', () => {

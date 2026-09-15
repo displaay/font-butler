@@ -243,6 +243,33 @@ test('catalogEntriesNeedingPreviewCss skips unchanged fingerprints until refresh
   assert.deepEqual(removed.changed, [])
 })
 
+test('catalog preview fingerprint changes when install verification flips at the same path', () => {
+  const path = '/tmp/installed/Preview.ttf'
+  const unavailable = entry({
+    id: 'flip',
+    sourcePath: '',
+    sourcePresent: false,
+    installedPath: path,
+    disabledPath: undefined,
+    installations: [{ destinationId: 'macos', path, verification: 'unavailable' }],
+    retailRelativePath: 'Preview/Preview.otf',
+    status: 'uninstalled',
+  })
+  const present = {
+    ...unavailable,
+    installations: [{ destinationId: 'macos', path, verification: 'file-present' as const }],
+  }
+  assert.notEqual(catalogPreviewFingerprint(unavailable), catalogPreviewFingerprint(present))
+  const first = catalogEntriesNeedingPreviewCss([unavailable], new Map())
+  assert.deepEqual([...first.keep], [])
+  const after = catalogEntriesNeedingPreviewCss([present], first.fingerprints, { mounted: first.keep })
+  assert.deepEqual([...after.keep], ['flip'])
+  assert.deepEqual(after.changed.map((item) => item.id), ['flip'])
+  const gone = catalogEntriesNeedingPreviewCss([unavailable], after.fingerprints, { mounted: after.keep })
+  assert.deepEqual([...gone.keep], [])
+  assert.deepEqual(gone.changed, [])
+})
+
 test('catalogEntriesNeedingPreviewCss skips listings with no file to load', () => {
   const installed = entry({ id: 'on' })
   const stub = entry({

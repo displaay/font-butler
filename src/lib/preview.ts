@@ -110,7 +110,8 @@ function catalogEntryPreviewUrls(entry: CatalogEntry): string[] {
 }
 
 export function catalogPreviewFingerprint(entry: CatalogEntry): string {
-  return `${entry.id}\t${faceDescriptorKey(entry.faces)}\t${catalogEntryPreviewUrls(entry).join(' ')}`
+  const live = entryHasPreviewFile(entry) ? 'file' : 'none'
+  return `${entry.id}\t${faceDescriptorKey(entry.faces)}\t${catalogEntryPreviewUrls(entry).join(' ')}\t${live}`
 }
 
 export type SystemPreviewFace = Pick<SystemFace, 'path' | 'weight' | 'italic' | 'isVariable'>
