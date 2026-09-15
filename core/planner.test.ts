@@ -44,7 +44,7 @@ test('loadPlan rejects path-traversal ids without reading outside plansDir', () 
     const evil = path.join(paths.dataRoot, 'evil.json')
     fs.writeFileSync(
       evil,
-      JSON.stringify({ ...samplePlan('../evil'), id: '../evil' }),
+      JSON.stringify({ ...samplePlan(), id: '../evil' }),
     )
     assert.equal(loadPlan(paths, '../evil'), undefined)
     assert.equal(loadPlan(paths, '..%2fevil'), undefined)
