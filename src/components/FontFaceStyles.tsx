@@ -198,12 +198,12 @@ export function FontFaceStyles({
             catalog: systemCatalogRef.current,
           },
         )
-        const cssByPath = await Promise.all(
-          changed.map(async (group) => [group.path, await systemPathCss(group.faces, secret, cache, refresh)] as const),
+        const cssByKey = await Promise.all(
+          changed.map(async (group) => [group.key, await systemPathCss(group.faces, secret, cache, refresh)] as const),
         )
         if (cancelled) return
-        for (const [path, css] of cssByPath) {
-          const style = ensureStyle(styles, path, 'data-font-butler-system')
+        for (const [key, css] of cssByKey) {
+          const style = ensureStyle(styles, key, 'data-font-butler-system')
           if (style.textContent !== css) style.textContent = css
         }
         pruneStyles(styles, keep)

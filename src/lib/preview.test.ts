@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { catalogFontUrl, catalogFontFaceRules, catalogPreviewFingerprint, catalogPreviewFingerprintSet, catalogPreviewRevision, catalogPreviewWhich, cachedSignedCatalogFontUrl, catalogEntriesNeedingPreviewCss, previewStylesFingerprint, signedCatalogFontUrl, systemFacesNeedingPreviewCss, systemPathPreviewFingerprint, systemPreviewFingerprintSet } from './preview.ts'
+import { catalogFontUrl, catalogFontFaceRules, catalogPreviewFingerprint, catalogPreviewFingerprintSet, catalogPreviewRevision, catalogPreviewWhich, cachedSignedCatalogFontUrl, catalogEntriesNeedingPreviewCss, previewStylesFingerprint, signedCatalogFontUrl, systemFacesNeedingPreviewCss, systemPathPreviewFingerprint, systemPreviewCssKey, systemPreviewFingerprintSet } from './preview.ts'
 import { verifyFontPreviewQuery } from '../../core/font-access.ts'
 import type { CatalogEntry, FontFaceInfo } from './types.ts'
 
@@ -416,13 +416,13 @@ test('system preview CSS stays cached when leaving the System tab', () => {
   const extra = { path: other, weight: 400, italic: false, isVariable: false }
   const catalog = [regular, bold, extra]
   const first = systemFacesNeedingPreviewCss([regular, bold], new Map(), { catalog })
-  assert.deepEqual([...first.keep], [ttc])
+  assert.deepEqual([...first.keep], [systemPreviewCssKey(regular)])
   const leftTab = systemFacesNeedingPreviewCss([], first.fingerprints, {
     mounted: first.keep,
     catalog,
   })
   assert.deepEqual(leftTab.changed, [])
-  assert.deepEqual([...leftTab.keep], [ttc])
+  assert.deepEqual([...leftTab.keep], [systemPreviewCssKey(regular)])
   const back = systemFacesNeedingPreviewCss([regular, bold], leftTab.fingerprints, {
     mounted: leftTab.keep,
     catalog,
@@ -456,7 +456,10 @@ test('systemFacesNeedingPreviewCss keeps the full path group instead of clobberi
   const bold = { path: ttc, weight: 700, italic: false, isVariable: false }
   const extra = { path: other, weight: 400, italic: false, isVariable: false }
   const first = systemFacesNeedingPreviewCss([regular, bold, extra], new Map())
-  assert.deepEqual([...first.keep].sort(), [other, ttc].sort())
+  assert.deepEqual(
+    [...first.keep].sort(),
+    [systemPreviewCssKey(extra), systemPreviewCssKey(regular)].sort(),
+  )
   const collection = first.changed.find((group) => group.path === ttc)
   assert.ok(collection)
   assert.equal(collection.faces.length, 2)
@@ -464,7 +467,10 @@ test('systemFacesNeedingPreviewCss keeps the full path group instead of clobberi
     collection.faces.map((face) => face.weight).sort(),
     [400, 700],
   )
-  assert.equal(first.fingerprints.get(ttc), systemPathPreviewFingerprint([regular, bold]))
+  assert.equal(
+    first.fingerprints.get(systemPreviewCssKey(regular)),
+    systemPathPreviewFingerprint([regular, bold]),
+  )
 
   const second = systemFacesNeedingPreviewCss([regular, bold, extra], first.fingerprints, {
     mounted: first.keep,
@@ -477,5 +483,74 @@ test('systemFacesNeedingPreviewCss keeps the full path group instead of clobberi
   })
   assert.equal(third.changed.length, 1)
   assert.equal(third.changed[0]!.path, other)
-  assert.equal(third.fingerprints.get(ttc), first.fingerprints.get(ttc))
+  assert.equal(
+    third.fingerprints.get(systemPreviewCssKey(regular)),
+    first.fingerprints.get(systemPreviewCssKey(regular)),
+  )
+})
+
+test('shared TTC families keep separate cached preview CSS when scrolling', () => {
+  const ttc = '/System/Library/Fonts/Collection.ttc'
+  const displayRegular = {
+    path: ttc,
+    familyName: 'Collection Display',
+    weight: 400,
+    italic: false,
+    isVariable: false,
+  }
+  const displayBold = {
+    path: ttc,
+    familyName: 'Collection Display',
+    weight: 700,
+    italic: false,
+    isVariable: false,
+  }
+  const textRegular = {
+    path: ttc,
+    familyName: 'Collection Text',
+    weight: 400,
+    italic: false,
+    isVariable: false,
+  }
+  const textItalic = {
+    path: ttc,
+    familyName: 'Collection Text',
+    weight: 400,
+    italic: true,
+    isVariable: false,
+  }
+  const catalog = [displayRegular, displayBold, textRegular, textItalic]
+  const displayKey = systemPreviewCssKey(displayRegular)
+  const textKey = systemPreviewCssKey(textRegular)
+  assert.notEqual(displayKey, textKey)
+  assert.equal(displayKey.startsWith(`${ttc}\t`), true)
+
+  const first = systemFacesNeedingPreviewCss([displayRegular, displayBold], new Map(), { catalog })
+  assert.deepEqual([...first.keep], [displayKey])
+  assert.equal(first.changed.length, 1)
+  assert.equal(first.changed[0]!.key, displayKey)
+  assert.deepEqual(
+    first.changed[0]!.faces.map((face) => face.weight).sort(),
+    [400, 700],
+  )
+
+  const scrolled = systemFacesNeedingPreviewCss([textRegular, textItalic], first.fingerprints, {
+    mounted: first.keep,
+    catalog,
+  })
+  assert.deepEqual(
+    scrolled.changed.map((group) => group.key),
+    [textKey],
+  )
+  assert.equal(scrolled.keep.has(displayKey), true)
+  assert.equal(scrolled.keep.has(textKey), true)
+  assert.equal(scrolled.fingerprints.get(displayKey), first.fingerprints.get(displayKey))
+  assert.notEqual(scrolled.fingerprints.get(textKey), scrolled.fingerprints.get(displayKey))
+
+  const back = systemFacesNeedingPreviewCss([displayRegular, displayBold], scrolled.fingerprints, {
+    mounted: scrolled.keep,
+    catalog,
+  })
+  assert.deepEqual(back.changed, [])
+  assert.equal(back.fingerprints.get(displayKey), first.fingerprints.get(displayKey))
 })
