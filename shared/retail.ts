@@ -600,6 +600,15 @@ export function entryHasActiveRetailSync(
   return Boolean(font?.enabled)
 }
 
+/**
+ * File-less collection listings stay in the catalog after sync is turned off.
+ * Unknown status must be treated as off, otherwise the library shows every
+ * stub until `/api/retail/status` arrives.
+ */
+export function retailSyncIsOn(retail?: Pick<RetailSyncView, 'enabled'> | null): boolean {
+  return retail?.enabled === true
+}
+
 export function retailLibraryEntryVisible(
   entry: RetailLibraryEntry,
   fonts: readonly RetailSyncFont[],

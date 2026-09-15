@@ -423,4 +423,5 @@ export {
   retailFileFormat,
   retailLibraryEntryVisible,
   retailListingHasLocalFile,
+  retailSyncIsOn,
 } from '../../shared/retail'

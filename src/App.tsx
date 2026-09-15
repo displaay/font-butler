@@ -128,7 +128,7 @@ import {
 import { allUpdateGroups, visibleUpdateGroups } from '@/lib/updateInventory'
 import { operationMatchesQuery, tabWithSearchHits } from '@/lib/search'
 import type { AppSettings, AppUpdateStatus, CatalogEntry, DestinationCapability, DuplicateWarning, FamilyGroup, ImportPlan, ImportPlanItem, LibraryFilter, Operation, PreviewPreferences, ProjectSet, RetailCollisionAction, RetailFamilyCollision, RetailSyncStatus, SavedLibraryFilter, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
-import { retailLibraryEntryVisible } from '@/lib/types'
+import { retailLibraryEntryVisible, retailSyncIsOn } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { isPathUnderFolder, isRetailLibraryFilter, isWatchFolderEntry, libraryFolderFilterLabel, matchesLibraryFolderFilter, RETAIL_LIBRARY_FILTER, watchFolderName } from '@/lib/watchFolders'
 
@@ -370,6 +370,7 @@ function AppShell() {
   useEffect(() => {
     let cancelled = false
     async function boot() {
+      let retailLoaded = false
       try {
         const boot = await api.bootstrap()
         if (!cancelled && boot.settings) {
@@ -379,13 +380,15 @@ function AppShell() {
         if (openPath) {
           await api.open(openPath)
         }
-        const [catalog, settingsResult, projectResult, activityResult, duplicatesResult] = await Promise.all([
-          api.catalog(),
-          api.settings(),
-          api.projects().catch(() => ({ projects: [] })),
-          api.activity().catch(() => ({ operations: [] })),
-          api.duplicates().catch(() => ({ duplicates: [] })),
-        ])
+        const [catalog, settingsResult, projectResult, activityResult, duplicatesResult, retailResult] =
+          await Promise.all([
+            api.catalog(),
+            api.settings(),
+            api.projects().catch(() => ({ projects: [] })),
+            api.activity().catch(() => ({ operations: [] })),
+            api.duplicates().catch(() => ({ duplicates: [] })),
+            api.retail.status().catch(() => null),
+          ])
         if (!cancelled) {
           applySettings(settingsResult.settings)
           applyAdobeAvailability(settingsResult.destinations?.destinations)
@@ -395,6 +398,10 @@ function AppShell() {
           setDuplicates(duplicatesResult.duplicates)
           if (shouldShowOnboarding(settingsResult.settings)) {
             setOnboardingOpen(true)
+          }
+          if (retailResult) {
+            setRetail(retailResult.status)
+            retailLoaded = true
           }
           setEntries(catalog.entries)
           const focus = openPath
@@ -418,7 +425,7 @@ function AppShell() {
         if (!cancelled) setLoading(false)
       }
       if (!cancelled) void loadAppUpdate()
-      if (!cancelled) void loadRetailStatus()
+      if (!cancelled && !retailLoaded) void loadRetailStatus()
     }
     void boot()
     const stop = subscribeEvents((event) => {
@@ -578,7 +585,7 @@ function AppShell() {
   const librarySourceEntries = useMemo(
     () =>
       entries.filter((entry) => {
-        if (!retailLibraryEntryVisible(entry, retail?.fonts ?? [], retail?.enabled !== false)) return false
+        if (!retailLibraryEntryVisible(entry, retail?.fonts ?? [], retailSyncIsOn(retail))) return false
         if (searching) return true
         if (watchFolderFilter && !matchesLibraryFolderFilter(entry, watchFolderFilter)) return false
         if (projectFilter && !projectMemberIds.has(entry.id)) return false
@@ -615,7 +622,7 @@ function AppShell() {
       entries.filter(
         (entry) =>
           matchesLibraryFolderFilter(entry, RETAIL_LIBRARY_FILTER) &&
-          retailLibraryEntryVisible(entry, retail?.fonts ?? [], retail?.enabled !== false),
+          retailLibraryEntryVisible(entry, retail?.fonts ?? [], retailSyncIsOn(retail)),
       ),
     )
     return counts

@@ -4,6 +4,7 @@ import {
   entryHasActiveRetailSync,
   retailLibraryEntryVisible,
   retailListingHasLocalFile,
+  retailSyncIsOn,
   type RetailSyncFont,
 } from '../../shared/retail.ts'
 
@@ -81,6 +82,15 @@ test('active retail sync is false when sync is off or the family is disabled', (
     entryHasActiveRetailSync(stub, { enabled: true, fonts: [], disabledGlyphsFiles: [] }),
     false,
   )
+})
+
+test('unknown retail status is treated as off so file-less stubs stay hidden', () => {
+  assert.equal(retailSyncIsOn(null), false)
+  assert.equal(retailSyncIsOn(undefined), false)
+  assert.equal(retailSyncIsOn({ enabled: false }), false)
+  assert.equal(retailSyncIsOn({ enabled: true }), true)
+  assert.equal(retailLibraryEntryVisible(stub, [], retailSyncIsOn(null)), false)
+  assert.equal(retailLibraryEntryVisible(stub, [], true), true)
 })
 
 test('file-less retail stubs hide when sync is off; installed and local entries stay visible', () => {
