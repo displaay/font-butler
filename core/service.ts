@@ -2368,7 +2368,7 @@ export class FontButlerService {
           ? verifyManagedCopy(this.paths, 'adobe-shared', adobe.path, adobe.fingerprint)
           : 'unavailable'
         fonts.push({
-          target: `${displayEntry(latest)} · Adobe testing folder`,
+          target: `${displayEntry(latest)} · Adobe folder`,
           kind: 'font',
           outcome: dest.supported
             ? adobe.verification === 'file-present'
@@ -3972,7 +3972,7 @@ export class FontButlerService {
         entryId: entry.id,
         label:
           failure.destinationId === 'adobe-shared'
-            ? `${displayEntry(entry)} · Adobe testing folder`
+            ? `${displayEntry(entry)} · Adobe folder`
             : displayEntry(entry),
         outcome: 'failed' as const,
         reason: failure.reason,

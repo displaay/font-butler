@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { ArrowLeftRight, ChevronDown, CircleMinus, CirclePlus, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { CatalogBatchPlan } from '@/lib/batch'
-import { actionLabel, activateActionLabel, forgetSourcesLabel } from '@/lib/batch'
+import { actionLabel, activateActionLabel, deactivateActionLabel, forgetSourcesLabel } from '@/lib/batch'
 import { formatSwapLabel } from '@/lib/formats'
 import { cn } from '@/lib/utils'
 
@@ -96,7 +96,7 @@ export function CatalogCardActions({
         </IconAction>
       )}
       {plan.deactivate > 0 && (
-        <IconAction label="Deactivate" disabled={busy} onClick={onDeactivate}>
+        <IconAction label={deactivateActionLabel(plan)} disabled={busy} onClick={onDeactivate}>
           <PowerOff />
         </IconAction>
       )}

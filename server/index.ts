@@ -150,7 +150,7 @@ app.post('/api/destinations/adobe', (c) => {
     return c.json(service.createAdobeTestingFolder())
   } catch (error) {
     return c.json(
-      { error: error instanceof Error ? error.message : 'Could not create the Adobe testing folder' },
+      { error: error instanceof Error ? error.message : 'Could not create the Adobe folder' },
       400,
     )
   }

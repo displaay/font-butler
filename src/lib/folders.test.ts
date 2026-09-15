@@ -7,7 +7,7 @@ test('DESTINATIONS includes Mac+Adobe as a default install choice', () => {
     DESTINATIONS.map((item) => item.id),
     ['macos', 'adobe-shared', 'macos-and-adobe'],
   )
-  assert.equal(destinationLabel('macos-and-adobe'), 'This Mac and Adobe testing folder')
+  assert.equal(destinationLabel('macos-and-adobe'), 'This Mac and Adobe folder')
   assert.equal(destinationNeedsAdobe('macos'), false)
   assert.equal(destinationNeedsAdobe('adobe-shared'), true)
   assert.equal(destinationNeedsAdobe('macos-and-adobe'), true)
@@ -20,7 +20,7 @@ test('adobeTestingFolderAvailable is false only when the Adobe destination is un
     adobeTestingFolderAvailable([
       {
         id: 'adobe-shared',
-        label: 'Adobe testing folder',
+        label: 'Adobe folder',
         path: '/Library/Application Support/Adobe/Fonts',
         exists: true,
         writable: true,
@@ -34,7 +34,7 @@ test('adobeTestingFolderAvailable is false only when the Adobe destination is un
     adobeTestingFolderAvailable([
       {
         id: 'adobe-shared',
-        label: 'Adobe testing folder',
+        label: 'Adobe folder',
         path: '/Library/Application Support/Adobe/Fonts',
         exists: false,
         writable: false,

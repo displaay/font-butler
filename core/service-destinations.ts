@@ -100,7 +100,7 @@ export function placeAdobeCopy(
 ): void {
   const capability = inspectDestination(paths, 'adobe-shared')
   if (!capability.supported) {
-    throw new Error(capability.remedy || capability.reason || 'The Adobe testing folder is not available.')
+    throw new Error(capability.remedy || capability.reason || 'The Adobe folder is not available.')
   }
   const managed = (entry.installations ?? [])
     .filter((item) => item.destinationId === 'adobe-shared')

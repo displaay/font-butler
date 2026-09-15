@@ -10,7 +10,7 @@ Drop a font file into Font Buttler and it remembers the original path. When that
 - **Format swap** — Keep OTF and TTF of the same family in the library, then **Swap OTF for TTF** (or the other way) in one step. The other format stays on the card, deactivated, so you can swap back.
 - **Install as…** — Rewrite the family name across OpenType name (and CFF) tables and install a copy. The original file is never mutated. The packaged app ships Python and fonttools, so this works without a system Python.
 - **Bake OpenType features** — Turn stylistic sets, figures, and other features on in the specimen, then bake them into a reinstall or a new **Install as…** copy.
-- **Destinations** — Install to `~/Library/Fonts`, an Adobe testing folder, or both. Watch-folder and drop policies can follow that choice.
+- **Destinations** — Install to `~/Library/Fonts`, an Adobe folder, or both. Watch-folder and drop policies can follow that choice.
 - **Activate, deactivate, uninstall** — Same user-font workflow as Font Book. Uninstalling removes the copy from the destination; a tracked source stays in the library as **Not installed**.
 - **Source tracking and updates** — The **Source** badge means the original file is still on disk. When it changes, the family shows as outdated and you can reinstall (or auto-reinstall). Removing the source does not uninstall the font.
 - **Projects** — Named sets of families you can activate or deactivate together, and pin so a project keeps a specific installed version.

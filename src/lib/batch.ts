@@ -9,7 +9,7 @@ import {
   repairableIds,
   uninstallableIds,
 } from './eligibility.ts'
-import { uniqueEntryFormats } from './formats.ts'
+import { occupyingStyleCount, uniqueEntryFormats, uniqueStyleCount } from './formats.ts'
 import {
   deletableSourceIds,
   familyBadgeEntry,
@@ -28,6 +28,8 @@ export type CatalogBatchPlan = {
   adobeUninstall: number
   activate: number
   activateFormat?: string
+  /** Occupying style count when some, but not all, family styles are active. */
+  partialActiveStyles?: number
   deactivate: number
   uninstall: number
   uninstallAndRemove: number
@@ -87,8 +89,17 @@ export function catalogBatchPlan(groups: FamilyGroup[], adobeAvailable = true): 
   const activating = groups.flatMap((group) => activatableEntries(group))
   const familyFormats = uniqueEntryFormats(groups.flatMap((group) => group.entries))
   const activatingFormats = uniqueEntryFormats(activating)
+  let partialActiveStyles: number | undefined
+  if (groups.length === 1) {
+    const entries = groups[0]!.entries
+    const total = uniqueStyleCount(entries)
+    const active = occupyingStyleCount(entries)
+    if (active > 0 && active < total) partialActiveStyles = active
+  }
   const activateFormat =
-    familyFormats.length > 1 && activatingFormats.length === 1 ? activatingFormats[0] : undefined
+    activatingFormats.length === 1 && (familyFormats.length > 1 || Boolean(partialActiveStyles))
+      ? activatingFormats[0]
+      : undefined
   return {
     count: groups.length,
     install,
@@ -97,6 +108,7 @@ export function catalogBatchPlan(groups: FamilyGroup[], adobeAvailable = true): 
     adobeUninstall,
     activate,
     ...(activateFormat ? { activateFormat } : {}),
+    ...(partialActiveStyles ? { partialActiveStyles } : {}),
     deactivate,
     uninstall,
     uninstallAndRemove,
@@ -131,6 +143,7 @@ export function familyCardPlan(group: FamilyGroup, adobeAvailable = true): Catal
     uninstall: 0,
     activate: 0,
     activateFormat: undefined,
+    partialActiveStyles: undefined,
     reinstall: 0,
   }
 }
@@ -198,7 +211,7 @@ export function actionLabel(verb: string, count: number, multi: boolean): string
   if (verb === 'Deactivate' || verb === 'Uninstall') {
     return verb
   }
-  if (verb === 'Install to Adobe testing folder' || verb === 'Uninstall from Adobe testing folder') {
+  if (verb === 'Install to Adobe folder' || verb === 'Uninstall from Adobe folder') {
     return verb
   }
   if (verb === 'Uninstall and delete sources') {
@@ -211,11 +224,28 @@ export function actionLabel(verb: string, count: number, multi: boolean): string
 }
 
 export function activateActionLabel(
-  plan: Pick<CatalogBatchPlan, 'activate' | 'activateFormat'>,
+  plan: Pick<CatalogBatchPlan, 'activate' | 'activateFormat' | 'partialActiveStyles'>,
   multi = false,
 ): string {
+  const remaining = Boolean(plan.partialActiveStyles) && !multi
+  if (remaining) {
+    return plan.activateFormat
+      ? `Activate remaining ${plan.activateFormat.toUpperCase()}`
+      : 'Activate remaining'
+  }
   if (plan.activateFormat) return `Activate ${plan.activateFormat.toUpperCase()}`
   return actionLabel('Activate', plan.activate, multi)
+}
+
+export function deactivateActionLabel(
+  plan: Pick<CatalogBatchPlan, 'partialActiveStyles'>,
+  multi = false,
+): string {
+  if (plan.partialActiveStyles && !multi) {
+    const n = plan.partialActiveStyles
+    return `Deactivate ${n} ${n === 1 ? 'style' : 'styles'}`
+  }
+  return 'Deactivate'
 }
 
 export function forgetSourcesLabel(count: number, multi: boolean): string {

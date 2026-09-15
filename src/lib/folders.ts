@@ -14,13 +14,13 @@ export const DESTINATIONS: { id: DefaultDestinationId; label: string; detail: st
   },
   {
     id: 'adobe-shared',
-    label: 'Adobe testing folder',
+    label: 'Adobe folder',
     detail: 'Place a managed copy for Adobe apps. This is not a verified activation in Photoshop or InDesign.',
   },
   {
     id: 'macos-and-adobe',
-    label: 'This Mac and Adobe testing folder',
-    detail: 'Install a managed copy for macOS and place one in the Adobe testing folder.',
+    label: 'This Mac and Adobe folder',
+    detail: 'Install a managed copy for macOS and place one in the Adobe folder.',
   },
 ]
 

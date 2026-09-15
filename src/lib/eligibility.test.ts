@@ -239,7 +239,7 @@ test('Adobe uninstall is offered only when a Mac copy would remain', () => {
   assert.deepEqual(adobeRemovableIds(regularBoth), ['regular'])
 })
 
-test('Adobe install is hidden when the testing folder is unavailable', () => {
+test('Adobe install is hidden when the Adobe folder is unavailable', () => {
   const installed = entry('on', 'installed', 'Bold')
   assert.deepEqual(adobeInstallableIds(group([entry('plain', 'installed')]), false), [])
   assert.deepEqual(instanceMenuLabels(installed, [installed], false), [
@@ -323,7 +323,7 @@ test('family Switch is offered for a kept same-format sibling', () => {
 test('instance menu is scoped to that catalog entry', () => {
   const installed = entry('on', 'installed', 'Bold')
   assert.deepEqual(instanceMenuLabels(installed), [
-    'Install to Adobe testing folder',
+    'Install to Adobe folder',
     'Deactivate instance',
     'Uninstall instance',
   ])
@@ -347,20 +347,20 @@ test('instance menu is scoped to that catalog entry', () => {
   assert.deepEqual(instanceMenuLabels(bothDests), [
     'Deactivate instance',
     'Uninstall instance',
-    'Uninstall from Adobe testing folder',
+    'Uninstall from Adobe folder',
   ])
 
   const deactivated = entry('off', 'deactivated', 'Light')
   assert.deepEqual(instanceMenuLabels(deactivated), [
     'Activate instance',
-    'Install to Adobe testing folder',
+    'Install to Adobe folder',
     'Uninstall instance',
   ])
 
   const uninstalled = entry('missing', 'uninstalled', 'Regular')
   assert.deepEqual(instanceMenuLabels(uninstalled), [
     'Install instance',
-    'Install to Adobe testing folder',
+    'Install to Adobe folder',
   ])
 
   const otf = { ...entry('otf', 'installed'), format: 'otf' as const, sourcePath: '/tmp/otf.otf' }
@@ -371,11 +371,11 @@ test('instance menu is scoped to that catalog entry', () => {
   }
   assert.deepEqual(instanceMenuLabels(ttf, [otf, ttf]), [
     'Swap with OTF',
-    'Install to Adobe testing folder',
+    'Install to Adobe folder',
   ])
   assert.deepEqual(instanceMenuLabels(otf, [otf, ttf]), [
     'Swap for TTF',
-    'Install to Adobe testing folder',
+    'Install to Adobe folder',
     'Deactivate instance',
     'Uninstall instance',
   ])

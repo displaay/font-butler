@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import {
   actionLabel,
   activateActionLabel,
+  deactivateActionLabel,
   catalogBatchPlan,
   catalogBatchSummary,
   deleteSourcesLabel,
@@ -14,7 +15,7 @@ import {
   systemBatchSummary,
 } from './batch.ts'
 import { displayStateParts, isNotInstalledLabel } from './state.ts'
-import { groupCatalog, groupSystem, familyBadgeEntry } from './group.ts'
+import { groupCatalog, groupSystem, familyBadgeEntry, familyStatusSummary } from './group.ts'
 import type { CatalogEntry, FontFaceInfo, SystemFace } from './types.ts'
 
 function face(familyName: string, styleName = 'Regular'): FontFaceInfo {
@@ -77,6 +78,7 @@ test('catalogBatchPlan uses entry-level eligibility for a mixed family', () => {
     adobeInstall: 2,
     adobeUninstall: 0,
     activate: 0,
+    partialActiveStyles: 1,
     deactivate: 1,
     uninstall: 1,
     uninstallAndRemove: 1,
@@ -100,6 +102,8 @@ test('familyCardPlan keeps honest mixed actions when the family is partly instal
   assert.equal(plan.install, 1)
   assert.equal(plan.installMissing, true)
   assert.equal(plan.deactivate, 1)
+  assert.equal(plan.partialActiveStyles, 1)
+  assert.equal(deactivateActionLabel(plan), 'Deactivate 1 style')
   assert.equal(plan.forget, 0)
 })
 
@@ -123,6 +127,7 @@ test('familyCardPlan still deactivates an installed family', () => {
   const plan = familyCardPlan(groups[0]!)
   assert.equal(plan.install, 0)
   assert.equal(plan.deactivate, 1)
+  assert.equal(deactivateActionLabel(plan), 'Deactivate')
 })
 
 test('catalogBatchPlan counts each action by family status', () => {
@@ -206,6 +211,47 @@ test('catalogBatchPlan does not count a parked alt-format copy as missing styles
   assert.equal(plan.activate, 1)
   assert.equal(plan.activateFormat, 'otf')
   assert.equal(activateActionLabel(plan), 'Activate OTF')
+  assert.equal(deactivateActionLabel(plan), 'Deactivate')
+})
+
+test('partial family context labels say remaining and count active styles', () => {
+  const live = entry('otf-reg', 'Fenul', 'installed', 'Regular')
+  const parked = {
+    ...entry('otf-bold', 'Fenul', 'deactivated', 'Bold'),
+    format: 'otf' as const,
+    sourcePath: '/tmp/otf-bold.otf',
+  }
+  const keptRegular = {
+    ...entry('ttf-reg', 'Fenul', 'uninstalled', 'Regular'),
+    format: 'ttf' as const,
+    sourcePath: '/tmp/ttf-reg.ttf',
+  }
+  const keptBold = {
+    ...entry('ttf-bold', 'Fenul', 'uninstalled', 'Bold'),
+    format: 'ttf' as const,
+    sourcePath: '/tmp/ttf-bold.ttf',
+  }
+  const plan = familyCardPlan(groupCatalog([live, parked, keptRegular, keptBold])[0]!)
+  assert.equal(plan.partialActiveStyles, 1)
+  assert.equal(plan.activateFormat, 'otf')
+  assert.equal(activateActionLabel(plan), 'Activate remaining OTF')
+  assert.equal(deactivateActionLabel(plan), 'Deactivate 1 style')
+
+  const threeLive = ['Light', 'Regular', 'Bold'].map((style, index) =>
+    entry(`live-${index}`, 'Reckless', 'installed', style),
+  )
+  const remaining = Array.from({ length: 21 }, (_, index) =>
+    entry(`parked-${index}`, 'Reckless', 'deactivated', `Style${index}`),
+  )
+  const recklessGroup = groupCatalog([...threeLive, ...remaining])[0]!
+  const reckless = familyCardPlan(recklessGroup)
+  assert.equal(familyStatusSummary(recklessGroup), '3 of 24 styles active')
+  assert.equal(reckless.partialActiveStyles, 3)
+  assert.equal(reckless.activateFormat, 'otf')
+  assert.equal(activateActionLabel(reckless), 'Activate remaining OTF')
+  assert.equal(deactivateActionLabel(reckless), 'Deactivate 3 styles')
+  assert.equal(activateActionLabel(reckless, true), 'Activate OTF')
+  assert.equal(deactivateActionLabel(reckless, true), 'Deactivate')
 })
 
 test('hasCatalogBatchActions is false for an empty selection', () => {
@@ -274,9 +320,9 @@ test('actionLabel adds a count for multi-select', () => {
   assert.equal(activateActionLabel({ activate: 1 }), 'Activate')
   assert.equal(activateActionLabel({ activate: 12 }, true), 'Activate 12 fonts')
   assert.equal(activateActionLabel({ activate: 1, activateFormat: 'otf' }), 'Activate OTF')
-  assert.equal(actionLabel('Install to Adobe testing folder', 1, false), 'Install to Adobe testing folder')
-  assert.equal(actionLabel('Install to Adobe testing folder', 3, true), 'Install to Adobe testing folder')
-  assert.equal(actionLabel('Uninstall from Adobe testing folder', 1, false), 'Uninstall from Adobe testing folder')
+  assert.equal(actionLabel('Install to Adobe folder', 1, false), 'Install to Adobe folder')
+  assert.equal(actionLabel('Install to Adobe folder', 3, true), 'Install to Adobe folder')
+  assert.equal(actionLabel('Uninstall from Adobe folder', 1, false), 'Uninstall from Adobe folder')
   assert.equal(actionLabel('Uninstall and delete sources', 1, false), 'Uninstall and delete sources')
   assert.equal(
     actionLabel('Uninstall and delete sources', 2, true),

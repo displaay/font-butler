@@ -195,7 +195,7 @@ export function FolderSetupDialog({
             </select>
             {adobeSupported ? (
               <span className="block text-xs text-muted-foreground">
-                Adobe testing folder places files only. It is unavailable until that folder exists and
+                Adobe folder places files only. It is unavailable until that folder exists and
                 is writable.
               </span>
             ) : null}

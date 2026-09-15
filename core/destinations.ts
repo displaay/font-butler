@@ -50,8 +50,8 @@ export function targetsForDefaultDestination(id: DefaultDestinationId | undefine
 }
 
 export function destinationLabel(id: DestinationId | DefaultDestinationId | undefined): string {
-  if (id === 'macos-and-adobe') return 'This Mac and Adobe testing folder'
-  return id === 'adobe-shared' ? 'Adobe testing folder' : 'This Mac'
+  if (id === 'macos-and-adobe') return 'This Mac and Adobe folder'
+  return id === 'adobe-shared' ? 'Adobe folder' : 'This Mac'
 }
 
 export function adobeFontsDir(paths: AppPaths): string {
@@ -171,7 +171,7 @@ export function createAdobeTestingFolder(paths: AppPaths): DestinationCapability
         'Could not create that folder. Give your user Read & Write on the Adobe Application Support folder in Finder Get Info.',
       )
     }
-    throw new Error(error instanceof Error ? error.message : 'Could not create the Adobe testing folder.')
+    throw new Error(error instanceof Error ? error.message : 'Could not create the Adobe folder.')
   }
   return inspectDestination(paths, 'adobe-shared')
 }
@@ -309,8 +309,8 @@ export function destinationSummary(entry: CatalogEntry): string | undefined {
   if (present.length === 0) return undefined
   const macos = present.some((copy) => copy.destinationId === 'macos')
   const adobe = present.some((copy) => copy.destinationId === 'adobe-shared')
-  if (macos && adobe) return 'This Mac and Adobe testing folder'
-  if (adobe) return 'Adobe testing folder'
+  if (macos && adobe) return 'This Mac and Adobe folder'
+  if (adobe) return 'Adobe folder'
   return undefined
 }
 
