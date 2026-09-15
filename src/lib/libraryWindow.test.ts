@@ -180,6 +180,28 @@ test('sliding the preview window does not remount CSS for overlapping cards', ()
   assert.deepEqual([...scrolled.keep].sort(), catalog.slice(4, 12).map((item) => item.id).sort())
 })
 
+test('sliding the preview window with a live catalog keeps off-screen CSS mounted', () => {
+  const catalog = Array.from({ length: 30 }, (_, index) => entry(`f${index}`))
+  const first = catalogEntriesNeedingPreviewCss(catalog.slice(0, 8), new Map(), { catalog })
+  const scrolled = catalogEntriesNeedingPreviewCss(catalog.slice(4, 12), first.fingerprints, {
+    mounted: first.keep,
+    catalog,
+  })
+  assert.deepEqual(
+    scrolled.changed.map((item) => item.id),
+    ['f8', 'f9', 'f10', 'f11'],
+  )
+  assert.equal(scrolled.keep.has('f0'), true)
+  assert.equal(scrolled.keep.has('f11'), true)
+  const leftTab = catalogEntriesNeedingPreviewCss([], scrolled.fingerprints, {
+    mounted: scrolled.keep,
+    catalog,
+  })
+  assert.deepEqual(leftTab.changed, [])
+  assert.equal(leftTab.keep.has('f0'), true)
+  assert.equal(leftTab.keep.has('f11'), true)
+})
+
 test('pinning a selected off-screen family does not change sibling preview fingerprints', () => {
   const kept = entry('kept')
   const other = entry('other')

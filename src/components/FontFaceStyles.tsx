@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { getApiToken } from '@/lib/api'
 import {
   cachedSignedCatalogFontUrl,
@@ -15,6 +15,22 @@ import {
 import type { CatalogEntry, SystemFace } from '@/lib/types'
 
 const REFRESH_MS = 15 * 60 * 1000
+
+type PreviewFaceSession = {
+  catalogStyles: Map<string, HTMLStyleElement>
+  systemStyles: Map<string, HTMLStyleElement>
+  urls: PreviewUrlCache
+  catalogFingerprints: Map<string, string>
+  systemFingerprints: Map<string, string>
+}
+
+const previewFaceSession: PreviewFaceSession = {
+  catalogStyles: new Map(),
+  systemStyles: new Map(),
+  urls: new Map(),
+  catalogFingerprints: new Map(),
+  systemFingerprints: new Map(),
+}
 
 function cssFamily(id: string, which?: PreviewWhich): string {
   return which ? `fc-${id}-${which}` : `fc-${id}`
@@ -92,29 +108,40 @@ function pruneStyles(map: Map<string, HTMLStyleElement>, keep: Set<string>) {
 
 export function FontFaceStyles({
   entries,
+  catalog,
   systemFaces,
+  systemCatalog,
 }: {
   entries: CatalogEntry[]
+  catalog?: CatalogEntry[]
   systemFaces: SystemFace[]
+  systemCatalog?: SystemFace[]
 }) {
-  const catalogStylesRef = useRef<Map<string, HTMLStyleElement>>(new Map())
-  const systemStylesRef = useRef<Map<string, HTMLStyleElement>>(new Map())
-  const cacheRef = useRef<PreviewUrlCache>(new Map())
-  const catalogFingerprintsRef = useRef<Map<string, string>>(new Map())
-  const systemFingerprintsRef = useRef<Map<string, string>>(new Map())
   const entriesRef = useRef(entries)
+  const catalogRef = useRef(catalog)
   const systemFacesRef = useRef(systemFaces)
-  const catalogFingerprint = catalogPreviewFingerprintSet(entries)
-  const systemFingerprint = systemPreviewFingerprintSet(systemFaces)
+  const systemCatalogRef = useRef(systemCatalog)
+  const catalogWindowKey = useMemo(() => catalogPreviewFingerprintSet(entries), [entries])
+  const catalogRetainKey = useMemo(
+    () => (catalog ? catalogPreviewFingerprintSet(catalog) : ''),
+    [catalog],
+  )
+  const systemWindowKey = useMemo(() => systemPreviewFingerprintSet(systemFaces), [systemFaces])
+  const systemRetainKey = useMemo(
+    () => (systemCatalog ? systemPreviewFingerprintSet(systemCatalog) : ''),
+    [systemCatalog],
+  )
 
   useEffect(() => {
     entriesRef.current = entries
+    catalogRef.current = catalog
     systemFacesRef.current = systemFaces
+    systemCatalogRef.current = systemCatalog
   })
 
   useEffect(() => {
-    const styles = catalogStylesRef.current
-    const cache = cacheRef.current
+    const styles = previewFaceSession.catalogStyles
+    const cache = previewFaceSession.urls
     let cancelled = false
 
     async function apply(refresh: boolean) {
@@ -123,8 +150,12 @@ export function FontFaceStyles({
         const nextEntries = entriesRef.current
         const { keep, changed, fingerprints } = catalogEntriesNeedingPreviewCss(
           nextEntries,
-          catalogFingerprintsRef.current,
-          { refresh, mounted: new Set(styles.keys()) },
+          previewFaceSession.catalogFingerprints,
+          {
+            refresh,
+            mounted: new Set(styles.keys()),
+            catalog: catalogRef.current,
+          },
         )
         const cssById = await Promise.all(
           changed.map(async (entry) => [entry.id, await catalogEntryCss(entry, secret, cache, refresh)] as const),
@@ -135,7 +166,7 @@ export function FontFaceStyles({
           if (style.textContent !== css) style.textContent = css
         }
         pruneStyles(styles, keep)
-        catalogFingerprintsRef.current = fingerprints
+        previewFaceSession.catalogFingerprints = fingerprints
       } catch {
         // Keep already-mounted @font-face rules; a signing blip must not blank cards.
       }
@@ -147,12 +178,11 @@ export function FontFaceStyles({
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [catalogFingerprint])
+  }, [catalogWindowKey, catalogRetainKey])
 
   useEffect(() => {
-    if (!systemFingerprint) return
-    const styles = systemStylesRef.current
-    const cache = cacheRef.current
+    const styles = previewFaceSession.systemStyles
+    const cache = previewFaceSession.urls
     let cancelled = false
 
     async function apply(refresh: boolean) {
@@ -161,19 +191,23 @@ export function FontFaceStyles({
         const nextFaces = systemFacesRef.current
         const { keep, changed, fingerprints } = systemFacesNeedingPreviewCss(
           nextFaces,
-          systemFingerprintsRef.current,
-          { refresh, mounted: new Set(styles.keys()) },
+          previewFaceSession.systemFingerprints,
+          {
+            refresh,
+            mounted: new Set(styles.keys()),
+            catalog: systemCatalogRef.current,
+          },
         )
-        const cssByPath = await Promise.all(
-          changed.map(async (group) => [group.path, await systemPathCss(group.faces, secret, cache, refresh)] as const),
+        const cssByKey = await Promise.all(
+          changed.map(async (group) => [group.key, await systemPathCss(group.faces, secret, cache, refresh)] as const),
         )
         if (cancelled) return
-        for (const [path, css] of cssByPath) {
-          const style = ensureStyle(styles, path, 'data-font-butler-system')
+        for (const [key, css] of cssByKey) {
+          const style = ensureStyle(styles, key, 'data-font-butler-system')
           if (style.textContent !== css) style.textContent = css
         }
         pruneStyles(styles, keep)
-        systemFingerprintsRef.current = fingerprints
+        previewFaceSession.systemFingerprints = fingerprints
       } catch {
         // Keep already-mounted system @font-face rules.
       }
@@ -185,16 +219,7 @@ export function FontFaceStyles({
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [systemFingerprint])
-
-  useEffect(() => {
-    const catalogStyles = catalogStylesRef.current
-    const systemStyles = systemStylesRef.current
-    return () => {
-      pruneStyles(catalogStyles, new Set())
-      pruneStyles(systemStyles, new Set())
-    }
-  }, [])
+  }, [systemWindowKey, systemRetainKey])
 
   return null
 }

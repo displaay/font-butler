@@ -1677,7 +1677,9 @@ function AppShell() {
       >
         <FontFaceStyles
           entries={previewCatalogEntries}
+          catalog={entries}
           systemFaces={previewSystemFaces}
+          systemCatalog={systemFaces}
         />
         <Sidebar
           query={query}

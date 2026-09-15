@@ -8,7 +8,7 @@ import { plansDir } from './paths.ts'
 import { tempPaths } from './test-util.ts'
 import type { CatalogEntry, CatalogFile, ImportPlan } from './types.ts'
 
-function samplePlan(id = crypto.randomUUID()): ImportPlan {
+function samplePlan(id: string = crypto.randomUUID()): ImportPlan {
   return {
     id,
     createdAt: Date.now(),
