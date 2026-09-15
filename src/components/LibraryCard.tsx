@@ -22,16 +22,17 @@ import { familyCardPlan, type CatalogBatchPlan } from '@/lib/batch'
 import { applyFontDragImage } from '@/lib/dragPreview'
 import { formatAddedAt } from '@/lib/dates'
 import { mixedFormatWarning, occupyingFormats, uniqueEntryFormats, formatSwap } from '@/lib/formats'
-import { familyBadgeEntry, familyStatusSummary, hasRetailSyncedSource, hasSourceMissing, hasTrackedSource } from '@/lib/group'
+import { familyBadgeEntry, familyStatusSummary, hasRetailSyncedSource, hasSourceMissing, hasTrackedSource, entryHasPreviewFile } from '@/lib/group'
 import { catalogInstanceRows } from '@/lib/instances'
 import { projectContainsAll, writeFontButlerEntries } from '@/lib/projects'
 import { displayStateParts, familyCopyDestinations, isNotInstalledLabel, needsLocateSource } from '@/lib/state'
-import type { FamilyGroup, ProjectSet, ViewLayout } from '@/lib/types'
+import type { FamilyGroup, ProjectSet, RetailSyncView, ViewLayout } from '@/lib/types'
 import { pendingPreviewSample } from '@/lib/previewSample'
 import { cn } from '@/lib/utils'
 
 export function LibraryCard({
   group,
+  retail,
   layout,
   previewSize,
   showSourcePath,
@@ -83,6 +84,7 @@ export function LibraryCard({
   onFontDragEnd,
 }: {
   group: FamilyGroup
+  retail?: RetailSyncView | null
   layout: ViewLayout
   previewSize: number
   showSourcePath?: boolean
@@ -142,7 +144,7 @@ export function LibraryCard({
   const notInstalled = isNotInstalledLabel(badgeEntry)
   const deactivated = displayStateParts(badgeEntry).includes('Deactivated')
   const missingSource = hasSourceMissing(group)
-  const instances = useMemo(() => catalogInstanceRows(group), [group])
+  const instances = useMemo(() => catalogInstanceRows(group, retail), [group, retail])
   const showInstances = instances.length > 0 && layout === 'list'
   const previewFamily = catalogFontFamily(group.previewEntryId)
   const previewWeight = preview.faces[0]?.weight
@@ -153,14 +155,20 @@ export function LibraryCard({
   )
   const previewFaces = useMemo(
     () =>
-      instances.map((row) => ({
-        family: row.catalogEntryId ? catalogFontFamily(row.catalogEntryId) : previewFamily,
-        weight: row.weight,
-        italic: row.italic,
-        label: row.label,
-        variation: row.variation,
-      })),
-    [instances, previewFamily],
+      instances.map((row) => {
+        const rowEntry = row.catalogEntryId
+          ? group.entries.find((item) => item.id === row.catalogEntryId)
+          : undefined
+        return {
+          family: row.catalogEntryId ? catalogFontFamily(row.catalogEntryId) : previewFamily,
+          weight: row.weight,
+          italic: row.italic,
+          label: row.label,
+          variation: row.variation,
+          wait: rowEntry ? entryHasPreviewFile(rowEntry) : true,
+        }
+      }),
+    [instances, previewFamily, group.entries],
   )
   const plan = batch ?? familyCardPlan(group, adobeAvailable)
   const inCurrentProject = Boolean(
@@ -202,7 +210,7 @@ export function LibraryCard({
   const dest = familyCopyDestinations(group.entries)
   const showDestIcons = !hideDestinations && (dest.macos || dest.adobe)
   const showSourceIcon = hasTrackedSource(group)
-  const showRetailIcon = hasRetailSyncedSource(group)
+  const showRetailIcon = hasRetailSyncedSource(group, retail)
   const overlayDeactivated = layout === 'grid' && deactivated
   const overlayMixed = layout === 'grid' && Boolean(mixedWarning)
   const showOverlayIcons =
@@ -364,6 +372,7 @@ export function LibraryCard({
                       weight={previewWeight}
                       italic={previewItalic}
                       sample={previewSample}
+                      wait={entryHasPreviewFile(preview)}
                     />
                     {deactivated ? (
                       <Badge

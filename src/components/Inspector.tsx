@@ -19,7 +19,7 @@ import { collectionScopeLabel, displayStateLabel, familyCopyDestinations, needsL
 import { formatBytes, formatRelativeTime } from '@/lib/utils'
 import { entryHasTrackedSource, familyBadgeEntry, familyNameOf, hasRetailSyncedSource, hasTrackedSource } from '@/lib/group'
 import type { CatalogBatchPlan, SystemBatchPlan } from '@/lib/batch'
-import type { CatalogEntry, FamilyGroup, PreviewPreferences, ProjectSet, SystemFamilyGroup } from '@/lib/types'
+import { entryHasActiveRetailSync, type CatalogEntry, type FamilyGroup, type PreviewPreferences, type ProjectSet, type RetailSyncView, type SystemFamilyGroup } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 const SAMPLE = 'The quick brown fox jumps over the lazy type.'
@@ -38,6 +38,7 @@ export function inspectorPaneTabs(hasGlyphs: boolean): InspectorPaneTab[] {
 
 export function Inspector({
   group,
+  retail,
   entry,
   statusSummary,
   selectedEntryId,
@@ -82,6 +83,7 @@ export function Inspector({
   tablistId,
 }: {
   group: FamilyGroup | null
+  retail?: RetailSyncView | null
   entry: CatalogEntry | null
   statusSummary: string | null
   selectedEntryId: string | null
@@ -245,12 +247,12 @@ export function Inspector({
     project.members.some((member) => member.assetId === entry.id && member.pinFingerprint),
   )
 
-  const instances = catalogInstanceRows(group)
+  const instances = catalogInstanceRows(group, retail)
   const header = (
     <div>
       <div className="flex items-center gap-2">
         <h2 className="text-base font-semibold tracking-tight">{familyNameOf(entry)}</h2>
-        {hasRetailSyncedSource(group) ? <RetailBadge /> : null}
+        {hasRetailSyncedSource(group, retail) ? <RetailBadge /> : null}
         {hasTrackedSource(group) ? <SourceBadge /> : null}
       </div>
       <p className="mt-1 text-sm text-muted-foreground">
@@ -292,7 +294,7 @@ export function Inspector({
           <span className="truncate" title={entry.sourcePath}>
             {entry.sourcePath}
           </span>
-          {entry.retailRelativePath ? (
+          {entryHasActiveRetailSync(entry, retail) ? (
             <RetailBadge className="bg-transparent shadow-none" />
           ) : entryHasTrackedSource(entry) ? (
             <SourceBadge className="bg-transparent shadow-none" />

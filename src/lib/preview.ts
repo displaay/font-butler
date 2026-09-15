@@ -1,5 +1,5 @@
 import { signFontAccess, withFontAccessQuery } from './font-access'
-import { hasManagedInstall } from './group'
+import { entryHasPreviewFile, hasManagedInstall } from './group'
 import type { CatalogEntry, SystemFace } from './types'
 
 export type PreviewWhich = 'source' | 'installed' | 'revision'
@@ -196,6 +196,7 @@ export function catalogEntriesNeedingPreviewCss(
   const refresh = Boolean(options.refresh)
   const mounted = options.mounted
   for (const entry of entries) {
+    if (!entryHasPreviewFile(entry)) continue
     keep.add(entry.id)
     const fingerprint = catalogPreviewFingerprint(entry)
     fingerprints.set(entry.id, fingerprint)

@@ -412,10 +412,12 @@ export type {
   RetailSkipReason,
   RetailSyncFont,
   RetailSyncStatus,
+  RetailSyncView,
 } from '../../shared/retail'
 export {
   DEFAULT_RETAIL_AUTOCHECK_MINUTES,
   RETAIL_AUTOCHECK_CHOICES,
+  entryHasActiveRetailSync,
   groupRetailFontsByTypeface,
   retailDriftSummary,
   retailFileFormat,

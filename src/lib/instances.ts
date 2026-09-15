@@ -1,6 +1,7 @@
 import { entryFormatOf } from './formats.ts'
 import { entryHasTrackedSource } from './group.ts'
 import { entryCopyDestinations, instanceInstallState, type InstanceInstallState } from './state'
+import { entryHasActiveRetailSync, type RetailSyncView } from '../../shared/retail.ts'
 import type {
   CatalogEntry,
   FamilyGroup,
@@ -111,12 +112,12 @@ function rowsFromFace(
   ]
 }
 
-export function catalogInstanceRows(group: FamilyGroup): InstanceRow[] {
+export function catalogInstanceRows(group: FamilyGroup, retail?: RetailSyncView | null): InstanceRow[] {
   const rows: InstanceRow[] = []
   for (const entry of group.entries) {
     const installState = instanceInstallState(entry)
     const hasSource = entryHasTrackedSource(entry)
-    const retailSynced = Boolean(entry.retailRelativePath)
+    const retailSynced = entryHasActiveRetailSync(entry, retail)
     for (const face of entry.faces) {
       rows.push(...rowsFromFace(face, entry, installState, hasSource, retailSynced))
     }

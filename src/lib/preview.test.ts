@@ -243,6 +243,24 @@ test('catalogEntriesNeedingPreviewCss skips unchanged fingerprints until refresh
   assert.deepEqual(removed.changed, [])
 })
 
+test('catalogEntriesNeedingPreviewCss skips listings with no file to load', () => {
+  const installed = entry({ id: 'on' })
+  const stub = entry({
+    id: 'stub',
+    sourcePath: '',
+    sourcePresent: false,
+    installedPath: undefined,
+    disabledPath: undefined,
+    installations: [],
+    retailRelativePath: 'Reckless/Reckless-Regular.otf',
+    status: 'uninstalled',
+  })
+  const needed = catalogEntriesNeedingPreviewCss([installed, stub], new Map())
+  assert.deepEqual([...needed.keep], ['on'])
+  assert.deepEqual(needed.changed.map((item) => item.id), ['on'])
+  assert.equal(needed.fingerprints.has('stub'), false)
+})
+
 test('system path fingerprints cover every TTC/OTC face on the shared file', () => {
   const ttc = '/System/Library/Fonts/Collection.ttc'
   const regular = { path: ttc, weight: 400, italic: false, isVariable: false }

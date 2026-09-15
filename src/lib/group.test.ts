@@ -5,6 +5,7 @@ import {
   catalogEntriesMatch,
   countFamilyNames,
   countLibraryFilters,
+  entryHasPreviewFile,
   entryHasTrackedSource,
   familyBadgeEntry,
   familyStatusSummary,
@@ -166,15 +167,45 @@ test('Displaay retail listings cannot be forgotten', () => {
   const retail = {
     ...entry('retail', 'Reckless', 1, 'uninstalled'),
     retailRelativePath: 'Reckless/RecklessVF.otf',
+    retailFamilyName: 'Reckless',
   }
+  const active = { enabled: true as const, fonts: [{ familyName: 'Reckless', enabled: true }], disabledGlyphsFiles: [] }
   assert.deepEqual(forgettableIds({ entries: [retail] }), [])
   assert.equal(isForgettableOnlyGroup({ status: 'uninstalled', entries: [retail] }), false)
   assert.equal(entryHasTrackedSource(retail), false)
-  assert.equal(hasRetailSyncedSource({ entries: [retail] }), true)
+  assert.equal(hasRetailSyncedSource({ entries: [retail] }), false)
+  assert.equal(hasRetailSyncedSource({ entries: [retail] }, active), true)
   assert.equal(hasTrackedSource({ entries: [retail] }), false)
-  assert.deepEqual(retailFamiliesToOptOut([retail]), ['Reckless'])
-  assert.deepEqual(retailFamiliesToOptOut([retail], [{ familyName: 'Reckless', enabled: false }]), [])
-  assert.deepEqual(retailFamiliesToOptOut([entry('local', 'Reckless', 1)]), [])
+  assert.deepEqual(retailFamiliesToOptOut([retail]), [])
+  assert.deepEqual(retailFamiliesToOptOut([retail], active), ['Reckless'])
+  assert.deepEqual(
+    retailFamiliesToOptOut([retail], { enabled: true, fonts: [{ familyName: 'Reckless', enabled: false }], disabledGlyphsFiles: ['Reckless'] }),
+    [],
+  )
+  assert.deepEqual(
+    retailFamiliesToOptOut([retail], { enabled: false, fonts: [{ familyName: 'Reckless', enabled: true }], disabledGlyphsFiles: [] }),
+    [],
+  )
+  assert.deepEqual(retailFamiliesToOptOut([entry('local', 'Reckless', 1)], active), [])
+})
+
+test('groupCatalog prefers an entry with preview bytes over a file-less retail stub', () => {
+  const stub = {
+    ...entry('stub', 'Reckless', 1, 'uninstalled', 'Regular'),
+    sourcePath: '',
+    sourcePresent: false,
+    retailRelativePath: 'Reckless/Reckless-Regular.otf',
+    retailFamilyName: 'Reckless',
+  }
+  const installed = {
+    ...entry('on', 'Reckless', 2, 'installed', 'Bold'),
+    installedPath: '/Library/Fonts/Reckless-Bold.otf',
+  }
+  assert.equal(entryHasPreviewFile(stub), false)
+  assert.equal(entryHasPreviewFile(installed), true)
+  const groups = groupCatalog([stub, installed])
+  assert.equal(groups.length, 1)
+  assert.equal(groups[0]?.previewEntryId, 'on')
 })
 
 test('groupCatalog merges installed and uninstalled styles onto one Fonts card', () => {
