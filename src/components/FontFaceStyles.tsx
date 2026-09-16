@@ -11,7 +11,7 @@ import {
   type PreviewUrlCache,
   type PreviewWhich,
 } from '@/lib/preview'
-import { notifyPreviewCssMounted } from '@/lib/previewReady'
+import { invalidatePreviewReadyFamilies, notifyPreviewCssMounted } from '@/lib/previewReady'
 import type { CatalogEntry, SystemFace } from '@/lib/types'
 
 const REFRESH_MS = 15 * 60 * 1000
@@ -98,12 +98,19 @@ function ensureStyle(
   return style
 }
 
-function pruneStyles(map: Map<string, HTMLStyleElement>, keep: Set<string>) {
+function pruneStyles(
+  map: Map<string, HTMLStyleElement>,
+  keep: Set<string>,
+  familiesForKey: (key: string) => string[],
+) {
+  const pruned: string[] = []
   for (const [key, style] of map) {
     if (keep.has(key)) continue
     style.remove()
     map.delete(key)
+    pruned.push(...familiesForKey(key))
   }
+  if (pruned.length > 0) invalidatePreviewReadyFamilies(pruned)
 }
 
 export function FontFaceStyles({
@@ -155,15 +162,32 @@ export function FontFaceStyles({
       try {
         const secret = await getApiToken()
         const nextEntries = entriesRef.current
+        const previousFingerprints = previewFaceSession.catalogFingerprints
         const { keep, changed, fingerprints } = catalogEntriesNeedingPreviewCss(
           nextEntries,
-          previewFaceSession.catalogFingerprints,
+          previousFingerprints,
           {
             refresh,
             mounted: new Set(styles.keys()),
             catalog: catalogRef.current,
           },
         )
+        // Drop cached readiness only when preview bytes actually changed; re-sign
+        // refreshes and tab switches keep the session cache so cards render instantly.
+        const bytesChanged = changed.filter(
+          (entry) =>
+            previousFingerprints.has(entry.id) &&
+            previousFingerprints.get(entry.id) !== fingerprints.get(entry.id),
+        )
+        if (bytesChanged.length > 0) {
+          invalidatePreviewReadyFamilies(
+            bytesChanged.flatMap((entry) => [
+              cssFamily(entry.id),
+              cssFamily(entry.id, 'installed'),
+              cssFamily(entry.id, 'source'),
+            ]),
+          )
+        }
         const cssById = await Promise.all(
           changed.map(async (entry) => [entry.id, await catalogEntryCss(entry, secret, cache, refresh)] as const),
         )
@@ -172,7 +196,11 @@ export function FontFaceStyles({
           const style = ensureStyle(styles, id, 'data-font-butler-face')
           if (style.textContent !== css) style.textContent = css
         }
-        pruneStyles(styles, keep)
+        pruneStyles(styles, keep, (id) => [
+          cssFamily(id),
+          cssFamily(id, 'installed'),
+          cssFamily(id, 'source'),
+        ])
         previewFaceSession.catalogFingerprints = fingerprints
         if (cssById.length > 0) notifyPreviewCssMounted()
       } catch {
@@ -197,15 +225,24 @@ export function FontFaceStyles({
       try {
         const secret = await getApiToken()
         const nextFaces = systemFacesRef.current
+        const previousFingerprints = previewFaceSession.systemFingerprints
         const { keep, changed, fingerprints } = systemFacesNeedingPreviewCss(
           nextFaces,
-          previewFaceSession.systemFingerprints,
+          previousFingerprints,
           {
             refresh,
             mounted: new Set(styles.keys()),
             catalog: systemCatalogRef.current,
           },
         )
+        const bytesChanged = changed.filter(
+          (group) =>
+            previousFingerprints.has(group.key) &&
+            previousFingerprints.get(group.key) !== fingerprints.get(group.key),
+        )
+        if (bytesChanged.length > 0) {
+          invalidatePreviewReadyFamilies(bytesChanged.map((group) => systemFontFamily(group.path)))
+        }
         const cssByKey = await Promise.all(
           changed.map(async (group) => [group.key, await systemPathCss(group.faces, secret, cache, refresh)] as const),
         )
@@ -214,7 +251,7 @@ export function FontFaceStyles({
           const style = ensureStyle(styles, key, 'data-font-butler-system')
           if (style.textContent !== css) style.textContent = css
         }
-        pruneStyles(styles, keep)
+        pruneStyles(styles, keep, (key) => [systemFontFamily(key.split('\t')[0] ?? key)])
         previewFaceSession.systemFingerprints = fingerprints
         if (cssByKey.length > 0) notifyPreviewCssMounted()
       } catch {

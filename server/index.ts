@@ -991,7 +991,8 @@ app.get('/api/font-file/:id', (c) => {
     return new Response(file.buffer, {
       headers: {
         'Content-Type': file.mime,
-        'Cache-Control': 'no-cache',
+        // Preview URLs are versioned by revision (v=), so bytes are immutable per URL.
+        'Cache-Control': 'public, max-age=31536000, immutable',
         'Content-Disposition': contentDisposition(file.filename),
       },
     })

@@ -22,7 +22,7 @@ export function usePreviewFontReady(
         stop = undefined
         return true
       }
-      setReady(false)
+      setReady((current) => (current ? false : current))
       return false
     }
     if (check()) return

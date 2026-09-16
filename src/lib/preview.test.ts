@@ -414,10 +414,48 @@ test('retained off-screen preview CSS is LRU-capped', () => {
   const windowed = catalogEntriesNeedingPreviewCss(catalog.slice(180, 188), first.fingerprints, {
     mounted: first.keep,
     catalog,
+    retainExtra: 64,
   })
-  assert.equal(windowed.keep.size, 8 + PREVIEW_CSS_RETAIN_EXTRA)
+  assert.equal(windowed.keep.size, 8 + 64)
   assert.equal(windowed.keep.has('cap-187'), true)
-  assert.equal(windowed.keep.has('cap-0'), false)
+  assert.equal(windowed.keep.has('cap-0'), true)
+  assert.equal(windowed.keep.has('cap-179'), false)
+})
+
+test('default off-screen retain budget covers a full viewport window', () => {
+  // Tab switches must not evict the just-visible window: the budget has to stay
+  // well above a typical window (dozens of groups, multiple entries each).
+  assert.ok(PREVIEW_CSS_RETAIN_EXTRA >= 256)
+})
+
+test('recently visible previews outrank older off-screen CSS', () => {
+  const catalog = Array.from({ length: 30 }, (_, index) => entry({ id: `seq-${index}` }))
+  const first = catalogEntriesNeedingPreviewCss(catalog.slice(0, 10), new Map(), {
+    catalog,
+    retainExtra: 6,
+  })
+  assert.equal(first.keep.size, 10)
+  const scrolled = catalogEntriesNeedingPreviewCss(catalog.slice(10, 20), first.fingerprints, {
+    mounted: first.keep,
+    catalog,
+    retainExtra: 6,
+  })
+  assert.equal(scrolled.keep.size, 10 + 6)
+  assert.equal(scrolled.keep.has('seq-10'), true)
+  assert.equal(scrolled.keep.has('seq-0'), true)
+  assert.equal(scrolled.keep.has('seq-6'), false)
+  const further = catalogEntriesNeedingPreviewCss(catalog.slice(20, 30), scrolled.fingerprints, {
+    mounted: scrolled.keep,
+    catalog,
+    retainExtra: 6,
+  })
+  // The just-visible window (seq-10..19) is retained ahead of older extras (seq-0..5).
+  assert.equal(further.keep.size, 10 + 6)
+  assert.equal(further.keep.has('seq-20'), true)
+  assert.equal(further.keep.has('seq-10'), true)
+  assert.equal(further.keep.has('seq-15'), true)
+  assert.equal(further.keep.has('seq-16'), false)
+  assert.equal(further.keep.has('seq-0'), false)
 })
 
 test('leaving the Fonts tab keeps the full already-mounted preview CSS set', () => {

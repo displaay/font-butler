@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
+  invalidatePreviewReadyFamilies,
   isGenericPreviewFamily,
   isPreviewFontReady,
   normalizePreviewFamily,
@@ -75,9 +76,9 @@ test('matching FontFace plus fonts.check() reports the preview ready', () => {
 })
 
 test('matching FontFace still waits while fonts.check() is false', () => {
-  const restore = mockFonts({ check: false, faces: [{ family: 'fc-abc' }] })
+  const restore = mockFonts({ check: false, faces: [{ family: 'fc-waiting' }] })
   try {
-    assert.equal(isPreviewFontReady('fc-abc'), false)
+    assert.equal(isPreviewFontReady('fc-waiting'), false)
   } finally {
     restore()
   }
@@ -127,5 +128,93 @@ test('fonts.load waits until a matching FontFace is mounted', () => {
     assert.equal(loads, 1)
   } finally {
     restoreMounted()
+  }
+})
+
+test('settled preview loads stay cached so system cards cannot retry-storm', async () => {
+  let loads = 0
+  const restore = mockFonts({
+    check: false,
+    faces: [{ family: 'fc-reload' }],
+    onLoad: () => {
+      loads += 1
+    },
+  })
+  try {
+    assert.equal(isPreviewFontReady('fc-reload'), false)
+    assert.equal(loads, 1)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.equal(isPreviewFontReady('fc-reload'), false)
+    assert.equal(loads, 1)
+  } finally {
+    restore()
+  }
+})
+
+test('ready previews stay cached while the face is still mounted', () => {
+  const restoreReady = mockFonts({ check: true, faces: [{ family: 'fc-cached' }] })
+  try {
+    assert.equal(isPreviewFontReady('fc-cached'), true)
+  } finally {
+    restoreReady()
+  }
+  const restoreRemount = mockFonts({ check: false, faces: [{ family: 'fc-cached' }] })
+  try {
+    assert.equal(isPreviewFontReady('fc-cached'), true)
+  } finally {
+    restoreRemount()
+  }
+  const restorePruned = mockFonts({ check: false, faces: [] })
+  try {
+    assert.equal(isPreviewFontReady('fc-cached'), false)
+  } finally {
+    restorePruned()
+  }
+})
+
+test('invalidatePreviewReadyFamilies drops cached readiness per family', () => {
+  const restoreReady = mockFonts({
+    check: true,
+    faces: [{ family: 'fc-drop' }, { family: 'fc-keep' }],
+  })
+  try {
+    assert.equal(isPreviewFontReady('fc-drop'), true)
+    assert.equal(isPreviewFontReady('fc-keep'), true)
+  } finally {
+    restoreReady()
+  }
+  invalidatePreviewReadyFamilies(['fc-drop'])
+  const restoreRemount = mockFonts({
+    check: false,
+    faces: [{ family: 'fc-drop' }, { family: 'fc-keep' }],
+  })
+  try {
+    assert.equal(isPreviewFontReady('fc-drop'), false)
+    assert.equal(isPreviewFontReady('fc-keep'), true)
+  } finally {
+    restoreRemount()
+  }
+})
+
+test('invalidating a family lets fonts.load run again after a prune', async () => {
+  let loads = 0
+  const restore = mockFonts({
+    check: false,
+    faces: [{ family: 'fc-pruned' }],
+    onLoad: () => {
+      loads += 1
+    },
+  })
+  try {
+    assert.equal(isPreviewFontReady('fc-pruned'), false)
+    assert.equal(loads, 1)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.equal(isPreviewFontReady('fc-pruned'), false)
+    assert.equal(loads, 1)
+    invalidatePreviewReadyFamilies(['fc-pruned'])
+    assert.equal(isPreviewFontReady('fc-pruned'), false)
+    assert.equal(loads, 2)
+  } finally {
+    restore()
   }
 })

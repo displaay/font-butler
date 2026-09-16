@@ -193,7 +193,7 @@ export async function cachedSignedSystemFontUrl(
 }
 
 /** Extra off-screen faces kept after the mounted window (inspector + recently visible). */
-export const PREVIEW_CSS_RETAIN_EXTRA = 64
+export const PREVIEW_CSS_RETAIN_EXTRA = 256
 
 export type PreviewCssOptions<TCatalog> = {
   refresh?: boolean
@@ -214,7 +214,10 @@ function retainOffscreenPreviewExtras<T>(
   windowEmpty: boolean,
 ): T[] {
   if (windowEmpty || extras.length <= retainExtra) return extras
-  return extras.slice(-retainExtra)
+  // Extras arrive newest-first (the just-visible window, then older off-screen
+  // faces), so keep the head: evicting from the tail preserves tab switches
+  // and scroll-backs instead of dropping what was just on screen.
+  return extras.slice(0, retainExtra)
 }
 
 function catalogAliveById(catalog: readonly CatalogEntry[]): Map<string, CatalogEntry> {
