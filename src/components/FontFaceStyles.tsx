@@ -11,6 +11,7 @@ import {
   type PreviewUrlCache,
   type PreviewWhich,
 } from '@/lib/preview'
+import { notifyPreviewCssMounted } from '@/lib/previewReady'
 import type { CatalogEntry, SystemFace } from '@/lib/types'
 
 const REFRESH_MS = 15 * 60 * 1000
@@ -173,6 +174,7 @@ export function FontFaceStyles({
         }
         pruneStyles(styles, keep)
         previewFaceSession.catalogFingerprints = fingerprints
+        if (cssById.length > 0) notifyPreviewCssMounted()
       } catch {
         // Keep already-mounted @font-face rules; a signing blip must not blank cards.
       }
@@ -214,6 +216,7 @@ export function FontFaceStyles({
         }
         pruneStyles(styles, keep)
         previewFaceSession.systemFingerprints = fingerprints
+        if (cssByKey.length > 0) notifyPreviewCssMounted()
       } catch {
         // Keep already-mounted system @font-face rules.
       }

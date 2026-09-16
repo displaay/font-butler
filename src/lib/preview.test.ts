@@ -420,6 +420,25 @@ test('retained off-screen preview CSS is LRU-capped', () => {
   assert.equal(windowed.keep.has('cap-0'), false)
 })
 
+test('leaving the Fonts tab keeps the full already-mounted preview CSS set', () => {
+  const catalog = Array.from({ length: 180 }, (_, index) => entry({ id: `cap-${index}` }))
+  const first = catalogEntriesNeedingPreviewCss(catalog.slice(0, 180), new Map(), { catalog })
+  assert.equal(first.keep.size, 180)
+  const leftTab = catalogEntriesNeedingPreviewCss([], first.fingerprints, {
+    mounted: first.keep,
+    catalog,
+  })
+  assert.equal(leftTab.keep.size, 180)
+  assert.deepEqual(leftTab.changed, [])
+  assert.equal(leftTab.keep.has('cap-0'), true)
+  const back = catalogEntriesNeedingPreviewCss(catalog.slice(0, 10), leftTab.fingerprints, {
+    mounted: leftTab.keep,
+    catalog,
+  })
+  assert.deepEqual(back.changed, [])
+  assert.equal(back.keep.has('cap-0'), true)
+})
+
 test('system preview CSS stays cached when leaving the System tab', () => {
   const ttc = '/System/Library/Fonts/Collection.ttc'
   const other = '/System/Library/Fonts/Other.ttf'

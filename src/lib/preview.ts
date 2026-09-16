@@ -200,11 +200,21 @@ export type PreviewCssOptions<TCatalog> = {
   mounted?: ReadonlySet<string>
   /**
    * Live catalog used to keep already-loaded preview CSS in memory.
-   * Off-screen / unmounted-tab faces stay cached; missing ids are pruned;
-   * fingerprint changes rebuild only the affected faces.
+   * Off-screen faces stay cached (LRU-capped while a viewport is active);
+   * an empty window (tab unmount) keeps the full already-mounted set.
+   * Missing ids are pruned; fingerprint changes rebuild only the affected faces.
    */
   catalog?: readonly TCatalog[]
   retainExtra?: number
+}
+
+function retainOffscreenPreviewExtras<T>(
+  extras: T[],
+  retainExtra: number,
+  windowEmpty: boolean,
+): T[] {
+  if (windowEmpty || extras.length <= retainExtra) return extras
+  return extras.slice(-retainExtra)
 }
 
 function catalogAliveById(catalog: readonly CatalogEntry[]): Map<string, CatalogEntry> {
@@ -258,7 +268,7 @@ export function catalogEntriesNeedingPreviewCss(
       extras.push({ id, live, fingerprint: catalogPreviewFingerprint(live), previous })
     }
     const retainExtra = options.retainExtra ?? PREVIEW_CSS_RETAIN_EXTRA
-    const retained = extras.length <= retainExtra ? extras : extras.slice(-retainExtra)
+    const retained = retainOffscreenPreviewExtras(extras, retainExtra, seen.size === 0)
     for (const extra of retained) {
       keep.add(extra.id)
       fingerprints.set(extra.id, extra.fingerprint)
@@ -319,7 +329,7 @@ export function systemFacesNeedingPreviewCss<T extends SystemPreviewFace>(
       extras.push({ key, live, fingerprint: systemPathPreviewFingerprint(live), previous })
     }
     const retainExtra = options.retainExtra ?? PREVIEW_CSS_RETAIN_EXTRA
-    const retained = extras.length <= retainExtra ? extras : extras.slice(-retainExtra)
+    const retained = retainOffscreenPreviewExtras(extras, retainExtra, seen.size === 0)
     for (const extra of retained) {
       keep.add(extra.key)
       fingerprints.set(extra.key, extra.fingerprint)

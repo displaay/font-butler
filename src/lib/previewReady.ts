@@ -86,15 +86,26 @@ export function isPreviewFontReady(
   if (typeof document === 'undefined' || !document.fonts) return false
   const name = normalizePreviewFamily(family)
   const spec = `${italic ? 'italic' : 'normal'} ${weight} 24px "${name}"`
+  const hasFace = hasMatchingPreviewFace(name)
+  let check = false
   try {
     // FontFaceSet.check() is true when nothing matching is pending, including when
     // no @font-face has been registered yet. That would paint fallback text.
-    if (hasMatchingPreviewFace(name) && document.fonts.check(spec)) return true
+    check = document.fonts.check(spec)
+    if (hasFace && check) return true
   } catch {
     // Fall through to load() when FontFaceSet.check rejects the descriptor.
   }
-  requestPreviewLoad(spec, previewLoadKey(name, weight, italic))
+  const key = previewLoadKey(name, weight, italic)
+  // Calling load() before @font-face exists resolves empty and is cached forever,
+  // so the spinner never uses the family and the browser never fetches the file.
+  if (hasFace) requestPreviewLoad(spec, key)
   return false
+}
+
+/** Cards wait on this after FontFaceStyles injects @font-face rules. */
+export function notifyPreviewCssMounted() {
+  notifyPreviewFonts()
 }
 
 export function subscribePreviewFonts(listener: PreviewFontsListener): () => void {

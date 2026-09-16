@@ -4,6 +4,8 @@ import {
   isGenericPreviewFamily,
   isPreviewFontReady,
   normalizePreviewFamily,
+  notifyPreviewCssMounted,
+  subscribePreviewFonts,
 } from './previewReady.ts'
 
 type MockFace = { family: string }
@@ -81,9 +83,24 @@ test('matching FontFace still waits while fonts.check() is false', () => {
   }
 })
 
-test('fonts.load is skipped until a card family is actually checked', () => {
+test('notifyPreviewCssMounted wakes waiting preview listeners', () => {
+  let calls = 0
+  const restore = mockFonts({ check: false, faces: [] })
+  try {
+    const stop = subscribePreviewFonts(() => {
+      calls += 1
+    })
+    notifyPreviewCssMounted()
+    assert.equal(calls, 1)
+    stop()
+  } finally {
+    restore()
+  }
+})
+
+test('fonts.load waits until a matching FontFace is mounted', () => {
   let loads = 0
-  const restore = mockFonts({
+  const restoreEmpty = mockFonts({
     check: false,
     faces: [],
     onLoad: () => {
@@ -91,13 +108,24 @@ test('fonts.load is skipped until a card family is actually checked', () => {
     },
   })
   try {
-    assert.equal(isPreviewFontReady('ui-sans-serif'), true)
+    assert.equal(isPreviewFontReady('fc-visible'), false)
     assert.equal(loads, 0)
+  } finally {
+    restoreEmpty()
+  }
+  const restoreMounted = mockFonts({
+    check: false,
+    faces: [{ family: 'fc-visible' }],
+    onLoad: () => {
+      loads += 1
+    },
+  })
+  try {
     assert.equal(isPreviewFontReady('fc-visible'), false)
     assert.equal(loads, 1)
     assert.equal(isPreviewFontReady('fc-visible'), false)
     assert.equal(loads, 1)
   } finally {
-    restore()
+    restoreMounted()
   }
 })
