@@ -18,13 +18,13 @@ export function catalogPreviewRevision(
   if (which === 'revision' && revision) return revision
   const liveInstall = hasManagedInstall(entry)
   if (which === 'source' || (which === 'installed' && !liveInstall)) {
-    return `${entry.sourceFingerprint ?? `${entry.sourceMtimeMs}-${entry.sourceSize}`}-${entry.updatedAt}`
+    return entry.sourceFingerprint ?? `${entry.sourceMtimeMs}-${entry.sourceSize}`
   }
-  if (entry.installedFingerprint) return `${entry.installedFingerprint}-${entry.updatedAt}`
+  if (entry.installedFingerprint) return entry.installedFingerprint
   if (entry.installedPath) {
-    return `${entry.installedSnapshotMtimeMs ?? 0}-${entry.installedSnapshotSize ?? 0}-${entry.updatedAt}`
+    return `${entry.installedSnapshotMtimeMs ?? 0}-${entry.installedSnapshotSize ?? 0}`
   }
-  return `${entry.sourceMtimeMs}-${entry.sourceSize}-${entry.updatedAt}`
+  return `${entry.sourceMtimeMs}-${entry.sourceSize}`
 }
 
 export function catalogFontUrl(
@@ -192,6 +192,9 @@ export async function cachedSignedSystemFontUrl(
   )
 }
 
+/** Extra off-screen faces kept after the mounted window (inspector + recently visible). */
+export const PREVIEW_CSS_RETAIN_EXTRA = 64
+
 export type PreviewCssOptions<TCatalog> = {
   refresh?: boolean
   mounted?: ReadonlySet<string>
@@ -201,6 +204,7 @@ export type PreviewCssOptions<TCatalog> = {
    * fingerprint changes rebuild only the affected faces.
    */
   catalog?: readonly TCatalog[]
+  retainExtra?: number
 }
 
 function catalogAliveById(catalog: readonly CatalogEntry[]): Map<string, CatalogEntry> {
@@ -246,15 +250,20 @@ export function catalogEntriesNeedingPreviewCss(
   }
   if (options.catalog) {
     const alive = catalogAliveById(options.catalog)
+    const extras: Array<{ id: string; live: CatalogEntry; fingerprint: string; previous: string }> = []
     for (const [id, previous] of previousFingerprints) {
       if (seen.has(id)) continue
       const live = alive.get(id)
       if (!live) continue
-      const fingerprint = catalogPreviewFingerprint(live)
-      keep.add(id)
-      fingerprints.set(id, fingerprint)
-      if (!shouldRebuildPreviewCss(refresh, previous, fingerprint, mounted, id)) continue
-      changed.push(live)
+      extras.push({ id, live, fingerprint: catalogPreviewFingerprint(live), previous })
+    }
+    const retainExtra = options.retainExtra ?? PREVIEW_CSS_RETAIN_EXTRA
+    const retained = extras.length <= retainExtra ? extras : extras.slice(-retainExtra)
+    for (const extra of retained) {
+      keep.add(extra.id)
+      fingerprints.set(extra.id, extra.fingerprint)
+      if (!shouldRebuildPreviewCss(refresh, extra.previous, extra.fingerprint, mounted, extra.id)) continue
+      changed.push(extra.live)
     }
   }
   return { keep, changed, fingerprints }
@@ -302,15 +311,20 @@ export function systemFacesNeedingPreviewCss<T extends SystemPreviewFace>(
   }
   if (options.catalog) {
     const alive = groupSystemPreviewFaces(options.catalog)
+    const extras: Array<{ key: string; live: T[]; fingerprint: string; previous: string }> = []
     for (const [key, previous] of previousFingerprints) {
       if (seen.has(key)) continue
       const live = alive.get(key)
       if (!live) continue
-      const fingerprint = systemPathPreviewFingerprint(live)
-      keep.add(key)
-      fingerprints.set(key, fingerprint)
-      if (!shouldRebuildPreviewCss(refresh, previous, fingerprint, mounted, key)) continue
-      changed.push({ key, path: live[0]?.path ?? '', faces: live })
+      extras.push({ key, live, fingerprint: systemPathPreviewFingerprint(live), previous })
+    }
+    const retainExtra = options.retainExtra ?? PREVIEW_CSS_RETAIN_EXTRA
+    const retained = extras.length <= retainExtra ? extras : extras.slice(-retainExtra)
+    for (const extra of retained) {
+      keep.add(extra.key)
+      fingerprints.set(extra.key, extra.fingerprint)
+      if (!shouldRebuildPreviewCss(refresh, extra.previous, extra.fingerprint, mounted, extra.key)) continue
+      changed.push({ key: extra.key, path: extra.live[0]?.path ?? '', faces: extra.live })
     }
   }
   return { keep, changed, fingerprints }

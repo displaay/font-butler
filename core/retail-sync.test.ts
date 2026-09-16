@@ -357,3 +357,13 @@ test('forgetRetailFile drops a key from the local manifest', () => {
   forgetRetailFile(paths, 'Reckless/RecklessVF.otf')
   assert.equal(loadRetailManifest(paths).files['Reckless/RecklessVF.otf'], undefined)
 })
+
+test('loadRetailManifest round-trips an incomplete download marker', () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-retail-incomplete-'))
+  const paths = buildPaths({ override: dataRoot, mac: false })
+  fs.mkdirSync(paths.dataRoot, { recursive: true })
+  saveRetailManifest(paths, { ...local([localFile()]), incomplete: true })
+  assert.equal(loadRetailManifest(paths).incomplete, true)
+  saveRetailManifest(paths, { ...loadRetailManifest(paths), incomplete: false })
+  assert.equal(loadRetailManifest(paths).incomplete, false)
+})

@@ -61,7 +61,7 @@ test('a sync flattens into Fonts atomically and records them in the manifest', a
   assert.equal(result.manifest.files['Reckless/RecklessVF.otf'].etag, 'etag-1')
   assert.equal(result.manifest.files['Reckless/RecklessVF.otf'].revisionId, 'rev-1')
   assert.equal(result.manifest.files['Reckless/RecklessVF.otf'].installedPath, target)
-  assert.deepEqual(saved, [1])
+  assert.deepEqual(saved, [0, 1, 1])
 })
 
 test('no .part file survives a successful write', async () => {
@@ -207,7 +207,58 @@ test('an interrupted run persists progress so it is not re-downloaded', async ()
     concurrency: 1,
   })
   assert.equal(result.written, 2)
-  assert.deepEqual(snapshots, [['Reckless/A.otf'], ['Reckless/A.otf', 'Reckless/B.otf']])
+  assert.deepEqual(snapshots, [
+    [],
+    ['Reckless/A.otf'],
+    ['Reckless/A.otf', 'Reckless/B.otf'],
+    ['Reckless/A.otf', 'Reckless/B.otf'],
+  ])
+})
+
+test('a sync marks the local manifest incomplete until the last file lands', async () => {
+  const { userFontsDir, stagingDir, rollbackDir, native } = dirs()
+  const flags: Array<boolean | undefined> = []
+  const result = await applyRetailSync({
+    userFontsDir,
+    stagingDir,
+    rollbackDir,
+    native,
+    drift: [added('Reckless/A.otf', 4), added('Reckless/B.otf', 4)],
+    download: async () => payload(4),
+    manifest: emptyRetailLocalManifest(),
+    persist: (manifest) => flags.push(manifest.incomplete),
+    concurrency: 1,
+  })
+  assert.equal(result.written, 2)
+  assert.deepEqual(flags, [true, true, true, false])
+  assert.equal(result.manifest.incomplete, false)
+})
+
+test('a sync reports family progress rather than style progress', async () => {
+  const { userFontsDir, stagingDir, rollbackDir, native } = dirs()
+  const progress: Array<{ done: number; total: number }> = []
+  const result = await applyRetailSync({
+    userFontsDir,
+    stagingDir,
+    rollbackDir,
+    native,
+    drift: [
+      { ...added('Aguzzo/A.otf', 4), familyName: 'Aguzzo', glyphsFile: 'Aguzzo' },
+      { ...added('Aguzzo/B.otf', 4), familyName: 'Aguzzo', glyphsFile: 'Aguzzo' },
+      { ...added('Vinila/V.otf', 4), familyName: 'Vinila', glyphsFile: 'Vinila' },
+    ],
+    download: async () => payload(4),
+    manifest: emptyRetailLocalManifest(),
+    persist: () => {},
+    onProgress: (next) => progress.push(next),
+    concurrency: 1,
+  })
+  assert.equal(result.written, 3)
+  assert.deepEqual(progress, [
+    { done: 0, total: 2 },
+    { done: 1, total: 2 },
+    { done: 2, total: 2 },
+  ])
 })
 
 test('sweepRetailPartials clears leftovers from an interrupted run', () => {
@@ -260,4 +311,29 @@ test('a parked dest is rewritten in place without replacing Fonts', async () => 
   assert.equal(result.written, 1)
   assert.equal(fs.readFileSync(parked).length, 4)
   assert.equal(fs.existsSync(path.join(userFontsDir, 'Parked.otf')), false)
+})
+
+test('aborting a sync leaves remaining files incomplete', async () => {
+  const { userFontsDir, stagingDir, rollbackDir, native } = dirs()
+  const controller = new AbortController()
+  let downloads = 0
+  const result = await applyRetailSync({
+    userFontsDir,
+    stagingDir,
+    rollbackDir,
+    native,
+    drift: [added('Reckless/A.otf', 4), added('Reckless/B.otf', 4), added('Reckless/C.otf', 4)],
+    download: async () => {
+      downloads += 1
+      if (downloads === 1) controller.abort()
+      return payload(4)
+    },
+    manifest: emptyRetailLocalManifest(),
+    persist: () => {},
+    concurrency: 1,
+    signal: controller.signal,
+  })
+  assert.equal(downloads, 1)
+  assert.equal(result.written, 1)
+  assert.equal(result.manifest.incomplete, true)
 })

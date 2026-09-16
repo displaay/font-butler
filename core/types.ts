@@ -190,6 +190,11 @@ export type LibraryFilter =
   | 'static'
   | 'source'
   | 'no-source'
+  | 'computer'
+  | 'adobe'
+  | 'no-destination'
+  | 'otf'
+  | 'ttf'
 
 export type SavedLibraryFilter = {
   id: string
@@ -535,7 +540,7 @@ export type AppUpdateStatus = {
 }
 
 export type ServiceEvent =
-  | { type: 'catalog'; entries: CatalogEntry[] }
+  | { type: 'catalog'; entries: CatalogEntry[]; revision?: number }
   | { type: 'system'; faces: SystemFace[] }
   | { type: 'notice'; notice: Notice }
   | { type: 'settings'; settings: AppSettings }
@@ -544,3 +549,12 @@ export type ServiceEvent =
   | { type: 'duplicates'; duplicates: DuplicateWarning[] }
   | { type: 'app-update'; update: AppUpdateStatus }
   | { type: 'retail'; status: RetailSyncStatus }
+  | { type: 'action-progress'; action: BatchProgressAction; done: number; total: number }
+
+export type BatchProgressAction =
+  | 'install'
+  | 'uninstall'
+  | 'activate'
+  | 'deactivate'
+  | 'reinstall'
+  | 'forget'

@@ -4,11 +4,11 @@ import { readRetailToken, writeRetailToken } from './auth.ts'
 import { loadCatalog, occupantsAtPath, removeEntryById, runCatalogTask, saveCatalog, upsertEntry } from './catalog.ts'
 import { copyAt, upsertCopy } from './destinations.ts'
 import { emitEvent } from './events.ts'
-import { tryFingerprintFile } from './fingerprint.ts'
+import { tryFingerprintFileIfChanged } from './fingerprint.ts'
 import { importOneUnlocked } from './service-import.ts'
 import { getFontNative } from './native.ts'
 import { applyParsedFont, parseFontFile } from './parse.ts'
-import { retailTokenPath } from './paths.ts'
+import { retailCacheDir, retailTokenPath } from './paths.ts'
 import { loadPlan } from './planner.ts'
 import { loadProjects } from './projects.ts'
 import type { AppPaths } from './paths.ts'
@@ -24,8 +24,9 @@ import {
   saveRetailManifest,
   statRetailFile,
 } from './retail-sync.ts'
-import { newId, now, removeInstalledCopy, touchEntry } from './service-helpers.ts'
+import { catalogEvent, newId, now, removeInstalledCopy, touchEntry } from './service-helpers.ts'
 import { DEFAULT_RETAIL_WORKER_BASE_URL, defaultRetailSync, loadSettings, saveSettings } from './settings.ts'
+import { removeAdobeCopy } from './service-destinations.ts'
 import { applyEntryFacts } from './state.ts'
 import type { AppSettings, CatalogEntry, FontFaceInfo, RetailSyncSettings } from './types.ts'
 import {
@@ -51,7 +52,10 @@ import {
   selectedFormatsFromFonts,
   selectedRetailFormat,
   isSelectedRetailFormat,
+  emptyRetailLocalManifest,
+  isOrphanRetailListing,
   type RetailCollisionAction,
+  type RetailDisableAction,
   type RetailFamilyCollision,
   type RetailFontFormat,
   type RetailOptOutMode,
@@ -61,6 +65,7 @@ import type {
   RetailManifest,
   RetailSkip,
   RetailSyncFont,
+  RetailSyncProgress,
   RetailSyncStatus,
 } from '../shared/retail.ts'
 
@@ -82,6 +87,7 @@ type RetailCache = {
   /** `null` until a successful check this process; catalog listings cover a restart. */
   fonts: CachedRetailFont[] | null
   collisions: RetailFamilyCollision[]
+  progress: RetailSyncProgress | null
 }
 
 const cache: RetailCache = {
@@ -91,6 +97,7 @@ const cache: RetailCache = {
   error: null,
   fonts: null,
   collisions: [],
+  progress: null,
 }
 
 /**
@@ -99,14 +106,21 @@ const cache: RetailCache = {
  * target. A shared promise makes a second request join the run already in progress.
  */
 let inflightSync: Promise<RetailSyncStatus> | null = null
+let inflightSyncAbort: AbortController | null = null
+
+export function abortInflightRetailSync(): void {
+  inflightSyncAbort?.abort()
+}
 
 export function resetRetailCache(): void {
+  abortInflightRetailSync()
   cache.checkedAt = null
   cache.drift = []
   cache.skipped = []
   cache.error = null
   cache.fonts = null
   cache.collisions = []
+  cache.progress = null
 }
 
 function cacheFontsFromSync(fonts: RetailSyncFont[]): CachedRetailFont[] {
@@ -219,6 +233,14 @@ function retailSettings(settings: AppSettings): RetailSyncSettings {
   }
 }
 
+/** True when a quit left a download pass unfinished. Pending check results wait for Sync. */
+export function retailSyncNeedsResume(paths: AppPaths, config = retailSettings(loadSettings(paths))): boolean {
+  if (!config.enabled) return false
+  // Catalog leftovers are not a resume signal: a finished pass can leave uninstalled rows that are
+  // not downloadable (`conflict`, `removed`) or that are waiting for an explicit Sync.
+  return loadRetailManifest(paths).incomplete === true
+}
+
 export function retailStatus(paths: AppPaths, settings = loadSettings(paths)): RetailSyncStatus {
   const config = retailSettings(settings)
   const local = loadRetailManifest(paths)
@@ -246,6 +268,8 @@ export function retailStatus(paths: AppPaths, settings = loadSettings(paths)): R
     disabledGlyphsFiles: config.disabledGlyphsFiles,
     familyFormats: config.familyFormats,
     collisions: cache.collisions,
+    incomplete: retailSyncNeedsResume(paths, config),
+    progress: cache.progress,
   }
 }
 
@@ -265,6 +289,7 @@ export async function configureRetailSync(
     folderId?: string | null
     disabledGlyphsFiles?: string[]
     familyFormats?: Record<string, RetailFontFormat>
+    disableAction?: RetailDisableAction
   },
 ): Promise<RetailSyncStatus> {
   const settings = loadSettings(paths)
@@ -311,7 +336,90 @@ export async function configureRetailSync(
   if (formatsChanged) {
     await uninstallUnselectedRetailFormats(paths, next)
   }
+  if (input.disabledGlyphsFiles !== undefined) {
+    const fonts = listRetailFonts(paths, next.disabledGlyphsFiles, next.familyFormats, optOutModeOf(next))
+    const stopping =
+      fonts.length > 0
+        ? fonts.every((font) => !font.enabled)
+        : input.disabledGlyphsFiles.length > 0
+    if (stopping) abortInflightRetailSync()
+  }
+  if (!next.enabled) {
+    abortInflightRetailSync()
+    const local = loadRetailManifest(paths)
+    if (local.incomplete) {
+      saveRetailManifest(paths, { ...local, incomplete: false })
+    }
+    if (input.disableAction === 'remove') {
+      await removeRetailCollection(paths)
+      resetRetailCache()
+    } else {
+      await dropOrphanRetailListings(paths)
+    }
+  }
   return emitRetail(paths)
+}
+
+function clearRetailCacheDir(paths: AppPaths): void {
+  const dir = retailCacheDir(paths)
+  if (fs.existsSync(dir)) {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+/** Drop file-less Displaay listings once collection sync is off. */
+export async function dropOrphanRetailListings(paths: AppPaths): Promise<number> {
+  if (loadSettings(paths).retailSync?.enabled) return 0
+  return runCatalogTask(async () => {
+    const catalog = loadCatalog(paths)
+    const orphans = catalog.entries.filter((entry) => isOrphanRetailListing(entry, false))
+    if (!orphans.length) return 0
+    const local = loadRetailManifest(paths)
+    let manifestDirty = false
+    for (const entry of orphans) {
+      await yieldEventLoop()
+      const relative = entry.retailRelativePath
+      removeEntryById(catalog, entry.id)
+      if (relative && local.files[relative]) {
+        delete local.files[relative]
+        manifestDirty = true
+      }
+    }
+    saveCatalog(paths, catalog)
+    if (manifestDirty) saveRetailManifest(paths, local)
+    emitEvent(catalogEvent(catalog.entries))
+    return orphans.length
+  })
+}
+
+/** Uninstall owned Fonts copies and drop every retail listing from the catalog. */
+async function removeRetailCollection(paths: AppPaths): Promise<void> {
+  await runCatalogTask(async () => {
+    const catalog = loadCatalog(paths)
+    const retail = catalog.entries.filter((entry) => entry.retailRelativePath)
+    for (const entry of retail) {
+      await yieldEventLoop()
+      const parkedPath = entry.disabledPath
+      const relative = entry.retailRelativePath
+      await removeInstalledCopy(entry, catalog.entries)
+      removeAdobeCopy(paths, entry)
+      entry.installations = []
+      if (parkedPath && fs.existsSync(parkedPath)) {
+        fs.rmSync(parkedPath, { force: true })
+      }
+      const cached = relative ? resolveRetailCachePath(paths, relative) : null
+      if (cached && fs.existsSync(cached)) {
+        fs.rmSync(cached, { force: true })
+      }
+      removeEntryById(catalog, entry.id)
+    }
+    if (retail.length) {
+      saveCatalog(paths, catalog)
+      emitEvent(catalogEvent(catalog.entries))
+    }
+    saveRetailManifest(paths, emptyRetailLocalManifest())
+    clearRetailCacheDir(paths)
+  })
 }
 
 function retailFamilyOfEntry(entry: CatalogEntry): string {
@@ -380,7 +488,7 @@ async function uninstallUnselectedRetailFormats(paths: AppPaths, config: RetailS
     }
     if (dirty) {
       saveCatalog(paths, catalog)
-      emitEvent({ type: 'catalog', entries: catalog.entries })
+      emitEvent(catalogEvent(catalog.entries))
     }
   })
 }
@@ -423,20 +531,25 @@ function occupantAt(catalog: ReturnType<typeof loadCatalog>, dest: string): Cata
   )
 }
 
-function fontsDestOccupied(paths: AppPaths, relativePath: string): boolean {
+function fontsDestOccupied(
+  paths: AppPaths,
+  relativePath: string,
+  catalog = loadCatalog(paths),
+): boolean {
   const dest = resolveRetailInstallPath(paths.userFontsDir, relativePath)
   if (!dest) return false
-  const occupants = occupantsAtPath(loadCatalog(paths), dest).filter(
+  const occupants = occupantsAtPath(catalog, dest).filter(
     (entry) => entry.retailRelativePath !== relativePath,
   )
   if (occupants.length > 0) return true
-  return fs.existsSync(dest) && !occupantAt(loadCatalog(paths), dest)
+  return fs.existsSync(dest) && !occupantAt(catalog, dest)
 }
 
 function destForRelativePath(paths: AppPaths, relativePath: string): { dest: string; parked: boolean } | null {
   const catalog = loadCatalog(paths)
   const existing = findRetailEntry(catalog, relativePath)
-  const config = retailSettings(loadSettings(paths))
+  const settings = loadSettings(paths)
+  const config = retailSettings(settings)
   const optOutMode = optOutModeOf(config)
   const fonts = listRetailFonts(
     paths,
@@ -473,7 +586,7 @@ function destForRelativePath(paths: AppPaths, relativePath: string): { dest: str
   }
   const known = loadRetailManifest(paths).files[relativePath]
   const holdOffFonts = existing?.status === 'uninstalled' && Boolean(known)
-  if (holdOffFonts || fontsDestOccupied(paths, relativePath)) {
+  if (holdOffFonts || fontsDestOccupied(paths, relativePath, catalog)) {
     const cached = resolveRetailCachePath(paths, relativePath)
     if (!cached) return null
     return { dest: cached, parked: true }
@@ -486,9 +599,13 @@ function destForRelativePath(paths: AppPaths, relativePath: string): { dest: str
 function stubRetailFace(familyName: string, relativePath: string): FontFaceInfo {
   const base = path.basename(relativePath, path.extname(relativePath))
   const family = familyName.trim() || base
+  const prefix = family.toLowerCase()
+  const styleFromBase = base.toLowerCase().startsWith(prefix)
+    ? base.slice(family.length).replace(/^[-_ ]+/, '')
+    : ''
   return {
     familyName: family,
-    styleName: base.replace(new RegExp(`^${family}`, 'i'), '').replace(/^[-_ ]+/, '') || 'Regular',
+    styleName: styleFromBase || 'Regular',
     fullName: `${family} ${base}`.trim(),
     postscriptName: '',
     isVariable: /vf$/i.test(base),
@@ -499,53 +616,61 @@ function stubRetailFace(familyName: string, relativePath: string): FontFaceInfo 
   }
 }
 
-function ensureRetailListings(paths: AppPaths, manifest: RetailManifest): boolean {
-  const catalog = loadCatalog(paths)
-  let changed = false
-  for (const collection of manifest.collections ?? []) {
-    const typefaceName = retailTypefaceName(collection)
-    for (const file of collection.files ?? []) {
-      if (!file?.relativePath || !resolveRetailInstallPath(paths.userFontsDir, file.relativePath)) {
-        continue
-      }
-      const familyName = retailFileFamilyName(file, collection)
-      const existing = findRetailEntry(catalog, file.relativePath)
-      if (existing) {
-        if (existing.retailFamilyName !== familyName || existing.retailTypefaceName !== typefaceName) {
-          existing.retailFamilyName = familyName
-          existing.retailTypefaceName = typefaceName
-          applyEntryFacts(existing)
-          upsertEntry(catalog, existing)
-          changed = true
+async function ensureRetailListings(paths: AppPaths, manifest: RetailManifest): Promise<boolean> {
+  return runCatalogTask(() => {
+    const catalog = loadCatalog(paths)
+    const config = retailSettings(loadSettings(paths))
+    const optOutMode = optOutModeOf(config)
+    let changed = false
+    for (const collection of manifest.collections ?? []) {
+      const typefaceName = retailTypefaceName(collection)
+      for (const file of collection.files ?? []) {
+        if (!file?.relativePath || !resolveRetailInstallPath(paths.userFontsDir, file.relativePath)) {
+          continue
         }
-        continue
+        const familyName = retailFileFamilyName(file, collection)
+        if (isRetailFamilyOptedOut(familyName, typefaceName, config.disabledGlyphsFiles, optOutMode)) {
+          continue
+        }
+        const existing = findRetailEntry(catalog, file.relativePath)
+        if (existing) {
+          if (existing.retailFamilyName !== familyName || existing.retailTypefaceName !== typefaceName) {
+            existing.retailFamilyName = familyName
+            existing.retailTypefaceName = typefaceName
+            touchEntry(existing)
+            applyEntryFacts(existing)
+            upsertEntry(catalog, existing)
+            changed = true
+          }
+          continue
+        }
+        const format = path.extname(file.relativePath).replace(/^\./, '').toLowerCase() || 'otf'
+        const entry: CatalogEntry = {
+          id: newId(),
+          sourcePath: '',
+          sourceMtimeMs: 0,
+          sourceSize: 0,
+          sourcePresent: false,
+          retailRelativePath: file.relativePath,
+          retailFamilyName: familyName,
+          retailTypefaceName: typefaceName,
+          status: 'uninstalled',
+          faces: [stubRetailFace(familyName, file.relativePath)],
+          format,
+          addedAt: now(),
+          updatedAt: now(),
+        }
+        applyEntryFacts(entry)
+        upsertEntry(catalog, entry)
+        changed = true
       }
-      const format = path.extname(file.relativePath).replace(/^\./, '').toLowerCase() || 'otf'
-      const entry: CatalogEntry = {
-        id: newId(),
-        sourcePath: '',
-        sourceMtimeMs: 0,
-        sourceSize: 0,
-        sourcePresent: false,
-        retailRelativePath: file.relativePath,
-        retailFamilyName: familyName,
-        retailTypefaceName: typefaceName,
-        status: 'uninstalled',
-        faces: [stubRetailFace(familyName, file.relativePath)],
-        format,
-        addedAt: now(),
-        updatedAt: now(),
-      }
-      applyEntryFacts(entry)
-      upsertEntry(catalog, entry)
-      changed = true
     }
-  }
-  if (changed) {
-    saveCatalog(paths, catalog)
-    emitEvent({ type: 'catalog', entries: loadCatalog(paths).entries })
-  }
-  return changed
+    if (changed) {
+      saveCatalog(paths, catalog)
+      emitEvent(catalogEvent(catalog.entries))
+    }
+    return changed
+  })
 }
 
 function statRetailInstall(paths: AppPaths) {
@@ -596,8 +721,8 @@ async function validateRetailCredentials(
   options: { refresh?: boolean; fetchManifest?: typeof fetchRetailManifest } = {},
 ): Promise<void> {
   const { config, token } = requireReady(paths)
-  if (!options.fetchManifest) return
-  await options.fetchManifest({
+  const fetchManifest = options.fetchManifest ?? fetchRetailManifest
+  await fetchManifest({
     workerBaseUrl: config.workerBaseUrl,
     token,
     refresh: options.refresh,
@@ -660,14 +785,14 @@ async function catalogRetailWrites(
       // this batch can delete that file (and forget the listing) before we persist. Skip
       // resurrecting status=installed / file-present when the dest or listing is gone.
       if (!fs.existsSync(item.dest)) continue
-      if (!item.parked && !entry) continue
       const pathOccupant = catalog.entries.find((candidate) => {
         if (candidate.id === entry?.id || candidate.retailRelativePath) return false
         const pathsToCheck = [candidate.installedPath, candidate.disabledPath, ...(candidate.installations ?? []).flatMap((copy) => [copy.path, copy.parkedPath])]
         return pathsToCheck.some((candidatePath) => candidatePath && path.resolve(candidatePath) === path.resolve(item.dest) && fs.existsSync(candidatePath))
       })
       if (!entry && pathOccupant) entry = pathOccupant
-      if (entry && pathOccupant && pathOccupant.id !== entry.id) {
+      if (!entry) continue
+      if (pathOccupant && pathOccupant.id !== entry.id) {
         removeEntryById(catalog, pathOccupant.id)
       }
       const wasDeactivated = Boolean(
@@ -677,7 +802,11 @@ async function catalogRetailWrites(
             copyAt(entry, 'macos')?.parkedPath && fs.existsSync(copyAt(entry, 'macos')!.parkedPath!)),
       )
       const previousMacos = entry ? copyAt(entry, 'macos') : undefined
-      const fingerprint = tryFingerprintFile(item.dest)
+      const fingerprint = tryFingerprintFileIfChanged(item.dest, {
+        fingerprint: recordedFingerprintForDest(entry, item.dest),
+        mtimeMs: entry?.installedSnapshotMtimeMs,
+        size: entry?.installedSnapshotSize,
+      })
       const shouldParse = parse === 'always' || destNeedsFaceParse(entry, item.dest, fingerprint)
       try {
         if (shouldParse && fs.existsSync(item.dest)) {
@@ -737,12 +866,13 @@ async function catalogRetailWrites(
         })
       }
       upsertEntry(catalog, entry)
+      touchEntry(entry)
       applyEntryFacts(entry)
       dirty = true
     }
     if (dirty) {
       saveCatalog(paths, catalog)
-      emitEvent({ type: 'catalog', entries: catalog.entries })
+      emitEvent(catalogEvent(catalog.entries))
     }
   })
 }
@@ -785,7 +915,7 @@ export async function checkRetail(
       return emitRetail(paths)
     }
     const { manifest } = await readManifest(paths, options)
-    ensureRetailListings(paths, manifest)
+    await ensureRetailListings(paths, manifest)
     await reconcileRetailCatalog(paths, loadRetailManifest(paths))
     const drift = measureDrift(paths, manifest)
     cache.checkedAt = new Date().toISOString()
@@ -915,7 +1045,10 @@ export async function syncRetail(
     if (!hasChoices) return inflightSync
     await inflightSync
   }
-  inflightSync = runSync(paths, options).finally(() => {
+  inflightSyncAbort = new AbortController()
+  const abort = inflightSyncAbort
+  inflightSync = runSync(paths, { ...options, signal: abort.signal }).finally(() => {
+    if (inflightSyncAbort === abort) inflightSyncAbort = null
     inflightSync = null
   })
   return inflightSync
@@ -927,6 +1060,7 @@ async function runSync(
     fetchManifest?: typeof fetchRetailManifest
     fetchFile?: typeof fetchRetailFile
     choices?: Record<string, RetailCollisionAction>
+    signal?: AbortSignal
   },
 ): Promise<RetailSyncStatus> {
   try {
@@ -934,7 +1068,7 @@ async function runSync(
       refresh: true,
       fetchManifest: options.fetchManifest,
     })
-    ensureRetailListings(paths, manifest)
+    await ensureRetailListings(paths, manifest)
     await reconcileRetailCatalog(paths, loadRetailManifest(paths))
 
     const choices = options.choices ?? {}
@@ -997,6 +1131,11 @@ async function runSync(
 
     await uninstallUnselectedRetailFormats(paths, config)
 
+    if (options.signal?.aborted) {
+      cache.progress = null
+      return emitRetail(paths)
+    }
+
     const result = await applyRetailSync({
       userFontsDir: paths.userFontsDir,
       stagingDir: path.join(paths.dataRoot, 'staging'),
@@ -1012,7 +1151,13 @@ async function runSync(
       destFor: (relativePath) => destForRelativePath(paths, relativePath),
       withLock: (task) => runCatalogTask(task),
       native: getFontNative(),
-      download: (key, expectedSize) => download({ workerBaseUrl, token, key, expectedSize }),
+      download: (key, expectedSize, signal) =>
+        download({ workerBaseUrl, token, key, expectedSize, signal }),
+      onProgress: (progress) => {
+        cache.progress = progress
+        emitRetail(paths)
+      },
+      signal: options.signal,
     })
 
     // persist already cataloged each batch under the lock; replaying writtenDests would
@@ -1024,7 +1169,10 @@ async function runSync(
     cache.error = result.errors.length ? result.errors.slice(0, 5).join(' ') : null
     cache.collisions = []
   } catch (error) {
-    cache.error = error instanceof Error ? error.message : 'Could not sync the retail collection.'
+    if (!options.signal?.aborted) {
+      cache.error = error instanceof Error ? error.message : 'Could not sync the retail collection.'
+    }
   }
+  cache.progress = null
   return emitRetail(paths)
 }

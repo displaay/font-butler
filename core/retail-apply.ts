@@ -5,14 +5,20 @@ import { yieldEventLoop } from './event-loop.ts'
 import { commitInstalledFile } from './install.ts'
 import { getFontNative, type FontNative } from './native.ts'
 import { resolveRetailInstallPath } from './retail-sync.ts'
-import { isSyncableDrift, type RetailDriftItem, type RetailLocalManifest } from '../shared/retail.ts'
+import {
+  isSyncableDrift,
+  retailSyncFamilyProgress,
+  type RetailDriftItem,
+  type RetailLocalManifest,
+  type RetailSyncProgress,
+} from '../shared/retail.ts'
 
 /** Not a font extension, so half-written downloads never appear as fonts in Fonts. */
 export const RETAIL_PART_SUFFIX = '.part'
 
 export const RETAIL_DOWNLOAD_CONCURRENCY = 4
 
-export type RetailDownload = (key: string, expectedSize: number) => Promise<Uint8Array>
+export type RetailDownload = (key: string, expectedSize: number, signal?: AbortSignal) => Promise<Uint8Array>
 
 export type RetailInstallDest = {
   dest: string
@@ -37,6 +43,9 @@ export type ApplyRetailSyncOptions = {
   native?: FontNative
   concurrency?: number
   now?: () => string
+  onProgress?: (progress: RetailSyncProgress) => void
+  /** When aborted, remaining files stay `incomplete` so a later pass can resume. */
+  signal?: AbortSignal
 }
 
 export type RetailSyncResult = {
@@ -89,6 +98,9 @@ function writeParkedFile(dest: string, stagedPath: string): void {
 
 /** Throws on any failure; `Promise.allSettled` in the caller turns that into a reported error. */
 async function writeOne(options: ApplyRetailSyncOptions, item: RetailDriftItem): Promise<RetailInstallDest> {
+  if (options.signal?.aborted) {
+    throw new Error('canceled.')
+  }
   const remote = item.remote
   if (!remote) {
     throw new Error('nothing to download.')
@@ -101,7 +113,7 @@ async function writeOne(options: ApplyRetailSyncOptions, item: RetailDriftItem):
     throw new Error('refused an unsafe path.')
   }
 
-  const bytes = await options.download(remote.key, remote.size)
+  const bytes = await options.download(remote.key, remote.size, options.signal)
   // The manifest size is the only integrity signal the worker gives us; a short read means a truncated
   // response, and writing it would leave a corrupt font that looks synced.
   if (bytes.byteLength !== remote.size) {
@@ -163,6 +175,7 @@ export async function applyRetailSync(options: ApplyRetailSyncOptions): Promise<
     version: 1,
     syncedAt: options.manifest.syncedAt,
     files: { ...options.manifest.files },
+    incomplete: options.manifest.incomplete,
   }
 
   const todo = options.drift.filter(isSyncableDrift)
@@ -177,7 +190,28 @@ export async function applyRetailSync(options: ApplyRetailSyncOptions): Promise<
     writtenDests: [],
   }
 
+  const processed = new Set<string>()
+  let lastDone = -1
+  const reportProgress = () => {
+    if (!options.onProgress || todo.length === 0) return
+    const progress = retailSyncFamilyProgress(todo, processed)
+    if (progress.done === lastDone) return
+    lastDone = progress.done
+    options.onProgress(progress)
+  }
+
+  if (todo.length > 0) {
+    manifest.incomplete = true
+    await options.persist(manifest)
+    reportProgress()
+  }
+
   for (let index = 0; index < todo.length; index += concurrency) {
+    if (options.signal?.aborted) {
+      manifest.incomplete = true
+      await options.persist(manifest)
+      return result
+    }
     const batch = todo.slice(index, index + concurrency)
     const settled = await Promise.allSettled(batch.map((item) => writeOne(options, item)))
     const batchWritten: Array<{ relativePath: string; dest: string; parked: boolean }> = []
@@ -185,6 +219,7 @@ export async function applyRetailSync(options: ApplyRetailSyncOptions): Promise<
     for (let offset = 0; offset < settled.length; offset += 1) {
       const outcome = settled[offset]
       const item = batch[offset]
+      processed.add(item.relativePath)
       if (outcome.status === 'rejected') {
         result.failed += 1
         const reason = outcome.reason
@@ -223,14 +258,20 @@ export async function applyRetailSync(options: ApplyRetailSyncOptions): Promise<
       manifest.syncedAt = now()
       await options.persist(manifest, batchWritten)
     }
+    reportProgress()
     // Downloads are concurrent; cataloging and native installs are not. Yield so the API that
     // owns this loop can keep serving the running app between batches of an initial sync.
     await yieldEventLoop()
   }
 
-  if (todo.length === 0) {
-    options.persist(manifest)
+  if (options.signal?.aborted) {
+    manifest.incomplete = true
+    await options.persist(manifest)
+    return result
   }
+
+  manifest.incomplete = false
+  await options.persist(manifest)
 
   return result
 }

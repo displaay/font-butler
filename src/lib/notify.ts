@@ -37,18 +37,44 @@ export function actionCopyFor(
   verb: ActionVerb,
   groups: { familyName: string }[],
 ): { pending: string; done: string } {
-  return actionCopy(verb, groups.length === 1 ? groups[0].familyName : `${groups.length} fonts`)
+  if (groups.length === 1) return actionCopy(verb, groups[0].familyName)
+  return {
+    pending: progressActionCopy(verb, 0, groups.length),
+    done: actionCopy(verb, `${groups.length} fonts`).done,
+  }
 }
 
-export function remainingActionCopy(
+export function progressActionCopy(
   verb: ActionVerb,
-  remaining: number,
+  done: number,
+  total: number,
   singleName?: string,
 ): string {
-  if (remaining <= 1 && singleName) {
-    return actionCopy(verb, singleName).pending
+  if (total <= 1) {
+    return actionCopy(verb, singleName ?? '1 font').pending
   }
-  return actionCopy(verb, remaining === 1 ? '1 font' : `${remaining} fonts`).pending
+  const words = ACTION_WORDS[verb]
+  const suffix = verb === 'forget' ? ' from the list' : ''
+  return `${words.pending}${suffix}… ${done}/${total}`
+}
+
+export function verbForBatchAction(
+  action: string,
+): ActionVerb | null {
+  if (action === 'uninstall') return 'remove'
+  if (
+    action === 'install' ||
+    action === 'activate' ||
+    action === 'deactivate' ||
+    action === 'reinstall' ||
+    action === 'forget' ||
+    action === 'remove' ||
+    action === 'deleteFiles' ||
+    action === 'uninstallAndRemove'
+  ) {
+    return action
+  }
+  return null
 }
 
 export function importDoneCopy(options: {

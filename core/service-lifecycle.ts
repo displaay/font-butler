@@ -22,7 +22,7 @@ import {
   removeStagedFile,
   stageFontFile,
 } from './install.ts'
-import { identityMutexMessage, occupiedDestinations, occupyingSiblings, occupyingSiblingsForIncoming, occupiesDestination } from './identity.ts'
+import { identityMutexMessage, occupiedDestinations, occupyingSiblingsForIncoming, occupiesDestination } from './identity.ts'
 import { extendMutationJournal, recordMutationDestination, withMutationJournal } from './journal.ts'
 import { ensureFontActivation, getFontNative } from './native.ts'
 import { applyParsedFont, parseFontFile, readFileStat } from './parse.ts'
@@ -110,17 +110,15 @@ export async function installEntry(
     options = { ...options, replace: true }
   }
   applyParsedFont(entry, staged.parsed)
-  if (!options?.switch && !retailReplace) {
-    const siblings = occupyingSiblingsForIncoming(
-      catalog.entries,
-      staged.parsed.faces,
-      staged.parsed.format,
-      host.paths,
-      entry.id,
-    ).filter((other) => targets.some((dest) => occupiesDestination(other, dest, host.paths)))
-    if (siblings[0]) {
-      throw new Error(identityMutexMessage(siblings[0]))
-    }
+  const siblings = occupyingSiblingsForIncoming(
+    catalog.entries,
+    staged.parsed.faces,
+    staged.parsed.format,
+    host.paths,
+    entry.id,
+  ).filter((other) => targets.some((dest) => occupiesDestination(other, dest, host.paths)))
+  if (!options?.switch && siblings[0] && !retailReplace) {
+    throw new Error(identityMutexMessage(siblings[0]))
   }
   const installMacos = targets.includes('macos')
   let conflictSnapshots: Array<{ entry: CatalogEntry; file: string }> = []
@@ -137,9 +135,7 @@ export async function installEntry(
     const formatConflicts = installMacos || options?.replace
       ? await host.resolveFormatConflicts(entry, catalog.entries, options?.replace, targets)
       : []
-    const siblingConflicts = retailReplace
-      ? occupyingSiblings(catalog.entries, entry, host.paths, targets)
-      : []
+    const siblingConflicts = retailReplace ? siblings : []
     const seen = new Set<string>()
     const conflicts = [...formatConflicts, ...destOccupants, ...siblingConflicts].filter((other) => {
       if (seen.has(other.id)) return false
@@ -414,7 +410,7 @@ async function installRenamedCopy(
 export async function uninstallEntry(
   host: ServiceLifecycleHost,
   id: string,
-  options?: { deleteSource?: boolean },
+  options?: { deleteSource?: boolean; retainCatalog?: boolean },
 ): Promise<CatalogEntry> {
   const catalog = loadCatalog(host.paths)
   const entry = findById(catalog, id)
@@ -422,39 +418,57 @@ export async function uninstallEntry(
     throw new Error('Font is not in the library.')
   }
   host.assertPinnedInstall(entry)
-  const sourcePath = entry.sourcePath
-  const hasSource = isExternalSource(entry) && sourceFileExists(sourcePath)
+  return withMutationJournal(
+    host.paths,
+    { kind: 'uninstall', entries: [entry] },
+    async () => {
+  const latestCatalog = loadCatalog(host.paths)
+  const latest = findById(latestCatalog, id)
+  if (!latest) {
+    throw new Error('Font is not in the library.')
+  }
+  const sourcePath = latest.sourcePath
+  const hasSource = isExternalSource(latest) && sourceFileExists(sourcePath)
   const deleteSource = Boolean(options?.deleteSource && hasSource)
-  await removeInstalledCopy(entry, catalog.entries)
-  removeAdobeCopy(host.paths, entry)
-  entry.installations = []
-  entry.destinationId = undefined
-  removeManualOwner(entry)
-  if (entry.disabledPath && fs.existsSync(entry.disabledPath)) {
-    fs.rmSync(entry.disabledPath, { force: true })
+  await removeInstalledCopy(latest, latestCatalog.entries)
+  removeAdobeCopy(host.paths, latest)
+  latest.installations = []
+  latest.destinationId = undefined
+  removeManualOwner(latest)
+  if (latest.disabledPath && fs.existsSync(latest.disabledPath)) {
+    fs.rmSync(latest.disabledPath, { force: true })
   }
-  entry.disabledPath = undefined
-  entry.installedPath = undefined
-  if (deleteSource && !entry.retailRelativePath) {
+  latest.disabledPath = undefined
+  latest.installedPath = undefined
+  if (deleteSource && !latest.retailRelativePath) {
     await deleteSourceFile(sourcePath, host.paths)
-    removeEntryById(catalog, id)
-    saveCatalog(host.paths, catalog)
-    entry.sourcePresent = false
-    entry.status = 'uninstalled'
-    return entry
+    removeEntryById(latestCatalog, id)
+    saveCatalog(host.paths, latestCatalog)
+    latest.sourcePresent = false
+    latest.status = 'uninstalled'
+    return latest
   }
-  if (hasSource || entry.retailRelativePath) {
-    entry.sourcePresent = hasSource
-    entry.status = 'uninstalled'
-    touchEntry(entry)
-    saveCatalog(host.paths, catalog)
-    return entry
+  if (hasSource || latest.retailRelativePath || options?.retainCatalog || latest.previousRevisionId) {
+    latest.sourcePresent = hasSource
+    latest.status = 'uninstalled'
+    if (!latest.retailRelativePath || hasSource) {
+      applyEntryFacts(latest)
+    }
+    if (latest.retailRelativePath) {
+      latest.sourcePresent = hasSource
+      latest.status = 'uninstalled'
+    }
+    touchEntry(latest)
+    saveCatalog(host.paths, latestCatalog)
+    return latest
   }
-  removeEntryById(catalog, id)
-  saveCatalog(host.paths, catalog)
-  entry.sourcePresent = false
-  entry.status = 'uninstalled'
-  return entry
+  removeEntryById(latestCatalog, id)
+  saveCatalog(host.paths, latestCatalog)
+  latest.sourcePresent = false
+  latest.status = 'uninstalled'
+  return latest
+    },
+  )
 }
 
 export async function deactivateEntry(
@@ -534,7 +548,7 @@ export async function activateEntry(
         addManualOwner(entry)
       }
       entry.status = 'installed'
-      entry.sourcePresent = isExternalSource(entry)
+      applyEntryFacts(entry)
       touchEntry(entry)
       saveCatalog(host.paths, catalog)
       const extra = (options.destinationIds ?? []).filter(
@@ -564,6 +578,7 @@ export async function activateEntry(
         addManualOwner(entry)
       }
       entry.status = 'installed'
+      applyEntryFacts(entry)
       touchEntry(entry)
       saveCatalog(host.paths, catalog)
       const extra = (options.destinationIds ?? []).filter(

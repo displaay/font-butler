@@ -27,16 +27,77 @@ function isCollection(font: Font | FontCollection): font is FontCollection {
   return 'fonts' in font && Array.isArray((font as FontCollection).fonts)
 }
 
+type FvarAxis = { axisTag?: string }
+type FvarInstance = {
+  name?: { en?: string } | string | null
+  coord?: Array<number | undefined>
+}
+
+const WEIGHT_INSTANCE_NAMES: Record<number, string> = {
+  100: 'Thin',
+  200: 'ExtraLight',
+  300: 'Light',
+  400: 'Regular',
+  500: 'Medium',
+  600: 'SemiBold',
+  700: 'Bold',
+  800: 'Heavy',
+  900: 'Black',
+}
+
+function instanceDisplayName(
+  name: FvarInstance['name'],
+  coordinates: Record<string, number>,
+  index: number,
+): string {
+  if (typeof name === 'string' && name.trim()) return name.trim()
+  if (name && typeof name === 'object') {
+    const labeled = englishOrFirst(name)
+    if (labeled) return labeled
+  }
+  const wght = coordinates.wght
+  if (Number.isFinite(wght)) {
+    const named = WEIGHT_INSTANCE_NAMES[Math.round(Number(wght) / 100) * 100]
+    if (named) return named
+  }
+  return `Instance ${index + 1}`
+}
+
+function namedInstancesFromFvar(font: Font): NamedInstanceInfo[] | undefined {
+  const fvar = (font as Font & { fvar?: { axis?: FvarAxis[]; instance?: FvarInstance[] } }).fvar
+  if (!fvar?.instance) return undefined
+  const axes = fvar.axis ?? []
+  return fvar.instance.map((instance, index) => {
+    const coordinates: Record<string, number> = {}
+    for (let i = 0; i < axes.length; i++) {
+      const tag = axes[i]?.axisTag?.trim()
+      const value = instance.coord?.[i]
+      if (tag && Number.isFinite(value)) coordinates[tag] = Number(value)
+    }
+    return {
+      name: instanceDisplayName(instance.name, coordinates, index),
+      coordinates,
+    }
+  })
+}
+
 function namedInstancesOf(font: Font): NamedInstanceInfo[] {
-  const named =
-    (font as Font & { namedVariations?: Record<string, Record<string, number>> }).namedVariations ??
-    {}
-  return Object.entries(named).map(([name, coordinates]) => ({
-    name,
-    coordinates: Object.fromEntries(
-      Object.entries(coordinates ?? {}).map(([tag, value]) => [tag, Number(value)]),
-    ),
-  }))
+  const fromFvar = namedInstancesFromFvar(font)
+  if (fromFvar) return fromFvar
+  try {
+    const named =
+      (font as Font & { namedVariations?: Record<string, Record<string, number>> }).namedVariations ??
+      {}
+    return Object.entries(named).map(([name, coordinates]) => ({
+      name,
+      coordinates: Object.fromEntries(
+        Object.entries(coordinates ?? {}).map(([tag, value]) => [tag, Number(value)]),
+      ),
+    }))
+  } catch {
+    // fontkit's namedVariations getter throws when an fvar instance has no name record.
+    return []
+  }
 }
 
 function namedInstanceCount(font: Font): { count: number; names: string[] } {
@@ -268,12 +329,37 @@ export function readFileStat(filePath: string): { mtimeMs: number; size: number 
   return { mtimeMs: stat.mtimeMs, size: stat.size }
 }
 
-export function existingFontPath(entry: {
-  installedPath?: string
-  disabledPath?: string
-  sourcePath?: string
-}): string | undefined {
-  for (const file of [entry.installedPath, entry.disabledPath, entry.sourcePath]) {
+export function existingFontPath(
+  entry: {
+    id?: string
+    installedPath?: string
+    disabledPath?: string
+    sourcePath?: string
+    status?: string
+  },
+  catalog: Array<{
+    id?: string
+    status?: string
+    installedPath?: string
+    disabledPath?: string
+    installations?: Array<{ path?: string; parkedPath?: string }>
+  }> = [],
+): string | undefined {
+  const live = entry.installedPath
+  const liveOwned =
+    live &&
+    fs.existsSync(live) &&
+    (entry.status === 'installed' || entry.status === 'outdated') &&
+    !catalog.some((other) => {
+      if (!entry.id || other.id === entry.id) return false
+      if (other.status !== 'installed' && other.status !== 'outdated') return false
+      const pathsToCheck = [
+        other.installedPath,
+        ...(other.installations ?? []).filter((copy) => !copy.parkedPath).map((copy) => copy.path),
+      ]
+      return pathsToCheck.some((candidate) => candidate && path.resolve(candidate) === path.resolve(live))
+    })
+  for (const file of [liveOwned ? live : undefined, entry.disabledPath, entry.sourcePath]) {
     if (file && fs.existsSync(file)) return file
   }
 }

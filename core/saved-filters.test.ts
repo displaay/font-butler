@@ -15,7 +15,7 @@ test('normalizeSavedFilters keeps named library criteria and drops junk', () => 
       id: 'vf-installed',
       name: 'VF installed',
       query: 'Review',
-      libraryFilters: ['installed', 'vf', 'nope'],
+      libraryFilters: ['installed', 'vf', 'computer', 'otf', 'nope'],
       watchFolder: '/Fonts/Client',
       createdAt: 12,
     },
@@ -28,7 +28,7 @@ test('normalizeSavedFilters keeps named library criteria and drops junk', () => 
     id: 'vf-installed',
     name: 'VF installed',
     query: 'Review',
-    libraryFilters: ['installed', 'vf'],
+    libraryFilters: ['installed', 'vf', 'computer', 'otf'],
     watchFolder: '/Fonts/Client',
     createdAt: 12,
   })

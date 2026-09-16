@@ -166,19 +166,15 @@ export function createAppUpdateChecker(options: { cacheMs?: number; timeoutMs?: 
         return status
       }
       if (!response.ok) {
-        const status = quietFailure(
+        return quietFailure(
           cached,
           currentVersion,
           now,
           `GitHub Releases returned HTTP ${response.status}`,
         )
-        if (!cached) cached = { at: now, status }
-        return status
       }
       if (!json) {
-        const status = quietFailure(cached, currentVersion, now, 'GitHub Releases returned an empty body')
-        if (!cached) cached = { at: now, status }
-        return status
+        return quietFailure(cached, currentVersion, now, 'GitHub Releases returned an empty body')
       }
       const status = parseGithubRelease(json, currentVersion, {
         now,
@@ -189,14 +185,12 @@ export function createAppUpdateChecker(options: { cacheMs?: number; timeoutMs?: 
       return status
     } catch (error) {
       controller.abort()
-      const status = quietFailure(
+      return quietFailure(
         cached,
         currentVersion,
         now,
         error instanceof Error ? error.message : 'Could not reach GitHub Releases',
       )
-      if (!cached) cached = { at: now, status }
-      return status
     }
   }
 

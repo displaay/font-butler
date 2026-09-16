@@ -19,10 +19,19 @@ export function isHiddenSystemFamily(name: string): boolean {
   return name.startsWith('.')
 }
 
-function walkFonts(root: string, acc: string[]): void {
+function walkFonts(root: string, acc: string[], depth = 0, seen = new Set<string>()): void {
+  if (depth > 12 || acc.length > 20_000) return
   if (!fs.existsSync(root)) {
     return
   }
+  let real: string
+  try {
+    real = fs.realpathSync(root)
+  } catch {
+    return
+  }
+  if (seen.has(real)) return
+  seen.add(real)
   let entries: fs.Dirent[]
   try {
     entries = fs.readdirSync(root, { withFileTypes: true })
@@ -31,9 +40,10 @@ function walkFonts(root: string, acc: string[]): void {
   }
   for (const entry of entries) {
     if (entry.name.startsWith('.')) continue
+    if (entry.isSymbolicLink()) continue
     const full = path.join(root, entry.name)
     if (entry.isDirectory()) {
-      walkFonts(full, acc)
+      walkFonts(full, acc, depth + 1, seen)
       continue
     }
     if (entry.isFile() && isFontFile(full)) {

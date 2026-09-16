@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { ArrowLeftRight, ChevronDown, CircleMinus, CirclePlus, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { CatalogBatchPlan } from '@/lib/batch'
-import { actionLabel, activateActionLabel, deactivateActionLabel, forgetSourcesLabel } from '@/lib/batch'
+import { actionLabel, activateActionLabel, deactivateActionLabel, forgetSourcesLabel, installActionLabel } from '@/lib/batch'
 import { formatSwapLabel } from '@/lib/formats'
 import { cn } from '@/lib/utils'
 
@@ -60,9 +60,7 @@ export function CatalogCardActions({
       </ActionDock>
     )
   }
-  const installLabel = plan.installMissing
-    ? actionLabel('Install missing', plan.install, plan.install > 1)
-    : actionLabel('Install', plan.install, plan.install > 1)
+  const installLabel = installActionLabel(plan)
   return (
     <ActionDock offset={offset} visible={visible || formatMenuOpen}>
       {plan.reinstall > 0 && (
@@ -307,11 +305,11 @@ function ActionDock({
     <div
       data-no-marquee=""
       className={cn(
-        'absolute top-1.5 z-10 flex gap-0.5 transition-opacity',
+        'absolute top-1.5 z-10 flex gap-0.5 transition-opacity [transform:translateZ(0)]',
         offset ? 'right-11' : 'right-1.5',
         visible
           ? 'opacity-100'
-          : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100',
+          : 'pointer-events-none opacity-0',
       )}
     >
       {children}

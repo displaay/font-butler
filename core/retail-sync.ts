@@ -1,6 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { isFullyUnderAnyRoot } from './containment.ts'
+import { MAX_UPLOAD_BYTES } from './constants.ts'
+import { isSafeRetailKey } from './retail-client.ts'
 import { retailCacheDir, retailManifestPath } from './paths.ts'
 import type { AppPaths } from './paths.ts'
 import {
@@ -113,10 +115,10 @@ function pathIdentity(relativePath: string): string {
 function isValidRemoteFile(value: unknown): value is RetailFile {
   if (!value || typeof value !== 'object') return false
   const row = value as Partial<RetailFile>
-  if (typeof row.key !== 'string' || !row.key) return false
+  if (typeof row.key !== 'string' || !row.key || !isSafeRetailKey(row.key)) return false
   if (typeof row.relativePath !== 'string') return false
-  if (typeof row.etag !== 'string') return false
-  return typeof row.size === 'number' && Number.isFinite(row.size) && row.size >= 0
+  if (typeof row.etag !== 'string' || !row.etag) return false
+  return typeof row.size === 'number' && Number.isInteger(row.size) && row.size > 0 && row.size <= MAX_UPLOAD_BYTES
 }
 
 function isValidLocalFile(value: unknown, key: string): value is RetailLocalFile {
@@ -301,6 +303,7 @@ export function loadRetailManifest(paths: AppPaths): RetailLocalManifest {
       version: 1,
       syncedAt: typeof parsed.syncedAt === 'string' ? parsed.syncedAt : null,
       files,
+      incomplete: parsed.incomplete === true,
     }
   } catch {
     return emptyRetailLocalManifest()

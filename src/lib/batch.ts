@@ -18,11 +18,13 @@ import {
   isUninstallableGroup,
 } from './group.ts'
 import { displayStateParts } from './state.ts'
-import type { FamilyGroup, SystemFamilyGroup } from './types.ts'
+import type { FamilyGroup, FontStatus, SystemFamilyGroup } from './types.ts'
 
 export type CatalogBatchPlan = {
   count: number
   install: number
+  /** Families with something to install. The green Install button counts these, not styles. */
+  installFonts: number
   installMissing: boolean
   adobeInstall: number
   adobeUninstall: number
@@ -45,8 +47,40 @@ export type SystemBatchPlan = {
   uninstall: number
 }
 
+/**
+ * Multi-select keeps only actions every selected family can take.
+ * A single family still unions its styles (install-missing + deactivate-installed).
+ */
 export function catalogBatchPlan(groups: FamilyGroup[], adobeAvailable = true): CatalogBatchPlan {
+  const plan = catalogBatchPlanUnion(groups, adobeAvailable)
+  if (groups.length <= 1) return plan
+  const parts = groups.map((group) => catalogBatchPlanUnion([group], adobeAvailable))
+  const shared = (count: (part: CatalogBatchPlan) => number) =>
+    parts.every((part) => count(part) > 0) ? count(plan) : 0
+  const install = shared((part) => part.install)
+  const activate = shared((part) => part.activate)
+  return {
+    count: plan.count,
+    install,
+    installFonts: install ? plan.installFonts : 0,
+    installMissing: Boolean(install && parts.every((part) => part.installMissing)),
+    adobeInstall: shared((part) => part.adobeInstall),
+    adobeUninstall: shared((part) => part.adobeUninstall),
+    activate,
+    ...(activate && plan.activateFormat ? { activateFormat: plan.activateFormat } : {}),
+    deactivate: shared((part) => part.deactivate),
+    uninstall: shared((part) => part.uninstall),
+    uninstallAndRemove: shared((part) => part.uninstallAndRemove),
+    reinstall: shared((part) => part.reinstall),
+    repair: shared((part) => part.repair),
+    forget: shared((part) => part.forget),
+    deleteFiles: shared((part) => part.deleteFiles),
+  }
+}
+
+function catalogBatchPlanUnion(groups: FamilyGroup[], adobeAvailable = true): CatalogBatchPlan {
   let install = 0
+  let installFonts = 0
   let adobeInstall = 0
   let adobeUninstall = 0
   let activate = 0
@@ -61,6 +95,7 @@ export function catalogBatchPlan(groups: FamilyGroup[], adobeAvailable = true): 
   for (const group of groups) {
     const toInstall = installableIds(group)
     install += toInstall.length
+    if (toInstall.length) installFonts += 1
     adobeInstall += adobeInstallableIds(group, adobeAvailable).length
     adobeUninstall += adobeRemovableIds(group).length
     if (
@@ -103,6 +138,7 @@ export function catalogBatchPlan(groups: FamilyGroup[], adobeAvailable = true): 
   return {
     count: groups.length,
     install,
+    installFonts,
     installMissing,
     adobeInstall,
     adobeUninstall,
@@ -150,35 +186,77 @@ export function familyCardPlan(group: FamilyGroup, adobeAvailable = true): Catal
 
 export function systemBatchPlan(groups: SystemFamilyGroup[]): SystemBatchPlan {
   const writable = groups.filter((group) => group.writable).length
+  const allWritable = groups.length > 0 && writable === groups.length
   return {
     count: groups.length,
-    deactivate: writable,
-    uninstall: writable,
+    deactivate: allWritable ? writable : 0,
+    uninstall: allWritable ? writable : 0,
   }
 }
 
+const CATALOG_STATUS_LABELS: [FontStatus, string][] = [
+  ['installed', 'installed'],
+  ['outdated', 'outdated'],
+  ['deactivated', 'deactivated'],
+  ['uninstalled', 'uninstalled'],
+  ['source-missing', 'missing source'],
+]
+
+export type CatalogBatchSummaryPart = {
+  status: FontStatus
+  count: number
+  label: string
+}
+
+export type SystemBatchSummaryPart = {
+  kind: 'removable' | 'system'
+  count: number
+  label: string
+}
+
+export function catalogBatchSummaryParts(groups: FamilyGroup[]): CatalogBatchSummaryPart[] {
+  const counts = new Map<FontStatus, number>()
+  for (const group of groups) {
+    counts.set(group.status, (counts.get(group.status) ?? 0) + 1)
+  }
+  return CATALOG_STATUS_LABELS.flatMap(([status, label]) => {
+    const count = counts.get(status)
+    return count ? [{ status, count, label }] : []
+  })
+}
+
 export function catalogBatchSummary(groups: FamilyGroup[]): string {
-  return countLabels(
-    groups.map((group) => group.status),
-    [
-      ['installed', 'installed'],
-      ['outdated', 'outdated'],
-      ['deactivated', 'deactivated'],
-      ['uninstalled', 'uninstalled'],
-      ['source-missing', 'missing source'],
-    ],
-  )
+  return joinSummaryParts(catalogBatchSummaryParts(groups))
+}
+
+export function catalogKeysForStatus(groups: FamilyGroup[], status: FontStatus): string[] {
+  return groups.filter((group) => group.status === status).map((group) => group.familyName)
+}
+
+export function systemBatchSummaryParts(groups: SystemFamilyGroup[]): SystemBatchSummaryPart[] {
+  const removable = groups.filter((group) => group.writable).length
+  const locked = groups.length - removable
+  return [
+    removable ? { kind: 'removable' as const, count: removable, label: 'removable' } : null,
+    locked ? { kind: 'system' as const, count: locked, label: 'system' } : null,
+  ].filter((part) => part !== null)
 }
 
 export function systemBatchSummary(groups: SystemFamilyGroup[]): string {
-  const writable = groups.filter((group) => group.writable).length
-  const locked = groups.length - writable
-  return [
-    writable ? `${writable} removable` : '',
-    locked ? `${locked} system` : '',
-  ]
-    .filter(Boolean)
-    .join(' · ')
+  return joinSummaryParts(systemBatchSummaryParts(groups))
+}
+
+export function systemKeysForKind(
+  groups: SystemFamilyGroup[],
+  kind: SystemBatchSummaryPart['kind'],
+): string[] {
+  return groups
+    .filter((group) => (kind === 'removable' ? group.writable : !group.writable))
+    .map((group) => group.familyName)
+}
+
+function joinSummaryParts(parts: Array<{ count: number; label: string }>): string {
+  return parts.map((part) => `${part.count} ${part.label}`).join(' · ')
 }
 
 export function hasCatalogBatchActions(plan: CatalogBatchPlan): boolean {
@@ -221,6 +299,18 @@ export function actionLabel(verb: string, count: number, multi: boolean): string
   }
   if (!multi) return verb
   return `${verb} ${count} ${count === 1 ? 'font' : 'fonts'}`
+}
+
+/** Green Install button: families when installing whole fonts, styles when filling in a mixed family. */
+export function installActionLabel(
+  plan: Pick<CatalogBatchPlan, 'install' | 'installFonts' | 'installMissing' | 'count'>,
+  multi = false,
+): string {
+  if (plan.installMissing) {
+    return actionLabel('Install missing', plan.install, plan.install > 1 || multi)
+  }
+  const fonts = plan.installFonts
+  return actionLabel('Install', fonts, fonts > 1 || multi)
 }
 
 export function activateActionLabel(
@@ -272,15 +362,4 @@ export function fileActionLabel(
   if (verb === 'repair') return 'Reinstall installed version'
   if (!mixed && count <= 1) return verb[0]!.toUpperCase() + verb.slice(1)
   return `${verb[0]!.toUpperCase()}${verb.slice(1)} ${count} ${count === 1 ? 'file' : 'files'}`
-}
-
-function countLabels<T extends string>(values: T[], order: [T, string][]): string {
-  const counts = new Map<T, number>()
-  for (const value of values) {
-    counts.set(value, (counts.get(value) ?? 0) + 1)
-  }
-  return order
-    .filter(([key]) => counts.get(key))
-    .map(([key, label]) => `${counts.get(key)} ${label}`)
-    .join(' · ')
 }

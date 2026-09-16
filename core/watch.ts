@@ -2,6 +2,7 @@ import chokidar, { type FSWatcher } from 'chokidar'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { MAX_IMPORT_FILES } from './constants.ts'
 import {
   findBySourcePath,
   isExternalSource,
@@ -220,10 +221,12 @@ function collectTreeFonts(
   const previewFiles: string[] = []
   let skippedWeb = 0
   for (const entry of entries) {
+    if (files.length + previewFiles.length >= MAX_IMPORT_FILES) break
     if (shouldSkipFontWalkName(entry.name)) {
       continue
     }
     const full = path.join(root, entry.name)
+    if (entry.isSymbolicLink()) continue
     if (entry.isDirectory()) {
       const nested = collectTreeFonts(full, depth + 1, maxDepth, includeWeb)
       files.push(...nested.files)
@@ -482,11 +485,12 @@ export async function syncInboxWatcher(
     clearTimeout(inboxTimer)
     inboxTimer = null
   }
-  inboxPending = []
+  const pending = inboxPending
   if (inboxWatcher) {
     await inboxWatcher.close()
     inboxWatcher = null
   }
+  inboxPending = pending
   const existing = existingWatchFolders(folders)
   if (existing.length === 0) {
     return

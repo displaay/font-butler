@@ -14,6 +14,81 @@ export function clientRect(x1: number, y1: number, x2: number, y2: number): Rect
   }
 }
 
+/** Viewport box plus its scroll offset — used to keep a marquee anchored to content. */
+export type ScrollOrigin = {
+  left: number
+  top: number
+  width: number
+  height: number
+  scrollLeft: number
+  scrollTop: number
+}
+
+export function scrollOriginOf(
+  element: Pick<HTMLElement, 'scrollLeft' | 'scrollTop'> & {
+    getBoundingClientRect(): { left: number; top: number; width: number; height: number }
+  },
+): ScrollOrigin {
+  const box = element.getBoundingClientRect()
+  return {
+    left: box.left,
+    top: box.top,
+    width: box.width,
+    height: box.height,
+    scrollLeft: element.scrollLeft,
+    scrollTop: element.scrollTop,
+  }
+}
+
+export function clientToContent(
+  clientX: number,
+  clientY: number,
+  origin: ScrollOrigin,
+): { x: number; y: number } {
+  return {
+    x: clientX - origin.left + origin.scrollLeft,
+    y: clientY - origin.top + origin.scrollTop,
+  }
+}
+
+/** Client-space marquee from a content-space start and the current pointer. */
+export function marqueeClientRect(
+  startContentX: number,
+  startContentY: number,
+  clientX: number,
+  clientY: number,
+  origin: ScrollOrigin,
+): Rect {
+  const current = clientToContent(clientX, clientY, origin)
+  const content = clientRect(startContentX, startContentY, current.x, current.y)
+  const dx = origin.left - origin.scrollLeft
+  const dy = origin.top - origin.scrollTop
+  return {
+    left: content.left + dx,
+    top: content.top + dy,
+    right: content.right + dx,
+    bottom: content.bottom + dy,
+  }
+}
+
+export function viewportClientRect(origin: ScrollOrigin): Rect {
+  return {
+    left: origin.left,
+    top: origin.top,
+    right: origin.left + origin.width,
+    bottom: origin.top + origin.height,
+  }
+}
+
+export function intersectRects(a: Rect, b: Rect): Rect | null {
+  const left = Math.max(a.left, b.left)
+  const top = Math.max(a.top, b.top)
+  const right = Math.min(a.right, b.right)
+  const bottom = Math.min(a.bottom, b.bottom)
+  if (left >= right || top >= bottom) return null
+  return { left, top, right, bottom }
+}
+
 export function rectsIntersect(a: Rect, b: Rect): boolean {
   return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
 }

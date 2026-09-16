@@ -2,9 +2,18 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   entryHasActiveRetailSync,
+  isOrphanRetailListing,
+  isRetailVariableFamilyName,
+  matchesRetailFontKindFilter,
+  matchesRetailFontQuery,
+  nextDisabledRetailFamilyNames,
   retailLibraryEntryVisible,
   retailListingHasLocalFile,
+  retailSyncFamilyProgress,
   retailSyncIsOn,
+  retailSyncingStatusMessage,
+  retailUpdateCount,
+  retailHasLiveUpdates,
   type RetailSyncFont,
 } from '../../shared/retail.ts'
 
@@ -90,7 +99,20 @@ test('unknown retail status is treated as off so file-less stubs stay hidden', (
   assert.equal(retailSyncIsOn({ enabled: false }), false)
   assert.equal(retailSyncIsOn({ enabled: true }), true)
   assert.equal(retailLibraryEntryVisible(stub, [], retailSyncIsOn(null)), false)
-  assert.equal(retailLibraryEntryVisible(stub, [], true), true)
+  assert.equal(retailLibraryEntryVisible(stub, [], true), false)
+})
+
+test('file-less retail stubs stay hidden while the family is Off', () => {
+  const off = [font('Reckless', { enabled: false })]
+  assert.equal(retailLibraryEntryVisible(stub, off, true), false)
+  assert.equal(retailLibraryEntryVisible(installed, off, true), true)
+})
+
+test('file-less retail listings are orphans only after sync is off', () => {
+  assert.equal(isOrphanRetailListing(stub, false), true)
+  assert.equal(isOrphanRetailListing(stub, true), false)
+  assert.equal(isOrphanRetailListing({ ...stub, retailRelativePath: null }, false), false)
+  assert.equal(isOrphanRetailListing(installed, false), false)
 })
 
 test('file-less retail stubs hide when sync is off; installed and local entries stay visible', () => {
@@ -203,4 +225,87 @@ test('when sync is on, unselected retail formats stay hidden', () => {
     ),
     true,
   )
+})
+
+test('retail sync progress counts families, not styles', () => {
+  const todo = [
+    { relativePath: 'Aguzzo/A.otf', familyName: 'Aguzzo' },
+    { relativePath: 'Aguzzo/B.otf', familyName: 'Aguzzo' },
+    { relativePath: 'Vinila/V.otf', familyName: 'Vinila' },
+  ]
+  assert.deepEqual(retailSyncFamilyProgress(todo, new Set()), { done: 0, total: 2 })
+  assert.deepEqual(retailSyncFamilyProgress(todo, new Set(['Aguzzo/A.otf'])), { done: 0, total: 2 })
+  assert.deepEqual(
+    retailSyncFamilyProgress(todo, new Set(['Aguzzo/A.otf', 'Aguzzo/B.otf'])),
+    { done: 1, total: 2 },
+  )
+  assert.deepEqual(
+    retailSyncFamilyProgress(todo, new Set(['Aguzzo/A.otf', 'Aguzzo/B.otf', 'Vinila/V.otf'])),
+    { done: 2, total: 2 },
+  )
+})
+
+test('the syncing status message includes the family count', () => {
+  assert.equal(retailSyncingStatusMessage(), 'Syncing Displaay retail…')
+  assert.equal(retailSyncingStatusMessage(null), 'Syncing Displaay retail…')
+  assert.equal(retailSyncingStatusMessage({ done: 0, total: 0 }), 'Syncing Displaay retail…')
+  assert.equal(retailSyncingStatusMessage({ done: 12, total: 36 }), 'Syncing Displaay retail… 12/36')
+})
+
+test('isRetailVariableFamilyName follows VF in the family name', () => {
+  assert.equal(isRetailVariableFamilyName('Aguzzo VF'), true)
+  assert.equal(isRetailVariableFamilyName('Aguzzo Italic VF'), true)
+  assert.equal(isRetailVariableFamilyName('AguzzoVF'), true)
+  assert.equal(isRetailVariableFamilyName('Aguzzo'), false)
+  assert.equal(isRetailVariableFamilyName('Aguzzo Italic'), false)
+  assert.equal(matchesRetailFontKindFilter(font('Aguzzo VF'), 'variable'), true)
+  assert.equal(matchesRetailFontKindFilter(font('Aguzzo'), 'variable'), false)
+  assert.equal(matchesRetailFontKindFilter(font('Aguzzo VF'), 'static'), false)
+  assert.equal(matchesRetailFontKindFilter(font('Aguzzo'), 'static'), true)
+  assert.equal(matchesRetailFontKindFilter(font('Aguzzo VF'), 'all'), true)
+})
+
+test('matchesRetailFontQuery filters families by name', () => {
+  assert.equal(matchesRetailFontQuery(font('Aguzzo VF', { typefaceName: 'Aguzzo' }), ''), true)
+  assert.equal(matchesRetailFontQuery(font('Aguzzo VF', { typefaceName: 'Aguzzo' }), 'aguzzo'), true)
+  assert.equal(matchesRetailFontQuery(font('Aguzzo Italic VF', { typefaceName: 'Aguzzo Italic' }), 'italic'), true)
+  assert.equal(matchesRetailFontQuery(font('Reckless', { typefaceName: 'Reckless' }), 'aguzzo'), false)
+})
+
+test('nextDisabledRetailFamilyNames keeps hidden families as they are', () => {
+  const fonts = [
+    font('Aguzzo', { enabled: false }),
+    font('Aguzzo VF', { enabled: false }),
+    font('Reckless', { enabled: true }),
+  ]
+  assert.deepEqual(nextDisabledRetailFamilyNames(fonts, ['Aguzzo', 'Aguzzo VF'], true), [])
+  assert.deepEqual(nextDisabledRetailFamilyNames(fonts, ['Aguzzo', 'Aguzzo VF'], false), [
+    'Aguzzo',
+    'Aguzzo VF',
+  ])
+  assert.deepEqual(nextDisabledRetailFamilyNames(fonts, ['Reckless'], false), [
+    'Aguzzo',
+    'Aguzzo VF',
+    'Reckless',
+  ])
+  assert.deepEqual(nextDisabledRetailFamilyNames(fonts, fonts.map((item) => item.familyName), true), [])
+  assert.deepEqual(
+    nextDisabledRetailFamilyNames(
+      [font('Aguzzo', { enabled: false }), font('Reckless', { enabled: false })],
+      ['Aguzzo'],
+      true,
+    ),
+    ['Reckless'],
+  )
+})
+
+test('retailUpdateCount uses remaining families while a sync is in flight', () => {
+  assert.equal(retailUpdateCount(null), 0)
+  assert.equal(retailUpdateCount({ pending: 40 }), 40)
+  assert.equal(retailUpdateCount({ pending: 40, progress: null }), 40)
+  assert.equal(retailUpdateCount({ pending: 40, progress: { done: 12, total: 36 } }), 24)
+  assert.equal(retailUpdateCount({ pending: 40, progress: { done: 36, total: 36 } }), 0)
+  assert.equal(retailHasLiveUpdates({ pending: 0, progress: { done: 36, total: 36 } }), true)
+  assert.equal(retailHasLiveUpdates({ pending: 0, progress: null }), false)
+  assert.equal(retailHasLiveUpdates({ pending: 3 }), true)
 })

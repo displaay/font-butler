@@ -1,4 +1,5 @@
-import { uniqueStyleCount, occupyingStyleCount } from './formats.ts'
+import { uniqueStyleCount, occupyingStyleCount, entryFormatOf } from './formats.ts'
+import { entryCopyDestinations } from './state.ts'
 import { entryHasActiveRetailSync, retailListingHasLocalFile, type RetailSyncView } from '../../shared/retail.ts'
 import type {
   CatalogEntry,
@@ -19,7 +20,11 @@ const statusRank: Record<FontStatus, number> = {
 }
 
 export function familyNameOf(entry: CatalogEntry): string {
-  return entry.customFamilyName || entry.faces[0]?.familyName || 'Unknown'
+  const custom = entry.customFamilyName?.trim()
+  if (custom) return custom
+  const retail = entry.retailFamilyName?.trim()
+  if (retail) return retail
+  return entry.faces[0]?.familyName || 'Unknown'
 }
 
 export function retailFamilyNameOf(entry: CatalogEntry): string {
@@ -67,13 +72,69 @@ export function catalogEntriesMatch(prev: CatalogEntry[], next: CatalogEntry[]):
       a.status !== b.status ||
       a.sourcePresent !== b.sourcePresent ||
       a.installedPath !== b.installedPath ||
+      a.disabledPath !== b.disabledPath ||
+      a.sourcePath !== b.sourcePath ||
       a.sourceFingerprint !== b.sourceFingerprint ||
-      a.installedFingerprint !== b.installedFingerprint
+      a.installedFingerprint !== b.installedFingerprint ||
+      a.customFamilyName !== b.customFamilyName ||
+      a.retailFamilyName !== b.retailFamilyName ||
+      a.updateHold !== b.updateHold ||
+      a.previousRevisionId !== b.previousRevisionId ||
+      a.previewSample !== b.previewSample ||
+      a.faces.length !== b.faces.length ||
+      (a.installations?.length ?? 0) !== (b.installations?.length ?? 0)
     ) {
       return false
     }
+    const aInstall = a.installations ?? []
+    const bInstall = b.installations ?? []
+    for (let j = 0; j < aInstall.length; j++) {
+      const left = aInstall[j]!
+      const right = bInstall[j]!
+      if (
+        left.destinationId !== right.destinationId ||
+        left.path !== right.path ||
+        left.parkedPath !== right.parkedPath ||
+        left.fingerprint !== right.fingerprint ||
+        left.verification !== right.verification
+      ) {
+        return false
+      }
+    }
   }
   return true
+}
+
+export function mergeCatalogEntries(current: CatalogEntry[], patch: CatalogEntry[]): CatalogEntry[] {
+  if (patch.length === 0) return current
+  const byId = new Map(current.map((entry) => [entry.id, entry]))
+  for (const entry of patch) byId.set(entry.id, entry)
+  const seen = new Set<string>()
+  const merged: CatalogEntry[] = []
+  for (const entry of current) {
+    const next = byId.get(entry.id)
+    if (!next) continue
+    seen.add(entry.id)
+    merged.push(next)
+  }
+  for (const entry of patch) {
+    if (seen.has(entry.id)) continue
+    merged.push(entry)
+  }
+  return catalogEntriesMatch(current, merged) ? current : merged
+}
+
+export function catalogPatchFromResult(result: unknown): CatalogEntry[] {
+  if (!result || typeof result !== 'object') return []
+  if (Array.isArray(result)) {
+    return result.filter((item): item is CatalogEntry => Boolean(item && typeof item === 'object' && 'id' in item && 'status' in item))
+  }
+  const record = result as { entries?: CatalogEntry[]; id?: string; status?: FontStatus }
+  if (Array.isArray(record.entries) && record.entries.length) {
+    return record.entries.filter((item): item is CatalogEntry => Boolean(item && typeof item === 'object' && 'id' in item))
+  }
+  if (record.id && record.status) return [record as CatalogEntry]
+  return []
 }
 
 export function groupCatalog(entries: CatalogEntry[]): FamilyGroup[] {
@@ -132,11 +193,15 @@ export function sortFamilyGroups(groups: FamilyGroup[], mode: SortMode): FamilyG
 const STATUS_FILTERS = new Set<LibraryFilter>(['installed', 'deactivated', 'uninstalled'])
 const KIND_FILTERS = new Set<LibraryFilter>(['vf', 'static'])
 const SOURCE_FILTERS = new Set<LibraryFilter>(['source', 'no-source'])
+const DESTINATION_FILTERS = new Set<LibraryFilter>(['computer', 'adobe', 'no-destination'])
+const FORMAT_FILTERS = new Set<LibraryFilter>(['otf', 'ttf'])
 
 const LIBRARY_FILTERS = new Set<LibraryFilter>([
   ...STATUS_FILTERS,
   ...KIND_FILTERS,
   ...SOURCE_FILTERS,
+  ...DESTINATION_FILTERS,
+  ...FORMAT_FILTERS,
 ])
 
 export function isLibraryFilter(value: unknown): value is LibraryFilter {
@@ -171,6 +236,21 @@ function matchesSourceFilter(entry: CatalogEntry, filter: LibraryFilter): boolea
   return false
 }
 
+function matchesDestinationFilter(entry: CatalogEntry, filter: LibraryFilter): boolean {
+  const dest = entryCopyDestinations(entry)
+  if (filter === 'computer') return dest.macos
+  if (filter === 'adobe') return dest.adobe
+  if (filter === 'no-destination') return !dest.macos && !dest.adobe
+  return false
+}
+
+function matchesFormatFilter(entry: CatalogEntry, filter: LibraryFilter): boolean {
+  const format = entryFormatOf(entry)
+  if (filter === 'otf') return format === 'otf'
+  if (filter === 'ttf') return format === 'ttf'
+  return false
+}
+
 export function countLibraryFilters(entries: CatalogEntry[]): Record<LibraryFilter, number> {
   const counts = {
     installed: 0,
@@ -180,6 +260,11 @@ export function countLibraryFilters(entries: CatalogEntry[]): Record<LibraryFilt
     static: 0,
     source: 0,
     'no-source': 0,
+    computer: 0,
+    adobe: 0,
+    'no-destination': 0,
+    otf: 0,
+    ttf: 0,
   } satisfies Record<LibraryFilter, number>
   for (const group of groupCatalog(entries)) {
     for (const filter of LIBRARY_FILTERS) {
@@ -201,6 +286,8 @@ export function matchesLibraryFilter(
   const statuses = filters.filter((filter) => STATUS_FILTERS.has(filter))
   const kinds = filters.filter((filter) => KIND_FILTERS.has(filter))
   const sources = filters.filter((filter) => SOURCE_FILTERS.has(filter))
+  const destinations = filters.filter((filter) => DESTINATION_FILTERS.has(filter))
+  const formats = filters.filter((filter) => FORMAT_FILTERS.has(filter))
   if (statuses.length > 0 && !statuses.some((filter) => matchesStatusFilter(entry, filter))) {
     return false
   }
@@ -208,6 +295,15 @@ export function matchesLibraryFilter(
     return false
   }
   if (sources.length > 0 && !sources.some((filter) => matchesSourceFilter(entry, filter))) {
+    return false
+  }
+  if (
+    destinations.length > 0 &&
+    !destinations.some((filter) => matchesDestinationFilter(entry, filter))
+  ) {
+    return false
+  }
+  if (formats.length > 0 && !formats.some((filter) => matchesFormatFilter(entry, filter))) {
     return false
   }
   return true

@@ -58,7 +58,7 @@ test('cold start does not await appUpdate in the boot Promise.all', async () => 
   const { fileURLToPath } = await import('node:url')
   const source = await readFile(fileURLToPath(new URL('../../src/App.tsx', import.meta.url)), 'utf8')
   const bootAll = source.match(
-    /const \[catalog, settingsResult, projectResult, activityResult, duplicatesResult\] = await Promise\.all\(\[([\s\S]*?)\]\)/,
+    /const \[catalog, settingsResult, projectResult, activityResult, duplicatesResult, retailResult\] =\s*await Promise\.all\(\[([\s\S]*?)\]\)/,
   )
   assert.ok(bootAll, 'expected cold-start Promise.all')
   assert.equal(/api\.appUpdate\(/.test(bootAll[1]), false)

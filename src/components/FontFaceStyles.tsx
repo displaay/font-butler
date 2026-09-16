@@ -5,10 +5,9 @@ import {
   cachedSignedSystemFontUrl,
   catalogEntriesNeedingPreviewCss,
   catalogFontFaceRules,
-  catalogPreviewFingerprintSet,
+  catalogPreviewFingerprint,
   catalogPreviewWhich,
   systemFacesNeedingPreviewCss,
-  systemPreviewFingerprintSet,
   type PreviewUrlCache,
   type PreviewWhich,
 } from '@/lib/preview'
@@ -121,16 +120,23 @@ export function FontFaceStyles({
   const catalogRef = useRef(catalog)
   const systemFacesRef = useRef(systemFaces)
   const systemCatalogRef = useRef(systemCatalog)
-  const catalogWindowKey = useMemo(() => catalogPreviewFingerprintSet(entries), [entries])
-  const catalogRetainKey = useMemo(
-    () => (catalog ? catalogPreviewFingerprintSet(catalog) : ''),
-    [catalog],
+  const catalogWindowKey = useMemo(
+    () => entries.map((entry) => `${entry.id}:${catalogPreviewFingerprint(entry)}`).join('\n'),
+    [entries],
   )
-  const systemWindowKey = useMemo(() => systemPreviewFingerprintSet(systemFaces), [systemFaces])
-  const systemRetainKey = useMemo(
-    () => (systemCatalog ? systemPreviewFingerprintSet(systemCatalog) : ''),
-    [systemCatalog],
+  const catalogRetainKey = useMemo(() => {
+    if (!catalog) return ''
+    let latest = 0
+    for (const item of catalog) {
+      if (item.updatedAt > latest) latest = item.updatedAt
+    }
+    return `${catalog.length}:${latest}`
+  }, [catalog])
+  const systemWindowKey = useMemo(
+    () => systemFaces.map((face) => `${face.path}:${face.familyName ?? ''}`).join('\n'),
+    [systemFaces],
   )
+  const systemRetainKey = useMemo(() => String(systemCatalog?.length ?? 0), [systemCatalog])
 
   useEffect(() => {
     entriesRef.current = entries

@@ -12,9 +12,11 @@ import type { AppPaths } from './paths.ts'
 import {
   checkRetail,
   configureRetailSync,
+  dropOrphanRetailListings,
   resetRetailCache,
   resolveDropRetailCollisions,
   retailStatus,
+  retailSyncNeedsResume,
   syncRetail,
 } from './service-retail.ts'
 import {
@@ -142,6 +144,134 @@ test('turning sync off does not create a folder', async () => {
   assert.equal(status.configured, false)
 })
 
+test('turning sync off keeps installed fonts unless remove is chosen', async () => {
+  resetRetailCache()
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await syncRetail(paths, {
+    fetchManifest: async () => manifestWith(4, 'e1'),
+    fetchFile: async () => new Uint8Array(4).fill(1),
+  })
+  const dest = path.join(paths.userFontsDir, 'RecklessVF.otf')
+  assert.equal(fs.existsSync(dest), true)
+  const listing = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath)
+  assert.ok(listing)
+
+  const kept = await configureRetailSync(paths, { enabled: false, disableAction: 'keep' })
+  assert.equal(kept.enabled, false)
+  assert.equal(fs.existsSync(dest), true)
+  const afterKeep = loadCatalog(paths).entries.find((entry) => entry.id === listing.id)
+  assert.equal(afterKeep?.status, 'installed')
+  assert.ok(afterKeep?.retailRelativePath)
+  assert.equal(Object.keys(loadRetailManifest(paths).files).length, 1)
+})
+
+test('file-less retail listings are dropped after sync is off', async () => {
+  resetRetailCache()
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await syncRetail(paths, {
+    fetchManifest: async () => manifestWith(4, 'e1'),
+    fetchFile: async () => new Uint8Array(4).fill(1),
+  })
+  await configureRetailSync(paths, { enabled: false, disableAction: 'keep' })
+  const dest = path.join(paths.userFontsDir, 'RecklessVF.otf')
+  fs.rmSync(dest, { force: true })
+  const catalog = loadCatalog(paths)
+  const listing = catalog.entries.find((entry) => entry.retailRelativePath)
+  assert.ok(listing)
+  listing.installedPath = undefined
+  listing.installations = []
+  listing.sourcePresent = false
+  listing.sourceAvailability = 'missing'
+  listing.status = 'source-missing'
+  saveCatalog(paths, catalog)
+
+  assert.equal(await dropOrphanRetailListings(paths), 1)
+  assert.equal(
+    loadCatalog(paths).entries.some((entry) => entry.retailRelativePath),
+    false,
+  )
+  assert.equal(Object.keys(loadRetailManifest(paths).files).length, 0)
+})
+
+test('forgetMissingSources removes orphan retail listings when sync is off', async () => {
+  resetRetailCache()
+  await withService(async (service, paths) => {
+    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await syncRetail(paths, {
+      fetchManifest: async () => manifestWith(4, 'e1'),
+      fetchFile: async () => new Uint8Array(4).fill(1),
+    })
+    await configureRetailSync(paths, { enabled: false, disableAction: 'keep' })
+    const dest = path.join(paths.userFontsDir, 'RecklessVF.otf')
+    fs.rmSync(dest, { force: true })
+    const catalog = loadCatalog(paths)
+    const listing = catalog.entries.find((entry) => entry.retailRelativePath)
+    assert.ok(listing)
+    listing.installedPath = undefined
+    listing.installations = []
+    listing.sourcePresent = false
+    listing.sourceAvailability = 'missing'
+    listing.status = 'source-missing'
+    saveCatalog(paths, catalog)
+
+    const result = await service.forgetMissingSources()
+    assert.equal(result.removed, 1)
+    assert.equal(
+      loadCatalog(paths).entries.some((entry) => entry.retailRelativePath),
+      false,
+    )
+  })
+})
+
+test('turning sync off with remove uninstalls fonts and drops the listings', async () => {
+  resetRetailCache()
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await syncRetail(paths, {
+    fetchManifest: async () => manifestWith(4, 'e1'),
+    fetchFile: async () => new Uint8Array(4).fill(1),
+  })
+  const dest = path.join(paths.userFontsDir, 'RecklessVF.otf')
+  assert.equal(fs.existsSync(dest), true)
+
+  const removed = await configureRetailSync(paths, { enabled: false, disableAction: 'remove' })
+  assert.equal(removed.enabled, false)
+  assert.equal(fs.existsSync(dest), false)
+  assert.equal(
+    loadCatalog(paths).entries.some((entry) => entry.retailRelativePath),
+    false,
+  )
+  assert.equal(Object.keys(loadRetailManifest(paths).files).length, 0)
+  assert.equal(removed.fonts.length, 0)
+})
+
+test('turning sync off with remove leaves a non-retail occupant in Fonts', async () => {
+  resetRetailCache()
+  await withService(async (service, paths) => {
+    const dest = path.join(paths.userFontsDir, 'RecklessVF.otf')
+    writeTestFont(dest, 'LocalReckless', 'LocalRecklessVF', { format: 'otf' })
+    const imported = await service.importPaths([dest])
+    assert.equal(imported.entries[0]?.retailRelativePath, undefined)
+
+    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await checkRetail(paths, { fetchManifest: async () => manifestWith(4, 'e1') })
+    assert.ok(loadCatalog(paths).entries.some((entry) => entry.retailRelativePath === 'Reckless/RecklessVF.otf'))
+
+    await configureRetailSync(paths, { enabled: false, disableAction: 'remove' })
+    assert.equal(fs.existsSync(dest), true)
+    assert.equal(
+      loadCatalog(paths).entries.some((entry) => entry.retailRelativePath),
+      false,
+    )
+    assert.equal(
+      loadCatalog(paths).entries.some((entry) => entry.id === imported.entries[0]?.id),
+      true,
+    )
+  })
+})
+
 test('a check without a token reports an error rather than throwing', async () => {
   const paths = setup()
   await configureRetailSync(paths, { enabled: true })
@@ -164,10 +294,18 @@ test('a credentials-only check validates the worker without writing listings', a
   assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'RecklessVF.otf')), false)
 })
 
-test('a credentials-only check does not fetch the remote manifest', async () => {
+test('a credentials-only check fetches the remote manifest to validate the token', async () => {
   const paths = setup()
   await configureRetailSync(paths, { enabled: true, token: 't' })
-  const status = await checkRetail(paths, { credentialsOnly: true })
+  let fetched = 0
+  const status = await checkRetail(paths, {
+    credentialsOnly: true,
+    fetchManifest: async () => {
+      fetched += 1
+      return manifestWith(4, 'e1')
+    },
+  })
+  assert.equal(fetched, 1)
   assert.equal(status.error, null)
   assert.equal(status.hasToken, true)
   assert.equal(status.pending, 0)
@@ -189,7 +327,30 @@ test('a credentials-only check still reports a worker error without writing list
   assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'RecklessVF.otf')), false)
 })
 
-test('retail stays check-only during onboarding and syncs after setup is finished', async () => {
+test('turning retail on after setup lists the collection without downloading', async () => {
+  resetRetailCache()
+  await withService(async (service, paths) => {
+    await service.updateSettings({ onboardingCompleted: true })
+    let downloads = 0
+    service.retailFetch = {
+      fetchManifest: async () => manifestWith(4, 'e1'),
+      fetchFile: async () => {
+        downloads += 1
+        return new Uint8Array(4).fill(1)
+      },
+    }
+    const status = await service.configureRetailSync({ enabled: true, token: 't' })
+    assert.equal(status.error, null)
+    assert.equal(status.pending, 1)
+    assert.equal(downloads, 0)
+    assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'RecklessVF.otf')), false)
+    assert.ok(
+      loadCatalog(paths).entries.some((entry) => entry.retailRelativePath === 'Reckless/RecklessVF.otf'),
+    )
+  })
+})
+
+test('retail stays check-only during onboarding and does not download after setup', async () => {
   resetRetailCache()
   await withService(async (service, paths) => {
     assert.equal(service.getSettings().onboardingCompleted, false)
@@ -209,7 +370,7 @@ test('retail stays check-only during onboarding and syncs after setup is finishe
     assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'RecklessVF.otf')), false)
 
     await service.updateSettings({ onboardingCompleted: true })
-    assert.equal(fs.readFileSync(path.join(paths.userFontsDir, 'RecklessVF.otf')).length, 4)
+    assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'RecklessVF.otf')), false)
     assert.ok(loadCatalog(paths).entries.some((entry) => entry.retailRelativePath === 'Reckless/RecklessVF.otf'))
   })
 })
@@ -353,6 +514,271 @@ test('overlapping syncs share one run instead of fighting over the same files', 
   assert.equal(later.error, null)
 })
 
+test('disabling every family aborts an in-flight sync', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 't' })
+  let downloads = 0
+  const files = Array.from({ length: RETAIL_DOWNLOAD_CONCURRENCY + 1 }, (_, index) => ({
+    basename: `File${index}.otf`,
+    size: 4,
+    etag: `e${index}`,
+  }))
+  const syncing = syncRetail(paths, {
+    fetchManifest: async () => manifestWithFiles(files),
+    fetchFile: async () => {
+      downloads += 1
+      await new Promise((resolve) => setTimeout(resolve, 40))
+      return new Uint8Array(4).fill(1)
+    },
+  })
+  while (downloads === 0) {
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  const stopped = await configureRetailSync(paths, { disabledGlyphsFiles: ['Reckless'] })
+  assert.equal(stopped.fonts.every((font) => !font.enabled), true)
+  await syncing
+  assert.ok(downloads <= RETAIL_DOWNLOAD_CONCURRENCY)
+})
+
+test('retail status reports family progress while a sync is running', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 't' })
+  const seen: Array<{ done: number; total: number } | null> = []
+  const synced = await syncRetail(paths, {
+    fetchManifest: async () =>
+      manifestWithFiles([
+        { basename: 'A.otf', size: 4, etag: 'ea' },
+        { basename: 'B.otf', size: 4, etag: 'eb' },
+      ]),
+    fetchFile: async () => {
+      seen.push(retailStatus(paths).progress)
+      return new Uint8Array(4).fill(1)
+    },
+  })
+  assert.equal(synced.error, null)
+  assert.equal(synced.progress, null)
+  assert.ok(seen.some((item) => item && item.total === 1 && item.done === 0))
+})
+
+test('turning sync off clears an interrupted download marker', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 't' })
+  saveRetailManifest(paths, {
+    version: 1,
+    syncedAt: null,
+    files: {},
+    incomplete: true,
+  })
+  assert.equal(retailSyncNeedsResume(paths), true)
+  await configureRetailSync(paths, { enabled: false })
+  assert.equal(loadRetailManifest(paths).incomplete, false)
+  assert.equal(retailSyncNeedsResume(paths), false)
+})
+
+test('init resumes an interrupted retail download', async () => {
+  resetRetailCache()
+  await withService(async (service, paths) => {
+    await service.updateSettings({ onboardingCompleted: true })
+    const fileA = path.join(paths.dataRoot, 'A.otf')
+    const fileB = path.join(paths.dataRoot, 'B.otf')
+    writeTestFont(fileA, 'Reckless', 'Reckless-A', { format: 'otf' })
+    writeTestFont(fileB, 'Reckless', 'Reckless-B', { format: 'otf', style: 'Bold', weight: 700 })
+    const bytesA = fs.readFileSync(fileA)
+    const bytesB = fs.readFileSync(fileB)
+    const remote = manifestWithFiles([
+      { basename: 'A.otf', size: bytesA.length, etag: 'ea' },
+      { basename: 'B.otf', size: bytesB.length, etag: 'eb' },
+    ])
+    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await checkRetail(paths, { fetchManifest: async () => remote })
+    saveRetailManifest(paths, { version: 1, syncedAt: null, files: {}, incomplete: true })
+    resetRetailCache()
+
+    const downloaded: string[] = []
+    service.retailFetch = {
+      fetchManifest: async () => remote,
+      fetchFile: async ({ key }) => {
+        downloaded.push(key)
+        return key.endsWith('A.otf') ? new Uint8Array(bytesA) : new Uint8Array(bytesB)
+      },
+    }
+    await service.init()
+    const status = await service.syncRetail()
+    assert.equal(status.error, null)
+    assert.equal(status.incomplete, false)
+    assert.equal(downloaded.length, 2)
+    assert.equal(fs.readFileSync(path.join(paths.userFontsDir, 'A.otf')).length, bytesA.length)
+    assert.equal(fs.readFileSync(path.join(paths.userFontsDir, 'B.otf')).length, bytesB.length)
+    assert.equal(loadRetailManifest(paths).incomplete, false)
+  })
+})
+
+test('leftover listings without an incomplete flag wait for an explicit sync', async () => {
+  resetRetailCache()
+  await withService(async (service, paths) => {
+    await service.updateSettings({ onboardingCompleted: true })
+    const fileA = path.join(paths.dataRoot, 'A.otf')
+    const fileB = path.join(paths.dataRoot, 'B.otf')
+    writeTestFont(fileA, 'Reckless', 'Reckless-A', { format: 'otf' })
+    writeTestFont(fileB, 'Reckless', 'Reckless-B', { format: 'otf', style: 'Bold', weight: 700 })
+    const bytesA = fs.readFileSync(fileA)
+    const bytesB = fs.readFileSync(fileB)
+    const remote = manifestWithFiles([
+      { basename: 'A.otf', size: bytesA.length, etag: 'ea' },
+      { basename: 'B.otf', size: bytesB.length, etag: 'eb' },
+    ])
+    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await checkRetail(paths, { fetchManifest: async () => remote })
+    fs.copyFileSync(fileA, path.join(paths.userFontsDir, 'A.otf'))
+    saveRetailManifest(paths, {
+      version: 1,
+      syncedAt: '2026-01-01T00:00:00.000Z',
+      files: {
+        'Reckless/A.otf': {
+          key: 'Reckless/rev-1/A.otf',
+          relativePath: 'Reckless/A.otf',
+          size: bytesA.length,
+          etag: 'ea',
+          glyphsFile: 'Reckless',
+          revisionId: 'rev-1',
+          syncedAt: '2026-01-01T00:00:00.000Z',
+          installedPath: path.join(paths.userFontsDir, 'A.otf'),
+        },
+      },
+    })
+    resetRetailCache()
+    assert.equal(retailSyncNeedsResume(paths), false)
+    assert.equal(retailStatus(paths).incomplete, false)
+
+    let downloads = 0
+    service.retailFetch = {
+      fetchManifest: async () => remote,
+      fetchFile: async ({ key }) => {
+        downloads += 1
+        assert.equal(key.endsWith('B.otf'), true)
+        return new Uint8Array(bytesB)
+      },
+    }
+    await service.init()
+    assert.equal(downloads, 0)
+
+    const status = await service.syncRetail()
+    assert.equal(status.error, null)
+    assert.equal(status.incomplete, false)
+    assert.equal(downloads, 1)
+    assert.equal(fs.readFileSync(path.join(paths.userFontsDir, 'B.otf')).length, bytesB.length)
+  })
+})
+
+test('a finished sync does not resume leftover conflict listings', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 't' })
+  const fixture = path.join(paths.dataRoot, 'X.otf')
+  writeTestFont(fixture, 'Reckless', 'Reckless-X', { format: 'otf' })
+  const bytes = fs.readFileSync(fixture)
+  const remote: RetailManifest = {
+    generatedAt: '2026-01-01T00:00:00.000Z',
+    collections: [
+      {
+        glyphsFile: 'Reckless',
+        revisionId: 'rev-1',
+        lastRegeneratedAt: '2026-01-01T00:00:00.000Z',
+        files: [
+          {
+            key: 'Reckless/rev-1/X.otf',
+            relativePath: 'Reckless/X.otf',
+            size: bytes.length,
+            etag: 'e1',
+            uploaded: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      },
+      {
+        glyphsFile: 'Vinila',
+        revisionId: 'rev-1',
+        lastRegeneratedAt: '2026-01-01T00:00:00.000Z',
+        files: [
+          {
+            key: 'Vinila/rev-1/X.otf',
+            relativePath: 'Vinila/X.otf',
+            size: bytes.length,
+            etag: 'e2',
+            uploaded: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      },
+    ],
+    skipped: [],
+  }
+  await syncRetail(paths, {
+    fetchManifest: async () => remote,
+    fetchFile: async () => new Uint8Array(bytes),
+  })
+  assert.ok(
+    loadCatalog(paths).entries.some(
+      (entry) => entry.retailRelativePath === 'Vinila/X.otf' && entry.status === 'uninstalled',
+    ),
+  )
+  assert.equal(loadRetailManifest(paths).incomplete, false)
+  resetRetailCache()
+  assert.equal(retailSyncNeedsResume(paths), false)
+})
+
+test('a finished sync does not resume listings that left the worker', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 't' })
+  const fixture = path.join(paths.dataRoot, 'A.otf')
+  writeTestFont(fixture, 'Reckless', 'Reckless-A', { format: 'otf' })
+  const bytes = fs.readFileSync(fixture)
+  await checkRetail(paths, {
+    fetchManifest: async () => manifestWithFiles([{ basename: 'A.otf', size: bytes.length, etag: 'ea' }]),
+  })
+  await syncRetail(paths, {
+    fetchManifest: async () => emptyManifest(),
+    fetchFile: async () => {
+      throw new Error('removed files must not download')
+    },
+  })
+  assert.ok(
+    loadCatalog(paths).entries.some(
+      (entry) => entry.retailRelativePath === 'Reckless/A.otf' && entry.status === 'uninstalled',
+    ),
+  )
+  assert.equal(loadRetailManifest(paths).incomplete, false)
+  resetRetailCache()
+  assert.equal(retailSyncNeedsResume(paths), false)
+})
+
+test('a finished retail sync does not download again on init', async () => {
+  resetRetailCache()
+  await withService(async (service, paths) => {
+    await service.updateSettings({ onboardingCompleted: true })
+    const fixture = path.join(paths.dataRoot, 'RecklessVF.otf')
+    writeTestFont(fixture, 'Reckless', 'RecklessVF', { format: 'otf' })
+    const bytes = fs.readFileSync(fixture)
+    const remote = manifestWith(bytes.length, 'e1')
+    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await syncRetail(paths, {
+      fetchManifest: async () => remote,
+      fetchFile: async () => new Uint8Array(bytes),
+    })
+    assert.equal(retailSyncNeedsResume(paths), false)
+    resetRetailCache()
+
+    let downloads = 0
+    service.retailFetch = {
+      fetchManifest: async () => remote,
+      fetchFile: async () => {
+        downloads += 1
+        return new Uint8Array(bytes)
+      },
+    }
+    await service.init()
+    assert.equal(downloads, 0)
+    assert.equal(retailSyncNeedsResume(paths), false)
+  })
+})
+
 test('the autocheck interval round-trips and rejects nonsense', async () => {
   const paths = setup()
 
@@ -411,6 +837,21 @@ test('a check lists every remote retail font even before a sync', async () => {
   const listing = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath === 'Reckless/RecklessVF.otf')
   assert.ok(listing)
   assert.equal(listing.status, 'uninstalled')
+})
+
+test('a check does not catalog families the user turned off', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, {
+    enabled: true,
+    token: 't',
+    disabledGlyphsFiles: ['Reckless'],
+  })
+  const status = await checkRetail(paths, { fetchManifest: async () => manifestWith(4, 'e1') })
+  assert.equal(status.fonts[0]?.enabled, false)
+  assert.equal(
+    loadCatalog(paths).entries.some((entry) => entry.retailRelativePath === 'Reckless/RecklessVF.otf'),
+    false,
+  )
 })
 
 test('a check lists loaded families so each can be toggled', async () => {
@@ -667,10 +1108,9 @@ test('installing a retail listing replaces the catalogue font that occupies Font
     assert.equal(installed.status, 'installed')
     assert.equal(installed.retailRelativePath, 'Reckless/RecklessVF.otf')
     assert.equal(fs.readFileSync(dest).equals(bytes), true)
-    assert.equal(
-      loadCatalog(paths).entries.some((entry) => entry.id === imported.entries[0]?.id),
-      false,
-    )
+    const leftover = loadCatalog(paths).entries.find((entry) => entry.id === imported.entries[0]?.id)
+    assert.notEqual(leftover?.status, 'installed')
+    assert.notEqual(leftover?.installedPath, dest)
   })
 })
 
@@ -1083,6 +1523,8 @@ test('sync downloads only the selected format of enabled families', async () => 
   assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'Azeret-Regular.ttf')), true)
   assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'Azeret-Regular.otf')), false)
   assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'AzeretMono-Regular.otf')), false)
+  resetRetailCache()
+  assert.equal(retailSyncNeedsResume(paths), false)
 })
 
 test('switching format uninstalls the other format instead of installing both', async () => {

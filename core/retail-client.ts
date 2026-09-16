@@ -1,4 +1,4 @@
-import { MAX_UPLOAD_BYTES } from './constants.ts'
+import { MAX_RETAIL_MANIFEST_FILES, MAX_UPLOAD_BYTES } from './constants.ts'
 import type { RetailManifest } from '../shared/retail.ts'
 
 export const RETAIL_FETCH_TIMEOUT_MS = 15_000
@@ -44,6 +44,18 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: str
   }
 }
 
+const ALLOWED_RETAIL_HOSTS = new Set([
+  'w.displaay.net',
+  'admin-worker-dev.displaay.workers.dev',
+])
+
+function isAllowedRetailHost(hostname: string): boolean {
+  const host = hostname.toLowerCase()
+  if (ALLOWED_RETAIL_HOSTS.has(host)) return true
+  if (host === 'localhost' || host === '127.0.0.1' || host === '[::1]') return true
+  return host === 'displaay.net' || host.endsWith('.displaay.net') || host.endsWith('.displaay.workers.dev')
+}
+
 /**
  * Only https, except for a loopback dev worker (`wrangler dev` serves http://localhost:8787). The
  * token is sent as a bearer header, so a plain-http remote host would put it on the wire in clear.
@@ -55,6 +67,8 @@ export function isAllowedRetailBaseUrl(value: string): boolean {
   } catch {
     return false
   }
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) return false
+  if (!isAllowedRetailHost(parsed.hostname)) return false
   if (parsed.protocol === 'https:') return true
   if (parsed.protocol !== 'http:') return false
   return parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || parsed.hostname === '[::1]'
@@ -139,6 +153,15 @@ export async function fetchRetailManifest(
     if (!parsed || !Array.isArray(parsed.collections)) {
       throw new RetailRequestError('The Displaay worker returned an unexpected manifest.')
     }
+    const fileCount = parsed.collections.reduce(
+      (sum, collection) => sum + (Array.isArray(collection?.files) ? collection.files.length : 0),
+      0,
+    )
+    if (fileCount > MAX_RETAIL_MANIFEST_FILES) {
+      throw new RetailRequestError(
+        `The Displaay worker listed ${fileCount} files; Font Buttler accepts at most ${MAX_RETAIL_MANIFEST_FILES}.`,
+      )
+    }
     return {
       generatedAt: typeof parsed.generatedAt === 'string' ? parsed.generatedAt : new Date().toISOString(),
       collections: parsed.collections,
@@ -155,9 +178,12 @@ export async function fetchRetailManifest(
 }
 
 export async function fetchRetailFile(
-  options: RetailClientOptions & { key: string; expectedSize?: number },
+  options: RetailClientOptions & { key: string; expectedSize?: number; signal?: AbortSignal },
 ): Promise<Uint8Array> {
   assertBaseUrl(options.workerBaseUrl)
+  if (options.signal?.aborted) {
+    throw new RetailRequestError(`${options.key}: canceled.`)
+  }
   if (!isSafeRetailKey(options.key)) {
     throw new RetailRequestError(`${options.key}: refused an unsafe key.`)
   }
@@ -167,6 +193,8 @@ export async function fetchRetailFile(
     `/font-butler/retail/file/${options.key.split('/').map(encodeURIComponent).join('/')}`,
   )
   const controller = new AbortController()
+  const onAbort = () => controller.abort()
+  options.signal?.addEventListener('abort', onAbort, { once: true })
 
   try {
     const response = await withTimeout(
@@ -212,5 +240,7 @@ export async function fetchRetailFile(
       : new RetailRequestError(
           error instanceof Error ? error.message : `${options.key}: download failed`,
         )
+  } finally {
+    options.signal?.removeEventListener('abort', onAbort)
   }
 }

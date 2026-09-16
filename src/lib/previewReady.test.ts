@@ -95,6 +95,8 @@ test('fonts.load is skipped until a card family is actually checked', () => {
     assert.equal(loads, 0)
     assert.equal(isPreviewFontReady('fc-visible'), false)
     assert.equal(loads, 1)
+    assert.equal(isPreviewFontReady('fc-visible'), false)
+    assert.equal(loads, 1)
   } finally {
     restore()
   }

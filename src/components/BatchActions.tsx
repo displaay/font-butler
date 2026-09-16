@@ -18,6 +18,7 @@ import {
   forgetSourcesLabel,
   hasCatalogBatchActions,
   hasSystemBatchActions,
+  installActionLabel,
   type CatalogBatchPlan,
   type SystemBatchPlan,
 } from '@/lib/batch'
@@ -63,7 +64,6 @@ export function CatalogBatchButtons({
 }) {
   if (!hasCatalogBatchActions(plan) && !formatSwap) return null
   const multi = plan.count > 1
-  const installVerb = plan.installMissing ? 'Install missing' : 'Install'
   const uninstallExtras: SplitUninstallExtra[] = [
     plan.adobeUninstall > 0 && onUninstallFromAdobe
       ? {
@@ -103,7 +103,7 @@ export function CatalogBatchButtons({
       )}
       {plan.install > 0 && (
         <Button size="sm" variant="success" disabled={busy} onClick={onInstall}>
-          <CirclePlus /> {actionLabel(installVerb, plan.install, plan.install > 1 || multi)}
+          <CirclePlus /> {installActionLabel(plan, multi)}
         </Button>
       )}
       {plan.activate > 0 && (
@@ -238,24 +238,49 @@ export function BatchActionBarContainer({
 
 export function BatchActionBar({
   count,
-  summary,
+  parts,
+  onFilter,
   children,
 }: {
   count: number
-  summary: string
+  parts: Array<{ id: string; count: number; label: string }>
+  onFilter?: (id: string) => void
   children: ReactNode
 }) {
   if (count < 1) return null
+  const filterable = Boolean(onFilter) && parts.length > 1
   return (
     <div
       data-keep-selection=""
-      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-background/95 px-4 py-3 shadow-lg backdrop-blur"
+      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-background px-4 py-3 shadow-lg [transform:translateZ(0)]"
     >
       <div className="min-w-0">
         <p className="text-sm font-medium">
           {count} {count === 1 ? 'font' : 'fonts'} selected
         </p>
-        {summary ? <p className="text-xs text-muted-foreground">{summary}</p> : null}
+        {parts.length > 0 ? (
+          <p className="text-xs text-muted-foreground">
+            {parts.map((part, index) => (
+              <span key={part.id}>
+                {index > 0 ? <span aria-hidden> · </span> : null}
+                {filterable ? (
+                  <button
+                    type="button"
+                    className="rounded-sm px-0.5 -mx-0.5 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    aria-label={`Keep ${part.count} ${part.label} selected`}
+                    onClick={() => onFilter?.(part.id)}
+                  >
+                    {part.count} {part.label}
+                  </button>
+                ) : (
+                  <span>
+                    {part.count} {part.label}
+                  </span>
+                )}
+              </span>
+            ))}
+          </p>
+        ) : null}
       </div>
       {children}
     </div>
@@ -307,7 +332,6 @@ export function CatalogMenuItems({
   onFormatSwap?: () => void
 }) {
   const multi = plan.count > 1
-  const installVerb = plan.installMissing ? 'Install missing' : 'Install'
   const hasPrimary =
     plan.reinstall > 0 ||
     plan.repair > 0 ||
@@ -334,7 +358,7 @@ export function CatalogMenuItems({
       )}
       {plan.install > 0 && (
         <ContextMenuItem disabled={busy} onSelect={onInstall}>
-          <CirclePlus /> {actionLabel(installVerb, plan.install, plan.install > 1 || multi)}
+          <CirclePlus /> {installActionLabel(plan, multi)}
         </ContextMenuItem>
       )}
       {showInstallAs && plan.install > 0 && onInstallAs && (

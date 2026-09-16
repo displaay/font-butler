@@ -23,11 +23,17 @@ export function getOrCreateApiToken(tokenPath: string): string {
   if (fs.existsSync(tokenPath)) {
     const token = fs.readFileSync(tokenPath, 'utf8').trim()
     if (token.length >= 16) {
+      try {
+        fs.chmodSync(tokenPath, 0o600)
+      } catch {
+        // Best effort; a later rewrite still repairs mode.
+      }
       return token
     }
   }
   const token = crypto.randomBytes(32).toString('hex')
   fs.mkdirSync(path.dirname(tokenPath), { recursive: true })
+  fs.rmSync(tokenPath, { force: true })
   fs.writeFileSync(tokenPath, token, { mode: 0o600 })
   return token
 }

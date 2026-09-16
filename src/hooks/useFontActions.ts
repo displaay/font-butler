@@ -2,6 +2,7 @@ import { toast } from 'sonner'
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
 import type { Tab } from '@/components/Sidebar'
 import { api } from '@/lib/api'
+import { enqueuePrompt } from '@/lib/promptQueue'
 import { isLastQueuedFontAction, startQueuedFontAction } from '@/lib/actionQueue'
 import {
   activatableIds,
@@ -35,10 +36,12 @@ import {
   hasTrackedSource,
   isForgettableOnlyGroup,
   isUninstallableGroup,
+  catalogPatchFromResult,
+  mergeCatalogEntries,
   uniquePaths,
 } from '@/lib/group'
 import { canSwitchTo } from '@/lib/identity'
-import { actionCopy, actionCopyFor, adobeInstallCopy, adobeUninstallCopy, remainingActionCopy } from '@/lib/notify'
+import { actionCopy, actionCopyFor, adobeInstallCopy, adobeUninstallCopy, progressActionCopy } from '@/lib/notify'
 import { batchResultCopy, type BatchOutcome } from '@/lib/results'
 import { doneToastAction, latestUndoableOperationId } from '@/lib/toastAction'
 import { updateGroupsForIds } from '@/lib/updateInventory'
@@ -71,6 +74,7 @@ export type FontActionInput = {
   operations: Operation[]
   setOperations: Dispatch<SetStateAction<Operation[]>>
   busyRef: MutableRefObject<boolean>
+  setBusy: (busy: boolean) => void
   setActionStatus: (message: string | null) => void
   setTab: Dispatch<SetStateAction<Tab>>
   setWatchFolderFilter: Dispatch<SetStateAction<string | null>>
@@ -89,6 +93,7 @@ export function useFontActions({
   setSystemFaces,
   operations,
   busyRef,
+  setBusy,
   setActionStatus,
   setTab,
   setWatchFolderFilter,
@@ -101,7 +106,7 @@ export function useFontActions({
   setReplacePrompt,
 }: FontActionInput) {
   function askFormat(formats: FormatCount[], confirmVerb: 'Install' | 'Add'): Promise<string | null> {
-    return new Promise((resolve) => {
+    return enqueuePrompt((resolve) => {
       setFormatPrompt({ formats, confirmVerb, resolve })
     })
   }
@@ -109,7 +114,7 @@ export function useFontActions({
   function askReplace(conflicts: ReturnType<typeof listFormatConflicts>): Promise<'replace' | 'keep' | null> {
     const incomingFormat = entryFormatOf(conflicts[0].incoming)
     const existingFormat = entryFormatOf(conflicts[0].existing)
-    return new Promise((resolve) => {
+    return enqueuePrompt((resolve) => {
       setReplacePrompt({
         incomingFormat,
         existingFormat,
@@ -289,10 +294,16 @@ export function useFontActions({
       const groups = selectedSystemList().filter((group) => group.writable)
       if (groups.length === 0) return
       await run(async () => {
-        for (const group of groups) {
-          for (const face of uniquePaths(group.faces)) {
+        for (let index = 0; index < groups.length; index += 1) {
+          setActionStatus(
+            progressActionCopy('remove', index, groups.length, groups[0].familyName),
+          )
+          for (const face of uniquePaths(groups[index].faces)) {
             await api.uninstallSystem(face)
           }
+          setActionStatus(
+            progressActionCopy('remove', index + 1, groups.length, groups[0].familyName),
+          )
         }
         setSystemFaces((await api.system()).faces)
       }, actionCopyFor('remove', groups))
@@ -307,14 +318,24 @@ export function useFontActions({
     const uninstallIds = toUninstall.flatMap((group) => uninstallableIds(group))
     await run(
       async () => {
+        if (toForget.length === 0) {
+          if (uninstallIds.length > 1) return api.uninstallMany(uninstallIds)
+          if (uninstallIds.length === 1) return api.uninstall(uninstallIds[0]!)
+          return
+        }
         let last: unknown
-        if (uninstallIds.length > 1) {
-          last = await api.uninstallMany(uninstallIds)
-        } else if (uninstallIds.length === 1) {
-          last = await api.uninstall(uninstallIds[0]!)
+        let done = 0
+        const total = copyGroups.length
+        setActionStatus(progressActionCopy(verb, 0, total, copyGroups[0]?.familyName))
+        for (const group of toUninstall) {
+          last = await uninstallGroup(group)
+          done += 1
+          setActionStatus(progressActionCopy(verb, done, total, copyGroups[0]?.familyName))
         }
         for (const group of toForget) {
           await forgetGroup(group)
+          done += 1
+          setActionStatus(progressActionCopy(verb, done, total, copyGroups[0]?.familyName))
         }
         return last
       },
@@ -331,18 +352,8 @@ export function useFontActions({
     const allowed = new Set(prepared.ids)
     await run(async () => {
       const results: unknown[] = []
-      for (let index = 0; index < groups.length; index += 1) {
-        const ids = installableIds(groups[index]).filter((id) => allowed.has(id))
-        if (ids.length === 0) continue
-        setActionStatus(
-          remainingActionCopy(
-            'install',
-            groups.length - index,
-            groups.length === 1 ? groups[0].familyName : undefined,
-          ),
-        )
-        results.push(await installPrepared(ids, undefined, prepared.replace))
-      }
+      const ids = groups.flatMap((group) => installableIds(group).filter((id) => allowed.has(id)))
+      if (ids.length) results.push(await installPrepared(ids, undefined, prepared.replace))
       return combineBatchResults(results)
     }, actionCopyFor('install', groups))
   }
@@ -355,11 +366,8 @@ export function useFontActions({
     const allowed = new Set(prepared.ids)
     await run(async () => {
       const results: unknown[] = []
-      for (const group of groups) {
-        const ids = activatableIds(group).filter((id) => allowed.has(id))
-        if (ids.length === 0) continue
-        results.push(await activatePrepared(ids, prepared.replace))
-      }
+      const ids = groups.flatMap((group) => activatableIds(group).filter((id) => allowed.has(id)))
+      if (ids.length) results.push(await activatePrepared(ids, prepared.replace))
       return combineBatchResults(results)
     }, actionCopyFor('activate', groups))
   }
@@ -377,20 +385,33 @@ export function useFontActions({
     const allowed = new Set(prepared.ids)
     await run(async () => {
       const results: unknown[] = []
-      for (let index = 0; index < groups.length; index += 1) {
-        const group = groups[index]
+      const work = groups.filter((group) => {
         const toActivate = activatableIds(group).filter((id) => allowed.has(id))
         const toInstall = installableIds(group).filter((id) => allowed.has(id))
-        if (toActivate.length === 0 && toInstall.length === 0) continue
+        return toActivate.length > 0 || toInstall.length > 0
+      })
+      for (let index = 0; index < work.length; index += 1) {
+        const group = work[index]
+        const toActivate = activatableIds(group).filter((id) => allowed.has(id))
+        const toInstall = installableIds(group).filter((id) => allowed.has(id))
         setActionStatus(
-          remainingActionCopy(
+          progressActionCopy(
             verb,
-            groups.length - index,
-            groups.length === 1 ? groups[0].familyName : undefined,
+            index,
+            work.length,
+            work.length === 1 ? work[0].familyName : undefined,
           ),
         )
         if (toActivate.length) results.push(await activatePrepared(toActivate, prepared.replace))
         if (toInstall.length) results.push(await installPrepared(toInstall, undefined, prepared.replace))
+        setActionStatus(
+          progressActionCopy(
+            verb,
+            index + 1,
+            work.length,
+            work.length === 1 ? work[0].familyName : undefined,
+          ),
+        )
       }
       return combineBatchResults(results)
     }, actionCopyFor(verb, groups))
@@ -488,13 +509,11 @@ export function useFontActions({
   async function reinstallSelected() {
     const groups = selectedCatalogGroups().filter((group) => reinstallableIds(group).length > 0)
     if (groups.length === 0) return
-    await run(async () => {
-      const results: unknown[] = []
-      for (const group of groups) {
-        results.push(await reinstallGroup(group))
-      }
-      return combineBatchResults(results)
-    }, actionCopyFor('reinstall', groups))
+    const ids = groups.flatMap(reinstallableIds)
+    await run(
+      () => (ids.length > 1 ? api.reinstallMany(ids) : api.reinstall(ids[0]!)),
+      actionCopyFor('reinstall', groups),
+    )
   }
 
   async function repairSelected() {
@@ -510,13 +529,12 @@ export function useFontActions({
   async function reinstallAllUpdates() {
     const groups = allUpdates
     if (groups.length === 0) return
-    await run(async () => {
-      const results: unknown[] = []
-      for (const group of groups) {
-        results.push(await reinstallGroup(group))
-      }
-      return combineBatchResults(results)
-    }, actionCopyFor('reinstall', groups))
+    const ids = groups.flatMap(reinstallableIds)
+    if (ids.length === 0) return
+    await run(
+      () => (ids.length > 1 ? api.reinstallMany(ids) : api.reinstall(ids[0]!)),
+      actionCopyFor('reinstall', groups),
+    )
   }
 
   function reinstallFromMenuBar(ids: string[]) {
@@ -537,22 +555,23 @@ export function useFontActions({
     }
     setTab('updates')
     setWatchFolderFilter(null)
-    run(async () => {
-      const results: unknown[] = []
-      for (const group of groups) {
-        results.push(await reinstallGroup(group))
-      }
-      return combineBatchResults(results)
-    }, actionCopyFor('reinstall', groups))
+    const reinstallIds = groups.flatMap(reinstallableIds)
+    run(
+      () =>
+        reinstallIds.length > 1
+          ? api.reinstallMany(reinstallIds)
+          : api.reinstall(reinstallIds[0]!),
+      actionCopyFor('reinstall', groups),
+    )
   }
 
   async function forgetSelected() {
     const groups = selectedCatalogGroups().filter((group) => forgettableIds(group).length > 0)
     if (groups.length === 0) return
     await run(async () => {
-      for (const group of groups) {
-        await forgetGroup(group)
-      }
+      const ids = groups.flatMap(forgettableIds)
+      if (ids.length > 1) return api.forgetMany(ids)
+      if (ids.length === 1) return api.forget(ids[0]!)
     }, actionCopyFor('forget', groups))
   }
 
@@ -567,9 +586,9 @@ export function useFontActions({
     )
     if (!confirmed) return
     await run(async () => {
-      for (const group of targets) {
-        await forgetGroup(group, { deleteFiles: true })
-      }
+      const ids = targets.flatMap(deletableSourceIds)
+      if (ids.length > 1) return api.forgetMany(ids, { deleteFiles: true })
+      if (ids.length === 1) return api.forget(ids[0]!, { deleteFiles: true })
     }, actionCopyFor('deleteFiles', targets))
   }
 
@@ -593,8 +612,10 @@ export function useFontActions({
     )
     if (!confirmed) return
     await run(async () => {
-      for (const group of targets) {
-        await uninstallGroup(group, { deleteSource: true })
+      for (let index = 0; index < targets.length; index += 1) {
+        setActionStatus(progressActionCopy('uninstallAndRemove', index, targets.length, targets[0].familyName))
+        await uninstallGroup(targets[index], { deleteSource: true })
+        setActionStatus(progressActionCopy('uninstallAndRemove', index + 1, targets.length, targets[0].familyName))
       }
     }, actionCopyFor('uninstallAndRemove', targets))
   }
@@ -629,10 +650,16 @@ export function useFontActions({
       const groups = selectedSystemList().filter((group) => group.writable)
       if (groups.length === 0) return
       await run(async () => {
-        for (const group of groups) {
-          for (const face of uniquePaths(group.faces)) {
+        for (let index = 0; index < groups.length; index += 1) {
+          setActionStatus(
+            progressActionCopy('deactivate', index, groups.length, groups[0].familyName),
+          )
+          for (const face of uniquePaths(groups[index].faces)) {
             await api.deactivateSystem(face)
           }
+          setActionStatus(
+            progressActionCopy('deactivate', index + 1, groups.length, groups[0].familyName),
+          )
         }
         setSystemFaces((await api.system()).faces)
       }, actionCopyFor('deactivate', groups))
@@ -640,11 +667,11 @@ export function useFontActions({
     }
     const groups = selectedCatalogGroups().filter((group) => deactivatableIds(group).length > 0)
     if (groups.length === 0) return
-    await run(async () => {
-      for (const group of groups) {
-        await deactivateGroup(group)
-      }
-    }, actionCopyFor('deactivate', groups))
+    const ids = groups.flatMap(deactivatableIds)
+    await run(
+      () => (ids.length > 1 ? api.deactivateMany(ids) : api.deactivate(ids[0]!)),
+      actionCopyFor('deactivate', groups),
+    )
   }
 
   function showDoneToast(
@@ -705,11 +732,16 @@ export function useFontActions({
     options?: { undo?: 'uninstall' },
   ) {
     busyRef.current = true
+    setBusy(true)
     setActionStatus(copy.pending)
     startQueuedFontAction(async () => {
       setActionStatus(copy.pending)
       try {
         const result = await action()
+        const patch = catalogPatchFromResult(result)
+        if (patch.length) {
+          setEntries((current) => mergeCatalogEntries(current, patch))
+        }
         const outcome = result && typeof result === 'object' ? (result as BatchOutcome) : undefined
         const { message, failedIds } = batchResultCopy(copy.done, outcome)
         const operationId =
@@ -740,6 +772,7 @@ export function useFontActions({
       } finally {
         if (isLastQueuedFontAction()) {
           busyRef.current = false
+          setBusy(false)
           setActionStatus(null)
         }
       }

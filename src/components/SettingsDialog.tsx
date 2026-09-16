@@ -19,6 +19,7 @@ import {
 import { FolderRelinkDialog } from '@/components/FolderRelinkDialog'
 import { FolderSetupDialog } from '@/components/FolderSetupDialog'
 import { AppUpdateCard } from '@/components/AppUpdateCard'
+import { RetailDisableDialog } from '@/components/RetailDisableDialog'
 import { RetailPane } from '@/components/RetailPane'
 import { SettingsRow, SettingsSection, settingsSelectClass } from '@/components/SettingsRow'
 import { Button } from '@/components/ui/button'
@@ -31,6 +32,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { useSetActionStatus } from '@/components/NotifyProvider'
 import { api } from '@/lib/api'
+import { startQueuedFontAction } from '@/lib/actionQueue'
 import {
   LATIN_PREVIEW_MAX_LENGTH,
   LATIN_PREVIEW_PRESETS,
@@ -53,7 +55,7 @@ import { APP_ICON_OPTIONS, appIconPreviewSrc, parseAppIconStyle } from '@/lib/ap
 import { cn } from '@/lib/utils'
 import { DESTINATIONS, FOLDER_POLICIES, adobeTestingFolderAvailable, destinationLabel, destinationNeedsAdobe, folderAvailabilityLabel, folderPolicyLabel } from '@/lib/folders'
 import { watchFolderName } from '@/lib/watchFolders'
-import type { FolderPolicyPreset, RetailSyncStatus, WatchFolder } from '@/lib/types'
+import type { FolderPolicyPreset, RetailDisableAction, RetailSyncStatus, WatchFolder } from '@/lib/types'
 
 const checkboxClass = 'size-4 shrink-0 cursor-pointer rounded border border-input accent-primary'
 
@@ -180,6 +182,7 @@ export function SettingsDialog({
   const [busy, setBusy] = useState(false)
   const [setupOpen, setSetupOpen] = useState(false)
   const [relinkRoot, setRelinkRoot] = useState<string | null>(null)
+  const [retailDisableOpen, setRetailDisableOpen] = useState(false)
   const [officeFontCache, setOfficeFontCache] = useState<OfficeFontCacheInfo | null>(null)
   const [adobeFontCache, setAdobeFontCache] = useState<AdobeFontCacheInfo | null>(null)
   const [destinations, setDestinations] = useState<DestinationCapability[]>([])
@@ -195,6 +198,7 @@ export function SettingsDialog({
   useEffect(() => {
     if (open) return
     setCategory('general')
+    setRetailDisableOpen(false)
   }, [open])
 
   useEffect(() => {
@@ -268,6 +272,24 @@ export function SettingsDialog({
     } finally {
       setBusy(false)
     }
+  }
+
+  function disableRetail(action: RetailDisableAction) {
+    setRetailDisableOpen(false)
+    const removing = action === 'remove'
+    startQueuedFontAction(async () => {
+      setBusy(true)
+      if (removing) setActionStatus('Uninstalling Displaay fonts…')
+      try {
+        const result = await api.retail.configure({ enabled: false, disableAction: action })
+        onRetailChange?.(result.status)
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Could not turn sync off')
+      } finally {
+        setBusy(false)
+        if (removing) setActionStatus(null)
+      }
+    })
   }
 
   async function save(patch: SettingsPatch) {
@@ -407,6 +429,7 @@ export function SettingsDialog({
                   onAddFolder={() => setSetupOpen(true)}
                   onRelink={(root) => setRelinkRoot(root)}
                   onSettingsChange={onSettingsChange}
+                  onRequestRetailDisable={() => setRetailDisableOpen(true)}
                 />
               )}
               {category === 'fonts' && (
@@ -459,6 +482,12 @@ export function SettingsDialog({
       onDone={() => {
         void api.settings().then((result) => onSettingsChange(result.settings))
       }}
+    />
+    <RetailDisableDialog
+      open={retailDisableOpen}
+      busy={busy}
+      onDismiss={() => setRetailDisableOpen(false)}
+      onChoose={(action) => void disableRetail(action)}
     />
     </>
   )
@@ -785,6 +814,7 @@ function FoldersPane({
   onAddFolder,
   onRelink,
   onSettingsChange,
+  onRequestRetailDisable,
 }: {
   settings: AppSettings | null
   folders: WatchFolder[]
@@ -797,6 +827,7 @@ function FoldersPane({
   onAddFolder: () => void
   onRelink: (root: string) => void
   onSettingsChange: (settings: AppSettings) => void
+  onRequestRetailDisable?: () => void
 }) {
   return (
     <div>
@@ -860,6 +891,7 @@ function FoldersPane({
         busy={busy}
         onStatus={(next) => onRetailChange?.(next)}
         onSync={onRetailSync}
+        onRequestDisable={onRequestRetailDisable}
       />
     </div>
   )
@@ -1173,6 +1205,41 @@ function CachesPane({
   )
 }
 
+function HistoryNumberInput({
+  id,
+  value,
+  min,
+  disabled,
+  onCommit,
+}: {
+  id: string
+  value: number
+  min: number
+  disabled: boolean
+  onCommit: (next: number) => void
+}) {
+  const [draft, setDraft] = useState(String(value))
+  useEffect(() => {
+    setDraft(String(value))
+  }, [value])
+  return (
+    <Input
+      id={id}
+      type="number"
+      min={min}
+      className="w-[7.5rem]"
+      value={draft}
+      disabled={disabled}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={() => {
+        const next = Math.max(min, Number(draft) || value)
+        setDraft(String(next))
+        if (next !== value) onCommit(next)
+      }}
+    />
+  )
+}
+
 function HistoryPane({
   settings,
   busy,
@@ -1190,18 +1257,12 @@ function HistoryPane({
         htmlFor="revision-budget"
       >
         <div className="flex items-center gap-2">
-          <Input
+          <HistoryNumberInput
             id="revision-budget"
-            type="number"
-            min={64}
-            className="w-[7.5rem]"
             value={Math.round((settings?.revisionBudgetBytes ?? 1073741824) / 1024 / 1024)}
+            min={64}
             disabled={busy || !settings}
-            onBlur={(event) =>
-              void onSave({
-                revisionBudgetBytes: Math.max(64, Number(event.target.value) || 1024) * 1024 * 1024,
-              })
-            }
+            onCommit={(next) => void onSave({ revisionBudgetBytes: next * 1024 * 1024 })}
           />
           <span className="text-[13px] text-muted-foreground">MB</span>
         </div>
@@ -1212,16 +1273,12 @@ function HistoryPane({
         htmlFor="activity-retention"
       >
         <div className="flex items-center gap-2">
-          <Input
+          <HistoryNumberInput
             id="activity-retention"
-            type="number"
-            min={7}
-            className="w-[7.5rem]"
             value={settings?.activityRetentionDays ?? 90}
+            min={7}
             disabled={busy || !settings}
-            onBlur={(event) =>
-              void onSave({ activityRetentionDays: Math.max(7, Number(event.target.value) || 90) })
-            }
+            onCommit={(next) => void onSave({ activityRetentionDays: next })}
           />
           <span className="text-[13px] text-muted-foreground">days</span>
         </div>

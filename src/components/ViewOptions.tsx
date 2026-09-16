@@ -33,8 +33,12 @@ export function ViewOptions({
   showSourcesToggle = true,
   showAdded,
   onShowAddedChange,
+  showInstanceCounts,
+  onShowInstanceCountsChange,
   hideDestinations,
   onHideDestinationsChange,
+  hideFormats,
+  onHideFormatsChange,
   previewSize,
   onPreviewSizeChange,
   className,
@@ -48,8 +52,12 @@ export function ViewOptions({
   showSourcesToggle?: boolean
   showAdded: boolean
   onShowAddedChange: (value: boolean) => void
+  showInstanceCounts: boolean
+  onShowInstanceCountsChange: (value: boolean) => void
   hideDestinations: boolean
   onHideDestinationsChange: (value: boolean) => void
+  hideFormats: boolean
+  onHideFormatsChange: (value: boolean) => void
   previewSize: number
   onPreviewSizeChange: (size: number) => void
   className?: string
@@ -166,7 +174,7 @@ export function ViewOptions({
             {menuOpen && (
               <div
                 role="menu"
-                className="absolute top-full right-0 z-30 mt-1 min-w-48 rounded-md border bg-popover p-1 shadow-sm"
+                className="absolute top-full right-0 z-30 mt-1 min-w-56 rounded-md border bg-popover p-1 shadow-sm"
               >
                 {showSourcesToggle && (
                   <Label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 font-normal text-foreground hover:bg-muted">
@@ -191,11 +199,29 @@ export function ViewOptions({
                 <Label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 font-normal text-foreground hover:bg-muted">
                   <input
                     type="checkbox"
+                    checked={showInstanceCounts}
+                    onChange={(event) => onShowInstanceCountsChange(event.target.checked)}
+                    className="size-3.5 rounded border border-input accent-primary"
+                  />
+                  Show instances and files
+                </Label>
+                <Label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 font-normal text-foreground hover:bg-muted">
+                  <input
+                    type="checkbox"
                     checked={hideDestinations}
                     onChange={(event) => onHideDestinationsChange(event.target.checked)}
                     className="size-3.5 rounded border border-input accent-primary"
                   />
                   Hide destinations
+                </Label>
+                <Label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 font-normal text-foreground hover:bg-muted">
+                  <input
+                    type="checkbox"
+                    checked={hideFormats}
+                    onChange={(event) => onHideFormatsChange(event.target.checked)}
+                    className="size-3.5 rounded border border-input accent-primary"
+                  />
+                  Hide formats
                 </Label>
               </div>
             )}

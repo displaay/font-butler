@@ -1,4 +1,5 @@
 import type { SVGProps } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { Link2, Monitor } from 'lucide-react'
 import { DisplaayMark } from '@/components/DisplaayMark'
 import { Badge } from '@/components/ui/badge'
@@ -13,7 +14,7 @@ import type { CatalogEntry, FontStatus } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 const overlayChipClassName =
-  'inline-flex size-5 items-center justify-center rounded-md bg-background/85 text-muted-foreground shadow-[inset_0_0_0_1px_var(--border)] backdrop-blur-sm'
+  'inline-flex size-5 items-center justify-center rounded-md bg-background text-muted-foreground shadow-[inset_0_0_0_1px_var(--border)]'
 
 export function AdobeLogo({ className, ...props }: SVGProps<SVGSVGElement>) {
   return (
@@ -90,6 +91,80 @@ export function VfBadge({ show }: { show: boolean }) {
   return <Badge>VF</Badge>
 }
 
+/** Name + VF/TTF/OTF on one row. Long names run under the tags instead of wrapping them. */
+export function NameWithFormatTags({
+  name,
+  isVariable,
+  formats,
+  occupying,
+  selected = false,
+  hideFormats = false,
+}: {
+  name: string
+  isVariable: boolean
+  formats: string[]
+  occupying?: string[]
+  selected?: boolean
+  hideFormats?: boolean
+}) {
+  const tags = (
+    <>
+      <VfBadge show={isVariable} />
+      {hideFormats ? null : <FormatBadges formats={formats} occupying={occupying} />}
+    </>
+  )
+  const boxRef = useRef<HTMLDivElement>(null)
+  const [covering, setCovering] = useState(false)
+  useLayoutEffect(() => {
+    const box = boxRef.current
+    if (!box) return
+    let cancelled = false
+    const check = () => {
+      if (!cancelled) setCovering(box.scrollWidth > box.clientWidth + 1)
+    }
+    check()
+    const observer = new ResizeObserver(check)
+    observer.observe(box)
+    // UI font loads after first paint can widen the name; re-check once it settles.
+    document.fonts?.ready.then(check).catch(() => {})
+    return () => {
+      cancelled = true
+      observer.disconnect()
+    }
+  }, [name, isVariable, hideFormats, formats.join(','), occupying?.join(',')])
+  if (!isVariable && (hideFormats || formats.length === 0)) {
+    return (
+      <span className="truncate font-medium" title={name}>
+        {name}
+      </span>
+    )
+  }
+  const wash = selected ? 'bg-muted/60' : 'group-hover:bg-muted/40'
+  const fadeWash = selected
+    ? 'bg-gradient-to-r from-muted/0 to-muted/60'
+    : 'bg-gradient-to-r from-muted/0 to-muted/40 opacity-0 group-hover:opacity-100'
+  const fadeClass = covering ? 'w-12' : 'w-1.5'
+  return (
+    <div ref={boxRef} className="relative inline-flex min-w-0 max-w-full overflow-hidden" title={name}>
+      <span className="whitespace-nowrap font-medium">{name}</span>
+      <span className="invisible flex shrink-0 items-center gap-1 pl-1.5" aria-hidden>
+        {tags}
+      </span>
+      <span className="absolute inset-y-0 right-0 z-10 flex items-center">
+        <span className={cn('relative h-full shrink-0', fadeClass)} aria-hidden>
+          <span className="absolute inset-0 bg-gradient-to-r from-background/0 to-background" />
+          <span className={cn('absolute inset-0', fadeWash)} />
+        </span>
+        <span className="relative flex items-center gap-1">
+          <span className="pointer-events-none absolute inset-0 bg-background" aria-hidden />
+          <span className={cn('pointer-events-none absolute inset-0', wash)} aria-hidden />
+          <span className="relative flex items-center gap-1">{tags}</span>
+        </span>
+      </span>
+    </div>
+  )
+}
+
 export function StatusBadge({ status }: { status: FontStatus }) {
   if (status === 'outdated') return <Badge tone="warn">Update available</Badge>
   if (status === 'deactivated') return <Badge>Deactivated</Badge>
@@ -133,7 +208,6 @@ export function StateBadges({
       {parts.map((part) => {
         const warn = part.includes('Update') || part.includes('Review') || part.includes('paused')
         const accent =
-          part === 'Not installed' ||
           part.includes('missing') ||
           part.includes('offline') ||
           part.includes('unreadable') ||

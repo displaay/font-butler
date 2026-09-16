@@ -3,6 +3,8 @@ import { test } from 'node:test'
 import {
   catalogRevealEntry,
   catalogEntriesMatch,
+  catalogPatchFromResult,
+  mergeCatalogEntries,
   countFamilyNames,
   countLibraryFilters,
   entryHasPreviewFile,
@@ -134,6 +136,11 @@ test('countLibraryFilters totals families per filter and can count one family tw
     static: 2,
     source: 3,
     'no-source': 0,
+    computer: 2,
+    adobe: 0,
+    'no-destination': 2,
+    otf: 3,
+    ttf: 0,
   })
 })
 
@@ -153,6 +160,35 @@ test('matchesLibraryFilter combines status, kind, and source dimensions', () => 
   assert.equal(matchesLibraryFilter(vf, ['installed', 'vf', 'source']), true)
   assert.equal(matchesLibraryFilter(statik, ['installed', 'vf']), false)
   assert.equal(matchesLibraryFilter(vf, ['uninstalled', 'vf']), false)
+})
+
+test('matchesLibraryFilter filters destination and format independently', () => {
+  const mac = entry('mac', 'Able', 1, 'installed')
+  const adobe = {
+    ...entry('adb', 'Baker', 2, 'installed'),
+    installations: [
+      {
+        destinationId: 'adobe-shared' as const,
+        path: '/tmp/baker-adobe.otf',
+        verification: 'file-present' as const,
+      },
+    ],
+  }
+  const nowhere = entry('off', 'Cage', 3, 'uninstalled')
+  const ttf = { ...entry('tt', 'Dada', 4, 'installed'), format: 'ttf' as const, sourcePath: '/tmp/tt.ttf' }
+  assert.equal(matchesLibraryFilter(mac, ['computer']), true)
+  assert.equal(matchesLibraryFilter(mac, ['adobe']), false)
+  assert.equal(matchesLibraryFilter(mac, ['no-destination']), false)
+  assert.equal(matchesLibraryFilter(adobe, ['adobe']), true)
+  assert.equal(matchesLibraryFilter(adobe, ['computer']), true)
+  assert.equal(matchesLibraryFilter(nowhere, ['no-destination']), true)
+  assert.equal(matchesLibraryFilter(nowhere, ['computer']), false)
+  assert.equal(matchesLibraryFilter(mac, ['otf']), true)
+  assert.equal(matchesLibraryFilter(ttf, ['ttf']), true)
+  assert.equal(matchesLibraryFilter(ttf, ['otf']), false)
+  assert.equal(matchesLibraryFilter(mac, ['computer', 'otf']), true)
+  assert.equal(matchesLibraryFilter(ttf, ['adobe', 'ttf']), false)
+  assert.equal(matchesLibraryFilter(nowhere, ['no-destination', 'otf']), true)
 })
 
 test('Delete uninstalls installed families and forgets the rest', () => {
@@ -326,6 +362,27 @@ test('catalogRevealEntry prefers selected install, else any install or tracked s
   assert.equal(catalogRevealEntry(group, selfSourced, 'source')?.id, 'src')
 })
 
+test('groupCatalog keeps retail VF families on their own cards', () => {
+  const roman = entry('roman', 'Aguzzo', 1)
+  roman.retailRelativePath = 'Aguzzo/Aguzzo-Regular.otf'
+  roman.retailFamilyName = 'Aguzzo'
+  const vf = entry('vf', 'Aguzzo', 2)
+  vf.retailRelativePath = 'Aguzzo/AguzzoVF.ttf'
+  vf.retailFamilyName = 'Aguzzo VF'
+  vf.faces[0]!.isVariable = true
+  const italicVf = entry('italic-vf', 'Aguzzo Italic', 3)
+  italicVf.retailRelativePath = 'Aguzzo Italic/AguzzoItalicVF.ttf'
+  italicVf.retailFamilyName = 'Aguzzo Italic VF'
+  italicVf.faces[0]!.isVariable = true
+  const groups = groupCatalog([roman, vf, italicVf])
+  assert.deepEqual(
+    groups.map((group) => group.familyName).sort(),
+    ['Aguzzo', 'Aguzzo Italic VF', 'Aguzzo VF'],
+  )
+  assert.equal(groups.find((group) => group.familyName === 'Aguzzo VF')?.entries[0]?.id, 'vf')
+  assert.equal(groups.find((group) => group.familyName === 'Aguzzo Italic VF')?.entries[0]?.id, 'italic-vf')
+})
+
 test('groupCatalog keeps typographic family styles on one card', () => {
   const groups = groupCatalog([
     entry('regular', 'Booton', 1, 'installed', 'Regular', false),
@@ -360,9 +417,41 @@ test('countFamilyNames matches groupCatalog length', () => {
   assert.equal(countFamilyNames(entries), groupCatalog(entries).length)
 })
 
+test('catalogEntriesMatch treats Adobe copies and parked paths as catalog changes', () => {
+  const a = [entry('a', 'Able', 1)]
+  const parked = [{ ...a[0]!, disabledPath: '/tmp/parked.otf' }]
+  assert.equal(catalogEntriesMatch(a, parked), false)
+  const adobe = [
+    {
+      ...a[0]!,
+      installations: [{ destinationId: 'adobe-shared' as const, path: '/tmp/adobe.otf', verification: 'file-present' as const }],
+    },
+  ]
+  assert.equal(catalogEntriesMatch(a, adobe), false)
+})
+
+test('catalogPatchFromResult merges single entries and batch payloads', () => {
+  const installed = entry('a', 'Able', 1)
+  assert.deepEqual(catalogPatchFromResult(installed).map((item) => item.id), ['a'])
+  assert.deepEqual(catalogPatchFromResult({ entries: [installed] }).map((item) => item.id), ['a'])
+  assert.deepEqual(catalogPatchFromResult({ ok: true }), [])
+})
+
+test('mergeCatalogEntries updates by id and appends new rows', () => {
+  const current = [entry('a', 'Able', 1), entry('b', 'Bane', 2)]
+  const patched = mergeCatalogEntries(current, [{ ...current[0]!, status: 'deactivated' }])
+  assert.equal(patched[0]!.status, 'deactivated')
+  assert.equal(patched[1]!.id, 'b')
+  const added = mergeCatalogEntries(current, [entry('c', 'Cave', 3)])
+  assert.equal(added[2]!.id, 'c')
+})
+
 test('catalogEntriesMatch ignores array identity when revision fields are equal', () => {
   const a = [entry('a', 'Able', 1), entry('z', 'Zed', 2)]
   const b = [entry('a', 'Able', 1), entry('z', 'Zed', 2)]
   assert.equal(catalogEntriesMatch(a, b), true)
   assert.equal(catalogEntriesMatch(a, [entry('a', 'Able', 1, 'outdated'), entry('z', 'Zed', 2)]), false)
+  const renamed = [entry('a', 'Able', 1), entry('z', 'Zed', 2)]
+  renamed[0]!.retailFamilyName = 'Aguzzo VF'
+  assert.equal(catalogEntriesMatch(a, renamed), false)
 })

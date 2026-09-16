@@ -1,6 +1,6 @@
 import { CloudDownload } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import type { RetailSyncStatus } from '@/lib/types'
+import { retailUpdateCount, type RetailSyncStatus } from '@/lib/types'
 
 /**
  * The retail collection's place on the Updates tab.
@@ -21,7 +21,7 @@ export function RetailUpdateCard({
   onSync?: () => void
   onOpenSettings?: () => void
 }) {
-  const count = status.pending
+  const count = retailUpdateCount(status)
 
   return (
     <div className="rounded-lg border px-3 py-2" data-retail-update={count > 0 ? 'available' : 'current'}>
@@ -49,7 +49,7 @@ export function RetailUpdateCard({
           ) : null}
           {onSync ? (
             <Button type="button" size="sm" disabled={busy} onClick={onSync}>
-              {busy ? 'Syncing…' : 'Sync'}
+              {busy ? 'Syncing…' : 'Sync All'}
             </Button>
           ) : null}
         </div>

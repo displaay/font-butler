@@ -6,13 +6,18 @@ import {
   deactivateActionLabel,
   catalogBatchPlan,
   catalogBatchSummary,
+  catalogBatchSummaryParts,
+  catalogKeysForStatus,
   deleteSourcesLabel,
   familyCardPlan,
   forgetSourcesLabel,
   hasCatalogBatchActions,
   hasSystemBatchActions,
+  installActionLabel,
   systemBatchPlan,
   systemBatchSummary,
+  systemBatchSummaryParts,
+  systemKeysForKind,
 } from './batch.ts'
 import { displayStateParts, isNotInstalledLabel } from './state.ts'
 import { groupCatalog, groupSystem, familyBadgeEntry, familyStatusSummary } from './group.ts'
@@ -74,6 +79,7 @@ test('catalogBatchPlan uses entry-level eligibility for a mixed family', () => {
   assert.deepEqual(catalogBatchPlan(groups), {
     count: 1,
     install: 1,
+    installFonts: 1,
     installMissing: true,
     adobeInstall: 2,
     adobeUninstall: 0,
@@ -130,7 +136,7 @@ test('familyCardPlan still deactivates an installed family', () => {
   assert.equal(deactivateActionLabel(plan), 'Deactivate')
 })
 
-test('catalogBatchPlan counts each action by family status', () => {
+test('catalogBatchPlan keeps only actions every selected family can take', () => {
   const groups = groupCatalog([
     entry('a', 'Able', 'uninstalled'),
     entry('b', 'Baker', 'deactivated'),
@@ -140,19 +146,54 @@ test('catalogBatchPlan counts each action by family status', () => {
   ])
   assert.deepEqual(catalogBatchPlan(groups), {
     count: 5,
-    install: 1,
+    install: 0,
+    installFonts: 0,
     installMissing: false,
     adobeInstall: 5,
     adobeUninstall: 0,
-    activate: 1,
-    deactivate: 2,
-    uninstall: 3,
-    uninstallAndRemove: 3,
-    reinstall: 1,
+    activate: 0,
+    deactivate: 0,
+    uninstall: 0,
+    uninstallAndRemove: 0,
+    reinstall: 0,
     repair: 0,
-    forget: 2,
-    deleteFiles: 1,
+    forget: 0,
+    deleteFiles: 0,
   })
+})
+
+test('catalogBatchPlan hides subset actions on a mixed installed/deactivated/uninstalled selection', () => {
+  const groups = groupCatalog([
+    entry('a', 'Able', 'installed'),
+    entry('b', 'Baker', 'installed'),
+    entry('c', 'Cage', 'deactivated'),
+    entry('d', 'Dada', 'deactivated'),
+    entry('e', 'Echo', 'uninstalled'),
+    entry('f', 'Fenul', 'uninstalled'),
+    entry('g', 'Gellix', 'uninstalled'),
+    entry('h', 'Hatch', 'uninstalled'),
+  ])
+  const plan = catalogBatchPlan(groups)
+  assert.equal(plan.count, 8)
+  assert.equal(plan.install, 0)
+  assert.equal(plan.activate, 0)
+  assert.equal(plan.deactivate, 0)
+  assert.equal(plan.uninstall, 0)
+  assert.equal(plan.repair, 0)
+  assert.equal(plan.forget, 0)
+})
+
+test('catalogBatchPlan counts installs across matching families', () => {
+  const groups = groupCatalog([
+    entry('a', 'Able', 'uninstalled'),
+    entry('b', 'Baker', 'uninstalled', 'Bold'),
+  ])
+  const plan = catalogBatchPlan(groups)
+  assert.equal(plan.install, 2)
+  assert.equal(plan.installFonts, 2)
+  assert.equal(plan.forget, 2)
+  assert.equal(plan.deactivate, 0)
+  assert.equal(plan.uninstall, 0)
 })
 
 test('catalogBatchSummary lists mixed statuses', () => {
@@ -162,6 +203,12 @@ test('catalogBatchSummary lists mixed statuses', () => {
     entry('c', 'Cage', 'uninstalled'),
   ])
   assert.equal(catalogBatchSummary(groups), '1 installed · 2 uninstalled')
+  assert.deepEqual(catalogBatchSummaryParts(groups), [
+    { status: 'installed', count: 1, label: 'installed' },
+    { status: 'uninstalled', count: 2, label: 'uninstalled' },
+  ])
+  assert.deepEqual(catalogKeysForStatus(groups, 'uninstalled'), ['Baker', 'Cage'])
+  assert.deepEqual(catalogKeysForStatus(groups, 'deactivated'), [])
 })
 
 test('systemBatchPlan only counts writable families', () => {
@@ -172,12 +219,19 @@ test('systemBatchPlan only counts writable families', () => {
   ])
   assert.deepEqual(systemBatchPlan(groups), {
     count: 3,
-    deactivate: 2,
-    uninstall: 2,
+    deactivate: 0,
+    uninstall: 0,
   })
   assert.equal(systemBatchSummary(groups), '2 removable · 1 system')
-  assert.equal(hasSystemBatchActions(systemBatchPlan(groups)), true)
+  assert.deepEqual(systemBatchSummaryParts(groups), [
+    { kind: 'removable', count: 2, label: 'removable' },
+    { kind: 'system', count: 1, label: 'system' },
+  ])
+  assert.deepEqual(systemKeysForKind(groups, 'removable'), ['Inter', 'Recoleta'])
+  assert.deepEqual(systemKeysForKind(groups, 'system'), ['Helvetica'])
+  assert.equal(hasSystemBatchActions(systemBatchPlan(groups)), false)
   assert.equal(hasSystemBatchActions(systemBatchPlan(groups.slice(0, 1))), false)
+  assert.equal(hasSystemBatchActions(systemBatchPlan(groups.slice(1))), true)
 })
 
 test('catalogBatchPlan does not count an alt-format copy as missing styles', () => {
@@ -269,7 +323,7 @@ test('catalogBatchPlan counts Adobe installs only when a copy is not present', (
     entry('b', 'Baker', 'installed'),
   ])
   const plan = catalogBatchPlan(groups)
-  assert.equal(plan.adobeInstall, 1)
+  assert.equal(plan.adobeInstall, 0)
   assert.equal(hasCatalogBatchActions(plan), true)
   assert.equal(catalogBatchPlan(groups, false).adobeInstall, 0)
 })
@@ -284,8 +338,8 @@ test('catalogBatchPlan counts Activate by family, not files', () => {
   ])
   const plan = catalogBatchPlan(groups)
   assert.equal(plan.count, 3)
-  assert.equal(plan.activate, 2)
-  assert.equal(activateActionLabel(plan, true), 'Activate 2 fonts')
+  assert.equal(plan.activate, 0)
+  assert.equal(plan.uninstall > 0, true)
 })
 
 test('catalogBatchPlan counts Adobe uninstalls only when a Mac copy would remain', () => {
@@ -305,6 +359,22 @@ test('catalogBatchPlan counts Adobe uninstalls only when a Mac copy would remain
   }
   assert.equal(catalogBatchPlan(groupCatalog([both])).adobeUninstall, 1)
   assert.equal(catalogBatchPlan(groupCatalog([adobeOnly])).adobeUninstall, 0)
+})
+
+test('Install label counts families, not styles', () => {
+  const groups = groupCatalog([
+    entry('a1', 'Able', 'uninstalled', 'Regular'),
+    entry('a2', 'Able', 'uninstalled', 'Bold'),
+    entry('a3', 'Able', 'uninstalled', 'Light'),
+    entry('b1', 'Baker', 'uninstalled', 'Regular'),
+    entry('b2', 'Baker', 'uninstalled', 'Italic'),
+  ])
+  const plan = catalogBatchPlan(groups)
+  assert.equal(plan.count, 2)
+  assert.equal(plan.install, 5)
+  assert.equal(plan.installFonts, 2)
+  assert.equal(installActionLabel(plan, true), 'Install 2 fonts')
+  assert.equal(installActionLabel(plan, false), 'Install 2 fonts')
 })
 
 test('actionLabel adds a count for multi-select', () => {

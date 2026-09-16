@@ -1,22 +1,29 @@
 import { useEffect, useId, useRef, useState } from 'react'
+import { Filter, Loader2, Search } from 'lucide-react'
 import { DisplaayMark } from '@/components/DisplaayMark'
 import { SettingsRow, SettingsSection, settingsSelectClass } from '@/components/SettingsRow'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { api } from '@/lib/api'
 import { startQueuedFontAction } from '@/lib/actionQueue'
+import { RetailDisableDialog } from '@/components/RetailDisableDialog'
 import {
   DEFAULT_RETAIL_AUTOCHECK_MINUTES,
   RETAIL_AUTOCHECK_CHOICES,
   groupRetailFontsByTypeface,
+  isRetailVariableFamilyName,
+  matchesRetailFontQuery,
+  nextDisabledRetailFamilyNames,
   retailDriftSummary,
+  type RetailDisableAction,
   type RetailFontFormat,
   type RetailSkip,
   type RetailSkipReason,
   type RetailSyncFont,
   type RetailSyncStatus,
 } from '@/lib/types'
-import { cn } from '@/lib/utils'
+import { cn, CONTROL_H } from '@/lib/utils'
 
 const BLOCKED_KINDS = new Set(['conflict', 'refused'])
 
@@ -116,12 +123,6 @@ function FormatToggle({
   )
 }
 
-function nextDisabledFamilyNames(fonts: RetailSyncFont[], familyName: string, enabled: boolean): string[] {
-  return fonts
-    .filter((font) => (font.familyName === familyName ? !enabled : !font.enabled))
-    .map((font) => font.familyName)
-}
-
 function nextFamilyFormats(
   fonts: RetailSyncFont[],
   familyName: string,
@@ -146,76 +147,200 @@ function RetailFontList({
   disabled: boolean
   onToggle: (familyName: string, enabled: boolean) => void
   onFormat: (familyName: string, format: RetailFontFormat) => void
-  onSetAll: (enabled: boolean) => void
+  onSetAll: (enabled: boolean, familyNames: string[]) => void
 }) {
+  const [showStatic, setShowStatic] = useState(true)
+  const [showVariable, setShowVariable] = useState(true)
+  const [filterOpen, setFilterOpen] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const filterRef = useRef<HTMLDivElement>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
   const synced = fonts.filter((font) => font.enabled).length
-  const groups = groupRetailFontsByTypeface(fonts)
+  const kindFiltered = showStatic && showVariable
+  const searching = query.trim().length > 0
+  const visible = fonts.filter((font) => {
+    const variable = isRetailVariableFamilyName(font.familyName)
+    if (!(variable ? showVariable : showStatic)) return false
+    return matchesRetailFontQuery(font, query)
+  })
+  const groups = groupRetailFontsByTypeface(visible)
+  const visibleSynced = visible.filter((font) => font.enabled).length
+  const narrowed = visible.length > 0 && visible.length < fonts.length
+  const batchNames = visible.map((font) => font.familyName)
+
+  useEffect(() => {
+    if (searchOpen) searchRef.current?.focus()
+  }, [searchOpen])
+
+  useEffect(() => {
+    if (!filterOpen) return
+    function onPointerDown(event: PointerEvent) {
+      if (!filterRef.current?.contains(event.target as Node)) setFilterOpen(false)
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') setFilterOpen(false)
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [filterOpen])
+
   return (
     <div className="rounded-lg border bg-muted/30">
       <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
         <p className="text-[13px] leading-5 text-muted-foreground">
-          {synced === fonts.length
-            ? `${fonts.length} ${fonts.length === 1 ? 'family' : 'families'} syncing`
-            : `${synced} of ${fonts.length} families syncing`}
+          {narrowed
+            ? visibleSynced === visible.length
+              ? `${visible.length} matching`
+              : `${visibleSynced} of ${visible.length} matching`
+            : synced === 0
+              ? `${fonts.length} ${fonts.length === 1 ? 'family' : 'families'} listed`
+              : synced === fonts.length
+                ? `${fonts.length} ${fonts.length === 1 ? 'family' : 'families'} syncing`
+                : `${synced} of ${fonts.length} families syncing`}
         </p>
-        <div className="flex items-center gap-1">
+        <div className="flex min-w-0 items-center gap-1">
+          {searchOpen ? (
+            <Input
+              ref={searchRef}
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== 'Escape') return
+                event.stopPropagation()
+                setSearchOpen(false)
+              }}
+              placeholder="Search"
+              aria-label="Search families"
+              autoFocus
+              className="h-7 w-36 shrink-0 [&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none"
+            />
+          ) : null}
           <Button
             type="button"
             size="sm"
             variant="ghost"
-            disabled={disabled || synced === fonts.length}
-            onClick={() => onSetAll(true)}
+            className={cn(CONTROL_H, 'w-8 px-0', (searchOpen || searching) && 'bg-muted')}
+            aria-label="Search families"
+            aria-pressed={searchOpen}
+            onClick={() => setSearchOpen((open) => !open)}
           >
-            All
+            <Search className="size-3.5 text-muted-foreground" />
+          </Button>
+          <div className="relative" ref={filterRef}>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className={cn(CONTROL_H, 'w-8 px-0', (filterOpen || !kindFiltered) && 'bg-muted')}
+              aria-label="Filter families"
+              aria-haspopup="menu"
+              aria-expanded={filterOpen}
+              onClick={() => setFilterOpen((open) => !open)}
+            >
+              <Filter className="size-3.5 text-muted-foreground" />
+            </Button>
+            {filterOpen ? (
+              <div
+                role="menu"
+                className="absolute top-full right-0 z-30 mt-1 min-w-44 rounded-md border bg-popover p-1 shadow-sm"
+              >
+                {(
+                  [
+                    { id: 'static', label: 'Static fonts', checked: showStatic, onChange: setShowStatic },
+                    { id: 'variable', label: 'Variable fonts', checked: showVariable, onChange: setShowVariable },
+                  ] as const
+                ).map((option) => (
+                  <Label
+                    key={option.id}
+                    className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 font-normal text-foreground hover:bg-muted"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={option.checked}
+                      onChange={(event) => option.onChange(event.target.checked)}
+                      className="size-3.5 rounded border border-input accent-primary"
+                    />
+                    {option.label}
+                  </Label>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            disabled={visible.length === 0}
+            onClick={() => onSetAll(true, batchNames)}
+          >
+            {narrowed ? 'Sync these' : 'Sync All'}
           </Button>
           <Button
             type="button"
             size="sm"
             variant="ghost"
-            disabled={disabled || synced === 0}
-            onClick={() => onSetAll(false)}
+            disabled={visibleSynced === 0}
+            onClick={() => onSetAll(false, batchNames)}
           >
-            None
+            {narrowed ? 'Off these' : 'None'}
           </Button>
         </div>
       </div>
       <div className="max-h-80 overflow-y-auto">
-        {groups.map((group) => (
-          <div key={group.typefaceName} className="border-b last:border-b-0">
-            <div className="px-3 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              {group.typefaceName}
-            </div>
-            {group.fonts.map((font) => (
-              <div key={font.familyName} className="flex items-center justify-between gap-3 px-3 py-2">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-medium leading-5">{font.familyName}</div>
-                  <p className="text-[13px] leading-5 text-muted-foreground">
-                    {font.available === false
-                      ? 'Not available yet'
-                      : font.fileCount === 1
-                        ? '1 file'
-                        : `${font.fileCount} files`}
-                  </p>
-                </div>
-                <div className="flex shrink-0 items-center gap-1.5">
-                  <FormatToggle
-                    formats={font.formats}
-                    selected={font.selectedFormat}
-                    disabled={disabled}
-                    ariaLabel={`Format for ${font.familyName}`}
-                    onChange={(format) => onFormat(font.familyName, format)}
-                  />
-                  <SyncToggle
-                    enabled={font.enabled}
-                    disabled={disabled}
-                    ariaLabel={`Sync ${font.familyName}`}
-                    onChange={(next) => onToggle(font.familyName, next)}
-                  />
-                </div>
+        {groups.length === 0 ? (
+          <p className="px-3 py-3 text-[13px] leading-5 text-muted-foreground">
+            {searching
+              ? 'No families match this search.'
+              : !showVariable && showStatic
+                ? 'No static fonts.'
+                : showVariable && !showStatic
+                  ? 'No variable fonts.'
+                  : 'No families match this filter.'}
+          </p>
+        ) : (
+          groups.map((group) => (
+            <div key={group.typefaceName} className="border-b last:border-b-0">
+              <div className="px-3 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                {group.typefaceName}
               </div>
-            ))}
-          </div>
-        ))}
+              {group.fonts.map((font) => (
+                <div key={font.familyName} className="flex items-center justify-between gap-3 px-3 py-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium leading-5">{font.familyName}</div>
+                    <p className="text-[13px] leading-5 text-muted-foreground">
+                      {font.available === false
+                        ? 'Not available yet'
+                        : font.fileCount === 1
+                          ? '1 file'
+                          : `${font.fileCount} files`}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <FormatToggle
+                      formats={font.formats}
+                      selected={font.selectedFormat}
+                      disabled={disabled}
+                      ariaLabel={`Format for ${font.familyName}`}
+                      onChange={(format) => onFormat(font.familyName, format)}
+                    />
+                    <SyncToggle
+                      enabled={font.enabled}
+                      disabled={disabled}
+                      ariaLabel={`Sync ${font.familyName}`}
+                      onChange={(next) => onToggle(font.familyName, next)}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))
+        )}
       </div>
     </div>
   )
@@ -247,19 +372,21 @@ function skipLabel(reason: RetailSkipReason): string {
 /**
  * The optional Displaay retail collection.
  *
- * Checking and syncing are always explicit actions — never on mount and never automatic — so a slow or
- * unreachable worker can't stall the app, the same rule the app-update check follows.
+ * Opening this pane loads the font list from the worker. Syncing stays an explicit action so a slow
+ * worker can't download fonts until the user asks.
  */
 export function RetailPane({
   status,
   busy,
   onStatus,
   onSync,
+  onRequestDisable,
 }: {
   status: RetailSyncStatus | null
   busy: boolean
   onStatus: (status: RetailSyncStatus) => void
   onSync?: () => void
+  onRequestDisable?: () => void
 }) {
   const urlId = useId()
   const tokenId = useId()
@@ -270,13 +397,18 @@ export function RetailPane({
   const [editedUrl, setEditedUrl] = useState<string | null>(null)
   const workerBaseUrl = editedUrl ?? status?.workerBaseUrl ?? ''
   const [error, setError] = useState<string | null>(null)
+  const [disableOpen, setDisableOpen] = useState(false)
+  const [checking, setChecking] = useState(
+    () => Boolean(status?.enabled) && (status?.fonts.length ?? 0) === 0 && !status?.checkedAt,
+  )
+  const autoCheckStartedRef = useRef(false)
 
   const disabled = busy
   const loadedRef = useRef(false)
   const enabled = Boolean(status?.enabled)
 
   // `/api/retail/status` reads settings and the local manifest only — no network — so it is safe on
-  // first render. Checking the worker stays an explicit action.
+  // first render. Opening the pane then checks the worker for the font list.
   useEffect(() => {
     if (status || loadedRef.current) return
     loadedRef.current = true
@@ -299,11 +431,62 @@ export function RetailPane({
     })
   }
 
+  // Font-list changes must reach the server even while a sync HTTP request is still in flight.
+  const configureSelection = (input: {
+    disabledGlyphsFiles?: string[]
+    familyFormats?: Record<string, RetailFontFormat>
+  }) => {
+    setError(null)
+    return api.retail
+      .configure(input)
+      .then((result) => {
+        onStatus(result.status)
+        return result
+      })
+      .catch((caught) => {
+        setError(caught instanceof Error ? caught.message : 'Something went wrong.')
+        return null
+      })
+  }
+
+  const startSync = () => {
+    if (onSync) onSync()
+    else void api.retail.sync().then((result) => onStatus(result.status))
+  }
+
   const blocked = (status?.drift ?? []).filter((item) => BLOCKED_KINDS.has(item.kind))
   const lastError = error ?? status?.error ?? null
   const fonts = status?.fonts ?? []
+  const showFontLoader = checking && fonts.length === 0
+
+  useEffect(() => {
+    if (!enabled) {
+      autoCheckStartedRef.current = false
+      return
+    }
+    if (!status || status.fonts.length > 0 || status.checkedAt) return
+    if (autoCheckStartedRef.current) return
+    autoCheckStartedRef.current = true
+    setChecking(true)
+    setError(null)
+    startQueuedFontAction(async () => {
+      try {
+        onStatus((await api.retail.check(true)).status)
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : 'Something went wrong.')
+      } finally {
+        setChecking(false)
+      }
+    })
+  }, [enabled, status, onStatus])
+
+  const turnSyncOff = (disableAction: RetailDisableAction) => {
+    setDisableOpen(false)
+    void run(() => api.retail.configure({ enabled: false, disableAction }))
+  }
 
   return (
+    <>
     <SettingsSection
       title={
         <>
@@ -314,13 +497,20 @@ export function RetailPane({
     >
       <SettingsRow
         label="Sync"
-        description="Keep the latest versions of selected fonts from the Displaay retail collection."
+        description="Load the Displaay retail list. Fonts stay off the computer until you Sync All or turn a family on."
       >
         <SyncToggle
           enabled={enabled}
           disabled={disabled}
           ariaLabel="Displaay retail sync"
-          onChange={(next) => void run(() => api.retail.configure({ enabled: next }))}
+          onChange={(next) => {
+            if (!next) {
+              if (onRequestDisable) onRequestDisable()
+              else setDisableOpen(true)
+              return
+            }
+            void run(() => api.retail.configure({ enabled: true }))
+          }}
         />
       </SettingsRow>
 
@@ -425,14 +615,16 @@ export function RetailPane({
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="text-sm font-medium">
-                {status ? retailDriftSummary(status) : 'Not checked yet.'}
+                {showFontLoader ? 'Checking…' : status ? retailDriftSummary(status) : 'Not checked yet.'}
               </div>
               <p className="mt-0.5 text-[13px] leading-5 text-muted-foreground">
-                {status?.checkedAt
-                  ? `Last checked ${new Date(status.checkedAt).toLocaleString()}.`
-                  : status?.enabled
-                    ? 'Check to load the collection and choose which families to sync.'
-                    : 'Turn sync on to check the collection.'}
+                {showFontLoader
+                  ? 'Loading the collection…'
+                  : status?.checkedAt
+                    ? `Last checked ${new Date(status.checkedAt).toLocaleString()}.`
+                    : status?.enabled
+                      ? 'Check to load the collection and choose which families to sync.'
+                      : 'Turn sync on to load the font list. Nothing is downloaded until you Sync All or turn a family on.'}
               </p>
             </div>
             <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
@@ -440,10 +632,27 @@ export function RetailPane({
                 type="button"
                 size="sm"
                 variant="outline"
-                disabled={disabled || !status?.enabled}
-                onClick={() => void run(() => api.retail.check(true))}
+                className="gap-1.5"
+                disabled={disabled || checking || !status?.enabled}
+                onClick={() => {
+                  setChecking(true)
+                  void run(async () => {
+                    try {
+                      return await api.retail.check(true)
+                    } finally {
+                      setChecking(false)
+                    }
+                  })
+                }}
               >
-                Check
+                {checking ? (
+                  <>
+                    <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden />
+                    Checking
+                  </>
+                ) : (
+                  'Check'
+                )}
               </Button>
               <Button
                 type="button"
@@ -487,41 +696,63 @@ export function RetailPane({
         </div>
       </div>
 
-      {fonts.length > 0 ? (
+      {fonts.length > 0 || showFontLoader ? (
         <SettingsRow
           label="Fonts"
-          description="Choose which families stay in sync. When a family has both otf and ttf, only the selected format is downloaded."
+          description={
+            showFontLoader
+              ? 'Loading the collection…'
+              : 'Turn a family on to download it, or Sync All. When a family has both otf and ttf, only the selected format is downloaded.'
+          }
           extra={
+            showFontLoader ? (
+              <div
+                role="status"
+                aria-live="polite"
+                className="flex items-center gap-2 rounded-lg border bg-muted/30 px-3 py-6 text-[13px] leading-5 text-muted-foreground"
+              >
+                <Loader2 className="size-4 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden />
+                Loading fonts…
+              </div>
+            ) : (
             <RetailFontList
               fonts={fonts}
               disabled={disabled}
-              onToggle={(familyName, nextEnabled) =>
-                void run(() =>
-                  api.retail.configure({
-                    disabledGlyphsFiles: nextDisabledFamilyNames(fonts, familyName, nextEnabled),
-                  }),
-                )
-              }
+              onToggle={(familyName, nextEnabled) => {
+                void configureSelection({
+                  disabledGlyphsFiles: nextDisabledRetailFamilyNames(fonts, [familyName], nextEnabled),
+                }).then((result) => {
+                  if (result && nextEnabled) startSync()
+                })
+              }}
               onFormat={(familyName, format) =>
-                void run(() =>
-                  api.retail.configure({
-                    familyFormats: nextFamilyFormats(fonts, familyName, format),
-                  }),
-                )
+                void configureSelection({
+                  familyFormats: nextFamilyFormats(fonts, familyName, format),
+                })
               }
-              onSetAll={(syncEnabled) =>
-                void run(() =>
-                  api.retail.configure({
-                    disabledGlyphsFiles: syncEnabled ? [] : fonts.map((font) => font.familyName),
-                  }),
-                )
-              }
+              onSetAll={(syncEnabled, familyNames) => {
+                void configureSelection({
+                  disabledGlyphsFiles: nextDisabledRetailFamilyNames(fonts, familyNames, syncEnabled),
+                }).then((result) => {
+                  if (result && syncEnabled) startSync()
+                })
+              }}
             />
+            )
           }
         />
       ) : null}
         </>
       ) : null}
     </SettingsSection>
+    {onRequestDisable ? null : (
+    <RetailDisableDialog
+      open={disableOpen}
+      busy={disabled}
+      onDismiss={() => setDisableOpen(false)}
+      onChoose={turnSyncOff}
+    />
+    )}
+    </>
   )
 }

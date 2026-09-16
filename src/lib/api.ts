@@ -91,21 +91,36 @@ async function parseJson<T>(input: Promise<Response>): Promise<T> {
   return data
 }
 
-async function json<T>(input: Promise<Response>): Promise<T> {
+async function authorizedFetch(url: string, init?: RequestInit): Promise<Response> {
   await ensureToken()
+  const request = (tokenRetry: boolean) =>
+    fetch(url, {
+      ...init,
+      headers: authHeaders(init?.headers),
+    }).then(async (response) => {
+      if (response.status !== 401 || tokenRetry) return response
+      apiToken = null
+      await ensureToken()
+      return fetch(url, {
+        ...init,
+        headers: authHeaders(init?.headers),
+      })
+    })
+  return request(false)
+}
+
+async function json<T>(input: Promise<Response>): Promise<T> {
   return parseJson(input)
 }
 
 async function get<T>(url: string): Promise<T> {
-  await ensureToken()
-  return parseJson(fetch(url, { headers: authHeaders() }))
+  return parseJson(authorizedFetch(url))
 }
 
 async function post(url: string, body: unknown): Promise<Response> {
-  await ensureToken()
-  return fetch(url, {
+  return authorizedFetch(url, {
     method: 'POST',
-    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
 }
@@ -115,7 +130,7 @@ export const api = {
     await ensureToken()
     return { settings: bootstrapSettings }
   },
-  catalog: () => get<{ entries: CatalogEntry[] }>('/api/catalog'),
+  catalog: () => get<{ entries: CatalogEntry[]; revision?: number }>('/api/catalog'),
   appUpdate: (refresh = false) =>
     get<{ update: AppUpdateStatus }>(`/api/app-update${refresh ? '?refresh=1' : ''}`),
   system: () => get<{ faces: SystemFace[] }>('/api/system'),
@@ -129,11 +144,10 @@ export const api = {
   importPaths: (paths: string[]) =>
     json<{ entries: CatalogEntry[]; errors: string[]; ignored: number }>(post('/api/import', { paths })),
   importFiles: async (files: File[]) => {
-    await ensureToken()
     const body = new FormData()
     for (const file of files) body.append('files', file)
     return json<{ entries: CatalogEntry[]; errors: string[]; ignored: number }>(
-      fetch('/api/import-files', { method: 'POST', headers: authHeaders(), body }),
+      authorizedFetch('/api/import-files', { method: 'POST', body }),
     )
   },
   open: (path: string) => json<{ entry: CatalogEntry }>(post('/api/open', { path })),
@@ -350,9 +364,12 @@ export const api = {
       folderId?: string | null
       disabledGlyphsFiles?: string[]
       familyFormats?: Record<string, 'otf' | 'ttf'>
+      disableAction?: 'keep' | 'remove'
     }) => json<{ status: RetailSyncStatus }>(post('/api/retail/configure', input)),
-    check: (refresh = false) =>
-      json<{ status: RetailSyncStatus }>(post('/api/retail/check', { refresh })),
+    check: (refresh = false, options?: { credentialsOnly?: boolean }) =>
+      json<{ status: RetailSyncStatus }>(
+        post('/api/retail/check', { refresh, credentialsOnly: options?.credentialsOnly }),
+      ),
     sync: (choices?: Record<string, RetailCollisionAction>) =>
       json<{ status: RetailSyncStatus }>(post('/api/retail/sync', { choices })),
     resolveDropCollisions: (
@@ -448,10 +465,17 @@ export function subscribeEvents(onEvent: (event: unknown) => void): () => void {
     let delayMs = 2000
     while (!abort.signal.aborted) {
       try {
+        await ensureToken()
         const response = await fetch('/api/events', {
           headers: authHeaders(),
           signal: abort.signal,
         })
+        if (response.status === 401) {
+          apiToken = null
+          await ensureToken()
+          delayMs = 2000
+          continue
+        }
         if (!response.ok || !response.body) {
           throw new Error('events unavailable')
         }
@@ -518,6 +542,19 @@ export function isDuplicatesEvent(
 ): value is { type: 'duplicates'; duplicates: DuplicateWarning[] } {
   return Boolean(
     value && typeof value === 'object' && (value as { type?: string }).type === 'duplicates',
+  )
+}
+
+export function isActionProgressEvent(
+  value: unknown,
+): value is {
+  type: 'action-progress'
+  action: 'install' | 'uninstall' | 'activate' | 'deactivate' | 'reinstall' | 'forget'
+  done: number
+  total: number
+} {
+  return Boolean(
+    value && typeof value === 'object' && (value as { type?: string }).type === 'action-progress',
   )
 }
 

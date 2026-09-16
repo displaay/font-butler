@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { loadCatalog } from './catalog.ts'
+import { currentCatalogGeneration, loadCatalog } from './catalog.ts'
 import { isUnderAnyRoot } from './containment.ts'
 import { pruneStaleDuplicates } from './duplicates.ts'
 import { emitEvent } from './events.ts'
@@ -94,9 +94,21 @@ export function bindEntryToInstalledFile(entry: CatalogEntry, dest: string): voi
   entry.status = 'installed'
 }
 
+export function catalogEvent(entries: CatalogEntry[]): {
+  type: 'catalog'
+  entries: CatalogEntry[]
+  revision: number
+} {
+  return {
+    type: 'catalog',
+    entries,
+    revision: currentCatalogGeneration(),
+  }
+}
+
 export function emitCatalog(paths: AppPaths): CatalogEntry[] {
   const catalog = loadCatalog(paths)
-  emitEvent({ type: 'catalog', entries: catalog.entries })
+  emitEvent(catalogEvent(catalog.entries))
   return catalog.entries
 }
 

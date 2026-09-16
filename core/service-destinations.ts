@@ -150,17 +150,20 @@ export function removeAdobeCopy(paths: AppPaths, entry: CatalogEntry): void {
     }
   }
   if (parked && fs.existsSync(parked)) {
-    const ownedParked =
-      isUnderAnyRoot(parked, [paths.disabledDir]) || isUnderAnyRoot(parked, [paths.adobeFontsDir])
-    if (ownedParked) {
-      try {
-        fs.rmSync(parked, { force: true })
-      } catch (error) {
-        if (fs.existsSync(parked)) throw error
-      }
-      if (fs.existsSync(parked)) {
-        throw new Error('Could not remove the parked Adobe copy.')
-      }
+    try {
+      fs.rmSync(parked, { force: true })
+    } catch (error) {
+      if (fs.existsSync(parked)) throw error
+    }
+    if (fs.existsSync(parked)) {
+      throw new Error('Could not remove the parked Adobe copy.')
+    }
+  }
+  if (existing.path && fs.existsSync(existing.path)) {
+    try {
+      removeManagedCopy(paths, 'adobe-shared', existing.path)
+    } catch (error) {
+      if (fs.existsSync(existing.path)) throw error
     }
   }
   dropCopy(entry, 'adobe-shared')

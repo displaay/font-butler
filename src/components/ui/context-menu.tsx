@@ -15,6 +15,7 @@ function ContextMenuTrigger(
 
 function ContextMenuContent({
   className,
+  onCloseAutoFocus,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Content>) {
   return (
@@ -24,6 +25,10 @@ function ContextMenuContent({
           'app-region-no-drag z-50 min-w-44 rounded-md border bg-popover p-1 shadow-sm',
           className,
         )}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault()
+          onCloseAutoFocus?.(event)
+        }}
         {...props}
       />
     </ContextMenuPrimitive.Portal>

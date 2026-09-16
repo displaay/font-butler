@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
+import { AdobeLogo } from '@/components/Badges'
 import {
   ALargeSmall,
+  Ban,
   Check,
   ChevronDown,
   ChevronRight,
@@ -8,6 +10,7 @@ import {
   CircleOff,
   Ellipsis,
   Copy,
+  FileType,
   Folder,
   FolderMinus,
   FolderOpen,
@@ -15,6 +18,7 @@ import {
   Link2,
   List,
   Filter,
+  Monitor,
   Pencil,
   Plus,
   Power,
@@ -89,6 +93,21 @@ const LIBRARY_FILTER_GROUPS: {
     filters: [
       { id: 'source', label: 'Source', icon: Link2 },
       { id: 'no-source', label: 'No source', icon: Unlink },
+    ],
+  },
+  {
+    heading: 'Destination',
+    filters: [
+      { id: 'computer', label: 'Computer', icon: Monitor },
+      { id: 'adobe', label: 'Adobe', icon: AdobeLogo },
+      { id: 'no-destination', label: 'None', icon: Ban },
+    ],
+  },
+  {
+    heading: 'Format',
+    filters: [
+      { id: 'otf', label: 'OTF', icon: FileType },
+      { id: 'ttf', label: 'TTF', icon: FileType },
     ],
   },
 ]
@@ -300,6 +319,7 @@ export function Sidebar({
   hasFontUpdates = false,
   searching = false,
   retailPending = 0,
+  retailSyncing = false,
   retailEnabled = false,
   retailBusy = false,
   retailCount = 0,
@@ -344,8 +364,10 @@ export function Sidebar({
   hasAppUpdate?: boolean
   hasFontUpdates?: boolean
   searching?: boolean
-  /** Retail fonts whose newer version is still on the server. */
+  /** Remaining retail families (live during a sync). */
   retailPending?: number
+  /** True while a retail download is in flight, even if remaining is already 0. */
+  retailSyncing?: boolean
   retailEnabled?: boolean
   retailBusy?: boolean
   retailCount?: number
@@ -371,6 +393,9 @@ export function Sidebar({
   const skipRenameCommitRef = useRef(false)
   const renameSessionRef = useRef<{ id: string; original: string } | null>(null)
   const [savedFiltersOpen, setSavedFiltersOpen] = useState(true)
+  const [filterGroupsOpen, setFilterGroupsOpen] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(LIBRARY_FILTER_GROUPS.map((group) => [group.heading, true])),
+  )
   const [editingFilterId, setEditingFilterId] = useState<string | null>(null)
   const [filterRenameValue, setFilterRenameValue] = useState('')
   const filterRenameInputRef = useRef<HTMLInputElement>(null)
@@ -526,6 +551,7 @@ export function Sidebar({
           (item) =>
             item.id !== 'updates' ||
             shouldShowUpdatesTab(counts.updates, hasAppUpdate, retailPending) ||
+            retailSyncing ||
             (searching && hasFontUpdates),
         ).map((item) => {
           if (item.id === 'library') {
@@ -586,7 +612,7 @@ export function Sidebar({
                     hoverAction={
                       onSyncRetail
                         ? {
-                            label: 'Sync',
+                            label: 'Sync All',
                             onClick: onSyncRetail,
                             disabled: retailBusy,
                           }
@@ -1006,33 +1032,59 @@ export function Sidebar({
         ) : null}
         {tab === 'library' && (
           <div className="flex w-full flex-wrap gap-3 md:mt-2 md:flex-col md:gap-2 md:border-t md:pt-2">
-            {LIBRARY_FILTER_GROUPS.map((group) => (
-              <div key={group.heading} className="flex w-full flex-col gap-0.5">
-                <p className="px-2 pt-1 text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
-                  {group.heading}
-                </p>
-                {group.filters.map((filter) => {
-                  const active = libraryFilters.includes(filter.id)
-                  const Icon = filter.icon
-                  return (
-                    <Button
-                      key={filter.id}
+            {LIBRARY_FILTER_GROUPS.map((group) => {
+              const groupOpen = filterGroupsOpen[group.heading] ?? true
+              const heading = group.heading.toLowerCase()
+              return (
+                <div key={group.heading} className="flex w-full flex-col gap-0.5">
+                  <div className="group/filter-section flex w-full items-center gap-0.5 px-1 pt-1">
+                    <button
                       type="button"
-                      size="default"
-                      variant="ghost"
-                      aria-pressed={active}
-                      aria-label={`Filter ${filter.label.toLowerCase()}`}
-                      className={navButtonClass(active, 'w-full')}
-                      onClick={() => toggleFilter(filter.id)}
+                      className="flex min-w-0 flex-1 items-center gap-1 px-1 text-left"
+                      aria-expanded={groupOpen}
+                      aria-label={groupOpen ? `Hide ${heading}` : `Show ${heading}`}
+                      onClick={() =>
+                        setFilterGroupsOpen((current) => ({
+                          ...current,
+                          [group.heading]: !groupOpen,
+                        }))
+                      }
                     >
-                      <Icon className="size-3.5 opacity-70" />
-                      <span className="min-w-0 truncate">{filter.label}</span>
-                      <Badge className="ml-auto">{libraryFilterCounts[filter.id] ?? 0}</Badge>
-                    </Button>
-                  )
-                })}
-              </div>
-            ))}
+                      <span className="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+                        {group.heading}
+                      </span>
+                      {groupOpen ? (
+                        <ChevronDown className="size-3 opacity-0 transition-opacity group-hover/filter-section:opacity-70" />
+                      ) : (
+                        <ChevronRight className="size-3 opacity-0 transition-opacity group-hover/filter-section:opacity-70" />
+                      )}
+                    </button>
+                  </div>
+                  {groupOpen
+                    ? group.filters.map((filter) => {
+                        const active = libraryFilters.includes(filter.id)
+                        const Icon = filter.icon
+                        return (
+                          <Button
+                            key={filter.id}
+                            type="button"
+                            size="default"
+                            variant="ghost"
+                            aria-pressed={active}
+                            aria-label={`Filter ${filter.label.toLowerCase()}`}
+                            className={navButtonClass(active, 'w-full')}
+                            onClick={() => toggleFilter(filter.id)}
+                          >
+                            <Icon className="size-3.5 opacity-70" />
+                            <span className="min-w-0 truncate">{filter.label}</span>
+                            <Badge className="ml-auto">{libraryFilterCounts[filter.id] ?? 0}</Badge>
+                          </Button>
+                        )
+                      })
+                    : null}
+                </div>
+              )
+            })}
           </div>
         )}
       </nav>

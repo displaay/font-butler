@@ -63,6 +63,8 @@ export type RetailLocalManifest = {
   syncedAt: string | null
   /** Keyed by `relativePath`, because that is the identity that survives a revision bump. */
   files: Record<string, RetailLocalFile>
+  /** True while a download/install pass is running. Survives a quit so the next launch can resume. */
+  incomplete?: boolean
 }
 
 export type RetailLocalFile = {
@@ -127,6 +129,9 @@ export type RetailSyncFont = {
 /** Replace the other copy, or keep it and stop acting on that family. */
 export type RetailCollisionAction = 'replace' | 'keep'
 
+/** Turning the collection off: leave Fonts copies, or uninstall and forget the listings. */
+export type RetailDisableAction = 'keep' | 'remove'
+
 export type RetailFamilyCollision = {
   familyName: string
   typefaceName: string
@@ -154,6 +159,17 @@ export type RetailSyncStatus = {
   familyFormats: Record<string, RetailFontFormat>
   /** Outside installs that share a family with a pending retail sync. Empty when none. */
   collisions: RetailFamilyCollision[]
+  /** True when a download/install pass was interrupted and still has work to do. */
+  incomplete: boolean
+  /** Family count for the in-flight download. Null when no sync is running. */
+  progress: RetailSyncProgress | null
+}
+
+export type RetailSyncProgress = {
+  /** Families whose files in this pass have all been written or failed. */
+  done: number
+  /** Distinct families this pass will download. Styles of one family count as one. */
+  total: number
 }
 
 /** Subset the library uses to decide badges, instance marks, and stub visibility. */
@@ -530,6 +546,47 @@ export function applyRetailFontSelection(
     })
 }
 
+export function nextDisabledRetailFamilyNames(
+  fonts: ReadonlyArray<Pick<RetailSyncFont, 'familyName' | 'enabled'>>,
+  names: readonly string[],
+  enabled: boolean,
+): string[] {
+  const target = new Set(names)
+  return fonts
+    .filter((font) => (target.has(font.familyName) ? !enabled : !font.enabled))
+    .map((font) => font.familyName)
+}
+
+export function matchesRetailFontQuery(
+  font: Pick<RetailSyncFont, 'familyName' | 'typefaceName'>,
+  query: string,
+): boolean {
+  const needle = query.trim().toLowerCase()
+  if (!needle) return true
+  return (
+    font.familyName.toLowerCase().includes(needle) ||
+    font.typefaceName.toLowerCase().includes(needle)
+  )
+}
+
+/** Settings rows mark VF families in the name (`Aguzzo VF`, `AguzzoVF`). */
+export function isRetailVariableFamilyName(name: string): boolean {
+  const trimmed = name.trim()
+  if (!trimmed) return false
+  return /(?:^|[^a-z0-9])vf(?:$|[^a-z0-9])/i.test(trimmed) || /vf$/i.test(trimmed)
+}
+
+export type RetailFontKindFilter = 'all' | 'static' | 'variable'
+
+export function matchesRetailFontKindFilter(
+  font: Pick<RetailSyncFont, 'familyName'>,
+  kind: RetailFontKindFilter,
+): boolean {
+  if (kind === 'all') return true
+  const variable = isRetailVariableFamilyName(font.familyName)
+  return kind === 'variable' ? variable : !variable
+}
+
 export function groupRetailFontsByTypeface(
   fonts: RetailSyncFont[],
 ): Array<{ typefaceName: string; fonts: RetailSyncFont[] }> {
@@ -583,6 +640,16 @@ export function retailListingHasLocalFile(entry: RetailLibraryEntry): boolean {
   return sourceHasLiveBytes(entry)
 }
 
+/** File-less Displaay listings left in the catalog after collection sync is off. */
+export function isOrphanRetailListing(
+  entry: RetailLibraryEntry,
+  syncEnabled = false,
+): boolean {
+  if (syncEnabled) return false
+  if (!entry.retailRelativePath) return false
+  return !retailListingHasLocalFile(entry)
+}
+
 /**
  * Badge / synced mark only when collection sync is on and this family is still
  * in the sync set (`fonts[].enabled`). An unlisted family is inactive, including
@@ -617,10 +684,11 @@ export function retailLibraryEntryVisible(
   const relative = entry.retailRelativePath
   if (!relative) return true
   if (!syncEnabled) return retailListingHasLocalFile(entry)
-  if (fonts.length === 0) return true
+  if (fonts.length === 0) return retailListingHasLocalFile(entry)
   const familyName = retailFamilyNameOf(entry)
   const font = fonts.find((item) => item.familyName === familyName)
-  if (!font || font.formats.length < 2) return true
+  if (!font || !font.enabled) return retailListingHasLocalFile(entry)
+  if (font.formats.length < 2) return true
   const format = retailFileFormat(relative)
   if (!format) return true
   return format === font.selectedFormat
@@ -628,6 +696,63 @@ export function retailLibraryEntryVisible(
 
 export function emptyRetailLocalManifest(): RetailLocalManifest {
   return { version: 1, syncedAt: null, files: {} }
+}
+
+/** How many families in this download pass are finished. Styles of one family count as one. */
+export function retailSyncFamilyProgress(
+  todo: ReadonlyArray<{
+    familyName?: string
+    relativePath: string
+    glyphsFile?: string
+    remote?: { familyName?: string }
+  }>,
+  processedRelativePaths: ReadonlySet<string>,
+): RetailSyncProgress {
+  const families = new Map<string, string[]>()
+  for (const item of todo) {
+    const name = retailDriftFamilyName(item) || item.relativePath
+    const files = families.get(name) ?? []
+    files.push(item.relativePath)
+    families.set(name, files)
+  }
+  let done = 0
+  for (const files of families.values()) {
+    if (files.every((relativePath) => processedRelativePaths.has(relativePath))) done += 1
+  }
+  return { done, total: families.size }
+}
+
+export function retailSyncingStatusMessage(progress?: RetailSyncProgress | null): string {
+  if (progress && progress.total > 0) {
+    return `Syncing Displaay retail… ${progress.done}/${progress.total}`
+  }
+  return 'Syncing Displaay retail…'
+}
+
+/**
+ * Updates-tab total: remaining families while a sync is in flight, otherwise pending files.
+ * `pending` is only remasured when a check or sync finishes, so the badge must not use it mid-sync.
+ */
+export function retailUpdateCount(status: {
+  pending: number
+  progress?: RetailSyncProgress | null
+} | null | undefined): number {
+  if (!status) return 0
+  const progress = status.progress
+  if (progress && progress.total > 0) {
+    return Math.max(0, progress.total - progress.done)
+  }
+  return Math.max(0, status.pending)
+}
+
+/** Keep the Updates tab open while a download is still running, even if remaining is already 0. */
+export function retailHasLiveUpdates(status: {
+  pending: number
+  progress?: RetailSyncProgress | null
+} | null | undefined): boolean {
+  if (!status) return false
+  if (status.progress && status.progress.total > 0) return true
+  return status.pending > 0
 }
 
 export function retailDriftSummary(status: {

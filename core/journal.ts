@@ -14,7 +14,7 @@ import { displayEntry } from './service-helpers.ts'
 import { applyEntryFacts } from './state.ts'
 import type { CatalogEntry } from './types.ts'
 
-export type MutationJournalKind = 'install' | 'replace' | 'park' | 'switch'
+export type MutationJournalKind = 'install' | 'replace' | 'park' | 'switch' | 'uninstall'
 export type MutationJournalPhase = 'prepared' | 'mutating' | 'catalog' | 'failed'
 export type JournalFileRole = 'macos-live' | 'adobe-live' | 'macos-parked' | 'adobe-parked' | 'source'
 
@@ -446,6 +446,8 @@ function recoveryReason(kind: MutationJournalKind): string {
       return 'Restored the previous working install after an incomplete park.'
     case 'switch':
       return 'Restored the previous working fonts after an incomplete switch.'
+    case 'uninstall':
+      return 'Restored the previous working install after an incomplete uninstall.'
     default:
       return 'Rolled back an incomplete install.'
   }

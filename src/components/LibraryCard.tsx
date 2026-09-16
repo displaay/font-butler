@@ -1,7 +1,7 @@
-import { useMemo, useRef, useState, type DragEvent, type MouseEvent } from 'react'
+import { memo, useMemo, useRef, useState, type DragEvent, type MouseEvent } from 'react'
 import { Check, ChevronDown, FolderMinus, FolderOpen, Plus } from 'lucide-react'
 import { AaPreview, CyclingAaPreview } from '@/components/AaPreview'
-import { FormatBadges, RetailBadge, SourceBadge, StateBadges, VfBadge, DestinationIcons } from '@/components/Badges'
+import { NameWithFormatTags, RetailBadge, SourceBadge, StateBadges, DestinationIcons } from '@/components/Badges'
 import { Badge } from '@/components/ui/badge'
 import { CatalogMenuItems } from '@/components/BatchActions'
 import { DisplaayMark } from '@/components/DisplaayMark'
@@ -27,17 +27,20 @@ import { catalogInstanceRows } from '@/lib/instances'
 import { projectContainsAll, writeFontButlerEntries } from '@/lib/projects'
 import { displayStateParts, familyCopyDestinations, isNotInstalledLabel, needsLocateSource } from '@/lib/state'
 import type { FamilyGroup, ProjectSet, RetailSyncView, ViewLayout } from '@/lib/types'
+import { useCardActionChrome } from '@/hooks/useCardActionChrome'
 import { pendingPreviewSample } from '@/lib/previewSample'
 import { cn } from '@/lib/utils'
 
-export function LibraryCard({
+export const LibraryCard = memo(function LibraryCard({
   group,
   retail,
   layout,
   previewSize,
   showSourcePath,
   showAddedAt,
+  showInstanceCounts = false,
   hideDestinations = false,
+  hideFormats = false,
   selected,
   selectedEntryId,
   busy,
@@ -89,7 +92,9 @@ export function LibraryCard({
   previewSize: number
   showSourcePath?: boolean
   showAddedAt?: boolean
+  showInstanceCounts?: boolean
   hideDestinations?: boolean
+  hideFormats?: boolean
   selected: boolean
   selectedEntryId: string | null
   busy: boolean
@@ -136,7 +141,7 @@ export function LibraryCard({
   onFontDragEnd: () => void
 }) {
   const [expanded, setExpanded] = useState(false)
-  const [hovered, setHovered] = useState(false)
+  const { hovered, actionsVisible, onContextMenuOpenChange, cardChrome } = useCardActionChrome()
   const skipNextClick = useRef(false)
   const preview = group.entries.find((entry) => entry.id === group.previewEntryId) ?? group.entries[0]
   const badgeEntry = familyBadgeEntry(group)
@@ -202,7 +207,7 @@ export function LibraryCard({
     onFontDragStart()
   }
 
-  const muted = group.status === 'deactivated'
+  const muted = deactivated || notInstalled
   const mixedFormats = occupyingFormats(group.entries)
   const mixedWarning = mixedFormatWarning(mixedFormats)
   const swap = formatSwap(group.entries)
@@ -227,12 +232,23 @@ export function LibraryCard({
       </>
     ) : null
   const addedLabel = showAddedAt ? formatAddedAt(group.addedAt) : ''
+  const countLabel = showInstanceCounts
+    ? `${group.instanceCount} ${group.instanceCount === 1 ? 'instance' : 'instances'}${
+        group.entries.length > 1 ? ` · ${group.entries.length} files` : ''
+      }`
+    : ''
+  const subtitle = [countLabel, addedLabel ? `Added ${addedLabel}` : ''].filter(Boolean).join(' · ')
   const identity = (
     <>
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="truncate font-medium">{group.familyName}</span>
-        <VfBadge show={group.isVariable} />
-        <FormatBadges formats={uniqueEntryFormats(group.entries)} occupying={mixedFormats} />
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <NameWithFormatTags
+          name={group.familyName}
+          isVariable={group.isVariable}
+          formats={uniqueEntryFormats(group.entries)}
+          occupying={mixedFormats}
+          selected={selected}
+          hideFormats={hideFormats}
+        />
         {layout === 'list' && mixedWarning ? (
           <Badge
             tone="accent"
@@ -246,7 +262,7 @@ export function LibraryCard({
           entry={badgeEntry}
           hideInstalled
           hideNotInstalled={layout === 'grid'}
-          hideDeactivated
+          hideDeactivated={layout === 'grid'}
         />
         {mixedSummary ? (
           <Badge tone="muted" title={mixedSummary}>
@@ -254,11 +270,7 @@ export function LibraryCard({
           </Badge>
         ) : null}
       </div>
-      <div className="mt-0.5 text-xs text-muted-foreground">
-        {group.instanceCount} {group.instanceCount === 1 ? 'instance' : 'instances'}
-        {group.entries.length > 1 ? ` · ${group.entries.length} files` : ''}
-        {addedLabel ? ` · Added ${addedLabel}` : ''}
-      </div>
+      {subtitle ? <div className="mt-0.5 text-xs text-muted-foreground">{subtitle}</div> : null}
       {showSourcePath && (
         <div className="mt-1 space-y-0.5">
           {group.entries.map((item) => (
@@ -279,24 +291,28 @@ export function LibraryCard({
   )
 
   return (
-    <ContextMenu onOpenChange={(open) => { if (open) skipClickAfterContextMenu() }}>
+    <ContextMenu
+      onOpenChange={(open) => {
+        if (open) skipClickAfterContextMenu()
+        onContextMenuOpenChange(open)
+      }}
+    >
       <div
         data-family-key={group.familyName}
         draggable
         onDragStart={startFontDrag}
         onDragEnd={onFontDragEnd}
         className={cn(
-          'group relative overflow-hidden rounded-lg border transition-colors',
+          'group relative overflow-clip rounded-lg border transition-colors',
             selected ? '!border-foreground/20 bg-muted/60' : 'border-border/80 hover:bg-muted/40',
           muted && '[&>:not([data-no-marquee])]:opacity-50',
         )}
-        onPointerEnter={() => setHovered(true)}
-        onPointerLeave={() => setHovered(false)}
+        {...cardChrome}
       >
         {showCorner ? (
           <div
             data-no-marquee=""
-            className="pointer-events-none absolute top-1.5 left-1.5 z-10 flex max-w-[calc(100%-0.75rem)] flex-col items-start gap-1"
+            className="pointer-events-none absolute top-1.5 left-1.5 z-10 flex max-w-[calc(100%-0.75rem)] flex-col items-start gap-1 [transform:translateZ(0)]"
           >
             {showOverlayIcons || overlayDeactivated ? (
               <div className="flex items-center gap-1">
@@ -366,33 +382,19 @@ export function LibraryCard({
                   onDoubleClick={onInspect}
                   className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left"
                 >
-                  <div className="relative shrink-0">
-                    <AaPreview
-                      family={previewFamily}
-                      weight={previewWeight}
-                      italic={previewItalic}
-                      sample={previewSample}
-                      wait={entryHasPreviewFile(preview)}
-                    />
-                    {deactivated ? (
-                      <Badge
-                        tone="muted"
-                        title="Deactivated"
-                        className="absolute left-0 top-0 z-10"
-                      >
-                        Deactivated
-                      </Badge>
-                    ) : null}
-                  </div>
+                  <AaPreview
+                    family={previewFamily}
+                    weight={previewWeight}
+                    italic={previewItalic}
+                    sample={previewSample}
+                    wait={entryHasPreviewFile(preview)}
+                  />
                   <div className="min-w-0 flex-1">{identity}</div>
                   {locationBadges ? (
                     <span
                       className={cn(
                         'ml-auto flex shrink-0 items-center gap-1',
-                        !batch &&
-                          (selected
-                            ? 'invisible'
-                            : 'group-hover:invisible group-focus-within:invisible'),
+                        !batch && (selected || actionsVisible) && 'invisible',
                       )}
                     >
                       {locationBadges}
@@ -450,7 +452,7 @@ export function LibraryCard({
             previewOnly={group.entries.every((entry) => entry.previewOnly)}
             missingSource={missingSource}
             busy={busy}
-            visible={selected}
+            visible={selected || actionsVisible}
             offset={layout === 'list' && showInstances}
             onInstall={onInstall}
             onReinstall={onReinstall}
@@ -547,4 +549,20 @@ export function LibraryCard({
       </ContextMenuContent>
     </ContextMenu>
   )
-}
+}, (prev, next) => (
+  prev.group === next.group &&
+  prev.selected === next.selected &&
+  prev.selectedEntryId === next.selectedEntryId &&
+  prev.busy === next.busy &&
+  prev.layout === next.layout &&
+  prev.previewSize === next.previewSize &&
+  prev.showSourcePath === next.showSourcePath &&
+  prev.showAddedAt === next.showAddedAt &&
+  prev.showInstanceCounts === next.showInstanceCounts &&
+  prev.hideDestinations === next.hideDestinations &&
+  prev.hideFormats === next.hideFormats &&
+  prev.retail === next.retail &&
+  prev.batch === next.batch &&
+  prev.projectFilter === next.projectFilter &&
+  prev.adobeAvailable === next.adobeAvailable
+))

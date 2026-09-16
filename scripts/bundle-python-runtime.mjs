@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -65,6 +66,36 @@ async function download(url, dest) {
     throw new Error(`Download failed (${response.status}): ${url}`)
   }
   fs.writeFileSync(dest, Buffer.from(await response.arrayBuffer()))
+}
+
+function sha256File(filePath) {
+  const hash = createHash('sha256')
+  hash.update(fs.readFileSync(filePath))
+  return hash.digest('hex')
+}
+
+async function expectedSha256(name) {
+  const url = `https://github.com/astral-sh/python-build-standalone/releases/download/${PYTHON_RELEASE}/SHA256SUMS`
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error(`Could not download SHA256SUMS (${response.status}): ${url}`)
+  }
+  const text = await response.text()
+  for (const line of text.split('\n')) {
+    const match = line.match(/^([a-f0-9]{64})\s+(\S+)$/i)
+    if (!match) continue
+    if (match[2] === name || match[2].endsWith(`/${name}`)) return match[1].toLowerCase()
+  }
+  throw new Error(`SHA256SUMS has no entry for ${name}`)
+}
+
+async function verifyArchive(archive, name) {
+  const expected = await expectedSha256(name)
+  const actual = sha256File(archive)
+  if (actual !== expected) {
+    fs.rmSync(archive, { force: true })
+    throw new Error(`Python runtime checksum mismatch for ${name} (expected ${expected}, got ${actual})`)
+  }
 }
 
 function extract(archive) {
@@ -224,6 +255,7 @@ if (alreadyBundled()) {
     console.log(`[font-butler] downloading ${url}`)
     await download(url, archive)
   }
+  await verifyArchive(archive, assetName())
   extract(archive)
   installFonttools()
   pruneRuntime()

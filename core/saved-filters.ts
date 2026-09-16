@@ -8,6 +8,11 @@ const LIBRARY_FILTER_IDS = new Set<LibraryFilter>([
   'static',
   'source',
   'no-source',
+  'computer',
+  'adobe',
+  'no-destination',
+  'otf',
+  'ttf',
 ])
 
 export type SavedFilterCriteria = {

@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { fingerprintBuffer, fingerprintFile } from './fingerprint.ts'
+import { fingerprintBuffer, fingerprintFile, tryFingerprintFileIfChanged } from './fingerprint.ts'
 
 test('streaming fingerprintFile matches a full-buffer SHA-256', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-fingerprint-'))
@@ -16,6 +16,31 @@ test('streaming fingerprintFile matches a full-buffer SHA-256', () => {
     fs.writeFileSync(file, data)
     assert.equal(fingerprintFile(file), fingerprintBuffer(data))
     assert.equal(fingerprintFile(file), crypto.createHash('sha256').update(data).digest('hex'))
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('tryFingerprintFileIfChanged reuses a matching mtime and size', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-fingerprint-skip-'))
+  try {
+    const file = path.join(dir, 'blob.bin')
+    const data = Buffer.from('abc')
+    fs.writeFileSync(file, data)
+    const stat = fs.statSync(file)
+    const digest = fingerprintFile(file)
+    const skipped = tryFingerprintFileIfChanged(file, {
+      fingerprint: digest,
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+    })
+    assert.equal(skipped, digest)
+    const changed = tryFingerprintFileIfChanged(file, {
+      fingerprint: digest,
+      mtimeMs: 1,
+      size: stat.size,
+    })
+    assert.equal(changed, digest)
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }

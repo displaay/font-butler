@@ -14,26 +14,25 @@ const GENERIC_FAMILIES = new Set([
 type PreviewFontsListener = () => void
 
 const listeners = new Set<PreviewFontsListener>()
-let interval: ReturnType<typeof setInterval> | null = null
+const loadPromises = new Map<string, Promise<void>>()
+let listening = false
 
 function notifyPreviewFonts() {
   for (const listener of listeners) listener()
 }
 
-function ensurePreviewFontTicking() {
+function ensurePreviewFontListening() {
   if (typeof document === 'undefined' || !document.fonts) return
-  if (interval != null) return
+  if (listening) return
+  listening = true
   document.fonts.addEventListener('loadingdone', notifyPreviewFonts)
   document.fonts.addEventListener('loadingerror', notifyPreviewFonts)
-  interval = setInterval(notifyPreviewFonts, 250)
 }
 
-function stopPreviewFontTicking() {
+function stopPreviewFontListening() {
   if (listeners.size > 0) return
-  if (interval != null) {
-    clearInterval(interval)
-    interval = null
-  }
+  if (!listening) return
+  listening = false
   if (typeof document === 'undefined' || !document.fonts) return
   document.fonts.removeEventListener('loadingdone', notifyPreviewFonts)
   document.fonts.removeEventListener('loadingerror', notifyPreviewFonts)
@@ -59,6 +58,25 @@ function hasMatchingPreviewFace(name: string): boolean {
   return found
 }
 
+function previewLoadKey(name: string, weight: number, italic: boolean): string {
+  return `${name}\t${weight}\t${italic ? 1 : 0}`
+}
+
+function requestPreviewLoad(spec: string, key: string): void {
+  if (loadPromises.has(key)) return
+  if (typeof document === 'undefined' || !document.fonts) return
+  const pending = document.fonts
+    .load(spec)
+    .then(
+      () => undefined,
+      () => undefined,
+    )
+    .finally(() => {
+      notifyPreviewFonts()
+    })
+  loadPromises.set(key, pending)
+}
+
 export function isPreviewFontReady(
   family: string,
   weight = 400,
@@ -75,15 +93,15 @@ export function isPreviewFontReady(
   } catch {
     // Fall through to load() when FontFaceSet.check rejects the descriptor.
   }
-  void document.fonts.load(spec)
+  requestPreviewLoad(spec, previewLoadKey(name, weight, italic))
   return false
 }
 
 export function subscribePreviewFonts(listener: PreviewFontsListener): () => void {
   listeners.add(listener)
-  ensurePreviewFontTicking()
+  ensurePreviewFontListening()
   return () => {
     listeners.delete(listener)
-    stopPreviewFontTicking()
+    stopPreviewFontListening()
   }
 }

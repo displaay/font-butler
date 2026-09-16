@@ -15,7 +15,7 @@ Drop a font file into Font Buttler and it remembers the original path. When that
 - **Source tracking and updates** — The **Source** badge means the original file is still on disk. When it changes, the family shows as outdated and you can reinstall (or auto-reinstall). Removing the source does not uninstall the font.
 - **Projects** — Named sets of families you can activate or deactivate together, and pin so a project keeps a specific installed version.
 - **Specimen and glyphs** — Live preview with variable-axis sliders, OpenType feature toggles, side-by-side compare, and a searchable glyph grid. Cards pick a sample glyph from cmap coverage (Latin **Aa**, or the face’s script / specialty sample).
-- **Library filters** — Status, type (VF / static), and source chips, plus saved filters and per-folder views.
+- **Library filters** — Status, type (VF / static), source, destination (computer / Adobe / none), and format (OTF / TTF) chips, plus saved filters and per-folder views.
 - **On this Mac** — Browse computer and system fonts and remove ones that are not protected.
 - **Caches** — Reinstall and the **Font cache** menu can clear the user ATS cache, Microsoft Office `FontCache`, and Adobe font list caches when those options are on.
 - **Displaay retail** — Optional sync with the Displaay worker. **Check** lists every remote font on the Displaay retail tab, even when a copy is already in the catalogue or not installed. **Sync** installs free slots; installing a listed font replaces the occupying catalogue copy. Listings cannot be removed. See [docs/retail-sync.md](docs/retail-sync.md).
@@ -77,8 +77,11 @@ The packaged macOS app ships its own CPython and `fonttools`, so “Install as�
 
 An optional collection can be kept in step with the Displaay worker. Turn it on in
 **Settings → Watch folders**, give it the worker address and a token, then use **Check** to see what
-changed on the server and **Sync** to pull it down. Nothing happens automatically and nothing runs at
-startup. Fonts flatten into `~/Library/Fonts` (no separate source folder on disk). See
+changed on the server and **Sync All** (or a per-family On switch) to pull it down. Turning Sync on
+loads the list without downloading; an interrupted sync resumes on the next launch. Turning Sync off
+asks whether to keep the fonts installed or uninstall them and remove them from the library. Background
+checks still do not run at startup. Fonts flatten into
+`~/Library/Fonts` (no separate source folder on disk). See
 [docs/retail-sync.md](docs/retail-sync.md).
 
 ## App updates

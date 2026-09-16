@@ -8,7 +8,7 @@ import {
   adobeUninstallCopy,
   emptyImportError,
   importDoneCopy,
-  remainingActionCopy,
+  progressActionCopy,
 } from './notify.ts'
 
 test('actionCopy names the family and uses an ellipsis while pending', () => {
@@ -36,20 +36,20 @@ test('actionCopy names source files for delete and uninstall-and-delete', () => 
   })
 })
 
-test('actionCopyFor uses a count when more than one family is selected', () => {
+test('actionCopyFor uses a live count when more than one family is selected', () => {
   assert.deepEqual(
     actionCopyFor('remove', [{ familyName: 'Inter' }, { familyName: 'Recoleta' }]),
     {
-      pending: 'Removing 2 fonts…',
+      pending: 'Removing… 0/2',
       done: 'Removed 2 fonts',
     },
   )
 })
 
-test('remainingActionCopy counts remaining fonts down', () => {
-  assert.equal(remainingActionCopy('install', 5), 'Installing 5 fonts…')
-  assert.equal(remainingActionCopy('install', 1), 'Installing 1 font…')
-  assert.equal(remainingActionCopy('install', 1, 'Inter'), 'Installing Inter…')
+test('progressActionCopy shows completed fonts over the batch total', () => {
+  assert.equal(progressActionCopy('install', 12, 36), 'Installing… 12/36')
+  assert.equal(progressActionCopy('remove', 0, 5), 'Removing… 0/5')
+  assert.equal(progressActionCopy('install', 0, 1, 'Inter'), 'Installing Inter…')
 })
 
 test('importDoneCopy mentions ignored web fonts only in the success line', () => {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { catalogFontUrl, catalogFontFaceRules, catalogPreviewFingerprint, catalogPreviewFingerprintSet, catalogPreviewRevision, catalogPreviewWhich, cachedSignedCatalogFontUrl, catalogEntriesNeedingPreviewCss, previewStylesFingerprint, signedCatalogFontUrl, systemFacesNeedingPreviewCss, systemPathPreviewFingerprint, systemPreviewCssKey, systemPreviewFingerprintSet } from './preview.ts'
+import { catalogFontUrl, catalogFontFaceRules, catalogPreviewFingerprint, catalogPreviewFingerprintSet, catalogPreviewRevision, catalogPreviewWhich, cachedSignedCatalogFontUrl, catalogEntriesNeedingPreviewCss, PREVIEW_CSS_RETAIN_EXTRA, previewStylesFingerprint, signedCatalogFontUrl, systemFacesNeedingPreviewCss, systemPathPreviewFingerprint, systemPreviewCssKey, systemPreviewFingerprintSet } from './preview.ts'
 import { verifyFontPreviewQuery } from '../../core/font-access.ts'
 import type { CatalogEntry, FontFaceInfo } from './types.ts'
 
@@ -406,6 +406,18 @@ test('sliding the window with a live catalog keeps already-loaded CSS', () => {
   assert.equal(scrolled.keep.has('f0'), true)
   assert.equal(scrolled.keep.has('f3'), true)
   assert.equal(scrolled.fingerprints.get('f0'), first.fingerprints.get('f0'))
+})
+
+test('retained off-screen preview CSS is LRU-capped', () => {
+  const catalog = Array.from({ length: 200 }, (_, index) => entry({ id: `cap-${index}` }))
+  const first = catalogEntriesNeedingPreviewCss(catalog.slice(0, 180), new Map(), { catalog })
+  const windowed = catalogEntriesNeedingPreviewCss(catalog.slice(180, 188), first.fingerprints, {
+    mounted: first.keep,
+    catalog,
+  })
+  assert.equal(windowed.keep.size, 8 + PREVIEW_CSS_RETAIN_EXTRA)
+  assert.equal(windowed.keep.has('cap-187'), true)
+  assert.equal(windowed.keep.has('cap-0'), false)
 })
 
 test('system preview CSS stays cached when leaving the System tab', () => {

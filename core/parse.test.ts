@@ -29,6 +29,19 @@ test('resolveFamilyNames falls back to name ID 1/2', () => {
   )
 })
 
+test('parseFontFile survives a VF named instance with no name record', (t) => {
+  const file = '/Users/danielquisek/Library/Fonts/AguzzoVF.ttf'
+  if (!fs.existsSync(file)) {
+    t.skip('Aguzzo VF is not installed on this machine')
+    return
+  }
+  const parsed = parseFontFile(file)
+  assert.ok(parsed.previewSample)
+  assert.equal(parsed.faces[0]?.isVariable, true)
+  assert.ok((parsed.faces[0]?.instanceNames.length ?? 0) > 1)
+  assert.ok(parsed.faces[0]?.postscriptName)
+})
+
 test('parseFontFile reads every face from a synthetic TTC and OTC', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-ttc-parse-'))
   try {

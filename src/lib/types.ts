@@ -167,6 +167,11 @@ export type LibraryFilter =
   | 'static'
   | 'source'
   | 'no-source'
+  | 'computer'
+  | 'adobe'
+  | 'no-destination'
+  | 'otf'
+  | 'ttf'
 
 export type SavedLibraryFilter = {
   id: string
@@ -408,9 +413,12 @@ export type {
   RetailFontFormat,
   RetailFamilyCollision,
   RetailCollisionAction,
+  RetailDisableAction,
   RetailSkip,
   RetailSkipReason,
+  RetailFontKindFilter,
   RetailSyncFont,
+  RetailSyncProgress,
   RetailSyncStatus,
   RetailSyncView,
 } from '../../shared/retail'
@@ -419,9 +427,16 @@ export {
   RETAIL_AUTOCHECK_CHOICES,
   entryHasActiveRetailSync,
   groupRetailFontsByTypeface,
+  isRetailVariableFamilyName,
+  matchesRetailFontKindFilter,
+  matchesRetailFontQuery,
+  nextDisabledRetailFamilyNames,
   retailDriftSummary,
   retailFileFormat,
   retailLibraryEntryVisible,
   retailListingHasLocalFile,
   retailSyncIsOn,
+  retailSyncingStatusMessage,
+  retailUpdateCount,
+  retailHasLiveUpdates,
 } from '../../shared/retail'

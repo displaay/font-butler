@@ -1,5 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
 import { toast } from 'sonner'
+import { enqueuePrompt } from '@/lib/promptQueue'
 import { ArrowLeft, RefreshCw } from 'lucide-react'
 import { ActivityView } from '@/components/ActivityView'
 import {
@@ -42,7 +43,7 @@ import { Toaster } from '@/components/ui/sonner'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useFontActions, type FormatPrompt, type ReplacePrompt } from '@/hooks/useFontActions'
 import { useLibraryWindow } from '@/hooks/useLibraryWindow'
-import { api, isAppUpdateEvent, isDuplicatesEvent, isNotice, isOperationsEvent, isProjectsEvent, isRetailEvent, isSettingsEvent, subscribeEvents } from '@/lib/api'
+import { api, isActionProgressEvent, isAppUpdateEvent, isDuplicatesEvent, isNotice, isOperationsEvent, isProjectsEvent, isRetailEvent, isSettingsEvent, subscribeEvents } from '@/lib/api'
 import {
   mergeUnreadFlags,
   unreadActivityCount,
@@ -75,7 +76,7 @@ import {
   readSortMode,
   shouldShowOnboarding,
 } from '@/lib/preferences'
-import { actionCopy, emptyImportError, importDoneCopy } from '@/lib/notify'
+import { actionCopy, emptyImportError, importDoneCopy, progressActionCopy, verbForBatchAction } from '@/lib/notify'
 import { planNeedsReview } from '@/lib/planner'
 import { clearFontDragImage } from '@/lib/dragPreview'
 import {
@@ -93,20 +94,28 @@ import { formatSwap } from '@/lib/formats'
 import {
   catalogBatchPlan,
   catalogBatchSummary,
+  catalogBatchSummaryParts,
+  catalogKeysForStatus,
   systemBatchPlan,
   systemBatchSummary,
+  systemBatchSummaryParts,
+  systemKeysForKind,
 } from '@/lib/batch'
 import {
   canStartMarquee,
   clickPreservesSelection,
-  clientRect,
+  clientToContent,
   collectFamilyCardRects,
+  intersectRects,
   keysInMarquee,
+  marqueeClientRect,
   mergeMarqueeSelection,
   nextSelection,
   pointerUpClearsSelection,
   sameKeys,
   shortcutAction,
+  scrollOriginOf,
+  viewportClientRect,
   type Rect,
 } from '@/lib/selection'
 import {
@@ -127,8 +136,8 @@ import {
 } from '@/lib/libraryWindow'
 import { allUpdateGroups, visibleUpdateGroups } from '@/lib/updateInventory'
 import { operationMatchesQuery, tabWithSearchHits } from '@/lib/search'
-import type { AppSettings, AppUpdateStatus, CatalogEntry, DestinationCapability, DuplicateWarning, FamilyGroup, ImportPlan, ImportPlanItem, LibraryFilter, Operation, PreviewPreferences, ProjectSet, RetailCollisionAction, RetailFamilyCollision, RetailSyncStatus, SavedLibraryFilter, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
-import { retailLibraryEntryVisible, retailSyncIsOn } from '@/lib/types'
+import type { AppSettings, AppUpdateStatus, CatalogEntry, DestinationCapability, DuplicateWarning, FamilyGroup, FontStatus, ImportPlan, ImportPlanItem, LibraryFilter, Operation, PreviewPreferences, ProjectSet, RetailCollisionAction, RetailFamilyCollision, RetailSyncStatus, SavedLibraryFilter, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
+import { retailHasLiveUpdates, retailLibraryEntryVisible, retailSyncIsOn, retailSyncingStatusMessage, retailUpdateCount } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { isPathUnderFolder, isRetailLibraryFilter, isWatchFolderEntry, libraryFolderFilterLabel, matchesLibraryFolderFilter, RETAIL_LIBRARY_FILTER, watchFolderName } from '@/lib/watchFolders'
 
@@ -157,9 +166,12 @@ function AppShell() {
   const [dragging, setDragging] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  // Font-file work is queued in the background so library, settings, and dialogs stay usable.
-  const busy = false
+  // Font-file work is queued; busy disables duplicate action clicks while dialogs stay usable.
+  const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
+  const [retailBusy, setRetailBusy] = useState(false)
+  const catalogRevisionRef = useRef(0)
+  const entriesRef = useRef<CatalogEntry[]>([])
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null)
   const [renameEntry, setRenameEntry] = useState<CatalogEntry | null>(null)
   const [bakeRenameFeatures, setBakeRenameFeatures] = useState<string[] | null>(null)
@@ -168,7 +180,22 @@ function AppShell() {
   const [settingsFocusWatchFolders, setSettingsFocusWatchFolders] = useState(false)
   const [appUpdate, setAppUpdate] = useState<AppUpdateStatus | null>(null)
   const [retail, setRetail] = useState<RetailSyncStatus | null>(null)
-  const retailBusy = false
+  const retailRef = useRef<RetailSyncStatus | null>(null)
+  retailRef.current = retail
+  entriesRef.current = entries
+
+  function applyCatalog(next: CatalogEntry[], revision?: number) {
+    if (typeof revision === 'number') {
+      if (revision < catalogRevisionRef.current) return
+      catalogRevisionRef.current = revision
+    }
+    setEntries((current) => (catalogEntriesMatch(current, next) ? current : next))
+  }
+
+  async function refreshCatalog() {
+    const result = await api.catalog()
+    applyCatalog(result.entries, result.revision)
+  }
   const [syncCollisions, setSyncCollisions] = useState<RetailFamilyCollision[]>([])
   const [dropRetailPrompt, setDropRetailPrompt] = useState<{
     remaining: RetailFamilyCollision[]
@@ -193,8 +220,14 @@ function AppShell() {
   const [showAdded, setShowAdded] = useState(
     () => localStorage.getItem('font-butler-show-added') === 'true',
   )
+  const [showInstanceCounts, setShowInstanceCounts] = useState(
+    () => localStorage.getItem('font-butler-show-instance-counts') === 'true',
+  )
   const [hideDestinations, setHideDestinations] = useState(
     () => localStorage.getItem('font-butler-hide-destinations') === 'true',
+  )
+  const [hideFormats, setHideFormats] = useState(
+    () => localStorage.getItem('font-butler-hide-formats') === 'true',
   )
   const [viewLayout, setViewLayout] = useState<ViewLayout>(() =>
     localStorage.getItem('font-butler-view-layout') === 'grid' ? 'grid' : 'list',
@@ -214,6 +247,8 @@ function AppShell() {
   const marqueeRef = useRef<{
     startX: number
     startY: number
+    startContentX: number
+    startContentY: number
     lastX: number
     lastY: number
     additive: boolean
@@ -224,6 +259,7 @@ function AppShell() {
   const fontDragRef = useRef(false)
   const applyMarqueeKeysRef = useRef<(keys: string[]) => void>(() => {})
   const reinstallFromMenuBarRef = useRef<(ids: string[]) => void>(() => {})
+  const syncRetailRef = useRef<(choices?: Record<string, RetailCollisionAction>) => void>(() => {})
   const libraryViewportRef = useRef<HTMLDivElement>(null)
   const libraryGridRef = useRef<HTMLDivElement>(null)
   const [scrollToFamily, setScrollToFamily] = useState<string | null>(null)
@@ -307,12 +343,14 @@ function AppShell() {
 
   function queueFontWork(work: () => Promise<void>) {
     busyRef.current = true
+    setBusy(true)
     startQueuedFontAction(async () => {
       try {
         await work()
       } finally {
         if (isLastQueuedFontAction()) {
           busyRef.current = false
+          setBusy(false)
           setActionStatus(null)
         }
       }
@@ -321,17 +359,21 @@ function AppShell() {
 
   function syncRetail(choices?: Record<string, RetailCollisionAction>) {
     if (choices) setSyncCollisions([])
+    setRetailBusy(true)
     queueFontWork(async () => {
-      setActionStatus('Syncing Displaay retail…')
+      setActionStatus(retailSyncingStatusMessage(retailRef.current?.progress))
       try {
         const result = await api.retail.sync(choices)
         setRetail(result.status)
         setSyncCollisions(result.status.collisions ?? [])
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Could not sync the retail collection')
+      } finally {
+        setRetailBusy(false)
       }
     })
   }
+  syncRetailRef.current = syncRetail
 
   function retailOptOutNames(entries: CatalogEntry[]): string[] {
     return retailFamiliesToOptOut(entries, retail)
@@ -362,7 +404,7 @@ function AppShell() {
   function askDropRetailCollisions(
     collisions: RetailFamilyCollision[],
   ): Promise<Record<string, RetailCollisionAction> | null> {
-    return new Promise((resolve) => {
+    return enqueuePrompt((resolve) => {
       setDropRetailPrompt({ remaining: collisions, choices: {}, resolve })
     })
   }
@@ -401,9 +443,19 @@ function AppShell() {
           }
           if (retailResult) {
             setRetail(retailResult.status)
+            retailRef.current = retailResult.status
             retailLoaded = true
+            if (retailResult.status.incomplete && !shouldShowOnboarding(settingsResult.settings)) {
+              const collisions = retailResult.status.collisions ?? []
+              if (collisions.length > 0 && retailResult.status.enabled) {
+                // A collision needs the user's choice — surface it instead of syncing blind.
+                setSyncCollisions(collisions)
+              } else if (retailResult.status.enabled) {
+                syncRetailRef.current()
+              }
+            }
           }
-          setEntries(catalog.entries)
+          applyCatalog(catalog.entries, catalog.revision)
           const focus = openPath
             ? catalog.entries.find((entry) => entry.sourcePath === openPath)
             : undefined
@@ -444,18 +496,15 @@ function AppShell() {
           })
         }
         if (event.notice.entryId) {
-          setEntries((current) => {
-            const match = current.find((entry) => entry.id === event.notice.entryId)
-            if (match) {
-              setSelectedFamily(familyNameOf(match))
-              if (match.previewOnly) {
-                setInspectorDensity(DEFAULT_INSPECTOR_DENSITY)
-                setInspectorPane('details')
-                setInspectSelection(true)
-              }
+          const match = entriesRef.current.find((entry) => entry.id === event.notice.entryId)
+          if (match) {
+            setSelectedFamily(familyNameOf(match))
+            if (match.previewOnly) {
+              setInspectorDensity(DEFAULT_INSPECTOR_DENSITY)
+              setInspectorPane('details')
+              setInspectSelection(true)
             }
-            return current
-          })
+          }
         }
         return
       }
@@ -475,9 +524,17 @@ function AppShell() {
         setAppUpdate(event.update)
         return
       }
+      if (isActionProgressEvent(event) && event.total > 1) {
+        const verb = verbForBatchAction(event.action)
+        if (verb) setActionStatus(progressActionCopy(verb, event.done, event.total))
+        return
+      }
       if (isRetailEvent(event)) {
         setRetail(event.status)
         if (event.status.collisions) setSyncCollisions(event.status.collisions)
+        if (event.status.progress && event.status.progress.total > 0) {
+          setActionStatus(retailSyncingStatusMessage(event.status.progress))
+        }
         return
       }
       if (isOperationsEvent(event)) {
@@ -505,8 +562,8 @@ function AppShell() {
         return
       }
       if (event && typeof event === 'object' && (event as { type?: string }).type === 'catalog') {
-        const next = (event as { entries: CatalogEntry[] }).entries
-        setEntries((current) => (catalogEntriesMatch(current, next) ? current : next))
+        const payload = event as { entries: CatalogEntry[]; revision?: number }
+        applyCatalog(payload.entries, payload.revision)
       }
       if (event && typeof event === 'object' && (event as { type?: string }).type === 'system') {
         setSystemFaces((event as { faces: SystemFace[] }).faces)
@@ -641,8 +698,8 @@ function AppShell() {
     [query, systemGroups],
   )
   const missingSourceCount = useMemo(
-    () => entries.filter((entry) => entry.status === 'source-missing').length,
-    [entries],
+    () => librarySourceEntries.filter((entry) => entry.status === 'source-missing').length,
+    [librarySourceEntries],
   )
   const visibleOperations = useMemo(
     () => operations.filter((operation) => operationMatchesQuery(operation, query)),
@@ -658,7 +715,7 @@ function AppShell() {
       }
     }
     return {
-      library: countFamilyNames(entries),
+      library: countFamilyNames(librarySourceEntries),
       system: groupSystem(systemFaces).length,
       updates: countFamilyNames(entries.filter((entry) => entry.status === 'outdated')),
       activity: operations.length,
@@ -669,6 +726,7 @@ function AppShell() {
     systemGroups.length,
     updateGroups.length,
     visibleOperations.length,
+    librarySourceEntries,
     entries,
     systemFaces,
     operations.length,
@@ -698,11 +756,11 @@ function AppShell() {
       tab === 'updates' &&
       allUpdates.length === 0 &&
       !appUpdate?.updateAvailable &&
-      (retail?.pending ?? 0) === 0
+      !retailHasLiveUpdates(retail)
     ) {
       setTab('library')
     }
-  }, [tab, allUpdates.length, appUpdate?.updateAvailable, retail?.pending])
+  }, [tab, allUpdates.length, appUpdate?.updateAvailable, retail])
 
   const searchTab = tabWithSearchHits({
     current: tab,
@@ -853,9 +911,32 @@ function AppShell() {
   const systemPlan = systemBatchPlan(systemSelection)
   const catalogSummary = catalogBatchSummary(catalogSelection)
   const systemSummary = systemBatchSummary(systemSelection)
+  const catalogSummaryParts = catalogBatchSummaryParts(catalogSelection)
+  const systemSummaryParts = systemBatchSummaryParts(systemSelection)
+
+  function keepCatalogSelectionByStatus(status: FontStatus) {
+    const keys = catalogKeysForStatus(catalogSelection, status)
+    if (!keys.length || sameKeys(selectedFamilyKeys, keys)) return
+    const last = catalogSelection.find((group) => group.familyName === keys[keys.length - 1])
+    setSelectedFamilyKeys(keys)
+    setSelectedFamily(keys[keys.length - 1] ?? null)
+    setSelectedEntryId(last?.entries[0]?.id ?? null)
+    setSelectionAnchor(keys[keys.length - 1] ?? null)
+    setInspectSelection(false)
+  }
+
+  function keepSystemSelectionByKind(kind: 'removable' | 'system') {
+    const keys = systemKeysForKind(systemSelection, kind)
+    if (!keys.length || sameKeys(selectedSystemKeys, keys)) return
+    setSelectedSystemKeys(keys)
+    setSelectedSystem(keys[keys.length - 1] ?? null)
+    setSelectionAnchor(keys[keys.length - 1] ?? null)
+    setInspectSelection(false)
+  }
   const selectionCount = tab === 'system' ? systemSelection.length : catalogSelection.length
-  const showInspector = selectionCount === 1 && inspectSelection
-  const showBatchBar = selectionCount > 1 || (selectionCount === 1 && !inspectSelection)
+  const comparePair = tab !== 'system' && catalogSelection.length === 2
+  const showInspector = inspectSelection && (selectionCount === 1 || comparePair)
+  const showBatchBar = !showInspector && (selectionCount > 1 || (selectionCount === 1 && !inspectSelection))
   const hideBrowseGrid = inspectorHidesBrowseGrid(showInspector)
   const insetTrafficLights = hasInsetTrafficLights()
   const browseCount = tab === 'system' ? shownSystemGroups.length : visibleGroups.length
@@ -863,12 +944,14 @@ function AppShell() {
     () => (tab === 'system' ? shownSystemGroups : visibleGroups).map((group) => group.familyName),
     [tab, shownSystemGroups, visibleGroups],
   )
+  // System cards have no "date added" row; counting it there over-measures the grid.
+  const browseSubtitleShown = tab === 'system' ? showInstanceCounts : showAdded || showInstanceCounts
   const libraryWindow = useLibraryWindow({
     count: browseCount,
     itemKeys: browseKeys,
     layout: viewLayout,
     previewSize: gridPreviewSize,
-    extraLines: showSources ? 1 : 0,
+    extraLines: (showSources ? 1 : 0) + (browseSubtitleShown ? 1 : 0),
     viewportRef: libraryViewportRef,
     gridRef: libraryGridRef,
     enabled: tab !== 'activity',
@@ -974,9 +1057,15 @@ function AppShell() {
     const additive = event.metaKey || event.ctrlKey || event.shiftKey
     const downPreserves = clickPreservesSelection(event.target)
     let contextMenuOpened = false
+    const startOrigin = libraryViewportRef.current
+      ? scrollOriginOf(libraryViewportRef.current)
+      : { left: 0, top: 0, width: 0, height: 0, scrollLeft: 0, scrollTop: 0 }
+    const startContent = clientToContent(event.clientX, event.clientY, startOrigin)
     marqueeRef.current = {
       startX: event.clientX,
       startY: event.clientY,
+      startContentX: startContent.x,
+      startContentY: startContent.y,
       lastX: event.clientX,
       lastY: event.clientY,
       additive,
@@ -996,15 +1085,18 @@ function AppShell() {
         suppressClickRef.current = true
         setInspectSelection(false)
       }
-      const rect = clientRect(session.startX, session.startY, x, y)
-      setMarqueeRect(rect)
+      const origin = libraryViewportRef.current ? scrollOriginOf(libraryViewportRef.current) : startOrigin
+      const rect = marqueeClientRect(session.startContentX, session.startContentY, x, y, origin)
+      const visible =
+        origin.width > 0 && origin.height > 0 ? intersectRects(rect, viewportClientRect(origin)) : rect
+      setMarqueeRect(visible ?? rect)
       const groups: Array<{ familyName: string }> = tab === 'system' ? shownSystemGroups : visibleGroups
       const grid = libraryGridRef.current
       const layout = { ...libraryWindow.layoutRef.current }
       if (grid) {
-        const origin = grid.getBoundingClientRect()
-        layout.originLeft = origin.left
-        layout.originTop = origin.top
+        const gridBox = grid.getBoundingClientRect()
+        layout.originLeft = gridBox.left
+        layout.originTop = gridBox.top
       }
       const hit = keysInMarquee(
         libraryCardRects(
@@ -1027,10 +1119,18 @@ function AppShell() {
       if (marqueeRef.current?.active) move.preventDefault()
       updateFromPoint(move.clientX, move.clientY)
     }
+    let scrollRaf = 0
     const onScroll = () => {
       const session = marqueeRef.current
       if (!session?.active) return
       updateFromPoint(session.lastX, session.lastY)
+      if (scrollRaf) return
+      scrollRaf = window.requestAnimationFrame(() => {
+        scrollRaf = 0
+        const current = marqueeRef.current
+        if (!current?.active) return
+        updateFromPoint(current.lastX, current.lastY)
+      })
     }
     const onContextMenu = () => {
       contextMenuOpened = true
@@ -1041,6 +1141,10 @@ function AppShell() {
       window.removeEventListener('pointercancel', onUp)
       window.removeEventListener('scroll', onScroll, true)
       window.removeEventListener('contextmenu', onContextMenu, true)
+      if (scrollRaf) {
+        window.cancelAnimationFrame(scrollRaf)
+        scrollRaf = 0
+      }
       const session = marqueeRef.current
       marqueeRef.current = null
       setMarqueeRect(null)
@@ -1135,11 +1239,18 @@ function AppShell() {
     run,
   } = useFontActions({
     entries,
-    setEntries,
+    setEntries: (update) => {
+      if (typeof update === 'function') {
+        setEntries(update)
+        return
+      }
+      applyCatalog(update)
+    },
     setSystemFaces,
     operations,
     setOperations,
     busyRef,
+    setBusy,
     setActionStatus,
     setTab,
     setWatchFolderFilter,
@@ -1340,7 +1451,7 @@ function AppShell() {
         return
       }
       if (action === 'inspect') {
-        if (selectionCount !== 1) return
+        if (selectionCount !== 1 && !comparePair) return
         event.preventDefault()
         if (!inspectSelection) {
           setInspectorDensity(DEFAULT_INSPECTOR_DENSITY)
@@ -1443,7 +1554,7 @@ function AppShell() {
   }
 
   function askImportPlan(plan: ImportPlan): Promise<ImportPlanDecision | null> {
-    return new Promise((resolve) => {
+    return enqueuePrompt((resolve) => {
       setImportPlan(plan)
       setImportPlanResolve(() => resolve)
     })
@@ -1458,8 +1569,7 @@ function AppShell() {
       idempotencyKey: plan.id,
       familyName,
     })
-    const latest = (await api.catalog()).entries
-    setEntries(latest)
+    await refreshCatalog()
     const preview = result.entries.filter((entry) => entry.previewOnly).length
     const firstEntry = result.entries[0]
     const names = [...new Set(result.entries.map(familyNameOf))]
@@ -1527,7 +1637,7 @@ function AppShell() {
               incoming: plan.items.map((item) => ({ familyName: item.familyName, path: item.path })),
             })
             setRetail(resolved.status)
-            setEntries((await api.catalog()).entries)
+            await refreshCatalog()
           }
           const remainingPaths = plan.items
             .filter((item) => !skipped.has(item.familyName ?? ''))
@@ -1589,7 +1699,7 @@ function AppShell() {
           preview,
         }),
       )
-      setEntries((await api.catalog()).entries)
+      await refreshCatalog()
       if (newProjectName) {
         await createProjectWith(
           result.entries.map((entry) => entry.id),
@@ -1744,7 +1854,8 @@ function AppShell() {
           hasAppUpdate={Boolean(appUpdate?.updateAvailable)}
           hasFontUpdates={allUpdates.length > 0}
           searching={searching}
-          retailPending={retail?.pending ?? 0}
+          retailPending={retailUpdateCount(retail)}
+          retailSyncing={Boolean(retail?.progress && retail.progress.total > 0)}
           retailEnabled={Boolean(retail?.enabled)}
           retailBusy={retailBusy}
           retailCount={watchFolderCounts[RETAIL_LIBRARY_FILTER] ?? 0}
@@ -1833,10 +1944,20 @@ function AppShell() {
                       setShowAdded(next)
                       localStorage.setItem('font-butler-show-added', String(next))
                     }}
+                    showInstanceCounts={showInstanceCounts}
+                    onShowInstanceCountsChange={(next) => {
+                      setShowInstanceCounts(next)
+                      localStorage.setItem('font-butler-show-instance-counts', String(next))
+                    }}
                     hideDestinations={hideDestinations}
                     onHideDestinationsChange={(next) => {
                       setHideDestinations(next)
                       localStorage.setItem('font-butler-hide-destinations', String(next))
+                    }}
+                    hideFormats={hideFormats}
+                    onHideFormatsChange={(next) => {
+                      setHideFormats(next)
+                      localStorage.setItem('font-butler-hide-formats', String(next))
                     }}
                     previewSize={gridPreviewSize}
                     onPreviewSizeChange={(next) => {
@@ -1854,7 +1975,7 @@ function AppShell() {
             )}
             <ScrollArea className="min-h-0 flex-1" viewportRef={libraryViewportRef}>
               <div className={cn('flex min-h-full flex-col p-3', showBatchBar && 'pb-24')}>
-                {!loading && tab === 'updates' && (retail?.pending ?? 0) > 0 && retail ? (
+                {!loading && tab === 'updates' && retailUpdateCount(retail) > 0 && retail ? (
                   <div className="pt-3">
                     <RetailUpdateCard
                       status={retail}
@@ -1959,6 +2080,8 @@ function AppShell() {
                           previewSize={gridPreviewSize}
                           group={group}
                           showSourcePath={showSources}
+                          showInstanceCounts={showInstanceCounts}
+                          hideFormats={hideFormats}
                           selected={inSelection || selectedSystemGroup?.key === group.key}
                           busy={busy}
                           batch={systemSelection.length > 1 && inSelection ? systemPlan : null}
@@ -2003,7 +2126,9 @@ function AppShell() {
                           retail={retail}
                           showSourcePath={showSources}
                           showAddedAt={showAdded}
+                          showInstanceCounts={showInstanceCounts}
                           hideDestinations={hideDestinations}
+                          hideFormats={hideFormats}
                           selected={inSelection || selectedGroup?.key === group.key}
                           selectedEntryId={selectedEntryId}
                           batch={useBatch ? catalogPlan : null}
@@ -2166,7 +2291,17 @@ function AppShell() {
           </section>
           <BatchActionBarContainer open={showBatchBar}>
             {tab === 'system' ? (
-              <BatchActionBar count={systemPlan.count} summary={systemSummary}>
+              <BatchActionBar
+                count={systemPlan.count}
+                parts={systemSummaryParts.map((part) => ({
+                  id: part.kind,
+                  count: part.count,
+                  label: part.label,
+                }))}
+                onFilter={(id) => {
+                  if (id === 'removable' || id === 'system') keepSystemSelectionByKind(id)
+                }}
+              >
                 <SystemBatchButtons
                   plan={systemPlan}
                   busy={busy}
@@ -2175,7 +2310,15 @@ function AppShell() {
                 />
               </BatchActionBar>
             ) : (
-              <BatchActionBar count={catalogPlan.count} summary={catalogSummary}>
+              <BatchActionBar
+                count={catalogPlan.count}
+                parts={catalogSummaryParts.map((part) => ({
+                  id: part.status,
+                  count: part.count,
+                  label: part.label,
+                }))}
+                onFilter={(id) => keepCatalogSelectionByStatus(id as FontStatus)}
+              >
                 <CatalogBatchButtons
                   plan={catalogPlan}
                   busy={busy}
@@ -2524,7 +2667,7 @@ function AppShell() {
           onDone={(started) => {
             if (started[0]) selectLibrary(started[0].root)
             void api.settings().then((result) => applySettings(result.settings))
-            void api.catalog().then((result) => setEntries(result.entries))
+            void refreshCatalog()
             toast.success(
               started.length === 1
                 ? `Watching ${watchFolderName(started[0]!.root)}`
@@ -2557,7 +2700,7 @@ function AppShell() {
               async () => {
                 const result = await api.resolveDuplicate(id, choice, familyName)
                 setDuplicates(result.duplicates)
-                setEntries((await api.catalog()).entries)
+                await refreshCatalog()
               },
               {
                 pending: 'Resolving duplicate…',
@@ -2584,7 +2727,7 @@ function AppShell() {
           }}
           onDone={(entry) => {
             setEntries((current) => current.map((item) => (item.id === entry.id ? entry : item)))
-            void api.catalog().then((result) => setEntries(result.entries))
+            void refreshCatalog()
             toast.success(entry.updateHold === 'relink-review' ? 'Source linked · update available' : 'Source linked')
           }}
         />
@@ -2595,7 +2738,7 @@ function AppShell() {
             if (!next) setFolderRelinkRoot(null)
           }}
           onDone={() => {
-            void api.catalog().then((result) => setEntries(result.entries))
+            void refreshCatalog()
             toast.success('Folder relinked')
           }}
         />
@@ -2643,7 +2786,7 @@ function AppShell() {
           onDone={(entry) => {
             setSelectedFamily(familyNameOf(entry))
             setBakeRenameFeatures(null)
-            void api.catalog().then((result) => setEntries(result.entries))
+            void refreshCatalog()
           }}
         />
         <OnboardingDialog

@@ -31,10 +31,14 @@ const EMPTY_WINDOW: LibraryWindowMetrics = {
   totalHeight: 0,
 }
 
-function readRootFontSize(): number {
+let cachedRootFontSize = 16
+
+function readRootFontSize(force = false): number {
   if (typeof document === 'undefined') return 16
+  if (!force) return cachedRootFontSize
   const size = Number.parseFloat(getComputedStyle(document.documentElement).fontSize)
-  return Number.isFinite(size) && size > 0 ? size : 16
+  cachedRootFontSize = Number.isFinite(size) && size > 0 ? size : 16
+  return cachedRootFontSize
 }
 
 function fallbackWindow(
@@ -104,7 +108,7 @@ export function useLibraryWindow(options: {
 
     let frame = 0
 
-    function measure() {
+    function measure(refreshRoot = false) {
       const viewportNode = viewportRef.current
       const gridNode = gridRef.current
       if (!viewportNode || !gridNode) return
@@ -119,21 +123,21 @@ export function useLibraryWindow(options: {
       }
       const width = gridNode.clientWidth || viewportNode.clientWidth || LIBRARY_WINDOW_FALLBACK_WIDTH
       const height = viewportNode.clientHeight || LIBRARY_WINDOW_FALLBACK_HEIGHT
-      const rootFontSize = readRootFontSize()
+      const rootFontSize = readRootFontSize(refreshRoot)
       const minCardWidth = gridCardMinWidthRem(previewSize) * rootFontSize
       const gridOffsetTop = contentOffsetTop(gridNode, viewportNode)
       const estimatedRowHeight = libraryRowHeightPx(layout, previewSize, rootFontSize, extraLines)
       let itemHeights: number[] | undefined
       if (itemKeys && itemKeys.length === count) {
-        const measured = new Map<string, number>()
+        const measuredHeights = new Map<string, number>()
         for (const node of Array.from(gridNode.querySelectorAll('[data-family-key]'))) {
           if (!(node instanceof HTMLElement)) continue
           const key = node.getAttribute('data-family-key')
           if (!key) continue
           const boxHeight = Math.ceil(node.getBoundingClientRect().height)
-          if (boxHeight > 0) measured.set(key, boxHeight)
+          if (boxHeight > 0) measuredHeights.set(key, boxHeight)
         }
-        itemHeights = applyMeasuredCardHeights([...itemKeys], estimatedRowHeight, measured)
+        itemHeights = applyMeasuredCardHeights(itemKeys as string[], estimatedRowHeight, measuredHeights)
       }
       const next = libraryWindowMetrics({
         count,
@@ -169,12 +173,12 @@ export function useLibraryWindow(options: {
       if (frame) return
       frame = requestAnimationFrame(() => {
         frame = 0
-        measure()
+        measure(false)
       })
     }
 
-    measure()
-    const observer = new ResizeObserver(onScroll)
+    measure(true)
+    const observer = new ResizeObserver(() => measure(true))
     observer.observe(viewport)
     observer.observe(grid)
     viewport.addEventListener('scroll', onScroll, { passive: true })

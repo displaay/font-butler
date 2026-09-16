@@ -98,6 +98,11 @@ function readCatalogFile(catalogPath: string): CatalogFile {
 
 let catalogQueue: Promise<void> = Promise.resolve()
 const catalogLock = new AsyncLocalStorage<boolean>()
+let catalogGeneration = 0
+
+export function currentCatalogGeneration(): number {
+  return catalogGeneration
+}
 
 export function runCatalogTask<T>(task: () => Promise<T> | T): Promise<T> {
   if (catalogLock.getStore()) {
@@ -141,6 +146,7 @@ export function saveCatalog(paths: AppPaths, catalog: CatalogFile): void {
   const tmp = `${paths.catalogPath}.${process.pid}.${process.hrtime.bigint()}.tmp`
   fs.writeFileSync(tmp, JSON.stringify(catalog, null, 2))
   fs.renameSync(tmp, paths.catalogPath)
+  catalogGeneration += 1
   try {
     writeCatalogBackup(paths.catalogPath)
   } catch {

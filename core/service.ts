@@ -30,7 +30,8 @@ import {
   upsertCopy,
   verifyManagedCopy,
 } from './destinations.ts'
-import { MAX_UPLOAD_BYTES } from './constants.ts'
+import { MAX_UPLOAD_BATCH_BYTES, MAX_UPLOAD_BYTES } from './constants.ts'
+import { familyProgressReporter } from './batch-progress.ts'
 import {
   loadDuplicates,
   pruneStaleDuplicates,
@@ -157,6 +158,7 @@ import type {
   AdobeFontCacheInfo,
   AppSettings,
   BatchActionResult,
+  BatchProgressAction,
   CatalogEntry,
   ComparisonCapture,
   DefaultDestinationId,
@@ -222,7 +224,6 @@ function existingManagedFontPath(
 
 const REMEMBERED_DECISIONS_LIMIT = 256
 const APPLY_PLAN_EMIT_EVERY = 16
-const MAX_UPLOAD_BATCH_BYTES = 8 * MAX_UPLOAD_BYTES
 
 async function yieldDuringBulkImport(_index?: number): Promise<void> {
   await yieldEventLoop()
@@ -247,6 +248,7 @@ import {
   displayEntryLabel,
   displayFamily,
   emitCatalog,
+  catalogEvent,
   emitDuplicates,
   emitNotice,
   livePathOccupiedByOther,
@@ -266,13 +268,21 @@ import { importInboxFiles as importInboxFilesFn, importOneUnlocked as importOneU
 import {
   checkRetail as checkRetailFn,
   configureRetailSync as configureRetailSyncFn,
+  dropOrphanRetailListings as dropOrphanRetailListingsFn,
   listDropRetailCollisions as listDropRetailCollisionsFn,
   optOutRetailFamilies as optOutRetailFamiliesFn,
   resolveDropRetailCollisions as resolveDropRetailCollisionsFn,
   retailStatus as retailStatusFn,
+  retailSyncNeedsResume as retailSyncNeedsResumeFn,
   syncRetail as syncRetailFn,
 } from './service-retail.ts'
-import type { RetailCollisionAction, RetailFamilyCollision, RetailSyncStatus } from '../shared/retail.ts'
+import {
+  isOrphanRetailListing,
+  type RetailCollisionAction,
+  type RetailFamilyCollision,
+  type RetailSyncStatus,
+} from '../shared/retail.ts'
+import { forgetRetailFile } from './retail-sync.ts'
 import {
   activateEntry as activateEntryFn,
   bakeFeatures as bakeFeaturesFn,
@@ -312,6 +322,7 @@ export class FontButlerService {
   private autoReinstallPending = new Set<string>()
   private rememberedDecisions = new Map<string, ImportPlanChoice>()
   private destinationFailures: Array<{ destinationId: DestinationId; reason: string }> = []
+  private replacedConflicts: OperationItem[] = []
   /**
    * Test seam: stub Displaay worker HTTP for this instance so onboarding follow-up
    * can sync without the network.
@@ -352,6 +363,26 @@ export class FontButlerService {
     return failures
   }
 
+  private withPartialDestinationResult(
+    entry: CatalogEntry,
+    destinationFailures: Array<{ destinationId: DestinationId; reason: string }>,
+  ): CatalogEntry {
+    if (destinationFailures.length === 0) return entry
+    const errors = destinationFailures.map((item) => item.reason)
+    return Object.assign(entry, {
+      errors,
+      failed: destinationFailures.length,
+      succeeded: 1,
+      entries: [entry],
+    })
+  }
+
+  private takeReplacedConflicts(): OperationItem[] {
+    const items = this.replacedConflicts
+    this.replacedConflicts = []
+    return items
+  }
+
   async init(): Promise<void> {
     ensureDirs(this.paths)
     const recovered = await reconcileMutationJournals(this.paths, getFontNative())
@@ -368,12 +399,15 @@ export class FontButlerService {
     // Hash external sources once on startup so timestamp-preserving syncs are
     // still detected; steady-state watcher updates already force a hash.
     await this.refreshSourceStatuses(true)
+    await dropOrphanRetailListingsFn(this.paths)
     await this.reinstallCurrentlyOutdated()
     await syncWatchers(this.paths)
     await reconcileWatchedSources(this.paths)
     await this.refreshUserFontsWatcher()
     await this.refreshInboxWatcher(this.watchingFolderRoots(), { importExisting: true })
     this.revisionStorage()
+    this.pruneActivity()
+    this.resumeIncompleteRetailSync()
   }
 
   listCatalog(): CatalogEntry[] {
@@ -599,7 +633,7 @@ export class FontButlerService {
       await this.refreshInboxWatcher(this.watchingFolderRoots(next), { importExisting: true })
     }
     if (completingOnboarding && next.retailSync?.enabled) {
-      await this.syncRetail()
+      await this.checkRetail({ credentialsOnly: false })
     }
     if (next.autoReinstallOnUpdate && !current.autoReinstallOnUpdate) {
       await this.refreshSourceStatuses()
@@ -608,6 +642,7 @@ export class FontButlerService {
     if (patch.revisionBudgetBytes !== undefined) {
       this.revisionStorage()
     }
+    this.pruneActivity()
     return next
   }
 
@@ -764,7 +799,14 @@ export class FontButlerService {
         return activated
       }
       if (entry.status === 'outdated') {
-        return this.reinstallEntry(entry.id)
+        const reinstalled = await this.reinstallEntry(entry.id)
+        emitCatalog(this.paths)
+        emitNotice({
+          kind: 'reinstalled',
+          message: `Reinstalled ${displayFamily(reinstalled)}`,
+          entryId: reinstalled.id,
+        })
+        return reinstalled
       }
       const installed = await this.installEntry(entry.id)
       emitNotice({
@@ -809,8 +851,10 @@ export class FontButlerService {
       )
       const previousRevision = installAs ? undefined : this.previousRevisionBeforeChange(before)
       this.destinationFailures = []
+      this.replacedConflicts = []
       const entry = await this.installEntry(id, familyName, options)
       const destinationFailures = this.takeDestinationFailures()
+      const replacedConflicts = this.takeReplacedConflicts()
       const catalog = loadCatalog(this.paths)
       const latest = findById(catalog, entry.id)
       if (latest) {
@@ -822,12 +866,12 @@ export class FontButlerService {
       item.previousRevision = previousRevision
       this.commitManualOperation(
         options?.replace ? 'install-update' : 'install',
-        this.withDestinationFailures(entry, item, destinationFailures),
+        [...this.withDestinationFailures(entry, item, destinationFailures), ...replacedConflicts],
         displayFamily(entry),
       )
       await syncWatchers(this.paths)
       emitCatalog(this.paths)
-      return entry
+      return this.withPartialDestinationResult(entry, destinationFailures)
     })
   }
 
@@ -845,26 +889,33 @@ export class FontButlerService {
       const entries: CatalogEntry[] = []
       const errors: string[] = []
       const items: OperationItem[] = []
+      const progress = this.familyProgress('install', ids)
+      progress.start()
       for (const id of ids) {
         const entry = findById(catalog, id)
         if (!entry) {
           const reason = 'Font is not in the library.'
           errors.push(reason)
           items.push({ id: crypto.randomUUID(), entryId: id, label: id, outcome: 'failed', reason })
+          await progress.mark(id)
         } else if (entry.status === 'source-missing') {
           const reason = 'The source file is missing.'
           errors.push(reason)
           items.push({ id: crypto.randomUUID(), entryId: id, label: displayEntry(entry), outcome: 'failed', reason })
+          await progress.mark(id)
         } else if (!eligibleForInstall(entry)) {
           items.push({ id: crypto.randomUUID(), entryId: id, label: displayEntry(entry), outcome: 'skipped' })
+          await progress.mark(id)
         }
       }
       for (const entry of toInstall) {
         try {
           const previousRevision = this.previousRevisionBeforeChange(entry)
           this.destinationFailures = []
+          this.replacedConflicts = []
           const installed = await this.installEntry(entry.id, familyName, options)
           const destinationFailures = this.takeDestinationFailures()
+          const replacedConflicts = this.takeReplacedConflicts()
           const catalog = loadCatalog(this.paths)
           const latest = findById(catalog, installed.id)
           if (latest) {
@@ -876,13 +927,14 @@ export class FontButlerService {
           entries.push(completed)
           const item = this.operationItem(completed, 'succeeded')
           item.previousRevision = previousRevision
-          items.push(...this.withDestinationFailures(completed, item, destinationFailures))
+          items.push(...this.withDestinationFailures(completed, item, destinationFailures), ...replacedConflicts)
           for (const failure of destinationFailures) errors.push(failure.reason)
         } catch (error) {
           const reason = error instanceof Error ? error.message : String(error)
           errors.push(reason)
           items.push(this.operationItem(entry, 'failed', reason))
         }
+        await progress.mark(entry.id)
       }
       const operation = this.commitManualOperation(
         options?.replace ? 'install-update' : 'install',
@@ -940,6 +992,8 @@ export class FontButlerService {
       const familyNames = new Map<string, string>()
       const items: OperationItem[] = []
       const errors: string[] = []
+      const progress = this.familyProgress('uninstall', ids)
+      progress.start()
       for (const id of ids) {
         const current = findById(loadCatalog(this.paths), id)
         if (current) familyNames.set(id, displayFamily(current))
@@ -962,6 +1016,7 @@ export class FontButlerService {
             items.push({ id: crypto.randomUUID(), entryId: id, label: id, outcome: 'failed', reason })
           }
         }
+        await progress.mark(id)
       }
       const operation = this.commitManualOperation(
         'uninstall',
@@ -1005,10 +1060,15 @@ export class FontButlerService {
       const entries: CatalogEntry[] = []
       const items: OperationItem[] = []
       const errors: string[] = []
+      const progress = this.familyProgress('deactivate', ids)
+      progress.start()
       for (const id of ids) {
         const catalog = loadCatalog(this.paths)
         const entry = findById(catalog, id)
-        if (!entry || !eligibleForDeactivate(entry)) continue
+        if (!entry || !eligibleForDeactivate(entry)) {
+          await progress.mark(id)
+          continue
+        }
         try {
           const next = await this.deactivateEntry(id, { removeManualOwner: true })
           entries.push(next)
@@ -1018,6 +1078,7 @@ export class FontButlerService {
           errors.push(reason)
           items.push(this.operationItem(entry, 'failed', reason))
         }
+        await progress.mark(id)
       }
       this.commitManualOperation('deactivate', items, entries[0] ? displayFamily(entries[0]) : undefined)
       emitCatalog(this.paths)
@@ -1034,18 +1095,20 @@ export class FontButlerService {
       const relatedId = current
         ? occupyingSiblings(loadCatalog(this.paths).entries, current, this.paths)[0]?.id
         : undefined
+      this.destinationFailures = []
       const entry = options?.switch
         ? await this.switchToEntry(id)
         : await this.activateEntry(id, { ...options, owner: 'manual' })
+      const destinationFailures = this.takeDestinationFailures()
       const item = this.operationItem(entry, 'succeeded')
       if (options?.switch) item.relatedEntryId = relatedId
       this.commitManualOperation(
         options?.switch ? 'switch' : 'activate',
-        [item],
+        this.withDestinationFailures(entry, item, destinationFailures),
         displayFamily(entry),
       )
       emitCatalog(this.paths)
-      return entry
+      return this.withPartialDestinationResult(entry, destinationFailures)
     })
   }
 
@@ -1059,6 +1122,8 @@ export class FontButlerService {
       const entries: CatalogEntry[] = []
       const items: OperationItem[] = []
       const errors: string[] = []
+      const progress = this.familyProgress('activate', ids)
+      progress.start()
       for (const id of ids) {
         const current = findById(loadCatalog(this.paths), id)
         try {
@@ -1081,6 +1146,7 @@ export class FontButlerService {
             items.push({ id: crypto.randomUUID(), entryId: id, label: id, outcome: 'failed', reason })
           }
         }
+        await progress.mark(id)
       }
       const operation = this.commitManualOperation(
         options?.switch ? 'switch' : 'activate',
@@ -1110,15 +1176,17 @@ export class FontButlerService {
   async reinstall(id: string, options?: InstallOptions): Promise<CatalogEntry> {
     return runCatalogTask(async () => {
       const before = findById(loadCatalog(this.paths), id)?.installedFingerprint
+      this.destinationFailures = []
       const entry = await this.reinstallEntry(id, options)
+      const destinationFailures = this.takeDestinationFailures()
       this.commitManualOperation(
         'reinstall',
-        [this.operationItem(entry, 'succeeded')],
+        this.withDestinationFailures(entry, this.operationItem(entry, 'succeeded'), destinationFailures),
         displayFamily(entry),
         before !== entry.installedFingerprint,
       )
       emitCatalog(this.paths)
-      return entry
+      return this.withPartialDestinationResult(entry, destinationFailures)
     })
   }
 
@@ -1172,6 +1240,8 @@ export class FontButlerService {
       if (needsCacheClear) {
         await this.clearCachesAfterInstall()
       }
+      const progress = this.familyProgress('reinstall', ids)
+      progress.start()
       for (const id of ids) {
         const catalog = loadCatalog(this.paths)
         const entry = findById(catalog, id)
@@ -1179,16 +1249,19 @@ export class FontButlerService {
           const reason = 'Font is not in the library.'
           errors.push(reason)
           items.push({ id: crypto.randomUUID(), entryId: id, label: id, outcome: 'failed', reason })
+          await progress.mark(id)
           continue
         }
         if (entry.status === 'source-missing') {
           const reason = 'The source file is missing.'
           errors.push(reason)
           items.push({ id: crypto.randomUUID(), entryId: id, label: displayEntry(entry), outcome: 'failed', reason })
+          await progress.mark(id)
           continue
         }
         if (!eligibleForReinstall(entry) && entry.status !== 'installed') {
           items.push({ id: crypto.randomUUID(), entryId: id, label: displayEntry(entry), outcome: 'skipped' })
+          await progress.mark(id)
           continue
         }
         try {
@@ -1201,6 +1274,7 @@ export class FontButlerService {
           errors.push(reason)
           items.push(this.operationItem(entry, 'failed', reason))
         }
+        await progress.mark(id)
       }
       await syncWatchers(this.paths)
       emitCatalog(this.paths)
@@ -1253,6 +1327,8 @@ export class FontButlerService {
     return runCatalogTask(async () => {
       const errors: string[] = []
       let removed = 0
+      const progress = this.familyProgress('forget', ids)
+      progress.start()
       for (const id of ids) {
         try {
           await this.forgetEntry(id, options)
@@ -1260,6 +1336,7 @@ export class FontButlerService {
         } catch (error) {
           errors.push(error instanceof Error ? error.message : String(error))
         }
+        await progress.mark(id)
       }
       await syncWatchers(this.paths)
       emitCatalog(this.paths)
@@ -1316,8 +1393,9 @@ export class FontButlerService {
   async forgetMissingSources(): Promise<{ removed: number }> {
     return runCatalogTask(async () => {
       const catalog = loadCatalog(this.paths)
+      const retailOn = Boolean(loadSettings(this.paths).retailSync?.enabled)
       const ids = catalog.entries
-        .filter((entry) => isCleanupEligible(entry))
+        .filter((entry) => isCleanupEligible(entry) || isOrphanRetailListing(entry, retailOn))
         .map((entry) => entry.id)
       for (const id of ids) {
         await this.forgetEntry(id)
@@ -1993,12 +2071,15 @@ export class FontButlerService {
   }
 
   listActivity(): Operation[] {
+    return loadOperations(this.paths)
+  }
+
+  private pruneActivity(): void {
     const settings = loadSettings(this.paths)
     pruneOperations(this.paths, {
       maxAgeMs: settings.activityRetentionDays * 24 * 60 * 60 * 1000,
       maxCount: settings.activityMaxOperations,
     })
-    return loadOperations(this.paths)
   }
 
   markAllActivityRead(): Operation[] {
@@ -2202,6 +2283,23 @@ export class FontButlerService {
         continue
       }
       try {
+        const undoTargetReached =
+          (operation.action === 'uninstall' &&
+            Boolean(item.previousRevision) &&
+            entry.installedFingerprint === item.previousRevision &&
+            (entry.status === 'installed' || entry.status === 'outdated' || entry.status === 'deactivated')) ||
+          ((operation.action === 'install' ||
+            operation.action === 'install-update' ||
+            operation.action === 'reinstall' ||
+            operation.action === 'apply-plan') &&
+            (item.previousRevision
+              ? entry.installedFingerprint === item.previousRevision
+              : entry.status === 'uninstalled' || entry.status === 'source-missing'))
+        if (undoTargetReached) {
+          entries.push(entry)
+          items.push({ ...item, outcome: 'succeeded' })
+          continue
+        }
         if (
           item.expectedRevision &&
           entry.installedFingerprint !== item.expectedRevision
@@ -2240,12 +2338,29 @@ export class FontButlerService {
           if (item.previousStatus) entry.status = item.previousStatus
           if (item.previousUpdateHold !== undefined) entry.updateHold = item.previousUpdateHold
           if (item.previousUpdatePolicy !== undefined) entry.updatePolicy = item.previousUpdatePolicy ?? undefined
-          saveCatalog(this.paths, (() => {
-            const catalog = loadCatalog(this.paths)
+          touchEntry(entry)
+          const catalog = loadCatalog(this.paths)
+          const live = findById(catalog, entry.id)
+          if (live) {
+            live.sourcePath = entry.sourcePath
+            live.sourceMtimeMs = entry.sourceMtimeMs
+            live.sourceSize = entry.sourceSize
+            live.sourceFingerprint = entry.sourceFingerprint
+            live.sourcePresent = entry.sourcePresent
+            live.sourceAvailability = entry.sourceAvailability
+            live.status = entry.status
+            live.updateHold = entry.updateHold
+            live.updatePolicy = entry.updatePolicy
+            applyEntryFacts(live)
+            touchEntry(live)
+            upsertEntry(catalog, live)
+            saveCatalog(this.paths, catalog)
+            entries.push(live)
+          } else {
             upsertEntry(catalog, entry)
-            return catalog
-          })())
-          entries.push(entry)
+            saveCatalog(this.paths, catalog)
+            entries.push(entry)
+          }
           await syncWatchers(this.paths)
         } else if (operation.action === 'restore-revision') {
           entries.push(
@@ -2278,8 +2393,20 @@ export class FontButlerService {
             entries.push(await this.deactivateEntry(entry.id, { removeManualOwner: true }))
           }
         } else if (operation.action === 'uninstall' && item.previousRevision) {
+          const catalog = loadCatalog(this.paths)
+          const before = findById(catalog, entry.id)
+          const snapshot = before ? structuredClone(before) : undefined
           this.applyUninstallUndoState(entry.id, item)
-          entries.push(await this.restoreRevision(entry.id, item.previousRevision))
+          try {
+            entries.push(await this.restoreRevision(entry.id, item.previousRevision))
+          } catch (error) {
+            if (snapshot) {
+              const rolled = loadCatalog(this.paths)
+              upsertEntry(rolled, snapshot)
+              saveCatalog(this.paths, rolled)
+            }
+            throw error
+          }
         }
         else {
           throw new Error('That action does not have a safe inverse.')
@@ -2318,6 +2445,7 @@ export class FontButlerService {
     ids: string[] = [],
     options: { caches?: boolean } = {},
   ): Promise<{ fonts: RepairItemResult[]; caches: RepairItemResult[] }> {
+    return runCatalogTask(async () => {
     const catalog = loadCatalog(this.paths)
     const targets = ids.length
       ? ids.map((id) => findById(catalog, id)).filter((entry): entry is CatalogEntry => Boolean(entry))
@@ -2364,6 +2492,7 @@ export class FontButlerService {
       const adobe = copyAt(latest, 'adobe-shared')
       if (adobe) {
         const dest = inspectDestination(this.paths, 'adobe-shared')
+        const previous = adobe.verification
         adobe.verification = dest.supported
           ? verifyManagedCopy(this.paths, 'adobe-shared', adobe.path, adobe.fingerprint)
           : 'unavailable'
@@ -2377,6 +2506,7 @@ export class FontButlerService {
             : 'unavailable',
           reason: dest.supported ? adobe.verification === 'file-present' ? undefined : 'Adobe testing copy is missing.' : dest.reason,
         })
+        if (adobe.verification !== previous) touchEntry(latest)
         saveCatalog(this.paths, latestCatalog)
       }
     }
@@ -2411,7 +2541,9 @@ export class FontButlerService {
         reason: item.reason ?? (item.outcome === 'succeeded' ? undefined : item.outcome),
       })),
     )
+    emitCatalog(this.paths)
     return { fonts, caches }
+    })
   }
 
   /** Optional Displaay retail collection. Delegated to `service-retail.ts` to keep this file navigable. */
@@ -2427,18 +2559,32 @@ export class FontButlerService {
     folderId?: string | null
     disabledGlyphsFiles?: string[]
     familyFormats?: Record<string, import('../shared/retail.ts').RetailFontFormat>
+    disableAction?: import('../shared/retail.ts').RetailDisableAction
   }): Promise<RetailSyncStatus> {
-    return configureRetailSyncFn(this.paths, input)
+    const wasEnabled = Boolean(loadSettings(this.paths).retailSync?.enabled)
+    const status = await configureRetailSyncFn(this.paths, input)
+    if (!wasEnabled && status.enabled && !this.onboardingWorkDeferred()) {
+      return this.checkRetail({ credentialsOnly: false })
+    }
+    return status
   }
 
   async checkRetail(options: { refresh?: boolean; credentialsOnly?: boolean } = {}): Promise<RetailSyncStatus> {
     const credentialsOnly =
-      options.credentialsOnly ?? this.onboardingWorkDeferred()
+      options.credentialsOnly !== undefined
+        ? options.credentialsOnly
+        : this.onboardingWorkDeferred()
     return checkRetailFn(this.paths, {
       refresh: options.refresh,
       credentialsOnly,
       fetchManifest: this.retailFetch?.fetchManifest,
     })
+  }
+
+  private resumeIncompleteRetailSync(): void {
+    if (this.onboardingWorkDeferred()) return
+    if (!retailSyncNeedsResumeFn(this.paths)) return
+    void this.syncRetail()
   }
 
   async syncRetail(choices?: Record<string, RetailCollisionAction>): Promise<RetailSyncStatus> {
@@ -2826,12 +2972,41 @@ export class FontButlerService {
       const current = findById(loadCatalog(this.paths), other.id)
       if (!current) continue
       const installed = current.installedPath
-      if (installed && fs.existsSync(installed)) {
-        const snapshot = path.join(rollbackDir, `${crypto.randomUUID()}${path.extname(installed) || '.ttf'}`)
-        fs.copyFileSync(installed, snapshot)
+      const liveBytes =
+        (installed && fs.existsSync(installed) ? installed : undefined) ??
+        parkedBytesPath(current)
+      if (liveBytes && fs.existsSync(liveBytes)) {
+        const retained = storeRevision(this.paths, liveBytes, {
+          faces: current.faces,
+          format: current.format,
+        })
+        if (retained) {
+          current.previousRevisionId = retained.fingerprint
+          const catalog = loadCatalog(this.paths)
+          const live = findById(catalog, current.id)
+          if (live) {
+            live.previousRevisionId = retained.fingerprint
+            touchEntry(live)
+            saveCatalog(this.paths, catalog)
+          }
+        }
+        const snapshot = path.join(rollbackDir, `${crypto.randomUUID()}${path.extname(liveBytes) || '.ttf'}`)
+        fs.copyFileSync(liveBytes, snapshot)
         snapshots.push({ entry: { ...current }, file: snapshot })
       }
-      await this.uninstallEntry(current.id)
+      const previousEntry = structuredClone(current)
+      await this.uninstallEntry(current.id, { retainCatalog: true })
+      const after = findById(loadCatalog(this.paths), current.id)
+      this.replacedConflicts.push({
+        id: crypto.randomUUID(),
+        entryId: current.id,
+        label: displayEntry(current),
+        outcome: 'succeeded',
+        previousRevision: current.previousRevisionId,
+        previousEntry,
+        expectedStatus: after?.status ?? 'uninstalled',
+        expectedRevision: after?.installedFingerprint,
+      })
     }
     return snapshots
   }
@@ -2975,7 +3150,7 @@ export class FontButlerService {
 
   private async uninstallEntry(
     id: string,
-    options?: { deleteSource?: boolean },
+    options?: { deleteSource?: boolean; retainCatalog?: boolean },
   ): Promise<CatalogEntry> {
     return uninstallEntryFn(this.asLifecycleHost(), id, options)
   }
@@ -3253,7 +3428,10 @@ export class FontButlerService {
       throw new Error('Font is not in the library.')
     }
     if (entry.retailRelativePath) {
-      throw new Error('Displaay retail fonts stay in the collection.')
+      const retailOn = Boolean(loadSettings(this.paths).retailSync?.enabled)
+      if (!isOrphanRetailListing(entry, retailOn)) {
+        throw new Error('Displaay retail fonts stay in the collection.')
+      }
     }
     if (entry.status !== 'source-missing' && entry.status !== 'uninstalled') {
       throw new Error('Only uninstalled fonts can be removed from the list.')
@@ -3273,6 +3451,9 @@ export class FontButlerService {
       fs.rmSync(entry.disabledPath, { force: true })
     }
     entry.disabledPath = undefined
+    if (entry.retailRelativePath) {
+      forgetRetailFile(this.paths, entry.retailRelativePath)
+    }
     removeEntryById(catalog, id)
     saveCatalog(this.paths, catalog)
     return entry
@@ -3438,13 +3619,20 @@ export class FontButlerService {
         await yieldEventLoop()
         continue
       }
-      const file = existingFontPath(entry)
+      const file = existingFontPath(entry, catalog.entries)
       if (!file) continue
       try {
         const analysis = await analyzeFontFile(file)
-        if (fillEntryPreviewSample(entry, { sample: analysis.parsed.previewSample })) {
+        const stubFaces = !entry.faces?.some((face) => Boolean(face.postscriptName))
+        if (stubFaces && analysis.parsed.faces.length > 0) {
+          applyParsedFont(entry, analysis.parsed)
+          touchEntry(entry)
           changed = true
-          emitEvent({ type: 'catalog', entries: catalog.entries })
+          emitEvent(catalogEvent(catalog.entries))
+        } else if (fillEntryPreviewSample(entry, { sample: analysis.parsed.previewSample })) {
+          touchEntry(entry)
+          changed = true
+          emitEvent(catalogEvent(catalog.entries))
         }
       } catch {
         // Leave the card pending if the file cannot be parsed.
@@ -3475,6 +3663,7 @@ export class FontButlerService {
         if (entry.sourceMtimeMs !== stat.mtimeMs || entry.sourceSize !== stat.size) {
           entry.sourceMtimeMs = stat.mtimeMs
           entry.sourceSize = stat.size
+          touchEntry(entry)
           changed = true
         }
         await yieldEventLoop()
@@ -3482,6 +3671,7 @@ export class FontButlerService {
         const bytesChanged = Boolean(fingerprint && fingerprint !== entry.sourceFingerprint)
         if (fingerprint && fingerprint !== entry.sourceFingerprint) {
           entry.sourceFingerprint = fingerprint
+          touchEntry(entry)
           changed = true
         }
         const needsParse = bytesChanged || !entry.faces?.length || !entry.previewSample
@@ -3493,6 +3683,7 @@ export class FontButlerService {
               const installedSample = entry.previewSample
               applyParsedFont(entry, parsed)
               if (keepInstalledSample) entry.previewSample = installedSample
+              touchEntry(entry)
               changed = true
             } else if (
               !keepInstalledSample &&
@@ -3500,6 +3691,7 @@ export class FontButlerService {
               entry.previewSample !== parsed.previewSample
             ) {
               entry.previewSample = parsed.previewSample
+              touchEntry(entry)
               changed = true
             }
           } catch {
@@ -3521,6 +3713,7 @@ export class FontButlerService {
     }
     if (changed) {
       saveCatalog(this.paths, catalog)
+      emitCatalog(this.paths)
     }
   }
 
@@ -3978,6 +4171,18 @@ export class FontButlerService {
         reason: failure.reason,
       })),
     ]
+  }
+
+  private familyProgress(action: BatchProgressAction, ids: string[]) {
+    const catalog = loadCatalog(this.paths)
+    return familyProgressReporter(
+      action,
+      ids.map((id) => {
+        const entry = findById(catalog, id)
+        return { id, familyName: entry ? displayFamily(entry) : id }
+      }),
+      { onFamilyDone: () => emitCatalog(this.paths) },
+    )
   }
 
   private commitManualOperation(

@@ -10,9 +10,12 @@ import {
 } from 'react'
 import { Loader2 } from 'lucide-react'
 import { usePreviewFontReady } from '@/hooks/usePreviewFontReady'
+import { paintedPreviewIndices } from '@/lib/cyclingPreview'
 import { fitPreviewTransform } from '@/lib/fitPreview'
 import { applyLatinPreviewSample, DEFAULT_LATIN_PREVIEW_TEXT } from '@/lib/latinPreview'
 import { cn } from '@/lib/utils'
+
+const previewPaintClass = 'isolate contain-paint [transform:translateZ(0)]'
 
 const LatinPreviewContext = createContext(DEFAULT_LATIN_PREVIEW_TEXT)
 
@@ -68,7 +71,10 @@ function previewBoxClass(size: 'sm' | 'md') {
 function PreviewPending({ size }: { size: 'sm' | 'md' | 'glyph' }) {
   return (
     <span
-      className="inline-flex items-center justify-center"
+      className={cn(
+        'inline-flex items-center justify-center',
+        previewPaintClass,
+      )}
       role="status"
       aria-label="Loading preview"
     >
@@ -147,12 +153,9 @@ function AaGlyph({
     const observer = new ResizeObserver(applyFit)
     observer.observe(box)
     observer.observe(el)
-    document.fonts?.addEventListener('loadingdone', applyFit)
-    void document.fonts?.ready.then(applyFit)
     return () => {
       cancelAnimationFrame(frame)
       observer.disconnect()
-      document.fonts?.removeEventListener('loadingdone', applyFit)
     }
   }, [fit, ready, family, weight, italic, variation, text])
 
@@ -207,6 +210,7 @@ export function AaPreview({
     <div
       className={cn(
         'relative flex shrink-0 items-center justify-center bg-muted/40 leading-none text-foreground shadow-[inset_0_0_0_1px_var(--border)]',
+        previewPaintClass,
         previewBoxClass(size),
       )}
     >
@@ -241,34 +245,42 @@ export function CyclingAaPreview({
   const index = useHoverCycle(faces.length, cycling, restIndex)
   const layers = faces.length > 0 ? faces : [rest]
   const visibleIndex = cycling ? index : restIndex
+  const painted = paintedPreviewIndices(layers.length, visibleIndex, cycling)
 
   return (
     <div
-      className="relative flex w-full shrink-0 items-center justify-center overflow-hidden rounded-none border-b border-border bg-muted/40 leading-none text-foreground"
+      className={cn(
+        'relative flex w-full shrink-0 items-center justify-center overflow-hidden rounded-none border-b border-border bg-muted/40 leading-none text-foreground',
+        previewPaintClass,
+      )}
       style={{ fontSize: `${size}rem`, minHeight: `${size * 2}rem` }}
     >
-      {layers.map((face, faceIndex) => (
-        <div
-          key={`${face.family}-${face.weight ?? 400}-${face.italic ? 'i' : 'r'}-${face.label}-${faceIndex}`}
-          className={cn(
-            'absolute inset-0 flex items-center justify-center transition-opacity duration-150 ease-out motion-reduce:transition-none',
-            faceIndex === visibleIndex ? 'opacity-100' : 'opacity-0',
-          )}
-          aria-hidden={faceIndex !== visibleIndex}
-        >
-          <AaGlyph
-            family={face.family}
-            weight={face.weight}
-            italic={face.italic}
-            variation={face.variation}
-            pendingSize="glyph"
-            wait={face.wait !== false && faceIndex === visibleIndex}
-            sample={sample}
-            fit
-          />
-          {cycling ? <PreviewLabel>{face.label}</PreviewLabel> : null}
-        </div>
-      ))}
+      {painted.map((faceIndex) => {
+        const face = layers[faceIndex]
+        if (!face) return null
+        return (
+          <div
+            key={`${face.family}-${face.weight ?? 400}-${face.italic ? 'i' : 'r'}-${face.label}-${faceIndex}`}
+            className={cn(
+              'absolute inset-0 flex items-center justify-center transition-opacity duration-150 ease-out motion-reduce:transition-none',
+              faceIndex === visibleIndex ? 'opacity-100' : 'opacity-0',
+            )}
+            aria-hidden={faceIndex !== visibleIndex}
+          >
+            <AaGlyph
+              family={face.family}
+              weight={face.weight}
+              italic={face.italic}
+              variation={face.variation}
+              pendingSize="glyph"
+              wait={face.wait !== false}
+              sample={sample}
+              fit
+            />
+            {cycling ? <PreviewLabel>{face.label}</PreviewLabel> : null}
+          </div>
+        )
+      })}
     </div>
   )
 }

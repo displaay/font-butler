@@ -30,3 +30,24 @@ export function tryFingerprintFile(filePath: string): string | undefined {
     return undefined
   }
 }
+
+export function tryFingerprintFileIfChanged(
+  filePath: string,
+  previous?: { fingerprint?: string; mtimeMs?: number; size?: number },
+): string | undefined {
+  try {
+    if (!fs.existsSync(filePath)) return undefined
+    const stat = fs.statSync(filePath)
+    if (!stat.isFile()) return undefined
+    if (
+      previous?.fingerprint &&
+      previous.mtimeMs === stat.mtimeMs &&
+      previous.size === stat.size
+    ) {
+      return previous.fingerprint
+    }
+    return fingerprintFile(filePath)
+  } catch {
+    return undefined
+  }
+}

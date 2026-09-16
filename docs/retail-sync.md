@@ -66,7 +66,10 @@ Settings groups the collection by `typefaceName` (parent) and lists each `family
 When a family has both `.otf` and `.ttf` files, that row has a format toggle; variable families usually
 have one format and only an on/off switch. Sync downloads and installs **only** the selected format.
 Switching format uninstalls the other format rather than leaving both in Fonts. Turning a family off
-still leaves any already-installed copy in place and only skips further downloads.
+still leaves any already-installed copy in place and only skips further downloads. Turning the
+collection **Off** asks whether to keep those fonts installed or uninstall them and remove them from
+the library. Keep leaves Fonts copies and catalog rows in place (file-less stubs hide). Remove
+uninstalls owned Fonts copies, deletes the listings, and clears the local sync record.
 
 The **Displaay retail** library view hides the unselected format so both weights of Azeret do not show
 as duplicate families. Watch-folder foundries are unchanged.
@@ -107,8 +110,11 @@ it is the user's call, not ours.
   flattened to a basename under the Fonts folder. Traversal and Windows-hostile segments are refused.
 - Downloads are written to a staging `.part` file under the data root and committed into Fonts. A
   download whose length does not match the manifest is discarded and the previous file is left intact.
-- Checking and syncing are always explicit actions. Nothing runs on the cold-start path, matching the
-  rule the app-update check follows.
+- Checks never run on the cold-start path, matching the app-update check. Turning Sync on loads
+  the font list (Check) without downloading. Download only happens when the user chooses **Sync All**
+  or turns a family on. An interrupted download is marked `incomplete` on disk and resumes the next
+  time the app launches. A finished pass is not re-downloaded at startup, even if catalog rows remain
+  uninstalled because they conflicted or left the worker. Pending updates from a check wait for Sync.
 
 ## Checking
 
@@ -132,7 +138,8 @@ already synced and then regenerated do not appear on Updates as a collection car
 ## Guard rails
 
 - The **On/Off** switch gates everything: with the collection off, Check and Sync refuse and never
-  contact the worker. Turning it on does not create a watch folder.
+  contact the worker. Turning it on loads the remote list and does not download. Turning it off asks
+  whether to keep installed fonts or uninstall them and remove the listings. There is no watch folder.
 - Installs go to the Mac Fonts folder only (no Adobe destination unless that is reused later).
 - Occupied Fonts files that are not this retail font stay put. The retail font is still listed as
   **Not installed**; installing it replaces the occupying catalogue copy.
@@ -141,7 +148,8 @@ already synced and then regenerated do not appear on Updates as a collection car
   the same `.part` files.
 - The initial sync does not run on the UI process. The packaged app forks the API as a child process
   (`utilityProcess`), matching `npm run electron`. Cataloging yields between files so the API event
-  loop keeps serving the running app.
+  loop keeps serving the running app. The status bar shows a live family count (`12/36`) for that
+  pass — styles of one family count as one.
 - A failed check does not update "last checked" and does not report "Up to date" — the previous drift
   is left as-is and the error is shown.
 

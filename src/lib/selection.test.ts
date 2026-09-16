@@ -2,14 +2,18 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   clientRect,
+  clientToContent,
+  intersectRects,
   isTypingTarget,
   keysInMarquee,
+  marqueeClientRect,
   mergeMarqueeSelection,
   nextSelection,
   pointerUpClearsSelection,
   rectsIntersect,
   sameKeys,
   shortcutAction,
+  viewportClientRect,
 } from './selection.ts'
 
 test('nextSelection replaces the set on a plain click', () => {
@@ -53,6 +57,26 @@ test('sameKeys compares ordered key lists', () => {
 
 test('clientRect normalizes a drag box', () => {
   assert.deepEqual(clientRect(10, 20, 4, 8), { left: 4, top: 8, right: 10, bottom: 20 })
+})
+
+test('scrolling while dragging enlarges the marquee instead of sliding it', () => {
+  const origin = { left: 100, top: 80, width: 400, height: 500, scrollLeft: 0, scrollTop: 0 }
+  const start = clientToContent(140, 200, origin)
+  const before = marqueeClientRect(start.x, start.y, 180, 280, origin)
+  assert.deepEqual(before, { left: 140, top: 200, right: 180, bottom: 280 })
+
+  const scrolled = { ...origin, scrollTop: 150 }
+  const after = marqueeClientRect(start.x, start.y, 180, 280, scrolled)
+  assert.deepEqual(after, { left: 140, top: 50, right: 180, bottom: 280 })
+  assert.equal(after.bottom - after.top, 230)
+  assert.equal(before.bottom - before.top, 80)
+
+  const visible = intersectRects(after, viewportClientRect(scrolled))
+  assert.deepEqual(visible, { left: 140, top: 80, right: 180, bottom: 280 })
+
+  const startCard = { key: 'Start', rect: { left: 140, top: 50, right: 180, bottom: 90 } }
+  const laterCard = { key: 'Later', rect: { left: 140, top: 240, right: 180, bottom: 280 } }
+  assert.deepEqual(keysInMarquee([startCard, laterCard], after), ['Start', 'Later'])
 })
 
 test('rectsIntersect detects overlap', () => {

@@ -1,7 +1,7 @@
-import { useMemo, useRef, useState, type MouseEvent } from 'react'
+import { memo, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { ChevronDown, FolderOpen } from 'lucide-react'
 import { AaPreview, CyclingAaPreview } from '@/components/AaPreview'
-import { FormatBadges, VfBadge } from '@/components/Badges'
+import { NameWithFormatTags } from '@/components/Badges'
 import { SystemMenuItems } from '@/components/BatchActions'
 import { SystemCardActions } from '@/components/FontCardActions'
 import { systemFontFamily } from '@/components/FontFaceStyles'
@@ -18,14 +18,17 @@ import { systemBatchPlan, type SystemBatchPlan } from '@/lib/batch'
 import { countFormats } from '@/lib/formats'
 import { systemInstanceRows } from '@/lib/instances'
 import type { SystemFamilyGroup, ViewLayout } from '@/lib/types'
+import { useCardActionChrome } from '@/hooks/useCardActionChrome'
 import { pendingPreviewSample } from '@/lib/previewSample'
 import { cn } from '@/lib/utils'
 
-export function SystemCard({
+export const SystemCard = memo(function SystemCard({
   group,
   layout,
   previewSize,
   showSourcePath,
+  showInstanceCounts = false,
+  hideFormats = false,
   selected,
   busy,
   batch,
@@ -39,6 +42,8 @@ export function SystemCard({
   layout: ViewLayout
   previewSize: number
   showSourcePath?: boolean
+  showInstanceCounts?: boolean
+  hideFormats?: boolean
   selected: boolean
   busy: boolean
   batch: SystemBatchPlan | null
@@ -49,7 +54,7 @@ export function SystemCard({
   onDeactivate: () => void
 }) {
   const [expanded, setExpanded] = useState(false)
-  const [hovered, setHovered] = useState(false)
+  const { hovered, actionsVisible, onContextMenuOpenChange, cardChrome } = useCardActionChrome()
   const skipNextClick = useRef(false)
   const face = group.faces[0]
   const instances = useMemo(() => systemInstanceRows(group), [group])
@@ -67,6 +72,7 @@ export function SystemCard({
     [instances, previewFamily],
   )
   const plan = batch ?? systemBatchPlan([group])
+  const muted = group.faces.length > 0 && group.faces.every((face) => face.deactivated)
 
   function handleCardClick(event: MouseEvent) {
     if (skipNextClick.current) {
@@ -86,15 +92,21 @@ export function SystemCard({
 
   const metadata = (
     <>
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="truncate font-medium">{group.familyName}</span>
-        <VfBadge show={group.isVariable} />
-        <FormatBadges formats={countFormats(group.faces.map((item) => item.format)).map((item) => item.format)} />
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <NameWithFormatTags
+          name={group.familyName}
+          isVariable={group.isVariable}
+          formats={countFormats(group.faces.map((item) => item.format)).map((item) => item.format)}
+          selected={selected}
+          hideFormats={hideFormats}
+        />
         {group.protected && <Badge>System</Badge>}
       </div>
-      <div className="mt-0.5 text-xs text-muted-foreground">
-        {group.instanceCount} {group.instanceCount === 1 ? 'instance' : 'instances'}
-      </div>
+      {showInstanceCounts ? (
+        <div className="mt-0.5 text-xs text-muted-foreground">
+          {group.instanceCount} {group.instanceCount === 1 ? 'instance' : 'instances'}
+        </div>
+      ) : null}
       {showSourcePath && (
         <div
           className="mt-1 truncate font-mono text-[11px] text-muted-foreground/90"
@@ -107,16 +119,21 @@ export function SystemCard({
   )
 
   return (
-    <ContextMenu onOpenChange={(open) => { if (open) skipClickAfterContextMenu() }}>
+    <ContextMenu
+      onOpenChange={(open) => {
+        if (open) skipClickAfterContextMenu()
+        onContextMenuOpenChange(open)
+      }}
+    >
       <ContextMenuTrigger asChild>
         <div
           data-family-key={group.familyName}
           className={cn(
-            'group relative overflow-hidden rounded-lg border transition-colors',
+            'group relative overflow-clip rounded-lg border transition-colors',
             selected ? '!border-foreground/20 bg-muted/60' : 'border-border/80 hover:bg-muted/40',
+            muted && '[&>:not([data-no-marquee])]:opacity-50',
           )}
-          onPointerEnter={() => setHovered(true)}
-          onPointerLeave={() => setHovered(false)}
+          {...cardChrome}
         >
           {layout === 'grid' ? (
             <button
@@ -183,7 +200,7 @@ export function SystemCard({
             <SystemCardActions
               writable={group.writable}
               busy={busy}
-              visible={selected}
+              visible={selected || actionsVisible}
               offset={layout === 'list' && showInstances}
               onDeactivate={onDeactivate}
               onUninstall={onUninstall}
@@ -205,4 +222,14 @@ export function SystemCard({
       </ContextMenuContent>
     </ContextMenu>
   )
-}
+}, (prev, next) => (
+  prev.group === next.group &&
+  prev.selected === next.selected &&
+  prev.busy === next.busy &&
+  prev.layout === next.layout &&
+  prev.previewSize === next.previewSize &&
+  prev.showSourcePath === next.showSourcePath &&
+  prev.showInstanceCounts === next.showInstanceCounts &&
+  prev.hideFormats === next.hideFormats &&
+  prev.batch === next.batch
+))

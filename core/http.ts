@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import type { Context } from 'hono'
 import path from 'node:path'
 import { isFullyUnderAnyRoot } from './containment.ts'
@@ -75,6 +76,13 @@ export function bearerToken(authorization: string | undefined): string | null {
   return value.startsWith('Bearer ') ? value.slice(7) : null
 }
 
+function tokensMatch(left: string, right: string): boolean {
+  const a = Buffer.from(left)
+  const b = Buffer.from(right)
+  if (a.length !== b.length) return false
+  return crypto.timingSafeEqual(a, b)
+}
+
 export function isAuthorizedApiRequest(options: {
   method: string
   pathname: string
@@ -88,7 +96,7 @@ export function isAuthorizedApiRequest(options: {
     return true
   }
   const bearer = bearerToken(options.authorization)
-  if (bearer && bearer === options.token) {
+  if (bearer && tokensMatch(bearer, options.token)) {
     return true
   }
   if (method === 'GET' || method === 'HEAD') {

@@ -1,2 +1,8 @@
 export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+export const MAX_UPLOAD_BATCH_BYTES = 8 * MAX_UPLOAD_BYTES
+export const MAX_UPLOAD_FILES = 500
+export const MAX_BATCH_IDS = 2_000
+export const MAX_IMPORT_FILES = 2_000
+export const MAX_RETAIL_MANIFEST_FILES = 5_000
 export const SYSTEM_FONT_CACHE_VERSION = 7
+export const PREVIEW_CSS_RETAIN_EXTRA = 64

@@ -57,7 +57,7 @@ export function libraryGridRowHeightPx(
 ): number {
   const preview = previewSize * 2 * rootFontSize
   const pad = (previewSize < 3.25 ? 0.5 : 0.75) * rootFontSize
-  const identity = (1.25 + 0.125 + 1 + extraLines * 1.1) * rootFontSize + pad * 2
+  const identity = (1.25 + extraLines * 1.225) * rootFontSize + pad * 2
   return Math.ceil(preview + identity + 2)
 }
 
@@ -65,7 +65,7 @@ export function libraryListRowHeightPx(rootFontSize: number, extraLines = 0): nu
   // Collapsed estimate only. Expanded InstanceList rows are measured via itemHeights.
   const padY = 0.625 * 2 * rootFontSize
   const preview = 2.75 * rootFontSize
-  const text = (1.25 + 0.125 + 1 + extraLines * 1.1) * rootFontSize
+  const text = (1.25 + extraLines * 1.225) * rootFontSize
   return Math.ceil(Math.max(preview, text) + padY + 2)
 }
 

@@ -185,4 +185,5 @@ body {
   background: var(--popover) !important;
   color: var(--foreground) !important;
   box-shadow: 0 10px 32px rgba(0, 0, 0, 0.14) !important;
+  transform: translateZ(0);
 }

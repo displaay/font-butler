@@ -227,7 +227,7 @@ export function OnboardingDialog({
     setWorkerUrl(result.status.workerBaseUrl || DEFAULT_WORKER_URL)
     if (retailToken.trim()) setRetailToken('')
     if (turningOn) {
-      const checked = await api.retail.check()
+      const checked = await api.retail.check(false, { credentialsOnly: false })
       if (checked.status.error) {
         throw new Error(checked.status.error)
       }
@@ -431,7 +431,7 @@ export function OnboardingDialog({
                         Displaay retail
                       </div>
                       <p className="mt-1 text-[13px] leading-5 text-muted-foreground">
-                        Keep the latest versions of all fonts from the Displaay retail collection.
+                        Load the Displaay retail list. Fonts are not downloaded until you Sync All or turn a family on in Settings.
                       </p>
                     </div>
                     <div

@@ -1012,8 +1012,16 @@ if (!gotLock) {
   app.on('before-quit', () => {
     isQuitting = true
     if (apiChild) {
-      apiChild.kill()
+      const child = apiChild
       apiChild = null
+      child.kill()
+      setTimeout(() => {
+        try {
+          child.kill('SIGKILL')
+        } catch {
+          // Already exited.
+        }
+      }, 1500).unref?.()
     }
   })
 
@@ -1028,7 +1036,14 @@ if (!gotLock) {
       const child = utilityProcess.fork(serverPath, [], {
         stdio: 'pipe',
         env: {
-          ...process.env,
+          ...Object.fromEntries(
+            Object.entries(process.env).filter(
+              ([key]) =>
+                key !== 'FONT_BUTLER_TEST' &&
+                key !== 'FONT_BUTLER_DEV_BOOTSTRAP' &&
+                key !== 'FONT_BUTLER_SHELL',
+            ),
+          ),
           FONT_BUTLER_SERVE: '1',
           FONT_BUTLER_API_PORT: String(port),
           FONT_BUTLER_STATIC_DIR: staticDir,
@@ -1070,10 +1085,15 @@ if (!gotLock) {
           return
         }
         apiChild = null
+        if (!isQuitting) {
+          console.error('Font Buttler API worker exited unexpectedly')
+          void restartPackagedBackend()
+        }
       })
 
       child.stdout?.on('data', (chunk) => {
         buffer += String(chunk)
+        if (buffer.length > 64_000) buffer = buffer.slice(-32_000)
         const match = buffer.match(/Font Buttler API on http:\/\/127\.0\.0\.1:(\d+)/)
         if (!match) return
         finish(null, { port: Number(match[1]), token: readApiTokenFile() })
@@ -1081,6 +1101,7 @@ if (!gotLock) {
       child.stderr?.on('data', (chunk) => {
         const text = String(chunk)
         buffer += text
+        if (buffer.length > 64_000) buffer = buffer.slice(-32_000)
         console.error(text.trimEnd())
       })
     })
@@ -1117,6 +1138,31 @@ if (!gotLock) {
       }
     }
     throw lastError
+  }
+
+  let restartingBackend = false
+  async function restartPackagedBackend() {
+    if (isQuitting || restartingBackend || !app.isPackaged) return
+    restartingBackend = true
+    try {
+      await startPackagedBackend()
+      await ensureApiToken()
+      for (const win of BrowserWindow.getAllWindows()) {
+        win.reload()
+      }
+      dialog.showErrorBox(
+        'Font Buttler restarted the local service',
+        'The font service stopped unexpectedly and was started again. Your library was reloaded.',
+      )
+    } catch (error) {
+      console.error('Could not restart Font Buttler API', error)
+      dialog.showErrorBox(
+        'Font Buttler could not restart',
+        error instanceof Error ? error.message : 'The font service stopped and could not be started again.',
+      )
+    } finally {
+      restartingBackend = false
+    }
   }
 
   app.whenReady().then(async () => {

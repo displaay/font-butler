@@ -6,10 +6,12 @@ import path from 'node:path'
 import { contentDisposition, shouldIncludeBootstrapToken } from '../core/auth.ts'
 import { onEvent } from '../core/events.ts'
 import { isFullyUnderAnyRoot } from '../core/containment.ts'
-import { MAX_UPLOAD_BYTES } from '../core/constants.ts'
+import { MAX_UPLOAD_BATCH_BYTES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES } from '../core/constants.ts'
 import { denyRemoteRequest, isAuthorizedApiRequest, resolveStaticAsset } from '../core/http.ts'
 import { checkAppUpdate } from '../core/app-update.ts'
+import { currentCatalogGeneration } from '../core/catalog.ts'
 import { FontButlerService } from '../core/service.ts'
+import { catalogEvent } from '../core/service-helpers.ts'
 import { closeFontAnalysisWorker } from '../core/font-analysis.ts'
 import { closeAllWatchers } from '../core/watch.ts'
 import type { AppSettings } from '../core/types.ts'
@@ -55,6 +57,9 @@ function mountStatic(app: Hono, staticDir: string): void {
   }
   app.get('*', async (c) => {
     const urlPath = new URL(c.req.url).pathname
+    if (urlPath === '/api' || urlPath.startsWith('/api/')) {
+      return c.json({ error: 'Not found' }, 404)
+    }
     const resolved = resolveStaticAsset(root, urlPath)
     if (resolved === 'forbidden') {
       return c.body('Forbidden', 403)
@@ -85,8 +90,21 @@ export async function startFontButlerServer(
 
   await service.init()
 
+  process.on('unhandledRejection', (error) => {
+    console.error('unhandledRejection', error)
+  })
+
 const apiToken = service.getApiToken()
 const app = new Hono()
+const sseClosers = new Set<() => void>()
+
+app.onError((error, c) => {
+  const message = error instanceof Error ? error.message : 'Request failed'
+  if (error instanceof SyntaxError || /JSON/.test(message)) {
+    return c.json({ error: 'Invalid JSON body' }, 400)
+  }
+  return c.json({ error: message }, 400)
+})
 
 app.use('*', async (c, next) => {
   const denied = denyRemoteRequest(c, PORT, extraOrigins)
@@ -198,7 +216,9 @@ app.post('/api/settings', async (c) => {
   }
 })
 
-app.get('/api/catalog', (c) => c.json({ entries: service.listCatalog() }))
+app.get('/api/catalog', (c) =>
+  c.json({ entries: service.listCatalog(), revision: currentCatalogGeneration() }),
+)
 
 app.get('/api/duplicates', (c) => c.json({ duplicates: service.listDuplicates() }))
 
@@ -250,31 +270,52 @@ app.post('/api/import', async (c) => {
 })
 
 app.post('/api/import-files', async (c) => {
+  try {
   const body = await c.req.parseBody({ all: true })
   const raw = body.files
   const files = (Array.isArray(raw) ? raw : raw ? [raw] : []).filter(
     (item): item is File => item instanceof File,
   )
+  if (files.length > MAX_UPLOAD_FILES) {
+    return c.json(
+      { error: `Upload batch exceeds ${MAX_UPLOAD_FILES} files` },
+      413,
+    )
+  }
   const oversized: string[] = []
   const accepted: File[] = []
+  let total = 0
   for (const file of files) {
     if (file.size > MAX_UPLOAD_BYTES) {
       oversized.push(`${file.name}: file exceeds ${MAX_UPLOAD_BYTES / (1024 * 1024)}MB limit`)
       continue
     }
+    total += file.size
+    if (total > MAX_UPLOAD_BATCH_BYTES) {
+      return c.json(
+        { error: `Upload batch exceeds ${MAX_UPLOAD_BATCH_BYTES / (1024 * 1024)}MB limit` },
+        413,
+      )
+    }
     accepted.push(file)
   }
-  const uploads = await Promise.all(
-    accepted.map(async (file) => ({
+  const uploads = []
+  for (const file of accepted) {
+    uploads.push({
       filename: file.name,
       data: Buffer.from(await file.arrayBuffer()),
-    })),
-  )
+    })
+  }
   const result = await service.importUploads(uploads)
   return c.json({
     ...result,
     errors: [...oversized, ...result.errors],
   })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Could not import files'
+    const status = /exceeds/.test(message) ? 413 : 400
+    return c.json({ error: message }, status)
+  }
 })
 
 app.post('/api/open', async (c) => {
@@ -726,6 +767,7 @@ app.post('/api/retail/configure', async (c) => {
     folderId?: string | null
     disabledGlyphsFiles?: string[]
     familyFormats?: Record<string, 'otf' | 'ttf'>
+    disableAction?: 'keep' | 'remove'
   }>()
   try {
     // The token goes in on this route and never comes back out: status reports `hasToken` only.
@@ -736,9 +778,16 @@ app.post('/api/retail/configure', async (c) => {
 })
 
 app.post('/api/retail/check', async (c) => {
-  const body = await c.req.json<{ refresh?: boolean }>().catch(() => ({}) as { refresh?: boolean })
+  const body = await c.req
+    .json<{ refresh?: boolean; credentialsOnly?: boolean }>()
+    .catch(() => ({}) as { refresh?: boolean; credentialsOnly?: boolean })
   try {
-    return c.json({ status: await service.checkRetail({ refresh: body.refresh }) })
+    return c.json({
+      status: await service.checkRetail({
+        refresh: body.refresh,
+        credentialsOnly: body.credentialsOnly,
+      }),
+    })
   } catch (error) {
     return c.json(fail(error, 'Could not check the retail collection'), 400)
   }
@@ -979,23 +1028,34 @@ app.get('/api/system-font', (c) => {
 app.get('/api/events', (c) => {
   return streamSSE(c, async (stream) => {
     let closed = false
+    const close = () => {
+      closed = true
+      unsubscribe()
+      sseClosers.delete(close)
+    }
     const unsubscribe = onEvent(async (event) => {
       if (closed) {
         return
       }
-      await stream.writeSSE({ data: JSON.stringify(event) })
+      try {
+        await stream.writeSSE({ data: JSON.stringify(event) })
+      } catch {
+        close()
+      }
     })
-    stream.onAbort(() => {
-      closed = true
-      unsubscribe()
-    })
+    sseClosers.add(close)
+    stream.onAbort(close)
     await stream.writeSSE({
-      data: JSON.stringify({ type: 'catalog', entries: service.listCatalog() }),
+      data: JSON.stringify(catalogEvent(service.listCatalog())),
     })
     while (!closed) {
       await stream.sleep(15_000)
       if (!closed) {
-        await stream.writeSSE({ data: JSON.stringify({ type: 'ping' }) })
+        try {
+          await stream.writeSSE({ data: JSON.stringify({ type: 'ping' }) })
+        } catch {
+          close()
+        }
       }
     }
   })
@@ -1015,15 +1075,23 @@ app.get('/api/events', (c) => {
     const shutdown = () => {
       if (shuttingDown) return
       shuttingDown = true
+      for (const close of sseClosers) close()
+      sseClosers.clear()
+      const force = setTimeout(() => process.exit(0), 2_000)
+      force.unref?.()
       void (async () => {
         try {
           await closeFontAnalysisWorker()
           await closeAllWatchers()
           service.dispose()
-          await new Promise<void>((resolve) => {
-            server.close(() => resolve())
-          })
+          await Promise.race([
+            new Promise<void>((resolve) => {
+              server.close(() => resolve())
+            }),
+            new Promise<void>((resolve) => setTimeout(resolve, 1_500)),
+          ])
         } finally {
+          clearTimeout(force)
           process.exit(0)
         }
       })()
