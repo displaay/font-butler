@@ -17,6 +17,7 @@ import {
   resolveDropRetailCollisions,
   retailStatus,
   retailSyncNeedsResume,
+  retailWorkerToken,
   syncRetail,
 } from './service-retail.ts'
 import {
@@ -110,6 +111,15 @@ test('the worker token is stored outside settings.json and never reported back',
   const raw = fs.readFileSync(paths.settingsPath, 'utf8')
   assert.equal(raw.includes('super-secret'), false)
   assert.equal(readRetailToken(retailTokenPath(paths)), 'super-secret')
+})
+
+test('the stored worker token can be read on demand without appearing in status', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { token: 'super-secret' })
+  const status = retailStatus(paths)
+  assert.equal(status.hasToken, true)
+  assert.equal(JSON.stringify(status).includes('super-secret'), false)
+  assert.equal(retailWorkerToken(paths), 'super-secret')
 })
 
 test('an empty token clears the stored one', async () => {

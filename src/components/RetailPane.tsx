@@ -3,7 +3,7 @@ import { Filter, Loader2, Search } from 'lucide-react'
 import { DisplaayMark } from '@/components/DisplaayMark'
 import { SettingsRow, SettingsSection, settingsSelectClass } from '@/components/SettingsRow'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { Input, PasswordInput } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { api } from '@/lib/api'
 import { startQueuedFontAction } from '@/lib/actionQueue'
@@ -517,6 +517,28 @@ export function RetailPane({
       {enabled ? (
         <>
       <SettingsRow
+        label="Check automatically"
+        htmlFor={autoCheckId}
+        description="How often to look for newer retail fonts. Checking never runs at startup."
+      >
+        <select
+          id={autoCheckId}
+          className={settingsSelectClass}
+          value={status?.autoCheckMinutes ?? DEFAULT_RETAIL_AUTOCHECK_MINUTES}
+          disabled={disabled}
+          onChange={(event) =>
+            void run(() => api.retail.configure({ autoCheckMinutes: Number(event.target.value) }))
+          }
+        >
+          {RETAIL_AUTOCHECK_CHOICES.map((choice) => (
+            <option key={choice.minutes} value={choice.minutes}>
+              {choice.label}
+            </option>
+          ))}
+        </select>
+      </SettingsRow>
+
+      <SettingsRow
         label="Worker address"
         htmlFor={urlId}
         description="The Displaay worker that serves the collection."
@@ -541,28 +563,6 @@ export function RetailPane({
       </SettingsRow>
 
       <SettingsRow
-        label="Check automatically"
-        htmlFor={autoCheckId}
-        description="How often to look for newer retail fonts. Checking never runs at startup."
-      >
-        <select
-          id={autoCheckId}
-          className={settingsSelectClass}
-          value={status?.autoCheckMinutes ?? DEFAULT_RETAIL_AUTOCHECK_MINUTES}
-          disabled={disabled}
-          onChange={(event) =>
-            void run(() => api.retail.configure({ autoCheckMinutes: Number(event.target.value) }))
-          }
-        >
-          {RETAIL_AUTOCHECK_CHOICES.map((choice) => (
-            <option key={choice.minutes} value={choice.minutes}>
-              {choice.label}
-            </option>
-          ))}
-        </select>
-      </SettingsRow>
-
-      <SettingsRow
         label="Worker token"
         htmlFor={tokenId}
         description={
@@ -572,14 +572,26 @@ export function RetailPane({
         }
       >
         <div className="flex max-w-[min(100%,22rem)] flex-wrap items-center justify-end gap-1.5">
-          <Input
+          <PasswordInput
             id={tokenId}
-            type="password"
             className="w-44"
             value={token}
             disabled={disabled}
             placeholder={status?.hasToken ? '••••••••' : 'Token'}
             onChange={(event) => setToken(event.target.value)}
+            onReveal={
+              status?.hasToken
+                ? async () => {
+                    if (token) return
+                    try {
+                      const result = await api.retail.token()
+                      setToken(result.token)
+                    } catch (caught) {
+                      setError(caught instanceof Error ? caught.message : 'Could not read the worker token.')
+                    }
+                  }
+                : undefined
+            }
           />
           <Button
             type="button"

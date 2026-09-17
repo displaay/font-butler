@@ -355,6 +355,8 @@ export const api = {
   resumeFolder: (id: string) => json<{ folder: WatchFolder }>(post('/api/folders/resume', { id })),
   retail: {
     status: () => get<{ status: RetailSyncStatus }>('/api/retail/status'),
+    // Status still reports `hasToken` only. This reads the stored token when the user reveals it.
+    token: () => get<{ token: string }>('/api/retail/token'),
     // `token` is write-only: the server stores it in a 0600 file and only ever reports `hasToken`.
     configure: (input: {
       enabled?: boolean

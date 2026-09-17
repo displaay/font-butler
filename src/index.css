@@ -132,6 +132,11 @@ body {
   background: color-mix(in srgb, var(--foreground) 12%, transparent);
 }
 
+[role='tooltip'] {
+  cursor: default;
+  user-select: none;
+}
+
 .preview-size-slider {
   -webkit-appearance: none;
   appearance: none;

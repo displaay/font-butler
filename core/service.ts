@@ -273,6 +273,7 @@ import {
   optOutRetailFamilies as optOutRetailFamiliesFn,
   resolveDropRetailCollisions as resolveDropRetailCollisionsFn,
   retailStatus as retailStatusFn,
+  retailWorkerToken as retailWorkerTokenFn,
   retailSyncNeedsResume as retailSyncNeedsResumeFn,
   syncRetail as syncRetailFn,
 } from './service-retail.ts'
@@ -2549,6 +2550,10 @@ export class FontButlerService {
   /** Optional Displaay retail collection. Delegated to `service-retail.ts` to keep this file navigable. */
   retailStatus(): RetailSyncStatus {
     return retailStatusFn(this.paths)
+  }
+
+  retailWorkerToken(): string {
+    return retailWorkerTokenFn(this.paths)
   }
 
   async configureRetailSync(input: {

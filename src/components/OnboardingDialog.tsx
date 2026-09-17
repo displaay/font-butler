@@ -12,7 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
+import { Input, PasswordInput } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { api } from '@/lib/api'
 import { APP_ICON_OPTIONS, appIconPreviewSrc, parseAppIconStyle, type AppIconStyle } from '@/lib/appIcon'
@@ -489,14 +489,25 @@ export function OnboardingDialog({
                         <Label htmlFor={tokenId} className="text-sm font-medium text-foreground">
                           Worker token
                         </Label>
-                        <Input
+                        <PasswordInput
                           id={tokenId}
-                          type="password"
                           value={retailToken}
                           disabled={locked}
                           placeholder={hasRetailToken ? '••••••••' : 'Token'}
-                          autoComplete="off"
                           onChange={(event) => setRetailToken(event.target.value)}
+                          onReveal={
+                            hasRetailToken
+                              ? async () => {
+                                  if (retailToken) return
+                                  try {
+                                    const result = await api.retail.token()
+                                    setRetailToken(result.token)
+                                  } catch {
+                                    // Keep the field visible; a missing token stays empty.
+                                  }
+                                }
+                              : undefined
+                          }
                         />
                       </div>
                     </div>

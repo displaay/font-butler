@@ -758,6 +758,8 @@ app.post('/api/import/apply', async (c) => {
 
 app.get('/api/retail/status', (c) => c.json({ status: service.retailStatus() }))
 
+app.get('/api/retail/token', (c) => c.json({ token: service.retailWorkerToken() }))
+
 app.post('/api/retail/configure', async (c) => {
   const body = await c.req.json<{
     enabled?: boolean

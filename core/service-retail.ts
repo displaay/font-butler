@@ -279,6 +279,11 @@ function emitRetail(paths: AppPaths): RetailSyncStatus {
   return status
 }
 
+/** Explicit reveal only. Status, settings, and retail events still never include the token. */
+export function retailWorkerToken(paths: AppPaths): string {
+  return readRetailToken(retailTokenPath(paths))
+}
+
 export async function configureRetailSync(
   paths: AppPaths,
   input: {

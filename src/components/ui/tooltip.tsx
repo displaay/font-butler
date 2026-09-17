@@ -17,6 +17,7 @@ function TooltipTrigger(props: ComponentProps<typeof TooltipPrimitive.Trigger>) 
 function TooltipContent({
   className,
   sideOffset = 6,
+  style,
   ...props
 }: ComponentProps<typeof TooltipPrimitive.Content>) {
   return (
@@ -24,9 +25,10 @@ function TooltipContent({
       <TooltipPrimitive.Content
         sideOffset={sideOffset}
         className={cn(
-          'z-50 rounded-md bg-primary px-2 py-1 text-xs text-primary-foreground shadow-none',
+          'z-50 pointer-events-auto cursor-default rounded-md bg-primary px-2 py-1 text-xs text-primary-foreground shadow-none select-none',
           className,
         )}
+        style={{ cursor: 'default', ...style }}
         {...props}
       />
     </TooltipPrimitive.Portal>
