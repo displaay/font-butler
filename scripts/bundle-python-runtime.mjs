@@ -98,16 +98,22 @@ async function verifyArchive(archive, name) {
   }
 }
 
+function stripMacXattrs(target) {
+  if (process.platform !== 'darwin') return
+  spawnSync('xattr', ['-cr', target], { stdio: 'ignore' })
+}
+
 function extract(archive) {
   fs.rmSync(destDir, { recursive: true, force: true })
   fs.mkdirSync(vendorDir, { recursive: true })
-  execFileSync('tar', ['-xzf', archive, '-C', vendorDir], { stdio: 'inherit' })
+  execFileSync('tar', ['-xzf', archive, '-C', vendorDir], {
+    stdio: 'inherit',
+    env: { ...process.env, COPYFILE_DISABLE: '1' },
+  })
   if (!fs.existsSync(pythonBin())) {
     throw new Error(`Extracted Python is missing ${pythonBin()}`)
   }
-  if (process.platform === 'darwin') {
-    spawnSync('xattr', ['-dr', 'com.apple.quarantine', destDir], { stdio: 'ignore' })
-  }
+  stripMacXattrs(destDir)
 }
 
 function installFonttools() {
@@ -246,6 +252,7 @@ function pruneRuntime() {
 
 if (alreadyBundled()) {
   copyPythonScripts()
+  stripMacXattrs(destDir)
   console.log(`[font-butler] bundled Python is current (${assetName()})`)
 } else {
   fs.mkdirSync(cacheDir, { recursive: true })
@@ -260,6 +267,7 @@ if (alreadyBundled()) {
   installFonttools()
   pruneRuntime()
   copyPythonScripts()
+  stripMacXattrs(destDir)
   fs.writeFileSync(markerPath, bundleId())
   console.log(`[font-butler] bundled Python + fonttools at ${destDir}`)
 }

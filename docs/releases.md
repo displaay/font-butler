@@ -49,11 +49,15 @@ Install and Switch are not part of this path. Offline, GitHub API failures, or a
    npm run dist
    ```
 
+   Do **not** set `CSC_IDENTITY_AUTO_DISCOVERY=false`. That skips signing and leaves Electron’s linker-signed binaries in an unsigned app bundle. Gatekeeper then reports the downloaded app as damaged until `xattr -cr`. `npm run dist` ad-hoc signs (`mac.identity: "-"`), strips copyable xattrs, and sets `COPYFILE_DISABLE=1` so resource forks are not packed.
+
    `npm run dist` does **not** publish. Artifacts land in `release/` as:
 
    `Font-Buttler-{version}-{arch}.{ext}`
 
-   Examples: `Font-Buttler-0.2.0-arm64.dmg`, `Font-Buttler-0.2.0-arm64.zip`. Ship both the **dmg** (people) and the **zip** (later `electron-updater`).
+   Examples: `Font-Buttler-0.3.1-arm64.dmg`, `Font-Buttler-0.3.1-arm64.zip`. Ship both the **dmg** (people) and the **zip** (later `electron-updater`).
+
+   A freshly downloaded dmg should open without `xattr -cr`. Gatekeeper may still ask the user to confirm an unidentified developer. Opening with **no** Gatekeeper prompt requires a Developer ID certificate and notarization; this repo has neither yet.
 
 5. Create a GitHub Release for that tag. Paste a changelog (Keep a Changelog / “What’s new” markdown). Attach the dmg and zip. Publish it (not a draft, not a prerelease) so `/releases/latest` returns it.
 
@@ -69,7 +73,7 @@ Auto-download and auto-install are **parked** (`autoInstall: "parked"` in the AP
 
 When signing lands:
 
-1. Sign and notarize the Mac app (`hardenedRuntime`, `entitlements`, notarize hook).
+1. Remove `mac.identity: "-"` so electron-builder uses a Developer ID certificate. Keep `hardenedRuntime` and the entitlements in `build/entitlements.mac.plist`. Add a notarize hook.
 2. Add `electron-updater` with the GitHub provider (`owner: displaay`, `repo: font-butler`). Keep **`autoDownload: false`** and **`autoInstallOnAppQuit: false`**.
 3. Keep the current **Download** / **Open release** path as the default.
 4. Add an explicit **Install {version}** action that is the only thing that may download, then install on quit.
