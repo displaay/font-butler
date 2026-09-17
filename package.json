@@ -2,7 +2,7 @@
   "name": "font-butler",
   "productName": "Font Buttler",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Source-tracked font manager for macOS",
   "author": "Font Buttler",
   "type": "module",
@@ -12,8 +12,8 @@
     "server": "FONT_BUTLER_DEV_BOOTSTRAP=1 tsx server/index.ts",
     "electron": "concurrently -k -n server,vite,app -c cyan,magenta,green \"npm run server\" \"vite\" \"wait-on http://127.0.0.1:43181 http-get://127.0.0.1:43182/api/health && electron .\"",
     "build": "tsc -b && vite build && node scripts/bundle-server.mjs",
-    "bundle:python": "node scripts/bundle-python-runtime.mjs",
-    "dist": "npm run build && npm run bundle:python && electron-builder --mac --publish never",
+    "bundle:python": "COPYFILE_DISABLE=1 node scripts/bundle-python-runtime.mjs",
+    "dist": "COPYFILE_DISABLE=1 npm run build && npm run bundle:python && COPYFILE_DISABLE=1 electron-builder --mac --publish never",
     "preview": "vite preview --host 127.0.0.1 --port 43181",
     "lint": "oxlint",
     "test": "FONT_BUTLER_TEST=1 tsx --test --test-concurrency=1 core/**/*.test.ts src/**/*.test.ts electron/**/*.test.mjs",
@@ -87,6 +87,8 @@
         ]
       }
     ],
+    "afterPack": "./scripts/strip-mac-xattrs.mjs",
+    "afterAllArtifactBuild": "./scripts/strip-mac-xattrs.mjs",
     "directories": {
       "output": "release"
     },
@@ -98,6 +100,9 @@
       "releaseType": "release"
     },
     "mac": {
+      "identity": "-",
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
       "icon": "build/icon.icns",
       "category": "public.app-category.utilities",
       "extendInfo": {
