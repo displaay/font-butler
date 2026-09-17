@@ -12,6 +12,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { api } from '@/lib/api'
 import {
@@ -246,9 +247,10 @@ export function GlyphGrid({ entry }: { entry: CatalogEntry }) {
           </span>
         </label>
       </div>
-      <div
-        ref={scrollerRef}
-        className="min-h-0 w-full flex-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      <ScrollArea
+        className="overlay-scroll-on-scroll min-h-0 w-full flex-1"
+        overlay
+        viewportRef={scrollerRef}
       >
         {shown.length === 0 ? (
           <p className="text-sm text-muted-foreground">No matching glyphs.</p>
@@ -302,7 +304,7 @@ export function GlyphGrid({ entry }: { entry: CatalogEntry }) {
             </div>
           </TooltipProvider>
         )}
-      </div>
+      </ScrollArea>
       <GlyphPreviewDialog
         entryId={entry.id}
         which={which}

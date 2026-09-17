@@ -9,6 +9,7 @@ import { InstanceList, type InstanceActions } from '@/components/InstanceList'
 import { SpecimenWorkspace } from '@/components/SpecimenWorkspace'
 import { DropdownActionButton, SplitInstallButton, SplitUninstallButton, type SplitUninstallExtra } from '@/components/SplitUninstallButton'
 import { Button } from '@/components/ui/button'
+import { ScrollArea } from '@/components/ui/scroll-area'
 import { usePreviewFontReady } from '@/hooks/usePreviewFontReady'
 import { api } from '@/lib/api'
 import { activateActionLabel, catalogBatchPlan, deactivateActionLabel, deleteSourcesLabel, forgetSourcesLabel } from '@/lib/batch'
@@ -148,7 +149,9 @@ export function Inspector({
 }) {
   if (multiSelect && multiSelect.names.length > 1) {
     return (
-      <aside className={cn(inspectorShellClass(), 'gap-4 overflow-y-auto p-5')}>
+      <aside className={inspectorShellClass()}>
+        <ScrollArea className="overlay-scroll-on-scroll min-h-0 flex-1" overlay>
+          <div className="flex flex-col gap-4 p-5">
         <div>
           <h2 className="text-base font-semibold tracking-tight">
             {multiSelect.names.length} selected
@@ -205,6 +208,8 @@ export function Inspector({
             onBake={onBake}
           />
         ) : null}
+          </div>
+        </ScrollArea>
       </aside>
     )
   }
@@ -659,14 +664,15 @@ function InspectorLayout({
       <div
         id={`${tablistId}-panel`}
         role="tabpanel"
-        className={cn(
-          'min-h-0 flex-1 p-5',
-          glyphsTab
-            ? 'overflow-hidden'
-            : 'overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
-        )}
+        className="min-h-0 flex-1 overflow-hidden"
       >
-        {panel}
+        {glyphsTab ? (
+          <div className="flex h-full min-h-0 flex-col p-5">{panel}</div>
+        ) : (
+          <ScrollArea className="overlay-scroll-on-scroll h-full" overlay>
+            <div className="p-5">{panel}</div>
+          </ScrollArea>
+        )}
       </div>
     </div>
   )

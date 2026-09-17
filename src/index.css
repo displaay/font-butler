@@ -176,6 +176,37 @@ body {
   background: var(--border);
 }
 
+.overlay-scroll [data-radix-scroll-area-viewport] {
+  scrollbar-width: none;
+  overflow-y: scroll !important;
+}
+
+.overlay-scroll [data-radix-scroll-area-viewport]::-webkit-scrollbar {
+  display: none;
+}
+
+.overlay-scroll-hover .overlay-scroll-bar {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.sidebar-column:hover .overlay-scroll-hover .overlay-scroll-bar {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.overlay-scroll-on-scroll .overlay-scroll-bar {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms ease;
+}
+
+.overlay-scroll-on-scroll.is-scrolling .overlay-scroll-bar {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 [data-sonner-toaster] {
   font-family: var(--font-sans);
 }

@@ -33,6 +33,7 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   ContextMenu,
   ContextMenuCheckboxItem,
@@ -526,13 +527,10 @@ export function Sidebar({
   }
 
   return (
-    <aside
-      className={cn(
-        'flex h-auto w-full shrink-0 flex-col border-b bg-sidebar text-sidebar-foreground md:h-full md:max-h-full md:w-56 md:border-r md:border-b-0',
-        insetTrafficLights && 'app-region-drag',
-      )}
-    >
-      {insetTrafficLights ? <div className="hidden h-10 shrink-0 md:block" aria-hidden /> : null}
+    <aside className="sidebar-column flex h-auto w-full shrink-0 flex-col border-b bg-sidebar text-sidebar-foreground md:h-full md:max-h-full md:w-56 md:border-r md:border-b-0">
+      {insetTrafficLights ? (
+        <div className="app-region-drag hidden h-10 shrink-0 md:block" aria-hidden />
+      ) : null}
       <div className="flex flex-col gap-3 px-3 pt-3 pb-2">
         <div className="relative">
           <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -546,7 +544,8 @@ export function Sidebar({
           />
         </div>
       </div>
-      <nav className="flex min-h-0 flex-1 flex-row flex-wrap gap-0.5 overflow-y-auto px-3 pb-2 md:flex-col md:flex-nowrap">
+      <ScrollArea className="overlay-scroll-hover min-h-0 flex-1" overlay>
+        <nav className="flex flex-row flex-wrap gap-0.5 px-3 pb-2 md:flex-col md:flex-nowrap">
         {TABS.filter(
           (item) =>
             item.id !== 'updates' ||
@@ -1088,6 +1087,7 @@ export function Sidebar({
           </div>
         )}
       </nav>
+      </ScrollArea>
       <div className="border-t px-3 py-2">
         <Button
           variant="ghost"
