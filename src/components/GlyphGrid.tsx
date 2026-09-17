@@ -61,6 +61,7 @@ export function GlyphGrid({ entry }: { entry: CatalogEntry }) {
   const [contain, setContain] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
   const scrollerRef = useRef<HTMLDivElement>(null)
+  const gridRef = useRef<HTMLDivElement>(null)
   const [viewport, setViewport] = useState({ width: 0, height: 0, scrollTop: 0 })
   const which = hasManagedInstall(entry) ? 'installed' : 'source'
 
@@ -91,7 +92,7 @@ export function GlyphGrid({ entry }: { entry: CatalogEntry }) {
     function sync() {
       if (!node) return
       setViewport({
-        width: node.clientWidth,
+        width: gridRef.current?.clientWidth ?? node.clientWidth,
         height: node.clientHeight,
         scrollTop: node.scrollTop,
       })
@@ -100,12 +101,13 @@ export function GlyphGrid({ entry }: { entry: CatalogEntry }) {
     sync()
     const observer = new ResizeObserver(sync)
     observer.observe(node)
+    if (gridRef.current) observer.observe(gridRef.current)
     node.addEventListener('scroll', sync, { passive: true })
     return () => {
       observer.disconnect()
       node.removeEventListener('scroll', sync)
     }
-  }, [points, cell, searchOpen])
+  }, [points, cell, searchOpen, query, contain])
 
   const shown = useMemo(() => filterGlyphs(points ?? [], query, contain), [points, query, contain])
   const { columns, track } = glyphGridLayout(viewport.width, cell, GAP)
@@ -155,23 +157,23 @@ export function GlyphGrid({ entry }: { entry: CatalogEntry }) {
 
   if (points === null) {
     return (
-      <div className="flex h-full min-h-48 items-center justify-center" role="status" aria-label="Loading glyphs">
+      <div className="flex h-full min-h-48 items-center justify-center p-5" role="status" aria-label="Loading glyphs">
         <Loader2 className="size-6 animate-spin text-muted-foreground/70 motion-reduce:animate-none" />
       </div>
     )
   }
 
   if (failed) {
-    return <p className="text-sm text-muted-foreground">Could not read glyphs from this font.</p>
+    return <p className="p-5 text-sm text-muted-foreground">Could not read glyphs from this font.</p>
   }
 
   if (points.length === 0) {
-    return <p className="text-sm text-muted-foreground">No glyphs to show for this font.</p>
+    return <p className="p-5 text-sm text-muted-foreground">No glyphs to show for this font.</p>
   }
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col gap-3">
-      <div className="flex shrink-0 items-center justify-between gap-3">
+    <div className="flex h-full min-h-0 w-full flex-col">
+      <div className="flex shrink-0 items-center justify-between gap-3 px-5 pt-5 pb-3">
         <div className="flex min-w-0 flex-1 items-center gap-1.5">
           <p className="shrink-0 text-sm text-muted-foreground">
             {query.trim()
@@ -252,11 +254,12 @@ export function GlyphGrid({ entry }: { entry: CatalogEntry }) {
         overlay
         viewportRef={scrollerRef}
       >
+        <div className="px-5 pb-5">
         {shown.length === 0 ? (
           <p className="text-sm text-muted-foreground">No matching glyphs.</p>
         ) : (
           <TooltipProvider delayDuration={400} skipDelayDuration={200}>
-            <div className="relative w-full" style={{ height: totalHeight }}>
+            <div ref={gridRef} className="relative w-full" style={{ height: totalHeight }}>
               {visibleRows.map((row, offset) => {
                 const index = start + offset
                 const top = tops[index]
@@ -304,6 +307,7 @@ export function GlyphGrid({ entry }: { entry: CatalogEntry }) {
             </div>
           </TooltipProvider>
         )}
+        </div>
       </ScrollArea>
       <GlyphPreviewDialog
         entryId={entry.id}

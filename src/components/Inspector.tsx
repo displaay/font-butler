@@ -667,7 +667,7 @@ function InspectorLayout({
         className="min-h-0 flex-1 overflow-hidden"
       >
         {glyphsTab ? (
-          <div className="flex h-full min-h-0 flex-col p-5">{panel}</div>
+          <div className="flex h-full min-h-0 flex-col">{panel}</div>
         ) : (
           <ScrollArea className="overlay-scroll-on-scroll h-full" overlay>
             <div className="p-5">{panel}</div>

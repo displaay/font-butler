@@ -23,6 +23,7 @@ import { RetailDisableDialog } from '@/components/RetailDisableDialog'
 import { RetailPane } from '@/components/RetailPane'
 import { SettingsRow, SettingsSection, settingsSelectClass } from '@/components/SettingsRow'
 import { Button } from '@/components/ui/button'
+import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   Dialog,
   DialogContent,
@@ -402,8 +403,10 @@ export function SettingsDialog({
               role="tabpanel"
               id={`${tablistId}-panel`}
               aria-labelledby={`${tablistId}-${selected.id}`}
-              className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+              className="min-h-0 flex-1 overflow-hidden"
             >
+              <ScrollArea className="overlay-scroll-on-scroll h-full" overlay>
+                <div className="overscroll-contain px-5 py-4">
               {category === 'general' && (
                 <GeneralPane
                   settings={settings}
@@ -460,6 +463,8 @@ export function SettingsDialog({
               {category === 'history' && (
                 <HistoryPane settings={settings} busy={busy} onSave={save} />
               )}
+                </div>
+              </ScrollArea>
             </div>
           </div>
         </div>
