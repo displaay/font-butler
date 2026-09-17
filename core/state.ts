@@ -129,9 +129,7 @@ export function displayStateParts(entry: CatalogEntry): string[] {
     if (destinations) parts.push(destinations)
   }
   const availability = entry.sourceAvailability ?? deriveSourceAvailability(entry)
-  if (availability === 'missing') {
-    parts.push('Source missing')
-  } else if (availability === 'offline') {
+  if (availability === 'offline') {
     parts.push('Source drive offline')
   } else if (availability === 'unreadable') {
     parts.push('Source unreadable')

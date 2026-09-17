@@ -168,8 +168,7 @@ export function NameWithFormatTags({
 export function StatusBadge({ status }: { status: FontStatus }) {
   if (status === 'outdated') return <Badge tone="warn">Update available</Badge>
   if (status === 'deactivated') return <Badge>Deactivated</Badge>
-  if (status === 'source-missing') return <Badge tone="accent">Source missing</Badge>
-  if (status === 'uninstalled') return <Badge>Not installed</Badge>
+  if (status === 'uninstalled' || status === 'source-missing') return <Badge>Not installed</Badge>
   return null
 }
 

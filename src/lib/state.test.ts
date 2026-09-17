@@ -74,7 +74,7 @@ test('isNotInstalledLabel is only true for library-only uninstalled fonts', () =
 test('displayStateLabel compounds installation and source facts', () => {
   assert.equal(
     displayStateLabel(entry({ sourceAvailability: 'missing', status: 'installed' })),
-    'Installed · Source missing',
+    'Installed',
   )
   assert.equal(
     displayStateLabel(

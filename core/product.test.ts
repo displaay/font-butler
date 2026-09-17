@@ -46,7 +46,7 @@ test('F01 display state keeps installation and source facts independent', () => 
         sourcePresent: false,
       }),
     ),
-    /Installed · Source missing/,
+    /^Installed$/,
   )
   assert.match(
     displayStateLabel(

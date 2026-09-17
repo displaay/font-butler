@@ -72,9 +72,7 @@ export function displayStateParts(entry: CatalogEntry): string[] {
     parts.push('Installed')
   }
   const availability = entry.sourceAvailability
-  if (availability === 'missing' || entry.status === 'source-missing') {
-    parts.push('Source missing')
-  } else if (availability === 'offline') {
+  if (availability === 'offline') {
     parts.push('Source drive offline')
   } else if (availability === 'unreadable') {
     parts.push('Source unreadable')

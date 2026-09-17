@@ -814,13 +814,6 @@ function SourceStateCopy({ entry }: { entry: CatalogEntry }) {
       </div>
     )
   }
-  if (entry.sourceAvailability === 'missing' || entry.status === 'source-missing') {
-    return (
-      <div className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
-        The source file is missing. Locate it to keep this record, or remove it from the list.
-      </div>
-    )
-  }
   return null
 }
 
