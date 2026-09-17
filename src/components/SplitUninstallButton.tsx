@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronDown, CircleMinus, FolderOpen, Trash2 } from 'lucide-react'
+import { ChevronDown, CircleMinus, CirclePlus, FolderOpen, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
@@ -119,6 +119,131 @@ function PortaledMenu({
   )
 }
 
+type SplitActionVariant = 'destructive' | 'success'
+
+const splitChevronBorder: Record<SplitActionVariant, string> = {
+  destructive: 'border-l !border-red-200/70 dark:!border-red-500/20',
+  success: 'border-l !border-emerald-200/70 dark:!border-emerald-500/20',
+}
+
+const splitMenuItemClass: Record<SplitActionVariant, string> = {
+  destructive: 'text-destructive hover:bg-red-100 dark:hover:bg-red-500/20',
+  success: 'hover:bg-muted',
+}
+
+function SplitActionButton({
+  busy,
+  variant,
+  icon,
+  label,
+  extras,
+  onClick,
+  chevronLabel,
+  menuPlacement = 'down',
+  menuAlign = 'end',
+  extraFallbackIcon,
+}: {
+  busy: boolean
+  variant: SplitActionVariant
+  icon: ReactNode
+  label: string
+  extras: SplitUninstallExtra[]
+  onClick: () => void
+  chevronLabel: string
+  menuPlacement?: 'up' | 'down'
+  menuAlign?: MenuAlign
+  extraFallbackIcon: ReactNode
+}) {
+  const { open, setOpen, rootRef, menuRef, coords } = useAnchoredMenu(menuPlacement, menuAlign)
+
+  if (extras.length === 0) {
+    return (
+      <Button size="sm" variant={variant} disabled={busy} onClick={onClick}>
+        {icon} {label}
+      </Button>
+    )
+  }
+
+  return (
+    <div ref={rootRef} data-keep-selection="" className="inline-flex">
+      <Button
+        size="sm"
+        variant={variant}
+        disabled={busy}
+        className="rounded-r-none"
+        onClick={onClick}
+      >
+        {icon} {label}
+      </Button>
+      <Button
+        size="sm"
+        variant={variant}
+        disabled={busy}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={chevronLabel}
+        className={cn('rounded-l-none px-1.5', splitChevronBorder[variant])}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <ChevronDown />
+      </Button>
+      {open ? (
+        <PortaledMenu menuRef={menuRef} coords={coords} className="min-w-52">
+          {extras.map((item) => (
+            <div key={item.key}>
+              {item.separatorBefore ? <div className="my-1 h-px bg-border" role="separator" /> : null}
+              <button
+                type="button"
+                role="menuitem"
+                className={cn(
+                  'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none',
+                  splitMenuItemClass[variant],
+                )}
+                onClick={() => {
+                  setOpen(false)
+                  item.onSelect()
+                }}
+              >
+                {item.icon ?? extraFallbackIcon}
+                {item.label}
+              </button>
+            </div>
+          ))}
+        </PortaledMenu>
+      ) : null}
+    </div>
+  )
+}
+
+export function SplitInstallButton({
+  busy,
+  label,
+  extras,
+  onInstall,
+  menuPlacement = 'down',
+}: {
+  busy: boolean
+  label: string
+  extras: SplitUninstallExtra[]
+  onInstall: () => void
+  menuPlacement?: 'up' | 'down'
+}) {
+  return (
+    <SplitActionButton
+      busy={busy}
+      variant="success"
+      icon={<CirclePlus />}
+      label={label}
+      extras={extras}
+      onClick={onInstall}
+      chevronLabel="More install actions"
+      menuPlacement={menuPlacement}
+      menuAlign="start"
+      extraFallbackIcon={<CirclePlus className="size-4 shrink-0" />}
+    />
+  )
+}
+
 export function SplitUninstallButton({
   busy,
   uninstallLabel,
@@ -132,61 +257,18 @@ export function SplitUninstallButton({
   onUninstall: () => void
   menuPlacement?: 'up' | 'down'
 }) {
-  const { open, setOpen, rootRef, menuRef, coords } = useAnchoredMenu(menuPlacement, 'end')
-
-  if (extras.length === 0) {
-    return (
-      <Button size="sm" variant="destructive" disabled={busy} onClick={onUninstall}>
-        <CircleMinus /> {uninstallLabel}
-      </Button>
-    )
-  }
-
   return (
-    <div ref={rootRef} data-keep-selection="" className="inline-flex">
-      <Button
-        size="sm"
-        variant="destructive"
-        disabled={busy}
-        className="rounded-r-none"
-        onClick={onUninstall}
-      >
-        <CircleMinus /> {uninstallLabel}
-      </Button>
-      <Button
-        size="sm"
-        variant="destructive"
-        disabled={busy}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label="More uninstall actions"
-        className="rounded-l-none border-l !border-red-200/70 px-1.5 dark:!border-red-500/20"
-        onClick={() => setOpen((value) => !value)}
-      >
-        <ChevronDown />
-      </Button>
-      {open ? (
-        <PortaledMenu menuRef={menuRef} coords={coords} className="min-w-52">
-          {extras.map((item) => (
-            <div key={item.key}>
-              {item.separatorBefore ? <div className="my-1 h-px bg-border" role="separator" /> : null}
-              <button
-                type="button"
-                role="menuitem"
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-destructive outline-none hover:bg-red-100 dark:hover:bg-red-500/20"
-                onClick={() => {
-                  setOpen(false)
-                  item.onSelect()
-                }}
-              >
-                {item.icon ?? <Trash2 className="size-4 shrink-0" />}
-                {item.label}
-              </button>
-            </div>
-          ))}
-        </PortaledMenu>
-      ) : null}
-    </div>
+    <SplitActionButton
+      busy={busy}
+      variant="destructive"
+      icon={<CircleMinus />}
+      label={uninstallLabel}
+      extras={extras}
+      onClick={onUninstall}
+      chevronLabel="More uninstall actions"
+      menuPlacement={menuPlacement}
+      extraFallbackIcon={<Trash2 className="size-4 shrink-0" />}
+    />
   )
 }
 

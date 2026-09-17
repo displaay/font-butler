@@ -2323,6 +2323,12 @@ function AppShell() {
                   plan={catalogPlan}
                   busy={busy}
                   onInstall={() => void installSelected()}
+                  onInstallAs={() => {
+                    const group = catalogSelection[0]
+                    if (!group) return
+                    setBakeRenameFeatures(null)
+                    setRenameEntry(selectedEntry ?? group.entries[0])
+                  }}
                   onActivate={() => void activateSelected()}
                   onDeactivate={() => void deactivateSelected()}
                   onUninstall={() => void uninstallSelected()}

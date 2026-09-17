@@ -168,6 +168,7 @@ export function familyCardPlan(group: FamilyGroup, adobeAvailable = true): Catal
   if (
     plan.deactivate === 0 &&
     plan.uninstall === 0 &&
+    plan.uninstallAndRemove === 0 &&
     plan.activate === 0 &&
     plan.reinstall === 0
   ) {
@@ -177,6 +178,7 @@ export function familyCardPlan(group: FamilyGroup, adobeAvailable = true): Catal
     ...plan,
     deactivate: 0,
     uninstall: 0,
+    uninstallAndRemove: 0,
     activate: 0,
     activateFormat: undefined,
     partialActiveStyles: undefined,

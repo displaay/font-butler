@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowLeftRight, CircleMinus, CirclePlus, ListX, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
 import { AdobeLogo } from '@/components/Badges'
 import { Button } from '@/components/ui/button'
-import { SplitUninstallButton, type SplitUninstallExtra } from '@/components/SplitUninstallButton'
+import { SplitInstallButton, SplitUninstallButton, type SplitUninstallExtra } from '@/components/SplitUninstallButton'
 import {
   ContextMenuItem,
   ContextMenuSeparator,
@@ -33,6 +33,7 @@ export function CatalogBatchButtons({
   plan,
   busy,
   onInstall,
+  onInstallAs,
   onActivate,
   onDeactivate,
   onUninstall,
@@ -49,6 +50,7 @@ export function CatalogBatchButtons({
   plan: CatalogBatchPlan
   busy: boolean
   onInstall: () => void
+  onInstallAs?: () => void
   onActivate: () => void
   onDeactivate: () => void
   onUninstall: () => void
@@ -102,9 +104,17 @@ export function CatalogBatchButtons({
         </Button>
       )}
       {plan.install > 0 && (
-        <Button size="sm" variant="success" disabled={busy} onClick={onInstall}>
-          <CirclePlus /> {installActionLabel(plan, multi)}
-        </Button>
+        <SplitInstallButton
+          busy={busy}
+          label={installActionLabel(plan, multi)}
+          extras={
+            plan.count === 1 && onInstallAs
+              ? [{ key: 'install-as', label: 'Install as…', onSelect: onInstallAs }]
+              : []
+          }
+          onInstall={onInstall}
+          menuPlacement={splitMenuPlacement}
+        />
       )}
       {plan.activate > 0 && (
         <Button size="sm" disabled={busy} onClick={onActivate}>

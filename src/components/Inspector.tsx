@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
-import { ArrowLeftRight, CircleMinus, CirclePlus, FolderOpen, Link2, ListX, Loader2, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
+import { ArrowLeftRight, CircleMinus, FolderOpen, Link2, ListX, Loader2, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
 import { CatalogBatchButtons, SystemBatchButtons } from '@/components/BatchActions'
 import { SourceBadge, RetailBadge, StateBadges, FormatBadges, AdobeLogo } from '@/components/Badges'
 import { Badge } from '@/components/ui/badge'
@@ -7,7 +7,7 @@ import { systemFontFamily } from '@/components/FontFaceStyles'
 import { GlyphGrid } from '@/components/GlyphGrid'
 import { InstanceList, type InstanceActions } from '@/components/InstanceList'
 import { SpecimenWorkspace } from '@/components/SpecimenWorkspace'
-import { DropdownActionButton, SplitUninstallButton, type SplitUninstallExtra } from '@/components/SplitUninstallButton'
+import { DropdownActionButton, SplitInstallButton, SplitUninstallButton, type SplitUninstallExtra } from '@/components/SplitUninstallButton'
 import { Button } from '@/components/ui/button'
 import { usePreviewFontReady } from '@/hooks/usePreviewFontReady'
 import { api } from '@/lib/api'
@@ -361,7 +361,7 @@ export function Inspector({
           separatorBefore: index === 0 && plan.adobeUninstall > 0 && Boolean(onUninstallFromAdobe),
         }))
       : []),
-    hasTrackedSource(group) && onUninstallAndRemove
+    plan.uninstallAndRemove > 0 && onUninstallAndRemove
       ? {
           key: 'uninstall-and-delete',
           label: 'Uninstall and delete sources',
@@ -379,7 +379,7 @@ export function Inspector({
           separatorBefore:
             (Boolean(onUninstallFormat && mixedFormats.length >= 2) ||
               (plan.adobeUninstall > 0 && Boolean(onUninstallFromAdobe))) &&
-            !(hasTrackedSource(group) && onUninstallAndRemove),
+            !(plan.uninstallAndRemove > 0 && onUninstallAndRemove),
         }
       : null,
   ] as Array<SplitUninstallExtra | null>).filter(
@@ -430,9 +430,18 @@ export function Inspector({
               </Button>
             )}
             {plan.install > 0 && (
-              <Button size="sm" variant="success" disabled={busy} onClick={onInstall}>
-                <CirclePlus /> {plan.installMissing ? 'Install missing styles' : 'Install'}
-              </Button>
+              <SplitInstallButton
+                busy={busy}
+                label={plan.installMissing ? 'Install missing styles' : 'Install'}
+                extras={[
+                  {
+                    key: 'install-as',
+                    label: 'Install as…',
+                    onSelect: onInstallAs,
+                  },
+                ]}
+                onInstall={onInstall}
+              />
             )}
             {plan.activate > 0 && (
               <Button size="sm" disabled={busy} onClick={onActivate}>
@@ -449,16 +458,6 @@ export function Inspector({
                 <AdobeLogo className="size-3.5" /> Install to Adobe folder
               </Button>
             ) : null}
-            {plan.install > 0 && (
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={busy}
-                onClick={onInstallAs}
-              >
-                <CirclePlus /> Install as…
-              </Button>
-            )}
             {onSwitch && (
               <Button size="sm" disabled={busy} onClick={onSwitch}>
                 <ArrowLeftRight /> Switch
@@ -477,7 +476,7 @@ export function Inspector({
                 onUninstall={onUninstall}
               />
             )}
-            {plan.uninstall === 0 && hasTrackedSource(group) && onUninstallAndRemove ? (
+            {plan.uninstall === 0 && plan.uninstallAndRemove > 0 && onUninstallAndRemove ? (
               <Button size="sm" variant="destructive" disabled={busy} onClick={onUninstallAndRemove}>
                 <Trash2 /> Uninstall and delete sources
               </Button>

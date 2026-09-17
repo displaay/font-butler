@@ -124,8 +124,23 @@ test('familyCardPlan never offers Deactivate on a not-installed family card', ()
   assert.equal(plan.install, 2)
   assert.equal(plan.deactivate, 0)
   assert.equal(plan.uninstall, 0)
+  assert.equal(plan.uninstallAndRemove, 0)
   assert.equal(plan.activate, 0)
   assert.equal(plan.reinstall, 0)
+})
+
+test('catalogBatchPlan does not uninstall-and-delete a not-installed family', () => {
+  const groups = groupCatalog([
+    entry('light', 'Jokker', 'uninstalled', 'Light'),
+    entry('bold', 'Jokker', 'uninstalled', 'Bold'),
+  ])
+  const plan = catalogBatchPlan(groups)
+  assert.equal(isNotInstalledLabel(familyBadgeEntry(groups[0]!)), true)
+  assert.equal(plan.uninstall, 0)
+  assert.equal(plan.uninstallAndRemove, 0)
+  assert.equal(plan.deleteFiles, 1)
+  assert.equal(plan.forget, 1)
+  assert.equal(plan.install > 0, true)
 })
 
 test('familyCardPlan still deactivates an installed family', () => {
