@@ -1,9 +1,27 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, nativeImage, nativeTheme, shell, Tray, utilityProcess } from 'electron'
+import { spawn } from 'node:child_process'
 import fs from 'node:fs'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readApiTokenFile } from './api-token.mjs'
 import { isAllowedAppUpdateUrl, trayTooltip } from './app-update.mjs'
+import {
+  collectFinderFontPaths,
+  createFinderJobQueue,
+  destinationChoices,
+  familyNamePromptScript,
+  finderInstallIssues,
+  FINDER_INSTALL_AS,
+  FINDER_LINK_TO,
+  FINDER_PROTOCOL,
+  formatFinderInstallIssues,
+  groupIdsByFormat,
+  idsEligibleForFinderInstall,
+  parseFinderInstallUrl,
+  parseFinderLaunch,
+  suggestedFamilyName,
+} from './finder-install.mjs'
 import { deliverNativeNotice, electronNotificationPermission } from './notify.mjs'
 import {
   buildTrayMenuModel,
@@ -14,6 +32,7 @@ import {
 } from './updates-menu.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const require = createRequire(import.meta.url)
 const DEFAULT_API_PORT = 43182
 let API = process.env.FONT_BUTLER_API ?? process.env.FONTCASE_API ?? `http://127.0.0.1:${DEFAULT_API_PORT}`
 let UI =
@@ -88,6 +107,7 @@ let lastNoticeKey = ''
 let lastNoticeAt = 0
 let isQuitting = false
 const queuedFiles = []
+const finderJobs = createFinderJobQueue((action, filePaths) => runFinderJob(action, filePaths))
 /** @type {null | { updateAvailable?: boolean, latestVersion?: string, htmlUrl?: string | null, releaseNotes?: string | null }} */
 let appUpdate = null
 const APP_UPDATE_POLL_MS = 6 * 60 * 60 * 1000
@@ -262,32 +282,236 @@ function createWindow() {
   })
 }
 
+async function postApi(pathname, body) {
+  const token = await ensureApiToken()
+  const response = await fetch(`${API}${pathname}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
+  })
+  const rawBody = await response.text()
+  let data = {}
+  try {
+    data = rawBody ? JSON.parse(rawBody) : {}
+  } catch {
+    data = {}
+  }
+  if (!response.ok) {
+    throw new Error(data.error || `Request failed (HTTP ${response.status})`)
+  }
+  return data
+}
+
+async function getApi(pathname) {
+  await ensureApiToken()
+  const response = await fetch(`${API}${pathname}`, {
+    headers: apiHeaders(),
+  })
+  const rawBody = await response.text()
+  let data = {}
+  try {
+    data = rawBody ? JSON.parse(rawBody) : {}
+  } catch {
+    data = {}
+  }
+  if (!response.ok) {
+    throw new Error(data.error || `Request failed (HTTP ${response.status})`)
+  }
+  return data
+}
+
 async function openFont(filePath) {
   try {
-    const token = await ensureApiToken()
-    const response = await fetch(`${API}/api/open`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ path: filePath }),
-    })
-    const rawBody = await response.text()
-    let data = {}
-    try {
-      data = rawBody ? JSON.parse(rawBody) : {}
-    } catch {
-      data = {}
-    }
-    if (!response.ok) {
-      throw new Error(data.error || `Could not open font (HTTP ${response.status})`)
-    }
+    await postApi('/api/open', { path: filePath })
   } catch (error) {
     console.error('Failed to open font', error)
     dialog.showErrorBox(
       'Could not open font',
       error instanceof Error ? error.message : 'Could not open font',
+    )
+  }
+  showMainWindow()
+}
+
+function enqueueFinderJob(action, filePaths) {
+  return finderJobs.enqueue(action, filePaths)
+}
+
+function registerNativeFinderServices() {
+  if (process.platform !== 'darwin') return false
+  try {
+    const addon = require('./finder-services.node')
+    addon.register((action, filePaths) => {
+      enqueueFinderJob(action, filePaths)
+    })
+    return true
+  } catch (error) {
+    if (error && error.code !== 'MODULE_NOT_FOUND') {
+      console.error('Finder services provider is not loaded', error)
+    }
+    return false
+  }
+}
+
+function runOsascript(script) {
+  return new Promise((resolve) => {
+    const child = spawn('osascript', [], { stdio: ['pipe', 'pipe', 'pipe'] })
+    let stdout = ''
+    child.stdout.on('data', (chunk) => {
+      stdout += String(chunk)
+    })
+    child.on('error', () => resolve(''))
+    child.on('close', () => resolve(stdout.trim()))
+    child.stdin.write(script)
+    child.stdin.end()
+  })
+}
+
+async function promptFinderInstallAs(entries) {
+  let destinations = []
+  try {
+    const data = await getApi('/api/destinations')
+    destinations = data.destinations ?? []
+  } catch {
+    destinations = []
+  }
+  const choices = destinationChoices(destinations)
+  let destinationIds = choices[0]?.destinationIds
+  if (choices.length > 1) {
+    const buttons = [...choices.map((item) => item.label), 'Cancel']
+    const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined
+    const options = {
+      type: 'question',
+      title: 'Install as…',
+      message: 'Where should Font Buttler install the renamed copy?',
+      detail: 'Font Buttler then asks for a family name. The original file is not changed.',
+      buttons,
+      defaultId: 0,
+      cancelId: buttons.length - 1,
+    }
+    const choice = parent
+      ? await dialog.showMessageBox(parent, options)
+      : await dialog.showMessageBox(options)
+    if (choice.response === buttons.length - 1) return null
+    destinationIds = choices[choice.response]?.destinationIds
+  }
+  const suggested = suggestedFamilyName(entries)
+  const familyName = (await runOsascript(familyNamePromptScript(suggested))).trim()
+  if (!familyName) return null
+  return { familyName, destinationIds }
+}
+
+async function runFinderJob(action, filePaths) {
+  if (action === FINDER_LINK_TO) {
+    runFinderLinkTo(filePaths)
+    return
+  }
+  await runFinderInstall(action, filePaths)
+}
+
+function runFinderLinkTo(filePaths) {
+  const collected = collectFinderFontPaths(filePaths, {
+    existsSync: fs.existsSync,
+    statSync: (filePath) => fs.statSync(filePath),
+    includeWeb: true,
+    allowDirectories: false,
+  })
+  if (collected.paths.length === 0) {
+    const message = collected.missing.length
+      ? 'Those font files could not be found.'
+      : 'No font files in that selection.'
+    dialog.showErrorBox('Link to …', message)
+    showMainWindow()
+    return
+  }
+  sendWhenReady('finder-link-to', { paths: collected.paths })
+}
+
+function finderInstallTitle(action) {
+  return action === FINDER_INSTALL_AS ? 'Install as…' : 'Install'
+}
+
+async function showFinderInstallIssues(action, issues, installed) {
+  const message = formatFinderInstallIssues(issues, { installed })
+  if (!message) return
+  const title = finderInstallTitle(action)
+  const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined
+  const options = {
+    type: installed > 0 ? 'warning' : 'error',
+    title,
+    message,
+    buttons: ['OK'],
+  }
+  if (parent) await dialog.showMessageBox(parent, options)
+  else await dialog.showMessageBox(options)
+}
+
+async function runFinderInstall(action, filePaths) {
+  const collected = collectFinderFontPaths(filePaths, {
+    existsSync: fs.existsSync,
+    statSync: (filePath) => fs.statSync(filePath),
+  })
+  if (collected.paths.length === 0) {
+    const issues = finderInstallIssues({
+      skippedWeb: collected.skippedWeb,
+      missing: collected.missing,
+    })
+    dialog.showErrorBox(
+      finderInstallTitle(action),
+      formatFinderInstallIssues(issues) || 'No installable font files in that selection.',
+    )
+    showMainWindow()
+    return
+  }
+  try {
+    await ensureApiToken()
+    const imported = await postApi('/api/import', { paths: collected.paths })
+    const entries = imported.entries ?? []
+    const issues = finderInstallIssues({
+      errors: imported.errors,
+      skippedWeb: collected.skippedWeb,
+      missing: collected.missing,
+    })
+    const eligible = entries.filter((entry) => idsEligibleForFinderInstall([entry]).length > 0)
+    if (eligible.length === 0) {
+      const already = entries.filter((entry) => entry.status === 'installed')
+      if (already.length && !issues.length) {
+        showMainWindow()
+        return
+      }
+      throw new Error(formatFinderInstallIssues(issues) || 'Nothing in that selection can be installed.')
+    }
+    let familyName
+    let destinationIds
+    if (action === FINDER_INSTALL_AS) {
+      const options = await promptFinderInstallAs(eligible)
+      if (!options) {
+        showMainWindow()
+        return
+      }
+      familyName = options.familyName
+      destinationIds = options.destinationIds
+    }
+    const ids = idsEligibleForFinderInstall(eligible)
+    const byFormat = groupIdsByFormat(eligible.filter((entry) => ids.includes(entry.id)))
+    for (const group of byFormat) {
+      await postApi('/api/install', {
+        ids: group,
+        familyName,
+        destinationIds,
+      })
+    }
+    if (issues.length) {
+      await showFinderInstallIssues(action, issues, ids.length)
+    }
+  } catch (error) {
+    console.error('Finder install failed', error)
+    dialog.showErrorBox(
+      finderInstallTitle(action),
+      error instanceof Error ? error.message : 'Install failed',
     )
   }
   showMainWindow()
@@ -992,7 +1216,18 @@ const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
 } else {
+  registerNativeFinderServices()
+  if (process.platform === 'darwin') {
+    app.setAsDefaultProtocolClient(FINDER_PROTOCOL)
+  }
+
   app.on('second-instance', (_event, argv) => {
+    const finder = parseFinderLaunch(argv)
+    if (finder) {
+      enqueueFinderJob(finder.action, finder.paths)
+      showMainWindow()
+      return
+    }
     const extra = argv.filter((arg) => /\.(ttf|otf|ttc|otc|woff2?)$/i.test(arg))
     extra.forEach((filePath) => {
       void openFont(filePath)
@@ -1007,6 +1242,12 @@ if (!gotLock) {
     } else {
       queuedFiles.push(filePath)
     }
+  })
+
+  app.on('open-url', (event, url) => {
+    event.preventDefault()
+    const finder = parseFinderInstallUrl(url)
+    if (finder) enqueueFinderJob(finder.action, finder.paths)
   })
 
   app.on('before-quit', () => {
@@ -1173,6 +1414,7 @@ if (!gotLock) {
     nativeTheme.on('updated', () => {
       mainWindow?.setBackgroundColor(windowBackgroundColor())
     })
+    registerNativeFinderServices()
     try {
       await startPackagedBackend()
       await ensureApiToken()
@@ -1192,13 +1434,18 @@ if (!gotLock) {
     setInterval(() => {
       if (!isQuitting) void retailTick()
     }, RETAIL_TICK_MS)
-    const fromArgv = process.argv.filter((arg) =>
-      /\.(ttf|otf|ttc|otc|woff2?)$/i.test(arg),
-    )
+    const finderLaunch = parseFinderLaunch(process.argv)
+    const fromArgv = finderLaunch
+      ? []
+      : process.argv.filter((arg) =>
+          /\.(ttf|otf|ttc|otc|woff2?)$/i.test(arg),
+        )
     for (const filePath of [...queuedFiles, ...fromArgv]) {
       await openFont(filePath)
     }
     queuedFiles.length = 0
+    if (finderLaunch) enqueueFinderJob(finderLaunch.action, finderLaunch.paths)
+    await finderJobs.start()
   })
 
   app.on('window-all-closed', () => {

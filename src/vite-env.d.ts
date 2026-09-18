@@ -15,6 +15,7 @@ declare global {
       openExternal?: (url: string) => Promise<boolean>
       onReinstallFonts: (callback: (payload: { ids?: string[] }) => void) => () => void
       onOpenTab: (callback: (payload: { tab?: string; operationId?: string }) => void) => () => void
+      onFinderLinkTo?: (callback: (payload: { paths?: string[] }) => void) => () => void
     }
   }
 }
