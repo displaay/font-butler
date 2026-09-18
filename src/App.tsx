@@ -278,7 +278,8 @@ function AppShell() {
     ((decision: ImportPlanDecision | null) => void) | null
   >(null)
   const [relinkEntry, setRelinkEntry] = useState<CatalogEntry | null>(null)
-  const [relinkMode, setRelinkMode] = useState<'locate' | 'link'>('locate')
+  const [relinkMode, setRelinkMode] = useState<'locate' | 'link' | 'link-to'>('locate')
+  const [finderLinkPaths, setFinderLinkPaths] = useState<string[]>([])
   const [folderSetupRoots, setFolderSetupRoots] = useState<string[] | null>(null)
   const [folderRelinkRoot, setFolderRelinkRoot] = useState<string | null>(null)
   const [highlightOperation, setHighlightOperation] = useState<string | null>(null)
@@ -625,11 +626,22 @@ function AppShell() {
         setHighlightOperation(payload.operationId)
       }
     })
+    const stopFinderLinkTo = window.fontButlerDesktop?.onFinderLinkTo?.((payload) => {
+      const paths = Array.isArray(payload?.paths)
+        ? payload.paths.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+        : []
+      if (paths.length === 0) return
+      setRelinkEntry(null)
+      setRelinkMode('link-to')
+      setFinderLinkPaths(paths)
+      setTab('library')
+    })
     return () => {
       window.removeEventListener('keydown', onKeyDown)
       stopDesktop?.()
       stopReinstall?.()
       stopOpenTab?.()
+      stopFinderLinkTo?.()
     }
   }, [])
 
@@ -2725,16 +2737,25 @@ function AppShell() {
           }}
         />
         <RelinkDialog
-          open={Boolean(relinkEntry)}
+          open={Boolean(relinkEntry) || finderLinkPaths.length > 0}
           entry={relinkEntry}
-          mode={relinkMode}
+          mode={finderLinkPaths.length > 0 ? 'link-to' : relinkMode}
+          sourcePath={finderLinkPaths[0]}
+          remainingCount={Math.max(0, finderLinkPaths.length - 1)}
+          catalog={entries}
           onOpenChange={(next) => {
-            if (!next) setRelinkEntry(null)
+            if (!next) {
+              setRelinkEntry(null)
+              setFinderLinkPaths([])
+            }
           }}
           onDone={(entry) => {
             setEntries((current) => current.map((item) => (item.id === entry.id ? entry : item)))
             void refreshCatalog()
             toast.success(entry.updateHold === 'relink-review' ? 'Source linked · update available' : 'Source linked')
+            if (finderLinkPaths.length > 0) {
+              setFinderLinkPaths((current) => current.slice(1))
+            }
           }}
         />
         <FolderRelinkDialog

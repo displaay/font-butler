@@ -142,6 +142,7 @@ static void DispatchFinderCall(NSString *action, NSPasteboard *pboard) {
 @interface FontButlerFinderServices : NSObject
 - (void)installFonts:(NSPasteboard *)pboard userData:(NSString *)userData error:(NSString **)error;
 - (void)installFontsAs:(NSPasteboard *)pboard userData:(NSString *)userData error:(NSString **)error;
+- (void)linkFonts:(NSPasteboard *)pboard userData:(NSString *)userData error:(NSString **)error;
 @end
 
 @implementation FontButlerFinderServices
@@ -150,6 +151,9 @@ static void DispatchFinderCall(NSString *action, NSPasteboard *pboard) {
 }
 - (void)installFontsAs:(NSPasteboard *)pboard userData:(NSString *)userData error:(NSString **)error {
   DispatchFinderCall(@"install-as", pboard);
+}
+- (void)linkFonts:(NSPasteboard *)pboard userData:(NSString *)userData error:(NSString **)error {
+  DispatchFinderCall(@"link-to", pboard);
 }
 @end
 

@@ -11,6 +11,7 @@ import {
   destinationChoices,
   familyNamePromptScript,
   FINDER_INSTALL_AS,
+  FINDER_LINK_TO,
   FINDER_PROTOCOL,
   groupIdsByFormat,
   idsEligibleForFinderInstall,
@@ -336,7 +337,7 @@ async function openFont(filePath) {
 function enqueueFinderJob(action, filePaths) {
   const job = { action, paths: Array.isArray(filePaths) ? filePaths : [] }
   if (finderCanRun) {
-    void runFinderInstall(job.action, job.paths)
+    void runFinderJob(job.action, job.paths)
     return
   }
   queuedFinderJobs.push(job)
@@ -404,6 +405,32 @@ async function promptFinderInstallAs(entries) {
   const familyName = (await runOsascript(familyNamePromptScript(suggested))).trim()
   if (!familyName) return null
   return { familyName, destinationIds }
+}
+
+async function runFinderJob(action, filePaths) {
+  if (action === FINDER_LINK_TO) {
+    runFinderLinkTo(filePaths)
+    return
+  }
+  await runFinderInstall(action, filePaths)
+}
+
+function runFinderLinkTo(filePaths) {
+  const collected = collectFinderFontPaths(filePaths, {
+    existsSync: fs.existsSync,
+    statSync: (filePath) => fs.statSync(filePath),
+    includeWeb: true,
+    allowDirectories: false,
+  })
+  if (collected.paths.length === 0) {
+    const message = collected.missing.length
+      ? 'Those font files could not be found.'
+      : 'No font files in that selection.'
+    dialog.showErrorBox('Link to …', message)
+    showMainWindow()
+    return
+  }
+  sendWhenReady('finder-link-to', { paths: collected.paths })
 }
 
 async function runFinderInstall(action, filePaths) {
@@ -1405,7 +1432,7 @@ if (!gotLock) {
     }
     queuedFinderJobs.length = 0
     for (const job of pendingFinder) {
-      await runFinderInstall(job.action, job.paths)
+      await runFinderJob(job.action, job.paths)
     }
   })
 

@@ -26,7 +26,7 @@ Drop a font file into Font Buttler and it remembers the original path. When that
 - Groups families, counts instances, and marks variable fonts with a **VF** badge
 - Right-click a card → **Show in Finder**
 - If Font Buttler is the default app for a font, double-clicking the file adds it to the library and installs it immediately
-- Right-click a font file in Finder → **Install** or **Install as…** (Services). **Install as…** asks for a destination and family name, then uses the same install path as the app.
+- Right-click a font file in Finder → **Install**, **Install as…**, or **Link to …** (Services). **Install as…** asks for a destination and family name, then uses the same install path as the app. **Link to …** opens Font Buttler so you can pick an existing catalog family and attach this file as its tracked source.
 
 ## Run on your Mac
 
@@ -37,7 +37,7 @@ npm run electron
 
 To replace Font Book as the double-click handler: select a `.otf` or `.ttf` in Finder, **Get Info → Open with → Font Buttler → Change All**.
 
-Finder **Install** / **Install as…** are macOS Services. They appear on `.otf`, `.ttf`, `.ttc`, `.otc`, and other font UTIs the app already claims. Run the packaged app once so Launch Services can pick them up. If the items are missing, enable them in **System Settings → Keyboard → Keyboard Shortcuts → Services**. Selecting several font files at once installs each file through the same `/api/import` then `/api/install` path the library uses.
+Finder **Install**, **Install as…**, and **Link to …** are macOS Services. They appear on `.otf`, `.ttf`, `.ttc`, `.otc`, and other font UTIs the app already claims. Run the packaged app once so Launch Services can pick them up. If the items are missing, enable them in **System Settings → Keyboard → Keyboard Shortcuts → Services**. Selecting several font files at once installs each file through the same `/api/import` then `/api/install` path the library uses. **Link to …** does not install: it opens the catalog picker and reuses **Link source** / `inspectRelink` + `applyRelink`.
 
 Font Buttler installs copies into `~/Library/Fonts`, the same user font folder Font Book uses. Fonts already there show up on the Fonts tab on launch. Catalog data lives in `~/Library/Application Support/Font Buttler/`.
 

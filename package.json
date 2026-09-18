@@ -140,6 +140,19 @@
               "public.truetype-ttf-font",
               "public.truetype-collection-font"
             ]
+          },
+          {
+            "NSMenuItem": { "default": "Link to …" },
+            "NSMessage": "linkFonts",
+            "NSPortName": "Font Buttler",
+            "NSUserData": "link-to",
+            "NSRequiredContext": { "NSTextContent": "FilePath" },
+            "NSSendFileTypes": [
+              "public.font",
+              "public.opentype-font",
+              "public.truetype-ttf-font",
+              "public.truetype-collection-font"
+            ]
           }
         ],
         "CFBundleDocumentTypes": [

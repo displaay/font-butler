@@ -1,8 +1,11 @@
 export const FINDER_PROTOCOL = 'font-butler'
 export const FINDER_INSTALL = 'install'
 export const FINDER_INSTALL_AS = 'install-as'
+export const FINDER_LINK_TO = 'link-to'
 export const FINDER_INSTALL_FLAG = '--finder-install'
 export const FINDER_INSTALL_AS_FLAG = '--finder-install-as'
+export const FINDER_LINK_TO_FLAG = '--finder-link-to'
+export const FINDER_ACTIONS = [FINDER_INSTALL, FINDER_INSTALL_AS, FINDER_LINK_TO]
 
 export const INSTALLABLE_FONT_EXTENSIONS = ['ttf', 'otf', 'ttc', 'otc']
 export const CLAIMED_FONT_EXTENSIONS = [...INSTALLABLE_FONT_EXTENSIONS, 'woff', 'woff2']
@@ -18,6 +21,7 @@ export const FONT_SERVICE_UTIS = [
 export const FINDER_SERVICE_PORT_NAME = 'Font Buttler'
 export const FINDER_INSTALL_MESSAGE = 'installFonts'
 export const FINDER_INSTALL_AS_MESSAGE = 'installFontsAs'
+export const FINDER_LINK_TO_MESSAGE = 'linkFonts'
 
 const INSTALLABLE_FONT_RE = /\.(ttf|otf|ttc|otc)$/i
 const CLAIMED_FONT_RE = /\.(ttf|otf|ttc|otc|woff2?)$/i
@@ -25,6 +29,14 @@ const ELECTRON_ARG_RE = /^(?:-[-a-zA-Z].*|--inspect(?:-brk)?(?:=.*)?|--remote-de
 
 export function isFinderInstallAction(value) {
   return value === FINDER_INSTALL || value === FINDER_INSTALL_AS
+}
+
+export function isFinderLinkToAction(value) {
+  return value === FINDER_LINK_TO
+}
+
+export function isFinderAction(value) {
+  return isFinderInstallAction(value) || isFinderLinkToAction(value)
 }
 
 export function isInstallableFontPath(filePath) {
@@ -36,15 +48,23 @@ export function isClaimedFontPath(filePath) {
 }
 
 export function finderServiceMenuTitle(action) {
-  return action === FINDER_INSTALL_AS ? 'Install as…' : 'Install'
+  if (action === FINDER_INSTALL_AS) return 'Install as…'
+  if (action === FINDER_LINK_TO) return 'Link to …'
+  return 'Install'
+}
+
+export function finderServiceMessage(action) {
+  if (action === FINDER_INSTALL_AS) return FINDER_INSTALL_AS_MESSAGE
+  if (action === FINDER_LINK_TO) return FINDER_LINK_TO_MESSAGE
+  return FINDER_INSTALL_MESSAGE
 }
 
 export function finderServicesPlist(options = {}) {
   const portName = options.portName ?? FINDER_SERVICE_PORT_NAME
   const sendFileTypes = options.sendFileTypes ?? FONT_SERVICE_UTIS
-  return [FINDER_INSTALL, FINDER_INSTALL_AS].map((action) => ({
+  return FINDER_ACTIONS.map((action) => ({
     NSMenuItem: { default: finderServiceMenuTitle(action) },
-    NSMessage: action === FINDER_INSTALL_AS ? FINDER_INSTALL_AS_MESSAGE : FINDER_INSTALL_MESSAGE,
+    NSMessage: finderServiceMessage(action),
     NSPortName: portName,
     NSUserData: action,
     NSRequiredContext: { NSTextContent: 'FilePath' },
@@ -95,7 +115,7 @@ export function parseFinderInstallUrl(rawUrl) {
   const parts = [host, ...parsed.pathname.split('/').filter(Boolean)].filter(Boolean)
   if (parts[0] !== 'finder') return null
   const action = parts[1]
-  if (!isFinderInstallAction(action)) return null
+  if (!isFinderAction(action)) return null
   const paths = []
   for (const [key, value] of parsed.searchParams) {
     if (key === 'p' || key === 'path' || key === 'file') {
@@ -112,7 +132,7 @@ export function parseFinderInstallUrl(rawUrl) {
 }
 
 export function finderInstallUrl(action, filePaths) {
-  if (!isFinderInstallAction(action)) {
+  if (!isFinderAction(action)) {
     throw new Error('Unknown Finder install action')
   }
   const url = new URL(`${FINDER_PROTOCOL}://finder/${action}`)
@@ -158,6 +178,10 @@ export function parseFinderLaunch(argv) {
       action = FINDER_INSTALL_AS
       continue
     }
+    if (arg === FINDER_LINK_TO_FLAG) {
+      action = FINDER_LINK_TO
+      continue
+    }
     if (typeof arg === 'string' && arg.startsWith(`${FINDER_PROTOCOL}:`)) {
       const fromUrl = parseFinderInstallUrl(arg)
       if (fromUrl) {
@@ -178,6 +202,8 @@ export function parseFinderLaunch(argv) {
 export function collectFinderFontPaths(filePaths, options = {}) {
   const existsSync = options.existsSync
   const statSync = options.statSync
+  const includeWeb = options.includeWeb === true
+  const allowDirectories = options.allowDirectories !== false
   const collected = []
   const skippedWeb = []
   const missing = []
@@ -193,7 +219,7 @@ export function collectFinderFontPaths(filePaths, options = {}) {
       try {
         const stat = statSync(resolved)
         if (stat?.isDirectory?.()) {
-          collected.push(resolved)
+          if (allowDirectories) collected.push(resolved)
           continue
         }
       } catch {
@@ -202,10 +228,13 @@ export function collectFinderFontPaths(filePaths, options = {}) {
       }
     }
     if (/\.(woff2?)$/i.test(resolved)) {
-      skippedWeb.push(resolved)
+      if (includeWeb) collected.push(resolved)
+      else skippedWeb.push(resolved)
       continue
     }
-    if (isInstallableFontPath(resolved)) collected.push(resolved)
+    if (isInstallableFontPath(resolved) || (includeWeb && isClaimedFontPath(resolved))) {
+      collected.push(resolved)
+    }
   }
 
   return {

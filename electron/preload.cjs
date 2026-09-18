@@ -30,4 +30,9 @@ contextBridge.exposeInMainWorld('fontButlerDesktop', {
     ipcRenderer.on('open-tab', listener)
     return () => ipcRenderer.removeListener('open-tab', listener)
   },
+  onFinderLinkTo: (callback) => {
+    const listener = (_event, payload) => callback(payload)
+    ipcRenderer.on('finder-link-to', listener)
+    return () => ipcRenderer.removeListener('finder-link-to', listener)
+  },
 })
