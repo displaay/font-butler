@@ -210,6 +210,9 @@ test('Electron main handles Finder services through the existing install APIs', 
   assert.match(relink, /inspectRelink/)
   assert.match(relink, /applyRelink/)
   assert.match(relink, /Search catalog families/)
+  assert.match(relink, /pairFinderFilesToFamily/)
+  assert.match(relink, /Already linked/)
+  assert.match(app, /onAdvance/)
   assert.match(native, /linkFonts/)
   assert.equal(
     CLAIMED_FONT_EXTENSIONS.join(','),

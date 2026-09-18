@@ -2741,6 +2741,7 @@ function AppShell() {
           entry={relinkEntry}
           mode={finderLinkPaths.length > 0 ? 'link-to' : relinkMode}
           sourcePath={finderLinkPaths[0]}
+          paths={finderLinkPaths}
           remainingCount={Math.max(0, finderLinkPaths.length - 1)}
           catalog={entries}
           onOpenChange={(next) => {
@@ -2753,9 +2754,9 @@ function AppShell() {
             setEntries((current) => current.map((item) => (item.id === entry.id ? entry : item)))
             void refreshCatalog()
             toast.success(entry.updateHold === 'relink-review' ? 'Source linked · update available' : 'Source linked')
-            if (finderLinkPaths.length > 0) {
-              setFinderLinkPaths((current) => current.slice(1))
-            }
+          }}
+          onAdvance={(filePath) => {
+            setFinderLinkPaths((current) => current.filter((item) => item !== filePath))
           }}
         />
         <FolderRelinkDialog

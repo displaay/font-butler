@@ -37,7 +37,7 @@ npm run electron
 
 To replace Font Book as the double-click handler: select a `.otf` or `.ttf` in Finder, **Get Info → Open with → Font Buttler → Change All**.
 
-Finder **Install**, **Install as…**, and **Link to …** are macOS Services. They appear on `.otf`, `.ttf`, `.ttc`, `.otc`, and other font UTIs the app already claims. Run the packaged app once so Launch Services can pick them up. If the items are missing, enable them in **System Settings → Keyboard → Keyboard Shortcuts → Services**. Selecting several font files at once installs each file through the same `/api/import` then `/api/install` path the library uses. **Link to …** does not install: it opens the catalog picker and reuses **Link source** / `inspectRelink` + `applyRelink`.
+Finder **Install**, **Install as…**, and **Link to …** are macOS Services. They appear on `.otf`, `.ttf`, `.ttc`, `.otc`, and other font UTIs the app already claims. Run the packaged app once so Launch Services can pick them up. If the items are missing, enable them in **System Settings → Keyboard → Keyboard Shortcuts → Services**. Selecting several font files at once installs each file through the same `/api/import` then `/api/install` path the library uses. **Link to …** pairs each selected file to at most one style in the family you pick (`inspectRelink` + `applyRelink`). Extra files that don’t match stay in the queue until you dismiss; a file already linked to that style is skipped.
 
 Font Buttler installs copies into `~/Library/Fonts`, the same user font folder Font Book uses. Fonts already there show up on the Fonts tab on launch. Catalog data lives in `~/Library/Application Support/Font Buttler/`.
 
