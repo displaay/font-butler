@@ -8,7 +8,16 @@ export function stripMacXattrs(target) {
 
 export async function afterPack(context) {
   const appName = context.packager.appInfo.productFilename
-  stripMacXattrs(path.join(context.appOutDir, `${appName}.app`))
+  const appBundle = path.join(context.appOutDir, `${appName}.app`)
+  if (process.platform === 'darwin') {
+    const { compileFinderServicesAddon } = await import('./build-finder-services.mjs')
+    const unpacked = path.join(appBundle, 'Contents/Resources/app.asar.unpacked/electron/finder-services.node')
+    const compiled = compileFinderServicesAddon({ out: unpacked })
+    if (!compiled.ok && !compiled.skipped) {
+      console.warn('Finder services addon was not compiled:', compiled.reason)
+    }
+  }
+  stripMacXattrs(appBundle)
 }
 
 export async function afterAllArtifactBuild(buildResult) {

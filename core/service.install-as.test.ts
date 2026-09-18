@@ -161,3 +161,32 @@ test('init detaches a renamed install that still points at the original source',
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
 })
+
+test('Finder-style import then install and install as use the existing installer', async () => {
+  const paths = tempPaths()
+  const first = path.join(paths.dataRoot, 'FinderOne.ttf')
+  const second = path.join(paths.dataRoot, 'FinderTwo.ttf')
+  writeTestFont(first, 'FinderOne', 'FinderOne-Regular')
+  writeTestFont(second, 'FinderTwo', 'FinderTwo-Regular')
+  const service = new FontButlerService(paths)
+  try {
+    await service.init()
+    const imported = await service.importPaths([first, second])
+    assert.equal(imported.entries.length, 2)
+    const installed = await service.installMany(imported.entries.map((entry) => entry.id))
+    assert.equal(installed.length, 2)
+    assert.ok(installed.every((entry) => entry.status === 'installed'))
+
+    const renamedSource = path.join(paths.dataRoot, 'FinderAs.ttf')
+    writeTestFont(renamedSource, 'FinderAs', 'FinderAs-Regular')
+    const next = await service.importPaths([renamedSource])
+    const renamed = await service.install(next.entries[0]!.id, 'Finder Renamed', {
+      destinationIds: ['macos'],
+    })
+    assert.equal(familyOf(renamed), 'Finder Renamed')
+    assert.equal(renamed.status, 'installed')
+  } finally {
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})

@@ -13,7 +13,7 @@
     "electron": "concurrently -k -n server,vite,app -c cyan,magenta,green \"npm run server\" \"vite\" \"wait-on http://127.0.0.1:43181 http-get://127.0.0.1:43182/api/health && electron .\"",
     "build": "tsc -b && vite build && node scripts/bundle-server.mjs",
     "bundle:python": "COPYFILE_DISABLE=1 node scripts/bundle-python-runtime.mjs",
-    "dist": "COPYFILE_DISABLE=1 npm run build && npm run bundle:python && COPYFILE_DISABLE=1 electron-builder --mac --publish never",
+    "dist": "COPYFILE_DISABLE=1 npm run build && npm run bundle:python && node scripts/build-finder-services.mjs && COPYFILE_DISABLE=1 electron-builder --mac --publish never",
     "preview": "vite preview --host 127.0.0.1 --port 43181",
     "lint": "oxlint",
     "test": "FONT_BUTLER_TEST=1 tsx --test --test-concurrency=1 core/**/*.test.ts src/**/*.test.ts electron/**/*.test.mjs",
@@ -68,6 +68,7 @@
       "dist/**/*",
       "electron/**/*",
       "!electron/**/*.test.mjs",
+      "!electron/**/*.mm",
       "build/icon.png",
       "build/menubarTemplate.png",
       "build/menubarTemplate@2x.png",
@@ -107,6 +108,40 @@
       "category": "public.app-category.utilities",
       "extendInfo": {
         "NSUserNotificationsUsageDescription": "Font Buttler can notify you when fonts are installed or updated.",
+        "CFBundleURLTypes": [
+          {
+            "CFBundleURLName": "Font Buttler Finder Install",
+            "CFBundleURLSchemes": ["font-butler"]
+          }
+        ],
+        "NSServices": [
+          {
+            "NSMenuItem": { "default": "Install" },
+            "NSMessage": "installFonts",
+            "NSPortName": "Font Buttler",
+            "NSUserData": "install",
+            "NSRequiredContext": { "NSTextContent": "FilePath" },
+            "NSSendFileTypes": [
+              "public.font",
+              "public.opentype-font",
+              "public.truetype-ttf-font",
+              "public.truetype-collection-font"
+            ]
+          },
+          {
+            "NSMenuItem": { "default": "Install as…" },
+            "NSMessage": "installFontsAs",
+            "NSPortName": "Font Buttler",
+            "NSUserData": "install-as",
+            "NSRequiredContext": { "NSTextContent": "FilePath" },
+            "NSSendFileTypes": [
+              "public.font",
+              "public.opentype-font",
+              "public.truetype-ttf-font",
+              "public.truetype-collection-font"
+            ]
+          }
+        ],
         "CFBundleDocumentTypes": [
           {
             "CFBundleTypeName": "TrueType Font",
