@@ -47,10 +47,10 @@ export function RelinkDialog({
   const [familyPreviews, setFamilyPreviews] = useState<RelinkPreview[]>([])
   const [preview, setPreview] = useState<RelinkPreview | null>(null)
   const [busy, setBusy] = useState(false)
+  const [linkSource, setLinkSource] = useState(sourcePath)
+  const catalogRef = useRef(catalog)
   const linkTo = mode === 'link-to'
   const title = linkTo ? 'Link to …' : mode === 'link' ? 'Link source…' : 'Locate source…'
-  const catalogRef = useRef(catalog)
-  catalogRef.current = catalog
   const allGroups = useMemo(
     () => (linkTo ? catalogGroupsForLinkPicker(catalog, '') : []),
     [catalog, linkTo],
@@ -61,26 +61,19 @@ export function RelinkDialog({
   )
   const pickedGroup = allGroups.find((group) => group.key === pickedGroupKey) ?? null
   const target = linkTo ? pickedEntry : entry
-  const candidatePath = linkTo ? sourcePath?.trim() || path : path
+  const candidatePath = linkTo ? (sourcePath ?? '').trim() : path
+
+  if (open && linkTo && sourcePath !== linkSource) {
+    setLinkSource(sourcePath)
+    setPickedEntry(null)
+    setFamilyPreviews([])
+    setPreview(null)
+    setBusy(false)
+  }
 
   useEffect(() => {
-    if (!open) {
-      setPath('')
-      setQuery('')
-      setPickedGroupKey(null)
-      setPickedEntry(null)
-      setFamilyPreviews([])
-      setPreview(null)
-      setBusy(false)
-      return
-    }
-    if (linkTo) {
-      setPath(sourcePath ?? '')
-      setPickedEntry(null)
-      setFamilyPreviews([])
-      setPreview(null)
-    }
-  }, [open, linkTo, sourcePath])
+    catalogRef.current = catalog
+  }, [catalog])
 
   useEffect(() => {
     if (!open || !linkTo || !sourcePath?.trim() || !pickedGroupKey) return
@@ -184,6 +177,7 @@ export function RelinkDialog({
           setPickedGroupKey(null)
           setPickedEntry(null)
           setFamilyPreviews([])
+          setLinkSource(undefined)
         }
         onOpenChange(next)
       }}
