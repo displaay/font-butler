@@ -34,6 +34,10 @@ release
 
 agent-tools
 
+# Python bytecode
+__pycache__/
+*.pyc
+
 # Bundled CPython + fonttools created by npm run bundle:python
 vendor/python
 vendor/cache

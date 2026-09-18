@@ -122,23 +122,3 @@ export function identityMutexMessage(existing?: CatalogEntry): string {
   const family = existing.customFamilyName || existing.faces[0]?.familyName || 'This font'
   return `Another copy of ${family} is already active. Switch to this copy, or park the active one first.`
 }
-
-export function liveSameIdentityFiles(
-  catalog: CatalogEntry[],
-  faces: FontFaceInfo[],
-  format: string | undefined,
-  paths: AppPaths,
-): string[] {
-  const files: string[] = []
-  for (const entry of occupyingSiblingsForIncoming(catalog, faces, format, paths)) {
-    if (occupiesDestination(entry, 'macos', paths)) {
-      const live = entry.installedPath
-      if (live && fs.existsSync(live)) files.push(path.resolve(live))
-    }
-    const adobe = entry.installations?.find((item) => item.destinationId === 'adobe-shared' && !item.parkedPath)
-    if (adobe?.path && fs.existsSync(adobe.path) && isLiveFontPath(adobe.path, paths)) {
-      files.push(path.resolve(adobe.path))
-    }
-  }
-  return files
-}

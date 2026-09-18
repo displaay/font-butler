@@ -18,8 +18,3 @@ export function updateGroupsForIds(groups: FamilyGroup[], ids: string[]): Family
   const idSet = new Set(ids)
   return groups.filter((group) => group.entries.some((entry) => idSet.has(entry.id)))
 }
-
-export function entriesForIds(entries: CatalogEntry[], ids: string[]): CatalogEntry[] {
-  const idSet = new Set(ids)
-  return entries.filter((entry) => idSet.has(entry.id))
-}

@@ -65,10 +65,6 @@ export function reinstallableEntries(group: { entries: CatalogEntry[] }): Catalo
   return group.entries.filter((entry) => entry.status === 'outdated' && !entry.previewOnly)
 }
 
-export function updateEntries(group: { entries: CatalogEntry[] }): CatalogEntry[] {
-  return reinstallableEntries(group)
-}
-
 function hasLiveMacCopy(entry: CatalogEntry): boolean {
   if (entry.installedPath || entry.disabledPath) return true
   return (entry.installations ?? []).some(

@@ -97,15 +97,6 @@ export function storeRevision(
   return revision
 }
 
-export function releaseRevision(paths: AppPaths, fingerprint: string | undefined): void {
-  if (!fingerprint) return
-  const index = loadRevisionIndex(paths)
-  const item = index.revisions.find((row) => row.fingerprint === fingerprint)
-  if (!item) return
-  item.refs = Math.max(0, item.refs - 1)
-  saveRevisionIndex(paths, index)
-}
-
 export function revisionUsageBytes(paths: AppPaths): number {
   const dir = revisionsDir(paths)
   if (!fs.existsSync(dir)) return 0

@@ -1,4 +1,0 @@
-{"probe":"preview-catalog-scaling","value":{"count":100,"catalogBytes":74617,"fiftyPreviewRequestsMs":[20,17,21,18,18],"groupAndFilterMeanMs":7}}
-{"probe":"preview-catalog-scaling","value":{"count":1000,"catalogBytes":748717,"fiftyPreviewRequestsMs":[184,161,153,156,166],"groupAndFilterMeanMs":2}}
-{"probe":"preview-catalog-scaling","value":{"count":5000,"catalogBytes":3756717,"fiftyPreviewRequestsMs":[785,813,827,828,1028],"groupAndFilterMeanMs":7}}
-{"probe":"system-scan","value":{"faces":722,"coldMs":2788,"warmMs":256}}

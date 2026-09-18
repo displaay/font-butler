@@ -10,7 +10,7 @@ import {
   type CopyDestinations,
   type InstanceInstallState,
 } from '@/lib/state'
-import type { CatalogEntry, FontStatus } from '@/lib/types'
+import type { CatalogEntry } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 const overlayChipClassName =
@@ -163,13 +163,6 @@ export function NameWithFormatTags({
       </span>
     </div>
   )
-}
-
-export function StatusBadge({ status }: { status: FontStatus }) {
-  if (status === 'outdated') return <Badge tone="warn">Update available</Badge>
-  if (status === 'deactivated') return <Badge>Deactivated</Badge>
-  if (status === 'uninstalled' || status === 'source-missing') return <Badge>Not installed</Badge>
-  return null
 }
 
 export function InstanceInstallBadge({ state }: { state: InstanceInstallState }) {

@@ -23,7 +23,6 @@ import type {
   ThemeMode,
   ViewLayout,
   WatchFolder,
-  ComparisonCapture,
 } from './types'
 import { consumeSseBuffer } from './sse'
 
@@ -141,8 +140,6 @@ export const api = {
       formats: { format: string; count: number }[]
       skippedWeb: number
     }>(post('/api/drop-inspect', { paths })),
-  importPaths: (paths: string[]) =>
-    json<{ entries: CatalogEntry[]; errors: string[]; ignored: number }>(post('/api/import', { paths })),
   importFiles: async (files: File[]) => {
     const body = new FormData()
     for (const file of files) body.append('files', file)
@@ -288,11 +285,6 @@ export const api = {
   uninstallSystem: (path: string) => json<{ ok: boolean }>(post('/api/system/uninstall', { path })),
   deactivateSystem: (path: string) =>
     json<{ ok: boolean }>(post('/api/system/deactivate', { path })),
-  clearFontCache: () => json<{ mac: boolean; cleared: boolean }>(post('/api/caches/font', {})),
-  clearOfficeCache: () =>
-    json<{ mac: boolean; cleared: boolean }>(post('/api/caches/office', {})),
-  clearAdobeCache: () =>
-    json<{ mac: boolean; cleared: boolean }>(post('/api/caches/adobe', {})),
   reveal: (payload: { id?: string; path?: string; which?: 'source' | 'installed' }) =>
     json<{ path: string }>(post('/api/reveal', payload)),
   settings: () =>
@@ -457,7 +449,6 @@ export const api = {
     get<{ code: number; name: string | null }>(
       `/api/preview-glyph/${encodeURIComponent(id)}?which=${which}&code=${encodeURIComponent(String(code))}`,
     ),
-  captureComparison: (id: string) => json<ComparisonCapture>(post('/api/comparison/capture', { id })),
 }
 
 export function subscribeEvents(onEvent: (event: unknown) => void): () => void {

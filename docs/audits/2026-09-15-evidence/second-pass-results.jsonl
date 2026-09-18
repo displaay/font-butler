@@ -1,4 +1,0 @@
-{"probe":"repair","catalogInstalledFpMatchesDisk":false,"diskMatchesExpectedV1":true,"adobeCatalogFpMatchesAdobeDisk":false,"settingsAcceptsNegative":true,"planTraversalEscaped":true}
-{"probe":"repair-detail","installedFileRecreated":true,"catalogInstalledFp":"d02ec9317b04","diskFp":"365405ec5ebd","expectedRestoredV1":"365405ec5ebd","catalogPreviousRevision":"365405ec5ebd","adobeCatalogFp":"d02ec9317b04","adobeDiskFp":"365405ec5ebd"}
-{"probe":"settings","revisionBudgetBytes":-5,"activityRetentionDays":-1,"activityMaxOperations":0,"opsBefore":1,"opsAfterListActivity":0}
-{"probe":"planTraversal","escapedPlansDir":true}
