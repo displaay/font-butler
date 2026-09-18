@@ -26,10 +26,6 @@ const BAKEABLE_FEATURE_ORDER = [
   ...Array.from({ length: 20 }, (_, index) => `ss${String(index + 1).padStart(2, '0')}`),
 ] as const
 
-export type BakeableFeatureTag = (typeof BAKEABLE_FEATURE_ORDER)[number]
-
-const BAKEABLE_FEATURE_SET = new Set<string>(BAKEABLE_FEATURE_ORDER)
-
 const FIGURE_NAME_TO_TAG: Record<string, string> = {
   'lining figures': 'lnum',
   'lining numerals': 'lnum',
@@ -87,10 +83,6 @@ export function groupOtFeatures(raw: string[]): OtFeatureGroup[] {
     { id: 'rest', label: 'Rest', tags: rest },
   ]
   return groups.filter((group) => group.tags.length > 0)
-}
-
-export function isBakeableFeatureTag(tag: string): tag is BakeableFeatureTag {
-  return BAKEABLE_FEATURE_SET.has(tag)
 }
 
 export function bakeableEnabledTags(features: Record<string, boolean>): string[] {

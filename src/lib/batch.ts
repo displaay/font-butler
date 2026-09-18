@@ -349,19 +349,3 @@ export function deleteSourcesLabel(count: number, multi: boolean): string {
   if (count <= 1 && !multi) return 'Delete source files'
   return `Delete ${count} source file${count === 1 ? '' : 's'}`
 }
-
-export function fileActionLabel(
-  verb: 'install' | 'update' | 'deactivate' | 'activate' | 'uninstall' | 'repair',
-  count: number,
-  mixed: boolean,
-): string {
-  if (verb === 'update') return count <= 1 ? 'Install update' : `Install ${count} updates`
-  if (verb === 'install') {
-    return mixed || count > 1 ? (count === 1 ? 'Install missing style' : `Install ${count} missing styles`) : 'Install'
-  }
-  if (verb === 'deactivate') return 'Deactivate'
-  if (verb === 'uninstall') return 'Uninstall'
-  if (verb === 'repair') return 'Reinstall installed version'
-  if (!mixed && count <= 1) return verb[0]!.toUpperCase() + verb.slice(1)
-  return `${verb[0]!.toUpperCase()}${verb.slice(1)} ${count} ${count === 1 ? 'file' : 'files'}`
-}

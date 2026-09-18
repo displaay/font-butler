@@ -24,10 +24,6 @@ function sentenceCase(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1)
 }
 
-export function activityActionLabel(action: string): string {
-  return sentenceCase(ACTIVITY_ACTION_LABELS[action] ?? action)
-}
-
 export function activityRowLabel(operation: {
   action: string
   familyName?: string
