@@ -17,12 +17,15 @@ import {
   FINDER_SERVICE_PORT_NAME,
   FONT_SERVICE_UTIS,
   collectFinderFontPaths,
+  createFinderJobQueue,
   destinationChoices,
   familyNamePromptScript,
+  finderInstallIssues,
   finderInstallUrl,
   finderServiceMenuTitle,
   finderServicesPlist,
   finderUrlSchemePlist,
+  formatFinderInstallIssues,
   groupIdsByFormat,
   idsEligibleForFinderInstall,
   isInstallableFontPath,
@@ -178,6 +181,65 @@ test('install-as helpers reuse destination labels and the existing eligible-inst
   ])
 })
 
+test('finderInstallIssues surfaces skipped WOFF, missing files, and import errors', () => {
+  assert.deepEqual(
+    finderInstallIssues({
+      errors: ['/Fonts/Broken.otf: Could not parse that font.', ''],
+      skippedWeb: ['/Fonts/Preview.woff2', '/Fonts/Preview.woff2'],
+      missing: ['/gone.ttf'],
+    }),
+    [
+      '/Fonts/Broken.otf: Could not parse that font.',
+      '/gone.ttf: file not found.',
+      'WOFF files cannot be installed. (Preview.woff2)',
+    ],
+  )
+  assert.deepEqual(finderInstallIssues({}), [])
+  assert.equal(
+    formatFinderInstallIssues(
+      ['/Fonts/Broken.otf: Could not parse that font.', 'WOFF files cannot be installed. (Preview.woff2)'],
+      { installed: 2 },
+    ),
+    [
+      'Installed 2 fonts. Some files were skipped:',
+      '/Fonts/Broken.otf: Could not parse that font.',
+      'WOFF files cannot be installed. (Preview.woff2)',
+    ].join('\n'),
+  )
+  assert.equal(
+    formatFinderInstallIssues(['WOFF files cannot be installed.']),
+    'Some files could not be installed:\nWOFF files cannot be installed.',
+  )
+  assert.equal(formatFinderInstallIssues([]), '')
+})
+
+test('createFinderJobQueue serializes overlapping jobs and drops duplicates', async () => {
+  const events = []
+  let releaseFirst
+  const firstHold = new Promise((resolve) => {
+    releaseFirst = resolve
+  })
+  const queue = createFinderJobQueue(async (action, paths) => {
+    events.push(`start:${action}:${paths[0]}`)
+    if (action === FINDER_INSTALL) await firstHold
+    events.push(`end:${action}:${paths[0]}`)
+  })
+  const started = queue.start()
+  const first = queue.enqueue(FINDER_INSTALL, ['/Fonts/A.otf'])
+  const duplicate = queue.enqueue(FINDER_INSTALL, ['/Fonts/A.otf'])
+  const second = queue.enqueue(FINDER_INSTALL_AS, ['/Fonts/B.otf'])
+  for (let i = 0; i < 20 && events.length === 0; i += 1) await Promise.resolve()
+  assert.deepEqual(events, ['start:install:/Fonts/A.otf'])
+  releaseFirst()
+  await Promise.all([started, first, duplicate, second])
+  assert.deepEqual(events, [
+    'start:install:/Fonts/A.otf',
+    'end:install:/Fonts/A.otf',
+    'start:install-as:/Fonts/B.otf',
+    'end:install-as:/Fonts/B.otf',
+  ])
+})
+
 test('finder services addon compile is skipped off macOS', () => {
   const result = compileFinderServicesAddon()
   if (process.platform === 'darwin') {
@@ -202,6 +264,12 @@ test('Electron main handles Finder services through the existing install APIs', 
   assert.match(main, /Install as…/)
   assert.match(main, /finder-link-to/)
   assert.match(main, /Link to …/)
+  assert.match(main, /createFinderJobQueue/)
+  assert.match(main, /finderJobs\.start/)
+  assert.match(main, /formatFinderInstallIssues/)
+  assert.match(main, /showFinderInstallIssues/)
+  assert.doesNotMatch(main, /finderCanRun/)
+  assert.doesNotMatch(main, /void runFinderJob/)
   assert.doesNotMatch(main, /\/api\/relink/)
   assert.doesNotMatch(main, /CSC_IDENTITY_AUTO_DISCOVERY/)
   assert.match(preload, /onFinderLinkTo/)
