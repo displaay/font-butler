@@ -35,37 +35,40 @@ Install and Switch are not part of this path. Offline, GitHub API failures, or a
 ## How to cut a release
 
 1. Bump `version` in `package.json` (semver, no leading `v`).
-2. `npm test && npm run lint && npm run build`
-3. Commit, then tag the same version:
+2. Commit that bump on `main`.
+3. Tag that commit and push the tag:
 
    ```bash
-   git tag v0.2.0
-   git push origin main v0.2.0
+   git tag -a v0.3.2 -m "v0.3.2"
+   git push origin main v0.3.2
    ```
 
-4. Package on a Mac:
+   Use an annotated tag. A lightweight `v*` tag starts the same workflow. The tag (`v0.3.2`) must match `package.json` (`0.3.2`).
 
-   ```bash
-   npm run dist
-   ```
+4. [`.github/workflows/release.yml`](../.github/workflows/release.yml) then:
+
+   - runs tests, lint, and build on Ubuntu
+   - on a macOS arm64 runner, runs `npm run dist`
+   - publishes a GitHub Release for that tag (not a draft, not a prerelease)
+
+   Attached files:
+
+   - `Font-Buttler-{version}-arm64.dmg`
+   - `Font-Buttler-{version}-arm64.zip`
+   - `Font-Buttler-{version}-arm64.zip.blockmap`
+   - `latest-mac.yml` (electron-updater feed)
+
+   Release notes are generated from commits since the previous tag. Edit them on GitHub if you want a tighter changelog.
+
+   `npm run dist` still uses `--publish never`. electron-builder writes `latest-mac.yml` and the zip blockmap next to the dmg; the workflow uploads them. Do not also run `electron-builder --publish always`, or two publishers will fight over the same Release.
 
    Do **not** set `CSC_IDENTITY_AUTO_DISCOVERY=false`. That skips signing and leaves Electron’s linker-signed binaries in an unsigned app bundle. Gatekeeper then reports the downloaded app as damaged until `xattr -cr`. `npm run dist` ad-hoc signs (`mac.identity: "-"`), strips copyable xattrs, and sets `COPYFILE_DISABLE=1` so resource forks are not packed.
 
-   `npm run dist` does **not** publish. Artifacts land in `release/` as:
-
-   `Font-Buttler-{version}-{arch}.{ext}`
-
-   Examples: `Font-Buttler-0.3.1-arm64.dmg`, `Font-Buttler-0.3.1-arm64.zip`. Ship both the **dmg** (people) and the **zip** (later `electron-updater`).
-
    A freshly downloaded dmg should open without `xattr -cr`. Gatekeeper may still ask the user to confirm an unidentified developer. Opening with **no** Gatekeeper prompt requires a Developer ID certificate and notarization; this repo has neither yet.
 
-5. Create a GitHub Release for that tag. Paste a changelog (Keep a Changelog / “What’s new” markdown). Attach the dmg and zip. Publish it (not a draft, not a prerelease) so `/releases/latest` returns it.
+5. Confirm the Release is public so `/releases/latest` returns it.
 
-6. Optional publish from a signed Mac with a `GH_TOKEN` that can write releases:
-
-   ```bash
-   npx electron-builder --mac --publish always
-   ```
+To package on GitHub Actions without publishing, open **Actions → Release → Run workflow** and leave **publish** off.
 
 ## Parked: signed auto-update
 
@@ -77,7 +80,7 @@ When signing lands:
 2. Add `electron-updater` with the GitHub provider (`owner: displaay`, `repo: font-butler`). Keep **`autoDownload: false`** and **`autoInstallOnAppQuit: false`**.
 3. Keep the current **Download** / **Open release** path as the default.
 4. Add an explicit **Install {version}** action that is the only thing that may download, then install on quit.
-5. Confirm `latest-mac.yml` (and matching zip) is attached to the GitHub Release.
+5. The release workflow already attaches `latest-mac.yml`, the zip, and the zip blockmap. After notarization, confirm those assets are on the GitHub Release.
 6. Only then consider auto-download for users who opt in.
 
 The stub is `startParkedAutoInstall()` in `shared/app-update.ts`. It throws on purpose.
