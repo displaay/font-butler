@@ -320,5 +320,6 @@ export function allowedFontPath(filePath: string, paths: AppPaths): boolean {
     paths.computerFontsDir,
     paths.systemFontsDir,
     paths.seedDir,
+    paths.adobeFontsDir,
   ])
 }

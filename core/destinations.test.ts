@@ -8,6 +8,7 @@ import {
   entryHasParkedBytes,
   findUnmanagedConflicts,
   inspectDestination,
+  installDestinationRoots,
   recordedDestinationIds,
   removeManagedCopy,
   targetsForDefaultDestination,
@@ -138,6 +139,53 @@ test('Mac+Adobe default expands to both destination IDs', () => {
   assert.deepEqual(targetsForDefaultDestination('macos'), ['macos'])
   assert.deepEqual(targetsForDefaultDestination('adobe-shared'), ['adobe-shared'])
   assert.deepEqual(targetsForDefaultDestination(undefined), ['macos'])
+})
+
+test('installDestinationRoots is user Fonts and Adobe, not computer fonts', () => {
+  const paths = tempPaths()
+  try {
+    const roots = installDestinationRoots(paths)
+    assert.deepEqual(
+      [...new Set(roots.map((item) => item.id))].sort(),
+      ['adobe-shared', 'macos'],
+    )
+    assert.equal(
+      roots.some((item) => item.dir === path.resolve(paths.userFontsDir)),
+      true,
+    )
+    assert.equal(
+      roots.some((item) => item.dir === path.resolve(paths.adobeFontsDir)),
+      true,
+    )
+    assert.equal(
+      roots.some((item) => item.dir === path.resolve(paths.computerFontsDir)),
+      false,
+    )
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('installDestinationRoots keeps both ids when dirs resolve equal', () => {
+  const paths = tempPaths()
+  try {
+    const shared = path.join(paths.dataRoot, 'shared-fonts')
+    paths.userFontsDir = shared
+    paths.installDir = shared
+    paths.adobeFontsDir = shared
+    const roots = installDestinationRoots(paths)
+    assert.equal(
+      roots.some((item) => item.id === 'macos' && item.dir === path.resolve(shared)),
+      true,
+    )
+    assert.equal(
+      roots.some((item) => item.id === 'adobe-shared' && item.dir === path.resolve(shared)),
+      true,
+    )
+    assert.equal(roots.filter((item) => item.id === 'macos').length, 1)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
 })
 
 test('recordedDestinationIds stay on the copy’s own dests and default to macos', () => {

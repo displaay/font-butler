@@ -123,10 +123,16 @@ test('matchesLibraryFilter treats empty as all and maps related statuses', () =>
 
 test('countLibraryFilters totals families per filter and can count one family twice', () => {
   const installed = entry('in', 'In', 1, 'installed')
+  installed.installations = [
+    { destinationId: 'macos', path: '/tmp/Fonts/In.otf', verification: 'file-present' },
+  ]
   const vf = entry('vf', 'Variable', 2, 'uninstalled')
   vf.faces[0]!.isVariable = true
   vf.sourcePresent = true
   const bootonOn = entry('br', 'Booton', 3, 'installed')
+  bootonOn.installations = [
+    { destinationId: 'macos', path: '/tmp/Fonts/Booton.otf', verification: 'file-present' },
+  ]
   const bootonOff = entry('bi', 'Booton', 4, 'uninstalled')
   assert.deepEqual(countLibraryFilters([installed, vf, bootonOn, bootonOff]), {
     installed: 2,
@@ -164,6 +170,7 @@ test('matchesLibraryFilter combines status, kind, and source dimensions', () => 
 
 test('matchesLibraryFilter filters destination and format independently', () => {
   const mac = entry('mac', 'Able', 1, 'installed')
+  mac.installedPath = mac.sourcePath
   const adobe = {
     ...entry('adb', 'Baker', 2, 'installed'),
     installations: [
@@ -180,7 +187,7 @@ test('matchesLibraryFilter filters destination and format independently', () => 
   assert.equal(matchesLibraryFilter(mac, ['adobe']), false)
   assert.equal(matchesLibraryFilter(mac, ['no-destination']), false)
   assert.equal(matchesLibraryFilter(adobe, ['adobe']), true)
-  assert.equal(matchesLibraryFilter(adobe, ['computer']), true)
+  assert.equal(matchesLibraryFilter(adobe, ['computer']), false)
   assert.equal(matchesLibraryFilter(nowhere, ['no-destination']), true)
   assert.equal(matchesLibraryFilter(nowhere, ['computer']), false)
   assert.equal(matchesLibraryFilter(mac, ['otf']), true)

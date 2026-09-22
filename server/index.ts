@@ -164,9 +164,9 @@ app.get('/api/settings', (c) =>
 
 app.get('/api/destinations', (c) => c.json(service.listDestinations()))
 
-app.post('/api/destinations/adobe', (c) => {
+app.post('/api/destinations/adobe', async (c) => {
   try {
-    return c.json(service.createAdobeTestingFolder())
+    return c.json(await service.createAdobeTestingFolder())
   } catch (error) {
     return c.json(
       { error: error instanceof Error ? error.message : 'Could not create the Adobe folder' },

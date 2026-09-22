@@ -63,6 +63,24 @@ export function destinationDir(paths: AppPaths, id: DestinationId): string {
   return id === 'adobe-shared' ? adobeFontsDir(paths) : path.resolve(paths.installDir)
 }
 
+/** Folders Font Buttler can later install into. Excludes computer and system fonts. */
+export function installDestinationRoots(paths: AppPaths): Array<{ id: DestinationId; dir: string }> {
+  const rows: Array<{ id: DestinationId; dir: string }> = []
+  const seen = new Set<string>()
+  const add = (id: DestinationId, dir: string | undefined) => {
+    if (!dir) return
+    const resolved = path.resolve(dir)
+    const key = `${id}\0${resolved}`
+    if (seen.has(key)) return
+    seen.add(key)
+    rows.push({ id, dir: resolved })
+  }
+  add('macos', paths.userFontsDir)
+  add('macos', paths.installDir)
+  add('adobe-shared', adobeFontsDir(paths))
+  return rows
+}
+
 function dirState(dir: string): {
   exists: boolean
   writable: boolean

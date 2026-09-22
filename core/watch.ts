@@ -23,6 +23,8 @@ let watcher: FSWatcher | null = null
 let watchedSourcePaths = new Set<string>()
 let inboxWatcher: FSWatcher | null = null
 let userFontsWatcher: FSWatcher | null = null
+let destParentWatcher: FSWatcher | null = null
+let destAppearPoll: ReturnType<typeof setInterval> | null = null
 let userFontsTimer: ReturnType<typeof setTimeout> | null = null
 let inboxTimer: ReturnType<typeof setTimeout> | null = null
 let inboxPending: string[] = []
@@ -520,26 +522,83 @@ export async function syncInboxWatcher(
   inboxWatcher.on('add', queue)
 }
 
-export async function syncUserFontsWatcher(
-  userFontsDir: string,
-  onChange: () => void,
-): Promise<void> {
+const USER_FONTS_WATCH_OPTIONS = {
+  ignoreInitial: true,
+  awaitWriteFinish: { stabilityThreshold: 400, pollInterval: 100 },
+  depth: FONT_TREE_MAX_DEPTH,
+} as const
+
+async function closeUserFontsWatchers(): Promise<void> {
   if (userFontsTimer) {
     clearTimeout(userFontsTimer)
     userFontsTimer = null
   }
+  if (destAppearPoll) {
+    clearInterval(destAppearPoll)
+    destAppearPoll = null
+  }
   if (userFontsWatcher) {
-    await userFontsWatcher.close()
+    try {
+      await userFontsWatcher.close()
+    } catch {
+      // Already gone.
+    }
     userFontsWatcher = null
   }
-  if (!userFontsDir || !fs.existsSync(userFontsDir)) {
+  if (destParentWatcher) {
+    try {
+      await destParentWatcher.close()
+    } catch {
+      // Already gone.
+    }
+    destParentWatcher = null
+  }
+}
+
+function isExistingDir(dir: string): boolean {
+  try {
+    return fs.existsSync(dir) && fs.statSync(dir).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+function waitForReady(instance: FSWatcher | null): Promise<void> {
+  if (!isLiveWatcher(instance)) return Promise.resolve()
+  return Promise.race([
+    new Promise<void>((resolve) => {
+      instance.once('ready', () => resolve())
+    }),
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, 400)
+    }),
+  ])
+}
+
+export async function syncUserFontsWatcher(
+  dirs: string | readonly string[],
+  onChange: () => void,
+): Promise<void> {
+  await closeUserFontsWatchers()
+  const requested = [
+    ...new Set(
+      (Array.isArray(dirs) ? dirs : [dirs])
+        .filter((dir): dir is string => typeof dir === 'string' && dir.trim().length > 0)
+        .map((dir) => path.resolve(dir)),
+    ),
+  ]
+  const existing = requested.filter(isExistingDir)
+  const missing = new Set(requested.filter((dir) => !isExistingDir(dir)))
+  const parents = [
+    ...new Set(
+      [...missing]
+        .map((dir) => path.dirname(dir))
+        .filter((dir) => dir && isExistingDir(dir)),
+    ),
+  ]
+  if (existing.length === 0 && missing.size === 0) {
     return
   }
-  userFontsWatcher = chokidar.watch(userFontsDir, {
-    ignoreInitial: true,
-    awaitWriteFinish: { stabilityThreshold: 400, pollInterval: 100 },
-    depth: FONT_TREE_MAX_DEPTH,
-  })
   const kick = () => {
     if (userFontsTimer) {
       clearTimeout(userFontsTimer)
@@ -549,8 +608,51 @@ export async function syncUserFontsWatcher(
       onChange()
     }, 350)
   }
-  userFontsWatcher.on('add', kick)
-  userFontsWatcher.on('unlink', kick)
+  const bindDestWatcher = (instance: FSWatcher) => {
+    instance.on('add', kick)
+    instance.on('unlink', kick)
+  }
+  const subscribeDest = (dir: string) => {
+    if (isLiveWatcher(userFontsWatcher)) {
+      userFontsWatcher.add(dir)
+      return
+    }
+    userFontsWatcher = chokidar.watch(dir, USER_FONTS_WATCH_OPTIONS)
+    bindDestWatcher(userFontsWatcher)
+  }
+  const claimDest = (dir: string): boolean => {
+    const resolved = path.resolve(dir)
+    if (!missing.has(resolved) || !isExistingDir(resolved)) return false
+    missing.delete(resolved)
+    subscribeDest(resolved)
+    kick()
+    return true
+  }
+  if (existing.length) {
+    userFontsWatcher = chokidar.watch(existing, USER_FONTS_WATCH_OPTIONS)
+    bindDestWatcher(userFontsWatcher)
+  }
+  if (parents.length) {
+    destParentWatcher = chokidar.watch(parents, { ignoreInitial: true, depth: 0 })
+    const onMaybeDest = (added: string) => {
+      claimDest(added)
+    }
+    destParentWatcher.on('addDir', onMaybeDest)
+    destParentWatcher.on('add', onMaybeDest)
+  }
+  if (missing.size) {
+    destAppearPoll = setInterval(() => {
+      for (const dir of [...missing]) {
+        claimDest(dir)
+      }
+      if (missing.size === 0 && destAppearPoll) {
+        clearInterval(destAppearPoll)
+        destAppearPoll = null
+      }
+    }, 400)
+    destAppearPoll.unref?.()
+  }
+  await Promise.all([waitForReady(userFontsWatcher), waitForReady(destParentWatcher)])
 }
 
 export async function closeAllWatchers(): Promise<void> {

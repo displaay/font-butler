@@ -118,7 +118,13 @@ test('instance rows carry the family preview sample', () => {
 
 test('catalog instance rows keep live vs inactive styles when the source is missing', () => {
   const groups = groupCatalog([
-    staticEntry('on', 'Regular', 'installed', { sourceAvailability: 'missing' }),
+    staticEntry('on', 'Regular', 'installed', {
+      sourceAvailability: 'missing',
+      installedPath: '/tmp/Fonts/on.otf',
+      installations: [
+        { destinationId: 'macos', path: '/tmp/Fonts/on.otf', verification: 'file-present' },
+      ],
+    }),
     staticEntry('off', 'Italic', 'deactivated', { sourceAvailability: 'missing' }),
     staticEntry('gone', 'Bold', 'source-missing', { sourceAvailability: 'missing' }),
   ])

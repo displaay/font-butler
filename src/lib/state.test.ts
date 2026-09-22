@@ -102,9 +102,44 @@ test('copy destinations follow Mac and Adobe file-present copies', () => {
     adobe: false,
   })
   assert.deepEqual(entryCopyDestinations(entry({ status: 'installed' })), {
-    macos: true,
+    macos: false,
     adobe: false,
   })
+  assert.deepEqual(
+    entryCopyDestinations(entry({ status: 'installed', installedPath: '/tmp/Fonts/State.otf' })),
+    { macos: true, adobe: false },
+  )
+  assert.deepEqual(
+    entryCopyDestinations(
+      entry({
+        status: 'installed',
+        installations: [
+          {
+            destinationId: 'adobe-shared',
+            path: '/tmp/adobe/State.otf',
+            verification: 'file-present',
+          },
+        ],
+      }),
+    ),
+    { macos: false, adobe: true },
+  )
+  assert.deepEqual(
+    entryCopyDestinations(
+      entry({
+        status: 'installed',
+        installedPath: '/tmp/Fonts/Stale.otf',
+        installations: [
+          {
+            destinationId: 'adobe-shared',
+            path: '/tmp/adobe/State.otf',
+            verification: 'file-present',
+          },
+        ],
+      }),
+    ),
+    { macos: false, adobe: true },
+  )
   assert.deepEqual(
     entryCopyDestinations(
       entry({
