@@ -635,7 +635,7 @@ export function Sidebar({
                     }
                     onClick={() => onSelectWatchFolder(TEST_INSTALL_FILTER)}
                     className="w-full pl-7"
-                    title="Fonts temporarily installed by Displaay Font Builder"
+                    title="Fonts temporarily installed by Displaay Font Builder or Glyphs"
                   />
                 ) : null}
               </div>

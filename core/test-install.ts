@@ -9,6 +9,9 @@ import type { FontFaceInfo } from './types.ts'
 
 export const TEST_INSTALL_APP_NAME = 'Displaay Font Builder'
 
+/** Glyphs 3 and 4 session fonts. Font Builder lists these in `gui/worker.py`; the Glyphs plugin uses `GSGlyphsInfo.applicationSupportPath()/Temp`. */
+export const GLYPHS_TEST_INSTALL_APP_NAMES = ['Glyphs 3', 'Glyphs 4'] as const
+
 export type TestInstallFont = {
   id: string
   path: string
@@ -30,6 +33,16 @@ export type TestInstallFont = {
 
 export function defaultTestInstallDir(home = os.homedir()): string {
   return path.join(home, 'Library', 'Application Support', TEST_INSTALL_APP_NAME, 'TestInstall')
+}
+
+export function glyphsTestInstallDirs(home = os.homedir()): string[] {
+  return GLYPHS_TEST_INSTALL_APP_NAMES.map((name) =>
+    path.join(home, 'Library', 'Application Support', name, 'Temp'),
+  )
+}
+
+export function testInstallDirs(home = os.homedir()): string[] {
+  return [defaultTestInstallDir(home), ...glyphsTestInstallDirs(home)]
 }
 
 export function testInstallId(filePath: string): string {
@@ -56,6 +69,14 @@ export function resolveTestInstallFile(filePath: string, dir: string): string | 
     return null
   }
   return real
+}
+
+export function resolveTestInstallFileInDirs(filePath: string, dirs: string[]): string | null {
+  for (const dir of dirs) {
+    const resolved = resolveTestInstallFile(filePath, dir)
+    if (resolved) return resolved
+  }
+  return null
 }
 
 export function scanTestInstallDir(dir: string): TestInstallFont[] {
@@ -98,6 +119,12 @@ export function scanTestInstallDir(dir: string): TestInstallFont[] {
       // Skip unreadable files so one bad font does not hide the rest.
     }
   }
+  fonts.sort((a, b) => a.path.localeCompare(b.path))
+  return fonts
+}
+
+export function scanTestInstallDirs(dirs: string[]): TestInstallFont[] {
+  const fonts = dirs.flatMap((dir) => scanTestInstallDir(dir))
   fonts.sort((a, b) => a.path.localeCompare(b.path))
   return fonts
 }
@@ -179,5 +206,12 @@ export function startTestInstallWatch(dir: string, onChange: () => void): () => 
     await parentWatcher?.close()
     watcher = null
     parentWatcher = null
+  }
+}
+
+export function startTestInstallWatches(dirs: string[], onChange: () => void): () => Promise<void> {
+  const stops = dirs.map((dir) => startTestInstallWatch(dir, onChange))
+  return async () => {
+    await Promise.all(stops.map((stop) => stop()))
   }
 }

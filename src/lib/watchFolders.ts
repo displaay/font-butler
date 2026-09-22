@@ -6,7 +6,7 @@ export const RETAIL_LIBRARY_FILTER = '__retail__'
 
 export const RETAIL_LIBRARY_LABEL = 'Displaay retail'
 
-/** Sidebar sentinel for Displaay Font Builder session test installs. */
+/** Sidebar sentinel for Font Builder and Glyphs session test installs. */
 export const TEST_INSTALL_FILTER = '__test_install__'
 
 export const TEST_INSTALL_LABEL = 'Test installs'

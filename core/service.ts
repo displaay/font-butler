@@ -40,11 +40,11 @@ import {
 import { emitEvent } from './events.ts'
 import { unregisterSessionFonts } from './session-fonts.ts'
 import {
-  defaultTestInstallDir,
   deleteTestInstallFiles,
-  resolveTestInstallFile,
-  scanTestInstallDir,
-  startTestInstallWatch,
+  resolveTestInstallFileInDirs,
+  scanTestInstallDirs,
+  startTestInstallWatches,
+  testInstallDirs,
   type TestInstallFont,
 } from './test-install.ts'
 import {
@@ -692,7 +692,7 @@ export class FontButlerService {
   }
 
   listTestInstalls(): TestInstallFont[] {
-    const fonts = scanTestInstallDir(defaultTestInstallDir())
+    const fonts = scanTestInstallDirs(testInstallDirs())
     this.testInstallPaths = new Map(fonts.map((font) => [font.id, font.path]))
     return fonts
   }
@@ -702,25 +702,25 @@ export class FontButlerService {
       emitEvent({ type: 'test-installs', fonts: this.listTestInstalls() })
     }
     publish()
-    const stop = startTestInstallWatch(defaultTestInstallDir(), publish)
+    const stop = startTestInstallWatches(testInstallDirs(), publish)
     this.stopTestInstallWatch = stop
     return stop
   }
 
   uninstallTestInstalls(filePaths: string[]): TestInstallFont[] {
-    const dir = defaultTestInstallDir()
+    const dirs = testInstallDirs()
     const resolved = [
       ...new Set(
         filePaths
-          .map((filePath) => resolveTestInstallFile(filePath, dir))
+          .map((filePath) => resolveTestInstallFileInDirs(filePath, dirs))
           .filter((filePath): filePath is string => Boolean(filePath)),
       ),
     ]
     if (resolved.length === 0) {
-      throw new Error('Those files are not Font Builder test installs.')
+      throw new Error('Those files are not test installs.')
     }
     unregisterSessionFonts(resolved)
-    deleteTestInstallFiles(dir, resolved)
+    for (const dir of dirs) deleteTestInstallFiles(dir, resolved)
     const fonts = this.listTestInstalls()
     emitEvent({ type: 'test-installs', fonts })
     return fonts
@@ -2883,7 +2883,7 @@ export class FontButlerService {
   private readableTestInstallPath(id: string): string | null {
     const testPath = this.testInstallPaths.get(id)
     if (!testPath) return null
-    const safe = resolveTestInstallFile(testPath, defaultTestInstallDir())
+    const safe = resolveTestInstallFileInDirs(testPath, testInstallDirs())
     if (!safe) throw new Error('That font path is not readable.')
     return safe
   }
