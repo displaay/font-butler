@@ -419,7 +419,7 @@ test('uninstall of an adopted Adobe-only row uses the Adobe path and leaves Font
   }
 })
 
-test('a font dropped into the Adobe folder after launch is adopted', async () => {
+test('a font added to the Adobe folder is adopted on the next init', async () => {
   const paths = tempPaths()
   fs.mkdirSync(paths.adobeFontsDir, { recursive: true })
   const service = new FontButlerService(paths)
@@ -428,16 +428,13 @@ test('a font dropped into the Adobe folder after launch is adopted', async () =>
     assert.equal(service.listCatalog().length, 0)
     const font = path.join(paths.adobeFontsDir, 'DroppedAdobe.ttf')
     writeTestFont(font, 'DroppedAdobe', 'DroppedAdobe-Regular')
-    const deadline = Date.now() + 8000
-    let entry = service.listCatalog()[0]
-    while (!entry && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 150))
-      entry = service.listCatalog()[0]
-    }
+    await service.init()
+    const [entry] = service.listCatalog()
     assert.ok(entry)
     assert.equal(entry.status, 'installed')
     assert.equal(occupiesDestination(entry, 'adobe-shared', paths), true)
     assert.equal(occupiesDestination(entry, 'macos', paths), false)
+    assert.equal(entry.installedPath, undefined)
   } finally {
     await closeAllWatchers()
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })

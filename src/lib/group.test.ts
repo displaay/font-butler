@@ -123,12 +123,16 @@ test('matchesLibraryFilter treats empty as all and maps related statuses', () =>
 
 test('countLibraryFilters totals families per filter and can count one family twice', () => {
   const installed = entry('in', 'In', 1, 'installed')
-  installed.installedPath = installed.sourcePath
+  installed.installations = [
+    { destinationId: 'macos', path: '/tmp/Fonts/In.otf', verification: 'file-present' },
+  ]
   const vf = entry('vf', 'Variable', 2, 'uninstalled')
   vf.faces[0]!.isVariable = true
   vf.sourcePresent = true
   const bootonOn = entry('br', 'Booton', 3, 'installed')
-  bootonOn.installedPath = bootonOn.sourcePath
+  bootonOn.installations = [
+    { destinationId: 'macos', path: '/tmp/Fonts/Booton.otf', verification: 'file-present' },
+  ]
   const bootonOff = entry('bi', 'Booton', 4, 'uninstalled')
   assert.deepEqual(countLibraryFilters([installed, vf, bootonOn, bootonOff]), {
     installed: 2,
