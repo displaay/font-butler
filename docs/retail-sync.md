@@ -105,7 +105,10 @@ it is the user's call, not ours.
 
 - The worker token is stored in `<data root>/retail-token` with mode `0600`, **not** in `settings.json`.
   `AppSettings` is broadcast to the renderer on bootstrap and on every settings event, so a token there
-  would leak into the UI payload. The API reports `hasToken: boolean` and never the value.
+  would leak into the UI payload. The API reports `hasToken: boolean` and never the value. With no
+  file the built-in trial token is used (see [The worker tokens](#the-worker-tokens)). Only a missing
+  file means that: an unreadable one (permissions, I/O, a directory in its place) is an error, because
+  falling back to the trial token would replace the user's full files with the trials.
 - Every server-supplied path is validated before a write: lexically by `isSafeRelativePath` and then
   flattened to a basename under the Fonts folder. Traversal and Windows-hostile segments are refused.
 - Downloads are written to a staging `.part` file under the data root and committed into Fonts. A
@@ -155,17 +158,43 @@ already synced and then regenerated do not appear on Updates as a collection car
 
 ## Configuration
 
-### The worker token
+### The worker tokens
 
-The endpoints accept exactly one token: `Settings.workerFontButlerApiToken`, edited in the Contember
-admin under **Settings → General → "Worker FontButler API Token"**. It is deliberately separate from
-`WORKER_API_TOKEN` / `Settings.workerApiToken`, which guard admin tooling and download links — a
-dedicated token can be rotated or revoked for the desktop app alone, and a leak on either side does not
-reach the other. There is no `?token=` query fallback: the caller is a Node process that can set a
-header, and a token in a URL ends up in logs. An unset token fails closed (401).
+The endpoints accept two tokens, both edited in the Contember admin under **Settings → General**, and
+the token decides which collection the same URLs serve (the manifest says which in `mode`):
 
-In Font Buttler the token is stored in `<data root>/retail-token` (mode `0600`) and entered under
-**Settings → Watch folders → Worker token**.
+| Contember field | Serves | Where it lives in Font Buttler |
+| --- | --- | --- |
+| `workerFontButlerApiToken` | `retail` — the licensed files (`<revision>/`) | Entered by the user, stored in `<data root>/retail-token` (mode `0600`) |
+| `workerFontButlerTrialApiToken` | `trial` — the trial cut (`<revision>-TRIALS/`, `Matter-TRIAL-Regular.otf`) | Compiled in as `DEFAULT_RETAIL_TRIAL_TOKEN` (`core/settings.ts`) |
+
+Both are deliberately separate from `WORKER_API_TOKEN` / `Settings.workerApiToken`, which guard admin
+tooling and download links — a dedicated token can be rotated or revoked for the desktop app alone, and a
+leak on either side does not reach the other. There is no `?token=` query fallback: the caller is a Node
+process that can set a header, and a token in a URL ends up in logs. An unset token fails closed (401).
+
+The trial token ships inside every build, so it is public by construction: it buys revocation (clear the
+field and every build in the wild stops syncing), not secrecy. If it is rotated in the admin, update
+`DEFAULT_RETAIL_TRIAL_TOKEN` and ship a release.
+
+Without a saved token Font Buttler uses the built-in trial token, so turning sync on needs no token at
+all. A token entered under **Settings → Watch folders → Worker token** replaces it; **Remove** goes back
+to the trial one. `GET /api/retail/token` only ever reveals the user's own token. Status reports
+`hasToken` (a token of the user's own is saved) and `mode` (which collection the listings came from); the
+library, the sidebar item and the token row show a **Trial** badge when `mode` is `trial`.
+
+### Switching between trial and retail
+
+Trial and retail files have different names, so they are different listings. The first check or sync
+whose manifest reports a different `mode` than the one the listings came from uninstalls the previous
+collection's Fonts copies and forgets its listings (the same path as turning the collection off with
+**Remove**), then lists the new collection. This is decided on the worker's answer, not when the token is
+saved: a pasted token may itself be the trial one, and a rejected token (401) changes nothing. Settings
+runs a Check right after **Save** or **Remove**, so in practice the switch happens there. A manifest
+fetched with a token that has changed since (Save/Remove while the request was in flight) is discarded,
+and a check that switches collections first stops a running sync of the old one. The mode is
+stored in the local sync record; records from before trial tokens have none and are read from their keys
+(`-TRIALS` revision folder = trial). A manifest without `mode` (an older worker) counts as retail.
 
 `AppSettings.retailSync` holds `{ enabled, workerBaseUrl, autoCheckMinutes }`. There is no `folderId`.
 The default worker address is

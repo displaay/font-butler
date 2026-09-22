@@ -29,6 +29,16 @@ import type {
 /** Production worker (`wrangler.toml` production route). Dev is opt-in via the settings field. */
 export const DEFAULT_RETAIL_WORKER_BASE_URL = 'https://w.displaay.net'
 
+/**
+ * `Settings.workerFontButlerTrialApiToken` in the Contember admin — used whenever no token of the user's
+ * own is saved. The worker answers it with the trial cut of the collection only (`mode: 'trial'`).
+ *
+ * Not a secret: it ships inside every public build, so it buys revocation (clear the field in the admin
+ * and every build stops syncing) and a narrow blast radius, never secrecy — the same exposure the public
+ * trial download links already have. A token the user saves in Settings replaces it (full retail files).
+ */
+export const DEFAULT_RETAIL_TRIAL_TOKEN = 'DisplaayTrials_ybQPI4x3tUu3humGFAHhMKxlucl37k'
+
 export function defaultRetailSync(): RetailSyncSettings {
   return {
     enabled: false,

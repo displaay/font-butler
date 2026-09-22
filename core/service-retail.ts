@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { readRetailToken, writeRetailToken } from './auth.ts'
+import { readRetailToken, readRetailTokenStrict, writeRetailToken } from './auth.ts'
 import { loadCatalog, occupantsAtPath, removeEntryById, runCatalogTask, saveCatalog, upsertEntry } from './catalog.ts'
 import { copyAt, upsertCopy } from './destinations.ts'
 import { emitEvent } from './events.ts'
@@ -25,7 +25,13 @@ import {
   statRetailFile,
 } from './retail-sync.ts'
 import { catalogEvent, newId, now, removeInstalledCopy, touchEntry } from './service-helpers.ts'
-import { DEFAULT_RETAIL_WORKER_BASE_URL, defaultRetailSync, loadSettings, saveSettings } from './settings.ts'
+import {
+  DEFAULT_RETAIL_TRIAL_TOKEN,
+  DEFAULT_RETAIL_WORKER_BASE_URL,
+  defaultRetailSync,
+  loadSettings,
+  saveSettings,
+} from './settings.ts'
 import { removeAdobeCopy } from './service-destinations.ts'
 import { applyEntryFacts } from './state.ts'
 import type { AppSettings, CatalogEntry, FontFaceInfo, RetailSyncSettings } from './types.ts'
@@ -54,6 +60,9 @@ import {
   isSelectedRetailFormat,
   emptyRetailLocalManifest,
   isOrphanRetailListing,
+  retailListingHasLocalFile,
+  retailLocalManifestMode,
+  type RetailCollectionMode,
   type RetailCollisionAction,
   type RetailDisableAction,
   type RetailFamilyCollision,
@@ -257,6 +266,7 @@ export function retailStatus(paths: AppPaths, settings = loadSettings(paths)): R
     configured: config.enabled,
     // Never the token itself: this object is emitted as an event and returned to the renderer.
     hasToken: readRetailToken(retailTokenPath(paths)).length > 0,
+    mode: retailLocalManifestMode(local) ?? null,
     workerBaseUrl: config.workerBaseUrl || DEFAULT_RETAIL_WORKER_BASE_URL,
     checkedAt: cache.checkedAt,
     syncedAt: local.syncedAt,
@@ -279,7 +289,10 @@ function emitRetail(paths: AppPaths): RetailSyncStatus {
   return status
 }
 
-/** Explicit reveal only. Status, settings, and retail events still never include the token. */
+/**
+ * Explicit reveal only. Status, settings, and retail events still never include the token. Returns the
+ * user's own token — the built-in trial one is never shown as if the user had saved it.
+ */
 export function retailWorkerToken(paths: AppPaths): string {
   return readRetailToken(retailTokenPath(paths))
 }
@@ -507,10 +520,8 @@ function requireReady(paths: AppPaths): {
   if (!config.enabled) {
     throw new Error('Turn on the Displaay retail collection first.')
   }
-  const token = readRetailToken(retailTokenPath(paths))
-  if (!token) {
-    throw new Error('Add a Displaay worker token first.')
-  }
+  // No token of the user's own means the trial collection, never a refusal.
+  const token = readRetailTokenStrict(retailTokenPath(paths)) || DEFAULT_RETAIL_TRIAL_TOKEN
   return { config, token }
 }
 
@@ -704,6 +715,74 @@ function statRetailInstall(paths: AppPaths) {
       }
     }
     return disk(relativePath)
+  }
+}
+
+/**
+ * The token decides which collection the worker serves, and trial and retail files have different names
+ * (`Matter-TRIAL-Regular.otf`), so they are different listings. When the served collection is not the one
+ * the listings came from, the old collection is uninstalled and forgotten before the new one is listed —
+ * otherwise a user who upgrades keeps every trial font next to its full twin (and the reverse).
+ *
+ * Decided on the worker's answer, not when the token is saved: a pasted token may itself be the trial one.
+ * Workers older than trial tokens send no `mode` and only ever served retail.
+ */
+async function adoptRetailCollectionMode(paths: AppPaths, manifest: RetailManifest): Promise<void> {
+  const next = manifestMode(manifest)
+  const local = loadRetailManifest(paths)
+  const previous = retailLocalManifestMode(local)
+  if (previous === next && local.mode === next) return
+  if (!previous) {
+    // Nothing synced and no stamped mode (a check-only run on an older build, or an unreadable record):
+    // file-less listings the new collection does not name belong to the other one. Listings with bytes
+    // on disk are left alone — without a record we cannot tell whose they are.
+    await dropFilelessListingsOutside(paths, manifest)
+  } else if (previous !== next) {
+    await removeRetailCollection(paths)
+    // Not `resetRetailCache()`: it aborts the in-flight sync, and runSync calls this from inside one.
+    cache.drift = []
+    cache.skipped = []
+    cache.fonts = null
+    cache.collisions = []
+  }
+  saveRetailManifest(paths, { ...loadRetailManifest(paths), mode: next })
+}
+
+function manifestMode(manifest: RetailManifest): RetailCollectionMode {
+  return manifest.mode ?? 'retail'
+}
+
+async function dropFilelessListingsOutside(paths: AppPaths, manifest: RetailManifest): Promise<void> {
+  const named = new Set(
+    (manifest.collections ?? []).flatMap((collection) =>
+      (collection.files ?? []).map((file) => file?.relativePath),
+    ),
+  )
+  await runCatalogTask(async () => {
+    const catalog = loadCatalog(paths)
+    const stale = catalog.entries.filter(
+      (entry) =>
+        entry.retailRelativePath &&
+        !named.has(entry.retailRelativePath) &&
+        !retailListingHasLocalFile(entry),
+    )
+    if (!stale.length) return
+    for (const entry of stale) removeEntryById(catalog, entry.id)
+    saveCatalog(paths, catalog)
+    emitEvent(catalogEvent(catalog.entries))
+  })
+}
+
+/**
+ * True when the token that fetched `manifest` is no longer the effective one — the user saved or
+ * removed a token while the request (or the wait on a running sync) was in flight. Acting on that
+ * answer would replace a collection the user just chose.
+ */
+function tokenChangedSince(paths: AppPaths, token: string): boolean {
+  try {
+    return requireReady(paths).token !== token
+  } catch {
+    return true
   }
 }
 
@@ -919,7 +998,17 @@ export async function checkRetail(
       cache.collisions = []
       return emitRetail(paths)
     }
-    const { manifest } = await readManifest(paths, options)
+    const { manifest, token } = await readManifest(paths, options)
+    if (tokenChangedSince(paths, token)) return emitRetail(paths)
+    // A sync of the previous collection could land files after the removal below: stop it and let it
+    // wind down first. Only once the worker answered, so an unreachable worker never disturbs a sync.
+    const previous = retailLocalManifestMode(loadRetailManifest(paths))
+    if (inflightSync && previous && previous !== manifestMode(manifest)) {
+      abortInflightRetailSync()
+      await inflightSync.catch(() => undefined)
+      if (tokenChangedSince(paths, token)) return emitRetail(paths)
+    }
+    await adoptRetailCollectionMode(paths, manifest)
     await ensureRetailListings(paths, manifest)
     await reconcileRetailCatalog(paths, loadRetailManifest(paths))
     const drift = measureDrift(paths, manifest)
@@ -1073,6 +1162,13 @@ async function runSync(
       refresh: true,
       fetchManifest: options.fetchManifest,
     })
+    // Aborted (token saved or removed meanwhile) or answered for a token that is no longer current:
+    // that manifest must not replace anything.
+    if (options.signal?.aborted || tokenChangedSince(paths, token)) {
+      cache.progress = null
+      return emitRetail(paths)
+    }
+    await adoptRetailCollectionMode(paths, manifest)
     await ensureRetailListings(paths, manifest)
     await reconcileRetailCatalog(paths, loadRetailManifest(paths))
 

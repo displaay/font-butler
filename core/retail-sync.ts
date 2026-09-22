@@ -8,6 +8,7 @@ import type { AppPaths } from './paths.ts'
 import {
   emptyRetailLocalManifest,
   isSyncableDrift,
+  normalizeRetailMode,
   retailFileFamilyName,
   retailTypefaceName,
   type RetailDriftItem,
@@ -304,6 +305,7 @@ export function loadRetailManifest(paths: AppPaths): RetailLocalManifest {
       syncedAt: typeof parsed.syncedAt === 'string' ? parsed.syncedAt : null,
       files,
       incomplete: parsed.incomplete === true,
+      ...(normalizeRetailMode(parsed.mode) ? { mode: normalizeRetailMode(parsed.mode) } : {}),
     }
   } catch {
     return emptyRetailLocalManifest()

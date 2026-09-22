@@ -28,7 +28,7 @@ import {
   findOutsideCollisionsForRetailFamilies,
   findRetailCollisionsForIncomingFamilies,
 } from './retail-collisions.ts'
-import { loadSettings, saveSettings } from './settings.ts'
+import { DEFAULT_RETAIL_TRIAL_TOKEN, loadSettings, saveSettings } from './settings.ts'
 import { RETAIL_DOWNLOAD_CONCURRENCY } from './retail-apply.ts'
 import { loadRetailManifest, saveRetailManifest } from './retail-sync.ts'
 import { withService, writeTestFont } from './test-util.ts'
@@ -65,6 +65,31 @@ function emptyManifest(): RetailManifest {
   return {
     generatedAt: '2026-01-01T00:00:00.000Z',
     collections: [],
+    skipped: [],
+  }
+}
+
+/** The trial cut the built-in token gets: sibling `-TRIALS` revision folder, `-TRIAL` file names. */
+function trialManifest(): RetailManifest {
+  return {
+    mode: 'trial',
+    generatedAt: '2026-01-01T00:00:00.000Z',
+    collections: [
+      {
+        glyphsFile: 'Reckless',
+        revisionId: 'rev-1',
+        lastRegeneratedAt: '2026-01-01T00:00:00.000Z',
+        files: [
+          {
+            key: 'Reckless/rev-1-TRIALS/Reckless-TRIAL-VF.otf',
+            relativePath: 'Reckless/Reckless-TRIAL-VF.otf',
+            size: 4,
+            etag: 't1',
+            uploaded: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      },
+    ],
     skipped: [],
   }
 }
@@ -282,11 +307,243 @@ test('turning sync off with remove leaves a non-retail occupant in Fonts', async
   })
 })
 
-test('a check without a token reports an error rather than throwing', async () => {
+test('without a saved token a check uses the built-in trial token', async () => {
   const paths = setup()
   await configureRetailSync(paths, { enabled: true })
+  const tokens: string[] = []
+  const status = await checkRetail(paths, {
+    fetchManifest: async (options) => {
+      tokens.push(options.token)
+      return trialManifest()
+    },
+  })
+  assert.deepEqual(tokens, [DEFAULT_RETAIL_TRIAL_TOKEN])
+  assert.equal(status.error, null)
+  assert.equal(status.hasToken, false)
+  assert.equal(status.mode, 'trial')
+  // The built-in token is never revealed as if the user had saved it.
+  assert.equal(retailWorkerToken(paths), '')
+})
+
+test('a saved token replaces the built-in trial token', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 'retail-token' })
+  const tokens: string[] = []
+  const status = await checkRetail(paths, {
+    fetchManifest: async (options) => {
+      tokens.push(options.token)
+      return { ...manifestWith(4, 'e1'), mode: 'retail' }
+    },
+  })
+  assert.deepEqual(tokens, ['retail-token'])
+  assert.equal(status.mode, 'retail')
+})
+
+async function syncTrialFont(paths: AppPaths): Promise<string> {
+  await configureRetailSync(paths, { enabled: true })
+  const synced = await syncRetail(paths, {
+    fetchManifest: async () => trialManifest(),
+    fetchFile: async () => new Uint8Array(4).fill(1),
+  })
+  assert.equal(synced.error, null)
+  const trialFile = path.join(paths.userFontsDir, 'Reckless-TRIAL-VF.otf')
+  assert.equal(fs.existsSync(trialFile), true)
+  return trialFile
+}
+
+for (const via of ['check', 'sync'] as const) {
+  test(`a ${via} with a retail token replaces the synced trial collection`, async () => {
+    const paths = setup()
+    const trialFile = await syncTrialFont(paths)
+    await configureRetailSync(paths, { token: 'retail-token' })
+    const fetchManifest = async () => ({ ...manifestWith(4, 'e1'), mode: 'retail' as const })
+    const status =
+      via === 'check'
+        ? await checkRetail(paths, { fetchManifest })
+        : await syncRetail(paths, { fetchManifest, fetchFile: async () => new Uint8Array(4).fill(2) })
+    assert.equal(status.error, null)
+    assert.equal(status.mode, 'retail')
+    assert.equal(fs.existsSync(trialFile), false)
+    assert.deepEqual(
+      loadCatalog(paths).entries.map((entry) => entry.retailRelativePath),
+      ['Reckless/RecklessVF.otf'],
+    )
+    assert.equal('Reckless/Reckless-TRIAL-VF.otf' in loadRetailManifest(paths).files, false)
+    assert.equal(status.drift.some((item) => item.kind === 'removed'), false)
+  })
+}
+
+test('removing the token puts the trial collection back in place of the retail one', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 'retail-token' })
+  await syncRetail(paths, {
+    fetchManifest: async () => ({ ...manifestWith(4, 'e1'), mode: 'retail' as const }),
+    fetchFile: async () => new Uint8Array(4).fill(1),
+  })
+  const retailFile = path.join(paths.userFontsDir, 'RecklessVF.otf')
+  assert.equal(fs.existsSync(retailFile), true)
+  await configureRetailSync(paths, { token: '' })
+  const status = await checkRetail(paths, { fetchManifest: async () => trialManifest() })
+  assert.equal(status.mode, 'trial')
+  assert.equal(fs.existsSync(retailFile), false)
+  assert.deepEqual(
+    loadCatalog(paths).entries.map((entry) => entry.retailRelativePath),
+    ['Reckless/Reckless-TRIAL-VF.otf'],
+  )
+})
+
+test('a sync record from before trial tokens is read as retail from its keys', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 'retail-token' })
+  // An older worker: no `mode` in the manifest.
+  await syncRetail(paths, {
+    fetchManifest: async () => manifestWith(4, 'e1'),
+    fetchFile: async () => new Uint8Array(4).fill(1),
+  })
+  const { mode: _dropped, ...legacy } = loadRetailManifest(paths)
+  saveRetailManifest(paths, legacy)
+  resetRetailCache()
+  assert.equal(retailStatus(paths).mode, 'retail')
+
+  await configureRetailSync(paths, { token: '' })
+  await checkRetail(paths, { fetchManifest: async () => trialManifest() })
+  assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'RecklessVF.otf')), false)
+})
+
+test('a full sync keeps the stamped collection mode on disk', async () => {
+  const paths = setup()
+  await syncTrialFont(paths)
+  assert.equal(loadRetailManifest(paths).mode, 'trial')
+  resetRetailCache()
+  assert.equal(retailStatus(paths).mode, 'trial')
+})
+
+test('a manifest without a mode (older worker) counts as retail and replaces the trials', async () => {
+  const paths = setup()
+  const trialFile = await syncTrialFont(paths)
+  await configureRetailSync(paths, { token: 'retail-token' })
   const status = await checkRetail(paths, { fetchManifest: async () => manifestWith(4, 'e1') })
+  assert.equal(status.mode, 'retail')
+  assert.equal(fs.existsSync(trialFile), false)
+})
+
+test('a check answered for a token the user has since replaced changes nothing', async () => {
+  const paths = setup()
+  const trialFile = await syncTrialFont(paths)
+  await configureRetailSync(paths, { token: 'retail-token' })
+  const status = await checkRetail(paths, {
+    fetchManifest: async () => {
+      // The user removes the token again while the retail answer is on its way.
+      await configureRetailSync(paths, { token: '' })
+      return { ...manifestWith(4, 'e1'), mode: 'retail' as const }
+    },
+  })
+  assert.equal(status.mode, 'trial')
+  assert.equal(fs.existsSync(trialFile), true)
+  assert.deepEqual(
+    loadCatalog(paths).entries.map((entry) => entry.retailRelativePath),
+    ['Reckless/Reckless-TRIAL-VF.otf'],
+  )
+})
+
+test('a sync answered for a token the user has since replaced changes nothing', async () => {
+  const paths = setup()
+  const trialFile = await syncTrialFont(paths)
+  await configureRetailSync(paths, { token: 'retail-token' })
+  let downloads = 0
+  await syncRetail(paths, {
+    fetchManifest: async () => {
+      await configureRetailSync(paths, { token: '' })
+      return { ...manifestWith(4, 'e1'), mode: 'retail' as const }
+    },
+    fetchFile: async () => {
+      downloads += 1
+      return new Uint8Array(4).fill(2)
+    },
+  })
+  assert.equal(downloads, 0)
+  assert.equal(fs.existsSync(trialFile), true)
+  assert.equal(loadRetailManifest(paths).mode, 'trial')
+})
+
+test('a check that switches collections stops a running sync of the old one first', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true })
+  const started = deferred()
+  const running = syncRetail(paths, {
+    fetchManifest: async () => trialManifest(),
+    // Hangs until aborted, like a slow download.
+    fetchFile: (options) =>
+      new Promise<Uint8Array>((_, reject) => {
+        started.resolve()
+        options.signal?.addEventListener('abort', () => reject(new Error('canceled')), { once: true })
+      }),
+  })
+  await started.promise
+  // Written directly rather than through configureRetailSync, which would abort the sync itself —
+  // this is the case where only the check can stop it.
+  fs.writeFileSync(retailTokenPath(paths), 'retail-token')
+  const status = await checkRetail(paths, {
+    fetchManifest: async () => ({ ...manifestWith(4, 'e1'), mode: 'retail' as const }),
+  })
+  await running
+  assert.equal(status.mode, 'retail')
+  assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'Reckless-TRIAL-VF.otf')), false)
+  assert.deepEqual(
+    loadCatalog(paths).entries.map((entry) => entry.retailRelativePath),
+    ['Reckless/RecklessVF.otf'],
+  )
+})
+
+test('an unreadable token file is an error, not a silent switch to the trial collection', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 'retail-token' })
+  await syncRetail(paths, {
+    fetchManifest: async () => ({ ...manifestWith(4, 'e1'), mode: 'retail' as const }),
+    fetchFile: async () => new Uint8Array(4).fill(1),
+  })
+  // Something that exists but cannot be read as the token.
+  fs.rmSync(retailTokenPath(paths), { force: true })
+  fs.mkdirSync(retailTokenPath(paths))
+  let fetched = 0
+  const status = await checkRetail(paths, {
+    fetchManifest: async () => {
+      fetched += 1
+      return trialManifest()
+    },
+  })
+  assert.equal(fetched, 0)
   assert.match(status.error ?? '', /token/i)
+  assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'RecklessVF.otf')), true)
+})
+
+test('with no sync record, file-less listings the new collection does not name are dropped', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 'retail-token' })
+  // A check-only run on a build that did not stamp the mode: listings, no files, no mode.
+  await checkRetail(paths, { fetchManifest: async () => manifestWith(4, 'e1') })
+  saveRetailManifest(paths, { version: 1, syncedAt: null, files: {} })
+  await configureRetailSync(paths, { token: '' })
+  const status = await checkRetail(paths, { fetchManifest: async () => trialManifest() })
+  assert.equal(status.mode, 'trial')
+  assert.deepEqual(
+    loadCatalog(paths).entries.map((entry) => entry.retailRelativePath),
+    ['Reckless/Reckless-TRIAL-VF.otf'],
+  )
+})
+
+test('a failed check with a new token leaves the previous collection alone', async () => {
+  const paths = setup()
+  const trialFile = await syncTrialFont(paths)
+  await configureRetailSync(paths, { token: 'wrong' })
+  const status = await checkRetail(paths, {
+    fetchManifest: async () => {
+      throw new Error('The Displaay worker rejected that token.')
+    },
+  })
+  assert.match(status.error ?? '', /rejected/)
+  assert.equal(status.mode, 'trial')
+  assert.equal(fs.existsSync(trialFile), true)
 })
 
 test('a credentials-only check validates the worker without writing listings', async () => {

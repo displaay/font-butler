@@ -79,13 +79,13 @@ The packaged macOS app ships its own CPython and `fonttools`, so “Install as�
 ## Displaay retail collection
 
 An optional collection can be kept in step with the Displaay worker. Turn it on in
-**Settings → Watch folders**, give it the worker address and a token, then use **Check** to see what
-changed on the server and **Sync All** (or a per-family On switch) to pull it down. Turning Sync on
+**Settings → Watch folders**, then use **Check** to see what changed on the server and **Sync All** (or a per-family On switch) to pull it down. Turning Sync on
 loads the list without downloading; an interrupted sync resumes on the next launch. Turning Sync off
 asks whether to keep the fonts installed or uninstall them and remove them from the library. Background
 checks still do not run at startup. Fonts flatten into
-`~/Library/Fonts` (no separate source folder on disk). See
-[docs/retail-sync.md](docs/retail-sync.md).
+`~/Library/Fonts` (no separate source folder on disk). Without a token of your own the app uses its
+built-in trial token and syncs the Displaay trial fonts (marked **Trial**); a token with retail access
+replaces them with the full files. See [docs/retail-sync.md](docs/retail-sync.md).
 
 ## App updates
 

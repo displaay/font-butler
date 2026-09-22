@@ -48,7 +48,15 @@ export type RetailSkip = {
   reason: RetailSkipReason
 }
 
+/**
+ * Which half of the collection the worker served, decided by the token: the licensed retail files or
+ * the trial cut (`<revision>-TRIALS/`, `Matter-TRIAL-Regular.otf`).
+ */
+export type RetailCollectionMode = 'retail' | 'trial'
+
 export type RetailManifest = {
+  /** Absent from workers that predate trial tokens; those only ever served retail. */
+  mode?: RetailCollectionMode
   generatedAt: string
   collections: RetailCollection[]
   skipped: RetailSkip[]
@@ -65,6 +73,8 @@ export type RetailLocalManifest = {
   files: Record<string, RetailLocalFile>
   /** True while a download/install pass is running. Survives a quit so the next launch can resume. */
   incomplete?: boolean
+  /** Mode of the last successful check. Absent in records written before trial tokens existed. */
+  mode?: RetailCollectionMode
 }
 
 export type RetailLocalFile = {
@@ -144,7 +154,13 @@ export type RetailSyncStatus = {
   /** Background check interval in minutes; `0` means the app never checks on its own. */
   autoCheckMinutes: number
   configured: boolean
+  /**
+   * True when the user saved a token of their own. Without one the built-in trial token is used, so a
+   * check never needs this to be true.
+   */
   hasToken: boolean
+  /** Collection the listings came from. Null before the first check on a fresh install. */
+  mode: RetailCollectionMode | null
   workerBaseUrl: string
   checkedAt: string | null
   syncedAt: string | null
@@ -175,6 +191,8 @@ export type RetailSyncProgress = {
 /** Subset the library uses to decide badges, instance marks, and stub visibility. */
 export type RetailSyncView = {
   enabled: boolean
+  /** `trial` adds the Trial badge next to the Displaay one. */
+  mode?: RetailCollectionMode | null
   fonts: ReadonlyArray<Pick<RetailSyncFont, 'familyName' | 'enabled'>>
   disabledGlyphsFiles?: readonly string[]
 }
@@ -692,6 +710,27 @@ export function retailLibraryEntryVisible(
   const format = retailFileFormat(relative)
   if (!format) return true
   return format === font.selectedFormat
+}
+
+export function normalizeRetailMode(value: unknown): RetailCollectionMode | undefined {
+  return value === 'retail' || value === 'trial' ? value : undefined
+}
+
+/**
+ * Mode of one R2 key (`<glyphsFile>/<revisionId>[-TRIALS]/<basename>`), mirroring the worker's own
+ * `allowedCollectionKeys` rule. Lets a local record written before `mode` existed say which collection
+ * its files came from.
+ */
+export function retailModeOfKey(key: string): RetailCollectionMode {
+  const slash = key.lastIndexOf('/')
+  return key.slice(0, Math.max(slash, 0)).endsWith('-TRIALS') ? 'trial' : 'retail'
+}
+
+/** Stored mode, else inferred from the synced keys; undefined when nothing was ever synced. */
+export function retailLocalManifestMode(local: RetailLocalManifest): RetailCollectionMode | undefined {
+  if (local.mode) return local.mode
+  const first = Object.values(local.files)[0]
+  return first ? retailModeOfKey(first.key) : undefined
 }
 
 export function emptyRetailLocalManifest(): RetailLocalManifest {
