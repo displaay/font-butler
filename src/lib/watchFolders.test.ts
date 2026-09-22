@@ -11,6 +11,9 @@ import {
   mergeWatchFolders,
   RETAIL_LIBRARY_FILTER,
   RETAIL_LIBRARY_LABEL,
+  TEST_INSTALL_FILTER,
+  TEST_INSTALL_LABEL,
+  isTestInstallFilter,
   watchFolderLabel,
   watchFolderName,
 } from './watchFolders.ts'
@@ -91,4 +94,11 @@ test('the retail library filter matches catalog entries tagged with a retail pat
   assert.equal(matchesLibraryFolderFilter(retail, RETAIL_LIBRARY_FILTER), true)
   assert.equal(matchesLibraryFolderFilter(local, RETAIL_LIBRARY_FILTER), false)
   assert.equal(libraryFolderFilterLabel(RETAIL_LIBRARY_FILTER, []), RETAIL_LIBRARY_LABEL)
+})
+
+test('the test install filter is not a watch folder of catalog fonts', () => {
+  const local = entry('/Users/you/Fonts/Inbox/Family.otf', true)
+  assert.equal(isTestInstallFilter(TEST_INSTALL_FILTER), true)
+  assert.equal(matchesLibraryFolderFilter(local, TEST_INSTALL_FILTER), false)
+  assert.equal(libraryFolderFilterLabel(TEST_INSTALL_FILTER, []), TEST_INSTALL_LABEL)
 })

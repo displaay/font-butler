@@ -89,6 +89,7 @@ export async function startFontButlerServer(
   const service = new FontButlerService()
 
   await service.init()
+  const stopTestInstallWatch = service.watchTestInstalls()
 
   process.on('unhandledRejection', (error) => {
     console.error('unhandledRejection', error)
@@ -559,6 +560,21 @@ app.post('/api/forget', async (c) => {
   } catch (error) {
     return c.json(
       { error: error instanceof Error ? error.message : 'Could not remove font' },
+      400,
+    )
+  }
+})
+
+app.get('/api/test-installs', (c) => c.json({ fonts: service.listTestInstalls() }))
+
+app.post('/api/test-installs/uninstall', async (c) => {
+  const body = await c.req.json<{ paths?: string[] }>()
+  const paths = Array.isArray(body.paths) ? body.paths.filter((item) => typeof item === 'string') : []
+  try {
+    return c.json({ fonts: service.uninstallTestInstalls(paths) })
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : 'Uninstall failed' },
       400,
     )
   }
@@ -1086,6 +1102,7 @@ app.get('/api/events', (c) => {
         try {
           await closeFontAnalysisWorker()
           await closeAllWatchers()
+          await stopTestInstallWatch()
           service.dispose()
           await Promise.race([
             new Promise<void>((resolve) => {

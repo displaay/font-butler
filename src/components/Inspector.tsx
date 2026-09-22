@@ -82,6 +82,7 @@ export function Inspector({
   pane = 'details',
   onPaneChange,
   tablistId,
+  uninstallOnly = false,
 }: {
   group: FamilyGroup | null
   retail?: RetailSyncView | null
@@ -128,6 +129,7 @@ export function Inspector({
   pane?: InspectorPaneTab
   onPaneChange?: (pane: InspectorPaneTab) => void
   tablistId?: string
+  uninstallOnly?: boolean
   multiSelect?: {
     names: string[]
     summary: string
@@ -390,7 +392,13 @@ export function Inspector({
   ] as Array<SplitUninstallExtra | null>).filter(
     (item): item is SplitUninstallExtra => Boolean(item),
   )
-  const actions = (
+  const actions = uninstallOnly ? (
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" variant="destructive" disabled={busy} onClick={onUninstall}>
+          <CircleMinus /> Uninstall
+        </Button>
+      </div>
+  ) : (
       <div className="flex flex-wrap gap-2">
         {previewOnly ? (
           <>

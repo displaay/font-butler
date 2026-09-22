@@ -38,6 +38,15 @@ import {
   removeDuplicateWarning,
 } from './duplicates.ts'
 import { emitEvent } from './events.ts'
+import { unregisterSessionFonts } from './session-fonts.ts'
+import {
+  defaultTestInstallDir,
+  deleteTestInstallFiles,
+  resolveTestInstallFile,
+  scanTestInstallDir,
+  startTestInstallWatch,
+  type TestInstallFont,
+} from './test-install.ts'
 import {
   IDENTITY_MUTEX_MESSAGE,
   identityMutexMessage,
@@ -324,6 +333,8 @@ export class FontButlerService {
   private rememberedDecisions = new Map<string, ImportPlanChoice>()
   private destinationFailures: Array<{ destinationId: DestinationId; reason: string }> = []
   private replacedConflicts: OperationItem[] = []
+  private testInstallPaths = new Map<string, string>()
+  private stopTestInstallWatch: (() => Promise<void>) | null = null
   /**
    * Test seam: stub Displaay worker HTTP for this instance so onboarding follow-up
    * can sync without the network.
@@ -346,6 +357,9 @@ export class FontButlerService {
       this.autoReinstallTimer = null
     }
     this.autoReinstallPending.clear()
+    const stop = this.stopTestInstallWatch
+    this.stopTestInstallWatch = null
+    if (stop) void stop()
   }
 
   private rememberDecision(key: string, choice: ImportPlanChoice): void {
@@ -675,6 +689,41 @@ export class FontButlerService {
     const faces = scanSystemFonts(this.paths)
     emitEvent({ type: 'system', faces })
     return faces
+  }
+
+  listTestInstalls(): TestInstallFont[] {
+    const fonts = scanTestInstallDir(defaultTestInstallDir())
+    this.testInstallPaths = new Map(fonts.map((font) => [font.id, font.path]))
+    return fonts
+  }
+
+  watchTestInstalls(): () => Promise<void> {
+    const publish = () => {
+      emitEvent({ type: 'test-installs', fonts: this.listTestInstalls() })
+    }
+    publish()
+    const stop = startTestInstallWatch(defaultTestInstallDir(), publish)
+    this.stopTestInstallWatch = stop
+    return stop
+  }
+
+  uninstallTestInstalls(filePaths: string[]): TestInstallFont[] {
+    const dir = defaultTestInstallDir()
+    const resolved = [
+      ...new Set(
+        filePaths
+          .map((filePath) => resolveTestInstallFile(filePath, dir))
+          .filter((filePath): filePath is string => Boolean(filePath)),
+      ),
+    ]
+    if (resolved.length === 0) {
+      throw new Error('Those files are not Font Builder test installs.')
+    }
+    unregisterSessionFonts(resolved)
+    deleteTestInstallFiles(dir, resolved)
+    const fonts = this.listTestInstalls()
+    emitEvent({ type: 'test-installs', fonts })
+    return fonts
   }
 
   inspectDrop(paths: string[]): DropInspect {
@@ -2878,6 +2927,16 @@ export class FontButlerService {
     which: 'source' | 'installed' | 'revision' = 'installed',
     fingerprint?: string,
   ): { buffer: Buffer; mime: string; filename: string } {
+    const testPath = this.testInstallPaths.get(id)
+    if (testPath) {
+      const safe = resolveTestInstallFile(testPath, defaultTestInstallDir())
+      if (!safe) throw new Error('That font path is not readable.')
+      return {
+        buffer: fs.readFileSync(safe),
+        mime: mimeForFont(safe),
+        filename: path.basename(safe),
+      }
+    }
     const catalog = loadCatalog(this.paths)
     const entry = findById(catalog, id)
     if (!entry) throw new Error('Font is not in the library.')

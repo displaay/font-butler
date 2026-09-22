@@ -19,6 +19,7 @@ import {
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
 import { familyCardPlan, type CatalogBatchPlan } from '@/lib/batch'
+import { testInstallMenuLabels } from '@/lib/testInstall'
 import { applyFontDragImage } from '@/lib/dragPreview'
 import { formatAddedAt } from '@/lib/dates'
 import { mixedFormatWarning, occupyingFormats, uniqueEntryFormats, formatSwap } from '@/lib/formats'
@@ -85,6 +86,7 @@ export const LibraryCard = memo(function LibraryCard({
   onCreateProjectFromCard,
   onFontDragStart,
   onFontDragEnd,
+  uninstallOnly = false,
 }: {
   group: FamilyGroup
   retail?: RetailSyncView | null
@@ -139,6 +141,7 @@ export const LibraryCard = memo(function LibraryCard({
   onCreateProjectFromCard: (ids: string[], familyNames: string[]) => void
   onFontDragStart: () => void
   onFontDragEnd: () => void
+  uninstallOnly?: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
   const { hovered, actionsVisible, onContextMenuOpenChange, cardChrome } = useCardActionChrome()
@@ -299,7 +302,7 @@ export const LibraryCard = memo(function LibraryCard({
     >
       <div
         data-family-key={group.familyName}
-        draggable
+        draggable={!uninstallOnly}
         onDragStart={startFontDrag}
         onDragEnd={onFontDragEnd}
         className={cn(
@@ -344,7 +347,7 @@ export const LibraryCard = memo(function LibraryCard({
           <ContextMenuTrigger asChild>
             <button
               type="button"
-              draggable
+              draggable={!uninstallOnly}
               onDragStart={startFontDrag}
               onClick={handleCardClick}
               onContextMenu={skipClickAfterContextMenu}
@@ -375,7 +378,7 @@ export const LibraryCard = memo(function LibraryCard({
               <div className="flex items-stretch">
                 <button
                   type="button"
-                  draggable
+                  draggable={!uninstallOnly}
                   onDragStart={startFontDrag}
                   onClick={handleCardClick}
                   onContextMenu={skipClickAfterContextMenu}
@@ -428,6 +431,7 @@ export const LibraryCard = memo(function LibraryCard({
                 instanceActions={{
                   entries: group.entries,
                   busy,
+                  uninstallOnly,
                   onInstall: onInstallInstance,
                   onActivate: onActivateInstance,
                   onDeactivate: onDeactivateInstance,
@@ -446,7 +450,7 @@ export const LibraryCard = memo(function LibraryCard({
             )}
           </>
         )}
-        {!batch && (
+        {!batch && !uninstallOnly && (
           <CatalogCardActions
             plan={plan}
             previewOnly={group.entries.every((entry) => entry.previewOnly)}
@@ -469,6 +473,12 @@ export const LibraryCard = memo(function LibraryCard({
         )}
       </div>
       <ContextMenuContent>
+        {uninstallOnly ? (
+          <ContextMenuItem disabled={busy} onSelect={onUninstall}>
+            {testInstallMenuLabels()[0]}
+          </ContextMenuItem>
+        ) : (
+          <>
         <ContextMenuItem
           disabled={!group.entries.some((entry) => entry.installedPath || entry.disabledPath)}
           onSelect={onReveal}
@@ -546,6 +556,8 @@ export const LibraryCard = memo(function LibraryCard({
           formatSwap={swap}
           onFormatSwap={onFormatSwap}
         />
+          </>
+        )}
       </ContextMenuContent>
     </ContextMenu>
   )
@@ -564,5 +576,6 @@ export const LibraryCard = memo(function LibraryCard({
   prev.retail === next.retail &&
   prev.batch === next.batch &&
   prev.projectFilter === next.projectFilter &&
-  prev.adobeAvailable === next.adobeAvailable
+  prev.adobeAvailable === next.adobeAvailable &&
+  prev.uninstallOnly === next.uninstallOnly
 ))

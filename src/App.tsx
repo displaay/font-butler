@@ -43,7 +43,7 @@ import { Toaster } from '@/components/ui/sonner'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useFontActions, type FormatPrompt, type ReplacePrompt } from '@/hooks/useFontActions'
 import { useLibraryWindow } from '@/hooks/useLibraryWindow'
-import { api, isActionProgressEvent, isAppUpdateEvent, isDuplicatesEvent, isNotice, isOperationsEvent, isProjectsEvent, isRetailEvent, isSettingsEvent, subscribeEvents } from '@/lib/api'
+import { api, isActionProgressEvent, isAppUpdateEvent, isDuplicatesEvent, isNotice, isOperationsEvent, isProjectsEvent, isRetailEvent, isSettingsEvent, isTestInstallsEvent, subscribeEvents } from '@/lib/api'
 import {
   mergeUnreadFlags,
   unreadActivityCount,
@@ -137,9 +137,10 @@ import {
 import { allUpdateGroups, visibleUpdateGroups } from '@/lib/updateInventory'
 import { operationMatchesQuery, tabWithSearchHits } from '@/lib/search'
 import type { AppSettings, AppUpdateStatus, CatalogEntry, DestinationCapability, DuplicateWarning, FamilyGroup, FontStatus, ImportPlan, ImportPlanItem, LibraryFilter, Operation, PreviewPreferences, ProjectSet, RetailCollisionAction, RetailFamilyCollision, RetailSyncStatus, SavedLibraryFilter, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
+import { testInstallToCatalog, type TestInstallFont } from '@/lib/testInstall'
 import { retailHasLiveUpdates, retailLibraryEntryVisible, retailSyncIsOn, retailSyncingStatusMessage, retailUpdateCount } from '@/lib/types'
 import { cn } from '@/lib/utils'
-import { isPathUnderFolder, isRetailLibraryFilter, isWatchFolderEntry, libraryFolderFilterLabel, matchesLibraryFolderFilter, RETAIL_LIBRARY_FILTER, watchFolderName } from '@/lib/watchFolders'
+import { isPathUnderFolder, isRetailLibraryFilter, isTestInstallFilter, isWatchFolderEntry, libraryFolderFilterLabel, matchesLibraryFolderFilter, RETAIL_LIBRARY_FILTER, TEST_INSTALL_FILTER, watchFolderName } from '@/lib/watchFolders'
 
 const EMPTY_WATCH_FOLDERS: string[] = []
 const EMPTY_SYSTEM_FACES: SystemFace[] = []
@@ -207,6 +208,7 @@ function AppShell() {
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const settingsRef = useRef<AppSettings | null>(null)
   const [watchFolderFilter, setWatchFolderFilter] = useState<string | null>(null)
+  const [testInstallFonts, setTestInstallFonts] = useState<TestInstallFont[]>([])
   const [folderDrop, setFolderDrop] = useState<{
     folders: string[]
     paths: string[]
@@ -472,6 +474,8 @@ function AppShell() {
         if (!cancelled) {
           setSystemFaces(system.faces)
         }
+        const testInstalls = await api.testInstalls().catch(() => ({ fonts: [] as TestInstallFont[] }))
+        if (!cancelled) setTestInstallFonts(testInstalls.fonts)
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Could not load fonts')
       } finally {
@@ -528,6 +532,10 @@ function AppShell() {
       if (isActionProgressEvent(event) && event.total > 1) {
         const verb = verbForBatchAction(event.action)
         if (verb) setActionStatus(progressActionCopy(verb, event.done, event.total))
+        return
+      }
+      if (isTestInstallsEvent(event)) {
+        setTestInstallFonts(event.fonts)
         return
       }
       if (isRetailEvent(event)) {
@@ -651,16 +659,20 @@ function AppShell() {
     return new Set(project?.members.map((member) => member.assetId) ?? [])
   }, [projects, projectFilter])
   const searching = Boolean(query.trim())
+  const testInstallActive = isTestInstallFilter(watchFolderFilter)
+  const testInstallEntries = useMemo(() => testInstallToCatalog(testInstallFonts), [testInstallFonts])
   const librarySourceEntries = useMemo(
-    () =>
-      entries.filter((entry) => {
+    () => {
+      if (testInstallActive) return testInstallEntries
+      return entries.filter((entry) => {
         if (!retailLibraryEntryVisible(entry, retail?.fonts ?? [], retailSyncIsOn(retail))) return false
         if (searching) return true
         if (watchFolderFilter && !matchesLibraryFolderFilter(entry, watchFolderFilter)) return false
         if (projectFilter && !projectMemberIds.has(entry.id)) return false
         return true
-      }),
-    [entries, watchFolderFilter, projectFilter, projectMemberIds, searching, retail],
+      })
+    },
+    [entries, watchFolderFilter, projectFilter, projectMemberIds, searching, retail, testInstallActive, testInstallEntries],
   )
   const libraryGroups = useMemo(
     () =>
@@ -687,6 +699,7 @@ function AppShell() {
     for (const folder of watchFolders) {
       counts[folder] = countFamilyNames(entries.filter((entry) => isWatchFolderEntry(entry, folder)))
     }
+    counts[TEST_INSTALL_FILTER] = countFamilyNames(testInstallEntries)
     counts[RETAIL_LIBRARY_FILTER] = countFamilyNames(
       entries.filter(
         (entry) =>
@@ -695,7 +708,7 @@ function AppShell() {
       ),
     )
     return counts
-  }, [entries, watchFolders, retail])
+  }, [entries, watchFolders, retail, testInstallEntries])
   const allUpdates = useMemo(() => allUpdateGroups(entries, sortMode), [entries, sortMode])
   const updateGroups = useMemo(() => visibleUpdateGroups(allUpdates, query), [allUpdates, query])
   const systemGroups = useMemo(
@@ -794,10 +807,14 @@ function AppShell() {
       if (!retail?.enabled) setWatchFolderFilter(null)
       return
     }
+    if (isTestInstallFilter(watchFolderFilter)) {
+      if (testInstallFonts.length === 0) setWatchFolderFilter(null)
+      return
+    }
     if (!watchFolders.includes(watchFolderFilter)) {
       setWatchFolderFilter(null)
     }
-  }, [watchFolderFilter, watchFolders, retail?.enabled])
+  }, [watchFolderFilter, watchFolders, retail?.enabled, testInstallFonts.length])
 
   useEffect(() => {
     if (loading) return
@@ -1555,6 +1572,15 @@ function AppShell() {
     if (folder === null) closeInspector()
   }
 
+  function uninstallTestInstallPaths(paths: string[], label: string) {
+    const unique = [...new Set(paths.filter(Boolean))]
+    if (unique.length === 0) return
+    void run(async () => {
+      const result = await api.uninstallTestInstalls(unique)
+      setTestInstallFonts(result.fonts)
+    }, actionCopy('remove', label))
+  }
+
   async function watchDroppedFolders(folders: string[], leftover: { paths: string[]; files: File[] }) {
     setFolderSetupRoots(folders)
     const loosePaths = leftover.paths.filter(
@@ -1871,6 +1897,7 @@ function AppShell() {
           retailEnabled={Boolean(retail?.enabled)}
           retailBusy={retailBusy}
           retailCount={watchFolderCounts[RETAIL_LIBRARY_FILTER] ?? 0}
+          testInstallCount={watchFolderCounts[TEST_INSTALL_FILTER] ?? 0}
           onSyncRetail={() => void syncRetail()}
           onReinstallAllUpdates={() => void reinstallAllUpdates()}
           onOpenSettings={() => {
@@ -2157,6 +2184,7 @@ function AppShell() {
                             setInspectSelection(false)
                           }}
                           busy={busy}
+                          uninstallOnly={testInstallActive}
                           onInstall={() =>
                             useBatch ? void installSelected() : void installGroupGuarded(group)
                           }
@@ -2172,7 +2200,14 @@ function AppShell() {
                           onInstallInstance={(entryId) => void installInstanceGuarded(entryId)}
                           onActivateInstance={(entryId) => void activateInstanceGuarded(entryId)}
                           onDeactivateInstance={(entryId) => void deactivateInstance(entryId)}
-                          onUninstallInstance={(entryId) => void uninstallInstance(entryId)}
+                          onUninstallInstance={(entryId) => {
+                            if (testInstallActive) {
+                              const entry = group.entries.find((item) => item.id === entryId)
+                              if (entry) uninstallTestInstallPaths([entry.sourcePath], familyNameOf(entry))
+                              return
+                            }
+                            void uninstallInstance(entryId)
+                          }}
                           onInstallInstanceToAdobe={(entryId) => void installInstanceToAdobe(entryId)}
                           onUninstallInstanceFromAdobe={(entryId) => void uninstallInstanceFromAdobe(entryId)}
                           onSwapInstanceFormat={(entryId) => void swapInstanceFormat(entryId)}
@@ -2188,13 +2223,23 @@ function AppShell() {
                             setRelinkMode(target.sourceAvailability === 'none' ? 'link' : 'locate')
                             setRelinkEntry(target)
                           }}
-                          onUninstall={() =>
-                            useBatch
-                              ? void uninstallSelected()
-                              : void run(() => uninstallGroup(group), actionCopy('remove', group.familyName), {
-                                  undo: 'uninstall',
-                                })
-                          }
+                          onUninstall={() => {
+                            if (testInstallActive) {
+                              const groups = useBatch ? catalogSelection : [group]
+                              uninstallTestInstallPaths(
+                                groups.flatMap((item) => item.entries.map((entry) => entry.sourcePath)),
+                                useBatch ? `${groups.length} families` : group.familyName,
+                              )
+                              return
+                            }
+                            if (useBatch) {
+                              void uninstallSelected()
+                            } else {
+                              void run(() => uninstallGroup(group), actionCopy('remove', group.familyName), {
+                                undo: 'uninstall',
+                              })
+                            }
+                          }}
                           onUninstallFormat={(format) =>
                             uninstallFormatFrom(useBatch ? catalogSelection : [group], format)
                           }
@@ -2423,7 +2468,15 @@ function AppShell() {
                       onInstall: (entryId) => void installInstanceGuarded(entryId),
                       onActivate: (entryId) => void activateInstanceGuarded(entryId),
                       onDeactivate: (entryId) => void deactivateInstance(entryId),
-                      onUninstall: (entryId) => void uninstallInstance(entryId),
+                      uninstallOnly: testInstallActive,
+                      onUninstall: (entryId) => {
+                        if (testInstallActive) {
+                          const entry = selectedGroup.entries.find((item) => item.id === entryId)
+                          if (entry) uninstallTestInstallPaths([entry.sourcePath], familyNameOf(entry))
+                          return
+                        }
+                        void uninstallInstance(entryId)
+                      },
                       onInstallToAdobe: (entryId) => void installInstanceToAdobe(entryId),
                       onUninstallFromAdobe: (entryId) => void uninstallInstanceFromAdobe(entryId),
                       adobeAvailable,
@@ -2449,7 +2502,8 @@ function AppShell() {
                   ? catalogSelection.find((group) => group.familyName !== selectedFamily)?.entries[0] ?? null
                   : null
               }
-              onBake={(mode, features) => {
+              uninstallOnly={testInstallActive}
+              onBake={testInstallActive ? undefined : (mode, features) => {
                 if (!selectedEntry) return
                 if (mode === 'new-copy') {
                   setBakeRenameFeatures(features)
@@ -2481,12 +2535,19 @@ function AppShell() {
                 void run(() => reinstallGroup(selectedGroup), actionCopy('reinstall', selectedGroup.familyName))
               }
               onRepair={() => void repairSelected()}
-              onUninstall={() =>
-                selectedGroup &&
+              onUninstall={() => {
+                if (!selectedGroup) return
+                if (testInstallActive) {
+                  uninstallTestInstallPaths(
+                    selectedGroup.entries.map((entry) => entry.sourcePath),
+                    selectedGroup.familyName,
+                  )
+                  return
+                }
                 void run(() => uninstallGroup(selectedGroup), actionCopy('remove', selectedGroup.familyName), {
                   undo: 'uninstall',
                 })
-              }
+              }}
               onUninstallFormat={(format) => selectedGroup && uninstallFormatFrom([selectedGroup], format)}
               onUninstallAndRemove={() => {
                 if (!selectedGroup) return

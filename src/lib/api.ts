@@ -133,6 +133,11 @@ export const api = {
   appUpdate: (refresh = false) =>
     get<{ update: AppUpdateStatus }>(`/api/app-update${refresh ? '?refresh=1' : ''}`),
   system: () => get<{ faces: SystemFace[] }>('/api/system'),
+  testInstalls: () => get<{ fonts: import('./testInstall').TestInstallFont[] }>('/api/test-installs'),
+  uninstallTestInstalls: (paths: string[]) =>
+    json<{ fonts: import('./testInstall').TestInstallFont[] }>(
+      post('/api/test-installs/uninstall', { paths }),
+    ),
   inspectDrop: (paths: string[]) =>
     json<{
       folders: string[]
@@ -556,6 +561,14 @@ export function isRetailEvent(
 ): value is { type: 'retail'; status: RetailSyncStatus } {
   return Boolean(
     value && typeof value === 'object' && (value as { type?: string }).type === 'retail',
+  )
+}
+
+export function isTestInstallsEvent(
+  value: unknown,
+): value is { type: 'test-installs'; fonts: import('./testInstall').TestInstallFont[] } {
+  return Boolean(
+    value && typeof value === 'object' && (value as { type?: string }).type === 'test-installs',
   )
 }
 
