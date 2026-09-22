@@ -392,7 +392,10 @@ export function RetailPane({
   const urlId = useId()
   const tokenId = useId()
   const autoCheckId = useId()
+  const advancedId = useId()
   const [token, setToken] = useState('')
+  // Session-only: Advanced reveals the worker address and token rows. Nothing is persisted.
+  const [advanced, setAdvanced] = useState(false)
   // `status` is null on the first render, so the field cannot be seeded from it directly — an edited
   // value wins, otherwise fall back to whatever the server reports.
   const [editedUrl, setEditedUrl] = useState<string | null>(null)
@@ -551,90 +554,108 @@ export function RetailPane({
       </SettingsRow>
 
       <SettingsRow
-        label="Worker address"
-        htmlFor={urlId}
-        description="The Displaay worker that serves the collection."
+        label="Advanced"
+        htmlFor={advancedId}
+        description="Show the worker address and token."
       >
-        <Input
-          id={urlId}
-          className="w-[min(18rem,100%)]"
-          value={workerBaseUrl}
-          disabled={disabled}
-          placeholder="https://w.displaay.net"
-          onChange={(event) => setEditedUrl(event.target.value)}
-          onBlur={() => {
-            if (workerBaseUrl && workerBaseUrl !== status?.workerBaseUrl) {
-              void run(async () => {
-                const result = await api.retail.configure({ workerBaseUrl })
-                setEditedUrl(null)
-                return result
-              })
-            }
-          }}
+        <input
+          id={advancedId}
+          type="checkbox"
+          checked={advanced}
+          onChange={(event) => setAdvanced(event.target.checked)}
+          className="size-4 shrink-0 cursor-pointer rounded border border-input accent-primary"
         />
       </SettingsRow>
 
-      <SettingsRow
-        label={
-          <span className="inline-flex items-center gap-1.5">
-            Worker token
-            {status?.mode === 'trial' ? <TrialBadge /> : null}
-          </span>
-        }
-        htmlFor={tokenId}
-        description={
-          status?.hasToken
-            ? status.mode === 'trial'
-              ? 'Your token only unlocks the trial fonts. Replace it with one that has retail access for the full files.'
-              : 'Your token is saved. Remove goes back to the trial fonts and replaces the installed full files with the trials right away.'
-            : 'Using the built-in trial access: you get the Displaay trial fonts. Save a token with retail access to replace the trials with the full files.'
-        }
-      >
-        <div className="flex max-w-[min(100%,22rem)] flex-wrap items-center justify-end gap-1.5">
-          <PasswordInput
-            id={tokenId}
-            className="w-44"
-            value={token}
-            disabled={disabled}
-            placeholder={status?.hasToken ? '••••••••' : 'Retail token'}
-            onChange={(event) => setToken(event.target.value)}
-            onReveal={
-              status?.hasToken
-                ? async () => {
-                    if (token) return
-                    try {
-                      const result = await api.retail.token()
-                      setToken(result.token)
-                    } catch (caught) {
-                      setError(caught instanceof Error ? caught.message : 'Could not read the worker token.')
-                    }
-                  }
-                : undefined
-            }
-          />
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={disabled || !token}
-            onClick={() => saveToken(token)}
+      {advanced ? (
+        <>
+          <SettingsRow
+            label="Worker address"
+            htmlFor={urlId}
+            description="The Displaay worker that serves the collection."
           >
-            Save
-          </Button>
-          {status?.hasToken ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
+            <Input
+              id={urlId}
+              className="w-[min(18rem,100%)]"
+              value={workerBaseUrl}
               disabled={disabled}
-              title="Go back to the trial fonts. Installed full files are replaced with the trials."
-              onClick={() => saveToken('')}
-            >
-              Remove
-            </Button>
-          ) : null}
-        </div>
-      </SettingsRow>
+              placeholder="https://w.displaay.net"
+              onChange={(event) => setEditedUrl(event.target.value)}
+              onBlur={() => {
+                if (workerBaseUrl && workerBaseUrl !== status?.workerBaseUrl) {
+                  void run(async () => {
+                    const result = await api.retail.configure({ workerBaseUrl })
+                    setEditedUrl(null)
+                    return result
+                  })
+                }
+              }}
+            />
+          </SettingsRow>
+
+          <SettingsRow
+            label={
+              <span className="inline-flex items-center gap-1.5">
+                Worker token
+                {status?.mode === 'trial' ? <TrialBadge /> : null}
+              </span>
+            }
+            htmlFor={tokenId}
+            description={
+              status?.hasToken
+                ? status.mode === 'trial'
+                  ? 'Your token only unlocks the trial fonts. Replace it with one that has retail access for the full files.'
+                  : 'Your token is saved. Remove goes back to the trial fonts and replaces the installed full files with the trials right away.'
+                : 'Using the built-in trial access: you get the Displaay trial fonts. Save a token with retail access to replace the trials with the full files.'
+            }
+          >
+            <div className="flex max-w-[min(100%,22rem)] flex-wrap items-center justify-end gap-1.5">
+              <PasswordInput
+                id={tokenId}
+                className="w-44"
+                value={token}
+                disabled={disabled}
+                placeholder={status?.hasToken ? '••••••••' : 'Retail token'}
+                onChange={(event) => setToken(event.target.value)}
+                onReveal={
+                  status?.hasToken
+                    ? async () => {
+                        if (token) return
+                        try {
+                          const result = await api.retail.token()
+                          setToken(result.token)
+                        } catch (caught) {
+                          setError(caught instanceof Error ? caught.message : 'Could not read the worker token.')
+                        }
+                      }
+                    : undefined
+                }
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={disabled || !token}
+                onClick={() => saveToken(token)}
+              >
+                Save
+              </Button>
+              {status?.hasToken ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  disabled={disabled}
+                  title="Go back to the trial fonts. Installed full files are replaced with the trials."
+                  onClick={() => saveToken('')}
+                >
+                  Remove
+                </Button>
+              ) : null}
+            </div>
+          </SettingsRow>
+        </>
+      ) : null}
 
       <div className="py-3.5">
         <div className="rounded-lg border bg-muted/30 px-3 py-3">
