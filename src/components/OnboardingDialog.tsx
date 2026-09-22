@@ -493,7 +493,7 @@ export function OnboardingDialog({
                           id={tokenId}
                           value={retailToken}
                           disabled={locked}
-                          placeholder={hasRetailToken ? '••••••••' : 'Token'}
+                          placeholder={hasRetailToken ? '••••••••' : 'Optional'}
                           onChange={(event) => setRetailToken(event.target.value)}
                           onReveal={
                             hasRetailToken
@@ -509,6 +509,10 @@ export function OnboardingDialog({
                               : undefined
                           }
                         />
+                        <p className="text-[13px] leading-5 text-muted-foreground">
+                          Leave empty to get the Displaay trial fonts. A token with retail access syncs the full
+                          files instead.
+                        </p>
                       </div>
                     </div>
                   ) : null}

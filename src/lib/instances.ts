@@ -23,6 +23,8 @@ export type InstanceRow = {
   installState?: InstanceInstallState
   hasSource?: boolean
   retailSynced?: boolean
+  /** The synced copy is the Displaay trial cut. */
+  retailTrial?: boolean
   macosCopy?: boolean
   adobeCopy?: boolean
   previewSample?: string
@@ -73,6 +75,7 @@ function rowsFromFace(
   installState: InstanceInstallState,
   hasSource = false,
   retailSynced = false,
+  retailTrial = false,
 ): InstanceRow[] {
   const format = entryFormatOf(entry) || undefined
   const dest = entryCopyDestinations(entry)
@@ -90,6 +93,7 @@ function rowsFromFace(
         previewSample: entry.previewSample,
         hasSource,
         retailSynced,
+        retailTrial,
       }
     })
   }
@@ -105,6 +109,7 @@ function rowsFromFace(
       installState,
       hasSource,
       retailSynced,
+      retailTrial,
       macosCopy: dest.macos,
       adobeCopy: dest.adobe,
       previewSample: entry.previewSample,
@@ -118,8 +123,9 @@ export function catalogInstanceRows(group: FamilyGroup, retail?: RetailSyncView 
     const installState = instanceInstallState(entry)
     const hasSource = entryHasTrackedSource(entry)
     const retailSynced = entryHasActiveRetailSync(entry, retail)
+    const retailTrial = retailSynced && retail?.mode === 'trial'
     for (const face of entry.faces) {
-      rows.push(...rowsFromFace(face, entry, installState, hasSource, retailSynced))
+      rows.push(...rowsFromFace(face, entry, installState, hasSource, retailSynced, retailTrial))
     }
   }
   return rows

@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { Filter, Loader2, Search } from 'lucide-react'
 import { DisplaayMark } from '@/components/DisplaayMark'
+import { TrialBadge } from '@/components/Badges'
 import { SettingsRow, SettingsSection, settingsSelectClass } from '@/components/SettingsRow'
 import { Button } from '@/components/ui/button'
 import { Input, PasswordInput } from '@/components/ui/input'
@@ -431,6 +432,17 @@ export function RetailPane({
     })
   }
 
+  // The token decides the collection, and `mode` only moves on a check — run one right away so the badge
+  // and the switch to the new collection follow the token instead of the next background check.
+  const saveToken = (value: string) =>
+    run(async () => {
+      const result = await api.retail.configure({ token: value })
+      if (value) setToken('')
+      if (!result.status.enabled) return result
+      onStatus(result.status)
+      return api.retail.check(true)
+    })
+
   // Font-list changes must reach the server even while a sync HTTP request is still in flight.
   const configureSelection = (input: {
     disabledGlyphsFiles?: string[]
@@ -563,12 +575,19 @@ export function RetailPane({
       </SettingsRow>
 
       <SettingsRow
-        label="Worker token"
+        label={
+          <span className="inline-flex items-center gap-1.5">
+            Worker token
+            {status?.mode === 'trial' ? <TrialBadge /> : null}
+          </span>
+        }
         htmlFor={tokenId}
         description={
           status?.hasToken
-            ? 'A token is saved. Type a new one to replace it, or remove it.'
-            : 'Paste the Displaay worker token. It is stored outside the settings file.'
+            ? status.mode === 'trial'
+              ? 'Your token only unlocks the trial fonts. Replace it with one that has retail access for the full files.'
+              : 'Your token is saved. Remove goes back to the trial fonts and replaces the installed full files with the trials right away.'
+            : 'Using the built-in trial access: you get the Displaay trial fonts. Save a token with retail access to replace the trials with the full files.'
         }
       >
         <div className="flex max-w-[min(100%,22rem)] flex-wrap items-center justify-end gap-1.5">
@@ -577,7 +596,7 @@ export function RetailPane({
             className="w-44"
             value={token}
             disabled={disabled}
-            placeholder={status?.hasToken ? '••••••••' : 'Token'}
+            placeholder={status?.hasToken ? '••••••••' : 'Retail token'}
             onChange={(event) => setToken(event.target.value)}
             onReveal={
               status?.hasToken
@@ -598,13 +617,7 @@ export function RetailPane({
             size="sm"
             variant="outline"
             disabled={disabled || !token}
-            onClick={() =>
-              void run(async () => {
-                const result = await api.retail.configure({ token })
-                setToken('')
-                return result
-              })
-            }
+            onClick={() => saveToken(token)}
           >
             Save
           </Button>
@@ -614,7 +627,8 @@ export function RetailPane({
               size="sm"
               variant="ghost"
               disabled={disabled}
-              onClick={() => void run(() => api.retail.configure({ token: '' }))}
+              title="Go back to the trial fonts. Installed full files are replaced with the trials."
+              onClick={() => saveToken('')}
             >
               Remove
             </Button>

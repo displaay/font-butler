@@ -244,3 +244,16 @@ export function RetailBadge({ className }: { className?: string }) {
     </span>
   )
 }
+
+/** Shown next to `RetailBadge` when the collection came from the built-in trial token. */
+export function TrialBadge({ className }: { className?: string }) {
+  return (
+    <Badge
+      tone="warn"
+      title="Displaay trial font. Save a token with retail access in Settings to sync the full files."
+      className={cn('shrink-0', className)}
+    >
+      Trial
+    </Badge>
+  )
+}

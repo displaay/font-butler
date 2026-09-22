@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
-import { AdobeLogo } from '@/components/Badges'
+import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react'
+import { AdobeLogo, TrialBadge } from '@/components/Badges'
 import {
   ALargeSmall,
   Ban,
@@ -132,6 +132,7 @@ function SidebarItem({
   active,
   icon: Icon,
   label,
+  labelBadge,
   count,
   showTotal,
   onShowTotalChange,
@@ -151,6 +152,8 @@ function SidebarItem({
   active: boolean
   icon: ComponentType<{ className?: string }>
   label: string
+  /** Rendered right after the label, e.g. the Trial chip on the Displaay item. */
+  labelBadge?: ReactNode
   count: number
   showTotal: boolean
   onShowTotalChange: (value: boolean) => void
@@ -210,6 +213,7 @@ function SidebarItem({
         ) : null}
       </span>
       <span className="min-w-0 truncate">{label}</span>
+      {labelBadge}
       {showCount || hoverAction ? (
         <span className="ml-auto inline-flex items-center gap-0.5">
           {hoverAction ? (
@@ -324,6 +328,7 @@ export function Sidebar({
   retailEnabled = false,
   retailBusy = false,
   retailCount = 0,
+  retailTrial = false,
   testInstallCount = 0,
   onSyncRetail,
   onReinstallAllUpdates,
@@ -373,6 +378,8 @@ export function Sidebar({
   retailEnabled?: boolean
   retailBusy?: boolean
   retailCount?: number
+  /** The collection came from the built-in trial token. */
+  retailTrial?: boolean
   testInstallCount?: number
   onSyncRetail?: () => void
   onReinstallAllUpdates?: () => void
@@ -602,6 +609,7 @@ export function Sidebar({
                     active={tab === 'library' && watchFolderFilter === RETAIL_LIBRARY_FILTER}
                     icon={Folder}
                     label={RETAIL_LIBRARY_LABEL}
+                    labelBadge={retailTrial ? <TrialBadge /> : undefined}
                     count={retailCount}
                     showTotal={Boolean(showTotals[watchShowTotalId(RETAIL_LIBRARY_FILTER)])}
                     onShowTotalChange={(value) =>

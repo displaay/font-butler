@@ -1,6 +1,6 @@
 import type { MouseEvent, PointerEvent, ReactNode } from 'react'
 import { AaPreview } from '@/components/AaPreview'
-import { DestinationIcons, FormatBadge, InstanceInstallBadge, RetailBadge, SourceBadge } from '@/components/Badges'
+import { DestinationIcons, FormatBadge, InstanceInstallBadge, RetailBadge, SourceBadge, TrialBadge } from '@/components/Badges'
 import { InstanceMenuItems } from '@/components/BatchActions'
 import { DisplaayMark } from '@/components/DisplaayMark'
 import { catalogFontFamily, systemFontFamily } from '@/components/FontFaceStyles'
@@ -177,6 +177,7 @@ export function InstanceList({
               )}
             </div>
             {row.retailSynced ? <RetailBadge className="shrink-0" /> : null}
+            {row.retailSynced && row.retailTrial ? <TrialBadge /> : null}
             {row.hasSource ? <SourceBadge className="shrink-0" /> : null}
             {row.installState && row.installState !== 'installed' ? (
               <InstanceInstallBadge state={row.installState} />

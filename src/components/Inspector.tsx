@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { ArrowLeftRight, CircleMinus, FolderOpen, Link2, ListX, Loader2, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
 import { CatalogBatchButtons, SystemBatchButtons } from '@/components/BatchActions'
-import { SourceBadge, RetailBadge, StateBadges, FormatBadges, AdobeLogo } from '@/components/Badges'
+import { SourceBadge, RetailBadge, StateBadges, FormatBadges, AdobeLogo, TrialBadge } from '@/components/Badges'
 import { Badge } from '@/components/ui/badge'
 import { systemFontFamily } from '@/components/FontFaceStyles'
 import { GlyphGrid } from '@/components/GlyphGrid'
@@ -260,6 +260,7 @@ export function Inspector({
       <div className="flex items-center gap-2">
         <h2 className="text-base font-semibold tracking-tight">{familyNameOf(entry)}</h2>
         {hasRetailSyncedSource(group, retail) ? <RetailBadge /> : null}
+        {hasRetailSyncedSource(group, retail) && retail?.mode === 'trial' ? <TrialBadge /> : null}
         {hasTrackedSource(group) ? <SourceBadge /> : null}
       </div>
       <p className="mt-1 text-sm text-muted-foreground">
