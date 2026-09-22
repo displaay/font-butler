@@ -2880,7 +2880,25 @@ export class FontButlerService {
     })
   }
 
+  private readableTestInstallPath(id: string): string | null {
+    const testPath = this.testInstallPaths.get(id)
+    if (!testPath) return null
+    const safe = resolveTestInstallFile(testPath, defaultTestInstallDir())
+    if (!safe) throw new Error('That font path is not readable.')
+    return safe
+  }
+
   previewMeta(id: string, which: 'source' | 'installed' | 'revision' = 'installed', fingerprint?: string) {
+    const testFile = this.readableTestInstallPath(id)
+    if (testFile) {
+      const parsed = parseFontFile(testFile, { previewMeta: true })
+      return {
+        ...parsed,
+        entryId: id,
+        which,
+        fingerprint: tryFingerprintFile(testFile),
+      }
+    }
     const catalog = loadCatalog(this.paths)
     const entry = findById(catalog, id)
     if (!entry) throw new Error('Font is not in the library.')
@@ -2906,6 +2924,13 @@ export class FontButlerService {
     which: 'source' | 'installed' | 'revision' = 'installed',
     fingerprint?: string,
   ) {
+    const testFile = this.readableTestInstallPath(id)
+    if (testFile) {
+      return {
+        code,
+        name: glyphNameForCodePoint(testFile, code),
+      }
+    }
     const catalog = loadCatalog(this.paths)
     const entry = findById(catalog, id)
     if (!entry) throw new Error('Font is not in the library.')
@@ -2927,14 +2952,12 @@ export class FontButlerService {
     which: 'source' | 'installed' | 'revision' = 'installed',
     fingerprint?: string,
   ): { buffer: Buffer; mime: string; filename: string } {
-    const testPath = this.testInstallPaths.get(id)
-    if (testPath) {
-      const safe = resolveTestInstallFile(testPath, defaultTestInstallDir())
-      if (!safe) throw new Error('That font path is not readable.')
+    const testFile = this.readableTestInstallPath(id)
+    if (testFile) {
       return {
-        buffer: fs.readFileSync(safe),
-        mime: mimeForFont(safe),
-        filename: path.basename(safe),
+        buffer: fs.readFileSync(testFile),
+        mime: mimeForFont(testFile),
+        filename: path.basename(testFile),
       }
     }
     const catalog = loadCatalog(this.paths)

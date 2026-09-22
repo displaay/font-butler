@@ -36,6 +36,8 @@ export function testInstallToCatalog(fonts: TestInstallFont[]): CatalogEntry[] {
     sourcePresent: true,
     status: 'installed',
     installedPath: font.path,
+    installedSnapshotMtimeMs: font.mtimeMs,
+    installedSnapshotSize: font.size,
     faces: font.faces,
     format: font.format,
     previewSample: font.previewSample,
