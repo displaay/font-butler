@@ -6,6 +6,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 import type { AppPaths } from './paths.ts'
 import { FontButlerService } from './service.ts'
+import { occupiesDestination } from './identity.ts'
 import { closeAllWatchers } from './watch.ts'
 import { setDesktopShell, testDesktopShell } from './reveal.ts'
 
@@ -79,6 +80,14 @@ test('init adopts user fonts onto the Fonts tab as installed', async () => {
     assert.equal(entry.installedPath, font)
     assert.equal(entry.sourcePath, font)
     assert.equal(entry.sourcePresent, false)
+    assert.ok(
+      entry.installations?.some(
+        (item) => item.destinationId === 'macos' && item.verification === 'file-present' && item.path === font,
+      ),
+    )
+    assert.equal(entry.installations?.some((item) => item.destinationId === 'adobe-shared'), false)
+    assert.equal(occupiesDestination(entry, 'macos', paths), true)
+    assert.equal(occupiesDestination(entry, 'adobe-shared', paths), false)
   } finally {
     await closeAllWatchers()
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
@@ -297,6 +306,139 @@ test('init does not delete a parked adopted user font', async () => {
     }
   } finally {
     first.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('init adopts an Adobe-only file without macos occupancy', async () => {
+  const paths = tempPaths()
+  const font = path.join(paths.adobeFontsDir, 'AdobeOnly.ttf')
+  writeTestFont(font, 'AdobeOnly', 'AdobeOnly-Regular')
+  const service = new FontButlerService(paths)
+  try {
+    await service.init()
+    const [entry] = service.listCatalog()
+    assert.ok(entry)
+    assert.equal(entry.status, 'installed')
+    assert.equal(entry.installedPath, undefined)
+    assert.ok(
+      entry.installations?.some(
+        (item) =>
+          item.destinationId === 'adobe-shared' &&
+          item.verification === 'file-present' &&
+          item.path === font,
+      ),
+    )
+    assert.equal(entry.installations?.some((item) => item.destinationId === 'macos'), false)
+    assert.equal(occupiesDestination(entry, 'macos', paths), false)
+    assert.equal(occupiesDestination(entry, 'adobe-shared', paths), true)
+    assert.equal(fs.existsSync(font), true)
+  } finally {
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('init adopts the same face in Fonts and Adobe as one catalog entry', async () => {
+  const paths = tempPaths()
+  const macos = path.join(paths.userFontsDir, 'BothFace.ttf')
+  const adobe = path.join(paths.adobeFontsDir, 'BothFaceAdobe.ttf')
+  writeTestFont(macos, 'BothFace', 'BothFace-Regular')
+  writeTestFont(adobe, 'BothFace', 'BothFace-Regular')
+  const service = new FontButlerService(paths)
+  try {
+    await service.init()
+    const catalog = service.listCatalog()
+    assert.equal(catalog.length, 1)
+    const [entry] = catalog
+    assert.ok(entry)
+    assert.equal(entry.status, 'installed')
+    assert.equal(entry.installedPath, macos)
+    assert.ok(
+      entry.installations?.some(
+        (item) => item.destinationId === 'macos' && item.verification === 'file-present',
+      ),
+    )
+    assert.ok(
+      entry.installations?.some(
+        (item) =>
+          item.destinationId === 'adobe-shared' &&
+          item.verification === 'file-present' &&
+          item.path === adobe,
+      ),
+    )
+    assert.equal(occupiesDestination(entry, 'macos', paths), true)
+    assert.equal(occupiesDestination(entry, 'adobe-shared', paths), true)
+  } finally {
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('init skips a corrupt Adobe folder file and leaves it on disk', async () => {
+  const paths = tempPaths()
+  const bad = path.join(paths.adobeFontsDir, 'Corrupt.ttf')
+  fs.mkdirSync(paths.adobeFontsDir, { recursive: true })
+  fs.writeFileSync(bad, 'not a font')
+  const service = new FontButlerService(paths)
+  try {
+    await service.init()
+    assert.equal(service.listCatalog().length, 0)
+    assert.equal(fs.existsSync(bad), true)
+  } finally {
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('uninstall of an adopted Adobe-only row uses the Adobe path and leaves Fonts neighbors', async () => {
+  const paths = tempPaths()
+  const adobe = path.join(paths.adobeFontsDir, 'AdobeGone.ttf')
+  const neighborAdobe = path.join(paths.adobeFontsDir, 'KeepAdobe.ttf')
+  const neighborFonts = path.join(paths.userFontsDir, 'KeepFonts.ttf')
+  writeTestFont(adobe, 'AdobeGone', 'AdobeGone-Regular')
+  writeTestFont(neighborAdobe, 'KeepAdobe', 'KeepAdobe-Regular')
+  writeTestFont(neighborFonts, 'KeepFonts', 'KeepFonts-Regular')
+  const service = new FontButlerService(paths)
+  try {
+    await service.init()
+    const gone = service.listCatalog().find((entry) => entry.faces[0]?.familyName === 'AdobeGone')
+    assert.ok(gone)
+    assert.equal(gone.installedPath, undefined)
+    await service.uninstall(gone.id)
+    assert.equal(fs.existsSync(adobe), false)
+    assert.equal(fs.existsSync(neighborAdobe), true)
+    assert.equal(fs.existsSync(neighborFonts), true)
+    assert.equal(service.listCatalog().some((entry) => entry.faces[0]?.familyName === 'AdobeGone'), false)
+    assert.equal(service.listCatalog().some((entry) => entry.faces[0]?.familyName === 'KeepFonts'), true)
+    assert.equal(service.listCatalog().some((entry) => entry.faces[0]?.familyName === 'KeepAdobe'), true)
+  } finally {
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('a font dropped into the Adobe folder after launch is adopted', async () => {
+  const paths = tempPaths()
+  fs.mkdirSync(paths.adobeFontsDir, { recursive: true })
+  const service = new FontButlerService(paths)
+  try {
+    await service.init()
+    assert.equal(service.listCatalog().length, 0)
+    const font = path.join(paths.adobeFontsDir, 'DroppedAdobe.ttf')
+    writeTestFont(font, 'DroppedAdobe', 'DroppedAdobe-Regular')
+    const deadline = Date.now() + 8000
+    let entry = service.listCatalog()[0]
+    while (!entry && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      entry = service.listCatalog()[0]
+    }
+    assert.ok(entry)
+    assert.equal(entry.status, 'installed')
+    assert.equal(occupiesDestination(entry, 'adobe-shared', paths), true)
+    assert.equal(occupiesDestination(entry, 'macos', paths), false)
+  } finally {
     await closeAllWatchers()
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }

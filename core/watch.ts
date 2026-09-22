@@ -521,7 +521,7 @@ export async function syncInboxWatcher(
 }
 
 export async function syncUserFontsWatcher(
-  userFontsDir: string,
+  dirs: string | readonly string[],
   onChange: () => void,
 ): Promise<void> {
   if (userFontsTimer) {
@@ -532,10 +532,23 @@ export async function syncUserFontsWatcher(
     await userFontsWatcher.close()
     userFontsWatcher = null
   }
-  if (!userFontsDir || !fs.existsSync(userFontsDir)) {
+  const existing = [
+    ...new Set(
+      (Array.isArray(dirs) ? dirs : [dirs])
+        .filter((dir): dir is string => typeof dir === 'string' && dir.trim().length > 0)
+        .map((dir) => path.resolve(dir)),
+    ),
+  ].filter((dir) => {
+    try {
+      return fs.existsSync(dir) && fs.statSync(dir).isDirectory()
+    } catch {
+      return false
+    }
+  })
+  if (existing.length === 0) {
     return
   }
-  userFontsWatcher = chokidar.watch(userFontsDir, {
+  userFontsWatcher = chokidar.watch(existing, {
     ignoreInitial: true,
     awaitWriteFinish: { stabilityThreshold: 400, pollInterval: 100 },
     depth: FONT_TREE_MAX_DEPTH,
