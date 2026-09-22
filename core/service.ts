@@ -4023,6 +4023,13 @@ export class FontButlerService {
     return copyAt(entry, 'adobe-shared')?.path
   }
 
+  private sourcePointsAtMacosCopy(entry: CatalogEntry, recorded: string | undefined): boolean {
+    if (!entry.sourcePath) return false
+    const source = path.resolve(entry.sourcePath)
+    if (entry.installedPath && path.resolve(entry.installedPath) === source) return true
+    return Boolean(recorded && recorded === source)
+  }
+
   private stampAdoptedCopy(entry: CatalogEntry, destId: DestinationId, filePath: string): boolean {
     const resolved = path.resolve(filePath)
     const existing = copyAt(entry, destId)
@@ -4030,24 +4037,16 @@ export class FontButlerService {
     if (recorded && recorded !== resolved && fs.existsSync(recorded)) {
       return false
     }
-    if (
-      existing &&
+    const selfSourced = destId === 'macos' && this.sourcePointsAtMacosCopy(entry, recorded)
+    const sourceNeedsMove =
+      selfSourced && Boolean(entry.sourcePath) && path.resolve(entry.sourcePath) !== resolved
+    const installedResolved = entry.installedPath ? path.resolve(entry.installedPath) : undefined
+    const copyAlreadyCurrent =
+      Boolean(existing) &&
       recorded === resolved &&
-      existing.verification === 'file-present' &&
-      !existing.parkedPath
-    ) {
-      if (destId === 'macos' && entry.installedPath && path.resolve(entry.installedPath) === resolved) {
-        return false
-      }
-      if (destId === 'macos') {
-        upsertCopy(entry, {
-          destinationId: 'macos',
-          path: resolved,
-          fingerprint: existing.fingerprint ?? tryFingerprintFile(resolved),
-          verification: 'file-present',
-        })
-        return true
-      }
+      existing?.verification === 'file-present' &&
+      !existing?.parkedPath
+    if (copyAlreadyCurrent && !sourceNeedsMove && (destId !== 'macos' || installedResolved === resolved)) {
       return false
     }
     upsertCopy(entry, {
@@ -4056,6 +4055,19 @@ export class FontButlerService {
       fingerprint: existing?.fingerprint ?? tryFingerprintFile(resolved),
       verification: 'file-present',
     })
+    if (destId === 'macos') {
+      entry.installedPath = resolved
+      if (sourceNeedsMove && entry.sourcePath) {
+        entry.sourcePath = resolved
+        try {
+          const stat = readFileStat(resolved)
+          entry.sourceMtimeMs = stat.mtimeMs
+          entry.sourceSize = stat.size
+        } catch {
+          // The file was present when the destination was scanned.
+        }
+      }
+    }
     return true
   }
 

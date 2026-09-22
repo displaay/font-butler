@@ -6,6 +6,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 import type { AppPaths } from './paths.ts'
 import { FontButlerService } from './service.ts'
+import { isExternalSource } from './catalog.ts'
 import { occupiesDestination } from './identity.ts'
 import { closeAllWatchers } from './watch.ts'
 import { setDesktopShell, testDesktopShell } from './reveal.ts'
@@ -623,6 +624,86 @@ test('creating the Adobe folder after init adopts a new font without a second in
     assert.ok(entry)
     assert.equal(occupiesDestination(entry, 'adobe-shared', paths), true)
     assert.equal(occupiesDestination(entry, 'macos', paths), false)
+  } finally {
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('renaming an adopted Fonts file keeps the row and follows the new path', async () => {
+  const paths = tempPaths()
+  const font = path.join(paths.userFontsDir, 'RenameMe.ttf')
+  writeTestFont(font, 'RenameFace', 'RenameFace-Regular')
+  const service = new FontButlerService(paths)
+  try {
+    await service.init()
+    const [before] = service.listCatalog()
+    assert.ok(before)
+    assert.equal(before.installedPath, font)
+    assert.equal(before.sourcePath, font)
+    const renamed = path.join(paths.userFontsDir, 'Renamed.ttf')
+    fs.renameSync(font, renamed)
+    await service.init()
+    const catalog = service.listCatalog()
+    assert.equal(catalog.length, 1)
+    const after = catalog[0]
+    assert.ok(after)
+    assert.equal(after.id, before.id)
+    assert.equal(after.status, 'installed')
+    assert.equal(path.resolve(after.installedPath!), path.resolve(renamed))
+    assert.equal(path.resolve(after.sourcePath), path.resolve(renamed))
+    assert.equal(isExternalSource(after), false)
+    assert.equal(after.sourcePresent, false)
+    assert.equal(
+      after.installations?.some(
+        (item) =>
+          item.destinationId === 'macos' &&
+          item.verification === 'file-present' &&
+          path.resolve(item.path) === path.resolve(renamed),
+      ),
+      true,
+    )
+    assert.equal(fs.existsSync(font), false)
+    assert.equal(fs.existsSync(renamed), true)
+    await service.uninstall(after.id)
+    assert.equal(service.listCatalog().length, 0)
+    assert.equal(fs.existsSync(renamed), false)
+  } finally {
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('renaming an installed copy leaves a separate source path in place', async () => {
+  const paths = tempPaths()
+  const source = path.join(paths.dataRoot, 'LibraryRename.ttf')
+  writeTestFont(source, 'LibraryRename', 'LibraryRename-Regular')
+  const service = new FontButlerService(paths)
+  try {
+    await service.init()
+    const imported = await service.importPaths([source])
+    const installed = await service.install(imported.entries[0]!.id)
+    assert.ok(installed.installedPath)
+    assert.notEqual(path.resolve(installed.installedPath), path.resolve(source))
+    const renamed = path.join(paths.userFontsDir, 'LibraryRenamed.ttf')
+    fs.renameSync(installed.installedPath, renamed)
+    await service.init()
+    const catalog = service.listCatalog()
+    assert.equal(catalog.length, 1)
+    const after = catalog[0]
+    assert.ok(after)
+    assert.equal(after.id, installed.id)
+    assert.equal(after.status, 'installed')
+    assert.equal(path.resolve(after.sourcePath), path.resolve(source))
+    assert.equal(path.resolve(after.installedPath!), path.resolve(renamed))
+    assert.equal(isExternalSource(after), true)
+    assert.equal(fs.existsSync(source), true)
+    assert.equal(fs.existsSync(renamed), true)
+    const uninstalled = await service.uninstall(after.id)
+    assert.equal(uninstalled.status, 'uninstalled')
+    assert.equal(service.listCatalog().length, 1)
+    assert.equal(fs.existsSync(source), true)
+    assert.equal(fs.existsSync(renamed), false)
   } finally {
     await closeAllWatchers()
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
