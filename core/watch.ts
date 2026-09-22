@@ -24,6 +24,7 @@ let watchedSourcePaths = new Set<string>()
 let inboxWatcher: FSWatcher | null = null
 let userFontsWatcher: FSWatcher | null = null
 let destParentWatcher: FSWatcher | null = null
+let destAppearPoll: ReturnType<typeof setInterval> | null = null
 let userFontsTimer: ReturnType<typeof setTimeout> | null = null
 let inboxTimer: ReturnType<typeof setTimeout> | null = null
 let inboxPending: string[] = []
@@ -532,6 +533,10 @@ async function closeUserFontsWatchers(): Promise<void> {
     clearTimeout(userFontsTimer)
     userFontsTimer = null
   }
+  if (destAppearPoll) {
+    clearInterval(destAppearPoll)
+    destAppearPoll = null
+  }
   if (userFontsWatcher) {
     try {
       await userFontsWatcher.close()
@@ -558,6 +563,18 @@ function isExistingDir(dir: string): boolean {
   }
 }
 
+function waitForReady(instance: FSWatcher | null): Promise<void> {
+  if (!isLiveWatcher(instance)) return Promise.resolve()
+  return Promise.race([
+    new Promise<void>((resolve) => {
+      instance.once('ready', () => resolve())
+    }),
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, 400)
+    }),
+  ])
+}
+
 export async function syncUserFontsWatcher(
   dirs: string | readonly string[],
   onChange: () => void,
@@ -579,7 +596,7 @@ export async function syncUserFontsWatcher(
         .filter((dir) => dir && isExistingDir(dir)),
     ),
   ]
-  if (existing.length === 0 && parents.length === 0) {
+  if (existing.length === 0 && missing.size === 0) {
     return
   }
   const kick = () => {
@@ -595,30 +612,47 @@ export async function syncUserFontsWatcher(
     instance.on('add', kick)
     instance.on('unlink', kick)
   }
+  const subscribeDest = (dir: string) => {
+    if (isLiveWatcher(userFontsWatcher)) {
+      userFontsWatcher.add(dir)
+      return
+    }
+    userFontsWatcher = chokidar.watch(dir, USER_FONTS_WATCH_OPTIONS)
+    bindDestWatcher(userFontsWatcher)
+  }
+  const claimDest = (dir: string): boolean => {
+    const resolved = path.resolve(dir)
+    if (!missing.has(resolved) || !isExistingDir(resolved)) return false
+    missing.delete(resolved)
+    subscribeDest(resolved)
+    kick()
+    return true
+  }
   if (existing.length) {
     userFontsWatcher = chokidar.watch(existing, USER_FONTS_WATCH_OPTIONS)
     bindDestWatcher(userFontsWatcher)
   }
-  if (parents.length === 0) {
-    return
-  }
-  destParentWatcher = chokidar.watch(parents, { ignoreInitial: true, depth: 0 })
-  const onMaybeDest = (added: string) => {
-    const resolved = path.resolve(added)
-    if (!missing.has(resolved) || !isExistingDir(resolved)) {
-      return
+  if (parents.length) {
+    destParentWatcher = chokidar.watch(parents, { ignoreInitial: true, depth: 0 })
+    const onMaybeDest = (added: string) => {
+      claimDest(added)
     }
-    missing.delete(resolved)
-    if (isLiveWatcher(userFontsWatcher)) {
-      userFontsWatcher.add(resolved)
-    } else {
-      userFontsWatcher = chokidar.watch(resolved, USER_FONTS_WATCH_OPTIONS)
-      bindDestWatcher(userFontsWatcher)
-    }
-    kick()
+    destParentWatcher.on('addDir', onMaybeDest)
+    destParentWatcher.on('add', onMaybeDest)
   }
-  destParentWatcher.on('addDir', onMaybeDest)
-  destParentWatcher.on('add', onMaybeDest)
+  if (missing.size) {
+    destAppearPoll = setInterval(() => {
+      for (const dir of [...missing]) {
+        claimDest(dir)
+      }
+      if (missing.size === 0 && destAppearPoll) {
+        clearInterval(destAppearPoll)
+        destAppearPoll = null
+      }
+    }, 400)
+    destAppearPoll.unref?.()
+  }
+  await Promise.all([waitForReady(userFontsWatcher), waitForReady(destParentWatcher)])
 }
 
 export async function closeAllWatchers(): Promise<void> {
