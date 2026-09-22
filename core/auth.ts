@@ -54,6 +54,20 @@ export function readRetailToken(tokenPath: string): string {
   }
 }
 
+/**
+ * Like `readRetailToken`, but only a missing file reads as "no token". Anything else (EACCES, EIO, a
+ * directory in its place) throws: falling back to the trial token there would make the next check
+ * replace the user's licensed fonts with the trials.
+ */
+export function readRetailTokenStrict(tokenPath: string): string {
+  try {
+    return fs.readFileSync(tokenPath, 'utf8').trim()
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return ''
+    throw new Error('Could not read the saved Displaay worker token.')
+  }
+}
+
 export function writeRetailToken(tokenPath: string, token: string): void {
   const value = token.trim()
   if (!value) {

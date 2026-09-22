@@ -1,5 +1,5 @@
 import { MAX_RETAIL_MANIFEST_FILES, MAX_UPLOAD_BYTES } from './constants.ts'
-import type { RetailManifest } from '../shared/retail.ts'
+import { normalizeRetailMode, type RetailManifest } from '../shared/retail.ts'
 
 export const RETAIL_FETCH_TIMEOUT_MS = 15_000
 export const RETAIL_DOWNLOAD_TIMEOUT_MS = 60_000
@@ -107,7 +107,7 @@ function assertBaseUrl(workerBaseUrl: string): void {
 
 function requestHeaders(token: string): Record<string, string> {
   if (!token) {
-    throw new RetailRequestError('Add a Displaay worker token first.')
+    throw new RetailRequestError('No Displaay worker token.')
   }
   return { Authorization: `Bearer ${token}`, Accept: 'application/json' }
 }
@@ -162,7 +162,9 @@ export async function fetchRetailManifest(
         `The Displaay worker listed ${fileCount} files; Font Buttler accepts at most ${MAX_RETAIL_MANIFEST_FILES}.`,
       )
     }
+    const mode = normalizeRetailMode(parsed.mode)
     return {
+      ...(mode ? { mode } : {}),
       generatedAt: typeof parsed.generatedAt === 'string' ? parsed.generatedAt : new Date().toISOString(),
       collections: parsed.collections,
       skipped: Array.isArray(parsed.skipped) ? parsed.skipped : [],

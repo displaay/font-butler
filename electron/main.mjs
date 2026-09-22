@@ -1058,7 +1058,8 @@ async function loadAppUpdate(refresh = false) {
  */
 async function retailTick() {
   const status = retailStatus
-  if (!status || !status.enabled || !status.hasToken) return
+  // No token check: without one of the user's own the server falls back to the built-in trial token.
+  if (!status || !status.enabled) return
   const minutes = Number(status.autoCheckMinutes)
   if (!Number.isFinite(minutes) || minutes <= 0) return
 

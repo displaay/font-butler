@@ -1,7 +1,7 @@
 import { memo, useMemo, useRef, useState, type DragEvent, type MouseEvent } from 'react'
 import { Check, ChevronDown, FolderMinus, FolderOpen, Plus } from 'lucide-react'
 import { AaPreview, CyclingAaPreview } from '@/components/AaPreview'
-import { NameWithFormatTags, RetailBadge, SourceBadge, StateBadges, DestinationIcons } from '@/components/Badges'
+import { NameWithFormatTags, RetailBadge, SourceBadge, StateBadges, DestinationIcons, TrialBadge } from '@/components/Badges'
 import { Badge } from '@/components/ui/badge'
 import { CatalogMenuItems } from '@/components/BatchActions'
 import { DisplaayMark } from '@/components/DisplaayMark'
@@ -231,6 +231,7 @@ export const LibraryCard = memo(function LibraryCard({
           <DestinationIcons macos={dest.macos} adobe={dest.adobe} overlay />
         ) : null}
         {showRetailIcon ? <RetailBadge className="shrink-0" /> : null}
+        {showRetailIcon && retail?.mode === 'trial' ? <TrialBadge /> : null}
         {showSourceIcon ? <SourceBadge className="shrink-0" /> : null}
       </>
     ) : null

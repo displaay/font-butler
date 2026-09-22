@@ -176,6 +176,7 @@ export async function applyRetailSync(options: ApplyRetailSyncOptions): Promise<
     syncedAt: options.manifest.syncedAt,
     files: { ...options.manifest.files },
     incomplete: options.manifest.incomplete,
+    ...(options.manifest.mode ? { mode: options.manifest.mode } : {}),
   }
 
   const todo = options.drift.filter(isSyncableDrift)

@@ -1897,6 +1897,7 @@ function AppShell() {
           retailEnabled={Boolean(retail?.enabled)}
           retailBusy={retailBusy}
           retailCount={watchFolderCounts[RETAIL_LIBRARY_FILTER] ?? 0}
+          retailTrial={retail?.mode === 'trial'}
           testInstallCount={watchFolderCounts[TEST_INSTALL_FILTER] ?? 0}
           onSyncRetail={() => void syncRetail()}
           onReinstallAllUpdates={() => void reinstallAllUpdates()}
