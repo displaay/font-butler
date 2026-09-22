@@ -550,6 +550,7 @@ export type ServiceEvent =
   | { type: 'app-update'; update: AppUpdateStatus }
   | { type: 'retail'; status: RetailSyncStatus }
   | { type: 'action-progress'; action: BatchProgressAction; done: number; total: number }
+  | { type: 'test-installs'; fonts: import('./test-install.ts').TestInstallFont[] }
 
 export type BatchProgressAction =
   | 'install'

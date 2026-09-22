@@ -62,7 +62,7 @@ import { savedFilterMatches } from '@/lib/savedFilters'
 import { hasInsetTrafficLights } from '@/lib/desktop'
 import { shouldShowUpdatesTab } from '@/lib/app-update'
 import { cn } from '@/lib/utils'
-import { watchFolderLabel, RETAIL_LIBRARY_FILTER, RETAIL_LIBRARY_LABEL } from '@/lib/watchFolders'
+import { watchFolderLabel, RETAIL_LIBRARY_FILTER, RETAIL_LIBRARY_LABEL, TEST_INSTALL_FILTER, TEST_INSTALL_LABEL } from '@/lib/watchFolders'
 
 export type Tab = 'library' | 'system' | 'updates' | 'activity'
 
@@ -324,6 +324,7 @@ export function Sidebar({
   retailEnabled = false,
   retailBusy = false,
   retailCount = 0,
+  testInstallCount = 0,
   onSyncRetail,
   onReinstallAllUpdates,
   onOpenSettings,
@@ -372,6 +373,7 @@ export function Sidebar({
   retailEnabled?: boolean
   retailBusy?: boolean
   retailCount?: number
+  testInstallCount?: number
   onSyncRetail?: () => void
   onReinstallAllUpdates?: () => void
   onOpenSettings: () => void
@@ -416,7 +418,7 @@ export function Sidebar({
   const showSavedFilters =
     tab === 'library' &&
     (hasSavedFilters || Boolean(onCreateSavedFilter && hasActiveLibraryCriteria))
-  const hasWatchChildren = watchFolders.length > 0 || retailEnabled
+  const hasWatchChildren = watchFolders.length > 0 || retailEnabled || testInstallCount > 0
   const fontsActive = tab === 'library' && !watchFolderFilter
 
   useEffect(() => {
@@ -618,6 +620,22 @@ export function Sidebar({
                         : undefined
                     }
                     onOpenWatchFoldersSettings={onOpenWatchFoldersSettings}
+                  />
+                ) : null}
+                {fontsOpen && testInstallCount > 0 ? (
+                  <SidebarItem
+                    key={TEST_INSTALL_FILTER}
+                    active={tab === 'library' && watchFolderFilter === TEST_INSTALL_FILTER}
+                    icon={Folder}
+                    label={TEST_INSTALL_LABEL}
+                    count={testInstallCount}
+                    showTotal={Boolean(showTotals[watchShowTotalId(TEST_INSTALL_FILTER)])}
+                    onShowTotalChange={(value) =>
+                      changeShowTotal(watchShowTotalId(TEST_INSTALL_FILTER), value)
+                    }
+                    onClick={() => onSelectWatchFolder(TEST_INSTALL_FILTER)}
+                    className="w-full pl-7"
+                    title="Fonts temporarily installed by Displaay Font Builder or Glyphs"
                   />
                 ) : null}
               </div>

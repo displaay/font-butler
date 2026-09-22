@@ -6,8 +6,17 @@ export const RETAIL_LIBRARY_FILTER = '__retail__'
 
 export const RETAIL_LIBRARY_LABEL = 'Displaay retail'
 
+/** Sidebar sentinel for Font Builder and Glyphs session test installs. */
+export const TEST_INSTALL_FILTER = '__test_install__'
+
+export const TEST_INSTALL_LABEL = 'Test installs'
+
 export function isRetailLibraryFilter(folder: string | null | undefined): boolean {
   return folder === RETAIL_LIBRARY_FILTER
+}
+
+export function isTestInstallFilter(folder: string | null | undefined): boolean {
+  return folder === TEST_INSTALL_FILTER
 }
 
 export function isRetailLibraryEntry(entry: CatalogEntry): boolean {
@@ -46,11 +55,13 @@ export function watchFolderLabel(folder: string, all: string[]): string {
 
 export function matchesLibraryFolderFilter(entry: CatalogEntry, filter: string): boolean {
   if (isRetailLibraryFilter(filter)) return isRetailLibraryEntry(entry)
+  if (isTestInstallFilter(filter)) return false
   return isWatchFolderEntry(entry, filter)
 }
 
 export function libraryFolderFilterLabel(filter: string, all: string[]): string {
   if (isRetailLibraryFilter(filter)) return RETAIL_LIBRARY_LABEL
+  if (isTestInstallFilter(filter)) return TEST_INSTALL_LABEL
   return watchFolderLabel(filter, all)
 }
 

@@ -31,6 +31,7 @@ export type InstanceActions = {
   onFormatSwap?: (entryId: string) => void
   onOpen?: (entryId: string) => void
   onTurnRetailSyncOff?: (entryId: string) => void
+  uninstallOnly?: boolean
 }
 
 function stopFamilyMenu(event: MouseEvent | PointerEvent) {
@@ -53,6 +54,7 @@ function InstanceRowMenu({
   onOpen,
   onTurnRetailSyncOff,
   retailSynced,
+  uninstallOnly = false,
 }: {
   entry: CatalogEntry
   family: CatalogEntry[]
@@ -69,10 +71,11 @@ function InstanceRowMenu({
   onOpen?: (entryId: string) => void
   onTurnRetailSyncOff?: (entryId: string) => void
   retailSynced?: boolean
+  uninstallOnly?: boolean
 }) {
   const plan = instanceMenuPlan(entry, family, adobeAvailable)
   const showTurnSyncOff = Boolean(onTurnRetailSyncOff && retailSynced)
-  if (!hasInstanceMenuActions(plan) && !showTurnSyncOff) return children
+  if (!uninstallOnly && !hasInstanceMenuActions(plan) && !showTurnSyncOff) return children
   return (
     <ContextMenu
       onOpenChange={(open) => {
@@ -83,7 +86,11 @@ function InstanceRowMenu({
         {children}
       </ContextMenuTrigger>
       <ContextMenuContent>
-        {showTurnSyncOff ? (
+        {uninstallOnly ? (
+          <ContextMenuItem disabled={busy} onSelect={() => onUninstall(entry.id)}>
+            Uninstall
+          </ContextMenuItem>
+        ) : showTurnSyncOff ? (
           <>
             <ContextMenuItem disabled={busy} onSelect={() => onTurnRetailSyncOff?.(entry.id)}>
               <DisplaayMark /> Turn sync off
@@ -91,6 +98,7 @@ function InstanceRowMenu({
             {hasInstanceMenuActions(plan) ? <ContextMenuSeparator /> : null}
           </>
         ) : null}
+        {uninstallOnly ? null : (
         <InstanceMenuItems
           plan={plan}
           entryId={entry.id}
@@ -103,6 +111,7 @@ function InstanceRowMenu({
           onUninstallFromAdobe={onUninstallFromAdobe ? () => onUninstallFromAdobe(entry.id) : undefined}
           onFormatSwap={onFormatSwap ? () => onFormatSwap(entry.id) : undefined}
         />
+        )}
       </ContextMenuContent>
     </ContextMenu>
   )
@@ -197,6 +206,7 @@ export function InstanceList({
                 onOpen={instanceActions.onOpen}
                 onTurnRetailSyncOff={instanceActions.onTurnRetailSyncOff}
                 retailSynced={row.retailSynced}
+                uninstallOnly={instanceActions.uninstallOnly}
               >
                 {button}
               </InstanceRowMenu>
