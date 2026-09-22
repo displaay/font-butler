@@ -70,8 +70,9 @@ export function installDestinationRoots(paths: AppPaths): Array<{ id: Destinatio
   const add = (id: DestinationId, dir: string | undefined) => {
     if (!dir) return
     const resolved = path.resolve(dir)
-    if (seen.has(resolved)) return
-    seen.add(resolved)
+    const key = `${id}\0${resolved}`
+    if (seen.has(key)) return
+    seen.add(key)
     rows.push({ id, dir: resolved })
   }
   add('macos', paths.userFontsDir)

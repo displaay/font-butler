@@ -34,9 +34,13 @@ export function entryCopyDestinations(
   const adobe = copies.some(
     (copy) => copy.destinationId === 'adobe-shared' && copy.verification === 'file-present',
   )
+  const macosCopy = copies.some(
+    (copy) => copy.destinationId === 'macos' && copy.verification === 'file-present',
+  )
   const macos =
-    copies.some((copy) => copy.destinationId === 'macos' && copy.verification === 'file-present') ||
-    Boolean(entry.installedPath)
+    copies.length > 0
+      ? macosCopy
+      : Boolean(entry.installedPath)
   return { macos, adobe }
 }
 

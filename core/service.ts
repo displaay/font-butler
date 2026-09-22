@@ -3,7 +3,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 import {
   applySourcePresence,
-  findAllByFaceIdentity,
   findById,
   findByInstalledPath,
   findBySourcePath,
@@ -35,9 +34,11 @@ import {
 import { MAX_UPLOAD_BATCH_BYTES, MAX_UPLOAD_BYTES } from './constants.ts'
 import { familyProgressReporter } from './batch-progress.ts'
 import {
+  duplicateNotifyKey,
   loadDuplicates,
   pruneStaleDuplicates,
   removeDuplicateWarning,
+  upsertDuplicateWarning,
 } from './duplicates.ts'
 import { emitEvent } from './events.ts'
 import { unregisterSessionFonts } from './session-fonts.ts'
@@ -52,6 +53,7 @@ import {
 import {
   IDENTITY_MUTEX_MESSAGE,
   identityMutexMessage,
+  matchesIncomingIdentity,
   occupiedDestinations,
   occupiesDestination,
   occupyingSiblings,
@@ -231,6 +233,18 @@ function existingManagedFontPath(
     if (catalog.length && livePathOccupiedByOther(catalog, resolved, entry.id)) return false
     return true
   })
+}
+
+function uniqueResolvedFiles(filePaths: string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const filePath of filePaths) {
+    const resolved = path.resolve(filePath)
+    if (seen.has(resolved)) continue
+    seen.add(resolved)
+    out.push(resolved)
+  }
+  return out
 }
 
 const REMEMBERED_DECISIONS_LIMIT = 256
@@ -678,9 +692,9 @@ export class FontButlerService {
     }
   }
 
-  createAdobeTestingFolder() {
+  async createAdobeTestingFolder() {
     createAdobeTestingFolderFn(this.paths)
-    void this.refreshUserFontsWatcher()
+    await this.refreshUserFontsWatcher()
     return this.listDestinations()
   }
 
@@ -3993,11 +4007,13 @@ export class FontButlerService {
   }
 
   private macosFontRoots(): string[] {
-    return [...new Set([this.paths.userFontsDir, this.paths.installDir].filter(Boolean))]
+    return installDestinationRoots(this.paths)
+      .filter((item) => item.id === 'macos')
+      .map((item) => item.dir)
   }
 
   private destinationWatchDirs(): string[] {
-    return installDestinationRoots(this.paths).map((item) => item.dir)
+    return [...new Set(installDestinationRoots(this.paths).map((item) => item.dir))]
   }
 
   private liveCopyPath(entry: CatalogEntry, destId: DestinationId): string | undefined {
@@ -4010,10 +4026,13 @@ export class FontButlerService {
   private stampAdoptedCopy(entry: CatalogEntry, destId: DestinationId, filePath: string): boolean {
     const resolved = path.resolve(filePath)
     const existing = copyAt(entry, destId)
+    const recorded = existing?.path ? path.resolve(existing.path) : undefined
+    if (recorded && recorded !== resolved && fs.existsSync(recorded)) {
+      return false
+    }
     if (
       existing &&
-      existing.path &&
-      path.resolve(existing.path) === resolved &&
+      recorded === resolved &&
       existing.verification === 'file-present' &&
       !existing.parkedPath
     ) {
@@ -4034,9 +4053,74 @@ export class FontButlerService {
     upsertCopy(entry, {
       destinationId: destId,
       path: resolved,
-      fingerprint: tryFingerprintFile(resolved),
+      fingerprint: existing?.fingerprint ?? tryFingerprintFile(resolved),
       verification: 'file-present',
     })
+    return true
+  }
+
+  private warnAdoptedDuplicate(entry: CatalogEntry, filePath: string): void {
+    let familyName = entry.faces[0]?.familyName
+    let format = entry.format
+    let incomingVersion: string | undefined
+    try {
+      const parsed = parseFontFile(filePath)
+      familyName = parsed.faces[0]?.familyName ?? familyName
+      format = parsed.format || format
+      incomingVersion = parsed.faces[0]?.fullName
+    } catch {
+      // Keep the occupying entry's labels when the neighbor cannot be parsed.
+    }
+    const fingerprint = tryFingerprintFile(filePath)
+    const occupyingFingerprints = [
+      entry.installedFingerprint,
+      entry.sourceFingerprint,
+      ...(entry.installations ?? []).map((copy) => copy.fingerprint),
+    ].filter((value): value is string => Boolean(value))
+    const { notify } = upsertDuplicateWarning(this.paths, {
+      path: filePath,
+      fingerprint,
+      familyName,
+      format,
+      incomingVersion,
+      conflictingEntryIds: [entry.id],
+      activeEntryId: entry.id,
+      notifyKey: duplicateNotifyKey(filePath, fingerprint, occupyingFingerprints),
+    })
+    emitDuplicates(this.paths)
+    if (notify) {
+      emitNotice({
+        kind: 'info',
+        message: 'A font with the same face is already in this destination and is not the managed copy.',
+      })
+    }
+  }
+
+  private isSafeAdoptMergeTarget(
+    entry: CatalogEntry,
+    incomingPath: string,
+    destId: DestinationId,
+  ): boolean {
+    if (entryHasParkedBytes(entry) || entry.status === 'deactivated') return false
+    const liveHere = this.liveCopyPath(entry, destId)
+    if (liveHere && fs.existsSync(liveHere) && path.resolve(liveHere) !== path.resolve(incomingPath)) {
+      return false
+    }
+    const destRoots = this.destinationWatchDirs()
+    if (!isUnderAnyRoot(incomingPath, destRoots)) return false
+    if (occupiedDestinations(entry, this.paths).length === 0) return false
+    if (isExternalSource(entry) && sourceFileExists(entry.sourcePath)) {
+      const source = path.resolve(entry.sourcePath)
+      if (source !== path.resolve(incomingPath) && !isUnderAnyRoot(source, destRoots)) {
+        const incomingFp = tryFingerprintFile(incomingPath)
+        const known = [
+          entry.installedFingerprint,
+          entry.sourceFingerprint,
+          ...(entry.installations ?? []).map((copy) => copy.fingerprint),
+        ].filter((value): value is string => Boolean(value))
+        if (!incomingFp || !known.includes(incomingFp)) return false
+      }
+    }
     return true
   }
 
@@ -4063,10 +4147,48 @@ export class FontButlerService {
         return Boolean(live && path.resolve(live) === resolved)
       })
       if (owner) return owner
-      if (occupying[0]) return occupying[0]
-      return findAllByFaceIdentity(catalog, parsed.faces, parsed.format).find(
-        (entry) => !entryHasParkedBytes(entry),
-      )
+      const merge = occupying.find((entry) => this.isSafeAdoptMergeTarget(entry, resolved, destId))
+      if (merge) return merge
+      return catalog.entries.find((entry) => {
+        if (entryHasParkedBytes(entry) || entry.status === 'deactivated') return false
+        const recorded = this.liveCopyPath(entry, destId)
+        if (!recorded || fs.existsSync(recorded)) return false
+        if (!matchesIncomingIdentity(entry, parsed.faces, parsed.format)) return false
+        if (isExternalSource(entry) && sourceFileExists(entry.sourcePath)) {
+          const source = path.resolve(entry.sourcePath)
+          if (source !== resolved && !isUnderAnyRoot(source, this.destinationWatchDirs())) {
+            const incomingFp = tryFingerprintFile(resolved)
+            const known = [
+              entry.installedFingerprint,
+              entry.sourceFingerprint,
+              ...(entry.installations ?? []).map((copy) => copy.fingerprint),
+            ].filter((value): value is string => Boolean(value))
+            if (!incomingFp || !known.includes(incomingFp)) return false
+          }
+        }
+        return true
+      })
+    } catch {
+      return undefined
+    }
+  }
+
+  private occupyingSameDest(
+    catalog: ReturnType<typeof loadCatalog>,
+    resolved: string,
+    destId: DestinationId,
+  ): CatalogEntry | undefined {
+    try {
+      const parsed = parseFontFile(resolved)
+      return occupyingSiblingsForIncoming(
+        catalog.entries,
+        parsed.faces,
+        parsed.format,
+        this.paths,
+      ).find((entry) => {
+        const live = this.liveCopyPath(entry, destId)
+        return Boolean(live && fs.existsSync(live) && path.resolve(live) !== resolved)
+      })
     } catch {
       return undefined
     }
@@ -4074,12 +4196,14 @@ export class FontButlerService {
 
   private async adoptUserFonts(): Promise<void> {
     const destinations = installDestinationRoots(this.paths)
-    const macosFiles = destinations
-      .filter((item) => item.id === 'macos')
-      .flatMap((item) => listFontFilesInTree(item.dir))
-    const adobeFiles = destinations
-      .filter((item) => item.id === 'adobe-shared')
-      .flatMap((item) => listFontFilesInTree(item.dir))
+    const macosFiles = uniqueResolvedFiles(
+      destinations.filter((item) => item.id === 'macos').flatMap((item) => listFontFilesInTree(item.dir)),
+    )
+    const adobeFiles = uniqueResolvedFiles(
+      destinations
+        .filter((item) => item.id === 'adobe-shared')
+        .flatMap((item) => listFontFilesInTree(item.dir)),
+    )
     const catalog = loadCatalog(this.paths)
     const activation =
       macosFiles.length > 0
@@ -4100,8 +4224,12 @@ export class FontButlerService {
         if (entryHasParkedBytes(existing)) {
           return
         }
+        if (existing.status === 'deactivated' && destId !== 'macos') {
+          return
+        }
         const live = this.liveCopyPath(existing, destId)
         if (live && fs.existsSync(live) && path.resolve(live) !== resolved) {
+          this.warnAdoptedDuplicate(existing, resolved)
           return
         }
         if (!live || !fs.existsSync(live)) {
@@ -4139,9 +4267,27 @@ export class FontButlerService {
         }
         return
       }
+      let parsedIncoming
       try {
-        const parsed = parseFontFile(resolved)
-        if (parsed.faces.length === 0) {
+        parsedIncoming = parseFontFile(resolved)
+      } catch {
+        return
+      }
+      const parked = catalog.entries.find(
+        (entry) =>
+          (entryHasParkedBytes(entry) || entry.status === 'deactivated') &&
+          matchesIncomingIdentity(entry, parsedIncoming.faces, parsedIncoming.format),
+      )
+      if (parked) {
+        return
+      }
+      const sameDest = this.occupyingSameDest(catalog, resolved, destId)
+      if (sameDest) {
+        this.warnAdoptedDuplicate(sameDest, resolved)
+        return
+      }
+      try {
+        if (parsedIncoming.faces.length === 0) {
           return
         }
         const stat = readFileStat(resolved)
@@ -4153,9 +4299,9 @@ export class FontButlerService {
           sourcePresent: false,
           status: isOn ? 'installed' : 'deactivated',
           installedPath: destId === 'macos' ? resolved : undefined,
-          faces: parsed.faces,
-          format: parsed.format,
-          previewSample: parsed.previewSample,
+          faces: parsedIncoming.faces,
+          format: parsedIncoming.format,
+          previewSample: parsedIncoming.previewSample,
           addedAt: now(),
           updatedAt: now(),
         }
@@ -4190,7 +4336,8 @@ export class FontButlerService {
         changed = true
       }
       const adobe = copyAt(entry, 'adobe-shared')
-      if (adobe?.path && !adobe.parkedPath && !fs.existsSync(adobe.path)) {
+      const adobeMissing = Boolean(adobe?.path && !adobe.parkedPath && !fs.existsSync(adobe.path))
+      if (adobeMissing) {
         dropCopy(entry, 'adobe-shared')
         changed = true
       }
@@ -4204,7 +4351,7 @@ export class FontButlerService {
         }
         continue
       }
-      if (!macosMissing && !adobe?.path) {
+      if (!macosMissing && !adobeMissing) {
         continue
       }
       if (isExternalSource(entry) && sourceFileExists(entry.sourcePath)) {

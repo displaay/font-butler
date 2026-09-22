@@ -166,6 +166,28 @@ test('installDestinationRoots is user Fonts and Adobe, not computer fonts', () =
   }
 })
 
+test('installDestinationRoots keeps both ids when dirs resolve equal', () => {
+  const paths = tempPaths()
+  try {
+    const shared = path.join(paths.dataRoot, 'shared-fonts')
+    paths.userFontsDir = shared
+    paths.installDir = shared
+    paths.adobeFontsDir = shared
+    const roots = installDestinationRoots(paths)
+    assert.equal(
+      roots.some((item) => item.id === 'macos' && item.dir === path.resolve(shared)),
+      true,
+    )
+    assert.equal(
+      roots.some((item) => item.id === 'adobe-shared' && item.dir === path.resolve(shared)),
+      true,
+    )
+    assert.equal(roots.filter((item) => item.id === 'macos').length, 1)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
 test('recordedDestinationIds stay on the copy’s own dests and default to macos', () => {
   const neverInstalled = { installations: [] } as unknown as CatalogEntry
   assert.deepEqual(recordedDestinationIds(neverInstalled), ['macos'])
