@@ -18,6 +18,7 @@ import {
   retailStatus,
   retailSyncNeedsResume,
   retailWorkerToken,
+  stopRetailSync,
   syncRetail,
 } from './service-retail.ts'
 import { onEvent } from './events.ts'
@@ -2630,6 +2631,22 @@ test('None during a sync ends it with a status that is no longer syncing, and no
   } finally {
     stop()
   }
+})
+
+test('Stop syncing aborts the pass, keeps installed files, and does not resume on launch', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 't' })
+  const run = slowManyFiles(RETAIL_DOWNLOAD_CONCURRENCY * 3)
+  const syncing = syncRetail(paths, run.options)
+  while (run.downloads <= RETAIL_DOWNLOAD_CONCURRENCY) await new Promise((resolve) => setImmediate(resolve))
+  const stopped = await stopRetailSync(paths)
+  await syncing
+  assert.equal(stopped.progress, null)
+  assert.equal(retailSyncNeedsResume(paths), false)
+  assert.ok(run.downloads < RETAIL_DOWNLOAD_CONCURRENCY * 3)
+  const installed = fs.readdirSync(paths.userFontsDir).filter((name) => name.endsWith('.otf'))
+  assert.ok(installed.length >= RETAIL_DOWNLOAD_CONCURRENCY)
+  assert.equal(retailStatus(paths).fonts[0]?.enabled, true)
 })
 
 test('one None during a sync removes every not-installed listing of the family', async () => {

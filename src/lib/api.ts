@@ -371,6 +371,7 @@ export const api = {
       ),
     sync: (choices?: Record<string, RetailCollisionAction>) =>
       json<{ status: RetailSyncStatus }>(post('/api/retail/sync', { choices })),
+    stop: () => json<{ status: RetailSyncStatus }>(post('/api/retail/stop', {})),
     resolveDropCollisions: (
       choices: Record<string, RetailCollisionAction>,
       extra?: {

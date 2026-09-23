@@ -131,6 +131,18 @@ async function settleInflightRetailSync(): Promise<void> {
   await inflightSync?.catch(() => undefined)
 }
 
+/**
+ * User-requested stop: already-installed fonts stay, the rest wait for the next explicit Sync. Clears the
+ * resume marker so the next launch does not pick the pass straight back up.
+ */
+export async function stopRetailSync(paths: AppPaths): Promise<RetailSyncStatus> {
+  await settleInflightRetailSync()
+  const local = loadRetailManifest(paths)
+  if (local.incomplete) saveRetailManifest(paths, { ...local, incomplete: false })
+  cache.progress = null
+  return emitRetail(paths)
+}
+
 export function resetRetailCache(): void {
   abortInflightRetailSync()
   cache.checkedAt = null

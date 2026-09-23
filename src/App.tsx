@@ -365,7 +365,7 @@ function AppShell() {
     if (choices) setSyncCollisions([])
     setRetailBusy(true)
     queueFontWork(async () => {
-      setActionStatus(retailSyncingStatusMessage(retailRef.current?.progress))
+      setActionStatus(retailSyncingStatusMessage(retailRef.current?.progress), retailStopAction)
       try {
         const result = await api.retail.sync(choices)
         setRetail(result.status)
@@ -379,6 +379,25 @@ function AppShell() {
     })
   }
   syncRetailRef.current = syncRetail
+
+  function stopRetailSync() {
+    clearActionStatusIf(isRetailSyncingStatusMessage)
+    void api.retail
+      .stop()
+      .then((result) => {
+        setRetail(result.status)
+        toast.message('Stopped syncing Displaay retail')
+      })
+      .catch((err) => {
+        toast.error(err instanceof Error ? err.message : 'Could not stop syncing')
+      })
+  }
+  const stopRetailSyncRef = useRef(stopRetailSync)
+  stopRetailSyncRef.current = stopRetailSync
+  const retailStopAction = useMemo(
+    () => ({ label: 'Stop syncing', onClick: () => stopRetailSyncRef.current() }),
+    [],
+  )
 
   function retailOptOutNames(entries: CatalogEntry[]): string[] {
     return retailFamiliesToOptOut(entries, retail)
@@ -546,7 +565,7 @@ function AppShell() {
         // Every way a pass ends (done, failed, aborted by None/off/token/collection switch, stopped)
         // emits a status without progress; that is what takes the syncing status down.
         if (retailSyncInProgress(event.status)) {
-          setActionStatus(retailSyncingStatusMessage(event.status.progress))
+          setActionStatus(retailSyncingStatusMessage(event.status.progress), retailStopAction)
         } else {
           clearActionStatusIf(isRetailSyncingStatusMessage)
         }

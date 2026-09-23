@@ -300,6 +300,7 @@ import {
   retailStatus as retailStatusFn,
   retailWorkerToken as retailWorkerTokenFn,
   retailSyncNeedsResume as retailSyncNeedsResumeFn,
+  stopRetailSync as stopRetailSyncFn,
   syncRetail as syncRetailFn,
 } from './service-retail.ts'
 import {
@@ -2663,6 +2664,10 @@ export class FontButlerService {
       return retailStatusFn(this.paths)
     }
     return syncRetailFn(this.paths, { choices, ...this.retailFetch })
+  }
+
+  async stopRetailSync(): Promise<RetailSyncStatus> {
+    return stopRetailSyncFn(this.paths)
   }
 
   listDropRetailCollisions(
