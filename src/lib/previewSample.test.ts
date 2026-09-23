@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   DEFAULT_PREVIEW_SAMPLE,
+  cardPreviewSample,
   pendingPreviewSample,
   previewSampleFromCoverage,
   resolvedPreviewSample,
@@ -96,4 +97,11 @@ test('fallback sample skips separators, controls, and format characters', () => 
   assert.notEqual(previewSampleFromCoverage([0x00a0, 0x0f40]), '\u00a0')
   assert.equal(previewSampleFromCoverage([0x00a0]), DEFAULT_PREVIEW_SAMPLE)
   assert.equal(previewSampleFromCoverage([0x200b, 0x0f40]), '\u0f40')
+})
+
+test('a card without a preview file shows the default sample instead of waiting forever', () => {
+  assert.equal(cardPreviewSample(true), undefined)
+  assert.equal(cardPreviewSample(true, 'א'), 'א')
+  assert.equal(cardPreviewSample(false), DEFAULT_PREVIEW_SAMPLE)
+  assert.equal(cardPreviewSample(false, undefined, 'ع'), 'ع')
 })

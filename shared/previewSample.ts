@@ -318,6 +318,17 @@ export function pendingPreviewSample(...values: Array<string | undefined | null>
   return undefined
 }
 
+/**
+ * Waits for a computed sample only when there are bytes to compute it from. A listing with no file
+ * never gets one, so waiting would spin forever.
+ */
+export function cardPreviewSample(
+  hasPreviewFile: boolean,
+  ...values: Array<string | undefined | null>
+): string | undefined {
+  return hasPreviewFile ? pendingPreviewSample(...values) : resolvedPreviewSample(...values)
+}
+
 /** Grid and list cards share this so missing coverage still renders Aa. */
 export function resolvedPreviewSample(...values: Array<string | undefined | null>): string {
   for (const value of values) {

@@ -1,5 +1,6 @@
 export {
   DEFAULT_PREVIEW_SAMPLE,
+  cardPreviewSample,
   PREVIEW_PROBE_CODE_POINTS,
   PREVIEW_SCRIPTS,
   isLatinPreviewSample,
