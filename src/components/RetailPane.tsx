@@ -19,6 +19,7 @@ import {
   nextDisabledRetailFamilyNames,
   nextDisabledRetailFamilyNamesForScope,
   retailFamilyNamesForSyncScope,
+  retailSyncOffersVfCollections,
   retailDriftSummary,
   retailFamiliesOffInstalled,
   retailFamiliesOffNeedsChoice,
@@ -146,9 +147,11 @@ function nextFamilyFormats(
 
 function RetailSyncScopeControl({
   disabled,
+  offersVfCollections,
   onSync,
 }: {
   disabled: boolean
+  offersVfCollections: boolean
   onSync: (scope: RetailSyncScope) => void
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -183,15 +186,21 @@ function RetailSyncScopeControl({
             type="button"
             className={cn(segment, 'flex items-center gap-0.5', menuOpen && 'bg-muted')}
             disabled={disabled}
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-            aria-label="Variable font sync"
-            onClick={() => setMenuOpen((open) => !open)}
+            aria-haspopup={offersVfCollections ? 'menu' : undefined}
+            aria-expanded={offersVfCollections ? menuOpen : undefined}
+            aria-label="Sync variable fonts"
+            onClick={() => {
+              if (!offersVfCollections) {
+                onSync('vf-all')
+                return
+              }
+              setMenuOpen((open) => !open)
+            }}
           >
             VF
-            <ChevronDown className="size-3 text-muted-foreground" aria-hidden />
+            {offersVfCollections ? <ChevronDown className="size-3 text-muted-foreground" aria-hidden /> : null}
           </button>
-          {menuOpen ? (
+          {offersVfCollections && menuOpen ? (
             <div
               role="menu"
               className="absolute top-full right-0 z-30 mt-1 min-w-52 rounded-md border bg-popover p-1 shadow-sm"
@@ -372,7 +381,11 @@ function RetailFontList({
               </div>
             ) : null}
           </div>
-          <RetailSyncScopeControl disabled={disabled || fonts.length === 0} onSync={onSyncScope} />
+          <RetailSyncScopeControl
+            disabled={disabled || fonts.length === 0}
+            offersVfCollections={retailSyncOffersVfCollections(fonts)}
+            onSync={onSyncScope}
+          />
           <Button
             type="button"
             size="sm"
@@ -877,10 +890,11 @@ export function RetailPane({
               }
               onSyncScope={(scope) => {
                 const selected = retailFamilyNamesForSyncScope(fonts, scope)
+                if (selected.length === 0) return
                 void configureSelection({
                   disabledGlyphsFiles: nextDisabledRetailFamilyNamesForScope(fonts, scope),
                 }).then((result) => {
-                  if (result && selected.length > 0) startSync()
+                  if (result) startSync()
                 })
               }}
               onSetAll={(syncEnabled, familyNames) => {

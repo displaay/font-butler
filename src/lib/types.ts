@@ -436,6 +436,7 @@ export {
   nextDisabledRetailFamilyNames,
   nextDisabledRetailFamilyNamesForScope,
   retailFamilyNamesForSyncScope,
+  retailSyncOffersVfCollections,
   retailDriftSummary,
   retailFileFormat,
   retailLibraryEntryVisible,

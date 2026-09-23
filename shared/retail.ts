@@ -659,6 +659,23 @@ export function retailFamilyNamesForSyncScope(
   return selected
 }
 
+/**
+ * True when "VF Collections" would install a different set than every VF family.
+ * Trial cuts and any other manifest with no collection-vs-member split return false, so the VF
+ * control installs all VF files directly instead of offering a choice that changes nothing.
+ * Decided from the family names in the manifest, not from whether a user token is saved.
+ */
+export function retailSyncOffersVfCollections(
+  fonts: ReadonlyArray<Pick<RetailSyncFont, 'familyName' | 'typefaceName'>>,
+): boolean {
+  const collections = retailFamilyNamesForSyncScope(fonts, 'vf-collections')
+  const all = retailFamilyNamesForSyncScope(fonts, 'vf-all')
+  if (all.length === 0 || collections.length === 0) return false
+  if (collections.length !== all.length) return true
+  const selected = new Set(collections)
+  return all.some((name) => !selected.has(name))
+}
+
 /** Disabled-family list for a scope, same shape Sync All writes (`disabledGlyphsFiles`). */
 export function nextDisabledRetailFamilyNamesForScope(
   fonts: ReadonlyArray<Pick<RetailSyncFont, 'familyName' | 'typefaceName'>>,

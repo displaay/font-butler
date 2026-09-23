@@ -13,6 +13,7 @@ import {
   isRetailVfCollectionName,
   nextDisabledRetailFamilyNamesForScope,
   retailFamilyNamesForSyncScope,
+  retailSyncOffersVfCollections,
   matchesRetailFontKindFilter,
   matchesRetailFontQuery,
   nextDisabledRetailFamilyNames,
@@ -425,6 +426,36 @@ test('several collections on one side are all installed, and unmarked VF familie
     ['Tobias Mono VF', 'Tobias VF'],
   )
   assert.equal(isRetailVfCollectionName('AzeretVFCollection'), true)
+})
+
+test('a trial cut with no collection file does not offer VF Collections', () => {
+  // The built-in trial manifest names files like Reckless-TRIAL-VF, not a separate "VF Collection".
+  const trial = [
+    font('Reckless VF', { typefaceName: 'Reckless' }),
+    font('Reckless', { typefaceName: 'Reckless' }),
+    font('Matter VF', { typefaceName: 'Matter' }),
+    font('Matter', { typefaceName: 'Matter' }),
+  ]
+  assert.equal(retailSyncOffersVfCollections(trial), false)
+  assert.deepEqual(
+    retailFamilyNamesForSyncScope(trial, 'vf-collections'),
+    retailFamilyNamesForSyncScope(trial, 'vf-all'),
+  )
+  // Only the collection files, no members: the two VF choices would install the same set.
+  const collectionsOnly = [
+    font('Azeret VF Collection', { typefaceName: 'Azeret' }),
+    font('Azeret', { typefaceName: 'Azeret' }),
+  ]
+  assert.equal(retailSyncOffersVfCollections(collectionsOnly), false)
+  // A saved token whose manifest also lacks the split is treated the same way.
+  const retailWithoutSplit = [font('Tobias VF', { typefaceName: 'Tobias' }), font('Tobias', { typefaceName: 'Tobias' })]
+  assert.equal(retailSyncOffersVfCollections(retailWithoutSplit), false)
+  const retail = [
+    font('Azeret VF Collection', { typefaceName: 'Azeret' }),
+    font('Azeret VF', { typefaceName: 'Azeret' }),
+    font('Azeret', { typefaceName: 'Azeret' }),
+  ]
+  assert.equal(retailSyncOffersVfCollections(retail), true)
 })
 
 test('a sync scope writes the same disabled-family list Sync All does', () => {
