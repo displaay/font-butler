@@ -4108,12 +4108,28 @@ export class FontButlerService {
     }
   }
 
+  /**
+   * Deactivated by macOS (Font Book), not by Font Buttler: the Fonts copy is still in place and
+   * nothing was parked. Its Adobe-folder copy is still live and gets recorded.
+   */
+  private isDeactivatedOutsideApp(entry: CatalogEntry): boolean {
+    if (entry.status !== 'deactivated' || entry.disabledPath) return false
+    if ((entry.installations ?? []).some((copy) => copy.parkedPath)) return false
+    return occupiesDestination(entry, 'macos', this.paths)
+  }
+
   private isSafeAdoptMergeTarget(
     entry: CatalogEntry,
     incomingPath: string,
     destId: DestinationId,
   ): boolean {
-    if (entryHasParkedBytes(entry) || entry.status === 'deactivated') return false
+    if (entryHasParkedBytes(entry)) return false
+    if (
+      entry.status === 'deactivated' &&
+      !(destId === 'adobe-shared' && this.isDeactivatedOutsideApp(entry))
+    ) {
+      return false
+    }
     const liveHere = this.liveCopyPath(entry, destId)
     if (liveHere && fs.existsSync(liveHere) && path.resolve(liveHere) !== path.resolve(incomingPath)) {
       return false
@@ -4236,7 +4252,11 @@ export class FontButlerService {
         if (entryHasParkedBytes(existing)) {
           return
         }
-        if (existing.status === 'deactivated' && destId !== 'macos') {
+        if (
+          existing.status === 'deactivated' &&
+          destId !== 'macos' &&
+          !this.isDeactivatedOutsideApp(existing)
+        ) {
           return
         }
         const live = this.liveCopyPath(existing, destId)

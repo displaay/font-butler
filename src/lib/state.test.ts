@@ -210,6 +210,44 @@ test('copy destinations follow Mac and Adobe file-present copies', () => {
   )
 })
 
+test('a row disabled in Font Book still shows its live Adobe-folder copy', () => {
+  const macosCopy = {
+    destinationId: 'macos' as const,
+    path: '/Library/Fonts/State.otf',
+    verification: 'file-present' as const,
+  }
+  const adobeCopy = {
+    destinationId: 'adobe-shared' as const,
+    path: '/tmp/adobe/State.otf',
+    verification: 'file-present' as const,
+  }
+  assert.deepEqual(
+    entryCopyDestinations(
+      entry({
+        status: 'deactivated',
+        installedPath: macosCopy.path,
+        installations: [macosCopy, adobeCopy],
+      }),
+    ),
+    { macos: false, adobe: true },
+  )
+  assert.deepEqual(
+    entryCopyDestinations(
+      entry({ status: 'deactivated', installedPath: macosCopy.path, installations: [macosCopy] }),
+    ),
+    { macos: false, adobe: false },
+  )
+  assert.deepEqual(
+    entryCopyDestinations(
+      entry({
+        status: 'deactivated',
+        installations: [{ ...adobeCopy, parkedPath: '/tmp/Disabled/State.otf' }],
+      }),
+    ),
+    { macos: false, adobe: false },
+  )
+})
+
 test('needsLocateSource covers missing and unlinked installed fonts', () => {
   assert.equal(needsLocateSource(entry({ sourceAvailability: 'missing' })), true)
   assert.equal(
