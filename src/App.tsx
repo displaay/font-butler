@@ -386,7 +386,7 @@ function AppShell() {
       .stop()
       .then((result) => {
         setRetail(result.status)
-        toast.message('Stopped syncing Displaay retail')
+        toast.success('Stopped syncing Displaay retail')
       })
       .catch((err) => {
         toast.error(err instanceof Error ? err.message : 'Could not stop syncing')
@@ -395,7 +395,7 @@ function AppShell() {
   const stopRetailSyncRef = useRef(stopRetailSync)
   stopRetailSyncRef.current = stopRetailSync
   const retailStopAction = useMemo(
-    () => ({ label: 'Stop syncing', onClick: () => stopRetailSyncRef.current() }),
+    () => ({ label: 'Stop', onClick: () => stopRetailSyncRef.current() }),
     [],
   )
 

@@ -14,14 +14,16 @@ export function ActionStatus({ message, action }: { message: string | null; acti
           {message}
         </span>
         {action ? (
-          // Hover or keyboard focus reveals it; it stays in the tab order the whole time.
-          <button
-            type="button"
-            onClick={action.onClick}
-            className="action-status-action -my-1 -mr-2 overflow-hidden whitespace-nowrap rounded-full py-1 text-[13px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            {action.label}
-          </button>
+          // Hover or keyboard focus expands the pill; the button stays in the tab order.
+          <span className="action-status-reveal">
+            <button
+              type="button"
+              onClick={action.onClick}
+              className="action-status-action rounded-full px-2.5 py-0.5 text-[13px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {action.label}
+            </button>
+          </span>
         ) : null}
       </div>
     </div>
