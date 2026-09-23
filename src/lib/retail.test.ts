@@ -3,7 +3,17 @@ import { test } from 'node:test'
 import {
   entryHasActiveRetailSync,
   isOrphanRetailListing,
+  isRetailSyncingStatusMessage,
+  retailFamiliesOffInstalled,
+  retailFamiliesOffNeedsChoice,
+  retailListingOnMac,
+  retailSyncInProgress,
+  isRetailItalicFamilyName,
   isRetailVariableFamilyName,
+  isRetailVfCollectionName,
+  nextDisabledRetailFamilyNamesForScope,
+  retailFamilyNamesForSyncScope,
+  retailSyncOffersVfCollections,
   matchesRetailFontKindFilter,
   matchesRetailFontQuery,
   nextDisabledRetailFamilyNames,
@@ -308,4 +318,164 @@ test('retailUpdateCount uses remaining families while a sync is in flight', () =
   assert.equal(retailHasLiveUpdates({ pending: 0, progress: { done: 36, total: 36 } }), true)
   assert.equal(retailHasLiveUpdates({ pending: 0, progress: null }), false)
   assert.equal(retailHasLiveUpdates({ pending: 3 }), true)
+})
+
+const cacheParked = {
+  ...stub,
+  status: 'uninstalled',
+  sourcePath: '/Users/you/Library/Application Support/Font Buttler/retail-cache/Reckless/Reckless-Regular.otf',
+  sourcePresent: true,
+  sourceAvailability: 'present' as const,
+}
+
+test('a not-installed listing parked in the retail cache is hidden once its family is off', () => {
+  assert.equal(retailListingHasLocalFile(cacheParked), true)
+  assert.equal(retailListingOnMac(cacheParked), false)
+  assert.equal(retailLibraryEntryVisible(cacheParked, [font('Reckless', { enabled: false })], true), false)
+  assert.equal(retailLibraryEntryVisible(cacheParked, [font('Reckless')], false), false)
+  assert.equal(retailLibraryEntryVisible(cacheParked, [font('Reckless')], true), true)
+  assert.equal(isOrphanRetailListing(cacheParked, false), true)
+  assert.equal(retailListingOnMac({ ...installed, status: 'installed' }), true)
+  assert.equal(retailListingOnMac({ ...parked, status: 'deactivated' }), true)
+})
+
+test('None asks keep-or-uninstall only while syncing or over installed families still syncing', () => {
+  const fonts = [font('Reckless'), font('Zangezi'), font('Aguzzo', { enabled: false })]
+  const onMac = new Set(['Zangezi', 'Aguzzo'])
+  const idle = { progress: null }
+  const syncing = { progress: { done: 1, total: 3 } }
+  assert.equal(retailFamiliesOffNeedsChoice(fonts, ['Reckless'], idle, onMac), false)
+  assert.equal(retailFamiliesOffNeedsChoice(fonts, ['Reckless'], syncing, onMac), true)
+  assert.equal(retailFamiliesOffNeedsChoice(fonts, ['Reckless', 'Zangezi'], idle, onMac), true)
+  assert.equal(retailFamiliesOffNeedsChoice(fonts, ['Aguzzo'], syncing, onMac), false, 'already off')
+  assert.equal(retailFamiliesOffInstalled(fonts, ['Reckless', 'Zangezi', 'Aguzzo'], onMac), 1)
+})
+
+function names(
+  scope: 'all' | 'static' | 'vf-collections' | 'vf-all',
+  rows: Array<[string, string]>,
+): string[] {
+  return retailFamilyNamesForSyncScope(
+    rows.map(([familyName, typefaceName]) => font(familyName, { typefaceName })),
+    scope,
+  ).slice().sort()
+}
+
+test('Collections only installs the collection and skips member families', () => {
+  const rows: Array<[string, string]> = [
+    ['Azeret VF Collection', 'Azeret'],
+    ['Azeret VF', 'Azeret'],
+    ['Azeret Monospaced VF', 'Azeret'],
+    ['Azeret Mono', 'Azeret'],
+  ]
+  assert.deepEqual(names('vf-collections', rows), ['Azeret VF Collection'])
+  assert.deepEqual(names('vf-all', rows), ['Azeret Monospaced VF', 'Azeret VF', 'Azeret VF Collection'])
+  assert.deepEqual(names('static', rows), ['Azeret Mono'])
+  assert.deepEqual(names('all', rows), ['Azeret Mono', 'Azeret Monospaced VF', 'Azeret VF', 'Azeret VF Collection'])
+})
+
+test('a typeface with a single VF family and no collection installs that family', () => {
+  assert.deepEqual(names('vf-collections', [['Tobias VF', 'Tobias'], ['Tobias', 'Tobias']]), ['Tobias VF'])
+  assert.equal(isRetailVfCollectionName('Tobias VF'), false)
+})
+
+test('roman and italic collections are both top collections, for either spelling', () => {
+  const rows: Array<[string, string]> = [
+    ['Reckless VF Collection', 'Reckless'],
+    ['Reckless Italics VF Collection', 'Reckless'],
+    ['Reckless VF', 'Reckless'],
+    ['Reckless Italic VF', 'Reckless'],
+  ]
+  assert.deepEqual(names('vf-collections', rows), ['Reckless Italics VF Collection', 'Reckless VF Collection'])
+  assert.equal(isRetailItalicFamilyName('Reckless Italic VF Collection'), true)
+  assert.equal(isRetailItalicFamilyName('Reckless Italics VF Collection'), true)
+  assert.deepEqual(
+    names('vf-collections', [
+      ['Reckless VF Collection', 'Reckless'],
+      ['Reckless Italic VF Collection', 'Reckless'],
+      ['Reckless VF', 'Reckless'],
+    ]),
+    ['Reckless Italic VF Collection', 'Reckless VF Collection'],
+  )
+})
+
+test('VF scopes skip a typeface that has no variable families', () => {
+  const rows: Array<[string, string]> = [
+    ['Matter', 'Matter'],
+    ['Matter Mono', 'Matter'],
+  ]
+  assert.deepEqual(names('vf-collections', rows), [])
+  assert.deepEqual(names('vf-all', rows), [])
+  assert.deepEqual(names('static', rows), ['Matter', 'Matter Mono'])
+})
+
+test('several collections on one side are all installed, and unmarked VF families are too when none is a collection', () => {
+  assert.deepEqual(
+    names('vf-collections', [
+      ['Azeret VF Collection', 'Azeret'],
+      ['Azeret Display VF Collection', 'Azeret'],
+      ['Azeret VF', 'Azeret'],
+    ]),
+    ['Azeret Display VF Collection', 'Azeret VF Collection'],
+  )
+  assert.deepEqual(
+    names('vf-collections', [
+      ['Tobias VF', 'Tobias'],
+      ['Tobias Mono VF', 'Tobias'],
+    ]),
+    ['Tobias Mono VF', 'Tobias VF'],
+  )
+  assert.equal(isRetailVfCollectionName('AzeretVFCollection'), true)
+})
+
+test('a trial cut with no collection file does not offer Collections only', () => {
+  // The built-in trial manifest names files like Reckless-TRIAL-VF, not a separate "VF Collection".
+  const trial = [
+    font('Reckless VF', { typefaceName: 'Reckless' }),
+    font('Reckless', { typefaceName: 'Reckless' }),
+    font('Matter VF', { typefaceName: 'Matter' }),
+    font('Matter', { typefaceName: 'Matter' }),
+  ]
+  assert.equal(retailSyncOffersVfCollections(trial), false)
+  assert.deepEqual(
+    retailFamilyNamesForSyncScope(trial, 'vf-collections'),
+    retailFamilyNamesForSyncScope(trial, 'vf-all'),
+  )
+  // Only the collection files, no members: the two VF choices would install the same set.
+  const collectionsOnly = [
+    font('Azeret VF Collection', { typefaceName: 'Azeret' }),
+    font('Azeret', { typefaceName: 'Azeret' }),
+  ]
+  assert.equal(retailSyncOffersVfCollections(collectionsOnly), false)
+  // A saved token whose manifest also lacks the split is treated the same way.
+  const retailWithoutSplit = [font('Tobias VF', { typefaceName: 'Tobias' }), font('Tobias', { typefaceName: 'Tobias' })]
+  assert.equal(retailSyncOffersVfCollections(retailWithoutSplit), false)
+  const retail = [
+    font('Azeret VF Collection', { typefaceName: 'Azeret' }),
+    font('Azeret VF', { typefaceName: 'Azeret' }),
+    font('Azeret', { typefaceName: 'Azeret' }),
+  ]
+  assert.equal(retailSyncOffersVfCollections(retail), true)
+})
+
+test('a sync scope writes the same disabled-family list Sync All does', () => {
+  const fonts = [
+    font('Azeret VF Collection', { typefaceName: 'Azeret' }),
+    font('Azeret VF', { typefaceName: 'Azeret', enabled: false }),
+    font('Azeret', { typefaceName: 'Azeret' }),
+  ]
+  assert.deepEqual(nextDisabledRetailFamilyNamesForScope(fonts, 'all'), [])
+  assert.deepEqual(nextDisabledRetailFamilyNamesForScope(fonts, 'static'), ['Azeret VF Collection', 'Azeret VF'])
+  assert.deepEqual(nextDisabledRetailFamilyNamesForScope(fonts, 'vf-collections'), ['Azeret VF', 'Azeret'])
+})
+
+test('the syncing status is recognised and ends with any status that has no progress', () => {
+  assert.equal(isRetailSyncingStatusMessage(retailSyncingStatusMessage({ done: 2, total: 9 })), true)
+  assert.equal(isRetailSyncingStatusMessage(retailSyncingStatusMessage()), true)
+  assert.equal(isRetailSyncingStatusMessage('Installing Inter…'), false)
+  assert.equal(isRetailSyncingStatusMessage(null), false)
+  assert.equal(retailSyncInProgress({ progress: { done: 0, total: 3 } }), true)
+  assert.equal(retailSyncInProgress({ progress: null }), false)
+  assert.equal(retailSyncInProgress({ progress: { done: 0, total: 0 } }), false)
+  assert.equal(retailSyncInProgress(null), false)
 })

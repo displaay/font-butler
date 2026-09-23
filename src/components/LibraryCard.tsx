@@ -29,7 +29,7 @@ import { projectContainsAll, writeFontButlerEntries } from '@/lib/projects'
 import { displayStateParts, familyCopyDestinations, isNotInstalledLabel, needsLocateSource } from '@/lib/state'
 import type { FamilyGroup, ProjectSet, RetailSyncView, ViewLayout } from '@/lib/types'
 import { useCardActionChrome } from '@/hooks/useCardActionChrome'
-import { pendingPreviewSample } from '@/lib/previewSample'
+import { cardPreviewSample } from '@/lib/previewSample'
 import { cn } from '@/lib/utils'
 
 export const LibraryCard = memo(function LibraryCard({
@@ -157,7 +157,8 @@ export const LibraryCard = memo(function LibraryCard({
   const previewFamily = catalogFontFamily(group.previewEntryId)
   const previewWeight = preview.faces[0]?.weight
   const previewItalic = preview.faces[0]?.italic
-  const previewSample = pendingPreviewSample(
+  const previewSample = cardPreviewSample(
+    entryHasPreviewFile(preview),
     preview.previewSample,
     group.entries.find((entry) => entry.previewSample)?.previewSample,
   )
@@ -173,10 +174,10 @@ export const LibraryCard = memo(function LibraryCard({
           italic: row.italic,
           label: row.label,
           variation: row.variation,
-          wait: rowEntry ? entryHasPreviewFile(rowEntry) : true,
+          wait: entryHasPreviewFile(rowEntry ?? preview),
         }
       }),
-    [instances, previewFamily, group.entries],
+    [instances, previewFamily, group.entries, preview],
   )
   const plan = batch ?? familyCardPlan(group, adobeAvailable)
   const inCurrentProject = Boolean(

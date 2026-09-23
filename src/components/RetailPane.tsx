@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { Filter, Loader2, Search } from 'lucide-react'
+import { ChevronDown, Filter, Loader2, Search } from 'lucide-react'
 import { DisplaayMark } from '@/components/DisplaayMark'
 import { TrialBadge } from '@/components/Badges'
 import { SettingsRow, SettingsSection, settingsSelectClass } from '@/components/SettingsRow'
@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label'
 import { api } from '@/lib/api'
 import { startQueuedFontAction } from '@/lib/actionQueue'
 import { RetailDisableDialog } from '@/components/RetailDisableDialog'
+import { RetailFamiliesOffDialog } from '@/components/RetailFamiliesOffDialog'
 import {
   DEFAULT_RETAIL_AUTOCHECK_MINUTES,
   RETAIL_AUTOCHECK_CHOICES,
@@ -16,12 +17,19 @@ import {
   isRetailVariableFamilyName,
   matchesRetailFontQuery,
   nextDisabledRetailFamilyNames,
+  nextDisabledRetailFamilyNamesForScope,
+  retailFamilyNamesForSyncScope,
+  retailSyncOffersVfCollections,
   retailDriftSummary,
+  retailFamiliesOffInstalled,
+  retailFamiliesOffNeedsChoice,
+  retailSyncInProgress,
   type RetailDisableAction,
   type RetailFontFormat,
   type RetailSkip,
   type RetailSkipReason,
   type RetailSyncFont,
+  type RetailSyncScope,
   type RetailSyncStatus,
 } from '@/lib/types'
 import { cn, CONTROL_H } from '@/lib/utils'
@@ -137,17 +145,117 @@ function nextFamilyFormats(
   return next
 }
 
+function RetailSyncScopeControl({
+  disabled,
+  offersVfCollections,
+  onSync,
+}: {
+  disabled: boolean
+  offersVfCollections: boolean
+  onSync: (scope: RetailSyncScope) => void
+}) {
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!menuOpen) return
+    function onPointerDown(event: PointerEvent) {
+      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false)
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') setMenuOpen(false)
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [menuOpen])
+
+  const segment = 'h-7 px-2 text-xs font-medium hover:bg-muted disabled:opacity-50'
+  return (
+    <div className="flex items-center gap-1.5" role="group" aria-label="Sync">
+      <span className="text-[13px] text-muted-foreground">Sync</span>
+      <div className="flex items-stretch rounded-md border bg-background">
+        <button type="button" className={segment} disabled={disabled} onClick={() => onSync('all')}>
+          All
+        </button>
+        <div className="relative border-l" ref={menuRef}>
+          <button
+            type="button"
+            className={cn(segment, 'flex items-center gap-0.5', menuOpen && 'bg-muted')}
+            disabled={disabled}
+            aria-haspopup={offersVfCollections ? 'menu' : undefined}
+            aria-expanded={offersVfCollections ? menuOpen : undefined}
+            aria-label="Sync variable fonts"
+            onClick={() => {
+              if (!offersVfCollections) {
+                onSync('vf-all')
+                return
+              }
+              setMenuOpen((open) => !open)
+            }}
+          >
+            VF
+            {offersVfCollections ? <ChevronDown className="size-3 text-muted-foreground" aria-hidden /> : null}
+          </button>
+          {offersVfCollections && menuOpen ? (
+            <div
+              role="menu"
+              className="absolute top-full right-0 z-30 mt-1 min-w-52 rounded-md border bg-popover p-1 shadow-sm"
+            >
+              <button
+                type="button"
+                role="menuitem"
+                className="block w-full rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-muted"
+                onClick={() => {
+                  setMenuOpen(false)
+                  onSync('vf-collections')
+                }}
+              >
+                Collections only
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="block w-full rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-muted"
+                onClick={() => {
+                  setMenuOpen(false)
+                  onSync('vf-all')
+                }}
+              >
+                All
+              </button>
+            </div>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          className={cn(segment, 'border-l')}
+          disabled={disabled}
+          onClick={() => onSync('static')}
+        >
+          Static
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function RetailFontList({
   fonts,
   disabled,
   onToggle,
   onFormat,
+  onSyncScope,
   onSetAll,
 }: {
   fonts: RetailSyncFont[]
   disabled: boolean
   onToggle: (familyName: string, enabled: boolean) => void
   onFormat: (familyName: string, format: RetailFontFormat) => void
+  onSyncScope: (scope: RetailSyncScope) => void
   onSetAll: (enabled: boolean, familyNames: string[]) => void
 }) {
   const [showStatic, setShowStatic] = useState(true)
@@ -273,15 +381,11 @@ function RetailFontList({
               </div>
             ) : null}
           </div>
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            disabled={visible.length === 0}
-            onClick={() => onSetAll(true, batchNames)}
-          >
-            {narrowed ? 'Sync these' : 'Sync All'}
-          </Button>
+          <RetailSyncScopeControl
+            disabled={disabled || fonts.length === 0}
+            offersVfCollections={retailSyncOffersVfCollections(fonts)}
+            onSync={onSyncScope}
+          />
           <Button
             type="button"
             size="sm"
@@ -378,12 +482,15 @@ function skipLabel(reason: RetailSkipReason): string {
  */
 export function RetailPane({
   status,
+  familiesOnMac,
   busy,
   onStatus,
   onSync,
   onRequestDisable,
 }: {
   status: RetailSyncStatus | null
+  /** Retail families with fonts installed or deactivated on this Mac. */
+  familiesOnMac?: ReadonlySet<string>
   busy: boolean
   onStatus: (status: RetailSyncStatus) => void
   onSync?: () => void
@@ -402,6 +509,7 @@ export function RetailPane({
   const workerBaseUrl = editedUrl ?? status?.workerBaseUrl ?? ''
   const [error, setError] = useState<string | null>(null)
   const [disableOpen, setDisableOpen] = useState(false)
+  const [turningOff, setTurningOff] = useState<string[] | null>(null)
   const [checking, setChecking] = useState(
     () => Boolean(status?.enabled) && (status?.fonts.length ?? 0) === 0 && !status?.checkedAt,
   )
@@ -450,6 +558,7 @@ export function RetailPane({
   const configureSelection = (input: {
     disabledGlyphsFiles?: string[]
     familyFormats?: Record<string, RetailFontFormat>
+    disableAction?: RetailDisableAction
   }) => {
     setError(null)
     return api.retail
@@ -479,7 +588,9 @@ export function RetailPane({
       autoCheckStartedRef.current = false
       return
     }
-    if (!status || status.fonts.length > 0 || status.checkedAt) return
+    // `checkedAt` is per process: after a restart the list comes from catalog listings, which no longer
+    // include families turned off, so check once to list them again.
+    if (!status || status.checkedAt) return
     if (autoCheckStartedRef.current) return
     autoCheckStartedRef.current = true
     setChecking(true)
@@ -512,7 +623,7 @@ export function RetailPane({
     >
       <SettingsRow
         label="Sync"
-        description="Load the Displaay retail list. Fonts stay off the computer until you Sync All or turn a family on."
+        description="Load the Displaay retail list. Fonts stay off the computer until you Sync or turn a family on."
       >
         <SyncToggle
           enabled={enabled}
@@ -671,7 +782,7 @@ export function RetailPane({
                     ? `Last checked ${new Date(status.checkedAt).toLocaleString()}.`
                     : status?.enabled
                       ? 'Check to load the collection and choose which families to sync.'
-                      : 'Turn sync on to load the font list. Nothing is downloaded until you Sync All or turn a family on.'}
+                      : 'Turn sync on to load the font list. Nothing is downloaded until you Sync or turn a family on.'}
               </p>
             </div>
             <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
@@ -749,7 +860,7 @@ export function RetailPane({
           description={
             showFontLoader
               ? 'Loading the collection…'
-              : 'Turn a family on to download it, or Sync All. When a family has both otf and ttf, only the selected format is downloaded.'
+              : 'Turn a family on to download it, or Sync. When a family has both otf and ttf, only the selected format is downloaded.'
           }
           extra={
             showFontLoader ? (
@@ -777,7 +888,20 @@ export function RetailPane({
                   familyFormats: nextFamilyFormats(fonts, familyName, format),
                 })
               }
+              onSyncScope={(scope) => {
+                const selected = retailFamilyNamesForSyncScope(fonts, scope)
+                if (selected.length === 0) return
+                void configureSelection({
+                  disabledGlyphsFiles: nextDisabledRetailFamilyNamesForScope(fonts, scope),
+                }).then((result) => {
+                  if (result) startSync()
+                })
+              }}
               onSetAll={(syncEnabled, familyNames) => {
+                if (!syncEnabled && retailFamiliesOffNeedsChoice(fonts, familyNames, status, familiesOnMac)) {
+                  setTurningOff(familyNames)
+                  return
+                }
                 void configureSelection({
                   disabledGlyphsFiles: nextDisabledRetailFamilyNames(fonts, familyNames, syncEnabled),
                 }).then((result) => {
@@ -792,6 +916,20 @@ export function RetailPane({
         </>
       ) : null}
     </SettingsSection>
+    <RetailFamiliesOffDialog
+      open={turningOff !== null}
+      syncing={retailSyncInProgress(status)}
+      installed={retailFamiliesOffInstalled(fonts, turningOff ?? [], familiesOnMac)}
+      onDismiss={() => setTurningOff(null)}
+      onChoose={(disableAction) => {
+        const names = turningOff ?? []
+        setTurningOff(null)
+        void configureSelection({
+          disabledGlyphsFiles: nextDisabledRetailFamilyNames(fonts, names, false),
+          disableAction,
+        })
+      }}
+    />
     {onRequestDisable ? null : (
     <RetailDisableDialog
       open={disableOpen}

@@ -160,6 +160,7 @@ export function SettingsDialog({
   highlightAppUpdate = false,
   highlightWatchFolders = false,
   retail = null,
+  retailFamiliesOnMac,
   onRetailChange,
   onRetailSync,
 }: {
@@ -174,6 +175,7 @@ export function SettingsDialog({
   highlightAppUpdate?: boolean
   highlightWatchFolders?: boolean
   retail?: RetailSyncStatus | null
+  retailFamiliesOnMac?: ReadonlySet<string>
   onRetailChange?: (status: RetailSyncStatus) => void
   onRetailSync?: () => void
 }) {
@@ -426,6 +428,7 @@ export function SettingsDialog({
                   watchFolders={watchFolders}
                   busy={busy}
                   retail={retail}
+                  retailFamiliesOnMac={retailFamiliesOnMac}
                   onRetailChange={onRetailChange}
                   onRetailSync={onRetailSync}
                   onSave={save}
@@ -813,6 +816,7 @@ function FoldersPane({
   watchFolders,
   busy,
   retail,
+  retailFamiliesOnMac,
   onRetailChange,
   onRetailSync,
   onSave,
@@ -826,6 +830,7 @@ function FoldersPane({
   watchFolders: string[]
   busy: boolean
   retail?: RetailSyncStatus | null
+  retailFamiliesOnMac?: ReadonlySet<string>
   onRetailChange?: (status: RetailSyncStatus) => void
   onRetailSync?: () => void
   onSave: (patch: SettingsPatch) => Promise<void>
@@ -893,6 +898,7 @@ function FoldersPane({
       </SettingsSection>
       <RetailPane
         status={retail ?? null}
+        familiesOnMac={retailFamiliesOnMac}
         busy={busy}
         onStatus={(next) => onRetailChange?.(next)}
         onSync={onRetailSync}

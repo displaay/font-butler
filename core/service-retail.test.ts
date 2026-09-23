@@ -18,8 +18,10 @@ import {
   retailStatus,
   retailSyncNeedsResume,
   retailWorkerToken,
+  stopRetailSync,
   syncRetail,
 } from './service-retail.ts'
+import { onEvent } from './events.ts'
 import {
   catalogEntryFamilyNames,
   familyHasValidDropReplacement,
@@ -2582,4 +2584,166 @@ test('a parked retail cache records its fingerprint so later checks skip reparse
   assert.ok(after)
   assert.equal(after.sourceFingerprint, fingerprintFile(listing.sourcePath))
   assert.equal(after.faces[0]?.familyName, 'StaleName', 'matching cache bytes must not reparse')
+})
+
+function recklessFont(paths: AppPaths): Uint8Array {
+  const file = path.join(paths.dataRoot, 'source-RecklessVF.otf')
+  writeTestFont(file, 'Reckless', 'RecklessVF', { format: 'otf' })
+  return new Uint8Array(fs.readFileSync(file))
+}
+
+function slowManyFiles(count: number) {
+  let downloads = 0
+  const files = Array.from({ length: count }, (_, index) => ({ basename: `File${index}.otf`, size: 4, etag: `e${index}` }))
+  return {
+    get downloads() {
+      return downloads
+    },
+    options: {
+      fetchManifest: async () => manifestWithFiles(files),
+      fetchFile: async () => {
+        downloads += 1
+        await new Promise((resolve) => setTimeout(resolve, 30))
+        return new Uint8Array(4).fill(1)
+      },
+    },
+  }
+}
+
+test('None during a sync ends it with a status that is no longer syncing, and nothing after', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 't' })
+  const run = slowManyFiles(RETAIL_DOWNLOAD_CONCURRENCY * 3)
+  const events: Array<{ done: number; total: number } | null> = []
+  const stop = onEvent((event) => {
+    if (event.type === 'retail') events.push(event.status.progress)
+  })
+  try {
+    const syncing = syncRetail(paths, run.options)
+    while (run.downloads === 0) await new Promise((resolve) => setImmediate(resolve))
+    assert.ok(events.some((progress) => progress && progress.total > 0))
+    const stopped = await configureRetailSync(paths, { disabledGlyphsFiles: ['Reckless'] })
+    assert.equal(stopped.progress, null)
+    const settled = events.length
+    await syncing
+    assert.equal(events.at(-1), null)
+    assert.equal(events.slice(settled).some((progress) => progress !== null), false)
+  } finally {
+    stop()
+  }
+})
+
+test('Stop syncing aborts the pass, keeps installed files, and does not resume on launch', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 't' })
+  const run = slowManyFiles(RETAIL_DOWNLOAD_CONCURRENCY * 3)
+  const syncing = syncRetail(paths, run.options)
+  while (run.downloads <= RETAIL_DOWNLOAD_CONCURRENCY) await new Promise((resolve) => setImmediate(resolve))
+  const stopped = await stopRetailSync(paths)
+  await syncing
+  assert.equal(stopped.progress, null)
+  assert.equal(retailSyncNeedsResume(paths), false)
+  assert.ok(run.downloads < RETAIL_DOWNLOAD_CONCURRENCY * 3)
+  const installed = fs.readdirSync(paths.userFontsDir).filter((name) => name.endsWith('.otf'))
+  assert.ok(installed.length >= RETAIL_DOWNLOAD_CONCURRENCY)
+  assert.equal(retailStatus(paths).fonts[0]?.enabled, true)
+})
+
+test('one None during a sync removes every not-installed listing of the family', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 't' })
+  const run = slowManyFiles(RETAIL_DOWNLOAD_CONCURRENCY * 3)
+  const syncing = syncRetail(paths, run.options)
+  while (run.downloads <= RETAIL_DOWNLOAD_CONCURRENCY) await new Promise((resolve) => setImmediate(resolve))
+  await configureRetailSync(paths, { disabledGlyphsFiles: ['Reckless'] })
+  const retail = loadCatalog(paths).entries.filter((entry) => entry.retailRelativePath)
+  assert.equal(retail.some((entry) => entry.status === 'uninstalled'), false)
+  assert.ok(retail.length > 0, 'installed fonts stay listed')
+  await syncing
+  assert.equal(
+    loadCatalog(paths).entries.some((entry) => entry.retailRelativePath && entry.status === 'uninstalled'),
+    false,
+  )
+})
+
+test('turning a family off drops a listing whose only copy is parked in the retail cache', async () => {
+  resetRetailCache()
+  await withService(async (service, paths) => {
+    const bytes = recklessFont(paths)
+    await configureRetailSync(paths, { enabled: true, token: 't' })
+    const options = { fetchManifest: async () => manifestWith(bytes.length, 'e1'), fetchFile: async () => bytes }
+    await syncRetail(paths, options)
+    const listing = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath)!
+    await service.uninstall(listing.id)
+    // The next pass re-downloads the uninstalled file into the retail cache, not Fonts.
+    await syncRetail(paths, options)
+    const parked = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath)!
+    assert.equal(parked.status, 'uninstalled')
+    assert.ok(parked.sourcePath && fs.existsSync(parked.sourcePath))
+
+    await configureRetailSync(paths, { disabledGlyphsFiles: ['Reckless'] })
+    assert.equal(loadCatalog(paths).entries.some((entry) => entry.retailRelativePath), false)
+    assert.equal(fs.existsSync(parked.sourcePath), false)
+  })
+})
+
+test('a restart drops not-installed listings of families that were already off', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await checkRetail(paths, { fetchManifest: async () => manifestWith(4, 'e1') })
+  // Written by an older build: the family is off but its listing stayed.
+  const settings = loadSettings(paths)
+  settings.retailSync = { ...settings.retailSync!, disabledGlyphsFiles: ['Reckless'], familyOptOuts: true }
+  saveSettings(paths, settings)
+  assert.equal(loadCatalog(paths).entries.some((entry) => entry.retailRelativePath), true)
+  resetRetailCache()
+  assert.equal(await dropOrphanRetailListings(paths), 1)
+  assert.equal(loadCatalog(paths).entries.some((entry) => entry.retailRelativePath), false)
+})
+
+test('None with "remove" uninstalls the installed fonts of the families turned off', async () => {
+  resetRetailCache()
+  await withService(async (_service, paths) => {
+    const bytes = recklessFont(paths)
+    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await syncRetail(paths, { fetchManifest: async () => manifestWith(bytes.length, 'e1'), fetchFile: async () => bytes })
+    const dest = path.join(paths.userFontsDir, 'RecklessVF.otf')
+    assert.equal(fs.existsSync(dest), true)
+    await configureRetailSync(paths, { disabledGlyphsFiles: ['Reckless'], disableAction: 'remove' })
+    assert.equal(fs.existsSync(dest), false)
+    assert.equal(loadCatalog(paths).entries.some((entry) => entry.retailRelativePath), false)
+    assert.equal(loadRetailManifest(paths).files['Reckless/RecklessVF.otf'], undefined)
+  })
+})
+
+test('None with "keep" detaches installed fonts so a later sync neither deletes nor duplicates them', async () => {
+  resetRetailCache()
+  await withService(async (_service, paths) => {
+    const bytes = recklessFont(paths)
+    const options = { fetchManifest: async () => manifestWith(bytes.length, 'e1'), fetchFile: async () => bytes }
+    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await syncRetail(paths, options)
+    const dest = path.join(paths.userFontsDir, 'RecklessVF.otf')
+    const before = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath)!
+
+    await configureRetailSync(paths, { disabledGlyphsFiles: ['Reckless'], disableAction: 'keep' })
+    const kept = loadCatalog(paths).entries.find((entry) => entry.id === before.id)!
+    assert.equal(kept.status, 'installed')
+    assert.equal(kept.retailRelativePath, undefined)
+    assert.equal(kept.installedPath, dest)
+    assert.equal(fs.existsSync(dest), true)
+    assert.equal(loadRetailManifest(paths).files['Reckless/RecklessVF.otf'], undefined)
+
+    // Another pass, a collection switch off and on, and the family turned back on.
+    await syncRetail(paths, options)
+    await configureRetailSync(paths, { enabled: false })
+    await configureRetailSync(paths, { enabled: true })
+    assert.equal(fs.existsSync(dest), true)
+    await configureRetailSync(paths, { disabledGlyphsFiles: [] })
+    const paused = await syncRetail(paths, options)
+    assert.equal(paused.collisions[0]?.familyName, 'Reckless')
+    assert.equal(fs.existsSync(dest), true)
+    const installed = loadCatalog(paths).entries.filter((entry) => entry.status === 'installed')
+    assert.deepEqual(installed.map((entry) => entry.id), [before.id])
+  })
 })

@@ -211,6 +211,7 @@ export type RetailLibraryEntry = {
   sourcePath?: string | null
   sourcePresent?: boolean
   sourceAvailability?: 'none' | 'present' | 'missing' | 'offline' | 'unreadable'
+  status?: string
 }
 
 /**
@@ -594,6 +595,96 @@ export function isRetailVariableFamilyName(name: string): boolean {
   return /(?:^|[^a-z0-9])vf(?:$|[^a-z0-9])/i.test(trimmed) || /vf$/i.test(trimmed)
 }
 
+/**
+ * A VF *collection* file, as opposed to a member family (`Azeret VF`, `Azeret Monospaced VF`).
+ * Matched as a substring so `VF Collection` and a glued `VFCollection` both count.
+ */
+export function isRetailVfCollectionName(name: string): boolean {
+  return /collections?/i.test(name.trim())
+}
+
+/** `Italic` and `Italics` are the same side. A collection on this side is its own top collection. */
+export function isRetailItalicFamilyName(name: string): boolean {
+  return /italics?/i.test(name.trim())
+}
+
+export type RetailSyncScope = 'all' | 'static' | 'vf-collections' | 'vf-all'
+
+/**
+ * Family names a Sync scope turns on.
+ *
+ * Collections only, per typeface: install every family whose name marks it as a collection, roman and
+ * italic separately (`Reckless VF Collection` and `Reckless Italics VF Collection` are both tops).
+ * When a typeface has VF families but none is named a collection, install those VF families — a lone
+ * `Tobias VF` is the collection. Several collections on the same side are all installed; the manifest
+ * has no parent pointer, so guessing one would drop a file. Typefaces with no VF family contribute
+ * nothing. All installs every VF family. Static installs the rest.
+ */
+export function retailFamilyNamesForSyncScope(
+  fonts: ReadonlyArray<Pick<RetailSyncFont, 'familyName' | 'typefaceName'>>,
+  scope: RetailSyncScope,
+): string[] {
+  if (scope === 'all') return fonts.map((font) => font.familyName)
+  if (scope === 'static') {
+    return fonts.filter((font) => !isRetailVariableFamilyName(font.familyName)).map((font) => font.familyName)
+  }
+  if (scope === 'vf-all') {
+    return fonts.filter((font) => isRetailVariableFamilyName(font.familyName)).map((font) => font.familyName)
+  }
+  const byTypeface = new Map<string, Array<Pick<RetailSyncFont, 'familyName' | 'typefaceName'>>>()
+  for (const font of fonts) {
+    if (!isRetailVariableFamilyName(font.familyName)) continue
+    const key = font.typefaceName.trim() || font.familyName
+    const list = byTypeface.get(key) ?? []
+    list.push(font)
+    byTypeface.set(key, list)
+  }
+  const selected: string[] = []
+  for (const group of byTypeface.values()) {
+    const collections = group.filter((font) => isRetailVfCollectionName(font.familyName))
+    if (collections.length === 0) {
+      selected.push(...group.map((font) => font.familyName))
+      continue
+    }
+    // Italic collections stay even when a roman collection exists; neither side collapses into the other.
+    selected.push(
+      ...collections
+        .filter((font) => !isRetailItalicFamilyName(font.familyName))
+        .map((font) => font.familyName),
+      ...collections
+        .filter((font) => isRetailItalicFamilyName(font.familyName))
+        .map((font) => font.familyName),
+    )
+  }
+  return selected
+}
+
+/**
+ * True when "Collections only" would install a different set than every VF family.
+ * Trial cuts and any other manifest with no collection-vs-member split return false, so the VF
+ * control installs all VF files directly instead of offering a choice that changes nothing.
+ * Decided from the family names in the manifest, not from whether a user token is saved.
+ */
+export function retailSyncOffersVfCollections(
+  fonts: ReadonlyArray<Pick<RetailSyncFont, 'familyName' | 'typefaceName'>>,
+): boolean {
+  const collections = retailFamilyNamesForSyncScope(fonts, 'vf-collections')
+  const all = retailFamilyNamesForSyncScope(fonts, 'vf-all')
+  if (all.length === 0 || collections.length === 0) return false
+  if (collections.length !== all.length) return true
+  const selected = new Set(collections)
+  return all.some((name) => !selected.has(name))
+}
+
+/** Disabled-family list for a scope, same shape Sync All writes (`disabledGlyphsFiles`). */
+export function nextDisabledRetailFamilyNamesForScope(
+  fonts: ReadonlyArray<Pick<RetailSyncFont, 'familyName' | 'typefaceName'>>,
+  scope: RetailSyncScope,
+): string[] {
+  const enabled = new Set(retailFamilyNamesForSyncScope(fonts, scope))
+  return fonts.filter((font) => !enabled.has(font.familyName)).map((font) => font.familyName)
+}
+
 export type RetailFontKindFilter = 'all' | 'static' | 'variable'
 
 export function matchesRetailFontKindFilter(
@@ -622,7 +713,7 @@ export function groupRetailFontsByTypeface(
   return groups
 }
 
-function retailFamilyNameOf(entry: RetailLibraryEntry): string {
+export function retailFamilyNameOf(entry: RetailLibraryEntry): string {
   return (entry.retailFamilyName ?? entry.faces?.[0]?.familyName ?? '').trim()
 }
 
@@ -658,14 +749,24 @@ export function retailListingHasLocalFile(entry: RetailLibraryEntry): boolean {
   return sourceHasLiveBytes(entry)
 }
 
-/** File-less Displaay listings left in the catalog after collection sync is off. */
+/**
+ * Installed, deactivated, or otherwise on the Mac. An `uninstalled` retail listing can still point at a
+ * copy parked in the retail cache (a re-sync after an uninstall); that copy is ours, not the user's.
+ */
+export function retailListingOnMac(entry: RetailLibraryEntry): boolean {
+  if (!retailListingHasLocalFile(entry)) return false
+  if (entry.retailRelativePath && entry.status === 'uninstalled') return false
+  return true
+}
+
+/** Not-installed Displaay listings left in the catalog after collection sync is off. */
 export function isOrphanRetailListing(
   entry: RetailLibraryEntry,
   syncEnabled = false,
 ): boolean {
   if (syncEnabled) return false
   if (!entry.retailRelativePath) return false
-  return !retailListingHasLocalFile(entry)
+  return !retailListingOnMac(entry)
 }
 
 /**
@@ -701,11 +802,11 @@ export function retailLibraryEntryVisible(
 ): boolean {
   const relative = entry.retailRelativePath
   if (!relative) return true
-  if (!syncEnabled) return retailListingHasLocalFile(entry)
-  if (fonts.length === 0) return retailListingHasLocalFile(entry)
+  if (!syncEnabled) return retailListingOnMac(entry)
+  if (fonts.length === 0) return retailListingOnMac(entry)
   const familyName = retailFamilyNameOf(entry)
   const font = fonts.find((item) => item.familyName === familyName)
-  if (!font || !font.enabled) return retailListingHasLocalFile(entry)
+  if (!font || !font.enabled) return retailListingOnMac(entry)
   if (font.formats.length < 2) return true
   const format = retailFileFormat(relative)
   if (!format) return true
@@ -766,6 +867,38 @@ export function retailSyncingStatusMessage(progress?: RetailSyncProgress | null)
     return `Syncing Displaay retail… ${progress.done}/${progress.total}`
   }
   return 'Syncing Displaay retail…'
+}
+
+/** Families in a None/Off batch that are still syncing and have fonts on the Mac. */
+export function retailFamiliesOffInstalled(
+  fonts: ReadonlyArray<Pick<RetailSyncFont, 'familyName' | 'enabled'>>,
+  familyNames: readonly string[],
+  familiesOnMac: ReadonlySet<string> = new Set(),
+): number {
+  const batch = new Set(familyNames)
+  return fonts.filter((font) => font.enabled && batch.has(font.familyName) && familiesOnMac.has(font.familyName))
+    .length
+}
+
+/** None while a pass runs, or over installed fonts, asks whether to keep or uninstall what landed. */
+export function retailFamiliesOffNeedsChoice(
+  fonts: ReadonlyArray<Pick<RetailSyncFont, 'familyName' | 'enabled'>>,
+  familyNames: readonly string[],
+  status: { progress?: RetailSyncProgress | null } | null | undefined,
+  familiesOnMac?: ReadonlySet<string>,
+): boolean {
+  const batch = new Set(familyNames)
+  if (!fonts.some((font) => font.enabled && batch.has(font.familyName))) return false
+  return retailSyncInProgress(status) || retailFamiliesOffInstalled(fonts, familyNames, familiesOnMac) > 0
+}
+
+export function isRetailSyncingStatusMessage(message: string | null | undefined): boolean {
+  return Boolean(message?.startsWith('Syncing Displaay retail…'))
+}
+
+/** A status with no family progress means no download pass is running, however the last one ended. */
+export function retailSyncInProgress(status: { progress?: RetailSyncProgress | null } | null | undefined): boolean {
+  return Boolean(status?.progress && status.progress.total > 0)
 }
 
 /**

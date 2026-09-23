@@ -61,6 +61,7 @@ import {
   emptyRetailLocalManifest,
   isOrphanRetailListing,
   retailListingHasLocalFile,
+  retailListingOnMac,
   retailLocalManifestMode,
   type RetailCollectionMode,
   type RetailCollisionAction,
@@ -118,7 +119,28 @@ let inflightSync: Promise<RetailSyncStatus> | null = null
 let inflightSyncAbort: AbortController | null = null
 
 export function abortInflightRetailSync(): void {
-  inflightSyncAbort?.abort()
+  if (!inflightSyncAbort) return
+  inflightSyncAbort.abort()
+  // The aborted run still has to wind down; nothing emitted meanwhile may claim a pass is running.
+  cache.progress = null
+}
+
+/** Abort and wait for the run to finish, so cleanup after it cannot race its last catalog writes. */
+async function settleInflightRetailSync(): Promise<void> {
+  abortInflightRetailSync()
+  await inflightSync?.catch(() => undefined)
+}
+
+/**
+ * User-requested stop: already-installed fonts stay, the rest wait for the next explicit Sync. Clears the
+ * resume marker so the next launch does not pick the pass straight back up.
+ */
+export async function stopRetailSync(paths: AppPaths): Promise<RetailSyncStatus> {
+  await settleInflightRetailSync()
+  const local = loadRetailManifest(paths)
+  if (local.incomplete) saveRetailManifest(paths, { ...local, incomplete: false })
+  cache.progress = null
+  return emitRetail(paths)
 }
 
 export function resetRetailCache(): void {
@@ -354,13 +376,17 @@ export async function configureRetailSync(
   if (formatsChanged) {
     await uninstallUnselectedRetailFormats(paths, next)
   }
-  if (input.disabledGlyphsFiles !== undefined) {
+  if (input.disabledGlyphsFiles !== undefined && next.enabled) {
     const fonts = listRetailFonts(paths, next.disabledGlyphsFiles, next.familyFormats, optOutModeOf(next))
     const stopping =
       fonts.length > 0
         ? fonts.every((font) => !font.enabled)
         : input.disabledGlyphsFiles.length > 0
-    if (stopping) abortInflightRetailSync()
+    // Wait for the aborted run: its in-flight batch can still catalog files, and the cleanup below has
+    // to see them or a second "None" is needed to clear what landed.
+    if (stopping) await settleInflightRetailSync()
+    await releaseTurnedOffRetailFamilies(paths, current, next, input.disableAction)
+    await dropOrphanRetailListings(paths)
   }
   if (!next.enabled) {
     abortInflightRetailSync()
@@ -385,12 +411,26 @@ function clearRetailCacheDir(paths: AppPaths): void {
   }
 }
 
-/** Drop file-less Displaay listings once collection sync is off. */
+function entryFamilyOptedOut(entry: CatalogEntry, config: RetailSyncSettings): boolean {
+  const familyName = retailFamilyOfEntry(entry)
+  if (!familyName) return false
+  return isRetailFamilyOptedOut(familyName, retailTypefaceOfEntry(entry), config.disabledGlyphsFiles, optOutModeOf(config))
+}
+
+/**
+ * Drop Displaay listings that are not on the Mac once nothing will sync them: every one when collection
+ * sync is off, otherwise those of families turned off. A copy parked in the retail cache goes with its
+ * listing — it is only a download staging area, and keeping it would list the font as local.
+ */
 export async function dropOrphanRetailListings(paths: AppPaths): Promise<number> {
-  if (loadSettings(paths).retailSync?.enabled) return 0
+  const config = retailSettings(loadSettings(paths))
   return runCatalogTask(async () => {
     const catalog = loadCatalog(paths)
-    const orphans = catalog.entries.filter((entry) => isOrphanRetailListing(entry, false))
+    const orphans = catalog.entries.filter((entry) =>
+      config.enabled
+        ? Boolean(entry.retailRelativePath) && entryFamilyOptedOut(entry, config) && !retailListingOnMac(entry)
+        : isOrphanRetailListing(entry, false),
+    )
     if (!orphans.length) return 0
     const local = loadRetailManifest(paths)
     let manifestDirty = false
@@ -398,6 +438,8 @@ export async function dropOrphanRetailListings(paths: AppPaths): Promise<number>
       await yieldEventLoop()
       const relative = entry.retailRelativePath
       removeEntryById(catalog, entry.id)
+      const cached = relative ? resolveRetailCachePath(paths, relative) : null
+      if (cached && fs.existsSync(cached)) fs.rmSync(cached, { force: true })
       if (relative && local.files[relative]) {
         delete local.files[relative]
         manifestDirty = true
@@ -417,19 +459,7 @@ async function removeRetailCollection(paths: AppPaths): Promise<void> {
     const retail = catalog.entries.filter((entry) => entry.retailRelativePath)
     for (const entry of retail) {
       await yieldEventLoop()
-      const parkedPath = entry.disabledPath
-      const relative = entry.retailRelativePath
-      await removeInstalledCopy(entry, catalog.entries)
-      removeAdobeCopy(paths, entry)
-      entry.installations = []
-      if (parkedPath && fs.existsSync(parkedPath)) {
-        fs.rmSync(parkedPath, { force: true })
-      }
-      const cached = relative ? resolveRetailCachePath(paths, relative) : null
-      if (cached && fs.existsSync(cached)) {
-        fs.rmSync(cached, { force: true })
-      }
-      removeEntryById(catalog, entry.id)
+      await uninstallRetailEntry(paths, entry, catalog)
     }
     if (retail.length) {
       saveCatalog(paths, catalog)
@@ -437,6 +467,74 @@ async function removeRetailCollection(paths: AppPaths): Promise<void> {
     }
     saveRetailManifest(paths, emptyRetailLocalManifest())
     clearRetailCacheDir(paths)
+  })
+}
+
+/** Caller holds the catalog lock and saves. */
+async function uninstallRetailEntry(
+  paths: AppPaths,
+  entry: CatalogEntry,
+  catalog: ReturnType<typeof loadCatalog>,
+): Promise<void> {
+  const parkedPath = entry.disabledPath
+  const relative = entry.retailRelativePath
+  await removeInstalledCopy(entry, catalog.entries)
+  removeAdobeCopy(paths, entry)
+  entry.installations = []
+  if (parkedPath && fs.existsSync(parkedPath)) {
+    fs.rmSync(parkedPath, { force: true })
+  }
+  const cached = relative ? resolveRetailCachePath(paths, relative) : null
+  if (cached && fs.existsSync(cached)) {
+    fs.rmSync(cached, { force: true })
+  }
+  removeEntryById(catalog, entry.id)
+}
+
+/**
+ * Families the user just turned off, and what happens to their fonts already on the Mac:
+ * - `remove` uninstalls them with their listings.
+ * - `keep` detaches them: they stay installed as ordinary local fonts, and the sync record forgets their
+ *   files so no later sync updates or removes them. Turning the family back on meets them as an outside
+ *   font in Fonts, which pauses for the usual keep/replace choice instead of writing a duplicate.
+ * - no action leaves them as retail listings, the behaviour before the choice existed.
+ */
+async function releaseTurnedOffRetailFamilies(
+  paths: AppPaths,
+  previous: RetailSyncSettings,
+  next: RetailSyncSettings,
+  action: RetailDisableAction | undefined,
+): Promise<void> {
+  if (!action) return
+  await runCatalogTask(async () => {
+    const catalog = loadCatalog(paths)
+    const released = catalog.entries.filter(
+      (entry) =>
+        Boolean(entry.retailRelativePath) &&
+        retailListingOnMac(entry) &&
+        entryFamilyOptedOut(entry, next) &&
+        !entryFamilyOptedOut(entry, previous),
+    )
+    if (!released.length) return
+    const local = loadRetailManifest(paths)
+    for (const entry of released) {
+      await yieldEventLoop()
+      const relative = entry.retailRelativePath!
+      delete local.files[relative]
+      if (action === 'remove') {
+        await uninstallRetailEntry(paths, entry, catalog)
+        continue
+      }
+      entry.retailRelativePath = undefined
+      entry.retailFamilyName = undefined
+      entry.retailTypefaceName = undefined
+      touchEntry(entry)
+      applyEntryFacts(entry)
+      upsertEntry(catalog, entry)
+    }
+    saveCatalog(paths, catalog)
+    saveRetailManifest(paths, local)
+    emitEvent(catalogEvent(catalog.entries))
   })
 }
 
@@ -1255,6 +1353,7 @@ async function runSync(
       download: (key, expectedSize, signal) =>
         download({ workerBaseUrl, token, key, expectedSize, signal }),
       onProgress: (progress) => {
+        if (options.signal?.aborted) return
         cache.progress = progress
         emitRetail(paths)
       },

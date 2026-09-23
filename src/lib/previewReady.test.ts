@@ -6,6 +6,7 @@ import {
   isPreviewFontReady,
   normalizePreviewFamily,
   notifyPreviewCssMounted,
+  previewFacesFailed,
   subscribePreviewFonts,
 } from './previewReady.ts'
 
@@ -217,4 +218,26 @@ test('invalidating a family lets fonts.load run again after a prune', async () =
   } finally {
     restore()
   }
+})
+
+test('a face whose file fails to load stops waiting instead of spinning forever', async () => {
+  const faces = [{ family: '"fc-gone"', status: 'error' }]
+  const restore = mockFonts({ check: false, faces })
+  try {
+    assert.equal(isPreviewFontReady('fc-gone'), false)
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(isPreviewFontReady('fc-gone'), true)
+    invalidatePreviewReadyFamilies(['fc-gone'])
+    faces[0]!.status = 'loading'
+    assert.equal(isPreviewFontReady('fc-gone'), false)
+  } finally {
+    restore()
+  }
+})
+
+test('previewFacesFailed only when every matching face errored', () => {
+  assert.equal(previewFacesFailed([]), false)
+  assert.equal(previewFacesFailed(['error']), true)
+  assert.equal(previewFacesFailed(['error', 'loaded']), false)
+  assert.equal(previewFacesFailed(['loading']), false)
 })

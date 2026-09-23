@@ -14,7 +14,7 @@ import {
 import { hasInstanceMenuActions, instanceMenuPlan } from '@/lib/eligibility'
 import { entryHasPreviewFile } from '@/lib/group'
 import type { InstanceRow } from '@/lib/instances'
-import { pendingPreviewSample } from '@/lib/previewSample'
+import { cardPreviewSample } from '@/lib/previewSample'
 import type { CatalogEntry } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
@@ -162,7 +162,7 @@ export function InstanceList({
               family={family}
               weight={row.weight}
               italic={row.italic}
-              sample={pendingPreviewSample(row.previewSample)}
+              sample={cardPreviewSample(entry ? entryHasPreviewFile(entry) : true, row.previewSample)}
               wait={entry ? entryHasPreviewFile(entry) : true}
             />
             <div className="min-w-0 flex-1">

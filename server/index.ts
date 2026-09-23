@@ -822,6 +822,14 @@ app.post('/api/retail/sync', async (c) => {
   }
 })
 
+app.post('/api/retail/stop', async (c) => {
+  try {
+    return c.json({ status: await service.stopRetailSync() })
+  } catch (error) {
+    return c.json(fail(error, 'Could not stop syncing the retail collection'), 400)
+  }
+})
+
 app.post('/api/retail/collisions/drop', async (c) => {
   const body = await c.req.json<{
     choices?: Record<string, 'replace' | 'keep'>

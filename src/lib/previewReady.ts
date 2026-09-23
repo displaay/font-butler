@@ -16,6 +16,9 @@ type PreviewFontsListener = () => void
 const listeners = new Set<PreviewFontsListener>()
 const loadPromises = new Map<string, Promise<void>>()
 const readyKeys = new Set<string>()
+// A face whose file could not load (a listing whose bytes are gone) never becomes "ready"; without this
+// the card would spin forever instead of falling back to the placeholder text.
+const failedKeys = new Set<string>()
 let faceNames: Set<string> | null = null
 let faceNamesSource: unknown
 let listening = false
@@ -72,7 +75,20 @@ function previewLoadKey(name: string, weight: number, italic: boolean): string {
   return `${name}\t${weight}\t${italic ? 1 : 0}`
 }
 
-function requestPreviewLoad(spec: string, key: string): void {
+export function previewFacesFailed(statuses: readonly string[]): boolean {
+  return statuses.length > 0 && statuses.every((status) => status === 'error')
+}
+
+function previewFaceStatuses(name: string): string[] {
+  const statuses: string[] = []
+  if (typeof document === 'undefined' || !document.fonts) return statuses
+  document.fonts.forEach((face) => {
+    if (normalizePreviewFamily(face.family).toLowerCase() === name.toLowerCase()) statuses.push(face.status)
+  })
+  return statuses
+}
+
+function requestPreviewLoad(spec: string, key: string, name: string): void {
   if (loadPromises.has(key)) return
   if (typeof document === 'undefined' || !document.fonts) return
   const pending = document.fonts
@@ -82,6 +98,7 @@ function requestPreviewLoad(spec: string, key: string): void {
       () => undefined,
     )
     .finally(() => {
+      if (previewFacesFailed(previewFaceStatuses(name))) failedKeys.add(key)
       notifyPreviewFonts()
     })
   loadPromises.set(key, pending)
@@ -99,6 +116,7 @@ export function isPreviewFontReady(
   // Session cache: a preview that already loaded renders instantly on remount
   // (tab switches) instead of flashing the spinner. The face still has to be
   // mounted; pruned faces fall through and drop their cached key.
+  if (failedKeys.has(key)) return true
   if (readyKeys.has(key)) {
     if (hasMatchingPreviewFace(name)) return true
     readyKeys.delete(key)
@@ -119,7 +137,7 @@ export function isPreviewFontReady(
   }
   // Calling load() before @font-face exists resolves empty, so the spinner never
   // uses the family and the browser never fetches the file.
-  if (hasFace) requestPreviewLoad(spec, key)
+  if (hasFace) requestPreviewLoad(spec, key, name)
   return false
 }
 
@@ -132,6 +150,9 @@ export function invalidatePreviewReadyFamilies(families: readonly string[]): voi
     const prefix = `${normalizePreviewFamily(family)}\t`
     for (const key of readyKeys) {
       if (key.startsWith(prefix)) readyKeys.delete(key)
+    }
+    for (const key of failedKeys) {
+      if (key.startsWith(prefix)) failedKeys.delete(key)
     }
     for (const key of loadPromises.keys()) {
       if (key.startsWith(prefix)) loadPromises.delete(key)
