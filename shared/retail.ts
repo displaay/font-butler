@@ -588,9 +588,17 @@ export function matchesRetailFontQuery(
   )
 }
 
+/** Unpack glued worker names (`AzeretVFCollection`) before VF / collection heuristics run. */
+export function normalizeRetailFamilyName(name: string): string {
+  return name
+    .trim()
+    .replace(/VFCollection/gi, 'VF Collection')
+    .replace(/([a-z0-9])(VF\b)/gi, '$1 $2')
+}
+
 /** Settings rows mark VF families in the name (`Aguzzo VF`, `AguzzoVF`). */
 export function isRetailVariableFamilyName(name: string): boolean {
-  const trimmed = name.trim()
+  const trimmed = normalizeRetailFamilyName(name)
   if (!trimmed) return false
   return /(?:^|[^a-z0-9])vf(?:$|[^a-z0-9])/i.test(trimmed) || /vf$/i.test(trimmed)
 }
@@ -600,7 +608,7 @@ export function isRetailVariableFamilyName(name: string): boolean {
  * Matched as a substring so `VF Collection` and a glued `VFCollection` both count.
  */
 export function isRetailVfCollectionName(name: string): boolean {
-  return /collections?/i.test(name.trim())
+  return /collections?/i.test(normalizeRetailFamilyName(name))
 }
 
 /** `Italic` and `Italics` are the same side. A collection on this side is its own top collection. */

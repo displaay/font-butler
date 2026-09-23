@@ -783,6 +783,68 @@ test('overlapping syncs share one run instead of fighting over the same files', 
   assert.equal(later.error, null)
 })
 
+test('disabling one family during a sync waits for in-flight writes before cleanup', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 't' })
+  const remote: RetailManifest = {
+    generatedAt: '2026-01-01T00:00:00.000Z',
+    collections: [
+      {
+        glyphsFile: 'Reckless',
+        revisionId: 'rev-1',
+        lastRegeneratedAt: '2026-01-01T00:00:00.000Z',
+        files: Array.from({ length: RETAIL_DOWNLOAD_CONCURRENCY + 2 }, (_, index) => ({
+          key: `Reckless/rev-1/File${index}.otf`,
+          relativePath: `Reckless/File${index}.otf`,
+          size: 4,
+          etag: `e${index}`,
+          uploaded: '2026-01-01T00:00:00.000Z',
+        })),
+      },
+      {
+        glyphsFile: 'Vinila',
+        revisionId: 'rev-1',
+        lastRegeneratedAt: '2026-01-01T00:00:00.000Z',
+        files: [
+          {
+            key: 'Vinila/rev-1/V.otf',
+            relativePath: 'Vinila/V.otf',
+            size: 4,
+            etag: 'ev',
+            uploaded: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      },
+    ],
+    skipped: [],
+  }
+  let downloads = 0
+  const syncing = syncRetail(paths, {
+    fetchManifest: async () => remote,
+    fetchFile: async () => {
+      downloads += 1
+      await new Promise((resolve) => setTimeout(resolve, 40))
+      return new Uint8Array(4).fill(1)
+    },
+  })
+  while (downloads === 0) {
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  await configureRetailSync(paths, { disabledGlyphsFiles: ['Vinila'], disableAction: 'remove' })
+  await syncing
+  const recklessListed = loadCatalog(paths).entries.filter(
+    (entry) => entry.retailRelativePath?.startsWith('Reckless/'),
+  )
+  assert.ok(
+    recklessListed.length >= RETAIL_DOWNLOAD_CONCURRENCY,
+    'in-flight Reckless writes must land before cleanup runs',
+  )
+  assert.equal(
+    loadCatalog(paths).entries.some((entry) => entry.retailRelativePath === 'Vinila/V.otf'),
+    false,
+  )
+})
+
 test('disabling every family aborts an in-flight sync', async () => {
   const paths = setup()
   await configureRetailSync(paths, { enabled: true, token: 't' })
@@ -2642,11 +2704,66 @@ test('Stop syncing aborts the pass, keeps installed files, and does not resume o
   const stopped = await stopRetailSync(paths)
   await syncing
   assert.equal(stopped.progress, null)
+  assert.equal(stopped.error, null)
   assert.equal(retailSyncNeedsResume(paths), false)
   assert.ok(run.downloads < RETAIL_DOWNLOAD_CONCURRENCY * 3)
   const installed = fs.readdirSync(paths.userFontsDir).filter((name) => name.endsWith('.otf'))
   assert.ok(installed.length >= RETAIL_DOWNLOAD_CONCURRENCY)
   assert.equal(retailStatus(paths).fonts[0]?.enabled, true)
+})
+
+test('changing scope during a sync starts a fresh pass with the new selection', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 't' })
+  const remote: RetailManifest = {
+    generatedAt: '2026-01-01T00:00:00.000Z',
+    collections: [
+      {
+        glyphsFile: 'Reckless',
+        revisionId: 'rev-1',
+        lastRegeneratedAt: '2026-01-01T00:00:00.000Z',
+        files: [
+          {
+            key: 'Reckless/rev-1/Static.otf',
+            relativePath: 'Reckless/Static.otf',
+            size: 4,
+            etag: 'es',
+            uploaded: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      },
+      {
+        glyphsFile: 'Reckless VF',
+        revisionId: 'rev-1',
+        lastRegeneratedAt: '2026-01-01T00:00:00.000Z',
+        files: [
+          {
+            key: 'Reckless/rev-1/RecklessVF.otf',
+            relativePath: 'Reckless/RecklessVF.otf',
+            size: 4,
+            etag: 'ev',
+            uploaded: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      },
+    ],
+    skipped: [],
+  }
+  const options = {
+    fetchManifest: async () => remote,
+    fetchFile: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      return new Uint8Array(4).fill(1)
+    },
+  }
+  const first = syncRetail(paths, options)
+  while (retailStatus(paths).progress === null) await new Promise((resolve) => setImmediate(resolve))
+  await configureRetailSync(paths, { disabledGlyphsFiles: ['Reckless VF'] })
+  const afterScope = await syncRetail(paths, options)
+  await first
+  assert.equal(afterScope.error, null)
+  assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'Static.otf')), true)
+  assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'RecklessVF.otf')), false)
 })
 
 test('one None during a sync removes every not-installed listing of the family', async () => {
