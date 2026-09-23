@@ -23,7 +23,7 @@ import { testInstallMenuLabels } from '@/lib/testInstall'
 import { applyFontDragImage } from '@/lib/dragPreview'
 import { formatAddedAt } from '@/lib/dates'
 import { mixedFormatWarning, occupyingFormats, uniqueEntryFormats, formatSwap } from '@/lib/formats'
-import { familyBadgeEntry, familyStatusSummary, hasRetailSyncedSource, hasSourceMissing, hasTrackedSource, entryHasPreviewFile } from '@/lib/group'
+import { familyBadgeEntry, familyStatusSummary, hasManagedInstall, hasRetailSyncedSource, hasSourceMissing, hasTrackedSource, entryHasPreviewFile } from '@/lib/group'
 import { catalogInstanceRows } from '@/lib/instances'
 import { projectContainsAll, writeFontButlerEntries } from '@/lib/projects'
 import { displayStateParts, familyCopyDestinations, isNotInstalledLabel, needsLocateSource } from '@/lib/state'
@@ -481,7 +481,7 @@ export const LibraryCard = memo(function LibraryCard({
         ) : (
           <>
         <ContextMenuItem
-          disabled={!group.entries.some((entry) => entry.installedPath || entry.disabledPath)}
+          disabled={!group.entries.some(hasManagedInstall)}
           onSelect={onReveal}
         >
           <FolderOpen /> Show in Finder

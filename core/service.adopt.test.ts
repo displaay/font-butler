@@ -607,6 +607,27 @@ test('an Adobe file does not stamp live occupancy onto a deactivated row', async
   }
 })
 
+test('Show in Finder on an Adobe-only row reveals the Adobe-folder file', async () => {
+  const paths = tempPaths()
+  const font = path.join(paths.adobeFontsDir, 'RevealAdobe.ttf')
+  writeTestFont(font, 'RevealAdobe', 'RevealAdobe-Regular')
+  const revealed: string[] = []
+  setDesktopShell({ ...testDesktopShell(), async reveal(filePath) { revealed.push(filePath) } })
+  const service = new FontButlerService(paths)
+  try {
+    await service.init()
+    const [entry] = service.listCatalog()
+    assert.ok(entry)
+    assert.equal(entry.installedPath, undefined)
+    assert.equal(await service.reveal(entry.id, 'installed'), font)
+    assert.deepEqual(revealed, [font])
+  } finally {
+    setDesktopShell(null)
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
 test('creating the Adobe folder after init adopts a new font without a second init', async () => {
   const paths = tempPaths()
   assert.equal(fs.existsSync(paths.adobeFontsDir), false)
