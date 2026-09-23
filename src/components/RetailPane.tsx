@@ -4,6 +4,7 @@ import { DisplaayMark } from '@/components/DisplaayMark'
 import { TrialBadge } from '@/components/Badges'
 import { SettingsRow, SettingsSection, settingsSelectClass } from '@/components/SettingsRow'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Input, PasswordInput } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { api } from '@/lib/api'
@@ -554,7 +555,16 @@ export function RetailPane({
       </SettingsRow>
 
       <SettingsRow
-        label="Advanced"
+        label={
+          <span className="inline-flex items-center gap-1.5">
+            Advanced
+            {status?.hasToken ? (
+              <Badge tone="ink" title="A worker token is saved." className="shrink-0">
+                Active
+              </Badge>
+            ) : null}
+          </span>
+        }
         htmlFor={advancedId}
         description="Show the worker address and token."
       >
