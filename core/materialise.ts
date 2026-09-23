@@ -4,7 +4,12 @@ import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { assertSafeShellPath } from './auth.ts'
-import { pythonScriptArgv, resolvePythonRuntime, type PythonRuntime } from './python-runtime.ts'
+import {
+  pythonScriptArgv,
+  pythonSpawnEnv,
+  resolvePythonRuntime,
+  type PythonRuntime,
+} from './python-runtime.ts'
 
 const execFileAsync = promisify(execFile)
 
@@ -77,7 +82,7 @@ export async function materialiseFeatureCopy(
     const result = await execFileAsync(
       runtime.command,
       materialisePythonArgv(runtime, sourcePath, destPath, features),
-      { timeout: 120_000, maxBuffer: 8 * 1024 * 1024 },
+      { timeout: 120_000, maxBuffer: 8 * 1024 * 1024, env: pythonSpawnEnv() },
     )
     stdout = result.stdout
     stderr = result.stderr

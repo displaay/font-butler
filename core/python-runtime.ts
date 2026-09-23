@@ -51,7 +51,14 @@ export function resolvePythonRuntime(
   return null
 }
 
+// -B keeps Python from writing __pycache__ next to the bundled scripts, which
+// would break the signed app's sealed resources. -I ignores PYTHON* env vars,
+// so the flag is what protects bundled runs; the env covers system Python too.
 export function pythonScriptArgv(runtime: PythonRuntime, args: string[]): string[] {
-  const isolated = runtime.source === 'bundled' ? ['-I'] : []
-  return [...isolated, runtime.script, '--', ...args]
+  const flags = runtime.source === 'bundled' ? ['-I', '-B'] : ['-B']
+  return [...flags, runtime.script, '--', ...args]
+}
+
+export function pythonSpawnEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return { ...base, PYTHONDONTWRITEBYTECODE: '1' }
 }
