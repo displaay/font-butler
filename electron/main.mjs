@@ -6,6 +6,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readApiTokenFile } from './api-token.mjs'
 import { isAllowedAppUpdateUrl, trayTooltip } from './app-update.mjs'
+import { macosDockIconPng } from './dock-icon.mjs'
 import {
   collectFinderFontPaths,
   createFinderJobQueue,
@@ -44,6 +45,7 @@ const MENUBAR_ICON_PATH = path.join(__dirname, '../build/menubarTemplate.png')
 const MENUBAR_ATTENTION_ICON_PATH = path.join(__dirname, '../build/menubarNotificationTemplate.svg')
 const APP_ICON = fs.existsSync(ICON_PATH) ? nativeImage.createFromPath(ICON_PATH) : undefined
 const trayTemplateIcons = new Map()
+const dockIcons = new Map()
 const LIGHT_BACKGROUND = '#ffffff'
 const DARK_BACKGROUND = '#0a0a0a'
 
@@ -75,13 +77,32 @@ function trayIconPaths() {
   }
 }
 
+function dockIconImage(file) {
+  if (!file || !fs.existsSync(file)) return null
+  const cached = dockIcons.get(file)
+  if (cached) return cached
+  let image
+  try {
+    image = nativeImage.createFromBuffer(macosDockIconPng(fs.readFileSync(file)))
+  } catch (error) {
+    console.error('Could not shape dock icon', error)
+    image = nativeImage.createFromPath(file)
+  }
+  if (!image || image.isEmpty()) {
+    image = nativeImage.createFromPath(file)
+  }
+  if (!image || image.isEmpty()) return null
+  dockIcons.set(file, image)
+  return image
+}
+
 function applyDockIcon() {
   if (process.platform !== 'darwin' || !app.dock) {
     return
   }
-  const file = path.join(iconPackDir(appIconStyle), 'app.png')
-  const image = fs.existsSync(file) ? nativeImage.createFromPath(file) : APP_ICON
-  if (image && !image.isEmpty()) {
+  const styled = path.join(iconPackDir(appIconStyle), 'app.png')
+  const image = dockIconImage(styled) ?? dockIconImage(ICON_PATH)
+  if (image) {
     app.dock.setIcon(image)
   }
 }
