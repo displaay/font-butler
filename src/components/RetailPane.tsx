@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label'
 import { api } from '@/lib/api'
 import { startQueuedFontAction } from '@/lib/actionQueue'
 import { RetailDisableDialog } from '@/components/RetailDisableDialog'
+import { RetailFamiliesOffDialog } from '@/components/RetailFamiliesOffDialog'
 import {
   DEFAULT_RETAIL_AUTOCHECK_MINUTES,
   RETAIL_AUTOCHECK_CHOICES,
@@ -17,6 +18,9 @@ import {
   matchesRetailFontQuery,
   nextDisabledRetailFamilyNames,
   retailDriftSummary,
+  retailFamiliesOffInstalled,
+  retailFamiliesOffNeedsChoice,
+  retailSyncInProgress,
   type RetailDisableAction,
   type RetailFontFormat,
   type RetailSkip,
@@ -378,12 +382,15 @@ function skipLabel(reason: RetailSkipReason): string {
  */
 export function RetailPane({
   status,
+  familiesOnMac,
   busy,
   onStatus,
   onSync,
   onRequestDisable,
 }: {
   status: RetailSyncStatus | null
+  /** Retail families with fonts installed or deactivated on this Mac. */
+  familiesOnMac?: ReadonlySet<string>
   busy: boolean
   onStatus: (status: RetailSyncStatus) => void
   onSync?: () => void
@@ -402,6 +409,7 @@ export function RetailPane({
   const workerBaseUrl = editedUrl ?? status?.workerBaseUrl ?? ''
   const [error, setError] = useState<string | null>(null)
   const [disableOpen, setDisableOpen] = useState(false)
+  const [turningOff, setTurningOff] = useState<string[] | null>(null)
   const [checking, setChecking] = useState(
     () => Boolean(status?.enabled) && (status?.fonts.length ?? 0) === 0 && !status?.checkedAt,
   )
@@ -450,6 +458,7 @@ export function RetailPane({
   const configureSelection = (input: {
     disabledGlyphsFiles?: string[]
     familyFormats?: Record<string, RetailFontFormat>
+    disableAction?: RetailDisableAction
   }) => {
     setError(null)
     return api.retail
@@ -780,6 +789,10 @@ export function RetailPane({
                 })
               }
               onSetAll={(syncEnabled, familyNames) => {
+                if (!syncEnabled && retailFamiliesOffNeedsChoice(fonts, familyNames, status, familiesOnMac)) {
+                  setTurningOff(familyNames)
+                  return
+                }
                 void configureSelection({
                   disabledGlyphsFiles: nextDisabledRetailFamilyNames(fonts, familyNames, syncEnabled),
                 }).then((result) => {
@@ -794,6 +807,20 @@ export function RetailPane({
         </>
       ) : null}
     </SettingsSection>
+    <RetailFamiliesOffDialog
+      open={turningOff !== null}
+      syncing={retailSyncInProgress(status)}
+      installed={retailFamiliesOffInstalled(fonts, turningOff ?? [], familiesOnMac)}
+      onDismiss={() => setTurningOff(null)}
+      onChoose={(disableAction) => {
+        const names = turningOff ?? []
+        setTurningOff(null)
+        void configureSelection({
+          disabledGlyphsFiles: nextDisabledRetailFamilyNames(fonts, names, false),
+          disableAction,
+        })
+      }}
+    />
     {onRequestDisable ? null : (
     <RetailDisableDialog
       open={disableOpen}

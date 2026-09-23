@@ -373,6 +373,7 @@ export async function configureRetailSync(
     // Wait for the aborted run: its in-flight batch can still catalog files, and the cleanup below has
     // to see them or a second "None" is needed to clear what landed.
     if (stopping) await settleInflightRetailSync()
+    await releaseTurnedOffRetailFamilies(paths, current, next, input.disableAction)
     await dropOrphanRetailListings(paths)
   }
   if (!next.enabled) {
@@ -446,19 +447,7 @@ async function removeRetailCollection(paths: AppPaths): Promise<void> {
     const retail = catalog.entries.filter((entry) => entry.retailRelativePath)
     for (const entry of retail) {
       await yieldEventLoop()
-      const parkedPath = entry.disabledPath
-      const relative = entry.retailRelativePath
-      await removeInstalledCopy(entry, catalog.entries)
-      removeAdobeCopy(paths, entry)
-      entry.installations = []
-      if (parkedPath && fs.existsSync(parkedPath)) {
-        fs.rmSync(parkedPath, { force: true })
-      }
-      const cached = relative ? resolveRetailCachePath(paths, relative) : null
-      if (cached && fs.existsSync(cached)) {
-        fs.rmSync(cached, { force: true })
-      }
-      removeEntryById(catalog, entry.id)
+      await uninstallRetailEntry(paths, entry, catalog)
     }
     if (retail.length) {
       saveCatalog(paths, catalog)
@@ -466,6 +455,74 @@ async function removeRetailCollection(paths: AppPaths): Promise<void> {
     }
     saveRetailManifest(paths, emptyRetailLocalManifest())
     clearRetailCacheDir(paths)
+  })
+}
+
+/** Caller holds the catalog lock and saves. */
+async function uninstallRetailEntry(
+  paths: AppPaths,
+  entry: CatalogEntry,
+  catalog: ReturnType<typeof loadCatalog>,
+): Promise<void> {
+  const parkedPath = entry.disabledPath
+  const relative = entry.retailRelativePath
+  await removeInstalledCopy(entry, catalog.entries)
+  removeAdobeCopy(paths, entry)
+  entry.installations = []
+  if (parkedPath && fs.existsSync(parkedPath)) {
+    fs.rmSync(parkedPath, { force: true })
+  }
+  const cached = relative ? resolveRetailCachePath(paths, relative) : null
+  if (cached && fs.existsSync(cached)) {
+    fs.rmSync(cached, { force: true })
+  }
+  removeEntryById(catalog, entry.id)
+}
+
+/**
+ * Families the user just turned off, and what happens to their fonts already on the Mac:
+ * - `remove` uninstalls them with their listings.
+ * - `keep` detaches them: they stay installed as ordinary local fonts, and the sync record forgets their
+ *   files so no later sync updates or removes them. Turning the family back on meets them as an outside
+ *   font in Fonts, which pauses for the usual keep/replace choice instead of writing a duplicate.
+ * - no action leaves them as retail listings, the behaviour before the choice existed.
+ */
+async function releaseTurnedOffRetailFamilies(
+  paths: AppPaths,
+  previous: RetailSyncSettings,
+  next: RetailSyncSettings,
+  action: RetailDisableAction | undefined,
+): Promise<void> {
+  if (!action) return
+  await runCatalogTask(async () => {
+    const catalog = loadCatalog(paths)
+    const released = catalog.entries.filter(
+      (entry) =>
+        Boolean(entry.retailRelativePath) &&
+        retailListingOnMac(entry) &&
+        entryFamilyOptedOut(entry, next) &&
+        !entryFamilyOptedOut(entry, previous),
+    )
+    if (!released.length) return
+    const local = loadRetailManifest(paths)
+    for (const entry of released) {
+      await yieldEventLoop()
+      const relative = entry.retailRelativePath!
+      delete local.files[relative]
+      if (action === 'remove') {
+        await uninstallRetailEntry(paths, entry, catalog)
+        continue
+      }
+      entry.retailRelativePath = undefined
+      entry.retailFamilyName = undefined
+      entry.retailTypefaceName = undefined
+      touchEntry(entry)
+      applyEntryFacts(entry)
+      upsertEntry(catalog, entry)
+    }
+    saveCatalog(paths, catalog)
+    saveRetailManifest(paths, local)
+    emitEvent(catalogEvent(catalog.entries))
   })
 }
 

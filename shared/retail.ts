@@ -623,7 +623,7 @@ export function groupRetailFontsByTypeface(
   return groups
 }
 
-function retailFamilyNameOf(entry: RetailLibraryEntry): string {
+export function retailFamilyNameOf(entry: RetailLibraryEntry): string {
   return (entry.retailFamilyName ?? entry.faces?.[0]?.familyName ?? '').trim()
 }
 
@@ -777,6 +777,29 @@ export function retailSyncingStatusMessage(progress?: RetailSyncProgress | null)
     return `Syncing Displaay retail… ${progress.done}/${progress.total}`
   }
   return 'Syncing Displaay retail…'
+}
+
+/** Families in a None/Off batch that are still syncing and have fonts on the Mac. */
+export function retailFamiliesOffInstalled(
+  fonts: ReadonlyArray<Pick<RetailSyncFont, 'familyName' | 'enabled'>>,
+  familyNames: readonly string[],
+  familiesOnMac: ReadonlySet<string> = new Set(),
+): number {
+  const batch = new Set(familyNames)
+  return fonts.filter((font) => font.enabled && batch.has(font.familyName) && familiesOnMac.has(font.familyName))
+    .length
+}
+
+/** None while a pass runs, or over installed fonts, asks whether to keep or uninstall what landed. */
+export function retailFamiliesOffNeedsChoice(
+  fonts: ReadonlyArray<Pick<RetailSyncFont, 'familyName' | 'enabled'>>,
+  familyNames: readonly string[],
+  status: { progress?: RetailSyncProgress | null } | null | undefined,
+  familiesOnMac?: ReadonlySet<string>,
+): boolean {
+  const batch = new Set(familyNames)
+  if (!fonts.some((font) => font.enabled && batch.has(font.familyName))) return false
+  return retailSyncInProgress(status) || retailFamiliesOffInstalled(fonts, familyNames, familiesOnMac) > 0
 }
 
 export function isRetailSyncingStatusMessage(message: string | null | undefined): boolean {

@@ -138,7 +138,7 @@ import { allUpdateGroups, visibleUpdateGroups } from '@/lib/updateInventory'
 import { operationMatchesQuery, tabWithSearchHits } from '@/lib/search'
 import type { AppSettings, AppUpdateStatus, CatalogEntry, DestinationCapability, DuplicateWarning, FamilyGroup, FontStatus, ImportPlan, ImportPlanItem, LibraryFilter, Operation, PreviewPreferences, ProjectSet, RetailCollisionAction, RetailFamilyCollision, RetailSyncStatus, SavedLibraryFilter, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
 import { testInstallToCatalog, type TestInstallFont } from '@/lib/testInstall'
-import { isRetailSyncingStatusMessage, retailHasLiveUpdates, retailLibraryEntryVisible, retailSyncInProgress, retailSyncIsOn, retailSyncingStatusMessage, retailUpdateCount } from '@/lib/types'
+import { isRetailSyncingStatusMessage, retailFamilyNameOf, retailHasLiveUpdates, retailLibraryEntryVisible, retailListingOnMac, retailSyncInProgress, retailSyncIsOn, retailSyncingStatusMessage, retailUpdateCount } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { isPathUnderFolder, isRetailLibraryFilter, isTestInstallFilter, isWatchFolderEntry, libraryFolderFilterLabel, matchesLibraryFolderFilter, RETAIL_LIBRARY_FILTER, TEST_INSTALL_FILTER, watchFolderName } from '@/lib/watchFolders'
 
@@ -699,6 +699,15 @@ function AppShell() {
   const libraryFilterCounts = useMemo(
     () => countLibraryFilters(librarySourceEntries),
     [librarySourceEntries],
+  )
+  const retailFamiliesOnMac = useMemo(
+    () =>
+      new Set(
+        entries
+          .filter((entry) => entry.retailRelativePath && retailListingOnMac(entry))
+          .map((entry) => retailFamilyNameOf(entry)),
+      ),
+    [entries],
   )
   const watchFolderCounts = useMemo(() => {
     const counts: Record<string, number> = {}
@@ -2910,6 +2919,7 @@ function AppShell() {
           highlightAppUpdate={settingsFocusAppUpdate}
           highlightWatchFolders={settingsFocusWatchFolders}
           retail={retail}
+          retailFamiliesOnMac={retailFamiliesOnMac}
           onRetailChange={setRetail}
           onRetailSync={() => void syncRetail()}
         />

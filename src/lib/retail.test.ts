@@ -4,6 +4,8 @@ import {
   entryHasActiveRetailSync,
   isOrphanRetailListing,
   isRetailSyncingStatusMessage,
+  retailFamiliesOffInstalled,
+  retailFamiliesOffNeedsChoice,
   retailListingOnMac,
   retailSyncInProgress,
   isRetailVariableFamilyName,
@@ -330,6 +332,18 @@ test('a not-installed listing parked in the retail cache is hidden once its fami
   assert.equal(isOrphanRetailListing(cacheParked, false), true)
   assert.equal(retailListingOnMac({ ...installed, status: 'installed' }), true)
   assert.equal(retailListingOnMac({ ...parked, status: 'deactivated' }), true)
+})
+
+test('None asks keep-or-uninstall only while syncing or over installed families still syncing', () => {
+  const fonts = [font('Reckless'), font('Zangezi'), font('Aguzzo', { enabled: false })]
+  const onMac = new Set(['Zangezi', 'Aguzzo'])
+  const idle = { progress: null }
+  const syncing = { progress: { done: 1, total: 3 } }
+  assert.equal(retailFamiliesOffNeedsChoice(fonts, ['Reckless'], idle, onMac), false)
+  assert.equal(retailFamiliesOffNeedsChoice(fonts, ['Reckless'], syncing, onMac), true)
+  assert.equal(retailFamiliesOffNeedsChoice(fonts, ['Reckless', 'Zangezi'], idle, onMac), true)
+  assert.equal(retailFamiliesOffNeedsChoice(fonts, ['Aguzzo'], syncing, onMac), false, 'already off')
+  assert.equal(retailFamiliesOffInstalled(fonts, ['Reckless', 'Zangezi', 'Aguzzo'], onMac), 1)
 })
 
 test('the syncing status is recognised and ends with any status that has no progress', () => {
