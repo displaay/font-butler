@@ -29,11 +29,16 @@ export function entryCopyDestinations(
     'previewOnly' | 'status' | 'installedPath' | 'disabledPath' | 'installations'
   >,
 ): CopyDestinations {
-  if (entry.previewOnly || entry.status === 'deactivated') return { macos: false, adobe: false }
+  if (entry.previewOnly) return { macos: false, adobe: false }
   const copies = entry.installations ?? []
   const adobe = copies.some(
-    (copy) => copy.destinationId === 'adobe-shared' && copy.verification === 'file-present',
+    (copy) =>
+      copy.destinationId === 'adobe-shared' &&
+      copy.verification === 'file-present' &&
+      !copy.parkedPath,
   )
+  // A row disabled in Font Book keeps a live Adobe-folder copy; rows the app parked never count.
+  if (entry.status === 'deactivated') return { macos: false, adobe: adobe && !entry.disabledPath }
   const macosCopy = copies.some(
     (copy) => copy.destinationId === 'macos' && copy.verification === 'file-present',
   )

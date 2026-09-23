@@ -10,6 +10,8 @@ import { isExternalSource } from './catalog.ts'
 import { occupiesDestination } from './identity.ts'
 import { closeAllWatchers } from './watch.ts'
 import { setDesktopShell, testDesktopShell } from './reveal.ts'
+import { noopFontNative, setFontNative } from './native.ts'
+import type { CatalogEntry } from './types.ts'
 
 function tempPaths(): AppPaths {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-adopt-'))
@@ -602,6 +604,114 @@ test('an Adobe file does not stamp live occupancy onto a deactivated row', async
       false,
     )
   } finally {
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+function fontBookNative(offPaths: () => string[]) {
+  return noopFontNative({
+    async fontActivationStates(filePaths) {
+      const off = new Set(offPaths().map((item) => path.resolve(item)))
+      const states: Record<string, boolean> = {}
+      for (const filePath of filePaths) states[filePath] = !off.has(path.resolve(filePath))
+      return { ok: true, native: true, states }
+    },
+  })
+}
+
+function adobeCopyOf(entry: CatalogEntry | undefined) {
+  return entry?.installations?.find((item) => item.destinationId === 'adobe-shared')
+}
+
+test('a Fonts copy disabled in Font Book still records its live Adobe-folder copy', async () => {
+  const paths = tempPaths()
+  const macos = path.join(paths.userFontsDir, 'BookOff.ttf')
+  const adobe = path.join(paths.adobeFontsDir, 'BookOffAdobe.ttf')
+  writeTestFont(macos, 'BookOff', 'BookOff-Regular')
+  writeTestFont(adobe, 'BookOff', 'BookOff-Regular')
+  let off = [macos]
+  setFontNative(fontBookNative(() => off))
+  const service = new FontButlerService(paths)
+  try {
+    await service.init()
+    const catalog = service.listCatalog()
+    assert.equal(catalog.length, 1)
+    const [entry] = catalog
+    assert.ok(entry)
+    assert.equal(entry.status, 'deactivated')
+    assert.equal(entry.installedPath, macos)
+    assert.equal(entry.disabledPath, undefined)
+    assert.equal(fs.existsSync(macos), true)
+    const copy = adobeCopyOf(entry)
+    assert.equal(copy?.path, adobe)
+    assert.equal(copy?.verification, 'file-present')
+    assert.equal(copy?.parkedPath, undefined)
+    assert.equal(occupiesDestination(entry, 'adobe-shared', paths), true)
+
+    await service.init()
+    const again = service.listCatalog()
+    assert.equal(again.length, 1)
+    assert.equal(again[0]?.status, 'deactivated')
+    assert.equal(adobeCopyOf(again[0])?.path, adobe)
+
+    off = []
+    await service.init()
+    const on = service.listCatalog()
+    assert.equal(on.length, 1)
+    assert.equal(on[0]?.status, 'installed')
+    assert.equal(adobeCopyOf(on[0])?.path, adobe)
+  } finally {
+    setFontNative(null)
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('an Adobe copy added after the Fonts copy was disabled in Font Book joins that row', async () => {
+  const paths = tempPaths()
+  const macos = path.join(paths.userFontsDir, 'LateBook.ttf')
+  writeTestFont(macos, 'LateBook', 'LateBook-Regular')
+  setFontNative(fontBookNative(() => [macos]))
+  const service = new FontButlerService(paths)
+  try {
+    await service.init()
+    const [entry] = service.listCatalog()
+    assert.ok(entry)
+    assert.equal(entry.status, 'deactivated')
+    assert.equal(adobeCopyOf(entry), undefined)
+    const adobe = path.join(paths.adobeFontsDir, 'LateBookAdobe.ttf')
+    writeTestFont(adobe, 'LateBook', 'LateBook-Regular')
+    await service.init()
+    const after = service.listCatalog()
+    assert.equal(after.length, 1)
+    assert.equal(after[0]?.id, entry.id)
+    assert.equal(after[0]?.status, 'deactivated')
+    assert.equal(adobeCopyOf(after[0])?.path, adobe)
+    assert.equal(adobeCopyOf(after[0])?.verification, 'file-present')
+  } finally {
+    setFontNative(null)
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('Show in Finder on an Adobe-only row reveals the Adobe-folder file', async () => {
+  const paths = tempPaths()
+  const font = path.join(paths.adobeFontsDir, 'RevealAdobe.ttf')
+  writeTestFont(font, 'RevealAdobe', 'RevealAdobe-Regular')
+  const revealed: string[] = []
+  setDesktopShell({ ...testDesktopShell(), async reveal(filePath) { revealed.push(filePath) } })
+  const service = new FontButlerService(paths)
+  try {
+    await service.init()
+    const [entry] = service.listCatalog()
+    assert.ok(entry)
+    assert.equal(entry.installedPath, undefined)
+    assert.equal(await service.reveal(entry.id, 'installed'), font)
+    assert.deepEqual(revealed, [font])
+  } finally {
+    setDesktopShell(null)
     await closeAllWatchers()
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }

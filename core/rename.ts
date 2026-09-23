@@ -6,6 +6,7 @@ import { promisify } from 'node:util'
 import { assertSafeShellPath } from './auth.ts'
 import {
   pythonScriptArgv,
+  pythonSpawnEnv,
   resolvePythonRuntime,
   type PythonRuntime,
 } from './python-runtime.ts'
@@ -239,6 +240,7 @@ async function renameWithPython(
   try {
     await execFileAsync(runtime.command, renamePythonArgv(runtime, sourcePath, destPath, family), {
       timeout: 30_000,
+      env: pythonSpawnEnv(),
     })
     if (!fs.existsSync(destPath)) {
       return { ok: false, reason: 'Python rename finished but no output file was written.' }

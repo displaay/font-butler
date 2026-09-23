@@ -18,7 +18,7 @@ import { catalogInstanceRows, systemInstanceRows } from '@/lib/instances'
 import { mixedFormatWarning, occupyingFormats, formatSwap, formatSwapLabel, uniqueEntryFormats } from '@/lib/formats'
 import { collectionScopeLabel, displayStateLabel, familyCopyDestinations, needsLocateSource } from '@/lib/state'
 import { formatBytes, formatRelativeTime } from '@/lib/utils'
-import { entryHasTrackedSource, familyBadgeEntry, familyNameOf, hasRetailSyncedSource, hasTrackedSource } from '@/lib/group'
+import { entryHasTrackedSource, familyBadgeEntry, familyNameOf, hasManagedInstall, hasRetailSyncedSource, hasTrackedSource } from '@/lib/group'
 import type { CatalogBatchPlan, SystemBatchPlan } from '@/lib/batch'
 import { entryHasActiveRetailSync, type CatalogEntry, type FamilyGroup, type PreviewPreferences, type ProjectSet, type RetailSyncView, type SystemFamilyGroup } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -520,7 +520,7 @@ export function Inspector({
         <DropdownActionButton
           label="Show in Finder"
           items={[
-            entry.installedPath || entry.disabledPath
+            hasManagedInstall(entry)
               ? {
                   key: 'installed',
                   label: 'Installed fonts',

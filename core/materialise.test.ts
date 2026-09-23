@@ -176,7 +176,7 @@ test('resolvePythonRuntime finds materialise_feature.py next to rename_family.py
   })
 })
 
-test('materialise Python argv uses -I for bundled runtimes and a -- separator', () => {
+test('materialise Python argv uses -I -B for bundled runtimes and a -- separator', () => {
   const script = '/tmp/materialise_feature.py'
   assert.deepEqual(
     materialisePythonArgv(
@@ -185,7 +185,7 @@ test('materialise Python argv uses -I for bundled runtimes and a -- separator', 
       '/tmp/Dest.ttf',
       ['ss01', 'tnum'],
     ),
-    ['-I', script, '--', '/tmp/Source.ttf', '/tmp/Dest.ttf', 'ss01', 'tnum'],
+    ['-I', '-B', script, '--', '/tmp/Source.ttf', '/tmp/Dest.ttf', 'ss01', 'tnum'],
   )
 })
 

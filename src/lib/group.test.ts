@@ -13,6 +13,7 @@ import {
   familyStatusSummary,
   forgettableIds,
   groupCatalog,
+  hasManagedInstall,
   hasRetailSyncedSource,
   hasTrackedSource,
   isForgettableOnlyGroup,
@@ -367,6 +368,23 @@ test('catalogRevealEntry prefers selected install, else any install or tracked s
   assert.equal(catalogRevealEntry(group, adobeOnly, 'installed')?.id, 'adobe')
   assert.equal(catalogRevealEntry(group, sourceOnly, 'source')?.id, 'src')
   assert.equal(catalogRevealEntry(group, selfSourced, 'source')?.id, 'src')
+})
+
+test('Show in Finder is enabled for an Adobe-only row and targets it', () => {
+  const adobeOnly = entry('adobe', 'Booton', 1, 'installed')
+  adobeOnly.installedPath = undefined
+  adobeOnly.installations = [{
+    destinationId: 'adobe-shared',
+    path: '/Library/Application Support/Adobe/Fonts/Booton.otf',
+    verification: 'file-present',
+  }]
+  const sourceOnly = entry('src', 'Booton', 2, 'uninstalled')
+  sourceOnly.installedPath = undefined
+  assert.equal(hasManagedInstall(adobeOnly), true)
+  assert.equal(hasManagedInstall(sourceOnly), false)
+  const group = groupCatalog([adobeOnly])[0]!
+  assert.equal(group.entries.some(hasManagedInstall), true)
+  assert.equal(catalogRevealEntry(group, undefined, 'installed')?.id, 'adobe')
 })
 
 test('groupCatalog keeps retail VF families on their own cards', () => {

@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { readApiTokenFile } from './api-token.mjs'
 import { isAllowedAppUpdateUrl, trayTooltip } from './app-update.mjs'
 import { macosDockIconPng } from './dock-icon.mjs'
+import { createLoginItemApplier } from './login-item.mjs'
 import {
   collectFinderFontPaths,
   createFinderJobQueue,
@@ -950,11 +951,10 @@ function applyAdobeCacheSetting(enabled) {
   refreshTrayMenu()
 }
 
-function applyOpenAtLogin(enabled) {
-  app.setLoginItemSettings({
-    openAtLogin: enabled === true,
-  })
-}
+const applyOpenAtLogin = createLoginItemApplier({
+  get: () => app.getLoginItemSettings(),
+  set: (settings) => app.setLoginItemSettings(settings),
+})
 
 function applyMenuBarSetting(enabled) {
   const next = enabled !== false
