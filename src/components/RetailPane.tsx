@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { Filter, Loader2, Search } from 'lucide-react'
+import { ChevronDown, Filter, Loader2, Search } from 'lucide-react'
 import { DisplaayMark } from '@/components/DisplaayMark'
 import { TrialBadge } from '@/components/Badges'
 import { SettingsRow, SettingsSection, settingsSelectClass } from '@/components/SettingsRow'
@@ -17,6 +17,8 @@ import {
   isRetailVariableFamilyName,
   matchesRetailFontQuery,
   nextDisabledRetailFamilyNames,
+  nextDisabledRetailFamilyNamesForScope,
+  retailFamilyNamesForSyncScope,
   retailDriftSummary,
   retailFamiliesOffInstalled,
   retailFamiliesOffNeedsChoice,
@@ -26,6 +28,7 @@ import {
   type RetailSkip,
   type RetailSkipReason,
   type RetailSyncFont,
+  type RetailSyncScope,
   type RetailSyncStatus,
 } from '@/lib/types'
 import { cn, CONTROL_H } from '@/lib/utils'
@@ -141,17 +144,109 @@ function nextFamilyFormats(
   return next
 }
 
+function RetailSyncScopeControl({
+  disabled,
+  onSync,
+}: {
+  disabled: boolean
+  onSync: (scope: RetailSyncScope) => void
+}) {
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!menuOpen) return
+    function onPointerDown(event: PointerEvent) {
+      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false)
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') setMenuOpen(false)
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [menuOpen])
+
+  const segment = 'h-7 px-2 text-xs font-medium hover:bg-muted disabled:opacity-50'
+  return (
+    <div className="flex items-center gap-1.5" role="group" aria-label="Sync">
+      <span className="text-[13px] text-muted-foreground">Sync</span>
+      <div className="flex items-stretch rounded-md border bg-background">
+        <button type="button" className={segment} disabled={disabled} onClick={() => onSync('all')}>
+          All
+        </button>
+        <div className="relative border-l" ref={menuRef}>
+          <button
+            type="button"
+            className={cn(segment, 'flex items-center gap-0.5', menuOpen && 'bg-muted')}
+            disabled={disabled}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            aria-label="Variable font sync"
+            onClick={() => setMenuOpen((open) => !open)}
+          >
+            VF
+            <ChevronDown className="size-3 text-muted-foreground" aria-hidden />
+          </button>
+          {menuOpen ? (
+            <div
+              role="menu"
+              className="absolute top-full right-0 z-30 mt-1 min-w-52 rounded-md border bg-popover p-1 shadow-sm"
+            >
+              <button
+                type="button"
+                role="menuitem"
+                className="block w-full rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-muted"
+                onClick={() => {
+                  setMenuOpen(false)
+                  onSync('vf-collections')
+                }}
+              >
+                VF Collections
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="block w-full rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-muted"
+                onClick={() => {
+                  setMenuOpen(false)
+                  onSync('vf-all')
+                }}
+              >
+                Collections and families
+              </button>
+            </div>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          className={cn(segment, 'border-l')}
+          disabled={disabled}
+          onClick={() => onSync('static')}
+        >
+          Static
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function RetailFontList({
   fonts,
   disabled,
   onToggle,
   onFormat,
+  onSyncScope,
   onSetAll,
 }: {
   fonts: RetailSyncFont[]
   disabled: boolean
   onToggle: (familyName: string, enabled: boolean) => void
   onFormat: (familyName: string, format: RetailFontFormat) => void
+  onSyncScope: (scope: RetailSyncScope) => void
   onSetAll: (enabled: boolean, familyNames: string[]) => void
 }) {
   const [showStatic, setShowStatic] = useState(true)
@@ -277,15 +372,7 @@ function RetailFontList({
               </div>
             ) : null}
           </div>
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            disabled={visible.length === 0}
-            onClick={() => onSetAll(true, batchNames)}
-          >
-            {narrowed ? 'Sync these' : 'Sync All'}
-          </Button>
+          <RetailSyncScopeControl disabled={disabled || fonts.length === 0} onSync={onSyncScope} />
           <Button
             type="button"
             size="sm"
@@ -523,7 +610,7 @@ export function RetailPane({
     >
       <SettingsRow
         label="Sync"
-        description="Load the Displaay retail list. Fonts stay off the computer until you Sync All or turn a family on."
+        description="Load the Displaay retail list. Fonts stay off the computer until you Sync or turn a family on."
       >
         <SyncToggle
           enabled={enabled}
@@ -682,7 +769,7 @@ export function RetailPane({
                     ? `Last checked ${new Date(status.checkedAt).toLocaleString()}.`
                     : status?.enabled
                       ? 'Check to load the collection and choose which families to sync.'
-                      : 'Turn sync on to load the font list. Nothing is downloaded until you Sync All or turn a family on.'}
+                      : 'Turn sync on to load the font list. Nothing is downloaded until you Sync or turn a family on.'}
               </p>
             </div>
             <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
@@ -760,7 +847,7 @@ export function RetailPane({
           description={
             showFontLoader
               ? 'Loading the collection…'
-              : 'Turn a family on to download it, or Sync All. When a family has both otf and ttf, only the selected format is downloaded.'
+              : 'Turn a family on to download it, or Sync. When a family has both otf and ttf, only the selected format is downloaded.'
           }
           extra={
             showFontLoader ? (
@@ -788,6 +875,14 @@ export function RetailPane({
                   familyFormats: nextFamilyFormats(fonts, familyName, format),
                 })
               }
+              onSyncScope={(scope) => {
+                const selected = retailFamilyNamesForSyncScope(fonts, scope)
+                void configureSelection({
+                  disabledGlyphsFiles: nextDisabledRetailFamilyNamesForScope(fonts, scope),
+                }).then((result) => {
+                  if (result && selected.length > 0) startSync()
+                })
+              }}
               onSetAll={(syncEnabled, familyNames) => {
                 if (!syncEnabled && retailFamiliesOffNeedsChoice(fonts, familyNames, status, familiesOnMac)) {
                   setTurningOff(familyNames)

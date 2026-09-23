@@ -8,7 +8,11 @@ import {
   retailFamiliesOffNeedsChoice,
   retailListingOnMac,
   retailSyncInProgress,
+  isRetailItalicFamilyName,
   isRetailVariableFamilyName,
+  isRetailVfCollectionName,
+  nextDisabledRetailFamilyNamesForScope,
+  retailFamilyNamesForSyncScope,
   matchesRetailFontKindFilter,
   matchesRetailFontQuery,
   nextDisabledRetailFamilyNames,
@@ -344,6 +348,94 @@ test('None asks keep-or-uninstall only while syncing or over installed families 
   assert.equal(retailFamiliesOffNeedsChoice(fonts, ['Reckless', 'Zangezi'], idle, onMac), true)
   assert.equal(retailFamiliesOffNeedsChoice(fonts, ['Aguzzo'], syncing, onMac), false, 'already off')
   assert.equal(retailFamiliesOffInstalled(fonts, ['Reckless', 'Zangezi', 'Aguzzo'], onMac), 1)
+})
+
+function names(
+  scope: 'all' | 'static' | 'vf-collections' | 'vf-all',
+  rows: Array<[string, string]>,
+): string[] {
+  return retailFamilyNamesForSyncScope(
+    rows.map(([familyName, typefaceName]) => font(familyName, { typefaceName })),
+    scope,
+  ).slice().sort()
+}
+
+test('VF Collections installs the collection and skips member families', () => {
+  const rows: Array<[string, string]> = [
+    ['Azeret VF Collection', 'Azeret'],
+    ['Azeret VF', 'Azeret'],
+    ['Azeret Monospaced VF', 'Azeret'],
+    ['Azeret Mono', 'Azeret'],
+  ]
+  assert.deepEqual(names('vf-collections', rows), ['Azeret VF Collection'])
+  assert.deepEqual(names('vf-all', rows), ['Azeret Monospaced VF', 'Azeret VF', 'Azeret VF Collection'])
+  assert.deepEqual(names('static', rows), ['Azeret Mono'])
+  assert.deepEqual(names('all', rows), ['Azeret Mono', 'Azeret Monospaced VF', 'Azeret VF', 'Azeret VF Collection'])
+})
+
+test('a typeface with a single VF family and no collection installs that family', () => {
+  assert.deepEqual(names('vf-collections', [['Tobias VF', 'Tobias'], ['Tobias', 'Tobias']]), ['Tobias VF'])
+  assert.equal(isRetailVfCollectionName('Tobias VF'), false)
+})
+
+test('roman and italic collections are both top collections, for either spelling', () => {
+  const rows: Array<[string, string]> = [
+    ['Reckless VF Collection', 'Reckless'],
+    ['Reckless Italics VF Collection', 'Reckless'],
+    ['Reckless VF', 'Reckless'],
+    ['Reckless Italic VF', 'Reckless'],
+  ]
+  assert.deepEqual(names('vf-collections', rows), ['Reckless Italics VF Collection', 'Reckless VF Collection'])
+  assert.equal(isRetailItalicFamilyName('Reckless Italic VF Collection'), true)
+  assert.equal(isRetailItalicFamilyName('Reckless Italics VF Collection'), true)
+  assert.deepEqual(
+    names('vf-collections', [
+      ['Reckless VF Collection', 'Reckless'],
+      ['Reckless Italic VF Collection', 'Reckless'],
+      ['Reckless VF', 'Reckless'],
+    ]),
+    ['Reckless Italic VF Collection', 'Reckless VF Collection'],
+  )
+})
+
+test('VF scopes skip a typeface that has no variable families', () => {
+  const rows: Array<[string, string]> = [
+    ['Matter', 'Matter'],
+    ['Matter Mono', 'Matter'],
+  ]
+  assert.deepEqual(names('vf-collections', rows), [])
+  assert.deepEqual(names('vf-all', rows), [])
+  assert.deepEqual(names('static', rows), ['Matter', 'Matter Mono'])
+})
+
+test('several collections on one side are all installed, and unmarked VF families are too when none is a collection', () => {
+  assert.deepEqual(
+    names('vf-collections', [
+      ['Azeret VF Collection', 'Azeret'],
+      ['Azeret Display VF Collection', 'Azeret'],
+      ['Azeret VF', 'Azeret'],
+    ]),
+    ['Azeret Display VF Collection', 'Azeret VF Collection'],
+  )
+  assert.deepEqual(
+    names('vf-collections', [
+      ['Tobias VF', 'Tobias'],
+      ['Tobias Mono VF', 'Tobias'],
+    ]),
+    ['Tobias Mono VF', 'Tobias VF'],
+  )
+  assert.equal(isRetailVfCollectionName('AzeretVFCollection'), true)
+})
+
+test('a sync scope writes the same disabled-family list Sync All does', () => {
+  const fonts = [
+    font('Azeret VF Collection', { typefaceName: 'Azeret' }),
+    font('Azeret VF', { typefaceName: 'Azeret', enabled: false }),
+    font('Azeret', { typefaceName: 'Azeret' }),
+  ]
+  assert.deepEqual(nextDisabledRetailFamilyNamesForScope(fonts, 'all'), [])
+  assert.deepEqual(nextDisabledRetailFamilyNamesForScope(fonts, 'static'), ['Azeret VF Collection', 'Azeret VF'])
+  assert.deepEqual(nextDisabledRetailFamilyNamesForScope(fonts, 'vf-collections'), ['Azeret VF', 'Azeret'])
 })
 
 test('the syncing status is recognised and ends with any status that has no progress', () => {

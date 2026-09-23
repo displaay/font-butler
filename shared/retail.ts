@@ -595,6 +595,79 @@ export function isRetailVariableFamilyName(name: string): boolean {
   return /(?:^|[^a-z0-9])vf(?:$|[^a-z0-9])/i.test(trimmed) || /vf$/i.test(trimmed)
 }
 
+/**
+ * A VF *collection* file, as opposed to a member family (`Azeret VF`, `Azeret Monospaced VF`).
+ * Matched as a substring so `VF Collection` and a glued `VFCollection` both count.
+ */
+export function isRetailVfCollectionName(name: string): boolean {
+  return /collections?/i.test(name.trim())
+}
+
+/** `Italic` and `Italics` are the same side. A collection on this side is its own top collection. */
+export function isRetailItalicFamilyName(name: string): boolean {
+  return /italics?/i.test(name.trim())
+}
+
+export type RetailSyncScope = 'all' | 'static' | 'vf-collections' | 'vf-all'
+
+/**
+ * Family names a Sync scope turns on.
+ *
+ * VF Collections, per typeface: install every family whose name marks it as a collection, roman and
+ * italic separately (`Reckless VF Collection` and `Reckless Italics VF Collection` are both tops).
+ * When a typeface has VF families but none is named a collection, install those VF families — a lone
+ * `Tobias VF` is the collection. Several collections on the same side are all installed; the manifest
+ * has no parent pointer, so guessing one would drop a file. Typefaces with no VF family contribute
+ * nothing. Collections and families installs every VF family. Static installs the rest.
+ */
+export function retailFamilyNamesForSyncScope(
+  fonts: ReadonlyArray<Pick<RetailSyncFont, 'familyName' | 'typefaceName'>>,
+  scope: RetailSyncScope,
+): string[] {
+  if (scope === 'all') return fonts.map((font) => font.familyName)
+  if (scope === 'static') {
+    return fonts.filter((font) => !isRetailVariableFamilyName(font.familyName)).map((font) => font.familyName)
+  }
+  if (scope === 'vf-all') {
+    return fonts.filter((font) => isRetailVariableFamilyName(font.familyName)).map((font) => font.familyName)
+  }
+  const byTypeface = new Map<string, Array<Pick<RetailSyncFont, 'familyName' | 'typefaceName'>>>()
+  for (const font of fonts) {
+    if (!isRetailVariableFamilyName(font.familyName)) continue
+    const key = font.typefaceName.trim() || font.familyName
+    const list = byTypeface.get(key) ?? []
+    list.push(font)
+    byTypeface.set(key, list)
+  }
+  const selected: string[] = []
+  for (const group of byTypeface.values()) {
+    const collections = group.filter((font) => isRetailVfCollectionName(font.familyName))
+    if (collections.length === 0) {
+      selected.push(...group.map((font) => font.familyName))
+      continue
+    }
+    // Italic collections stay even when a roman collection exists; neither side collapses into the other.
+    selected.push(
+      ...collections
+        .filter((font) => !isRetailItalicFamilyName(font.familyName))
+        .map((font) => font.familyName),
+      ...collections
+        .filter((font) => isRetailItalicFamilyName(font.familyName))
+        .map((font) => font.familyName),
+    )
+  }
+  return selected
+}
+
+/** Disabled-family list for a scope, same shape Sync All writes (`disabledGlyphsFiles`). */
+export function nextDisabledRetailFamilyNamesForScope(
+  fonts: ReadonlyArray<Pick<RetailSyncFont, 'familyName' | 'typefaceName'>>,
+  scope: RetailSyncScope,
+): string[] {
+  const enabled = new Set(retailFamilyNamesForSyncScope(fonts, scope))
+  return fonts.filter((font) => !enabled.has(font.familyName)).map((font) => font.familyName)
+}
+
 export type RetailFontKindFilter = 'all' | 'static' | 'variable'
 
 export function matchesRetailFontKindFilter(
