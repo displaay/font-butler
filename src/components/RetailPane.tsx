@@ -581,7 +581,9 @@ export function RetailPane({
   const blocked = (status?.drift ?? []).filter((item) => BLOCKED_KINDS.has(item.kind))
   const lastError = error ?? status?.error ?? null
   const fonts = status?.fonts ?? []
-  const showFontLoader = checking && fonts.length === 0
+  const manifestReady = !enabled || Boolean(status?.checkedAt)
+  const selectionDisabled = disabled || !manifestReady
+  const showFontLoader = (checking || !manifestReady) && fonts.length === 0
 
   useEffect(() => {
     if (!enabled) {
@@ -875,20 +877,23 @@ export function RetailPane({
             ) : (
             <RetailFontList
               fonts={fonts}
-              disabled={disabled}
+              disabled={selectionDisabled}
               onToggle={(familyName, nextEnabled) => {
+                if (!manifestReady) return
                 void configureSelection({
                   disabledGlyphsFiles: nextDisabledRetailFamilyNames(fonts, [familyName], nextEnabled),
                 }).then((result) => {
                   if (result && nextEnabled) startSync()
                 })
               }}
-              onFormat={(familyName, format) =>
+              onFormat={(familyName, format) => {
+                if (!manifestReady) return
                 void configureSelection({
                   familyFormats: nextFamilyFormats(fonts, familyName, format),
                 })
-              }
+              }}
               onSyncScope={(scope) => {
+                if (!manifestReady) return
                 const selected = retailFamilyNamesForSyncScope(fonts, scope)
                 if (selected.length === 0) return
                 void configureSelection({
@@ -898,6 +903,7 @@ export function RetailPane({
                 })
               }}
               onSetAll={(syncEnabled, familyNames) => {
+                if (!manifestReady) return
                 if (!syncEnabled && retailFamiliesOffNeedsChoice(fonts, familyNames, status, familiesOnMac)) {
                   setTurningOff(familyNames)
                   return

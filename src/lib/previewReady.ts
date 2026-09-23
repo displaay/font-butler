@@ -79,16 +79,20 @@ export function previewFacesFailed(statuses: readonly string[]): boolean {
   return statuses.length > 0 && statuses.every((status) => status === 'error')
 }
 
-function previewFaceStatuses(name: string): string[] {
-  const statuses: string[] = []
-  if (typeof document === 'undefined' || !document.fonts) return statuses
+function previewFaceStatus(name: string, weight: number, italic: boolean): string | undefined {
+  if (typeof document === 'undefined' || !document.fonts) return undefined
+  let status: string | undefined
   document.fonts.forEach((face) => {
-    if (normalizePreviewFamily(face.family).toLowerCase() === name.toLowerCase()) statuses.push(face.status)
+    if (normalizePreviewFamily(face.family).toLowerCase() !== name.toLowerCase()) return
+    if ((face.weight ?? 400) !== weight) return
+    const faceItalic = face.style === 'italic' || face.style === 'oblique'
+    if (faceItalic !== italic) return
+    status = face.status
   })
-  return statuses
+  return status
 }
 
-function requestPreviewLoad(spec: string, key: string, name: string): void {
+function requestPreviewLoad(spec: string, key: string, name: string, weight: number, italic: boolean): void {
   if (loadPromises.has(key)) return
   if (typeof document === 'undefined' || !document.fonts) return
   const pending = document.fonts
@@ -98,7 +102,7 @@ function requestPreviewLoad(spec: string, key: string, name: string): void {
       () => undefined,
     )
     .finally(() => {
-      if (previewFacesFailed(previewFaceStatuses(name))) failedKeys.add(key)
+      if (previewFaceStatus(name, weight, italic) === 'error') failedKeys.add(key)
       notifyPreviewFonts()
     })
   loadPromises.set(key, pending)
@@ -137,7 +141,7 @@ export function isPreviewFontReady(
   }
   // Calling load() before @font-face exists resolves empty, so the spinner never
   // uses the family and the browser never fetches the file.
-  if (hasFace) requestPreviewLoad(spec, key, name)
+  if (hasFace) requestPreviewLoad(spec, key, name, weight, italic)
   return false
 }
 

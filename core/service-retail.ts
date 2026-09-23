@@ -140,6 +140,7 @@ export async function stopRetailSync(paths: AppPaths): Promise<RetailSyncStatus>
   const local = loadRetailManifest(paths)
   if (local.incomplete) saveRetailManifest(paths, { ...local, incomplete: false })
   cache.progress = null
+  cache.error = null
   return emitRetail(paths)
 }
 
@@ -377,14 +378,9 @@ export async function configureRetailSync(
     await uninstallUnselectedRetailFormats(paths, next)
   }
   if (input.disabledGlyphsFiles !== undefined && next.enabled) {
-    const fonts = listRetailFonts(paths, next.disabledGlyphsFiles, next.familyFormats, optOutModeOf(next))
-    const stopping =
-      fonts.length > 0
-        ? fonts.every((font) => !font.enabled)
-        : input.disabledGlyphsFiles.length > 0
-    // Wait for the aborted run: its in-flight batch can still catalog files, and the cleanup below has
-    // to see them or a second "None" is needed to clear what landed.
-    if (stopping) await settleInflightRetailSync()
+    // Wait for any in-flight sync: its last batch may still catalog files, and scope or keep/remove
+    // cleanup below must see them or committed files can be dropped.
+    await settleInflightRetailSync()
     await releaseTurnedOffRetailFamilies(paths, current, next, input.disableAction)
     await dropOrphanRetailListings(paths)
   }

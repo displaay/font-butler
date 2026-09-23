@@ -2,7 +2,7 @@
   "name": "font-butler",
   "productName": "Font Buttler",
   "private": true,
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Source-tracked font manager for macOS",
   "author": "Font Buttler",
   "type": "module",
@@ -110,16 +110,22 @@
         "CFBundleURLTypes": [
           {
             "CFBundleURLName": "Font Buttler Finder Install",
-            "CFBundleURLSchemes": ["font-butler"]
+            "CFBundleURLSchemes": [
+              "font-butler"
+            ]
           }
         ],
         "NSServices": [
           {
-            "NSMenuItem": { "default": "Install" },
+            "NSMenuItem": {
+              "default": "Install"
+            },
             "NSMessage": "installFonts",
             "NSPortName": "Font Buttler",
             "NSUserData": "install",
-            "NSRequiredContext": { "NSTextContent": "FilePath" },
+            "NSRequiredContext": {
+              "NSTextContent": "FilePath"
+            },
             "NSSendFileTypes": [
               "public.font",
               "public.opentype-font",
@@ -128,11 +134,15 @@
             ]
           },
           {
-            "NSMenuItem": { "default": "Install as…" },
+            "NSMenuItem": {
+              "default": "Install as…"
+            },
             "NSMessage": "installFontsAs",
             "NSPortName": "Font Buttler",
             "NSUserData": "install-as",
-            "NSRequiredContext": { "NSTextContent": "FilePath" },
+            "NSRequiredContext": {
+              "NSTextContent": "FilePath"
+            },
             "NSSendFileTypes": [
               "public.font",
               "public.opentype-font",
@@ -141,11 +151,15 @@
             ]
           },
           {
-            "NSMenuItem": { "default": "Link to …" },
+            "NSMenuItem": {
+              "default": "Link to …"
+            },
             "NSMessage": "linkFonts",
             "NSPortName": "Font Buttler",
             "NSUserData": "link-to",
-            "NSRequiredContext": { "NSTextContent": "FilePath" },
+            "NSRequiredContext": {
+              "NSTextContent": "FilePath"
+            },
             "NSSendFileTypes": [
               "public.font",
               "public.opentype-font",
@@ -159,14 +173,18 @@
             "CFBundleTypeName": "TrueType Font",
             "CFBundleTypeRole": "Editor",
             "LSHandlerRank": "Default",
-            "LSItemContentTypes": ["public.truetype-ttf-font"],
+            "LSItemContentTypes": [
+              "public.truetype-ttf-font"
+            ],
             "CFBundleTypeIconFile": "finderDocIcon.icns"
           },
           {
             "CFBundleTypeName": "OpenType Font",
             "CFBundleTypeRole": "Editor",
             "LSHandlerRank": "Default",
-            "LSItemContentTypes": ["public.opentype-font"],
+            "LSItemContentTypes": [
+              "public.opentype-font"
+            ],
             "CFBundleTypeIconFile": "finderDocIcon.icns"
           }
         ]

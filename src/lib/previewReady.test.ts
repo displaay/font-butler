@@ -10,7 +10,7 @@ import {
   subscribePreviewFonts,
 } from './previewReady.ts'
 
-type MockFace = { family: string }
+type MockFace = { family: string; weight?: number; style?: string; status?: string }
 
 function mockFonts(options: { check?: boolean; faces?: MockFace[]; onLoad?: () => void }): () => void {
   const faces = options.faces ?? []
@@ -240,4 +240,23 @@ test('previewFacesFailed only when every matching face errored', () => {
   assert.equal(previewFacesFailed(['error']), true)
   assert.equal(previewFacesFailed(['error', 'loaded']), false)
   assert.equal(previewFacesFailed(['loading']), false)
+})
+
+test('one failed weight does not mark another weight as failed', async () => {
+  const faces = [{ family: '"fc-mix"', weight: 700, style: 'normal', status: 'error' }]
+  const restore = mockFonts({ check: false, faces })
+  try {
+    assert.equal(isPreviewFontReady('fc-mix', 400), false)
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(
+      isPreviewFontReady('fc-mix', 400),
+      false,
+      'weight 400 must stay retryable when only 700 errored',
+    )
+    assert.equal(isPreviewFontReady('fc-mix', 700), false)
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(isPreviewFontReady('fc-mix', 700), true)
+  } finally {
+    restore()
+  }
 })

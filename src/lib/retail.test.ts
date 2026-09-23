@@ -10,6 +10,7 @@ import {
   retailSyncInProgress,
   isRetailItalicFamilyName,
   isRetailVariableFamilyName,
+  normalizeRetailFamilyName,
   isRetailVfCollectionName,
   nextDisabledRetailFamilyNamesForScope,
   retailFamilyNamesForSyncScope,
@@ -262,10 +263,16 @@ test('the syncing status message includes the family count', () => {
   assert.equal(retailSyncingStatusMessage({ done: 12, total: 36 }), 'Syncing Displaay retail… 12/36')
 })
 
+test('normalizeRetailFamilyName unpacks glued VF collection names', () => {
+  assert.equal(normalizeRetailFamilyName('AzeretVFCollection'), 'Azeret VF Collection')
+  assert.equal(normalizeRetailFamilyName('AguzzoVF'), 'Aguzzo VF')
+})
+
 test('isRetailVariableFamilyName follows VF in the family name', () => {
   assert.equal(isRetailVariableFamilyName('Aguzzo VF'), true)
   assert.equal(isRetailVariableFamilyName('Aguzzo Italic VF'), true)
   assert.equal(isRetailVariableFamilyName('AguzzoVF'), true)
+  assert.equal(isRetailVariableFamilyName('AzeretVFCollection'), true)
   assert.equal(isRetailVariableFamilyName('Aguzzo'), false)
   assert.equal(isRetailVariableFamilyName('Aguzzo Italic'), false)
   assert.equal(matchesRetailFontKindFilter(font('Aguzzo VF'), 'variable'), true)
@@ -467,6 +474,15 @@ test('a sync scope writes the same disabled-family list Sync All does', () => {
   assert.deepEqual(nextDisabledRetailFamilyNamesForScope(fonts, 'all'), [])
   assert.deepEqual(nextDisabledRetailFamilyNamesForScope(fonts, 'static'), ['Azeret VF Collection', 'Azeret VF'])
   assert.deepEqual(nextDisabledRetailFamilyNamesForScope(fonts, 'vf-collections'), ['Azeret VF', 'Azeret'])
+})
+
+test('glued collection names participate in VF scopes', () => {
+  const fonts = [
+    font('AzeretVFCollection', { typefaceName: 'Azeret' }),
+    font('Azeret', { typefaceName: 'Azeret' }),
+  ]
+  assert.deepEqual(retailFamilyNamesForSyncScope(fonts, 'static'), ['Azeret'])
+  assert.deepEqual(retailFamilyNamesForSyncScope(fonts, 'vf-all'), ['AzeretVFCollection'])
 })
 
 test('the syncing status is recognised and ends with any status that has no progress', () => {
