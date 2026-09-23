@@ -436,6 +436,7 @@ export {
   retailLibraryEntryVisible,
   isRetailSyncingStatusMessage,
   retailListingHasLocalFile,
+  retailListingOnMac,
   retailSyncInProgress,
   retailSyncIsOn,
   retailSyncingStatusMessage,

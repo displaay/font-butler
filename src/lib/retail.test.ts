@@ -4,6 +4,7 @@ import {
   entryHasActiveRetailSync,
   isOrphanRetailListing,
   isRetailSyncingStatusMessage,
+  retailListingOnMac,
   retailSyncInProgress,
   isRetailVariableFamilyName,
   matchesRetailFontKindFilter,
@@ -310,6 +311,25 @@ test('retailUpdateCount uses remaining families while a sync is in flight', () =
   assert.equal(retailHasLiveUpdates({ pending: 0, progress: { done: 36, total: 36 } }), true)
   assert.equal(retailHasLiveUpdates({ pending: 0, progress: null }), false)
   assert.equal(retailHasLiveUpdates({ pending: 3 }), true)
+})
+
+const cacheParked = {
+  ...stub,
+  status: 'uninstalled',
+  sourcePath: '/Users/you/Library/Application Support/Font Buttler/retail-cache/Reckless/Reckless-Regular.otf',
+  sourcePresent: true,
+  sourceAvailability: 'present' as const,
+}
+
+test('a not-installed listing parked in the retail cache is hidden once its family is off', () => {
+  assert.equal(retailListingHasLocalFile(cacheParked), true)
+  assert.equal(retailListingOnMac(cacheParked), false)
+  assert.equal(retailLibraryEntryVisible(cacheParked, [font('Reckless', { enabled: false })], true), false)
+  assert.equal(retailLibraryEntryVisible(cacheParked, [font('Reckless')], false), false)
+  assert.equal(retailLibraryEntryVisible(cacheParked, [font('Reckless')], true), true)
+  assert.equal(isOrphanRetailListing(cacheParked, false), true)
+  assert.equal(retailListingOnMac({ ...installed, status: 'installed' }), true)
+  assert.equal(retailListingOnMac({ ...parked, status: 'deactivated' }), true)
 })
 
 test('the syncing status is recognised and ends with any status that has no progress', () => {

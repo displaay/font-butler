@@ -211,6 +211,7 @@ export type RetailLibraryEntry = {
   sourcePath?: string | null
   sourcePresent?: boolean
   sourceAvailability?: 'none' | 'present' | 'missing' | 'offline' | 'unreadable'
+  status?: string
 }
 
 /**
@@ -658,14 +659,24 @@ export function retailListingHasLocalFile(entry: RetailLibraryEntry): boolean {
   return sourceHasLiveBytes(entry)
 }
 
-/** File-less Displaay listings left in the catalog after collection sync is off. */
+/**
+ * Installed, deactivated, or otherwise on the Mac. An `uninstalled` retail listing can still point at a
+ * copy parked in the retail cache (a re-sync after an uninstall); that copy is ours, not the user's.
+ */
+export function retailListingOnMac(entry: RetailLibraryEntry): boolean {
+  if (!retailListingHasLocalFile(entry)) return false
+  if (entry.retailRelativePath && entry.status === 'uninstalled') return false
+  return true
+}
+
+/** Not-installed Displaay listings left in the catalog after collection sync is off. */
 export function isOrphanRetailListing(
   entry: RetailLibraryEntry,
   syncEnabled = false,
 ): boolean {
   if (syncEnabled) return false
   if (!entry.retailRelativePath) return false
-  return !retailListingHasLocalFile(entry)
+  return !retailListingOnMac(entry)
 }
 
 /**
@@ -701,11 +712,11 @@ export function retailLibraryEntryVisible(
 ): boolean {
   const relative = entry.retailRelativePath
   if (!relative) return true
-  if (!syncEnabled) return retailListingHasLocalFile(entry)
-  if (fonts.length === 0) return retailListingHasLocalFile(entry)
+  if (!syncEnabled) return retailListingOnMac(entry)
+  if (fonts.length === 0) return retailListingOnMac(entry)
   const familyName = retailFamilyNameOf(entry)
   const font = fonts.find((item) => item.familyName === familyName)
-  if (!font || !font.enabled) return retailListingHasLocalFile(entry)
+  if (!font || !font.enabled) return retailListingOnMac(entry)
   if (font.formats.length < 2) return true
   const format = retailFileFormat(relative)
   if (!format) return true

@@ -61,6 +61,7 @@ import {
   emptyRetailLocalManifest,
   isOrphanRetailListing,
   retailListingHasLocalFile,
+  retailListingOnMac,
   retailLocalManifestMode,
   type RetailCollectionMode,
   type RetailCollisionAction,
@@ -363,7 +364,7 @@ export async function configureRetailSync(
   if (formatsChanged) {
     await uninstallUnselectedRetailFormats(paths, next)
   }
-  if (input.disabledGlyphsFiles !== undefined) {
+  if (input.disabledGlyphsFiles !== undefined && next.enabled) {
     const fonts = listRetailFonts(paths, next.disabledGlyphsFiles, next.familyFormats, optOutModeOf(next))
     const stopping =
       fonts.length > 0
@@ -372,6 +373,7 @@ export async function configureRetailSync(
     // Wait for the aborted run: its in-flight batch can still catalog files, and the cleanup below has
     // to see them or a second "None" is needed to clear what landed.
     if (stopping) await settleInflightRetailSync()
+    await dropOrphanRetailListings(paths)
   }
   if (!next.enabled) {
     abortInflightRetailSync()
@@ -396,12 +398,26 @@ function clearRetailCacheDir(paths: AppPaths): void {
   }
 }
 
-/** Drop file-less Displaay listings once collection sync is off. */
+function entryFamilyOptedOut(entry: CatalogEntry, config: RetailSyncSettings): boolean {
+  const familyName = retailFamilyOfEntry(entry)
+  if (!familyName) return false
+  return isRetailFamilyOptedOut(familyName, retailTypefaceOfEntry(entry), config.disabledGlyphsFiles, optOutModeOf(config))
+}
+
+/**
+ * Drop Displaay listings that are not on the Mac once nothing will sync them: every one when collection
+ * sync is off, otherwise those of families turned off. A copy parked in the retail cache goes with its
+ * listing — it is only a download staging area, and keeping it would list the font as local.
+ */
 export async function dropOrphanRetailListings(paths: AppPaths): Promise<number> {
-  if (loadSettings(paths).retailSync?.enabled) return 0
+  const config = retailSettings(loadSettings(paths))
   return runCatalogTask(async () => {
     const catalog = loadCatalog(paths)
-    const orphans = catalog.entries.filter((entry) => isOrphanRetailListing(entry, false))
+    const orphans = catalog.entries.filter((entry) =>
+      config.enabled
+        ? Boolean(entry.retailRelativePath) && entryFamilyOptedOut(entry, config) && !retailListingOnMac(entry)
+        : isOrphanRetailListing(entry, false),
+    )
     if (!orphans.length) return 0
     const local = loadRetailManifest(paths)
     let manifestDirty = false
@@ -409,6 +425,8 @@ export async function dropOrphanRetailListings(paths: AppPaths): Promise<number>
       await yieldEventLoop()
       const relative = entry.retailRelativePath
       removeEntryById(catalog, entry.id)
+      const cached = relative ? resolveRetailCachePath(paths, relative) : null
+      if (cached && fs.existsSync(cached)) fs.rmSync(cached, { force: true })
       if (relative && local.files[relative]) {
         delete local.files[relative]
         manifestDirty = true

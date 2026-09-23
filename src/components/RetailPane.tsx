@@ -479,7 +479,9 @@ export function RetailPane({
       autoCheckStartedRef.current = false
       return
     }
-    if (!status || status.fonts.length > 0 || status.checkedAt) return
+    // `checkedAt` is per process: after a restart the list comes from catalog listings, which no longer
+    // include families turned off, so check once to list them again.
+    if (!status || status.checkedAt) return
     if (autoCheckStartedRef.current) return
     autoCheckStartedRef.current = true
     setChecking(true)

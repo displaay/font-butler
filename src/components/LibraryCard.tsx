@@ -173,10 +173,10 @@ export const LibraryCard = memo(function LibraryCard({
           italic: row.italic,
           label: row.label,
           variation: row.variation,
-          wait: rowEntry ? entryHasPreviewFile(rowEntry) : true,
+          wait: entryHasPreviewFile(rowEntry ?? preview),
         }
       }),
-    [instances, previewFamily, group.entries],
+    [instances, previewFamily, group.entries, preview],
   )
   const plan = batch ?? familyCardPlan(group, adobeAvailable)
   const inCurrentProject = Boolean(
