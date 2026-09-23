@@ -768,6 +768,15 @@ export function retailSyncingStatusMessage(progress?: RetailSyncProgress | null)
   return 'Syncing Displaay retail…'
 }
 
+export function isRetailSyncingStatusMessage(message: string | null | undefined): boolean {
+  return Boolean(message?.startsWith('Syncing Displaay retail…'))
+}
+
+/** A status with no family progress means no download pass is running, however the last one ended. */
+export function retailSyncInProgress(status: { progress?: RetailSyncProgress | null } | null | undefined): boolean {
+  return Boolean(status?.progress && status.progress.total > 0)
+}
+
 /**
  * Updates-tab total: remaining families while a sync is in flight, otherwise pending files.
  * `pending` is only remasured when a check or sync finishes, so the badge must not use it mid-sync.

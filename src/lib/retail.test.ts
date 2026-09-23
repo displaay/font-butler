@@ -3,6 +3,8 @@ import { test } from 'node:test'
 import {
   entryHasActiveRetailSync,
   isOrphanRetailListing,
+  isRetailSyncingStatusMessage,
+  retailSyncInProgress,
   isRetailVariableFamilyName,
   matchesRetailFontKindFilter,
   matchesRetailFontQuery,
@@ -308,4 +310,15 @@ test('retailUpdateCount uses remaining families while a sync is in flight', () =
   assert.equal(retailHasLiveUpdates({ pending: 0, progress: { done: 36, total: 36 } }), true)
   assert.equal(retailHasLiveUpdates({ pending: 0, progress: null }), false)
   assert.equal(retailHasLiveUpdates({ pending: 3 }), true)
+})
+
+test('the syncing status is recognised and ends with any status that has no progress', () => {
+  assert.equal(isRetailSyncingStatusMessage(retailSyncingStatusMessage({ done: 2, total: 9 })), true)
+  assert.equal(isRetailSyncingStatusMessage(retailSyncingStatusMessage()), true)
+  assert.equal(isRetailSyncingStatusMessage('Installing Inter…'), false)
+  assert.equal(isRetailSyncingStatusMessage(null), false)
+  assert.equal(retailSyncInProgress({ progress: { done: 0, total: 3 } }), true)
+  assert.equal(retailSyncInProgress({ progress: null }), false)
+  assert.equal(retailSyncInProgress({ progress: { done: 0, total: 0 } }), false)
+  assert.equal(retailSyncInProgress(null), false)
 })

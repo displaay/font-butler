@@ -20,6 +20,7 @@ import {
   retailWorkerToken,
   syncRetail,
 } from './service-retail.ts'
+import { onEvent } from './events.ts'
 import {
   catalogEntryFamilyNames,
   familyHasValidDropReplacement,
@@ -2582,4 +2583,45 @@ test('a parked retail cache records its fingerprint so later checks skip reparse
   assert.ok(after)
   assert.equal(after.sourceFingerprint, fingerprintFile(listing.sourcePath))
   assert.equal(after.faces[0]?.familyName, 'StaleName', 'matching cache bytes must not reparse')
+})
+
+function slowManyFiles(count: number) {
+  let downloads = 0
+  const files = Array.from({ length: count }, (_, index) => ({ basename: `File${index}.otf`, size: 4, etag: `e${index}` }))
+  return {
+    get downloads() {
+      return downloads
+    },
+    options: {
+      fetchManifest: async () => manifestWithFiles(files),
+      fetchFile: async () => {
+        downloads += 1
+        await new Promise((resolve) => setTimeout(resolve, 30))
+        return new Uint8Array(4).fill(1)
+      },
+    },
+  }
+}
+
+test('None during a sync ends it with a status that is no longer syncing, and nothing after', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 't' })
+  const run = slowManyFiles(RETAIL_DOWNLOAD_CONCURRENCY * 3)
+  const events: Array<{ done: number; total: number } | null> = []
+  const stop = onEvent((event) => {
+    if (event.type === 'retail') events.push(event.status.progress)
+  })
+  try {
+    const syncing = syncRetail(paths, run.options)
+    while (run.downloads === 0) await new Promise((resolve) => setImmediate(resolve))
+    assert.ok(events.some((progress) => progress && progress.total > 0))
+    const stopped = await configureRetailSync(paths, { disabledGlyphsFiles: ['Reckless'] })
+    assert.equal(stopped.progress, null)
+    const settled = events.length
+    await syncing
+    assert.equal(events.at(-1), null)
+    assert.equal(events.slice(settled).some((progress) => progress !== null), false)
+  } finally {
+    stop()
+  }
 })

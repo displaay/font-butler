@@ -118,7 +118,16 @@ let inflightSync: Promise<RetailSyncStatus> | null = null
 let inflightSyncAbort: AbortController | null = null
 
 export function abortInflightRetailSync(): void {
-  inflightSyncAbort?.abort()
+  if (!inflightSyncAbort) return
+  inflightSyncAbort.abort()
+  // The aborted run still has to wind down; nothing emitted meanwhile may claim a pass is running.
+  cache.progress = null
+}
+
+/** Abort and wait for the run to finish, so cleanup after it cannot race its last catalog writes. */
+async function settleInflightRetailSync(): Promise<void> {
+  abortInflightRetailSync()
+  await inflightSync?.catch(() => undefined)
 }
 
 export function resetRetailCache(): void {
@@ -360,7 +369,9 @@ export async function configureRetailSync(
       fonts.length > 0
         ? fonts.every((font) => !font.enabled)
         : input.disabledGlyphsFiles.length > 0
-    if (stopping) abortInflightRetailSync()
+    // Wait for the aborted run: its in-flight batch can still catalog files, and the cleanup below has
+    // to see them or a second "None" is needed to clear what landed.
+    if (stopping) await settleInflightRetailSync()
   }
   if (!next.enabled) {
     abortInflightRetailSync()
@@ -1255,6 +1266,7 @@ async function runSync(
       download: (key, expectedSize, signal) =>
         download({ workerBaseUrl, token, key, expectedSize, signal }),
       onProgress: (progress) => {
+        if (options.signal?.aborted) return
         cache.progress = progress
         emitRetail(paths)
       },

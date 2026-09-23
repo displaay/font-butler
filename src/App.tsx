@@ -38,7 +38,7 @@ import {
 } from '@/components/ViewOptions'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { NotifyProvider, useSetActionStatus } from '@/components/NotifyProvider'
+import { NotifyProvider, useClearActionStatusIf, useSetActionStatus } from '@/components/NotifyProvider'
 import { Toaster } from '@/components/ui/sonner'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useFontActions, type FormatPrompt, type ReplacePrompt } from '@/hooks/useFontActions'
@@ -138,7 +138,7 @@ import { allUpdateGroups, visibleUpdateGroups } from '@/lib/updateInventory'
 import { operationMatchesQuery, tabWithSearchHits } from '@/lib/search'
 import type { AppSettings, AppUpdateStatus, CatalogEntry, DestinationCapability, DuplicateWarning, FamilyGroup, FontStatus, ImportPlan, ImportPlanItem, LibraryFilter, Operation, PreviewPreferences, ProjectSet, RetailCollisionAction, RetailFamilyCollision, RetailSyncStatus, SavedLibraryFilter, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
 import { testInstallToCatalog, type TestInstallFont } from '@/lib/testInstall'
-import { retailHasLiveUpdates, retailLibraryEntryVisible, retailSyncIsOn, retailSyncingStatusMessage, retailUpdateCount } from '@/lib/types'
+import { isRetailSyncingStatusMessage, retailHasLiveUpdates, retailLibraryEntryVisible, retailSyncInProgress, retailSyncIsOn, retailSyncingStatusMessage, retailUpdateCount } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { isPathUnderFolder, isRetailLibraryFilter, isTestInstallFilter, isWatchFolderEntry, libraryFolderFilterLabel, matchesLibraryFolderFilter, RETAIL_LIBRARY_FILTER, TEST_INSTALL_FILTER, watchFolderName } from '@/lib/watchFolders'
 
@@ -158,6 +158,7 @@ export default function App() {
 
 function AppShell() {
   const setActionStatus = useSetActionStatus()
+  const clearActionStatusIf = useClearActionStatusIf()
   const [entries, setEntries] = useState<CatalogEntry[]>([])
   const [systemFaces, setSystemFaces] = useState<SystemFace[]>([])
   const [tab, setTab] = useState<Tab>('library')
@@ -369,6 +370,7 @@ function AppShell() {
         const result = await api.retail.sync(choices)
         setRetail(result.status)
         setSyncCollisions(result.status.collisions ?? [])
+        if (!retailSyncInProgress(result.status)) clearActionStatusIf(isRetailSyncingStatusMessage)
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Could not sync the retail collection')
       } finally {
@@ -541,8 +543,12 @@ function AppShell() {
       if (isRetailEvent(event)) {
         setRetail(event.status)
         if (event.status.collisions) setSyncCollisions(event.status.collisions)
-        if (event.status.progress && event.status.progress.total > 0) {
+        // Every way a pass ends (done, failed, aborted by None/off/token/collection switch, stopped)
+        // emits a status without progress; that is what takes the syncing status down.
+        if (retailSyncInProgress(event.status)) {
           setActionStatus(retailSyncingStatusMessage(event.status.progress))
+        } else {
+          clearActionStatusIf(isRetailSyncingStatusMessage)
         }
         return
       }
