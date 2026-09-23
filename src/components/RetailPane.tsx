@@ -214,7 +214,7 @@ function RetailSyncScopeControl({
                   onSync('vf-collections')
                 }}
               >
-                VF Collections
+                Collections only
               </button>
               <button
                 type="button"
@@ -225,7 +225,7 @@ function RetailSyncScopeControl({
                   onSync('vf-all')
                 }}
               >
-                Collections and families
+                All
               </button>
             </div>
           ) : null}

@@ -613,12 +613,12 @@ export type RetailSyncScope = 'all' | 'static' | 'vf-collections' | 'vf-all'
 /**
  * Family names a Sync scope turns on.
  *
- * VF Collections, per typeface: install every family whose name marks it as a collection, roman and
+ * Collections only, per typeface: install every family whose name marks it as a collection, roman and
  * italic separately (`Reckless VF Collection` and `Reckless Italics VF Collection` are both tops).
  * When a typeface has VF families but none is named a collection, install those VF families — a lone
  * `Tobias VF` is the collection. Several collections on the same side are all installed; the manifest
  * has no parent pointer, so guessing one would drop a file. Typefaces with no VF family contribute
- * nothing. Collections and families installs every VF family. Static installs the rest.
+ * nothing. All installs every VF family. Static installs the rest.
  */
 export function retailFamilyNamesForSyncScope(
   fonts: ReadonlyArray<Pick<RetailSyncFont, 'familyName' | 'typefaceName'>>,
@@ -660,7 +660,7 @@ export function retailFamilyNamesForSyncScope(
 }
 
 /**
- * True when "VF Collections" would install a different set than every VF family.
+ * True when "Collections only" would install a different set than every VF family.
  * Trial cuts and any other manifest with no collection-vs-member split return false, so the VF
  * control installs all VF files directly instead of offering a choice that changes nothing.
  * Decided from the family names in the manifest, not from whether a user token is saved.

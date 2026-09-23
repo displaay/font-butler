@@ -361,7 +361,7 @@ function names(
   ).slice().sort()
 }
 
-test('VF Collections installs the collection and skips member families', () => {
+test('Collections only installs the collection and skips member families', () => {
   const rows: Array<[string, string]> = [
     ['Azeret VF Collection', 'Azeret'],
     ['Azeret VF', 'Azeret'],
@@ -428,7 +428,7 @@ test('several collections on one side are all installed, and unmarked VF familie
   assert.equal(isRetailVfCollectionName('AzeretVFCollection'), true)
 })
 
-test('a trial cut with no collection file does not offer VF Collections', () => {
+test('a trial cut with no collection file does not offer Collections only', () => {
   // The built-in trial manifest names files like Reckless-TRIAL-VF, not a separate "VF Collection".
   const trial = [
     font('Reckless VF', { typefaceName: 'Reckless' }),
