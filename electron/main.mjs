@@ -115,6 +115,10 @@ function applyAppIconSetting(style) {
 }
 
 let mainWindow = null
+/** @type {boolean} Packaged app: true only after API worker + token are ready. Dev: true after bootstrap attempt. */
+let apiBootstrapReady = false
+/** @type {Error | null} */
+let lastBootstrapError = null
 let tray = null
 let apiToken = null
 let apiChild = null
@@ -212,7 +216,94 @@ async function persistDeniedNativeNotifications(wanted) {
   }
 }
 
+function catalogJsonPathHint() {
+  return path.join(app.getPath('userData'), 'catalog.json')
+}
+
+function bootstrapFailureMessage(error) {
+  const reason = error instanceof Error ? error.message : String(error)
+  const catalog = catalogJsonPathHint()
+  return [
+    'Font Buttler could not start its local font service, so the window cannot load.',
+    '',
+    reason,
+    '',
+    'Try quitting Font Buttler completely (Font Buttler → Quit) and open it again.',
+    'If the problem continues, open Console.app, filter for "Font Buttler", and check messages from startup.',
+    '',
+    `Library catalog file:\n${catalog}`,
+    '',
+    'If catalog.json is corrupt, quit the app, rename catalog.json, and relaunch (catalog.json.bak may be used automatically).',
+    '',
+    'More steps: https://github.com/displaay/font-butler/blob/main/docs/troubleshooting-blank-window.md',
+  ].join('\n')
+}
+
+function createBootstrapErrorWindow(message) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.show()
+    mainWindow.focus()
+    return
+  }
+  const safe = message
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Font Buttler</title>
+<style>
+  body { font: 13px/1.45 -apple-system, BlinkMacSystemFont, sans-serif; margin: 24px; color: #111; }
+  h1 { font-size: 16px; margin: 0 0 12px; }
+  pre { white-space: pre-wrap; background: #f4f4f5; padding: 12px; border-radius: 8px; font-size: 12px; }
+  button { margin-top: 16px; padding: 8px 14px; font-size: 13px; cursor: pointer; }
+</style>
+</head>
+<body>
+  <h1>Font Buttler could not start</h1>
+  <pre>${safe}</pre>
+  <button type="button" onclick="window.close()">Close window</button>
+</body>
+</html>`
+  mainWindow = new BrowserWindow({
+    width: 560,
+    height: 480,
+    minWidth: 400,
+    minHeight: 320,
+    title: 'Font Buttler',
+    icon: APP_ICON,
+    backgroundColor: windowBackgroundColor(),
+    show: true,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  })
+  void mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+  mainWindow.on('closed', () => {
+    mainWindow = null
+  })
+}
+
+function showBootstrapFailure(error) {
+  lastBootstrapError = error instanceof Error ? error : new Error(String(error))
+  const message = bootstrapFailureMessage(lastBootstrapError)
+  dialog.showErrorBox('Font Buttler could not start', message)
+  createBootstrapErrorWindow(message)
+}
+
 function showMainWindow() {
+  if (app.isPackaged && !apiBootstrapReady) {
+    if (lastBootstrapError) {
+      showBootstrapFailure(lastBootstrapError)
+    } else {
+      createBootstrapErrorWindow('The local font service is not running.')
+    }
+    return
+  }
   if (!mainWindow) {
     createWindow()
   }
@@ -266,6 +357,9 @@ async function openExternalUrl(url) {
 
 function createWindow() {
   if (mainWindow && !mainWindow.isDestroyed()) {
+    return
+  }
+  if (app.isPackaged && !apiBootstrapReady) {
     return
   }
   mainWindow = new BrowserWindow({
@@ -1403,6 +1497,30 @@ if (!gotLock) {
     throw lastError
   }
 
+  async function bootstrapApi() {
+    if (!app.isPackaged) {
+      try {
+        await ensureApiToken()
+      } catch (error) {
+        console.error('Could not connect to Font Buttler API (dev)', error)
+      }
+      apiBootstrapReady = true
+      return true
+    }
+    try {
+      await startPackagedBackend()
+      await ensureApiToken()
+      apiBootstrapReady = true
+      lastBootstrapError = null
+      return true
+    } catch (error) {
+      console.error('Could not bootstrap Font Buttler API', error)
+      showBootstrapFailure(error)
+      apiBootstrapReady = false
+      return false
+    }
+  }
+
   let restartingBackend = false
   async function restartPackagedBackend() {
     if (isQuitting || restartingBackend || !app.isPackaged) return
@@ -1437,25 +1555,22 @@ if (!gotLock) {
       mainWindow?.setBackgroundColor(windowBackgroundColor())
     })
     registerNativeFinderServices()
-    try {
-      await startPackagedBackend()
-      await ensureApiToken()
-    } catch (error) {
-      console.error('Could not bootstrap Font Buttler API', error)
-    }
+    const bootstrapOk = await bootstrapApi()
     ensureTray()
-    createWindow()
-    void loadCatalog()
-    void loadActivity()
-    void loadAppUpdate()
-    void listenForApiEvents()
-    setInterval(() => {
-      if (!isQuitting) void loadAppUpdate()
-    }, APP_UPDATE_POLL_MS)
-    void loadRetailStatus()
-    setInterval(() => {
-      if (!isQuitting) void retailTick()
-    }, RETAIL_TICK_MS)
+    if (bootstrapOk) {
+      createWindow()
+      void loadCatalog()
+      void loadActivity()
+      void loadAppUpdate()
+      void listenForApiEvents()
+      setInterval(() => {
+        if (!isQuitting) void loadAppUpdate()
+      }, APP_UPDATE_POLL_MS)
+      void loadRetailStatus()
+      setInterval(() => {
+        if (!isQuitting) void retailTick()
+      }, RETAIL_TICK_MS)
+    }
     const finderLaunch = parseFinderLaunch(process.argv)
     const fromArgv = finderLaunch
       ? []

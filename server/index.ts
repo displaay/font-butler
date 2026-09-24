@@ -88,7 +88,16 @@ export async function startFontButlerServer(
   )
   const service = new FontButlerService()
 
-  await service.init()
+  try {
+    await service.init()
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    console.error('Font Buttler service init failed:', message)
+    if (error instanceof Error && error.stack) {
+      console.error(error.stack)
+    }
+    process.exit(1)
+  }
   const stopTestInstallWatch = service.watchTestInstalls()
 
   process.on('unhandledRejection', (error) => {
