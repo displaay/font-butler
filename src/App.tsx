@@ -43,7 +43,21 @@ import { Toaster } from '@/components/ui/sonner'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useFontActions, type FormatPrompt, type ReplacePrompt } from '@/hooks/useFontActions'
 import { useLibraryWindow } from '@/hooks/useLibraryWindow'
-import { api, isActionProgressEvent, isAppUpdateEvent, isDuplicatesEvent, isNotice, isOperationsEvent, isProjectsEvent, isRetailEvent, isSettingsEvent, isTestInstallsEvent, subscribeEvents } from '@/lib/api'
+import {
+  api,
+  isActionProgressEvent,
+  isAppUpdateEvent,
+  isDuplicatesEvent,
+  isNotice,
+  isOperationsEvent,
+  isProjectsEvent,
+  isRetailEvent,
+  isSettingsEvent,
+  isTestInstallsEvent,
+  subscribeEvents,
+  waitForCatalogReady,
+  waitForServiceReady,
+} from '@/lib/api'
 import {
   mergeUnreadFlags,
   unreadActivityCount,
@@ -438,6 +452,31 @@ function AppShell() {
     async function boot() {
       let retailLoaded = false
       try {
+        await waitForCatalogReady({
+          onPhase: (phase) => {
+            if (!cancelled && (phase === 'catalog' || phase === 'starting')) {
+              setActionStatus('Starting Font Buttler…')
+            }
+          },
+        })
+        void waitForServiceReady({
+          onPhase: (phase) => {
+            if (!cancelled && phase === 'background') {
+              setActionStatus('Reading fonts…')
+            }
+          },
+        })
+          .then(() => {
+            if (!cancelled) setActionStatus(null)
+          })
+          .catch((err) => {
+            if (cancelled) return
+            setActionStatus(null)
+            const message =
+              err instanceof Error ? err.message : 'Font Buttler could not finish reading fonts.'
+            setError(message)
+            toast.error(message)
+          })
         const boot = await api.bootstrap()
         if (!cancelled && boot.settings) {
           applySettings(boot.settings)
@@ -474,9 +513,8 @@ function AppShell() {
               if (collisions.length > 0 && retailResult.status.enabled) {
                 // A collision needs the user's choice — surface it instead of syncing blind.
                 setSyncCollisions(collisions)
-              } else if (retailResult.status.enabled) {
-                syncRetailRef.current()
               }
+              // Incomplete retail sync resumes on the server during background init.
             }
           }
           applyCatalog(catalog.entries, catalog.revision)

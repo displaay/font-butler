@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Font Buttler — Log Console</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      body {
+        margin: 0;
+        font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        background: #0a0a0a;
+        color: #e4e4e7;
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        border-bottom: 1px solid #27272a;
+        background: #18181b;
+      }
+      header h1 {
+        font: 600 13px/1.2 -apple-system, BlinkMacSystemFont, sans-serif;
+        margin: 0;
+        flex: 1;
+      }
+      button {
+        font: 12px -apple-system, BlinkMacSystemFont, sans-serif;
+        padding: 6px 10px;
+        border-radius: 6px;
+        border: 1px solid #3f3f46;
+        background: #27272a;
+        color: inherit;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #3f3f46;
+      }
+      #log {
+        flex: 1;
+        overflow: auto;
+        padding: 12px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      #status {
+        padding: 6px 12px;
+        font: 11px -apple-system, BlinkMacSystemFont, sans-serif;
+        color: #a1a1aa;
+        border-top: 1px solid #27272a;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Font Buttler log console</h1>
+      <button type="button" id="copy">Copy all</button>
+      <button type="button" id="reveal">Reveal log file</button>
+      <button type="button" id="clear">Clear</button>
+    </header>
+    <pre id="log"></pre>
+    <div id="status">Live — updates from the main process and API worker.</div>
+    <script>
+      const logEl = document.getElementById('log')
+      const statusEl = document.getElementById('status')
+      let lines = []
+
+      function render() {
+        logEl.textContent = lines.join('\n')
+        logEl.scrollTop = logEl.scrollHeight
+        statusEl.textContent = `${lines.length} line(s) — live`
+      }
+
+      async function boot() {
+        lines = await window.fontButlerDebugConsole.getSnapshot()
+        render()
+        window.fontButlerDebugConsole.subscribe((line) => {
+          if (line === null) {
+            lines = []
+          } else {
+            lines.push(line)
+          }
+          render()
+        })
+      }
+
+      document.getElementById('copy').addEventListener('click', () => {
+        void window.fontButlerDebugConsole.copyAll().then((text) => {
+          statusEl.textContent = text ? 'Copied to clipboard.' : 'Nothing to copy.'
+        })
+      })
+      document.getElementById('reveal').addEventListener('click', () => {
+        void window.fontButlerDebugConsole.revealLogFile()
+      })
+      document.getElementById('clear').addEventListener('click', () => {
+        void window.fontButlerDebugConsole.clear()
+      })
+
+      void boot()
+    </script>
+  </body>
+</html>

@@ -3,12 +3,14 @@ import fs from 'node:fs'
 import path from 'node:path'
 import {
   applySourcePresence,
+  buildPathOccupancyIndex,
   findById,
   findByInstalledPath,
   findBySourcePath,
   isExternalSource,
   loadCatalog,
   occupantsAtPath,
+  type PathOccupancyIndex,
   removeEntryById,
   runCatalogTask,
   saveCatalog,
@@ -415,22 +417,24 @@ export class FontButlerService {
     return items
   }
 
-  async init(): Promise<void> {
+  /** Fast path: validate catalog and apply cheap on-disk fixes only. */
+  async initCatalogPhase(): Promise<void> {
     ensureDirs(this.paths)
     const recovered = await reconcileMutationJournals(this.paths, getFontNative())
     if (recovered.length) {
       emitCatalog(this.paths)
       emitEvent({ type: 'operations', operations: loadOperations(this.paths) })
     }
+    loadCatalog(this.paths)
     await this.restoreDisabledCopies()
+  }
+
+  /** Heavier startup work; safe to run while read-only API serves the catalog. */
+  async initBackgroundPhase(): Promise<void> {
     await this.adoptUserFonts()
     await this.detachRenamedInstallSources()
     await this.seedIfEmpty()
-    await runCatalogTask(() => this.fillMissingPreviewSamplesUnlocked())
-    // A watcher cannot report changes that happened while the app was closed.
-    // Hash external sources once on startup so timestamp-preserving syncs are
-    // still detected; steady-state watcher updates already force a hash.
-    await this.refreshSourceStatuses(true)
+    await this.refreshSourceStatuses(true, { fingerprintOnly: true })
     await dropOrphanRetailListingsFn(this.paths)
     await this.reinstallCurrentlyOutdated()
     await syncWatchers(this.paths)
@@ -439,7 +443,33 @@ export class FontButlerService {
     await this.refreshInboxWatcher(this.watchingFolderRoots(), { importExisting: true })
     this.revisionStorage()
     this.pruneActivity()
-    this.resumeIncompleteRetailSync()
+    void this.resumeIncompleteRetailSync()
+  }
+
+  async init(): Promise<void> {
+    await this.initCatalogPhase()
+    await this.initBackgroundPhase()
+  }
+
+  private previewBackfillIndex = 0
+
+  /** Runs after API readiness; does not block startup or hold the catalog lock for long. */
+  startPreviewBackfill(): void {
+    void this.runPreviewBackfillBatches().catch((error) => {
+      console.error('fillMissingPreviewSamples', error)
+    })
+  }
+
+  private async runPreviewBackfillBatches(): Promise<void> {
+    const batchSize = 32
+    for (;;) {
+      const done = await runCatalogTask(() => this.fillMissingPreviewSamplesBatchUnlocked(batchSize))
+      if (done) {
+        this.previewBackfillIndex = 0
+        return
+      }
+      await yieldEventLoop()
+    }
   }
 
   listCatalog(): CatalogEntry[] {
@@ -3716,18 +3746,33 @@ export class FontButlerService {
     }
   }
 
-  private async refreshSourceStatuses(forceFingerprint = false): Promise<void> {
-    return runCatalogTask(() => this.refreshSourceStatusesUnlocked(forceFingerprint))
+  private async refreshSourceStatuses(
+    forceFingerprint = false,
+    options: { fingerprintOnly?: boolean } = {},
+  ): Promise<void> {
+    return runCatalogTask(() => this.refreshSourceStatusesUnlocked(forceFingerprint, options))
   }
 
-  private async fillMissingPreviewSamplesUnlocked(): Promise<void> {
+  /**
+   * @returns true when every entry has been scanned for missing previews
+   */
+  private async fillMissingPreviewSamplesBatchUnlocked(batchSize: number): Promise<boolean> {
     const catalog = loadCatalog(this.paths)
     let changed = false
-    for (const entry of catalog.entries) {
+    let emitAfterBatch = false
+    const flushCatalogEvent = () => {
+      if (!emitAfterBatch) return
+      emitEvent(catalogEvent(catalog.entries))
+      emitAfterBatch = false
+    }
+    let processed = 0
+    let index = this.previewBackfillIndex
+    for (; index < catalog.entries.length && processed < batchSize; index += 1) {
+      const entry = catalog.entries[index]!
       if (entry.previewSample) {
-        await yieldEventLoop()
         continue
       }
+      processed += 1
       const file = existingFontPath(entry, catalog.entries)
       if (!file) continue
       try {
@@ -3737,29 +3782,35 @@ export class FontButlerService {
           applyParsedFont(entry, analysis.parsed)
           touchEntry(entry)
           changed = true
-          emitEvent(catalogEvent(catalog.entries))
+          emitAfterBatch = true
         } else if (fillEntryPreviewSample(entry, { sample: analysis.parsed.previewSample })) {
           touchEntry(entry)
           changed = true
-          emitEvent(catalogEvent(catalog.entries))
+          emitAfterBatch = true
         }
       } catch {
         // Leave the card pending if the file cannot be parsed.
       }
     }
+    this.previewBackfillIndex = index
+    flushCatalogEvent()
     if (changed) saveCatalog(this.paths, catalog)
+    return index >= catalog.entries.length
   }
 
-  private async refreshSourceStatusesUnlocked(forceFingerprint = false): Promise<void> {
+  private async refreshSourceStatusesUnlocked(
+    forceFingerprint = false,
+    options: { fingerprintOnly?: boolean } = {},
+  ): Promise<void> {
     const catalog = loadCatalog(this.paths)
     let changed = false
-    for (const entry of catalog.entries) {
+    for (let index = 0; index < catalog.entries.length; index += 1) {
+      const entry = catalog.entries[index]!
       if (applySourcePresence(entry)) {
         touchEntry(entry)
         changed = true
       }
       if (!entry.sourcePresent || !isExternalSource(entry)) {
-        await yieldEventLoop()
         continue
       }
       const stat = readFileStat(entry.sourcePath)
@@ -3775,7 +3826,6 @@ export class FontButlerService {
           touchEntry(entry)
           changed = true
         }
-        await yieldEventLoop()
         const fingerprint = tryFingerprintFile(entry.sourcePath)
         const bytesChanged = Boolean(fingerprint && fingerprint !== entry.sourceFingerprint)
         if (fingerprint && fingerprint !== entry.sourceFingerprint) {
@@ -3784,7 +3834,7 @@ export class FontButlerService {
           changed = true
         }
         const needsParse = bytesChanged || !entry.faces?.length || !entry.previewSample
-        if (needsParse) {
+        if (needsParse && !options.fingerprintOnly) {
           try {
             const parsed = (await analyzeFontFile(entry.sourcePath)).parsed
             const keepInstalledSample = previewUsesInstalledBytes(entry)
@@ -3818,7 +3868,7 @@ export class FontButlerService {
         touchEntry(entry)
         changed = true
       }
-      await yieldEventLoop()
+      if (index % 128 === 127) await yieldEventLoop()
     }
     if (changed) {
       saveCatalog(this.paths, catalog)
@@ -3963,9 +4013,13 @@ export class FontButlerService {
       await syncInboxWatcher([], () => {})
       return
     }
-    await syncInboxWatcher(folders, (filePaths) => {
-      void this.importInboxFiles(filePaths)
-    })
+    await syncInboxWatcher(
+      folders,
+      (filePaths) => {
+        void this.importInboxFiles(filePaths)
+      },
+      this.paths,
+    )
     if (options.importExisting && folders.length) {
       const settings = loadSettings(this.paths)
       const known = new Set(
@@ -4161,8 +4215,12 @@ export class FontButlerService {
     catalog: ReturnType<typeof loadCatalog>,
     resolved: string,
     destId: DestinationId,
+    pathIndex?: PathOccupancyIndex,
   ): CatalogEntry | undefined {
     const byPath =
+      pathIndex?.occupantsAt(resolved)[0] ??
+      pathIndex?.findByInstalledPath(resolved) ??
+      pathIndex?.findBySourcePath(resolved) ??
       occupantsAtPath(catalog, resolved)[0] ??
       findByInstalledPath(catalog, resolved) ??
       findBySourcePath(catalog, resolved)
@@ -4238,6 +4296,7 @@ export class FontButlerService {
         .flatMap((item) => listFontFilesInTree(item.dir)),
     )
     const catalog = loadCatalog(this.paths)
+    const pathIndex = buildPathOccupancyIndex(catalog.entries)
     const activation =
       macosFiles.length > 0
         ? await getFontNative().fontActivationStates(macosFiles)
@@ -4246,7 +4305,7 @@ export class FontButlerService {
 
     const adoptFile = (filePath: string, destId: DestinationId, useActivation: boolean) => {
       const resolved = path.resolve(filePath)
-      const existing = this.findAdoptTarget(catalog, resolved, destId)
+      const existing = this.findAdoptTarget(catalog, resolved, destId, pathIndex)
       const queriedOn = useActivation && activation.ok
         ? (activation.states[resolved] ?? activation.states[filePath])
         : undefined

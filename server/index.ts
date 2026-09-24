@@ -4,7 +4,7 @@ import { streamSSE } from 'hono/streaming'
 import fs from 'node:fs'
 import path from 'node:path'
 import { contentDisposition, shouldIncludeBootstrapToken } from '../core/auth.ts'
-import { onEvent } from '../core/events.ts'
+import { emitEvent, onEvent } from '../core/events.ts'
 import { isFullyUnderAnyRoot } from '../core/containment.ts'
 import { MAX_UPLOAD_BATCH_BYTES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES } from '../core/constants.ts'
 import { denyRemoteRequest, isAuthorizedApiRequest, resolveStaticAsset } from '../core/http.ts'
@@ -47,6 +47,10 @@ function mountStatic(app: Hono, staticDir: string): void {
     process.env.FONT_BUTLER_TEST === '1' || process.env.NODE_ENV === 'development'
   const staticCache = new Map<string, Buffer>()
   const readStatic = (target: string): Buffer => {
+    const base = path.basename(target)
+    if (base === 'index.html') {
+      return fs.readFileSync(target)
+    }
     if (!skipCache) {
       const cached = staticCache.get(target)
       if (cached) return cached
@@ -66,17 +70,74 @@ function mountStatic(app: Hono, staticDir: string): void {
     }
     const fallback = path.join(root, 'index.html')
     const candidate = resolved
-    const target =
+    const hasAsset =
       candidate && fs.existsSync(candidate) && fs.statSync(candidate).isFile()
-        ? candidate
-        : fallback
+    if (!hasAsset && urlPath.startsWith('/assets/')) {
+      return c.body('Not found', 404)
+    }
+    const target = hasAsset ? candidate : fallback
     if (!isFullyUnderAnyRoot(target, [root]) || !fs.existsSync(target) || !fs.statSync(target).isFile()) {
       return c.body('Not found', 404)
     }
-    return new Response(readStatic(target), {
-      headers: { 'Content-Type': mimeForStatic(target) },
-    })
+    const headers: Record<string, string> = { 'Content-Type': mimeForStatic(target) }
+    if (path.basename(target) === 'index.html') {
+      headers['Cache-Control'] = 'no-store'
+    }
+    return new Response(readStatic(target), { headers })
   })
+}
+
+export type ServiceInitState = {
+  ready: boolean
+  catalogReady: boolean
+  phase: string
+  error: string | null
+  startedAt: number
+  catalogReadyAt: number | null
+  readyAt: number | null
+}
+
+const CATALOG_READ_PATHS = new Set([
+  '/api/bootstrap',
+  '/api/health',
+  '/api/catalog',
+  '/api/settings',
+  '/api/destinations',
+  '/api/system',
+  '/api/retail/status',
+  '/api/duplicates',
+  '/api/activity',
+  '/api/projects',
+  '/api/test-installs',
+  '/api/events',
+  '/api/app-update',
+])
+
+function isFontFileReadPath(pathname: string): boolean {
+  return (
+    pathname.startsWith('/api/font-file/') ||
+    pathname.startsWith('/api/preview-meta/') ||
+    pathname.startsWith('/api/preview-glyph/')
+  )
+}
+
+function createInitState(): ServiceInitState {
+  return {
+    ready: false,
+    catalogReady: false,
+    phase: 'starting',
+    error: null,
+    startedAt: Date.now(),
+    catalogReadyAt: null,
+    readyAt: null,
+  }
+}
+
+function apiAvailableDuringStartup(method: string, pathname: string): boolean {
+  if (pathname === '/api/bootstrap' || pathname === '/api/health') return true
+  if (method !== 'GET' && method !== 'HEAD') return false
+  if (CATALOG_READ_PATHS.has(pathname)) return true
+  return isFontFileReadPath(pathname)
 }
 
 export async function startFontButlerServer(
@@ -87,9 +148,14 @@ export async function startFontButlerServer(
     (value): value is string => Boolean(value),
   )
   const service = new FontButlerService()
-
-  await service.init()
-  const stopTestInstallWatch = service.watchTestInstalls()
+  const initState = createInitState()
+  let resolveBackgroundReady: () => void = () => {}
+  let rejectBackgroundReady: (error: Error) => void = () => {}
+  const backgroundReady = new Promise<void>((resolve, reject) => {
+    resolveBackgroundReady = resolve
+    rejectBackgroundReady = reject
+  })
+  let stopTestInstallWatch: (() => Promise<void>) | null = null
 
   process.on('unhandledRejection', (error) => {
     console.error('unhandledRejection', error)
@@ -114,6 +180,43 @@ app.use('*', async (c, next) => {
 })
 
 app.use('/api/*', async (c, next) => {
+  const pathname = c.req.path
+  if (pathname !== '/api/health' && pathname !== '/api/bootstrap') {
+    if (initState.error) {
+      return c.json(
+        { error: initState.error, ready: false, catalogReady: false, phase: 'failed' },
+        503,
+      )
+    }
+    if (!initState.catalogReady) {
+      return c.json(
+        { error: 'Service is starting', ready: false, catalogReady: false, phase: initState.phase },
+        503,
+      )
+    }
+    if (!initState.ready && !apiAvailableDuringStartup(c.req.method, pathname)) {
+      if (c.req.method !== 'GET' && c.req.method !== 'HEAD') {
+        try {
+          await backgroundReady
+        } catch {
+          return c.json(
+            { error: initState.error ?? 'Service failed', ready: false, catalogReady: initState.catalogReady, phase: initState.phase },
+            503,
+          )
+        }
+      } else {
+        return c.json(
+          {
+            error: 'Font Buttler is still reading fonts. Try again in a moment.',
+            ready: false,
+            catalogReady: true,
+            phase: initState.phase,
+          },
+          503,
+        )
+      }
+    }
+  }
   if (
     isAuthorizedApiRequest({
       method: c.req.method,
@@ -134,7 +237,19 @@ app.use('/api/*', async (c, next) => {
   return c.json({ error: 'Unauthorized' }, 401)
 })
 
-app.get('/api/health', (c) => c.json({ ok: true, platform: process.platform }))
+app.get('/api/health', (c) =>
+  c.json({
+    ok: initState.error ? false : true,
+    platform: process.platform,
+    ready: initState.ready,
+    catalogReady: initState.catalogReady,
+    phase: initState.phase,
+    error: initState.error,
+    startedAt: initState.startedAt,
+    catalogReadyAt: initState.catalogReadyAt,
+    readyAt: initState.readyAt,
+  }),
+)
 
 app.get('/api/app-update', async (c) => {
   const refresh = c.req.query('refresh') === '1' || c.req.query('refresh') === 'true'
@@ -1092,10 +1207,48 @@ app.get('/api/events', (c) => {
     mountStatic(app, options.staticDir)
   }
 
+  async function runServiceInit(): Promise<void> {
+    initState.phase = 'catalog'
+    try {
+      await service.initCatalogPhase()
+      initState.catalogReady = true
+      initState.catalogReadyAt = Date.now()
+      initState.phase = 'background'
+      console.log('Font Buttler catalog ready')
+      emitEvent({
+        type: 'init',
+        catalogReady: true,
+        ready: false,
+        phase: 'background',
+        detail: 'Reading fonts…',
+      })
+      await service.initBackgroundPhase()
+      stopTestInstallWatch = service.watchTestInstalls()
+      initState.ready = true
+      initState.phase = 'ready'
+      initState.readyAt = Date.now()
+      console.log('Font Buttler init complete')
+      emitEvent({ type: 'init', catalogReady: true, ready: true, phase: 'ready' })
+      resolveBackgroundReady()
+      service.startPreviewBackfill()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      initState.error = message
+      initState.phase = 'failed'
+      console.error('Font Buttler service init failed:', message)
+      if (error instanceof Error && error.stack) {
+        console.error(error.stack)
+      }
+      rejectBackgroundReady(error instanceof Error ? error : new Error(message))
+      process.exitCode = 1
+    }
+  }
+
   return new Promise<{ port: number; token: string }>((resolve, reject) => {
     const server = serve({ fetch: app.fetch, port: PORT, hostname: '127.0.0.1' }, (info) => {
       console.log(`Font Buttler API on http://127.0.0.1:${info.port}`)
       resolve({ port: info.port, token: apiToken })
+      void runServiceInit()
     })
     server.once('error', reject)
     let shuttingDown = false
@@ -1110,7 +1263,7 @@ app.get('/api/events', (c) => {
         try {
           await closeFontAnalysisWorker()
           await closeAllWatchers()
-          await stopTestInstallWatch()
+          if (stopTestInstallWatch) await stopTestInstallWatch()
           service.dispose()
           await Promise.race([
             new Promise<void>((resolve) => {

@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { MAX_IMPORT_FILES } from './constants.ts'
 import {
+  buildPathOccupancyIndex,
   findBySourcePath,
   isExternalSource,
   loadCatalog,
@@ -17,6 +18,7 @@ import { tryFingerprintFile } from './fingerprint.ts'
 import { isFontFile, isPreviewableFontFile, readFileStat } from './parse.ts'
 import { applyEntryFacts } from './state.ts'
 import type { AppPaths } from './paths.ts'
+import { loadSettings } from './settings.ts'
 import type { CatalogEntry } from './types.ts'
 
 let watcher: FSWatcher | null = null
@@ -29,6 +31,9 @@ let userFontsTimer: ReturnType<typeof setTimeout> | null = null
 let inboxTimer: ReturnType<typeof setTimeout> | null = null
 let inboxPending: string[] = []
 let sourceStatusListener: ((entry: CatalogEntry) => void) | undefined
+let pendingSourceStatusPaths = new Set<string>()
+let sourceStatusBatchTimer: ReturnType<typeof setTimeout> | null = null
+let sourceStatusBatchPaths: AppPaths | null = null
 
 export function setSourceStatusListener(listener?: (entry: CatalogEntry) => void): void {
   sourceStatusListener = listener
@@ -111,6 +116,63 @@ function refreshStatusUnlocked(paths: AppPaths, sourcePath: string): CatalogEntr
   return entry
 }
 
+function refreshStatusesBatchUnlocked(
+  paths: AppPaths,
+  sourcePaths: string[],
+): CatalogEntry[] {
+  if (sourcePaths.length === 0) return []
+  const catalog = loadCatalog(paths)
+  const index = buildPathOccupancyIndex(catalog.entries)
+  const updated: CatalogEntry[] = []
+  let changedAny = false
+  for (const raw of sourcePaths) {
+    const resolved = path.resolve(raw)
+    const entry = index.findBySourcePath(resolved)
+    if (!entry) continue
+    if (refreshWatchedEntry(entry, { forceFingerprint: true })) {
+      changedAny = true
+      updated.push(entry)
+    }
+  }
+  persistCatalogIfChanged(paths, catalog, changedAny)
+  return updated
+}
+
+export function enqueueSourceStatusRefresh(paths: AppPaths, filePath: string): void {
+  if (!isFontFile(filePath)) return
+  sourceStatusBatchPaths = paths
+  pendingSourceStatusPaths.add(path.resolve(filePath))
+  if (sourceStatusBatchTimer) return
+  sourceStatusBatchTimer = setTimeout(() => {
+    sourceStatusBatchTimer = null
+    const batchPaths = sourceStatusBatchPaths
+    const batch = [...pendingSourceStatusPaths]
+    pendingSourceStatusPaths.clear()
+    if (!batchPaths || batch.length === 0) return
+    void runCatalogTask(() => {
+      const updated = refreshStatusesBatchUnlocked(batchPaths, batch)
+      for (const entry of updated) {
+        sourceStatusListener?.(entry)
+      }
+    })
+  }, 75)
+}
+
+/** Test hook: flush coalesced source-status refreshes immediately. */
+export async function flushSourceStatusRefreshForTest(paths: AppPaths): Promise<void> {
+  if (sourceStatusBatchTimer) {
+    clearTimeout(sourceStatusBatchTimer)
+    sourceStatusBatchTimer = null
+  }
+  const batch = [...pendingSourceStatusPaths]
+  pendingSourceStatusPaths.clear()
+  sourceStatusBatchPaths = null
+  if (batch.length === 0) return
+  await runCatalogTask(() => {
+    refreshStatusesBatchUnlocked(paths, batch)
+  })
+}
+
 export function refreshSourceStatus(
   paths: AppPaths,
   sourcePath: string,
@@ -131,8 +193,17 @@ export function reconcileWatchedSources(paths: AppPaths): Promise<CatalogEntry[]
   })
 }
 
+export const FONT_TREE_MAX_DEPTH = 10
+
 const SOURCE_WATCH_OPTIONS = {
   ignoreInitial: true,
+  depth: FONT_TREE_MAX_DEPTH,
+  ignored: (watchPath: string, stats?: fs.Stats) => {
+    const base = path.basename(watchPath)
+    if (shouldSkipFontWalkName(base)) return true
+    if (stats?.isFile() && !isFontFile(watchPath)) return true
+    return false
+  },
   awaitWriteFinish: { stabilityThreshold: 250, pollInterval: 100 },
 } as const
 
@@ -142,9 +213,7 @@ function isLiveWatcher(value: FSWatcher | null): value is FSWatcher {
 
 function bindSourceWatcher(paths: AppPaths, instance: FSWatcher): void {
   const apply = (filePath: string) => {
-    void refreshSourceStatus(paths, filePath).then((entry) => {
-      if (entry) sourceStatusListener?.(entry)
-    })
+    enqueueSourceStatusRefresh(paths, filePath)
   }
   instance.on('change', apply)
   instance.on('unlink', apply)
@@ -163,36 +232,56 @@ async function closeSourceWatcher(): Promise<void> {
   watchedSourcePaths.clear()
 }
 
-export async function syncWatchers(paths: AppPaths): Promise<void> {
-  const catalog = loadCatalog(paths)
-  const sources = [
+export function externalSourceWatchTargets(
+  paths: AppPaths,
+  catalog = loadCatalog(paths),
+): string[] {
+  const settings = loadSettings(paths)
+  const watchingRoots = [
     ...new Set(
-      catalog.entries
-        .filter((entry) => isExternalSource(entry) && entry.sourcePath)
-        .map((entry) => path.resolve(entry.sourcePath!)),
+      settings.folders
+        .filter((folder) => folder.watching && !folder.paused)
+        .map((folder) => path.resolve(folder.root)),
     ),
   ]
+  const looseFiles: string[] = []
+  for (const entry of catalog.entries) {
+    if (!isExternalSource(entry) || !entry.sourcePath) continue
+    const resolved = path.resolve(entry.sourcePath)
+    if (
+      watchingRoots.some(
+        (root) => resolved === root || resolved.startsWith(root + path.sep),
+      )
+    ) {
+      continue
+    }
+    looseFiles.push(resolved)
+  }
+  return looseFiles
+}
+
+export async function syncWatchers(paths: AppPaths): Promise<void> {
+  const catalog = loadCatalog(paths)
+  const targets = externalSourceWatchTargets(paths, catalog)
 
   if (!isLiveWatcher(watcher)) {
     await closeSourceWatcher()
-    if (sources.length === 0) {
+    if (targets.length === 0) {
       return
     }
-    watcher = chokidar.watch(sources, SOURCE_WATCH_OPTIONS)
-    watchedSourcePaths = new Set(sources)
+    watcher = chokidar.watch(targets, SOURCE_WATCH_OPTIONS)
+    watchedSourcePaths = new Set(targets)
     bindSourceWatcher(paths, watcher)
     return
   }
 
-  const next = new Set(sources)
-  const toAdd = sources.filter((filePath) => !watchedSourcePaths.has(filePath))
-  const toRemove = [...watchedSourcePaths].filter((filePath) => !next.has(filePath))
+  const next = new Set(targets)
+  const toAdd = targets.filter((target) => !watchedSourcePaths.has(target))
+  const toRemove = [...watchedSourcePaths].filter((target) => !next.has(target))
   if (toAdd.length) watcher.add(toAdd)
   if (toRemove.length) watcher.unwatch(toRemove)
   watchedSourcePaths = next
 }
-
-export const FONT_TREE_MAX_DEPTH = 10
 
 export function shouldSkipFontWalkName(name: string): boolean {
   return name.startsWith('.') || name === '__MACOSX'
@@ -482,6 +571,7 @@ function existingWatchFolders(folders: string[]): string[] {
 export async function syncInboxWatcher(
   folders: string[],
   onBatch: (filePaths: string[]) => void,
+  paths?: AppPaths,
 ): Promise<void> {
   if (inboxTimer) {
     clearTimeout(inboxTimer)
@@ -520,6 +610,13 @@ export async function syncInboxWatcher(
     }, 350)
   }
   inboxWatcher.on('add', queue)
+  if (paths) {
+    const touchStatus = (filePath: string) => {
+      enqueueSourceStatusRefresh(paths, filePath)
+    }
+    inboxWatcher.on('change', touchStatus)
+    inboxWatcher.on('unlink', touchStatus)
+  }
 }
 
 const USER_FONTS_WATCH_OPTIONS = {

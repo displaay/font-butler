@@ -312,9 +312,19 @@ function registerUrl(filePath, register) {
 }
 function run(argv) {
   const mode = argv[0]
+  if (mode === 'available') {
+    return JSON.stringify(availableUrlSet())
+  }
   if (mode === 'get') {
     const paths = JSON.parse(argv[1] || '[]')
     const available = availableUrlSet()
+    const out = {}
+    for (const filePath of paths) out[filePath] = isEnabled(filePath, available)
+    return JSON.stringify(out)
+  }
+  if (mode === 'get-with') {
+    const paths = JSON.parse(argv[1] || '[]')
+    const available = JSON.parse(argv[2] || '{}')
     const out = {}
     for (const filePath of paths) out[filePath] = isEnabled(filePath, available)
     return JSON.stringify(out)
@@ -435,13 +445,30 @@ export async function fontActivationStates(filePaths: string[]): Promise<Activat
     return { ok: true, native: false, states }
   }
   const safe = filePaths.map((filePath) => assertSafeShellPath(filePath))
-  const chunkSize = 40
+  let availableKeys: Record<string, true>
+  try {
+    const { stdout } = await execFileAsync(
+      'osascript',
+      ['-l', 'JavaScript', '-e', FONT_ENABLE_SCRIPT, 'available'],
+      { timeout: 60_000 },
+    )
+    availableKeys = JSON.parse(stdout.trim() || '{}') as Record<string, true>
+  } catch (error) {
+    return {
+      ok: false,
+      native: true,
+      states: {},
+      error: error instanceof Error ? error.message : 'Could not read font activation.',
+    }
+  }
+  const chunkSize = 200
+  const availableJson = JSON.stringify(availableKeys)
   for (let index = 0; index < safe.length; index += chunkSize) {
     const chunk = safe.slice(index, index + chunkSize)
     try {
       const { stdout } = await execFileAsync(
         'osascript',
-        ['-l', 'JavaScript', '-e', FONT_ENABLE_SCRIPT, 'get', JSON.stringify(chunk)],
+        ['-l', 'JavaScript', '-e', FONT_ENABLE_SCRIPT, 'get-with', JSON.stringify(chunk), availableJson],
         { timeout: 20_000 },
       )
       const parsed = JSON.parse(stdout.trim() || '{}') as Record<string, boolean>
