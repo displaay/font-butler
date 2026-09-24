@@ -79,8 +79,26 @@ async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Respon
 export type ServiceHealth = {
   ok: boolean
   ready: boolean
+  catalogReady?: boolean
   phase: string
   error?: string | null
+}
+
+export async function waitForCatalogReady(options: {
+  pollMs?: number
+  onPhase?: (phase: string) => void
+} = {}): Promise<ServiceHealth> {
+  const pollMs = options.pollMs ?? 200
+  while (true) {
+    const response = await fetchWithTimeout('/api/health')
+    const data = (await response.json()) as ServiceHealth
+    if (data.phase && options.onPhase) options.onPhase(data.phase)
+    if (data.catalogReady) return data
+    if (data.phase === 'failed' || data.error) {
+      throw new Error(data.error || 'Font Buttler could not start.')
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollMs))
+  }
 }
 
 export async function waitForServiceReady(options: {

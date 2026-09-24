@@ -4,7 +4,7 @@ import { streamSSE } from 'hono/streaming'
 import fs from 'node:fs'
 import path from 'node:path'
 import { contentDisposition, shouldIncludeBootstrapToken } from '../core/auth.ts'
-import { onEvent } from '../core/events.ts'
+import { emitEvent, onEvent } from '../core/events.ts'
 import { isFullyUnderAnyRoot } from '../core/containment.ts'
 import { MAX_UPLOAD_BATCH_BYTES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES } from '../core/constants.ts'
 import { denyRemoteRequest, isAuthorizedApiRequest, resolveStaticAsset } from '../core/http.ts'
@@ -89,20 +89,46 @@ function mountStatic(app: Hono, staticDir: string): void {
 
 export type ServiceInitState = {
   ready: boolean
+  catalogReady: boolean
   phase: string
   error: string | null
   startedAt: number
+  catalogReadyAt: number | null
   readyAt: number | null
 }
+
+const CATALOG_READ_PATHS = new Set([
+  '/api/bootstrap',
+  '/api/health',
+  '/api/catalog',
+  '/api/settings',
+  '/api/destinations',
+  '/api/system',
+  '/api/retail/status',
+  '/api/duplicates',
+  '/api/activity',
+  '/api/projects',
+  '/api/test-installs',
+  '/api/events',
+  '/api/app-update',
+])
 
 function createInitState(): ServiceInitState {
   return {
     ready: false,
+    catalogReady: false,
     phase: 'starting',
     error: null,
     startedAt: Date.now(),
+    catalogReadyAt: null,
     readyAt: null,
   }
+}
+
+function apiAvailableDuringStartup(method: string, pathname: string): boolean {
+  if (pathname === '/api/bootstrap' || pathname === '/api/health') return true
+  if (method !== 'GET' && method !== 'HEAD') return false
+  return CATALOG_READ_PATHS.has(pathname)
 }
 
 export async function startFontButlerServer(
@@ -142,10 +168,27 @@ app.use('/api/*', async (c, next) => {
   const pathname = c.req.path
   if (pathname !== '/api/health' && pathname !== '/api/bootstrap') {
     if (initState.error) {
-      return c.json({ error: initState.error, ready: false, phase: 'failed' }, 503)
+      return c.json(
+        { error: initState.error, ready: false, catalogReady: false, phase: 'failed' },
+        503,
+      )
     }
-    if (!initState.ready) {
-      return c.json({ error: 'Service is starting', ready: false, phase: initState.phase }, 503)
+    if (!initState.catalogReady) {
+      return c.json(
+        { error: 'Service is starting', ready: false, catalogReady: false, phase: initState.phase },
+        503,
+      )
+    }
+    if (!initState.ready && !apiAvailableDuringStartup(c.req.method, pathname)) {
+      return c.json(
+        {
+          error: 'Font Buttler is still reading fonts. Try again in a moment.',
+          ready: false,
+          catalogReady: true,
+          phase: initState.phase,
+        },
+        503,
+      )
     }
   }
   if (
@@ -173,9 +216,11 @@ app.get('/api/health', (c) =>
     ok: initState.error ? false : true,
     platform: process.platform,
     ready: initState.ready,
+    catalogReady: initState.catalogReady,
     phase: initState.phase,
     error: initState.error,
     startedAt: initState.startedAt,
+    catalogReadyAt: initState.catalogReadyAt,
     readyAt: initState.readyAt,
   }),
 )
@@ -1137,14 +1182,27 @@ app.get('/api/events', (c) => {
   }
 
   async function runServiceInit(): Promise<void> {
-    initState.phase = 'init'
+    initState.phase = 'catalog'
     try {
-      await service.init()
+      await service.initCatalogPhase()
+      initState.catalogReady = true
+      initState.catalogReadyAt = Date.now()
+      initState.phase = 'background'
+      console.log('Font Buttler catalog ready')
+      emitEvent({
+        type: 'init',
+        catalogReady: true,
+        ready: false,
+        phase: 'background',
+        detail: 'Reading fonts…',
+      })
+      await service.initBackgroundPhase()
       stopTestInstallWatch = service.watchTestInstalls()
       initState.ready = true
       initState.phase = 'ready'
       initState.readyAt = Date.now()
       console.log('Font Buttler init complete')
+      emitEvent({ type: 'init', catalogReady: true, ready: true, phase: 'ready' })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       initState.error = message

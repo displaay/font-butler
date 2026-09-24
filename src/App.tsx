@@ -55,6 +55,7 @@ import {
   isSettingsEvent,
   isTestInstallsEvent,
   subscribeEvents,
+  waitForCatalogReady,
   waitForServiceReady,
 } from '@/lib/api'
 import {
@@ -451,10 +452,21 @@ function AppShell() {
     async function boot() {
       let retailLoaded = false
       try {
-        await waitForServiceReady({
+        await waitForCatalogReady({
           onPhase: (phase) => {
-            if (!cancelled && phase === 'init') setActionStatus('Starting Font Buttler…')
+            if (!cancelled && (phase === 'catalog' || phase === 'starting')) {
+              setActionStatus('Starting Font Buttler…')
+            }
           },
+        })
+        void waitForServiceReady({
+          onPhase: (phase) => {
+            if (!cancelled && phase === 'background') {
+              setActionStatus('Reading fonts…')
+            }
+          },
+        }).then(() => {
+          if (!cancelled) setActionStatus(null)
         })
         const boot = await api.bootstrap()
         if (!cancelled && boot.settings) {

@@ -17,6 +17,7 @@ import { tryFingerprintFile } from './fingerprint.ts'
 import { isFontFile, isPreviewableFontFile, readFileStat } from './parse.ts'
 import { applyEntryFacts } from './state.ts'
 import type { AppPaths } from './paths.ts'
+import { loadSettings } from './settings.ts'
 import type { CatalogEntry } from './types.ts'
 
 let watcher: FSWatcher | null = null
@@ -163,30 +164,52 @@ async function closeSourceWatcher(): Promise<void> {
   watchedSourcePaths.clear()
 }
 
-export async function syncWatchers(paths: AppPaths): Promise<void> {
-  const catalog = loadCatalog(paths)
-  const sources = [
+export function externalSourceWatchTargets(
+  paths: AppPaths,
+  catalog = loadCatalog(paths),
+): string[] {
+  const settings = loadSettings(paths)
+  const watchingRoots = [
     ...new Set(
-      catalog.entries
-        .filter((entry) => isExternalSource(entry) && entry.sourcePath)
-        .map((entry) => path.resolve(entry.sourcePath!)),
+      settings.folders
+        .filter((folder) => folder.watching && !folder.paused)
+        .map((folder) => path.resolve(folder.root)),
     ),
   ]
+  const looseFiles: string[] = []
+  for (const entry of catalog.entries) {
+    if (!isExternalSource(entry) || !entry.sourcePath) continue
+    const resolved = path.resolve(entry.sourcePath)
+    if (
+      watchingRoots.some(
+        (root) => resolved === root || resolved.startsWith(root + path.sep),
+      )
+    ) {
+      continue
+    }
+    looseFiles.push(resolved)
+  }
+  return [...watchingRoots, ...looseFiles]
+}
+
+export async function syncWatchers(paths: AppPaths): Promise<void> {
+  const catalog = loadCatalog(paths)
+  const targets = externalSourceWatchTargets(paths, catalog)
 
   if (!isLiveWatcher(watcher)) {
     await closeSourceWatcher()
-    if (sources.length === 0) {
+    if (targets.length === 0) {
       return
     }
-    watcher = chokidar.watch(sources, SOURCE_WATCH_OPTIONS)
-    watchedSourcePaths = new Set(sources)
+    watcher = chokidar.watch(targets, SOURCE_WATCH_OPTIONS)
+    watchedSourcePaths = new Set(targets)
     bindSourceWatcher(paths, watcher)
     return
   }
 
-  const next = new Set(sources)
-  const toAdd = sources.filter((filePath) => !watchedSourcePaths.has(filePath))
-  const toRemove = [...watchedSourcePaths].filter((filePath) => !next.has(filePath))
+  const next = new Set(targets)
+  const toAdd = targets.filter((target) => !watchedSourcePaths.has(target))
+  const toRemove = [...watchedSourcePaths].filter((target) => !next.has(target))
   if (toAdd.length) watcher.add(toAdd)
   if (toRemove.length) watcher.unwatch(toRemove)
   watchedSourcePaths = next

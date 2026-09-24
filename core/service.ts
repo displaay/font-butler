@@ -417,32 +417,41 @@ export class FontButlerService {
     return items
   }
 
-  async init(): Promise<void> {
+  /** Fast path: validate catalog and apply cheap on-disk fixes only. */
+  async initCatalogPhase(): Promise<void> {
     ensureDirs(this.paths)
     const recovered = await reconcileMutationJournals(this.paths, getFontNative())
     if (recovered.length) {
       emitCatalog(this.paths)
       emitEvent({ type: 'operations', operations: loadOperations(this.paths) })
     }
+    loadCatalog(this.paths)
     await this.restoreDisabledCopies()
+  }
+
+  /** Heavier startup work; safe to run while read-only API serves the catalog. */
+  async initBackgroundPhase(): Promise<void> {
     await this.adoptUserFonts()
     await this.detachRenamedInstallSources()
     await this.seedIfEmpty()
-    await runCatalogTask(() => this.fillMissingPreviewSamplesUnlocked())
-    // A watcher cannot report changes that happened while the app was closed.
-    // Hash external sources once on startup so timestamp-preserving syncs are
-    // still detected; steady-state watcher updates already force a hash.
+    void runCatalogTask(() => this.fillMissingPreviewSamplesUnlocked()).catch((error) => {
+      console.error('fillMissingPreviewSamples', error)
+    })
     await this.refreshSourceStatuses(false)
-    void this.refreshSourceStatuses(true)
     await dropOrphanRetailListingsFn(this.paths)
     await this.reinstallCurrentlyOutdated()
     await syncWatchers(this.paths)
     await reconcileWatchedSources(this.paths)
     await this.refreshUserFontsWatcher()
-    await this.refreshInboxWatcher(this.watchingFolderRoots(), { importExisting: true })
+    await this.refreshInboxWatcher(this.watchingFolderRoots(), { importExisting: false })
     this.revisionStorage()
     this.pruneActivity()
-    this.resumeIncompleteRetailSync()
+    void this.resumeIncompleteRetailSync()
+  }
+
+  async init(): Promise<void> {
+    await this.initCatalogPhase()
+    await this.initBackgroundPhase()
   }
 
   listCatalog(): CatalogEntry[] {
@@ -3726,9 +3735,9 @@ export class FontButlerService {
   private async fillMissingPreviewSamplesUnlocked(): Promise<void> {
     const catalog = loadCatalog(this.paths)
     let changed = false
-    for (const entry of catalog.entries) {
+    for (let index = 0; index < catalog.entries.length; index += 1) {
+      const entry = catalog.entries[index]!
       if (entry.previewSample) {
-        await yieldEventLoop()
         continue
       }
       const file = existingFontPath(entry, catalog.entries)
@@ -3749,6 +3758,7 @@ export class FontButlerService {
       } catch {
         // Leave the card pending if the file cannot be parsed.
       }
+      if (index % 64 === 63) await yieldEventLoop()
     }
     if (changed) saveCatalog(this.paths, catalog)
   }
@@ -3756,13 +3766,13 @@ export class FontButlerService {
   private async refreshSourceStatusesUnlocked(forceFingerprint = false): Promise<void> {
     const catalog = loadCatalog(this.paths)
     let changed = false
-    for (const entry of catalog.entries) {
+    for (let index = 0; index < catalog.entries.length; index += 1) {
+      const entry = catalog.entries[index]!
       if (applySourcePresence(entry)) {
         touchEntry(entry)
         changed = true
       }
       if (!entry.sourcePresent || !isExternalSource(entry)) {
-        await yieldEventLoop()
         continue
       }
       const stat = readFileStat(entry.sourcePath)
@@ -3778,7 +3788,6 @@ export class FontButlerService {
           touchEntry(entry)
           changed = true
         }
-        await yieldEventLoop()
         const fingerprint = tryFingerprintFile(entry.sourcePath)
         const bytesChanged = Boolean(fingerprint && fingerprint !== entry.sourceFingerprint)
         if (fingerprint && fingerprint !== entry.sourceFingerprint) {
@@ -3821,7 +3830,7 @@ export class FontButlerService {
         touchEntry(entry)
         changed = true
       }
-      await yieldEventLoop()
+      if (index % 128 === 127) await yieldEventLoop()
     }
     if (changed) {
       saveCatalog(this.paths, catalog)

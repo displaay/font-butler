@@ -52,10 +52,12 @@ test('corrupt catalog exits the API worker quickly with init failure text', asyn
   assert.ok(exit.ms < 2000, `expected fast failure, got ${exit.ms}ms`)
 })
 
-test('server starts listening before awaiting service.init', () => {
+test('server starts listening before catalog and background init', () => {
   const server = readFileSync(path.join(repoRoot, 'server/index.ts'), 'utf8')
   const serveCallbackIdx = server.indexOf('serve({ fetch: app.fetch')
   const runInitCallIdx = server.indexOf('void runServiceInit()')
   assert.ok(serveCallbackIdx > 0 && runInitCallIdx > serveCallbackIdx)
-  assert.match(server, /await service\.init\(\)/)
+  assert.match(server, /await service\.initCatalogPhase\(\)/)
+  assert.match(server, /await service\.initBackgroundPhase\(\)/)
+  assert.match(server, /Font Buttler catalog ready/)
 })

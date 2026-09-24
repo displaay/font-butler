@@ -551,6 +551,13 @@ export type ServiceEvent =
   | { type: 'retail'; status: RetailSyncStatus }
   | { type: 'action-progress'; action: BatchProgressAction; done: number; total: number }
   | { type: 'test-installs'; fonts: import('./test-install.ts').TestInstallFont[] }
+  | {
+      type: 'init'
+      catalogReady: boolean
+      ready: boolean
+      phase: string
+      detail?: string
+    }
 
 export type BatchProgressAction =
   | 'install'
