@@ -3834,10 +3834,25 @@ export class FontButlerService {
           changed = true
         }
         const needsParse = bytesChanged || !entry.faces?.length || !entry.previewSample
-        if (needsParse && !options.fingerprintOnly) {
+        const keepInstalledSample = previewUsesInstalledBytes(entry)
+        if (needsParse && options.fingerprintOnly) {
+          if (!keepInstalledSample && bytesChanged) {
+            try {
+              const sample = parseFontFile(entry.sourcePath).previewSample
+              if (
+                sample &&
+                fillEntryPreviewSample(entry, { refresh: true, sample })
+              ) {
+                touchEntry(entry)
+                changed = true
+              }
+            } catch {
+              // Keep stored sample if the file can no longer be parsed.
+            }
+          }
+        } else if (needsParse) {
           try {
             const parsed = (await analyzeFontFile(entry.sourcePath)).parsed
-            const keepInstalledSample = previewUsesInstalledBytes(entry)
             if (JSON.stringify(entry.faces) !== JSON.stringify(parsed.faces)) {
               const installedSample = entry.previewSample
               applyParsedFont(entry, parsed)
