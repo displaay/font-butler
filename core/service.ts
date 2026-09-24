@@ -434,16 +434,13 @@ export class FontButlerService {
     await this.adoptUserFonts()
     await this.detachRenamedInstallSources()
     await this.seedIfEmpty()
-    void runCatalogTask(() => this.fillMissingPreviewSamplesUnlocked()).catch((error) => {
-      console.error('fillMissingPreviewSamples', error)
-    })
     await this.refreshSourceStatuses(false)
     await dropOrphanRetailListingsFn(this.paths)
     await this.reinstallCurrentlyOutdated()
     await syncWatchers(this.paths)
     await reconcileWatchedSources(this.paths)
     await this.refreshUserFontsWatcher()
-    await this.refreshInboxWatcher(this.watchingFolderRoots(), { importExisting: false })
+    await this.refreshInboxWatcher(this.watchingFolderRoots(), { importExisting: true })
     this.revisionStorage()
     this.pruneActivity()
     void this.resumeIncompleteRetailSync()
@@ -452,6 +449,13 @@ export class FontButlerService {
   async init(): Promise<void> {
     await this.initCatalogPhase()
     await this.initBackgroundPhase()
+  }
+
+  /** Runs after API readiness; does not block startup. */
+  startPreviewBackfill(): void {
+    void runCatalogTask(() => this.fillMissingPreviewSamplesUnlocked()).catch((error) => {
+      console.error('fillMissingPreviewSamples', error)
+    })
   }
 
   listCatalog(): CatalogEntry[] {
@@ -3735,6 +3739,12 @@ export class FontButlerService {
   private async fillMissingPreviewSamplesUnlocked(): Promise<void> {
     const catalog = loadCatalog(this.paths)
     let changed = false
+    let emitAfterBatch = false
+    const flushCatalogEvent = () => {
+      if (!emitAfterBatch) return
+      emitEvent(catalogEvent(catalog.entries))
+      emitAfterBatch = false
+    }
     for (let index = 0; index < catalog.entries.length; index += 1) {
       const entry = catalog.entries[index]!
       if (entry.previewSample) {
@@ -3749,17 +3759,21 @@ export class FontButlerService {
           applyParsedFont(entry, analysis.parsed)
           touchEntry(entry)
           changed = true
-          emitEvent(catalogEvent(catalog.entries))
+          emitAfterBatch = true
         } else if (fillEntryPreviewSample(entry, { sample: analysis.parsed.previewSample })) {
           touchEntry(entry)
           changed = true
-          emitEvent(catalogEvent(catalog.entries))
+          emitAfterBatch = true
         }
       } catch {
         // Leave the card pending if the file cannot be parsed.
       }
-      if (index % 64 === 63) await yieldEventLoop()
+      if (index % 64 === 63) {
+        flushCatalogEvent()
+        await yieldEventLoop()
+      }
     }
+    flushCatalogEvent()
     if (changed) saveCatalog(this.paths, catalog)
   }
 
@@ -3975,9 +3989,13 @@ export class FontButlerService {
       await syncInboxWatcher([], () => {})
       return
     }
-    await syncInboxWatcher(folders, (filePaths) => {
-      void this.importInboxFiles(filePaths)
-    })
+    await syncInboxWatcher(
+      folders,
+      (filePaths) => {
+        void this.importInboxFiles(filePaths)
+      },
+      this.paths,
+    )
     if (options.importExisting && folders.length) {
       const settings = loadSettings(this.paths)
       const known = new Set(

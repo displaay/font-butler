@@ -504,9 +504,8 @@ function AppShell() {
               if (collisions.length > 0 && retailResult.status.enabled) {
                 // A collision needs the user's choice — surface it instead of syncing blind.
                 setSyncCollisions(collisions)
-              } else if (retailResult.status.enabled) {
-                syncRetailRef.current()
               }
+              // Incomplete retail sync resumes on the server during background init.
             }
           }
           applyCatalog(catalog.entries, catalog.revision)

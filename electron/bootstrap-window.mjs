@@ -13,6 +13,17 @@ export function shouldRetryBootstrapOnActivate({ isPackaged, apiBootstrapReady, 
   return isPackaged && !bootstrapping && !apiBootstrapReady && Boolean(lastBootstrapError)
 }
 
+export function canRetryPackagedBootstrap({ isPackaged, bootstrapping, hasBootstrapRunner }) {
+  return Boolean(isPackaged && hasBootstrapRunner && !bootstrapping)
+}
+
+/** Remove handlers that would quit or stale-reference a window being replaced. */
+export function detachWindowLifecycleHandlers(win) {
+  if (!win || win.isDestroyed?.()) return
+  win.removeAllListeners('close')
+  win.removeAllListeners('closed')
+}
+
 export function canOpenMainUi({ isPackaged, apiBootstrapReady }) {
   return !isPackaged || apiBootstrapReady
 }

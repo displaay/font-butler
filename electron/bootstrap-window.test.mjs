@@ -8,6 +8,8 @@ import {
   reduceBootstrapWindowState,
   shouldIgnoreShowMainWindowDuringBootstrap,
   shouldRetryBootstrapOnActivate,
+  canRetryPackagedBootstrap,
+  detachWindowLifecycleHandlers,
 } from './bootstrap-window.mjs'
 
 test('Dock activate during bootstrap shows starting, not a sticky error window', () => {
@@ -50,6 +52,31 @@ test('formatBootstrapFailureMessage warns against renaming catalog alone', () =>
   })
   assert.match(message, /Do not delete catalog\.json alone|copy catalog\.json\.bak/i)
   assert.doesNotMatch(message, /rename catalog\.json/i)
+})
+
+test('retry is blocked while bootstrapping', () => {
+  assert.equal(
+    canRetryPackagedBootstrap({ isPackaged: true, bootstrapping: true, hasBootstrapRunner: true }),
+    false,
+  )
+  assert.equal(
+    canRetryPackagedBootstrap({ isPackaged: true, bootstrapping: false, hasBootstrapRunner: true }),
+    true,
+  )
+})
+
+test('detachWindowLifecycleHandlers removes close and closed listeners', () => {
+  const listeners = { close: 0, closed: 0 }
+  const win = {
+    isDestroyed: () => false,
+    removeAllListeners(event) {
+      if (event === 'close') listeners.close += 1
+      if (event === 'closed') listeners.closed += 1
+    },
+  }
+  detachWindowLifecycleHandlers(win)
+  assert.equal(listeners.close, 1)
+  assert.equal(listeners.closed, 1)
 })
 
 test('classifyWorkerFailure separates timeout from init failure', () => {

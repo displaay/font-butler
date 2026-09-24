@@ -113,6 +113,14 @@ const CATALOG_READ_PATHS = new Set([
   '/api/app-update',
 ])
 
+function isFontFileReadPath(pathname: string): boolean {
+  return (
+    pathname.startsWith('/api/font-file/') ||
+    pathname.startsWith('/api/preview-meta/') ||
+    pathname.startsWith('/api/preview-glyph/')
+  )
+}
+
 function createInitState(): ServiceInitState {
   return {
     ready: false,
@@ -128,7 +136,8 @@ function createInitState(): ServiceInitState {
 function apiAvailableDuringStartup(method: string, pathname: string): boolean {
   if (pathname === '/api/bootstrap' || pathname === '/api/health') return true
   if (method !== 'GET' && method !== 'HEAD') return false
-  return CATALOG_READ_PATHS.has(pathname)
+  if (CATALOG_READ_PATHS.has(pathname)) return true
+  return isFontFileReadPath(pathname)
 }
 
 export async function startFontButlerServer(
@@ -140,6 +149,12 @@ export async function startFontButlerServer(
   )
   const service = new FontButlerService()
   const initState = createInitState()
+  let resolveBackgroundReady: () => void = () => {}
+  let rejectBackgroundReady: (error: Error) => void = () => {}
+  const backgroundReady = new Promise<void>((resolve, reject) => {
+    resolveBackgroundReady = resolve
+    rejectBackgroundReady = reject
+  })
   let stopTestInstallWatch: (() => Promise<void>) | null = null
 
   process.on('unhandledRejection', (error) => {
@@ -180,15 +195,26 @@ app.use('/api/*', async (c, next) => {
       )
     }
     if (!initState.ready && !apiAvailableDuringStartup(c.req.method, pathname)) {
-      return c.json(
-        {
-          error: 'Font Buttler is still reading fonts. Try again in a moment.',
-          ready: false,
-          catalogReady: true,
-          phase: initState.phase,
-        },
-        503,
-      )
+      if (c.req.method !== 'GET' && c.req.method !== 'HEAD') {
+        try {
+          await backgroundReady
+        } catch {
+          return c.json(
+            { error: initState.error ?? 'Service failed', ready: false, catalogReady: initState.catalogReady, phase: initState.phase },
+            503,
+          )
+        }
+      } else {
+        return c.json(
+          {
+            error: 'Font Buttler is still reading fonts. Try again in a moment.',
+            ready: false,
+            catalogReady: true,
+            phase: initState.phase,
+          },
+          503,
+        )
+      }
     }
   }
   if (
@@ -1203,6 +1229,8 @@ app.get('/api/events', (c) => {
       initState.readyAt = Date.now()
       console.log('Font Buttler init complete')
       emitEvent({ type: 'init', catalogReady: true, ready: true, phase: 'ready' })
+      resolveBackgroundReady()
+      service.startPreviewBackfill()
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       initState.error = message
@@ -1211,8 +1239,8 @@ app.get('/api/events', (c) => {
       if (error instanceof Error && error.stack) {
         console.error(error.stack)
       }
+      rejectBackgroundReady(error instanceof Error ? error : new Error(message))
       process.exitCode = 1
-      setTimeout(() => process.exit(1), 50).unref?.()
     }
   }
 

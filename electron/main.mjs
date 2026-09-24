@@ -47,6 +47,8 @@ import {
 } from './updates-menu.mjs'
 import {
   bootstrapErrorPageHtml,
+  canRetryPackagedBootstrap,
+  detachWindowLifecycleHandlers,
   formatBootstrapFailureMessage,
   shouldIgnoreShowMainWindowDuringBootstrap,
   shouldRetryBootstrapOnActivate,
@@ -206,6 +208,8 @@ let apiWorkerLogTail = ''
 let tray = null
 let apiToken = null
 let apiChild = null
+/** When true, worker exit after listen is an init failure — do not auto-restart. */
+let workerInitFailed = false
 let catalogEntries = []
 let activityOperations = []
 let menuBarIconEnabled = true
@@ -238,7 +242,15 @@ function startMainUiAfterBootstrap() {
 }
 
 async function retryPackagedBootstrap() {
-  if (!app.isPackaged || !runPackagedBootstrap || bootstrapping) return false
+  if (
+    !canRetryPackagedBootstrap({
+      isPackaged: app.isPackaged,
+      bootstrapping,
+      hasBootstrapRunner: Boolean(runPackagedBootstrap),
+    })
+  ) {
+    return false
+  }
   const ok = await runPackagedBootstrap({ suppressFailureUi: true })
   ensureTray()
   if (ok) {
@@ -277,6 +289,24 @@ function applyBootstrapSettings(settings) {
 
 function bootstrapFetchInit() {
   return { signal: AbortSignal.timeout(10_000) }
+}
+
+async function waitForWorkerCatalogOrFailure() {
+  const deadline = Date.now() + 120_000
+  while (Date.now() < deadline) {
+    const response = await fetch(`${API}/api/health`, bootstrapFetchInit())
+    const data = await response.json()
+    if (data.phase === 'failed' || (data.error && !data.catalogReady)) {
+      workerInitFailed = true
+      throw new Error(data.error || 'Font Buttler service init failed')
+    }
+    if (data.catalogReady) {
+      workerInitFailed = false
+      return data
+    }
+    await new Promise((resolve) => setTimeout(resolve, 40))
+  }
+  throw new Error('Font Buttler API worker did not load the catalog in time')
 }
 
 async function ensureApiToken() {
@@ -358,7 +388,7 @@ function destroyMainWindowForReplace() {
   const win = mainWindow
   mainWindow = null
   mainWindowKind = null
-  win.removeAllListeners('close')
+  detachWindowLifecycleHandlers(win)
   win.destroy()
 }
 
@@ -452,11 +482,13 @@ function createBootstrapErrorWindow(message) {
       sandbox: true,
     },
   })
+  const win = mainWindow
   mainWindowKind = BOOTSTRAP_ERROR_WINDOW_KIND
-  attachMainWindowHandlers(mainWindow)
+  attachMainWindowHandlers(win)
   const html = bootstrapErrorPageHtml(message, { dark: nativeTheme.shouldUseDarkColors })
-  void mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
-  mainWindow.on('closed', () => {
+  void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+  win.on('closed', () => {
+    if (mainWindow !== win) return
     if (!isQuitting && mainWindowKind === BOOTSTRAP_ERROR_WINDOW_KIND) {
       isQuitting = true
       app.quit()
@@ -499,6 +531,7 @@ async function promptBootstrapRecovery(error) {
 }
 
 async function showBootstrapFailure(error) {
+  bootstrapping = false
   lastBootstrapError = error instanceof Error ? error : new Error(String(error))
   logDebug('bootstrap', bootstrapFailureMessage(lastBootstrapError))
   while (!isQuitting && !apiBootstrapReady) {
@@ -1711,10 +1744,14 @@ if (!gotLock) {
           return
         }
         apiChild = null
-        if (!isQuitting) {
-          console.error('Font Buttler API worker exited unexpectedly')
-          void restartPackagedBackend()
+        if (isQuitting || workerInitFailed) {
+          return
         }
+        if (!apiBootstrapReady) {
+          return
+        }
+        console.error('Font Buttler API worker exited unexpectedly')
+        void restartPackagedBackend()
       })
 
       child.stdout?.on('data', (chunk) => {
@@ -1781,8 +1818,10 @@ if (!gotLock) {
       return true
     }
     bootstrapping = true
+    workerInitFailed = false
     try {
       await startPackagedBackend()
+      await waitForWorkerCatalogOrFailure()
       apiBootstrapReady = true
       lastBootstrapError = null
       if (mainWindow && !mainWindow.isDestroyed() && mainWindowKind !== 'main') {
