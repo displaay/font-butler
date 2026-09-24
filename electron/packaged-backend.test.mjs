@@ -14,6 +14,8 @@ test('the packaged app runs the API in a child process, not in Electron main', (
   assert.match(main, /utilityProcess\.fork/)
   assert.match(main, /FONT_BUTLER_SERVE/)
   assert.match(main, /spawnApiWorker/)
+  assert.match(main, /stopPackagedApiWorker/)
+  assert.match(main, /await stopPackagedApiWorker\(\)/)
   assert.doesNotMatch(main, /await import\('\.\/server\.bundle\.mjs'\)/)
 })
 
@@ -90,4 +92,10 @@ test('server starts listening before catalog and background init', () => {
   assert.doesNotMatch(server, /process\.exit\(1\)/)
   assert.match(server, /await backgroundReady/)
   assert.match(server, /service\.startPreviewBackfill\(\)/)
+})
+
+test('renderer handles background init failure from waitForServiceReady', () => {
+  const appTsx = readFileSync(path.join(repoRoot, 'src/App.tsx'), 'utf8')
+  assert.match(appTsx, /waitForServiceReady\([\s\S]*?\)[\s\S]*?\.catch\(/)
+  assert.match(appTsx, /setError\(message\)/)
 })

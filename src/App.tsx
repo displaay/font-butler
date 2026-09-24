@@ -465,9 +465,18 @@ function AppShell() {
               setActionStatus('Reading fonts…')
             }
           },
-        }).then(() => {
-          if (!cancelled) setActionStatus(null)
         })
+          .then(() => {
+            if (!cancelled) setActionStatus(null)
+          })
+          .catch((err) => {
+            if (cancelled) return
+            setActionStatus(null)
+            const message =
+              err instanceof Error ? err.message : 'Font Buttler could not finish reading fonts.'
+            setError(message)
+            toast.error(message)
+          })
         const boot = await api.bootstrap()
         if (!cancelled && boot.settings) {
           applySettings(boot.settings)

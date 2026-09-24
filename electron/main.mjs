@@ -241,6 +241,25 @@ function startMainUiAfterBootstrap() {
   void loadRetailStatus()
 }
 
+async function stopPackagedApiWorker() {
+  if (!apiChild) return
+  const child = apiChild
+  apiChild = null
+  await new Promise((resolve) => {
+    const timer = setTimeout(resolve, 3_000)
+    child.once('exit', () => {
+      clearTimeout(timer)
+      resolve(undefined)
+    })
+    try {
+      child.kill()
+    } catch {
+      clearTimeout(timer)
+      resolve(undefined)
+    }
+  })
+}
+
 async function retryPackagedBootstrap() {
   if (
     !canRetryPackagedBootstrap({
@@ -251,6 +270,8 @@ async function retryPackagedBootstrap() {
   ) {
     return false
   }
+  await stopPackagedApiWorker()
+  workerInitFailed = false
   const ok = await runPackagedBootstrap({ suppressFailureUi: true })
   ensureTray()
   if (ok) {
@@ -1820,6 +1841,7 @@ if (!gotLock) {
     bootstrapping = true
     workerInitFailed = false
     try {
+      await stopPackagedApiWorker()
       await startPackagedBackend()
       await waitForWorkerCatalogOrFailure()
       apiBootstrapReady = true

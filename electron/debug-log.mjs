@@ -108,7 +108,11 @@ export function rotateLogFileIfNeeded(filePath, maxBytes = LOG_FILE_MAX_BYTES) {
 
 export function createDebugLogFileWriter(filePath, options = {}) {
   const maxBytes = options.maxBytes ?? LOG_FILE_MAX_BYTES
-  fs.mkdirSync(path.dirname(filePath), { recursive: true })
+  try {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true })
+  } catch {
+    // Best-effort: logging must not block app startup.
+  }
   rotateLogFileIfNeeded(filePath, maxBytes)
 
   return {

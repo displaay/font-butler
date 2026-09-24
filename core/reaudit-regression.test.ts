@@ -133,10 +133,104 @@ test('preview backfill coalesces catalog SSE events', async () => {
   })
   const service = new FontButlerService(paths)
   try {
-    await service['fillMissingPreviewSamplesUnlocked']()
+    for (;;) {
+      const done = await service['fillMissingPreviewSamplesBatchUnlocked'](64)
+      if (done) break
+    }
     assert.ok(catalogEvents <= 3, `expected coalesced catalog events, got ${catalogEvents}`)
   } finally {
     stop()
+    service.dispose()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('startup fingerprint-only refresh marks same-stamp source edits outdated', async () => {
+  const paths = tempPaths()
+  const source = path.join(paths.dataRoot, 'watch', 'Source.ttf')
+  const installed = path.join(paths.userFontsDir, 'Source.ttf')
+  fs.mkdirSync(path.dirname(source), { recursive: true })
+  fs.mkdirSync(paths.userFontsDir, { recursive: true })
+  writeTestFont(source, 'StampTest', 'StampTest-Regular')
+  writeTestFont(installed, 'StampTest', 'StampTest-Regular')
+  const st = fs.statSync(source)
+  fs.writeFileSync(
+    paths.settingsPath,
+    JSON.stringify({ version: 1, onboardingCompleted: true, watchFolders: [] }),
+  )
+  fs.writeFileSync(
+    paths.catalogPath,
+    JSON.stringify({
+      version: 1,
+      entries: [
+        {
+          id: 'e1',
+          status: 'installed',
+          sourcePath: source,
+          sourcePresent: true,
+          sourceMtimeMs: st.mtimeMs,
+          sourceSize: st.size,
+          sourceFingerprint: 'stale-fingerprint',
+          installedPath: installed,
+          installedFingerprint: 'installed-fp',
+          installedSnapshotMtimeMs: fs.statSync(installed).mtimeMs,
+          installedSnapshotSize: fs.statSync(installed).size,
+          format: 'ttf',
+          previewSample: 'Aa',
+          faces: [{ postscriptName: 'StampTest-Regular', familyName: 'StampTest', subfamilyName: 'Regular' }],
+          installations: [{ destinationId: 'macos', path: installed, verification: 'file-present', fingerprint: 'installed-fp' }],
+          addedAt: new Date().toISOString(),
+        },
+      ],
+    }),
+  )
+  const service = new FontButlerService(paths)
+  try {
+    await service['refreshSourceStatuses'](true, { fingerprintOnly: true })
+    const entry = service.listCatalog()[0]
+    assert.equal(entry?.status, 'outdated')
+    assert.notEqual(entry?.sourceFingerprint, 'stale-fingerprint')
+  } finally {
+    service.dispose()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('preview backfill releases the catalog lock between batches', async () => {
+  const paths = tempPaths()
+  const fontPath = path.join(paths.dataRoot, 'Parallel.ttf')
+  writeTestFont(fontPath, 'Parallel', 'Parallel-Regular')
+  fs.writeFileSync(
+    paths.settingsPath,
+    JSON.stringify({ version: 1, onboardingCompleted: true, watchFolders: [] }),
+  )
+  const entries = Array.from({ length: 80 }, (_, index) => ({
+    id: `e-${index}`,
+    status: 'installed',
+    sourcePath: fontPath,
+    sourcePresent: true,
+    installedPath: fontPath,
+    format: 'ttf',
+    faces: [{ postscriptName: 'Parallel-Regular', familyName: 'Parallel', subfamilyName: 'Regular' }],
+    installations: [{ destinationId: 'macos', path: fontPath, verification: 'file-present' }],
+    addedAt: new Date().toISOString(),
+  }))
+  fs.writeFileSync(paths.catalogPath, JSON.stringify({ version: 1, entries }))
+  const service = new FontButlerService(paths)
+  try {
+    service.startPreviewBackfill()
+    const deadline = Date.now() + 5_000
+    let listed = false
+    while (Date.now() < deadline) {
+      const catalog = service.listCatalog()
+      if (catalog.length === 80) {
+        listed = true
+        break
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    assert.equal(listed, true, 'listCatalog should not be blocked for the whole backfill')
+  } finally {
     service.dispose()
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }

@@ -434,7 +434,7 @@ export class FontButlerService {
     await this.adoptUserFonts()
     await this.detachRenamedInstallSources()
     await this.seedIfEmpty()
-    await this.refreshSourceStatuses(false)
+    await this.refreshSourceStatuses(true, { fingerprintOnly: true })
     await dropOrphanRetailListingsFn(this.paths)
     await this.reinstallCurrentlyOutdated()
     await syncWatchers(this.paths)
@@ -451,11 +451,25 @@ export class FontButlerService {
     await this.initBackgroundPhase()
   }
 
-  /** Runs after API readiness; does not block startup. */
+  private previewBackfillIndex = 0
+
+  /** Runs after API readiness; does not block startup or hold the catalog lock for long. */
   startPreviewBackfill(): void {
-    void runCatalogTask(() => this.fillMissingPreviewSamplesUnlocked()).catch((error) => {
+    void this.runPreviewBackfillBatches().catch((error) => {
       console.error('fillMissingPreviewSamples', error)
     })
+  }
+
+  private async runPreviewBackfillBatches(): Promise<void> {
+    const batchSize = 32
+    for (;;) {
+      const done = await runCatalogTask(() => this.fillMissingPreviewSamplesBatchUnlocked(batchSize))
+      if (done) {
+        this.previewBackfillIndex = 0
+        return
+      }
+      await yieldEventLoop()
+    }
   }
 
   listCatalog(): CatalogEntry[] {
@@ -3732,11 +3746,17 @@ export class FontButlerService {
     }
   }
 
-  private async refreshSourceStatuses(forceFingerprint = false): Promise<void> {
-    return runCatalogTask(() => this.refreshSourceStatusesUnlocked(forceFingerprint))
+  private async refreshSourceStatuses(
+    forceFingerprint = false,
+    options: { fingerprintOnly?: boolean } = {},
+  ): Promise<void> {
+    return runCatalogTask(() => this.refreshSourceStatusesUnlocked(forceFingerprint, options))
   }
 
-  private async fillMissingPreviewSamplesUnlocked(): Promise<void> {
+  /**
+   * @returns true when every entry has been scanned for missing previews
+   */
+  private async fillMissingPreviewSamplesBatchUnlocked(batchSize: number): Promise<boolean> {
     const catalog = loadCatalog(this.paths)
     let changed = false
     let emitAfterBatch = false
@@ -3745,11 +3765,14 @@ export class FontButlerService {
       emitEvent(catalogEvent(catalog.entries))
       emitAfterBatch = false
     }
-    for (let index = 0; index < catalog.entries.length; index += 1) {
+    let processed = 0
+    let index = this.previewBackfillIndex
+    for (; index < catalog.entries.length && processed < batchSize; index += 1) {
       const entry = catalog.entries[index]!
       if (entry.previewSample) {
         continue
       }
+      processed += 1
       const file = existingFontPath(entry, catalog.entries)
       if (!file) continue
       try {
@@ -3768,16 +3791,17 @@ export class FontButlerService {
       } catch {
         // Leave the card pending if the file cannot be parsed.
       }
-      if (index % 64 === 63) {
-        flushCatalogEvent()
-        await yieldEventLoop()
-      }
     }
+    this.previewBackfillIndex = index
     flushCatalogEvent()
     if (changed) saveCatalog(this.paths, catalog)
+    return index >= catalog.entries.length
   }
 
-  private async refreshSourceStatusesUnlocked(forceFingerprint = false): Promise<void> {
+  private async refreshSourceStatusesUnlocked(
+    forceFingerprint = false,
+    options: { fingerprintOnly?: boolean } = {},
+  ): Promise<void> {
     const catalog = loadCatalog(this.paths)
     let changed = false
     for (let index = 0; index < catalog.entries.length; index += 1) {
@@ -3810,7 +3834,7 @@ export class FontButlerService {
           changed = true
         }
         const needsParse = bytesChanged || !entry.faces?.length || !entry.previewSample
-        if (needsParse) {
+        if (needsParse && !options.fingerprintOnly) {
           try {
             const parsed = (await analyzeFontFile(entry.sourcePath)).parsed
             const keepInstalledSample = previewUsesInstalledBytes(entry)

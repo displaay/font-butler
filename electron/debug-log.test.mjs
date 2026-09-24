@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { test } from 'node:test'
 import {
+  createDebugLogFileWriter,
   createDebugLogStore,
   DEBUG_LOG_RING_MAX,
   redactDebugLogLine,
@@ -29,4 +33,18 @@ test('redactDebugLogLine removes bearer and registered secrets', () => {
 
 test('default ring max is 2000', () => {
   assert.equal(DEBUG_LOG_RING_MAX, 2000)
+})
+
+test('createDebugLogFileWriter tolerates mkdir failure', () => {
+  const filePath = path.join(os.tmpdir(), `fb-log-${Date.now()}`, 'nested', 'main.log')
+  const original = fs.mkdirSync
+  fs.mkdirSync = () => {
+    throw new Error('EACCES')
+  }
+  try {
+    const writer = createDebugLogFileWriter(filePath)
+    assert.doesNotThrow(() => writer.writeLine('hello'))
+  } finally {
+    fs.mkdirSync = original
+  }
 })
