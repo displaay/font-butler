@@ -13,6 +13,9 @@ contextBridge.exposeInMainWorld('fontButlerDesktop', {
   pickFolder: () => ipcRenderer.invoke('pick-folder'),
   pickFile: () => ipcRenderer.invoke('pick-file'),
   getApiToken: () => ipcRenderer.invoke('get-api-token'),
+  quitApp: () => ipcRenderer.invoke('quit-app'),
+  showDebugLogs: () => ipcRenderer.invoke('debug-console:show'),
+  signalAppMounted: () => ipcRenderer.send('renderer-app-mounted'),
   requestNotifications: () => ipcRenderer.invoke('request-notifications'),
   onOpenSettings: (callback) => {
     const listener = (_event, payload) => callback(payload)

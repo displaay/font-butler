@@ -172,6 +172,60 @@ export function findBySourcePath(
   return catalog.entries.find((entry) => resolvedPath(entry.sourcePath) === resolved)
 }
 
+export type PathOccupancyIndex = {
+  occupantsAt(resolved: string): CatalogEntry[]
+  findByInstalledPath(resolved: string): CatalogEntry | undefined
+  findBySourcePath(resolved: string): CatalogEntry | undefined
+}
+
+function pushOccupant(
+  map: Map<string, CatalogEntry[]>,
+  filePath: string | undefined,
+  entry: CatalogEntry,
+): void {
+  if (!filePath || !fs.existsSync(filePath)) return
+  const resolved = path.resolve(filePath)
+  const list = map.get(resolved)
+  if (list) {
+    if (!list.includes(entry)) list.push(entry)
+  } else {
+    map.set(resolved, [entry])
+  }
+}
+
+/** One pass over catalog entries for adoption and path lookups (O(entries), not O(files × entries)). */
+export function buildPathOccupancyIndex(entries: CatalogEntry[]): PathOccupancyIndex {
+  const occupants = new Map<string, CatalogEntry[]>()
+  const byInstalled = new Map<string, CatalogEntry>()
+  const bySource = new Map<string, CatalogEntry>()
+  for (const entry of entries) {
+    pushOccupant(occupants, entry.installedPath, entry)
+    pushOccupant(occupants, entry.disabledPath, entry)
+    for (const copy of entry.installations ?? []) {
+      pushOccupant(occupants, copy.path, entry)
+      pushOccupant(occupants, copy.parkedPath, entry)
+    }
+    bySource.set(path.resolve(entry.sourcePath), entry)
+    if (entry.installedPath && fs.existsSync(entry.installedPath)) {
+      byInstalled.set(path.resolve(entry.installedPath), entry)
+    }
+    if (entry.disabledPath && fs.existsSync(entry.disabledPath)) {
+      byInstalled.set(path.resolve(entry.disabledPath), entry)
+    }
+  }
+  return {
+    occupantsAt(resolved) {
+      return occupants.get(resolved) ?? []
+    },
+    findByInstalledPath(resolved) {
+      return byInstalled.get(resolved)
+    },
+    findBySourcePath(resolved) {
+      return bySource.get(resolved)
+    },
+  }
+}
+
 export function occupantsAtPath(catalog: CatalogFile | CatalogEntry[], filePath: string): CatalogEntry[] {
   const resolved = path.resolve(filePath)
   const entries = Array.isArray(catalog) ? catalog : catalog.entries

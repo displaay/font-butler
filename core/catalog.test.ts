@@ -5,11 +5,13 @@ import path from 'node:path'
 import { test } from 'node:test'
 import {
   applySourcePresence,
+  buildPathOccupancyIndex,
   CatalogCorruptError,
   faceIdentityKey,
   findByFaceIdentity,
   isExternalSource,
   loadCatalog,
+  occupantsAtPath,
   resolveStatusWhenSourceMissing,
   saveCatalog,
 } from './catalog.ts'
@@ -261,6 +263,30 @@ test('unsupported catalog version is not wiped', () => {
     fs.writeFileSync(paths.catalogPath, raw)
     assert.throws(() => loadCatalog(paths), CatalogCorruptError)
     assert.equal(fs.readFileSync(paths.catalogPath, 'utf8'), raw)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('buildPathOccupancyIndex matches occupantsAtPath for installed files', () => {
+  const paths = tempPaths('font-butler-path-index-')
+  try {
+    const fontPath = path.join(paths.dataRoot, 'Live.ttf')
+    fs.writeFileSync(fontPath, 'font')
+    const catalog: CatalogFile = {
+      version: 1,
+      entries: [
+        entry({
+          id: 'a',
+          sourcePath: path.join(paths.dataRoot, 'source.ttf'),
+          installedPath: fontPath,
+          status: 'installed',
+        }),
+      ],
+    }
+    const index = buildPathOccupancyIndex(catalog.entries)
+    const resolved = path.resolve(fontPath)
+    assert.deepEqual(index.occupantsAt(resolved), occupantsAtPath(catalog, fontPath))
   } finally {
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }

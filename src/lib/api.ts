@@ -49,7 +49,9 @@ async function ensureToken(): Promise<string> {
       // Fall back to HTTP bootstrap when the preload bridge is unavailable.
     }
   }
-  const data = await parseJson<{ token?: string; settings?: AppSettings }>(fetch('/api/bootstrap'))
+  const data = await parseJson<{ token?: string; settings?: AppSettings }>(
+    fetchWithTimeout('/api/bootstrap'),
+  )
   if (!data.token) {
     throw new Error('Could not connect to Font Buttler API.')
   }
@@ -66,6 +68,36 @@ function authHeaders(extra?: HeadersInit): HeadersInit {
     headers.set('Authorization', `Bearer ${apiToken}`)
   }
   return headers
+}
+
+const API_FETCH_TIMEOUT_MS = 10_000
+
+async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
+  return fetch(url, { ...init, signal: AbortSignal.timeout(API_FETCH_TIMEOUT_MS) })
+}
+
+export type ServiceHealth = {
+  ok: boolean
+  ready: boolean
+  phase: string
+  error?: string | null
+}
+
+export async function waitForServiceReady(options: {
+  pollMs?: number
+  onPhase?: (phase: string) => void
+} = {}): Promise<ServiceHealth> {
+  const pollMs = options.pollMs ?? 250
+  while (true) {
+    const response = await fetchWithTimeout('/api/health')
+    const data = (await response.json()) as ServiceHealth
+    if (data.phase && options.onPhase) options.onPhase(data.phase)
+    if (data.ready) return data
+    if (data.phase === 'failed' || data.error) {
+      throw new Error(data.error || 'Font Buttler could not start.')
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollMs))
+  }
 }
 
 async function parseJson<T>(input: Promise<Response>): Promise<T> {

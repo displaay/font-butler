@@ -47,6 +47,10 @@ function mountStatic(app: Hono, staticDir: string): void {
     process.env.FONT_BUTLER_TEST === '1' || process.env.NODE_ENV === 'development'
   const staticCache = new Map<string, Buffer>()
   const readStatic = (target: string): Buffer => {
+    const base = path.basename(target)
+    if (base === 'index.html') {
+      return fs.readFileSync(target)
+    }
     if (!skipCache) {
       const cached = staticCache.get(target)
       if (cached) return cached
@@ -66,17 +70,39 @@ function mountStatic(app: Hono, staticDir: string): void {
     }
     const fallback = path.join(root, 'index.html')
     const candidate = resolved
-    const target =
+    const hasAsset =
       candidate && fs.existsSync(candidate) && fs.statSync(candidate).isFile()
-        ? candidate
-        : fallback
+    if (!hasAsset && urlPath.startsWith('/assets/')) {
+      return c.body('Not found', 404)
+    }
+    const target = hasAsset ? candidate : fallback
     if (!isFullyUnderAnyRoot(target, [root]) || !fs.existsSync(target) || !fs.statSync(target).isFile()) {
       return c.body('Not found', 404)
     }
-    return new Response(readStatic(target), {
-      headers: { 'Content-Type': mimeForStatic(target) },
-    })
+    const headers: Record<string, string> = { 'Content-Type': mimeForStatic(target) }
+    if (path.basename(target) === 'index.html') {
+      headers['Cache-Control'] = 'no-store'
+    }
+    return new Response(readStatic(target), { headers })
   })
+}
+
+export type ServiceInitState = {
+  ready: boolean
+  phase: string
+  error: string | null
+  startedAt: number
+  readyAt: number | null
+}
+
+function createInitState(): ServiceInitState {
+  return {
+    ready: false,
+    phase: 'starting',
+    error: null,
+    startedAt: Date.now(),
+    readyAt: null,
+  }
 }
 
 export async function startFontButlerServer(
@@ -87,18 +113,8 @@ export async function startFontButlerServer(
     (value): value is string => Boolean(value),
   )
   const service = new FontButlerService()
-
-  try {
-    await service.init()
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    console.error('Font Buttler service init failed:', message)
-    if (error instanceof Error && error.stack) {
-      console.error(error.stack)
-    }
-    process.exit(1)
-  }
-  const stopTestInstallWatch = service.watchTestInstalls()
+  const initState = createInitState()
+  let stopTestInstallWatch: (() => Promise<void>) | null = null
 
   process.on('unhandledRejection', (error) => {
     console.error('unhandledRejection', error)
@@ -123,6 +139,15 @@ app.use('*', async (c, next) => {
 })
 
 app.use('/api/*', async (c, next) => {
+  const pathname = c.req.path
+  if (pathname !== '/api/health' && pathname !== '/api/bootstrap') {
+    if (initState.error) {
+      return c.json({ error: initState.error, ready: false, phase: 'failed' }, 503)
+    }
+    if (!initState.ready) {
+      return c.json({ error: 'Service is starting', ready: false, phase: initState.phase }, 503)
+    }
+  }
   if (
     isAuthorizedApiRequest({
       method: c.req.method,
@@ -143,7 +168,17 @@ app.use('/api/*', async (c, next) => {
   return c.json({ error: 'Unauthorized' }, 401)
 })
 
-app.get('/api/health', (c) => c.json({ ok: true, platform: process.platform }))
+app.get('/api/health', (c) =>
+  c.json({
+    ok: initState.error ? false : true,
+    platform: process.platform,
+    ready: initState.ready,
+    phase: initState.phase,
+    error: initState.error,
+    startedAt: initState.startedAt,
+    readyAt: initState.readyAt,
+  }),
+)
 
 app.get('/api/app-update', async (c) => {
   const refresh = c.req.query('refresh') === '1' || c.req.query('refresh') === 'true'
@@ -1101,10 +1136,33 @@ app.get('/api/events', (c) => {
     mountStatic(app, options.staticDir)
   }
 
+  async function runServiceInit(): Promise<void> {
+    initState.phase = 'init'
+    try {
+      await service.init()
+      stopTestInstallWatch = service.watchTestInstalls()
+      initState.ready = true
+      initState.phase = 'ready'
+      initState.readyAt = Date.now()
+      console.log('Font Buttler init complete')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      initState.error = message
+      initState.phase = 'failed'
+      console.error('Font Buttler service init failed:', message)
+      if (error instanceof Error && error.stack) {
+        console.error(error.stack)
+      }
+      process.exitCode = 1
+      setTimeout(() => process.exit(1), 50).unref?.()
+    }
+  }
+
   return new Promise<{ port: number; token: string }>((resolve, reject) => {
     const server = serve({ fetch: app.fetch, port: PORT, hostname: '127.0.0.1' }, (info) => {
       console.log(`Font Buttler API on http://127.0.0.1:${info.port}`)
       resolve({ port: info.port, token: apiToken })
+      void runServiceInit()
     })
     server.once('error', reject)
     let shuttingDown = false
@@ -1119,7 +1177,7 @@ app.get('/api/events', (c) => {
         try {
           await closeFontAnalysisWorker()
           await closeAllWatchers()
-          await stopTestInstallWatch()
+          if (stopTestInstallWatch) await stopTestInstallWatch()
           service.dispose()
           await Promise.race([
             new Promise<void>((resolve) => {

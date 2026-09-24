@@ -43,7 +43,20 @@ import { Toaster } from '@/components/ui/sonner'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useFontActions, type FormatPrompt, type ReplacePrompt } from '@/hooks/useFontActions'
 import { useLibraryWindow } from '@/hooks/useLibraryWindow'
-import { api, isActionProgressEvent, isAppUpdateEvent, isDuplicatesEvent, isNotice, isOperationsEvent, isProjectsEvent, isRetailEvent, isSettingsEvent, isTestInstallsEvent, subscribeEvents } from '@/lib/api'
+import {
+  api,
+  isActionProgressEvent,
+  isAppUpdateEvent,
+  isDuplicatesEvent,
+  isNotice,
+  isOperationsEvent,
+  isProjectsEvent,
+  isRetailEvent,
+  isSettingsEvent,
+  isTestInstallsEvent,
+  subscribeEvents,
+  waitForServiceReady,
+} from '@/lib/api'
 import {
   mergeUnreadFlags,
   unreadActivityCount,
@@ -438,6 +451,11 @@ function AppShell() {
     async function boot() {
       let retailLoaded = false
       try {
+        await waitForServiceReady({
+          onPhase: (phase) => {
+            if (!cancelled && phase === 'init') setActionStatus('Starting Font Buttler…')
+          },
+        })
         const boot = await api.bootstrap()
         if (!cancelled && boot.settings) {
           applySettings(boot.settings)

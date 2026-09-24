@@ -3,12 +3,14 @@ import fs from 'node:fs'
 import path from 'node:path'
 import {
   applySourcePresence,
+  buildPathOccupancyIndex,
   findById,
   findByInstalledPath,
   findBySourcePath,
   isExternalSource,
   loadCatalog,
   occupantsAtPath,
+  type PathOccupancyIndex,
   removeEntryById,
   runCatalogTask,
   saveCatalog,
@@ -430,7 +432,8 @@ export class FontButlerService {
     // A watcher cannot report changes that happened while the app was closed.
     // Hash external sources once on startup so timestamp-preserving syncs are
     // still detected; steady-state watcher updates already force a hash.
-    await this.refreshSourceStatuses(true)
+    await this.refreshSourceStatuses(false)
+    void this.refreshSourceStatuses(true)
     await dropOrphanRetailListingsFn(this.paths)
     await this.reinstallCurrentlyOutdated()
     await syncWatchers(this.paths)
@@ -4161,8 +4164,12 @@ export class FontButlerService {
     catalog: ReturnType<typeof loadCatalog>,
     resolved: string,
     destId: DestinationId,
+    pathIndex?: PathOccupancyIndex,
   ): CatalogEntry | undefined {
     const byPath =
+      pathIndex?.occupantsAt(resolved)[0] ??
+      pathIndex?.findByInstalledPath(resolved) ??
+      pathIndex?.findBySourcePath(resolved) ??
       occupantsAtPath(catalog, resolved)[0] ??
       findByInstalledPath(catalog, resolved) ??
       findBySourcePath(catalog, resolved)
@@ -4238,6 +4245,7 @@ export class FontButlerService {
         .flatMap((item) => listFontFilesInTree(item.dir)),
     )
     const catalog = loadCatalog(this.paths)
+    const pathIndex = buildPathOccupancyIndex(catalog.entries)
     const activation =
       macosFiles.length > 0
         ? await getFontNative().fontActivationStates(macosFiles)
@@ -4246,7 +4254,7 @@ export class FontButlerService {
 
     const adoptFile = (filePath: string, destId: DestinationId, useActivation: boolean) => {
       const resolved = path.resolve(filePath)
-      const existing = this.findAdoptTarget(catalog, resolved, destId)
+      const existing = this.findAdoptTarget(catalog, resolved, destId, pathIndex)
       const queriedOn = useActivation && activation.ok
         ? (activation.states[resolved] ?? activation.states[filePath])
         : undefined

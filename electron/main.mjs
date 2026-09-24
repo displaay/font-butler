@@ -1,4 +1,17 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, nativeImage, nativeTheme, shell, Tray, utilityProcess } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  dialog,
+  ipcMain,
+  Menu,
+  Notification,
+  nativeImage,
+  nativeTheme,
+  shell,
+  Tray,
+  utilityProcess,
+} from 'electron'
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
@@ -32,9 +45,75 @@ import {
   outdatedFamilies,
   unreadOperationIdsToMark,
 } from './updates-menu.mjs'
+import {
+  bootstrapErrorPageHtml,
+  formatBootstrapFailureMessage,
+  shouldIgnoreShowMainWindowDuringBootstrap,
+  shouldRetryBootstrapOnActivate,
+  startingPageHtml,
+  BOOTSTRAP_ERROR_WINDOW_KIND,
+  BOOTSTRAP_STARTING_WINDOW_KIND,
+} from './bootstrap-window.mjs'
+import { showDebugConsole, getDebugConsoleWindow } from './debug-console.mjs'
+import {
+  attachDebugLogPersistence,
+  createDebugLogFileWriter,
+  createDebugLogStore,
+  defaultLogFilePath,
+} from './debug-log.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
+
+const debugLog = createDebugLogStore()
+let debugLogFilePath = defaultLogFilePath()
+
+function openDebugConsole() {
+  showDebugConsole({ dirname: __dirname })
+}
+
+function emitDebugLogUi(line) {
+  const win = getDebugConsoleWindow()
+  if (!win || win.isDestroyed()) return
+  if (line === null) {
+    win.webContents.send('debug-log:cleared')
+    return
+  }
+  win.webContents.send('debug-log:line', line)
+}
+
+debugLog.subscribe((line) => {
+  emitDebugLogUi(line)
+})
+
+function registerDebugLogSecrets() {
+  const values = [apiToken, readApiTokenFile()].filter(Boolean)
+  debugLog.registerSecrets(values)
+}
+
+function logDebug(source, message) {
+  return debugLog.append(source, message)
+}
+
+function logDebugMultiline(source, text) {
+  for (const part of String(text).split(/\r?\n/)) {
+    const trimmed = part.trimEnd()
+    if (trimmed) logDebug(source, trimmed)
+  }
+}
+
+process.on('uncaughtException', (error) => {
+  console.error(error)
+  logDebug('main', error instanceof Error ? error.stack ?? error.message : String(error))
+})
+
+process.on('unhandledRejection', (reason) => {
+  console.error('unhandledRejection', reason)
+  logDebug(
+    'main',
+    reason instanceof Error ? reason.stack ?? reason.message : String(reason),
+  )
+})
 const DEFAULT_API_PORT = 43182
 let API = process.env.FONT_BUTLER_API ?? process.env.FONTCASE_API ?? `http://127.0.0.1:${DEFAULT_API_PORT}`
 let UI =
@@ -119,6 +198,11 @@ let mainWindow = null
 let apiBootstrapReady = false
 /** @type {Error | null} */
 let lastBootstrapError = null
+/** @type {boolean} */
+let bootstrapping = false
+/** @type {null | typeof BOOTSTRAP_ERROR_WINDOW_KIND | typeof BOOTSTRAP_STARTING_WINDOW_KIND | 'main'} */
+let mainWindowKind = null
+let apiWorkerLogTail = ''
 let tray = null
 let apiToken = null
 let apiChild = null
@@ -141,6 +225,33 @@ const APP_UPDATE_POLL_MS = 6 * 60 * 60 * 1000
 // no-op unless the collection is on and a check is actually due.
 const RETAIL_TICK_MS = 60 * 1000
 let retailStatus = null
+/** @type {null | (() => Promise<boolean>)} */
+let runPackagedBootstrap = null
+
+function startMainUiAfterBootstrap() {
+  createWindow()
+  void loadCatalog()
+  void loadActivity()
+  void loadAppUpdate()
+  void listenForApiEvents()
+  void loadRetailStatus()
+}
+
+async function retryPackagedBootstrap() {
+  if (!app.isPackaged || !runPackagedBootstrap || bootstrapping) return false
+  const ok = await runPackagedBootstrap({ suppressFailureUi: true })
+  ensureTray()
+  if (ok) {
+    destroyMainWindowForReplace()
+    startMainUiAfterBootstrap()
+    showMainWindow()
+    return true
+  }
+  if (lastBootstrapError) {
+    await showBootstrapFailure(lastBootstrapError)
+  }
+  return false
+}
 
 function apiHeaders(extra = {}) {
   const headers = { ...extra }
@@ -164,12 +275,16 @@ function applyBootstrapSettings(settings) {
   void persistDeniedNativeNotifications(settings.nativeNotifications)
 }
 
+function bootstrapFetchInit() {
+  return { signal: AbortSignal.timeout(10_000) }
+}
+
 async function ensureApiToken() {
   if (!apiToken) {
     apiToken = readApiTokenFile()
   }
   if (!apiToken) {
-    const response = await fetch(`${API}/api/bootstrap`)
+    const response = await fetch(`${API}/api/bootstrap`, bootstrapFetchInit())
     const bootstrapBody = await response.text()
     const data = bootstrapBody ? JSON.parse(bootstrapBody) : {}
     if (data.token) {
@@ -182,9 +297,11 @@ async function ensureApiToken() {
   if (!apiToken) {
     throw new Error('Could not connect to Font Buttler API.')
   }
+  registerDebugLogSecrets()
   try {
     const response = await fetch(`${API}/api/bootstrap`, {
       headers: apiHeaders(),
+      signal: AbortSignal.timeout(10_000),
     })
     const bootstrapBody = await response.text()
     const data = bootstrapBody ? JSON.parse(bootstrapBody) : {}
@@ -220,53 +337,105 @@ function catalogJsonPathHint() {
   return path.join(app.getPath('userData'), 'catalog.json')
 }
 
-function bootstrapFailureMessage(error) {
-  const reason = error instanceof Error ? error.message : String(error)
-  const catalog = catalogJsonPathHint()
-  return [
-    'Font Buttler could not start its local font service, so the window cannot load.',
-    '',
-    reason,
-    '',
-    'Try quitting Font Buttler completely (Font Buttler → Quit) and open it again.',
-    'If the problem continues, open Console.app, filter for "Font Buttler", and check messages from startup.',
-    '',
-    `Library catalog file:\n${catalog}`,
-    '',
-    'If catalog.json is corrupt, quit the app, rename catalog.json, and relaunch (catalog.json.bak may be used automatically).',
-    '',
-    'More steps: https://github.com/displaay/font-butler/blob/main/docs/troubleshooting-blank-window.md',
-  ].join('\n')
+function dataDirPathHint() {
+  return app.getPath('userData')
 }
 
-function createBootstrapErrorWindow(message) {
+function bootstrapFailureMessage(error) {
+  return formatBootstrapFailureMessage(error, {
+    stderrTail: apiWorkerLogTail,
+    dataDir: dataDirPathHint(),
+    catalogPath: catalogJsonPathHint(),
+  })
+}
+
+function destroyMainWindowForReplace() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    mainWindow = null
+    mainWindowKind = null
+    return
+  }
+  const win = mainWindow
+  mainWindow = null
+  mainWindowKind = null
+  win.removeAllListeners('close')
+  win.destroy()
+}
+
+function attachMainWindowHandlers(win) {
+  win.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    if (level < 2) return
+    const levelLabel = level === 2 ? 'warn' : 'error'
+    logDebug('renderer', `[${levelLabel}] ${message} (${sourceId}:${line})`)
+  })
+  win.webContents.on('did-fail-load', (_event, code, description, url) => {
+    if (code === -3) return
+    console.error('Window failed to load', code, description, url)
+    logDebug('window', `did-fail-load ${code} ${description} ${url}`)
+    void showLoadFailurePage(win, `Could not load the window (${description}).`)
+  })
+  win.webContents.on('render-process-gone', (_event, details) => {
+    console.error('Renderer exited', details)
+    logDebug('window', `render-process-gone ${details.reason} exitCode=${details.exitCode}`)
+    void showLoadFailurePage(win, `The window crashed (${details.reason}).`)
+  })
+  win.on('unresponsive', () => {
+    console.error('Window became unresponsive')
+    logDebug('window', 'Window became unresponsive')
+  })
+}
+
+async function showLoadFailurePage(win, detail) {
+  if (!win || win.isDestroyed()) return
+  const message = `${detail}\n\nTry Quit from the menu, or use Retry after the font service is running.`
+  const html = bootstrapErrorPageHtml(message, { dark: nativeTheme.shouldUseDarkColors })
+  await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+  mainWindowKind = BOOTSTRAP_ERROR_WINDOW_KIND
+}
+
+function createBootstrapShellWindow(kind) {
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindowKind === 'main') {
+    return
+  }
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.show()
     mainWindow.focus()
     return
   }
-  const safe = message
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-  const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<title>Font Buttler</title>
-<style>
-  body { font: 13px/1.45 -apple-system, BlinkMacSystemFont, sans-serif; margin: 24px; color: #111; }
-  h1 { font-size: 16px; margin: 0 0 12px; }
-  pre { white-space: pre-wrap; background: #f4f4f5; padding: 12px; border-radius: 8px; font-size: 12px; }
-  button { margin-top: 16px; padding: 8px 14px; font-size: 13px; cursor: pointer; }
-</style>
-</head>
-<body>
-  <h1>Font Buttler could not start</h1>
-  <pre>${safe}</pre>
-  <button type="button" onclick="window.close()">Close window</button>
-</body>
-</html>`
+  mainWindow = new BrowserWindow({
+    width: kind === BOOTSTRAP_STARTING_WINDOW_KIND ? 420 : 560,
+    height: kind === BOOTSTRAP_STARTING_WINDOW_KIND ? 220 : 480,
+    minWidth: 320,
+    minHeight: 180,
+    title: 'Font Buttler',
+    icon: APP_ICON,
+    backgroundColor: windowBackgroundColor(),
+    show: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  })
+  mainWindowKind = kind
+  attachMainWindowHandlers(mainWindow)
+  const dark = nativeTheme.shouldUseDarkColors
+  const html =
+    kind === BOOTSTRAP_STARTING_WINDOW_KIND
+      ? startingPageHtml({ dark })
+      : bootstrapErrorPageHtml('Starting…', { dark })
+  void mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+  mainWindow.on('closed', () => {
+    if (mainWindowKind !== 'main') {
+      mainWindow = null
+      mainWindowKind = null
+    }
+  })
+}
+
+function createBootstrapErrorWindow(message) {
+  destroyMainWindowForReplace()
   mainWindow = new BrowserWindow({
     width: 560,
     height: 480,
@@ -277,32 +446,105 @@ function createBootstrapErrorWindow(message) {
     backgroundColor: windowBackgroundColor(),
     show: true,
     webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
     },
   })
+  mainWindowKind = BOOTSTRAP_ERROR_WINDOW_KIND
+  attachMainWindowHandlers(mainWindow)
+  const html = bootstrapErrorPageHtml(message, { dark: nativeTheme.shouldUseDarkColors })
   void mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
   mainWindow.on('closed', () => {
+    if (!isQuitting && mainWindowKind === BOOTSTRAP_ERROR_WINDOW_KIND) {
+      isQuitting = true
+      app.quit()
+    }
     mainWindow = null
+    mainWindowKind = null
   })
 }
 
-function showBootstrapFailure(error) {
+async function promptBootstrapRecovery(error) {
+  const message = bootstrapFailureMessage(error)
+  const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined
+  const options = {
+    type: 'error',
+    title: 'Font Buttler could not start',
+    message: 'The local font service is not available.',
+    detail: message,
+    buttons: ['Retry', 'Quit', 'Open troubleshooting'],
+    defaultId: 0,
+    cancelId: 2,
+  }
+  const choice = parent
+    ? await dialog.showMessageBox(parent, options)
+    : await dialog.showMessageBox(options)
+  if (choice.response === 0) {
+    return 'retry'
+  }
+  if (choice.response === 1) {
+    isQuitting = true
+    app.quit()
+    return 'quit'
+  }
+  if (choice.response === 2) {
+    await shell.openExternal(
+      'https://github.com/displaay/font-butler/blob/main/docs/troubleshooting-blank-window.md',
+    )
+    return 'docs'
+  }
+  return 'cancel'
+}
+
+async function showBootstrapFailure(error) {
   lastBootstrapError = error instanceof Error ? error : new Error(String(error))
-  const message = bootstrapFailureMessage(lastBootstrapError)
-  dialog.showErrorBox('Font Buttler could not start', message)
-  createBootstrapErrorWindow(message)
+  logDebug('bootstrap', bootstrapFailureMessage(lastBootstrapError))
+  while (!isQuitting && !apiBootstrapReady) {
+    createBootstrapErrorWindow(bootstrapFailureMessage(lastBootstrapError))
+    const action = await promptBootstrapRecovery(lastBootstrapError)
+    if (action === 'retry') {
+      if (await retryPackagedBootstrap()) return
+      continue
+    }
+    return
+  }
+}
+
+function showStartingWindowIfNeeded() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.show()
+    mainWindow.focus()
+    return
+  }
+  createBootstrapShellWindow(BOOTSTRAP_STARTING_WINDOW_KIND)
 }
 
 function showMainWindow() {
-  if (app.isPackaged && !apiBootstrapReady) {
-    if (lastBootstrapError) {
-      showBootstrapFailure(lastBootstrapError)
-    } else {
-      createBootstrapErrorWindow('The local font service is not running.')
-    }
+  if (
+    shouldIgnoreShowMainWindowDuringBootstrap({
+      isPackaged: app.isPackaged,
+      bootstrapping,
+      apiBootstrapReady,
+    })
+  ) {
+    showStartingWindowIfNeeded()
     return
+  }
+  if (
+    shouldRetryBootstrapOnActivate({
+      isPackaged: app.isPackaged,
+      apiBootstrapReady,
+      bootstrapping,
+      lastBootstrapError,
+    })
+  ) {
+    void retryPackagedBootstrap('activate')
+    return
+  }
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindowKind !== 'main') {
+    destroyMainWindowForReplace()
   }
   if (!mainWindow) {
     createWindow()
@@ -357,6 +599,10 @@ async function openExternalUrl(url) {
 
 function createWindow() {
   if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindowKind !== 'main') {
+      void mainWindow.loadURL(UI)
+      mainWindowKind = 'main'
+    }
     return
   }
   if (app.isPackaged && !apiBootstrapReady) {
@@ -380,6 +626,8 @@ function createWindow() {
       sandbox: true,
     },
   })
+  mainWindowKind = 'main'
+  attachMainWindowHandlers(mainWindow)
   mainWindow.loadURL(UI)
   mainWindow.webContents.setWindowOpenHandler((details) => {
     if (isAllowedAppUpdateUrl(details.url)) {
@@ -904,6 +1152,13 @@ function buildTrayMenu() {
     },
   })
   items.push({ type: 'separator' })
+  items.push({
+    label: 'Show logs…',
+    click: () => {
+      openDebugConsole()
+    },
+  })
+  items.push({ type: 'separator' })
   items.push({ role: 'quit' })
   return Menu.buildFromTemplate(items)
 }
@@ -1278,6 +1533,12 @@ function buildAppMenu() {
               { role: 'hideOthers' },
               { role: 'unhide' },
               { type: 'separator' },
+              {
+                label: 'Show logs…',
+                accelerator: 'CommandOrControl+Alt+L',
+                click: openDebugConsole,
+              },
+              { type: 'separator' },
               { role: 'quit' },
             ],
           },
@@ -1325,6 +1586,16 @@ function buildAppMenu() {
       ],
     },
     { role: 'windowMenu' },
+    {
+      role: 'help',
+      submenu: [
+        {
+          label: 'Show logs…',
+          accelerator: 'CommandOrControl+Alt+L',
+          click: openDebugConsole,
+        },
+      ],
+    },
   ])
 }
 
@@ -1338,6 +1609,10 @@ if (!gotLock) {
   }
 
   app.on('second-instance', (_event, argv) => {
+    if (app.isPackaged && !apiBootstrapReady && lastBootstrapError) {
+      void retryPackagedBootstrap()
+      return
+    }
     const finder = parseFinderLaunch(argv)
     if (finder) {
       enqueueFinderJob(finder.action, finder.paths)
@@ -1409,19 +1684,12 @@ if (!gotLock) {
       apiChild = child
       let settled = false
       let buffer = ''
-      const timeout = setTimeout(() => {
-        if (settled) return
-        settled = true
-        child.kill()
-        apiChild = null
-        reject(new Error('Font Buttler API worker did not start'))
-      }, 20_000)
 
       function finish(error, info) {
         if (settled) return
         settled = true
-        clearTimeout(timeout)
         if (error) {
+          error.tail = buffer.slice(-4000)
           child.kill()
           apiChild = null
           reject(error)
@@ -1438,6 +1706,7 @@ if (!gotLock) {
           } else if (code) {
             error.code = code
           }
+          error.tail = buffer.slice(-4000)
           finish(error)
           return
         }
@@ -1449,7 +1718,9 @@ if (!gotLock) {
       })
 
       child.stdout?.on('data', (chunk) => {
-        buffer += String(chunk)
+        const text = String(chunk)
+        buffer += text
+        logDebugMultiline('api-worker', text)
         if (buffer.length > 64_000) buffer = buffer.slice(-32_000)
         const match = buffer.match(/Font Buttler API on http:\/\/127\.0\.0\.1:(\d+)/)
         if (!match) return
@@ -1458,6 +1729,8 @@ if (!gotLock) {
       child.stderr?.on('data', (chunk) => {
         const text = String(chunk)
         buffer += text
+        apiWorkerLogTail = buffer.slice(-8000)
+        logDebugMultiline('api-stderr', text)
         if (buffer.length > 64_000) buffer = buffer.slice(-32_000)
         console.error(text.trimEnd())
       })
@@ -1497,7 +1770,7 @@ if (!gotLock) {
     throw lastError
   }
 
-  async function bootstrapApi() {
+  async function bootstrapApi(options = {}) {
     if (!app.isPackaged) {
       try {
         await ensureApiToken()
@@ -1507,19 +1780,40 @@ if (!gotLock) {
       apiBootstrapReady = true
       return true
     }
+    bootstrapping = true
     try {
       await startPackagedBackend()
-      await ensureApiToken()
       apiBootstrapReady = true
       lastBootstrapError = null
+      if (mainWindow && !mainWindow.isDestroyed() && mainWindowKind !== 'main') {
+        createWindow()
+      }
+      try {
+        await ensureApiToken()
+      } catch (tokenError) {
+        console.error('Could not read bootstrap settings', tokenError)
+      }
       return true
     } catch (error) {
+      if (error && typeof error === 'object' && 'tail' in error && typeof error.tail === 'string') {
+        apiWorkerLogTail = error.tail
+      }
       console.error('Could not bootstrap Font Buttler API', error)
-      showBootstrapFailure(error)
+      logDebug(
+        'bootstrap',
+        error instanceof Error ? error.stack ?? error.message : String(error),
+      )
       apiBootstrapReady = false
+      if (!options.suppressFailureUi) {
+        await showBootstrapFailure(error)
+      }
       return false
+    } finally {
+      bootstrapping = false
     }
   }
+
+  runPackagedBootstrap = bootstrapApi
 
   let restartingBackend = false
   async function restartPackagedBackend() {
@@ -1528,8 +1822,10 @@ if (!gotLock) {
     try {
       await startPackagedBackend()
       await ensureApiToken()
+      apiBootstrapReady = true
+      lastBootstrapError = null
       for (const win of BrowserWindow.getAllWindows()) {
-        win.reload()
+        void win.loadURL(UI)
       }
       dialog.showErrorBox(
         'Font Buttler restarted the local service',
@@ -1537,16 +1833,19 @@ if (!gotLock) {
       )
     } catch (error) {
       console.error('Could not restart Font Buttler API', error)
-      dialog.showErrorBox(
-        'Font Buttler could not restart',
-        error instanceof Error ? error.message : 'The font service stopped and could not be started again.',
-      )
+      apiBootstrapReady = false
+      lastBootstrapError = error instanceof Error ? error : new Error(String(error))
+      await showBootstrapFailure(lastBootstrapError)
     } finally {
       restartingBackend = false
     }
   }
 
   app.whenReady().then(async () => {
+    debugLogFilePath = defaultLogFilePath(app.getPath('home'))
+    const fileWriter = createDebugLogFileWriter(debugLogFilePath)
+    attachDebugLogPersistence(debugLog, fileWriter)
+    logDebug('main', `Font Buttler ${app.getVersion()} starting`)
     if (process.platform === 'darwin' && app.dock) {
       applyDockIcon()
     }
@@ -1558,15 +1857,10 @@ if (!gotLock) {
     const bootstrapOk = await bootstrapApi()
     ensureTray()
     if (bootstrapOk) {
-      createWindow()
-      void loadCatalog()
-      void loadActivity()
-      void loadAppUpdate()
-      void listenForApiEvents()
+      startMainUiAfterBootstrap()
       setInterval(() => {
         if (!isQuitting) void loadAppUpdate()
       }, APP_UPDATE_POLL_MS)
-      void loadRetailStatus()
       setInterval(() => {
         if (!isQuitting) void retailTick()
       }, RETAIL_TICK_MS)
@@ -1598,6 +1892,39 @@ if (!gotLock) {
     showMainWindow()
   })
 }
+
+ipcMain.handle('quit-app', () => {
+  isQuitting = true
+  app.quit()
+})
+
+ipcMain.handle('debug-console:show', () => {
+  openDebugConsole()
+  return true
+})
+
+ipcMain.handle('debug-log:get-snapshot', () => debugLog.getSnapshot())
+
+ipcMain.handle('debug-log:copy-all', () => {
+  const text = debugLog.getText()
+  if (text) clipboard.writeText(text)
+  return text
+})
+
+ipcMain.handle('debug-log:clear', () => {
+  debugLog.clear()
+  return true
+})
+
+ipcMain.handle('debug-log:reveal-file', () => {
+  const dir = path.dirname(debugLogFilePath)
+  if (fs.existsSync(debugLogFilePath)) {
+    shell.showItemInFolder(debugLogFilePath)
+    return debugLogFilePath
+  }
+  shell.openPath(dir)
+  return dir
+})
 
 ipcMain.handle('get-api-token', async () => {
   try {
