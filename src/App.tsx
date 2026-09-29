@@ -90,6 +90,7 @@ import {
   readSortMode,
   shouldShowOnboarding,
 } from '@/lib/preferences'
+import { closedSettingsFocus, startOnboardingFromSettings } from '@/lib/settingsSession'
 import { actionCopy, emptyImportError, importDoneCopy, progressActionCopy, verbForBatchAction } from '@/lib/notify'
 import { planNeedsReview } from '@/lib/planner'
 import { clearFontDragImage } from '@/lib/dragPreview'
@@ -199,6 +200,13 @@ function AppShell() {
   const retailRef = useRef<RetailSyncStatus | null>(null)
   retailRef.current = retail
   entriesRef.current = entries
+
+  function closeSettings() {
+    const closed = closedSettingsFocus()
+    setSettingsOpen(closed.settingsOpen)
+    setSettingsFocusAppUpdate(closed.focusAppUpdate)
+    setSettingsFocusWatchFolders(closed.focusWatchFolders)
+  }
 
   function applyCatalog(next: CatalogEntry[], revision?: number) {
     if (typeof revision === 'number') {
@@ -2954,11 +2962,11 @@ function AppShell() {
         <SettingsDialog
           open={settingsOpen}
           onOpenChange={(open) => {
-            setSettingsOpen(open)
             if (!open) {
-              setSettingsFocusAppUpdate(false)
-              setSettingsFocusWatchFolders(false)
+              closeSettings()
+              return
             }
+            setSettingsOpen(true)
           }}
           settings={settings}
           onSettingsChange={applySettings}
@@ -2969,8 +2977,8 @@ function AppShell() {
           highlightAppUpdate={settingsFocusAppUpdate}
           highlightWatchFolders={settingsFocusWatchFolders}
           onStartOnboarding={() => {
-            setSettingsOpen(false)
-            setOnboardingOpen(true)
+            closeSettings()
+            setOnboardingOpen(startOnboardingFromSettings().onboardingOpen)
           }}
           retail={retail}
           retailFamiliesOnMac={retailFamiliesOnMac}
