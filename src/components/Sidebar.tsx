@@ -128,6 +128,99 @@ function navButtonClass(active: boolean, extra?: string) {
   )
 }
 
+export function LibraryFilterGroups({
+  libraryFilters,
+  libraryFilterCounts,
+  onLibraryFiltersChange,
+}: {
+  libraryFilters: LibraryFilter[]
+  libraryFilterCounts: Record<LibraryFilter, number>
+  onLibraryFiltersChange: (value: LibraryFilter[]) => void
+}) {
+  const [filterGroupsOpen, setFilterGroupsOpen] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(LIBRARY_FILTER_GROUPS.map((group) => [group.heading, true])),
+  )
+
+  function toggleFilter(id: LibraryFilter) {
+    onLibraryFiltersChange(
+      libraryFilters.includes(id)
+        ? libraryFilters.filter((item) => item !== id)
+        : [...libraryFilters, id],
+    )
+  }
+
+  return (
+    <div className="flex w-full flex-wrap gap-3 md:mt-2 md:flex-col md:gap-2 md:border-t md:pt-2">
+      {libraryFilters.length > 0 ? (
+        <div className="flex w-full justify-end">
+          <Button
+            type="button"
+            size="default"
+            variant="ghost"
+            className={navButtonClass(false, 'h-6 w-auto px-1.5')}
+            onClick={() => onLibraryFiltersChange([])}
+          >
+            × Clear
+          </Button>
+        </div>
+      ) : null}
+      {LIBRARY_FILTER_GROUPS.map((group) => {
+        const groupOpen = filterGroupsOpen[group.heading] ?? true
+        const heading = group.heading.toLowerCase()
+        return (
+          <div key={group.heading} className="flex w-full flex-col gap-0.5">
+            <div className="group/filter-section flex w-full items-center gap-0.5 px-1 pt-1">
+              <button
+                type="button"
+                className="flex min-w-0 flex-1 items-center gap-1 px-1 text-left"
+                aria-expanded={groupOpen}
+                aria-label={groupOpen ? `Hide ${heading}` : `Show ${heading}`}
+                onClick={() =>
+                  setFilterGroupsOpen((current) => ({
+                    ...current,
+                    [group.heading]: !groupOpen,
+                  }))
+                }
+              >
+                <span className="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+                  {group.heading}
+                </span>
+                {groupOpen ? (
+                  <ChevronDown className="size-3 opacity-0 transition-opacity group-hover/filter-section:opacity-70" />
+                ) : (
+                  <ChevronRight className="size-3 opacity-0 transition-opacity group-hover/filter-section:opacity-70" />
+                )}
+              </button>
+            </div>
+            {groupOpen
+              ? group.filters.map((filter) => {
+                  const active = libraryFilters.includes(filter.id)
+                  const Icon = filter.icon
+                  return (
+                    <Button
+                      key={filter.id}
+                      type="button"
+                      size="default"
+                      variant="ghost"
+                      aria-pressed={active}
+                      aria-label={`Filter ${filter.label.toLowerCase()}`}
+                      className={navButtonClass(active, 'w-full')}
+                      onClick={() => toggleFilter(filter.id)}
+                    >
+                      <Icon className="size-3.5 opacity-70" />
+                      <span className="min-w-0 truncate">{filter.label}</span>
+                      <Badge className="ml-auto">{libraryFilterCounts[filter.id] ?? 0}</Badge>
+                    </Button>
+                  )
+                })
+              : null}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function SidebarItem({
   active,
   icon: Icon,
@@ -403,9 +496,6 @@ export function Sidebar({
   const skipRenameCommitRef = useRef(false)
   const renameSessionRef = useRef<{ id: string; original: string } | null>(null)
   const [savedFiltersOpen, setSavedFiltersOpen] = useState(true)
-  const [filterGroupsOpen, setFilterGroupsOpen] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(LIBRARY_FILTER_GROUPS.map((group) => [group.heading, true])),
-  )
   const [editingFilterId, setEditingFilterId] = useState<string | null>(null)
   const [filterRenameValue, setFilterRenameValue] = useState('')
   const filterRenameInputRef = useRef<HTMLInputElement>(null)
@@ -525,14 +615,6 @@ export function Sidebar({
     const next = setShowTotal(showTotals, id, value)
     setShowTotals(next)
     writeShowTotals(next)
-  }
-
-  function toggleFilter(id: LibraryFilter) {
-    onLibraryFiltersChange(
-      libraryFilters.includes(id)
-        ? libraryFilters.filter((item) => item !== id)
-        : [...libraryFilters, id],
-    )
   }
 
   return (
@@ -1055,63 +1137,13 @@ export function Sidebar({
             </Button>
           </div>
         ) : null}
-        {tab === 'library' && (
-          <div className="flex w-full flex-wrap gap-3 md:mt-2 md:flex-col md:gap-2 md:border-t md:pt-2">
-            {LIBRARY_FILTER_GROUPS.map((group) => {
-              const groupOpen = filterGroupsOpen[group.heading] ?? true
-              const heading = group.heading.toLowerCase()
-              return (
-                <div key={group.heading} className="flex w-full flex-col gap-0.5">
-                  <div className="group/filter-section flex w-full items-center gap-0.5 px-1 pt-1">
-                    <button
-                      type="button"
-                      className="flex min-w-0 flex-1 items-center gap-1 px-1 text-left"
-                      aria-expanded={groupOpen}
-                      aria-label={groupOpen ? `Hide ${heading}` : `Show ${heading}`}
-                      onClick={() =>
-                        setFilterGroupsOpen((current) => ({
-                          ...current,
-                          [group.heading]: !groupOpen,
-                        }))
-                      }
-                    >
-                      <span className="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
-                        {group.heading}
-                      </span>
-                      {groupOpen ? (
-                        <ChevronDown className="size-3 opacity-0 transition-opacity group-hover/filter-section:opacity-70" />
-                      ) : (
-                        <ChevronRight className="size-3 opacity-0 transition-opacity group-hover/filter-section:opacity-70" />
-                      )}
-                    </button>
-                  </div>
-                  {groupOpen
-                    ? group.filters.map((filter) => {
-                        const active = libraryFilters.includes(filter.id)
-                        const Icon = filter.icon
-                        return (
-                          <Button
-                            key={filter.id}
-                            type="button"
-                            size="default"
-                            variant="ghost"
-                            aria-pressed={active}
-                            aria-label={`Filter ${filter.label.toLowerCase()}`}
-                            className={navButtonClass(active, 'w-full')}
-                            onClick={() => toggleFilter(filter.id)}
-                          >
-                            <Icon className="size-3.5 opacity-70" />
-                            <span className="min-w-0 truncate">{filter.label}</span>
-                            <Badge className="ml-auto">{libraryFilterCounts[filter.id] ?? 0}</Badge>
-                          </Button>
-                        )
-                      })
-                    : null}
-                </div>
-              )
-            })}
-          </div>
-        )}
+        {tab === 'library' ? (
+          <LibraryFilterGroups
+            libraryFilters={libraryFilters}
+            libraryFilterCounts={libraryFilterCounts}
+            onLibraryFiltersChange={onLibraryFiltersChange}
+          />
+        ) : null}
       </nav>
       </ScrollArea>
       <div className="border-t px-3 py-2">
