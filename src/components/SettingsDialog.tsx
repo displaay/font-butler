@@ -639,7 +639,7 @@ function GeneralPane({
       <SettingsSection title="App">
         <SettingsRow
           label="Icon in menu bar"
-          description="Keep Font Buttler running in the menu bar after you close the window. Click the icon to reinstall updated fonts, clear caches, or quit."
+          description="Keep Font Buttler running in the menu bar after you close the window. The Dock icon hides until you show the window again. Click the icon to show the window, reinstall updated fonts, clear caches, or quit."
           htmlFor="menu-bar-icon"
         >
           <input
