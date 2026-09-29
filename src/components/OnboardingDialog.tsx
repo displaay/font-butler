@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { X } from 'lucide-react'
 import { FolderSetupDialog } from '@/components/FolderSetupDialog'
@@ -92,6 +92,11 @@ export function OnboardingDialog({
   onComplete: () => void
 }) {
   const finishedRef = useRef(false)
+  const finishingRef = useRef<Promise<void> | null>(null)
+  const settleRetailRef = useRef<() => Promise<void>>(() => Promise.resolve())
+  const registerRetailSettle = useCallback((settle: () => Promise<void>) => {
+    settleRetailRef.current = settle
+  }, [])
   const settingsRef = useRef(settings)
   const onRetailChangeRef = useRef(onRetailChange)
   const installAfterId = useId()
@@ -177,14 +182,25 @@ export function OnboardingDialog({
 
   async function finish() {
     if (finishedRef.current) return
-    finishedRef.current = true
-    onComplete()
-    try {
-      await persist({ onboardingCompleted: true })
-    } catch (error) {
-      finishedRef.current = false
-      toast.error(error instanceof Error ? error.message : 'Could not finish setup')
-    }
+    if (finishingRef.current) return finishingRef.current
+    const job = (async () => {
+      setBusy(true)
+      try {
+        await settleRetailRef.current()
+        if (finishedRef.current) return
+        finishedRef.current = true
+        onComplete()
+        await persist({ onboardingCompleted: true })
+      } catch (error) {
+        finishedRef.current = false
+        toast.error(error instanceof Error ? error.message : 'Could not finish setup')
+      } finally {
+        setBusy(false)
+        finishingRef.current = null
+      }
+    })()
+    finishingRef.current = job
+    return job
   }
 
   async function start() {
@@ -199,8 +215,14 @@ export function OnboardingDialog({
     }
   }
 
-  function leaveFolders() {
-    setStep('fonts')
+  async function leaveFolders() {
+    setBusy(true)
+    try {
+      await settleRetailRef.current()
+      setStep('fonts')
+    } finally {
+      setBusy(false)
+    }
   }
 
   async function afterFonts() {
@@ -387,6 +409,7 @@ export function OnboardingDialog({
                     status={retailStatus}
                     busy={locked}
                     deferInstall
+                    onSettle={registerRetailSettle}
                     onStatus={(status) => {
                       setRetailStatus(status)
                       onRetailChangeRef.current?.(status)
@@ -512,10 +535,10 @@ export function OnboardingDialog({
                 </>
               ) : step === 'folders' ? (
                 <>
-                  <Button variant="outline" disabled={locked} onClick={leaveFolders}>
+                  <Button variant="outline" disabled={locked} onClick={() => void leaveFolders()}>
                     Skip
                   </Button>
-                  <Button disabled={locked} onClick={leaveFolders}>
+                  <Button disabled={locked} onClick={() => void leaveFolders()}>
                     Continue
                   </Button>
                 </>

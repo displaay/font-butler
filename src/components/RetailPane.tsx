@@ -8,6 +8,7 @@ import { Input, PasswordInput } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { api } from '@/lib/api'
 import { startQueuedFontAction } from '@/lib/actionQueue'
+import { createRetailWorkGate, type RetailWorkGate } from '@/lib/retailWorkGate'
 import { RetailDisableDialog } from '@/components/RetailDisableDialog'
 import { RetailFamiliesOffDialog } from '@/components/RetailFamiliesOffDialog'
 import {
@@ -495,6 +496,7 @@ export function RetailPane({
   onRequestDisable,
   deferInstall = false,
   defaultAdvanced = false,
+  onSettle,
 }: {
   status: RetailSyncStatus | null
   /** Retail families with fonts installed or deactivated on this Mac. */
@@ -510,6 +512,8 @@ export function RetailPane({
   deferInstall?: boolean
   /** Initial open state of the worker-token panel. Settings and onboarding start collapsed. */
   defaultAdvanced?: boolean
+  /** Onboarding awaits this before Continue, close, or finish. */
+  onSettle?: (settle: () => Promise<void>) => void
 }) {
   const urlId = useId()
   const tokenId = useId()
@@ -529,6 +533,8 @@ export function RetailPane({
     () => Boolean(status?.enabled) && (status?.fonts.length ?? 0) === 0 && !status?.checkedAt,
   )
   const autoCheckStartedRef = useRef(false)
+  const gateRef = useRef<RetailWorkGate>(createRetailWorkGate())
+  const bundledCheckRef = useRef(false)
 
   const disabled = busy
   const loadedRef = useRef(false)
@@ -547,15 +553,31 @@ export function RetailPane({
       })
   }, [status, onStatus])
 
+  function trackRetail<T>(work: () => Promise<T>): Promise<T> {
+    if (!deferInstall) return work()
+    return gateRef.current.track(work)
+  }
+
+  useEffect(() => {
+    if (!deferInstall) return
+    const gate = gateRef.current
+    onSettle?.(() => gate.settle())
+  }, [deferInstall, onSettle])
+
   const run = (action: () => Promise<{ status: RetailSyncStatus }>) => {
     setError(null)
-    startQueuedFontAction(async () => {
+    const job = async () => {
       try {
         onStatus((await action()).status)
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : 'Something went wrong.')
       }
-    })
+    }
+    if (deferInstall) {
+      void trackRetail(job)
+      return
+    }
+    startQueuedFontAction(job)
   }
 
   // The token decides the collection, and `mode` only moves on a check — run one right away so the badge
@@ -579,16 +601,18 @@ export function RetailPane({
     disableAction?: RetailDisableAction
   }) => {
     setError(null)
-    return api.retail
-      .configure(input)
-      .then((result) => {
-        onStatus(result.status)
-        return result
-      })
-      .catch((caught) => {
-        setError(caught instanceof Error ? caught.message : 'Something went wrong.')
-        return null
-      })
+    const job = () =>
+      api.retail
+        .configure(input)
+        .then((result) => {
+          onStatus(result.status)
+          return result
+        })
+        .catch((caught) => {
+          setError(caught instanceof Error ? caught.message : 'Something went wrong.')
+          return null
+        })
+    return trackRetail(job)
   }
 
   const startSync = () => {
@@ -612,11 +636,12 @@ export function RetailPane({
     // `checkedAt` is per process: after a restart the list comes from catalog listings, which no longer
     // include families turned off, so check once to list them again.
     if (!status || status.checkedAt) return
+    if (bundledCheckRef.current) return
     if (autoCheckStartedRef.current) return
     autoCheckStartedRef.current = true
     setChecking(true)
     setError(null)
-    startQueuedFontAction(async () => {
+    const job = async () => {
       try {
         onStatus(
           (await api.retail.check(true, deferInstall ? { credentialsOnly: false } : undefined)).status,
@@ -626,7 +651,9 @@ export function RetailPane({
       } finally {
         setChecking(false)
       }
-    })
+    }
+    if (deferInstall) void gateRef.current.track(job)
+    else startQueuedFontAction(job)
   }, [enabled, status, onStatus, deferInstall])
 
   const turnSyncOff = (disableAction: RetailDisableAction) => {
@@ -641,7 +668,7 @@ export function RetailPane({
         <>
           <DisplaayMark className="size-4" />
           Displaay retail
-          {deferInstall && status?.mode === 'trial' ? <TrialBadge /> : null}
+          {deferInstall && status?.mode !== 'retail' ? <TrialBadge /> : null}
         </>
       }
     >
@@ -663,7 +690,20 @@ export function RetailPane({
               else setDisableOpen(true)
               return
             }
-            void run(() => api.retail.configure({ enabled: true }))
+            if (!deferInstall) {
+              void run(() => api.retail.configure({ enabled: true }))
+              return
+            }
+            bundledCheckRef.current = true
+            void run(async () => {
+              try {
+                const configured = await api.retail.configure({ enabled: true })
+                if (!configured.status.enabled) return configured
+                return listCheck(true)
+              } finally {
+                bundledCheckRef.current = false
+              }
+            })
           }}
         />
       </SettingsRow>

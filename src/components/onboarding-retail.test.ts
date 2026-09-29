@@ -102,13 +102,30 @@ test('onboarding retail lists show and install choices without a second sync con
   const settings = markup({ deferInstall: false })
   assert.match(settings, />Sync 2</)
   assert.equal(settings.includes('installs it after setup'), false)
+  assert.equal(settings.includes('>Trial<'), false)
 })
 
 test('retail font list stays hidden until sync is on', () => {
-  const html = markup({ status: status({ enabled: false, fonts: [], mode: null, pending: 0 }), deferInstall: true })
+  const html = markup({
+    status: status({ enabled: false, fonts: [], mode: null, pending: 0, checkedAt: null }),
+    deferInstall: true,
+  })
+  const heading = html.slice(0, html.indexOf('aria-label="Displaay retail sync"'))
+  assert.match(heading, /Displaay retail/)
+  assert.match(heading, />Trial</)
   assert.equal(html.includes('Reckless'), false)
   assert.equal(html.includes('Worker token'), false)
   assert.match(html, /aria-label="Displaay retail sync"/)
+})
+
+test('a confirmed retail collection hides the onboarding trial heading', () => {
+  const html = markup({
+    status: status({ mode: 'retail', enabled: false, fonts: [], pending: 0 }),
+    deferInstall: true,
+  })
+  const heading = html.slice(0, html.indexOf('aria-label="Displaay retail sync"'))
+  assert.match(heading, /Displaay retail/)
+  assert.equal(heading.includes('>Trial<'), false)
 })
 
 test('onboarding embeds the Settings retail pane and does not sync while it is open', async () => {
@@ -116,4 +133,8 @@ test('onboarding embeds the Settings retail pane and does not sync while it is o
   assert.match(source, /<RetailPane[\s\S]*deferInstall/)
   assert.equal(/api\.retail\.sync\(/.test(source), false)
   assert.equal(source.includes('Worker token'), false)
+  const finish = source.slice(source.indexOf('async function finish'))
+  assert.match(finish, /await settleRetailRef\.current\(\)[\s\S]*onboardingCompleted:\s*true/)
+  const leave = source.slice(source.indexOf('async function leaveFolders'), source.indexOf('async function afterFonts'))
+  assert.match(leave, /await settleRetailRef\.current\(\)/)
 })
