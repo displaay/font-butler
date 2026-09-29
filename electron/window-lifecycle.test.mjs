@@ -4,7 +4,9 @@ import { test } from 'node:test'
 import {
   applyMainWindowClosed,
   applyWindowShown,
+  appWindowNeedsDock,
   mainWindowCloseEffect,
+  otherAppWindowNeedsDock,
   shouldQuitOnWindowAllClosed,
   shouldShowDockOnWindowShow,
 } from './window-lifecycle.mjs'
@@ -38,6 +40,46 @@ test('red close hides the Dock, keeps the menu bar, and does not quit', () => {
     quit: false,
   })
   assert.deepEqual(dock.calls, ['hide'])
+})
+
+function fakeWindow({ visible = false, minimized = false, destroyed = false } = {}) {
+  return {
+    isVisible: () => visible,
+    isMinimized: () => minimized,
+    isDestroyed: () => destroyed,
+  }
+}
+
+test('red close keeps the Dock while another app window is visible', () => {
+  const dock = fakeDock()
+  const effect = applyMainWindowClosed({
+    isQuitting: false,
+    platform: 'darwin',
+    menuBarIconEnabled: true,
+    otherVisibleWindow: true,
+    dock,
+  })
+  assert.equal(effect.hideDock, false)
+  assert.equal(effect.keepMenuBar, true)
+  assert.equal(effect.quit, false)
+  assert.deepEqual(dock.calls, [])
+})
+
+test('the window that just closed does not keep the Dock by itself', () => {
+  const closing = fakeWindow({ visible: true })
+  const logs = fakeWindow({ visible: true })
+  const hidden = fakeWindow({ visible: false })
+  const minimized = fakeWindow({ minimized: true })
+  const destroyed = fakeWindow({ visible: true, destroyed: true })
+  assert.equal(appWindowNeedsDock(null), false)
+  assert.equal(appWindowNeedsDock(destroyed), false)
+  assert.equal(appWindowNeedsDock(hidden), false)
+  assert.equal(appWindowNeedsDock(logs), true)
+  assert.equal(appWindowNeedsDock(minimized), true)
+  assert.equal(otherAppWindowNeedsDock([closing], closing), false)
+  assert.equal(otherAppWindowNeedsDock([closing, hidden, destroyed], closing), false)
+  assert.equal(otherAppWindowNeedsDock([closing, logs], closing), true)
+  assert.equal(otherAppWindowNeedsDock([closing, minimized], closing), true)
 })
 
 test('quitting does not hide the Dock from the window close path', () => {
@@ -112,8 +154,10 @@ test('main process closes the window, hides the Dock, and shows it again with th
   const main = readFileSync(new URL('./main.mjs', import.meta.url), 'utf8')
   assert.match(main, /applyMainWindowClosed\(/)
   assert.match(main, /applyWindowShown\(/)
+  assert.match(main, /otherAppWindowNeedsDock\(BrowserWindow\.getAllWindows\(\), closingWindow\)/)
   assert.match(main, /shouldQuitOnWindowAllClosed\(/)
   assert.match(main, /label: 'Show Font Buttler'/)
+  assert.match(main, /function openDebugConsole\(\) \{\n  showDockIcon\(\)\n  showDebugConsole\(/)
   assert.doesNotMatch(main, /mainWindow\?\.hide\(\)/)
   assert.doesNotMatch(main, /event\.preventDefault\(\)\s*\n\s*mainWindow\?\.hide\(\)/)
 })

@@ -48,6 +48,7 @@ import {
 import {
   applyMainWindowClosed,
   applyWindowShown,
+  otherAppWindowNeedsDock,
   shouldQuitOnWindowAllClosed,
   shouldShowDockOnWindowShow,
 } from './window-lifecycle.mjs'
@@ -77,7 +78,15 @@ const debugLog = createDebugLogStore()
 let debugLogFilePath = defaultLogFilePath()
 
 function openDebugConsole() {
-  showDebugConsole({ dirname: __dirname })
+  showDockIcon()
+  showDebugConsole({
+    dirname: __dirname,
+    onFirstOpen(win) {
+      win.on('closed', () => {
+        hideDockIconIfNoAppWindowNeedsIt(win)
+      })
+    },
+  })
 }
 
 function emitDebugLogUi(line) {
@@ -203,11 +212,12 @@ function showDockIcon() {
   else paint()
 }
 
-function hideDockIconForClosedMainWindow() {
+function hideDockIconIfNoAppWindowNeedsIt(closingWindow) {
   applyMainWindowClosed({
     isQuitting,
     platform: process.platform,
     menuBarIconEnabled: menuBarIconEnabled && Boolean(tray),
+    otherVisibleWindow: otherAppWindowNeedsDock(BrowserWindow.getAllWindows(), closingWindow),
     dock: app.dock,
   })
 }
@@ -719,8 +729,9 @@ function createWindow() {
     return { action: 'deny' }
   })
   mainWindow.on('closed', () => {
+    const closedWindow = mainWindow
     mainWindow = null
-    hideDockIconForClosedMainWindow()
+    hideDockIconIfNoAppWindowNeedsIt(closedWindow)
   })
 }
 
