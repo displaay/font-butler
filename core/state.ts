@@ -217,10 +217,14 @@ export function effectiveUpdatePolicy(
   if (folder?.paused) {
     return 'manual'
   }
-  if (folder) {
-    return folder.autoUpdate ? 'automatic' : 'manual'
+  // Folder policy "Install new fonts and updates" sets autoUpdate, so that
+  // folder still reinstalls when the global switch is off. The global switch
+  // also reinstalls updates for other folders, including Add to library,
+  // whose policy leaves autoUpdate false. Pause still stops automation.
+  if (folder?.autoUpdate || globalAuto) {
+    return 'automatic'
   }
-  return globalAuto ? 'automatic' : 'manual'
+  return 'manual'
 }
 
 export function canAutomateUpdates(

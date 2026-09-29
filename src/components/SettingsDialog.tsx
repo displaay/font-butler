@@ -96,7 +96,7 @@ const CATEGORIES: {
     id: 'fonts',
     label: 'Fonts',
     icon: Type,
-    description: 'Choose whether dropped or updated fonts are installed automatically.',
+    description: 'Choose whether fonts you add are activated.',
   },
   {
     id: 'destinations',
@@ -423,7 +423,6 @@ export function SettingsDialog({
               )}
               {category === 'folders' && (
                 <FoldersPane
-                  settings={settings}
                   folders={folders}
                   watchFolders={watchFolders}
                   busy={busy}
@@ -522,6 +521,40 @@ function GeneralPane({
 }) {
   return (
     <div>
+      <SettingsSection>
+        <SettingsRow
+          label="Automatically reinstall when an update is detected"
+          description="When a tracked source file changes, reinstall the installed copy. Off by default."
+          htmlFor="auto-reinstall-on-update"
+        >
+          <input
+            id="auto-reinstall-on-update"
+            type="checkbox"
+            checked={settings?.autoReinstallOnUpdate === true}
+            disabled={busy || !settings}
+            onChange={(event) =>
+              void onSave({ autoReinstallOnUpdate: event.target.checked })
+            }
+            className={checkboxClass}
+          />
+        </SettingsRow>
+        <SettingsRow
+          label="Install fonts added to watch folders"
+          description="When a font file appears in a watch folder, install it. Turn this off to keep those fonts in the library without installing."
+          htmlFor="install-watch-folder-fonts"
+        >
+          <input
+            id="install-watch-folder-fonts"
+            type="checkbox"
+            checked={settings?.installWatchFolderFonts !== false}
+            disabled={busy || !settings}
+            onChange={(event) =>
+              void onSave({ installWatchFolderFonts: event.target.checked })
+            }
+            className={checkboxClass}
+          />
+        </SettingsRow>
+      </SettingsSection>
       <SettingsSection title="Appearance">
         <SettingsRow
           label="Theme"
@@ -811,7 +844,6 @@ function LatinPreviewRow({
 }
 
 function FoldersPane({
-  settings,
   folders,
   watchFolders,
   busy,
@@ -825,7 +857,6 @@ function FoldersPane({
   onSettingsChange,
   onRequestRetailDisable,
 }: {
-  settings: AppSettings | null
   folders: WatchFolder[]
   watchFolders: string[]
   busy: boolean
@@ -879,22 +910,6 @@ function FoldersPane({
             Add folder
           </Button>
         </SettingsRow>
-        <SettingsRow
-          label="Install fonts added to watch folders"
-          description="When a font file appears in a watch folder, install it. Turn this off to keep those fonts in the library without installing."
-          htmlFor="install-watch-folder-fonts"
-        >
-          <input
-            id="install-watch-folder-fonts"
-            type="checkbox"
-            checked={settings?.installWatchFolderFonts !== false}
-            disabled={busy || !settings}
-            onChange={(event) =>
-              void onSave({ installWatchFolderFonts: event.target.checked })
-            }
-            className={checkboxClass}
-          />
-        </SettingsRow>
       </SettingsSection>
       <RetailPane
         status={retail ?? null}
@@ -931,22 +946,6 @@ function FontsPane({
           disabled={busy || !settings}
           onChange={(event) =>
             void onSave({ installAfterUpload: event.target.checked })
-          }
-          className={checkboxClass}
-        />
-      </SettingsRow>
-      <SettingsRow
-        label="Automatically reinstall when an update is detected"
-        description="When a tracked source file changes, reinstall the installed copy. Off by default."
-        htmlFor="auto-reinstall-on-update"
-      >
-        <input
-          id="auto-reinstall-on-update"
-          type="checkbox"
-          checked={settings?.autoReinstallOnUpdate === true}
-          disabled={busy || !settings}
-          onChange={(event) =>
-            void onSave({ autoReinstallOnUpdate: event.target.checked })
           }
           className={checkboxClass}
         />

@@ -6,7 +6,9 @@ import path from 'node:path'
 import { test } from 'node:test'
 import type { AppPaths } from './paths.ts'
 import { FontButlerService } from './service.ts'
-import { closeAllWatchers, syncInboxWatcher } from './watch.ts'
+import { canAutomateUpdates, effectiveUpdatePolicy } from './state.ts'
+import type { CatalogEntry } from './types.ts'
+import { closeAllWatchers, enqueueSourceStatusRefresh, syncInboxWatcher } from './watch.ts'
 
 function tempPaths(): AppPaths {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-watch-settings-'))
@@ -270,6 +272,208 @@ test('watch folder add during onboarding does not import until setup is finished
     assert.equal(entry.status, 'installed')
     assert.ok(entry.installedPath)
     assert.notEqual(path.resolve(entry.installedPath), path.resolve(font))
+  } finally {
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+function installedEntry(partial: Partial<CatalogEntry> = {}): CatalogEntry {
+  return {
+    id: 'font',
+    sourcePath: '/tmp/Font.ttf',
+    sourceMtimeMs: 1,
+    sourceSize: 1,
+    status: 'installed',
+    faces: [],
+    format: 'ttf',
+    addedAt: 1,
+    updatedAt: 1,
+    ...partial,
+  }
+}
+
+async function waitForEntry(
+  service: FontButlerService,
+  id: string,
+  predicate: (entry: CatalogEntry) => boolean,
+  timeoutMs = 5000,
+): Promise<CatalogEntry> {
+  const start = Date.now()
+  let last: CatalogEntry | undefined
+  while (Date.now() - start < timeoutMs) {
+    last = service.listCatalog().find((entry) => entry.id === id)
+    if (last && predicate(last)) return last
+    await new Promise((resolve) => setTimeout(resolve, 40))
+  }
+  assert.fail(`timed out waiting for ${id}; last status ${last?.status ?? 'missing'}`)
+}
+
+test('library folder policy does not block global auto-reinstall', () => {
+  const library = { paused: false, installNew: false, autoUpdate: false }
+  const installNew = { paused: false, installNew: true, autoUpdate: false }
+  const installUpdates = { paused: false, installNew: true, autoUpdate: true }
+  const entry = installedEntry()
+  assert.equal(effectiveUpdatePolicy(entry, library, true), 'automatic')
+  assert.equal(canAutomateUpdates(entry, library, true), true)
+  assert.equal(effectiveUpdatePolicy(entry, library, false), 'manual')
+  assert.equal(canAutomateUpdates(installedEntry({ status: 'uninstalled' }), library, true), false)
+  assert.equal(effectiveUpdatePolicy(entry, installNew, false), 'manual')
+  assert.equal(effectiveUpdatePolicy(entry, installNew, true), 'automatic')
+  assert.equal(effectiveUpdatePolicy(entry, installUpdates, false), 'automatic')
+  assert.equal(effectiveUpdatePolicy(entry, { ...library, paused: true }, true), 'manual')
+  assert.equal(
+    effectiveUpdatePolicy(installedEntry({ updatePolicy: 'manual' }), library, true),
+    'manual',
+  )
+})
+
+test('Add to library reinstalls a detected update when auto-reinstall is on', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  const font = path.join(inbox, 'LibraryUpdate.ttf')
+  const extra = path.join(inbox, 'LibraryNew.ttf')
+  writeTestFont(font, 'LibraryUpdate', 'LibraryUpdate-Regular')
+  writeTestFont(extra, 'LibraryNew', 'LibraryNew-Regular')
+  const service = new FontButlerService(paths)
+  try {
+    await service.updateSettings({
+      autoReinstallOnUpdate: true,
+      installWatchFolderFonts: true,
+      onboardingCompleted: true,
+    })
+    const configured = await service.configureFolder({ root: inbox, policy: 'library' })
+    assert.equal(configured.folder.policy, 'library')
+    assert.equal(configured.folder.installNew, false)
+    assert.equal(configured.folder.autoUpdate, false)
+    await service.startWatching(configured.folder.id)
+    const tracked = service.listCatalog().find((entry) => entry.faces[0]?.familyName === 'LibraryUpdate')
+    const fresh = service.listCatalog().find((entry) => entry.faces[0]?.familyName === 'LibraryNew')
+    assert.ok(tracked)
+    assert.ok(fresh)
+    assert.equal(tracked.status, 'uninstalled')
+    assert.equal(fresh.status, 'uninstalled')
+    assert.equal(tracked.installedPath, undefined)
+    assert.equal(tracked.ownerFolderId, configured.folder.id)
+
+    const installed = await service.install(tracked.id)
+    assert.equal(installed.status, 'installed')
+    assert.ok(installed.installedPath)
+    const before = fs.readFileSync(installed.installedPath)
+    writeTestFont(font, 'LibraryUpdate', 'LibraryUpdate-Regular', { version: 'Version 2.000' })
+    enqueueSourceStatusRefresh(paths, font)
+    const after = await waitForEntry(service, installed.id, (entry) => {
+      if (entry.status !== 'installed' || !entry.installedPath) return false
+      return !fs.readFileSync(entry.installedPath).equals(before)
+    })
+    assert.equal(after.status, 'installed')
+    assert.equal(service.listCatalog().find((entry) => entry.id === fresh.id)?.status, 'uninstalled')
+  } finally {
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('Add to library does not install new files unless the folder policy says to', async () => {
+  const paths = tempPaths()
+  const libraryDir = path.join(paths.dataRoot, 'library')
+  const installDir = path.join(paths.dataRoot, 'install-new')
+  const libraryFont = path.join(libraryDir, 'Stay.ttf')
+  const installFont = path.join(installDir, 'Go.ttf')
+  writeTestFont(libraryFont, 'Stay', 'Stay-Regular')
+  writeTestFont(installFont, 'Go', 'Go-Regular')
+  const service = new FontButlerService(paths)
+  try {
+    await service.updateSettings({
+      autoReinstallOnUpdate: true,
+      installWatchFolderFonts: false,
+      onboardingCompleted: true,
+    })
+    const library = await service.configureFolder({ root: libraryDir, policy: 'library' })
+    const installing = await service.configureFolder({ root: installDir, policy: 'install-new' })
+    await service.startWatching(library.folder.id)
+    await service.startWatching(installing.folder.id)
+    const stayed = service.listCatalog().find((entry) => entry.faces[0]?.familyName === 'Stay')
+    const installed = service.listCatalog().find((entry) => entry.faces[0]?.familyName === 'Go')
+    assert.ok(stayed)
+    assert.ok(installed)
+    assert.equal(stayed.status, 'uninstalled')
+    assert.equal(stayed.installedPath, undefined)
+    assert.equal(installed.status, 'installed')
+    assert.ok(installed.installedPath)
+    assert.notEqual(path.resolve(installed.installedPath), path.resolve(installFont))
+  } finally {
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('Add to library leaves a detected update outdated when auto-reinstall is off', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  const font = path.join(inbox, 'Hold.ttf')
+  writeTestFont(font, 'Hold', 'Hold-Regular')
+  const service = new FontButlerService(paths)
+  try {
+    await service.updateSettings({
+      autoReinstallOnUpdate: false,
+      onboardingCompleted: true,
+    })
+    const configured = await service.configureFolder({ root: inbox, policy: 'library' })
+    await service.startWatching(configured.folder.id)
+    const added = service.listCatalog().find((entry) => entry.faces[0]?.familyName === 'Hold')
+    assert.ok(added)
+    assert.equal(added.status, 'uninstalled')
+    const installed = await service.install(added.id)
+    assert.ok(installed.installedPath)
+    const before = fs.readFileSync(installed.installedPath)
+    writeTestFont(font, 'Hold', 'Hold-Regular', { version: 'Version 2.000' })
+    enqueueSourceStatusRefresh(paths, font)
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+    const after = service.listCatalog().find((entry) => entry.id === installed.id)
+    assert.ok(after)
+    assert.equal(after.status, 'outdated')
+    assert.ok(after.installedPath)
+    assert.deepEqual(fs.readFileSync(after.installedPath), before)
+  } finally {
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('Install new fonts and updates still reinstalls when global auto-reinstall is off', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  const font = path.join(inbox, 'Follow.ttf')
+  writeTestFont(font, 'Follow', 'Follow-Regular')
+  const service = new FontButlerService(paths)
+  try {
+    await service.updateSettings({
+      autoReinstallOnUpdate: false,
+      onboardingCompleted: true,
+    })
+    const configured = await service.configureFolder({
+      root: inbox,
+      policy: 'install-new-and-updates',
+    })
+    assert.equal(configured.folder.autoUpdate, true)
+    await service.startWatching(configured.folder.id)
+    const added = service.listCatalog().find((entry) => entry.faces[0]?.familyName === 'Follow')
+    assert.ok(added)
+    assert.equal(added.status, 'installed')
+    assert.ok(added.installedPath)
+    const before = fs.readFileSync(added.installedPath)
+    writeTestFont(font, 'Follow', 'Follow-Regular', { version: 'Version 2.000' })
+    enqueueSourceStatusRefresh(paths, font)
+    const after = await waitForEntry(service, added.id, (entry) => {
+      if (entry.status !== 'installed' || !entry.installedPath) return false
+      return !fs.readFileSync(entry.installedPath).equals(before)
+    })
+    assert.equal(after.status, 'installed')
   } finally {
     service.dispose()
     await closeAllWatchers()
