@@ -558,7 +558,7 @@ export function Sidebar({
         {TABS.filter(
           (item) =>
             item.id !== 'updates' ||
-            shouldShowUpdatesTab(counts.updates, hasAppUpdate, retailPending) ||
+            shouldShowUpdatesTab(counts.updates, retailPending) ||
             retailSyncing ||
             (searching && hasFontUpdates),
         ).map((item) => {
@@ -661,9 +661,7 @@ export function Sidebar({
                   : item.id === 'activity'
                     ? counts.activity ?? 0
                     : item.id === 'updates'
-                      ? counts.updates +
-                        (hasAppUpdate && !searching ? 1 : 0) +
-                        (searching ? 0 : retailPending)
+                      ? counts.updates + (searching ? 0 : retailPending)
                       : counts.updates
               }
               showTotal={item.id === 'updates' || searching || Boolean(showTotals[item.id])}
@@ -684,11 +682,9 @@ export function Sidebar({
               title={
                 item.id === 'activity' && activityUnread > 0
                   ? `${activityUnread} unread`
-                  : item.id === 'updates' && hasAppUpdate
-                    ? 'App update available'
-                    : item.id === 'updates' && retailPending > 0
-                      ? `${retailPending} retail ${retailPending === 1 ? 'font has' : 'fonts have'} a newer version`
-                      : undefined
+                  : item.id === 'updates' && retailPending > 0
+                    ? `${retailPending} retail ${retailPending === 1 ? 'font has' : 'fonts have'} a newer version`
+                    : undefined
               }
             />
           )
