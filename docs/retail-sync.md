@@ -114,10 +114,15 @@ it is the user's call, not ours.
 - Downloads are written to a staging `.part` file under the data root and committed into Fonts. A
   download whose length does not match the manifest is discarded and the previous file is left intact.
 - Checks never run on the cold-start path, matching the app-update check. Turning Sync on loads
-  the font list (Check) without downloading. Download only happens when the user chooses **Sync All**
-  or turns a family on. An interrupted download is marked `incomplete` on disk and resumes the next
+  the font list (Check) without downloading families that have not been installed yet. **Automatically
+  install updates** (on by default) makes that check download updates of families already chosen:
+  `changed`, missing, and corrupt files, plus a new file of a family that was already synced. Families
+  turned off are skipped, and `removed` files are not deleted. With the checkbox off, a check only
+  records the update and download waits for **Sync**. Turning a family on still downloads it.
+  An interrupted download is marked `incomplete` on disk and resumes the next
   time the app launches. A finished pass is not re-downloaded at startup, even if catalog rows remain
-  uninstalled because they conflicted or left the worker. Pending updates from a check wait for Sync.
+  uninstalled because they conflicted or left the worker. Updates that are not installed automatically
+  wait for Sync.
 
 ## Checking
 
@@ -126,7 +131,8 @@ Two paths, on purpose:
 - **Background check** — runs in the Electron main process next to the app-update poll, so it keeps
   going with the window closed. Sends no `refresh`, so the worker answers from its cached manifest.
   The interval is a setting (**Check automatically**): never, 15 minutes, hourly (default) or every 6
-  hours. Never on the cold-start path.
+  hours. Never on the cold-start path. The tick only posts `/api/retail/check`. When **Automatically
+  install updates** is on, that check installs the update itself.
 - **Check button** — sends `refresh=1` and makes the worker rebuild the manifest from R2.
 
 The cache does not have to expire for a new generation to show up: the regenerate webhook purges
@@ -196,7 +202,8 @@ and a check that switches collections first stops a running sync of the old one.
 stored in the local sync record; records from before trial tokens have none and are read from their keys
 (`-TRIALS` revision folder = trial). A manifest without `mode` (an older worker) counts as retail.
 
-`AppSettings.retailSync` holds `{ enabled, workerBaseUrl, autoCheckMinutes }`. There is no `folderId`.
+`AppSettings.retailSync` holds `{ enabled, workerBaseUrl, autoCheckMinutes, autoInstallUpdates }`.
+`autoInstallUpdates` defaults to true when the field is missing. There is no `folderId`.
 The default worker address is
 `https://w.displaay.net`; `https://admin-worker-dev.displaay.workers.dev` and a loopback `wrangler dev`
 address are accepted for development. Any other plain-http address is refused, because the token travels

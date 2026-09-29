@@ -44,6 +44,7 @@ export function defaultRetailSync(): RetailSyncSettings {
     enabled: false,
     workerBaseUrl: DEFAULT_RETAIL_WORKER_BASE_URL,
     autoCheckMinutes: DEFAULT_RETAIL_AUTOCHECK_MINUTES,
+    autoInstallUpdates: true,
     disabledGlyphsFiles: [],
     familyFormats: {},
     familyOptOuts: true,
@@ -62,6 +63,8 @@ function readRetailSync(value: unknown): RetailSyncSettings {
     enabled: row.enabled === true,
     workerBaseUrl,
     autoCheckMinutes: normalizeAutoCheckMinutes(row.autoCheckMinutes),
+    // Absent on settings files written before the checkbox existed. On is the default.
+    autoInstallUpdates: row.autoInstallUpdates !== false,
     disabledGlyphsFiles: normalizeDisabledGlyphsFiles(row.disabledGlyphsFiles),
     familyFormats: normalizeFamilyFormats(row.familyFormats),
     familyOptOuts: row.familyOptOuts === true,

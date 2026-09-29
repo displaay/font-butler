@@ -667,7 +667,7 @@ test('a check reports pending files, and a sync writes them into Fonts', async (
 
 test('a regenerated file is picked up as changed on the next check', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, token: 't', autoInstallUpdates: false })
 
   await syncRetail(paths, {
     fetchManifest: async () => manifestWith(4, 'e1'),
@@ -1110,6 +1110,194 @@ test('a finished retail sync does not download again on init', async () => {
   })
 })
 
+test('automatic retail install defaults on and stays off once turned off', async () => {
+  const paths = setup()
+  const fresh = await configureRetailSync(paths, {})
+  assert.equal(fresh.autoInstallUpdates, true)
+  assert.equal(loadSettings(paths).retailSync?.autoInstallUpdates, true)
+
+  const off = await configureRetailSync(paths, { autoInstallUpdates: false })
+  assert.equal(off.autoInstallUpdates, false)
+  const interval = await configureRetailSync(paths, { autoCheckMinutes: 15 })
+  assert.equal(interval.autoInstallUpdates, false)
+  assert.equal(interval.autoCheckMinutes, 15)
+  assert.equal(loadSettings(paths).retailSync?.autoInstallUpdates, false)
+})
+
+test('a detected retail change installs when automatic install is on', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 't' })
+  assert.equal(retailStatus(paths).autoInstallUpdates, true)
+
+  await syncRetail(paths, {
+    fetchManifest: async () =>
+      manifestWithFiles([
+        { basename: 'RecklessVF.otf', size: 4, etag: 'e1' },
+        { basename: 'Reckless-Light.otf', size: 4, etag: 'light' },
+      ]),
+    fetchFile: async () => new Uint8Array(4).fill(1),
+  })
+  const lightPath = path.join(paths.userFontsDir, 'Reckless-Light.otf')
+  assert.equal(fs.readFileSync(lightPath).length, 4)
+
+  const keys: string[] = []
+  const next: RetailManifest = {
+    generatedAt: '2026-01-02T00:00:00.000Z',
+    collections: [
+      {
+        glyphsFile: 'Reckless',
+        revisionId: 'rev-1',
+        lastRegeneratedAt: '2026-01-02T00:00:00.000Z',
+        files: [
+          {
+            key: 'Reckless/rev-1/RecklessVF.otf',
+            relativePath: 'Reckless/RecklessVF.otf',
+            size: 6,
+            etag: 'e2',
+            uploaded: '2026-01-02T00:00:00.000Z',
+            familyName: 'Reckless',
+          },
+          {
+            key: 'Reckless/rev-1/Reckless-Bold.otf',
+            relativePath: 'Reckless/Reckless-Bold.otf',
+            size: 4,
+            etag: 'bold',
+            uploaded: '2026-01-02T00:00:00.000Z',
+            familyName: 'Reckless',
+          },
+        ],
+      },
+      {
+        glyphsFile: 'Vinila',
+        revisionId: 'rev-1',
+        lastRegeneratedAt: '2026-01-02T00:00:00.000Z',
+        files: [
+          {
+            key: 'Vinila/rev-1/Vinila.otf',
+            relativePath: 'Vinila/Vinila.otf',
+            size: 4,
+            etag: 'v1',
+            uploaded: '2026-01-02T00:00:00.000Z',
+            familyName: 'Vinila',
+          },
+        ],
+      },
+    ],
+    skipped: [],
+  }
+  const status = await checkRetail(paths, {
+    fetchManifest: async () => next,
+    fetchFile: async ({ key }) => {
+      keys.push(key)
+      return new Uint8Array(key.endsWith('RecklessVF.otf') ? 6 : 4).fill(2)
+    },
+  })
+
+  assert.equal(status.error, null)
+  assert.deepEqual(keys.sort(), ['Reckless/rev-1/Reckless-Bold.otf', 'Reckless/rev-1/RecklessVF.otf'])
+  assert.equal(fs.readFileSync(path.join(paths.userFontsDir, 'RecklessVF.otf')).length, 6)
+  assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'Reckless-Bold.otf')), true)
+  assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'Vinila.otf')), false)
+  assert.equal(fs.readFileSync(lightPath).length, 4)
+  assert.equal(
+    status.drift.some((item) => item.kind === 'removed' && item.relativePath === 'Reckless/Reckless-Light.otf'),
+    true,
+  )
+  assert.equal(
+    status.drift.some((item) => item.kind === 'added' && item.relativePath === 'Vinila/Vinila.otf'),
+    true,
+  )
+})
+
+test('a detected retail change stays pending when automatic install is off', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 't', autoInstallUpdates: false })
+  await syncRetail(paths, {
+    fetchManifest: async () => manifestWith(4, 'e1'),
+    fetchFile: async () => new Uint8Array(4).fill(1),
+  })
+  const dest = path.join(paths.userFontsDir, 'RecklessVF.otf')
+  const before = fs.readFileSync(dest)
+
+  let downloads = 0
+  const after = await checkRetail(paths, {
+    fetchManifest: async () => manifestWith(6, 'e2'),
+    fetchFile: async () => {
+      downloads += 1
+      return new Uint8Array(6).fill(2)
+    },
+  })
+  assert.equal(downloads, 0)
+  assert.equal(after.pending, 1)
+  assert.equal(after.drift[0]?.kind, 'changed')
+  assert.equal(fs.readFileSync(dest).equals(before), true)
+})
+
+test('automatic retail install leaves opted-out families alone', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 't' })
+
+  const remote = (etag: string, size: number): RetailManifest => ({
+    generatedAt: '2026-01-01T00:00:00.000Z',
+    collections: [
+      {
+        glyphsFile: 'Reckless',
+        revisionId: 'rev-1',
+        lastRegeneratedAt: '2026-01-01T00:00:00.000Z',
+        files: [
+          {
+            key: 'Reckless/rev-1/RecklessVF.otf',
+            relativePath: 'Reckless/RecklessVF.otf',
+            size,
+            etag,
+            uploaded: '2026-01-01T00:00:00.000Z',
+            familyName: 'Reckless',
+          },
+        ],
+      },
+      {
+        glyphsFile: 'Zangezi',
+        revisionId: 'rev-1',
+        lastRegeneratedAt: '2026-01-01T00:00:00.000Z',
+        files: [
+          {
+            key: 'Zangezi/rev-1/Zangezi.otf',
+            relativePath: 'Zangezi/Zangezi.otf',
+            size,
+            etag,
+            uploaded: '2026-01-01T00:00:00.000Z',
+            familyName: 'Zangezi',
+          },
+        ],
+      },
+    ],
+    skipped: [],
+  })
+
+  await syncRetail(paths, {
+    fetchManifest: async () => remote('e1', 4),
+    fetchFile: async () => new Uint8Array(4).fill(1),
+  })
+  await configureRetailSync(paths, { disabledGlyphsFiles: ['Zangezi'] })
+  const zangeziPath = path.join(paths.userFontsDir, 'Zangezi.otf')
+  const before = fs.readFileSync(zangeziPath)
+
+  const keys: string[] = []
+  const status = await checkRetail(paths, {
+    fetchManifest: async () => remote('e2', 6),
+    fetchFile: async ({ key }) => {
+      keys.push(key)
+      return new Uint8Array(6).fill(2)
+    },
+  })
+
+  assert.equal(status.error, null)
+  assert.deepEqual(keys, ['Reckless/rev-1/RecklessVF.otf'])
+  assert.equal(fs.readFileSync(path.join(paths.userFontsDir, 'RecklessVF.otf')).length, 6)
+  assert.equal(fs.readFileSync(zangeziPath).equals(before), true)
+  assert.equal(status.fonts.find((font) => font.familyName === 'Zangezi')?.enabled, false)
+})
+
 test('the autocheck interval round-trips and rejects nonsense', async () => {
   const paths = setup()
 
@@ -1546,6 +1734,7 @@ test('an uninstall during the same retail batch is not overwritten by stale cata
     const dest = path.join(paths.userFontsDir, files[0]!.basename)
     const before = Buffer.from(fs.readFileSync(dest))
     const nextFiles = files.map((file) => ({ ...file, etag: `${file.etag}-next` }))
+    await configureRetailSync(paths, { autoInstallUpdates: false })
     await checkRetail(paths, { fetchManifest: async () => manifestWithFiles(nextFiles) })
 
     const status = await syncRetail(paths, {

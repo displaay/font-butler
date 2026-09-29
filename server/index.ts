@@ -896,6 +896,7 @@ app.post('/api/retail/configure', async (c) => {
     enabled?: boolean
     workerBaseUrl?: string
     autoCheckMinutes?: number
+    autoInstallUpdates?: boolean
     token?: string
     folderId?: string | null
     disabledGlyphsFiles?: string[]

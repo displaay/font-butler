@@ -153,6 +153,11 @@ export type RetailSyncStatus = {
   enabled: boolean
   /** Background check interval in minutes; `0` means the app never checks on its own. */
   autoCheckMinutes: number
+  /**
+   * When true, a check installs updates of families already chosen to sync.
+   * Missing on older clients; treat that the same as on.
+   */
+  autoInstallUpdates: boolean
   configured: boolean
   /**
    * True when the user saved a token of their own. Without one the built-in trial token is used, so a

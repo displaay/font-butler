@@ -477,8 +477,8 @@ function skipLabel(reason: RetailSkipReason): string {
 /**
  * The optional Displaay retail collection.
  *
- * Opening this pane loads the font list from the worker. Syncing stays an explicit action so a slow
- * worker can't download fonts until the user asks.
+ * Opening this pane loads the font list from the worker. A check installs updates of families already
+ * chosen when "Automatically install updates" is on. New families and families turned off wait for Sync.
  */
 export function RetailPane({
   status,
@@ -499,6 +499,7 @@ export function RetailPane({
   const urlId = useId()
   const tokenId = useId()
   const autoCheckId = useId()
+  const autoInstallId = useId()
   const advancedId = useId()
   const [token, setToken] = useState('')
   // Session-only: Advanced reveals the worker address and token rows. Nothing is persisted.
@@ -625,7 +626,7 @@ export function RetailPane({
     >
       <SettingsRow
         label="Sync"
-        description="Load the Displaay retail list. Fonts stay off the computer until you Sync or turn a family on."
+        description="Load the Displaay retail list. New families stay off the computer until you Sync or turn a family on."
       >
         <SyncToggle
           enabled={enabled}
@@ -664,6 +665,23 @@ export function RetailPane({
             </option>
           ))}
         </select>
+      </SettingsRow>
+
+      <SettingsRow
+        label="Automatically install updates"
+        htmlFor={autoInstallId}
+        description="When a check finds an update to a family you already install, download it. Turn this off to leave the update listed until you Sync."
+      >
+        <input
+          id={autoInstallId}
+          type="checkbox"
+          checked={status?.autoInstallUpdates !== false}
+          disabled={disabled}
+          onChange={(event) =>
+            void run(() => api.retail.configure({ autoInstallUpdates: event.target.checked }))
+          }
+          className="size-4 shrink-0 cursor-pointer rounded border border-input accent-primary"
+        />
       </SettingsRow>
 
       <SettingsRow

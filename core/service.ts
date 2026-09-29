@@ -2657,6 +2657,7 @@ export class FontButlerService {
     enabled?: boolean
     workerBaseUrl?: string
     autoCheckMinutes?: number
+    autoInstallUpdates?: boolean
     token?: string
     folderId?: string | null
     disabledGlyphsFiles?: string[]
@@ -2680,6 +2681,7 @@ export class FontButlerService {
       refresh: options.refresh,
       credentialsOnly,
       fetchManifest: this.retailFetch?.fetchManifest,
+      fetchFile: this.retailFetch?.fetchFile,
     })
   }
 
