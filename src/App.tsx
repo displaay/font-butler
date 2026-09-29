@@ -2951,13 +2951,6 @@ function AppShell() {
             void refreshCatalog()
           }}
         />
-        <OnboardingDialog
-          open={onboardingOpen}
-          settings={settings}
-          onSettingsChange={applySettings}
-          onRetailChange={setRetail}
-          onComplete={() => setOnboardingOpen(false)}
-        />
         <SettingsDialog
           open={settingsOpen}
           onOpenChange={(open) => {
@@ -2975,10 +2968,21 @@ function AppShell() {
           onCheckAppUpdate={(refresh) => void loadAppUpdate(refresh)}
           highlightAppUpdate={settingsFocusAppUpdate}
           highlightWatchFolders={settingsFocusWatchFolders}
+          onStartOnboarding={() => {
+            setSettingsOpen(false)
+            setOnboardingOpen(true)
+          }}
           retail={retail}
           retailFamiliesOnMac={retailFamiliesOnMac}
           onRetailChange={setRetail}
           onRetailSync={() => void syncRetail()}
+        />
+        <OnboardingDialog
+          open={onboardingOpen}
+          settings={settings}
+          onSettingsChange={applySettings}
+          onRetailChange={setRetail}
+          onComplete={() => setOnboardingOpen(false)}
         />
         <RetailCollisionDialog
           open={syncCollisions.length > 0}
