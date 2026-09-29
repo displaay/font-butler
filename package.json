@@ -16,7 +16,7 @@
     "dist": "COPYFILE_DISABLE=1 npm run build && npm run bundle:python && node scripts/build-finder-services.mjs && node scripts/build-session-fonts.mjs && COPYFILE_DISABLE=1 electron-builder --mac --publish never",
     "preview": "vite preview --host 127.0.0.1 --port 43181",
     "lint": "oxlint",
-    "test": "FONT_BUTLER_TEST=1 tsx --test --test-concurrency=1 core/**/*.test.ts src/**/*.test.ts electron/**/*.test.mjs",
+    "test": "FONT_BUTLER_TEST=1 tsx --tsconfig tsconfig.app.json --test --test-concurrency=1 core/**/*.test.ts src/**/*.test.ts electron/**/*.test.mjs",
     "test:native": "FONT_BUTLER_TEST=1 FONT_BUTLER_NATIVE=1 tsx --test --test-concurrency=1 core/native.integration.test.ts"
   },
   "dependencies": {},

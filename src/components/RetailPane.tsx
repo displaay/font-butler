@@ -246,6 +246,7 @@ function RetailSyncScopeControl({
 function RetailFontList({
   fonts,
   disabled,
+  trial = false,
   onToggle,
   onFormat,
   onSyncScope,
@@ -253,6 +254,8 @@ function RetailFontList({
 }: {
   fonts: RetailSyncFont[]
   disabled: boolean
+  /** Trial collection: mark each family so the list reads as trial fonts. */
+  trial?: boolean
   onToggle: (familyName: string, enabled: boolean) => void
   onFormat: (familyName: string, format: RetailFontFormat) => void
   onSyncScope: (scope: RetailSyncScope) => void
@@ -417,7 +420,10 @@ function RetailFontList({
               {group.fonts.map((font) => (
                 <div key={font.familyName} className="flex items-center justify-between gap-3 px-3 py-2">
                   <div className="min-w-0">
-                    <div className="truncate text-sm font-medium leading-5">{font.familyName}</div>
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <div className="truncate text-sm font-medium leading-5">{font.familyName}</div>
+                      {trial ? <TrialBadge /> : null}
+                    </div>
                     <p className="text-[13px] leading-5 text-muted-foreground">
                       {font.available === false
                         ? 'Not available yet'
@@ -487,6 +493,8 @@ export function RetailPane({
   onStatus,
   onSync,
   onRequestDisable,
+  deferInstall = false,
+  defaultAdvanced = false,
 }: {
   status: RetailSyncStatus | null
   /** Retail families with fonts installed or deactivated on this Mac. */
@@ -495,6 +503,13 @@ export function RetailPane({
   onStatus: (status: RetailSyncStatus) => void
   onSync?: () => void
   onRequestDisable?: () => void
+  /**
+   * Onboarding: record show/install choices and list the collection, but do not download.
+   * The install runs after setup closes.
+   */
+  deferInstall?: boolean
+  /** Initial open state of the worker-token panel. Settings and onboarding start collapsed. */
+  defaultAdvanced?: boolean
 }) {
   const urlId = useId()
   const tokenId = useId()
@@ -502,7 +517,7 @@ export function RetailPane({
   const advancedId = useId()
   const [token, setToken] = useState('')
   // Session-only: Advanced reveals the worker address and token rows. Nothing is persisted.
-  const [advanced, setAdvanced] = useState(false)
+  const [advanced, setAdvanced] = useState(defaultAdvanced)
   // `status` is null on the first render, so the field cannot be seeded from it directly — an edited
   // value wins, otherwise fall back to whatever the server reports.
   const [editedUrl, setEditedUrl] = useState<string | null>(null)
@@ -545,13 +560,16 @@ export function RetailPane({
 
   // The token decides the collection, and `mode` only moves on a check — run one right away so the badge
   // and the switch to the new collection follow the token instead of the next background check.
+  const listCheck = (refresh: boolean) =>
+    api.retail.check(refresh, deferInstall ? { credentialsOnly: false } : undefined)
+
   const saveToken = (value: string) =>
     run(async () => {
       const result = await api.retail.configure({ token: value })
       if (value) setToken('')
       if (!result.status.enabled) return result
       onStatus(result.status)
-      return api.retail.check(true)
+      return listCheck(true)
     })
 
   // Font-list changes must reach the server even while a sync HTTP request is still in flight.
@@ -574,6 +592,7 @@ export function RetailPane({
   }
 
   const startSync = () => {
+    if (deferInstall) return
     if (onSync) onSync()
     else void api.retail.sync().then((result) => onStatus(result.status))
   }
@@ -599,14 +618,16 @@ export function RetailPane({
     setError(null)
     startQueuedFontAction(async () => {
       try {
-        onStatus((await api.retail.check(true)).status)
+        onStatus(
+          (await api.retail.check(true, deferInstall ? { credentialsOnly: false } : undefined)).status,
+        )
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : 'Something went wrong.')
       } finally {
         setChecking(false)
       }
     })
-  }, [enabled, status, onStatus])
+  }, [enabled, status, onStatus, deferInstall])
 
   const turnSyncOff = (disableAction: RetailDisableAction) => {
     setDisableOpen(false)
@@ -620,12 +641,17 @@ export function RetailPane({
         <>
           <DisplaayMark className="size-4" />
           Displaay retail
+          {deferInstall && status?.mode === 'trial' ? <TrialBadge /> : null}
         </>
       }
     >
       <SettingsRow
         label="Sync"
-        description="Load the Displaay retail list. Fonts stay off the computer until you Sync or turn a family on."
+        description={
+          deferInstall
+            ? 'Load the Displaay retail list and choose which families to install. They install after you finish setup.'
+            : 'Load the Displaay retail list. Fonts stay off the computer until you Sync or turn a family on.'
+        }
       >
         <SyncToggle
           enabled={enabled}
@@ -644,6 +670,7 @@ export function RetailPane({
 
       {enabled ? (
         <>
+      {deferInstall ? null : (
       <SettingsRow
         label="Check automatically"
         htmlFor={autoCheckId}
@@ -665,6 +692,7 @@ export function RetailPane({
           ))}
         </select>
       </SettingsRow>
+      )}
 
       <SettingsRow
         label="Advanced"
@@ -778,7 +806,9 @@ export function RetailPane({
                 {showFontLoader ? 'Checking…' : status ? retailDriftSummary(status) : 'Not checked yet.'}
               </div>
               <p className="mt-0.5 text-[13px] leading-5 text-muted-foreground">
-                {showFontLoader
+                {deferInstall && !showFontLoader
+                  ? 'Choices are saved now. Selected families install when you finish setup.'
+                  : showFontLoader
                   ? 'Loading the collection…'
                   : status?.checkedAt
                     ? `Last checked ${new Date(status.checkedAt).toLocaleString()}.`
@@ -798,7 +828,7 @@ export function RetailPane({
                   setChecking(true)
                   void run(async () => {
                     try {
-                      return await api.retail.check(true)
+                      return await listCheck(true)
                     } finally {
                       setChecking(false)
                     }
@@ -814,6 +844,7 @@ export function RetailPane({
                   'Check'
                 )}
               </Button>
+              {deferInstall ? null : (
               <Button
                 type="button"
                 size="sm"
@@ -828,6 +859,7 @@ export function RetailPane({
               >
                 {status?.pending ? `Sync ${status.pending}` : 'Sync'}
               </Button>
+              )}
             </div>
           </div>
           {lastError ? (
@@ -862,7 +894,9 @@ export function RetailPane({
           description={
             showFontLoader
               ? 'Loading the collection…'
-              : 'Turn a family on to download it, or Sync. When a family has both otf and ttf, only the selected format is downloaded.'
+              : deferInstall
+                ? 'On shows that family in the library and installs it after setup. Off leaves it out. When a family has both otf and ttf, only the selected format is installed.'
+                : 'Turn a family on to download it, or Sync. When a family has both otf and ttf, only the selected format is downloaded.'
           }
           extra={
             showFontLoader ? (
@@ -878,6 +912,7 @@ export function RetailPane({
             <RetailFontList
               fonts={fonts}
               disabled={selectionDisabled}
+              trial={Boolean(deferInstall && status?.mode === 'trial')}
               onToggle={(familyName, nextEnabled) => {
                 if (!manifestReady) return
                 void configureSelection({

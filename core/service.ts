@@ -695,7 +695,10 @@ export class FontButlerService {
       await this.refreshInboxWatcher(this.watchingFolderRoots(next), { importExisting: true })
     }
     if (completingOnboarding && next.retailSync?.enabled) {
+      // Onboarding lists the collection and records which families to install.
+      // The download runs once, after setup is closed.
       await this.checkRetail({ credentialsOnly: false })
+      await this.syncRetail()
     }
     if (next.autoReinstallOnUpdate && !current.autoReinstallOnUpdate) {
       await this.refreshSourceStatuses()
