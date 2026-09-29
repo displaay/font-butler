@@ -54,9 +54,9 @@ import type {
 } from '@/lib/types'
 import { APP_ICON_OPTIONS, appIconPreviewSrc, parseAppIconStyle } from '@/lib/appIcon'
 import { cn } from '@/lib/utils'
-import { DESTINATIONS, FOLDER_POLICIES, adobeTestingFolderAvailable, destinationLabel, destinationNeedsAdobe, folderAvailabilityLabel, folderPolicyLabel } from '@/lib/folders'
+import { DESTINATIONS, GLOBAL_AUTO_REINSTALL_DESCRIPTION, WATCH_FOLDER_ACTIONS, adobeTestingFolderAvailable, destinationLabel, destinationNeedsAdobe, folderAvailabilityLabel } from '@/lib/folders'
 import { watchFolderName } from '@/lib/watchFolders'
-import type { FolderPolicyPreset, RetailDisableAction, RetailSyncStatus, WatchFolder } from '@/lib/types'
+import type { RetailDisableAction, RetailSyncStatus, WatchFolder } from '@/lib/types'
 
 const checkboxClass = 'size-4 shrink-0 cursor-pointer rounded border border-input accent-primary'
 
@@ -123,7 +123,6 @@ type SettingsPatch = {
   defaultView?: ViewLayout
   defaultSort?: SortMode
   installAfterUpload?: boolean
-  installWatchFolderFonts?: boolean
   theme?: ThemeMode
   appIcon?: AppSettings['appIcon']
   menuBarIcon?: boolean
@@ -524,7 +523,7 @@ function GeneralPane({
       <SettingsSection>
         <SettingsRow
           label="Automatically reinstall when an update is detected"
-          description="When a tracked source file changes, reinstall the installed copy. Off by default."
+          description={GLOBAL_AUTO_REINSTALL_DESCRIPTION}
           htmlFor="auto-reinstall-on-update"
         >
           <input
@@ -534,22 +533,6 @@ function GeneralPane({
             disabled={busy || !settings}
             onChange={(event) =>
               void onSave({ autoReinstallOnUpdate: event.target.checked })
-            }
-            className={checkboxClass}
-          />
-        </SettingsRow>
-        <SettingsRow
-          label="Install fonts added to watch folders"
-          description="When a font file appears in a watch folder, install it. Turn this off to keep those fonts in the library without installing."
-          htmlFor="install-watch-folder-fonts"
-        >
-          <input
-            id="install-watch-folder-fonts"
-            type="checkbox"
-            checked={settings?.installWatchFolderFonts !== false}
-            disabled={busy || !settings}
-            onChange={(event) =>
-              void onSave({ installWatchFolderFonts: event.target.checked })
             }
             className={checkboxClass}
           />
@@ -885,9 +868,9 @@ function FoldersPane({
                   toast.error(error instanceof Error ? error.message : 'Could not update folder'),
                 )
             }
-            onPolicy={(policy) =>
+            onActions={(flags) =>
               void api
-                .configureFolder({ id: folder.id, root: folder.root, policy })
+                .configureFolder({ id: folder.id, root: folder.root, ...flags })
                 .then(async () => onSettingsChange((await api.settings()).settings))
                 .catch((error) =>
                   toast.error(error instanceof Error ? error.message : 'Could not update folder'),
@@ -903,7 +886,7 @@ function FoldersPane({
         ))}
         <SettingsRow
           label="Add a watch folder"
-          description="Each folder has its own policy. Pause stops automatic imports and updates. Adding a folder previews a scan before watching starts."
+          description="Each folder chooses whether to install new fonts and whether to reinstall updates. Pause stops both. Adding a folder previews a scan before watching starts."
         >
           <Button type="button" variant="outline" size="sm" disabled={busy} onClick={onAddFolder}>
             <FolderOpen className="size-4" />
@@ -1301,48 +1284,53 @@ function SettingsFolderRow({
   folder,
   busy,
   onPause,
-  onPolicy,
+  onActions,
   onRelink,
   onRemove,
 }: {
   folder: WatchFolder
   busy: boolean
   onPause: () => void
-  onPolicy: (policy: FolderPolicyPreset) => void
+  onActions: (flags: { installNew: boolean; autoUpdate: boolean }) => void
   onRelink: () => void
   onRemove: () => void
 }) {
-  const policyOptions = FOLDER_POLICIES.filter(
-    (item) => item.id !== 'custom' || folder.policy === 'custom',
-  )
   const name = watchFolderName(folder.root)
   return (
     <SettingsRow
       label={<span className="block truncate" title={name}>{name}</span>}
       description={
         <span className="block">
-          {folderPolicyLabel(folder.policy)} · {folderAvailabilityLabel(folder)} ·{' '}
-          {destinationLabel(folder.destinationId)}
+          {folderAvailabilityLabel(folder)} · {destinationLabel(folder.destinationId)}
           <span className="mt-0.5 block truncate font-mono text-[11px]" title={folder.root}>
             {folder.root}
           </span>
         </span>
       }
+      extra={
+        <div className="flex flex-col gap-2 py-1">
+          {WATCH_FOLDER_ACTIONS.map((action) => (
+            <label key={action.key} className="flex items-center justify-between gap-3">
+              <span className="text-sm">{action.label}</span>
+              <input
+                type="checkbox"
+                className={checkboxClass}
+                checked={folder[action.key]}
+                disabled={busy}
+                aria-label={`${action.label} for ${name}`}
+                onChange={(event) =>
+                  onActions({
+                    installNew: action.key === 'installNew' ? event.target.checked : folder.installNew,
+                    autoUpdate: action.key === 'autoUpdate' ? event.target.checked : folder.autoUpdate,
+                  })
+                }
+              />
+            </label>
+          ))}
+        </div>
+      }
     >
         <div className="flex max-w-[min(100%,22rem)] flex-wrap items-center justify-end gap-1.5">
-          <select
-            className={settingsSelectClass}
-            value={folder.policy}
-            disabled={busy}
-            aria-label={`Policy for ${name}`}
-            onChange={(event) => onPolicy(event.target.value as FolderPolicyPreset)}
-          >
-            {policyOptions.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.label}
-              </option>
-            ))}
-          </select>
           <Button type="button" size="sm" variant="outline" disabled={busy} onClick={onPause}>
             {folder.paused ? <Play className="size-3.5" /> : <Pause className="size-3.5" />}
             {folder.paused ? 'Resume' : 'Pause'}

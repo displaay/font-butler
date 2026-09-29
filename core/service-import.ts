@@ -220,7 +220,7 @@ export async function importInboxFiles(host: InboxImportHost, filePaths: string[
     if (folder && (folder.paused || isExcluded(folder, entry.sourcePath))) {
       continue
     }
-    const installNew = folder ? folder.installNew : settings.installWatchFolderFonts
+    const installNew = folder?.installNew === true
     if (!installNew) continue
     try {
       installed.push(await host.install(entry.id))
