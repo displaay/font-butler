@@ -132,15 +132,15 @@ export function LibraryFilterGroups({
   libraryFilters,
   libraryFilterCounts,
   onLibraryFiltersChange,
+  filterGroupsOpen,
+  onFilterGroupsOpenChange,
 }: {
   libraryFilters: LibraryFilter[]
   libraryFilterCounts: Record<LibraryFilter, number>
   onLibraryFiltersChange: (value: LibraryFilter[]) => void
+  filterGroupsOpen: Record<string, boolean>
+  onFilterGroupsOpenChange: (value: Record<string, boolean>) => void
 }) {
-  const [filterGroupsOpen, setFilterGroupsOpen] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(LIBRARY_FILTER_GROUPS.map((group) => [group.heading, true])),
-  )
-
   function toggleFilter(id: LibraryFilter) {
     onLibraryFiltersChange(
       libraryFilters.includes(id)
@@ -176,10 +176,10 @@ export function LibraryFilterGroups({
                 aria-expanded={groupOpen}
                 aria-label={groupOpen ? `Hide ${heading}` : `Show ${heading}`}
                 onClick={() =>
-                  setFilterGroupsOpen((current) => ({
-                    ...current,
+                  onFilterGroupsOpenChange({
+                    ...filterGroupsOpen,
                     [group.heading]: !groupOpen,
-                  }))
+                  })
                 }
               >
                 <span className="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
@@ -496,6 +496,9 @@ export function Sidebar({
   const skipRenameCommitRef = useRef(false)
   const renameSessionRef = useRef<{ id: string; original: string } | null>(null)
   const [savedFiltersOpen, setSavedFiltersOpen] = useState(true)
+  const [filterGroupsOpen, setFilterGroupsOpen] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(LIBRARY_FILTER_GROUPS.map((group) => [group.heading, true])),
+  )
   const [editingFilterId, setEditingFilterId] = useState<string | null>(null)
   const [filterRenameValue, setFilterRenameValue] = useState('')
   const filterRenameInputRef = useRef<HTMLInputElement>(null)
@@ -1142,6 +1145,8 @@ export function Sidebar({
             libraryFilters={libraryFilters}
             libraryFilterCounts={libraryFilterCounts}
             onLibraryFiltersChange={onLibraryFiltersChange}
+            filterGroupsOpen={filterGroupsOpen}
+            onFilterGroupsOpenChange={setFilterGroupsOpen}
           />
         ) : null}
       </nav>
