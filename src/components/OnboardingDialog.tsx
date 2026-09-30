@@ -17,7 +17,7 @@ import { Label } from '@/components/ui/label'
 import { api } from '@/lib/api'
 import { APP_ICON_OPTIONS, appIconPreviewSrc, parseAppIconStyle, type AppIconStyle } from '@/lib/appIcon'
 import { collectDropPayload } from '@/lib/drop'
-import { DESTINATIONS, folderPolicyLabel } from '@/lib/folders'
+import { DESTINATIONS, GLOBAL_AUTO_REINSTALL_DESCRIPTION } from '@/lib/folders'
 import { persistNativeNotificationsEnabled, requestNotificationPermission } from '@/lib/notifications'
 import type { AppSettings, DefaultDestinationId, DestinationCapability, RetailSyncStatus, WatchFolder } from '@/lib/types'
 import { cn, CONTROL_H } from '@/lib/utils'
@@ -49,7 +49,7 @@ const COPY: Record<Step, { title: string; description: string }> = {
   welcome: {
     title: 'Welcome to Font Buttler',
     description:
-      'A source-tracked font manager for folders you already use. Drop fonts in, or watch a folder after you choose its policy.',
+      'A source-tracked font manager for folders you already use. Drop fonts in, or watch a folder and choose how it handles new fonts and updates.',
   },
   folders: {
     title: 'Watch folders',
@@ -538,7 +538,7 @@ export function OnboardingDialog({
                 </SettingsRow>
                 <SettingsRow
                   label="Automatically reinstall when an update is detected"
-                  description="When a tracked source file changes, reinstall the installed copy. Off by default."
+                  description={GLOBAL_AUTO_REINSTALL_DESCRIPTION}
                   htmlFor={autoReinstallId}
                 >
                   <input
@@ -719,7 +719,9 @@ function FolderRow({
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm">{watchFolderName(folder.root)}</div>
         <div className="truncate text-xs text-muted-foreground">
-          {folderPolicyLabel(folder.policy)}
+          {folder.installNew ? 'Installs new fonts' : 'Does not install new fonts'}
+          {' · '}
+          {folder.autoUpdate ? 'Reinstalls updates' : 'Does not reinstall updates'}
           {folder.watching ? '' : ' · not watching yet'}
         </div>
       </div>
