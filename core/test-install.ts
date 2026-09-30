@@ -5,11 +5,16 @@ import { createHash } from 'node:crypto'
 import chokidar, { type FSWatcher } from 'chokidar'
 import { isFullyUnderAnyRoot } from './containment.ts'
 import { isFontFile, parseFontFile } from './parse.ts'
+import { isSessionScopedFont } from './session-fonts.ts'
 import type { FontFaceInfo } from './types.ts'
 
 export const TEST_INSTALL_APP_NAME = 'Displaay Font Builder'
 
-/** Glyphs 3 and 4 session fonts. Font Builder lists these in `gui/worker.py`; the Glyphs plugin uses `GSGlyphsInfo.applicationSupportPath()/Temp`. */
+/**
+ * Glyphs 3 and 4 write both session test installs and full-export leftovers into Temp.
+ * Only a file Core Text has registered for the session is a test install. A full export
+ * stays on the watch-folder path.
+ */
 export const GLYPHS_TEST_INSTALL_APP_NAMES = ['Glyphs 3', 'Glyphs 4'] as const
 
 export type TestInstallFont = {
@@ -45,12 +50,32 @@ export function testInstallDirs(home = os.homedir()): string[] {
   return [defaultTestInstallDir(home), ...glyphsTestInstallDirs(home)]
 }
 
+export function isGlyphsTestInstallDir(dir: string, home = os.homedir()): boolean {
+  const root = path.resolve(dir)
+  return glyphsTestInstallDirs(home).some((candidate) => path.resolve(candidate) === root)
+}
+
+export type TestInstallScanOptions = {
+  /** Defaults to Core Text session scope. Font Builder TestInstall does not use this. */
+  isSessionFont?: (filePath: string) => boolean
+}
+
+function glyphsTempFileIsTestInstall(filePath: string, dir: string, options?: TestInstallScanOptions): boolean {
+  if (!isGlyphsTestInstallDir(dir)) return true
+  const isSessionFont = options?.isSessionFont ?? isSessionScopedFont
+  return isSessionFont(filePath)
+}
+
 export function testInstallId(filePath: string): string {
   return `ti_${createHash('sha1').update(path.resolve(filePath)).digest('hex').slice(0, 16)}`
 }
 
 /** Real font file inside `dir`, or null when the path escapes it (including symlinks). */
-export function resolveTestInstallFile(filePath: string, dir: string): string | null {
+export function resolveTestInstallFile(
+  filePath: string,
+  dir: string,
+  options?: TestInstallScanOptions,
+): string | null {
   if (!filePath || !dir) return null
   const root = path.resolve(dir)
   if (!fs.existsSync(root)) return null
@@ -68,18 +93,23 @@ export function resolveTestInstallFile(filePath: string, dir: string): string | 
   } catch {
     return null
   }
+  if (!glyphsTempFileIsTestInstall(real, root, options)) return null
   return real
 }
 
-export function resolveTestInstallFileInDirs(filePath: string, dirs: string[]): string | null {
+export function resolveTestInstallFileInDirs(
+  filePath: string,
+  dirs: string[],
+  options?: TestInstallScanOptions,
+): string | null {
   for (const dir of dirs) {
-    const resolved = resolveTestInstallFile(filePath, dir)
+    const resolved = resolveTestInstallFile(filePath, dir, options)
     if (resolved) return resolved
   }
   return null
 }
 
-export function scanTestInstallDir(dir: string): TestInstallFont[] {
+export function scanTestInstallDir(dir: string, options?: TestInstallScanOptions): TestInstallFont[] {
   const root = path.resolve(dir)
   if (!fs.existsSync(root)) return []
   let names: string[]
@@ -90,7 +120,7 @@ export function scanTestInstallDir(dir: string): TestInstallFont[] {
   }
   const fonts: TestInstallFont[] = []
   for (const name of names) {
-    const filePath = resolveTestInstallFile(path.join(root, name), root)
+    const filePath = resolveTestInstallFile(path.join(root, name), root, options)
     if (!filePath) continue
     try {
       const stat = fs.statSync(filePath)
@@ -123,16 +153,20 @@ export function scanTestInstallDir(dir: string): TestInstallFont[] {
   return fonts
 }
 
-export function scanTestInstallDirs(dirs: string[]): TestInstallFont[] {
-  const fonts = dirs.flatMap((dir) => scanTestInstallDir(dir))
+export function scanTestInstallDirs(dirs: string[], options?: TestInstallScanOptions): TestInstallFont[] {
+  const fonts = dirs.flatMap((dir) => scanTestInstallDir(dir, options))
   fonts.sort((a, b) => a.path.localeCompare(b.path))
   return fonts
 }
 
-export function deleteTestInstallFiles(dir: string, filePaths: string[]): string[] {
+export function deleteTestInstallFiles(
+  dir: string,
+  filePaths: string[],
+  options?: TestInstallScanOptions,
+): string[] {
   const removed: string[] = []
   for (const filePath of filePaths) {
-    const resolved = resolveTestInstallFile(filePath, dir)
+    const resolved = resolveTestInstallFile(filePath, dir, options)
     if (!resolved) continue
     try {
       fs.unlinkSync(resolved)

@@ -23,6 +23,7 @@ napi_status napi_get_array_length(napi_env env, napi_value value, uint32_t *resu
 napi_status napi_get_element(napi_env env, napi_value object, uint32_t index, napi_value *result);
 napi_status napi_get_value_string_utf8(napi_env env, napi_value value, char *buf, size_t bufsize, size_t *result);
 napi_status napi_create_int32(napi_env env, int32_t value, napi_value *result);
+napi_status napi_get_boolean(napi_env env, bool value, napi_value *result);
 }
 
 typedef struct {
@@ -41,6 +42,32 @@ extern "C" void napi_module_register(napi_module *mod);
 #define NAPI_C_CTOR(fn)                                \
   static void fn(void) __attribute__((constructor)); \
   static void fn(void)
+
+static bool PathIsSessionScopedFont(const char *filePath) {
+  if (filePath == nullptr || filePath[0] == '\0') return false;
+  NSString *path = [NSString stringWithUTF8String:filePath];
+  if (path.length == 0) return false;
+  NSURL *url = [NSURL fileURLWithPath:path];
+  if (!url) return false;
+  return CTFontManagerGetScopeForURL((__bridge CFURLRef)url) == kCTFontManagerScopeSession;
+}
+
+static napi_value IsSessionScopedFont(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  bool session = false;
+  if (argc >= 1) {
+    char filePath[4096];
+    size_t len = 0;
+    if (napi_get_value_string_utf8(env, argv[0], filePath, sizeof(filePath), &len) == napi_ok && len > 0) {
+      session = PathIsSessionScopedFont(filePath);
+    }
+  }
+  napi_value result;
+  napi_get_boolean(env, session, &result);
+  return result;
+}
 
 static napi_value UnregisterSessionFonts(napi_env env, napi_callback_info info) {
   size_t argc = 1;
@@ -73,9 +100,12 @@ static napi_value UnregisterSessionFonts(napi_env env, napi_callback_info info) 
 }
 
 static napi_value Init(napi_env env, napi_value exports) {
-  napi_value fn;
-  napi_create_function(env, "unregisterSessionFonts", NAPI_AUTO_LENGTH, UnregisterSessionFonts, nullptr, &fn);
-  napi_set_named_property(env, exports, "unregisterSessionFonts", fn);
+  napi_value unregister;
+  napi_create_function(env, "unregisterSessionFonts", NAPI_AUTO_LENGTH, UnregisterSessionFonts, nullptr, &unregister);
+  napi_set_named_property(env, exports, "unregisterSessionFonts", unregister);
+  napi_value isSession;
+  napi_create_function(env, "isSessionScopedFont", NAPI_AUTO_LENGTH, IsSessionScopedFont, nullptr, &isSession);
+  napi_set_named_property(env, exports, "isSessionScopedFont", isSession);
   return exports;
 }
 

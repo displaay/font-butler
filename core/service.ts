@@ -772,7 +772,8 @@ export class FontButlerService {
       throw new Error('Those files are not test installs.')
     }
     unregisterSessionFonts(resolved)
-    for (const dir of dirs) deleteTestInstallFiles(dir, resolved)
+    // Scope is cleared above, so the delete must not ask Core Text again.
+    for (const dir of dirs) deleteTestInstallFiles(dir, resolved, { isSessionFont: () => true })
     const fonts = this.listTestInstalls()
     emitEvent({ type: 'test-installs', fonts })
     return fonts
