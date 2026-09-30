@@ -620,14 +620,18 @@ test('turning retail on after setup lists the collection without downloading', a
   })
 })
 
-test('retail stays check-only during onboarding and does not download after setup', async () => {
+test('retail stays check-only during onboarding and installs once setup closes', async () => {
   resetRetailCache()
   await withService(async (service, paths) => {
     assert.equal(service.getSettings().onboardingCompleted, false)
     await service.configureRetailSync({ enabled: true, token: 't' })
+    let downloads = 0
     service.retailFetch = {
       fetchManifest: async () => manifestWith(4, 'e1'),
-      fetchFile: async () => new Uint8Array(4).fill(1),
+      fetchFile: async () => {
+        downloads += 1
+        return new Uint8Array(4).fill(1)
+      },
     }
 
     const checked = await service.checkRetail()
@@ -637,11 +641,85 @@ test('retail stays check-only during onboarding and does not download after setu
 
     const skipped = await service.syncRetail()
     assert.equal(skipped.error, null)
+    assert.equal(downloads, 0)
     assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'RecklessVF.otf')), false)
 
     await service.updateSettings({ onboardingCompleted: true })
-    assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'RecklessVF.otf')), false)
+    assert.equal(downloads, 1)
+    assert.equal(fs.readFileSync(path.join(paths.userFontsDir, 'RecklessVF.otf')).length, 4)
     assert.ok(loadCatalog(paths).entries.some((entry) => entry.retailRelativePath === 'Reckless/RecklessVF.otf'))
+  })
+})
+
+test('onboarding can list retail fonts and install only the families still chosen when setup closes', async () => {
+  resetRetailCache()
+  await withService(async (service, paths) => {
+    assert.equal(service.getSettings().onboardingCompleted, false)
+    service.retailFetch = {
+      fetchManifest: async () => ({
+        mode: 'trial' as const,
+        generatedAt: '2026-01-01T00:00:00.000Z',
+        collections: [
+          {
+            glyphsFile: 'Reckless',
+            typefaceName: 'Reckless',
+            revisionId: 'rev-1',
+            lastRegeneratedAt: '2026-01-01T00:00:00.000Z',
+            files: [
+              {
+                key: 'Reckless/rev-1-TRIALS/Reckless-TRIAL-Regular.otf',
+                relativePath: 'Reckless/Reckless-TRIAL-Regular.otf',
+                familyName: 'Reckless',
+                size: 4,
+                etag: 'r1',
+                uploaded: '2026-01-01T00:00:00.000Z',
+              },
+            ],
+          },
+          {
+            glyphsFile: 'Zangezi',
+            typefaceName: 'Zangezi',
+            revisionId: 'rev-1',
+            lastRegeneratedAt: '2026-01-01T00:00:00.000Z',
+            files: [
+              {
+                key: 'Zangezi/rev-1-TRIALS/Zangezi-TRIAL-Regular.otf',
+                relativePath: 'Zangezi/Zangezi-TRIAL-Regular.otf',
+                familyName: 'Zangezi',
+                size: 4,
+                etag: 'z1',
+                uploaded: '2026-01-01T00:00:00.000Z',
+              },
+            ],
+          },
+        ],
+        skipped: [],
+      }),
+      fetchFile: async () => new Uint8Array(4).fill(1),
+    }
+    await service.configureRetailSync({ enabled: true })
+    const listed = await service.checkRetail({ credentialsOnly: false })
+    assert.equal(listed.mode, 'trial')
+    assert.deepEqual(
+      listed.fonts.map((font) => font.familyName),
+      ['Reckless', 'Zangezi'],
+    )
+    assert.equal(listed.fonts.every((font) => font.enabled), true)
+    const reckless = path.join(paths.userFontsDir, 'Reckless-TRIAL-Regular.otf')
+    const zangezi = path.join(paths.userFontsDir, 'Zangezi-TRIAL-Regular.otf')
+    assert.equal(fs.existsSync(reckless), false)
+    assert.equal(fs.existsSync(zangezi), false)
+
+    const chosen = await service.configureRetailSync({ disabledGlyphsFiles: ['Zangezi'] })
+    assert.equal(chosen.fonts.find((font) => font.familyName === 'Reckless')?.enabled, true)
+    assert.equal(chosen.fonts.find((font) => font.familyName === 'Zangezi')?.enabled, false)
+    assert.equal((await service.syncRetail()).error, null)
+    assert.equal(fs.existsSync(reckless), false)
+    assert.equal(fs.existsSync(zangezi), false)
+
+    await service.updateSettings({ onboardingCompleted: true })
+    assert.equal(fs.existsSync(reckless), true)
+    assert.equal(fs.existsSync(zangezi), false)
   })
 })
 

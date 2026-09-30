@@ -128,6 +128,99 @@ function navButtonClass(active: boolean, extra?: string) {
   )
 }
 
+export function LibraryFilterGroups({
+  libraryFilters,
+  libraryFilterCounts,
+  onLibraryFiltersChange,
+  filterGroupsOpen,
+  onFilterGroupsOpenChange,
+}: {
+  libraryFilters: LibraryFilter[]
+  libraryFilterCounts: Record<LibraryFilter, number>
+  onLibraryFiltersChange: (value: LibraryFilter[]) => void
+  filterGroupsOpen: Record<string, boolean>
+  onFilterGroupsOpenChange: (value: Record<string, boolean>) => void
+}) {
+  function toggleFilter(id: LibraryFilter) {
+    onLibraryFiltersChange(
+      libraryFilters.includes(id)
+        ? libraryFilters.filter((item) => item !== id)
+        : [...libraryFilters, id],
+    )
+  }
+
+  return (
+    <div className="flex w-full flex-wrap gap-3 md:mt-2 md:flex-col md:gap-2 md:border-t md:pt-2">
+      {libraryFilters.length > 0 ? (
+        <div className="flex w-full justify-end">
+          <Button
+            type="button"
+            size="default"
+            variant="ghost"
+            className={navButtonClass(false, 'h-6 w-auto px-1.5')}
+            onClick={() => onLibraryFiltersChange([])}
+          >
+            × Clear
+          </Button>
+        </div>
+      ) : null}
+      {LIBRARY_FILTER_GROUPS.map((group) => {
+        const groupOpen = filterGroupsOpen[group.heading] ?? true
+        const heading = group.heading.toLowerCase()
+        return (
+          <div key={group.heading} className="flex w-full flex-col gap-0.5">
+            <div className="group/filter-section flex w-full items-center gap-0.5 px-1 pt-1">
+              <button
+                type="button"
+                className="flex min-w-0 flex-1 items-center gap-1 px-1 text-left"
+                aria-expanded={groupOpen}
+                aria-label={groupOpen ? `Hide ${heading}` : `Show ${heading}`}
+                onClick={() =>
+                  onFilterGroupsOpenChange({
+                    ...filterGroupsOpen,
+                    [group.heading]: !groupOpen,
+                  })
+                }
+              >
+                <span className="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+                  {group.heading}
+                </span>
+                {groupOpen ? (
+                  <ChevronDown className="size-3 opacity-0 transition-opacity group-hover/filter-section:opacity-70" />
+                ) : (
+                  <ChevronRight className="size-3 opacity-0 transition-opacity group-hover/filter-section:opacity-70" />
+                )}
+              </button>
+            </div>
+            {groupOpen
+              ? group.filters.map((filter) => {
+                  const active = libraryFilters.includes(filter.id)
+                  const Icon = filter.icon
+                  return (
+                    <Button
+                      key={filter.id}
+                      type="button"
+                      size="default"
+                      variant="ghost"
+                      aria-pressed={active}
+                      aria-label={`Filter ${filter.label.toLowerCase()}`}
+                      className={navButtonClass(active, 'w-full')}
+                      onClick={() => toggleFilter(filter.id)}
+                    >
+                      <Icon className="size-3.5 opacity-70" />
+                      <span className="min-w-0 truncate">{filter.label}</span>
+                      <Badge className="ml-auto">{libraryFilterCounts[filter.id] ?? 0}</Badge>
+                    </Button>
+                  )
+                })
+              : null}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function SidebarItem({
   active,
   icon: Icon,
@@ -527,14 +620,6 @@ export function Sidebar({
     writeShowTotals(next)
   }
 
-  function toggleFilter(id: LibraryFilter) {
-    onLibraryFiltersChange(
-      libraryFilters.includes(id)
-        ? libraryFilters.filter((item) => item !== id)
-        : [...libraryFilters, id],
-    )
-  }
-
   return (
     <aside className="sidebar-column flex h-auto w-full shrink-0 flex-col border-b bg-sidebar text-sidebar-foreground md:h-full md:max-h-full md:w-56 md:border-r md:border-b-0">
       {insetTrafficLights ? (
@@ -558,7 +643,7 @@ export function Sidebar({
         {TABS.filter(
           (item) =>
             item.id !== 'updates' ||
-            shouldShowUpdatesTab(counts.updates, hasAppUpdate, retailPending) ||
+            shouldShowUpdatesTab(counts.updates, retailPending) ||
             retailSyncing ||
             (searching && hasFontUpdates),
         ).map((item) => {
@@ -661,9 +746,7 @@ export function Sidebar({
                   : item.id === 'activity'
                     ? counts.activity ?? 0
                     : item.id === 'updates'
-                      ? counts.updates +
-                        (hasAppUpdate && !searching ? 1 : 0) +
-                        (searching ? 0 : retailPending)
+                      ? counts.updates + (searching ? 0 : retailPending)
                       : counts.updates
               }
               showTotal={item.id === 'updates' || searching || Boolean(showTotals[item.id])}
@@ -684,11 +767,9 @@ export function Sidebar({
               title={
                 item.id === 'activity' && activityUnread > 0
                   ? `${activityUnread} unread`
-                  : item.id === 'updates' && hasAppUpdate
-                    ? 'App update available'
-                    : item.id === 'updates' && retailPending > 0
-                      ? `${retailPending} retail ${retailPending === 1 ? 'font has' : 'fonts have'} a newer version`
-                      : undefined
+                  : item.id === 'updates' && retailPending > 0
+                    ? `${retailPending} retail ${retailPending === 1 ? 'font has' : 'fonts have'} a newer version`
+                    : undefined
               }
             />
           )
@@ -1055,63 +1136,15 @@ export function Sidebar({
             </Button>
           </div>
         ) : null}
-        {tab === 'library' && (
-          <div className="flex w-full flex-wrap gap-3 md:mt-2 md:flex-col md:gap-2 md:border-t md:pt-2">
-            {LIBRARY_FILTER_GROUPS.map((group) => {
-              const groupOpen = filterGroupsOpen[group.heading] ?? true
-              const heading = group.heading.toLowerCase()
-              return (
-                <div key={group.heading} className="flex w-full flex-col gap-0.5">
-                  <div className="group/filter-section flex w-full items-center gap-0.5 px-1 pt-1">
-                    <button
-                      type="button"
-                      className="flex min-w-0 flex-1 items-center gap-1 px-1 text-left"
-                      aria-expanded={groupOpen}
-                      aria-label={groupOpen ? `Hide ${heading}` : `Show ${heading}`}
-                      onClick={() =>
-                        setFilterGroupsOpen((current) => ({
-                          ...current,
-                          [group.heading]: !groupOpen,
-                        }))
-                      }
-                    >
-                      <span className="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
-                        {group.heading}
-                      </span>
-                      {groupOpen ? (
-                        <ChevronDown className="size-3 opacity-0 transition-opacity group-hover/filter-section:opacity-70" />
-                      ) : (
-                        <ChevronRight className="size-3 opacity-0 transition-opacity group-hover/filter-section:opacity-70" />
-                      )}
-                    </button>
-                  </div>
-                  {groupOpen
-                    ? group.filters.map((filter) => {
-                        const active = libraryFilters.includes(filter.id)
-                        const Icon = filter.icon
-                        return (
-                          <Button
-                            key={filter.id}
-                            type="button"
-                            size="default"
-                            variant="ghost"
-                            aria-pressed={active}
-                            aria-label={`Filter ${filter.label.toLowerCase()}`}
-                            className={navButtonClass(active, 'w-full')}
-                            onClick={() => toggleFilter(filter.id)}
-                          >
-                            <Icon className="size-3.5 opacity-70" />
-                            <span className="min-w-0 truncate">{filter.label}</span>
-                            <Badge className="ml-auto">{libraryFilterCounts[filter.id] ?? 0}</Badge>
-                          </Button>
-                        )
-                      })
-                    : null}
-                </div>
-              )
-            })}
-          </div>
-        )}
+        {tab === 'library' ? (
+          <LibraryFilterGroups
+            libraryFilters={libraryFilters}
+            libraryFilterCounts={libraryFilterCounts}
+            onLibraryFiltersChange={onLibraryFiltersChange}
+            filterGroupsOpen={filterGroupsOpen}
+            onFilterGroupsOpenChange={setFilterGroupsOpen}
+          />
+        ) : null}
       </nav>
       </ScrollArea>
       <div className="border-t px-3 py-2">

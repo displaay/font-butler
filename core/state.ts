@@ -217,6 +217,10 @@ export function effectiveUpdatePolicy(
   if (folder?.paused) {
     return 'manual'
   }
+  // The folder checkbox is the decision for fonts in that folder. Checked
+  // reinstalls even when the global switch is off. Unchecked does not
+  // reinstall even when the global switch is on. Fonts with no folder follow
+  // the global switch. Pause still stops automation.
   if (folder) {
     return folder.autoUpdate ? 'automatic' : 'manual'
   }

@@ -246,10 +246,10 @@ test('startParkedAutoInstall refuses to download or install', () => {
   assert.equal(parkedAutoInstallState().autoInstall, 'parked')
 })
 
-test('shouldShowUpdatesTab appears for font updates or an app release', () => {
-  assert.equal(shouldShowUpdatesTab(0, false), false)
-  assert.equal(shouldShowUpdatesTab(1, false), true)
-  assert.equal(shouldShowUpdatesTab(0, true), true)
+test('shouldShowUpdatesTab is font updates only, not an app release', () => {
+  assert.equal(shouldShowUpdatesTab(0), false)
+  assert.equal(shouldShowUpdatesTab(1), true)
+  assert.equal(shouldShowUpdatesTab(0, 2), true)
 })
 
 test('readAppVersion matches package.json', () => {

@@ -12,9 +12,8 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { api } from '@/lib/api'
-import { DESTINATIONS, FOLDER_POLICIES, adobeTestingFolderAvailable, destinationNeedsAdobe } from '@/lib/folders'
-import type { DefaultDestinationId, FolderPolicyPreset, ImportPlan, WatchFolder } from '@/lib/types'
-import { cn } from '@/lib/utils'
+import { DESTINATIONS, WATCH_FOLDER_ACTIONS, adobeTestingFolderAvailable, destinationNeedsAdobe } from '@/lib/folders'
+import type { DefaultDestinationId, ImportPlan, WatchFolder } from '@/lib/types'
 
 export function FolderSetupDialog({
   open,
@@ -32,7 +31,8 @@ export function FolderSetupDialog({
 }) {
   const [root, setRoot] = useState(roots?.[0] ?? '')
   const extraRoots = roots?.slice(1) ?? []
-  const [policy, setPolicy] = useState<FolderPolicyPreset>('library')
+  const [installNew, setInstallNew] = useState(true)
+  const [autoUpdate, setAutoUpdate] = useState(true)
   const [destinationId, setDestinationId] = useState<DefaultDestinationId>('macos')
   const [exclusions, setExclusions] = useState('')
   const [discovery, setDiscovery] = useState<ImportPlan | null>(null)
@@ -43,7 +43,8 @@ export function FolderSetupDialog({
   useEffect(() => {
     if (!open) return
     setRoot(roots?.[0] ?? '')
-    setPolicy('library')
+    setInstallNew(true)
+    setAutoUpdate(true)
     setDestinationId('macos')
     setExclusions('')
     setDiscovery(null)
@@ -61,13 +62,19 @@ export function FolderSetupDialog({
     .map((item) => item.trim())
     .filter(Boolean)
 
-  async function configure(nextRoot = root, nextPolicy = policy, nextDestination = destinationId) {
+  async function configure(
+    nextRoot = root,
+    nextInstallNew = installNew,
+    nextAutoUpdate = autoUpdate,
+    nextDestination = destinationId,
+  ) {
     if (!nextRoot.trim()) return
     setBusy(true)
     try {
       const result = await api.configureFolder({
         root: nextRoot.trim(),
-        policy: nextPolicy,
+        installNew: nextInstallNew,
+        autoUpdate: nextAutoUpdate,
         exclusions: parsedExclusions,
         destinationId: nextDestination,
       })
@@ -91,7 +98,8 @@ export function FolderSetupDialog({
       for (const extra of extraRoots) {
         const configured = await api.configureFolder({
           root: extra,
-          policy,
+          installNew,
+          autoUpdate,
           exclusions: parsedExclusions,
           destinationId,
         })
@@ -115,8 +123,8 @@ export function FolderSetupDialog({
           <DialogTitle>Watch folder</DialogTitle>
           <DialogDescription>
             {deferInstall
-              ? 'Choose a policy. Fonts from this folder are not installed until you finish setup.'
-              : 'Choose a policy before Font Buttler scans or installs anything. Starting watch applies only the operations shown below.'}
+              ? 'Choose what this folder does. Fonts are not installed until you finish setup.'
+              : 'Choose what this folder does before Font Buttler scans or installs anything. Starting watch applies only the operations shown below.'}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
@@ -146,32 +154,37 @@ export function FolderSetupDialog({
           </div>
           {extraRoots.length > 0 && (
             <p className="text-xs text-muted-foreground">
-              And {extraRoots.length} more folder{extraRoots.length === 1 ? '' : 's'} with the same policy.
+              And {extraRoots.length} more folder{extraRoots.length === 1 ? '' : 's'} with the same choices.
             </p>
           )}
-          <div className="space-y-2">
-            {FOLDER_POLICIES.filter((item) => item.id !== 'custom').map((option) => {
-              const active = policy === option.id
+          <div className="space-y-2 rounded-lg border px-3 py-2">
+            {WATCH_FOLDER_ACTIONS.map((action) => {
+              const checked = action.key === 'installNew' ? installNew : autoUpdate
               return (
-                <button
-                  key={option.id}
-                  type="button"
-                  onClick={() => {
-                    setPolicy(option.id)
-                    if (root.trim()) void configure(root, option.id)
-                  }}
-                  className={cn(
-                    'flex w-full items-start justify-between rounded-lg border px-3 py-2.5 text-left',
-                    active ? 'border-foreground bg-muted/60' : 'border-border hover:bg-muted/40',
-                  )}
-                >
-                  <div>
-                    <div className="text-sm font-medium">{option.label}</div>
-                    <div className="text-xs text-muted-foreground">{option.detail}</div>
-                  </div>
-                </button>
+                <label key={action.key} className="flex items-start justify-between gap-3 py-1">
+                  <span>
+                    <span className="block text-sm font-medium">{action.label}</span>
+                    <span className="block text-xs text-muted-foreground">{action.description}</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 size-4 shrink-0 cursor-pointer rounded border border-input accent-primary"
+                    checked={checked}
+                    aria-label={action.label}
+                    onChange={(event) => {
+                      const nextInstall = action.key === 'installNew' ? event.target.checked : installNew
+                      const nextUpdate = action.key === 'autoUpdate' ? event.target.checked : autoUpdate
+                      setInstallNew(nextInstall)
+                      setAutoUpdate(nextUpdate)
+                      if (root.trim()) void configure(root, nextInstall, nextUpdate)
+                    }}
+                  />
+                </label>
               )
             })}
+            <p className="text-xs text-muted-foreground">
+              Both start on. This folder&apos;s checkboxes win over the global reinstall setting.
+            </p>
           </div>
           <Label className="block space-y-1 font-normal">
             <span className="text-sm">Install destination</span>
@@ -182,7 +195,7 @@ export function FolderSetupDialog({
               onChange={(event) => {
                 const next = event.target.value as DefaultDestinationId
                 setDestinationId(next)
-                if (root.trim()) void configure(root, policy, next)
+                if (root.trim()) void configure(root, installNew, autoUpdate, next)
               }}
             >
               {DESTINATIONS.filter((option) => adobeSupported || !destinationNeedsAdobe(option.id)).map(

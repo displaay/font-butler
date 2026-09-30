@@ -5,10 +5,10 @@ import { retailUpdateCount, type RetailSyncStatus } from '@/lib/types'
 /**
  * The retail collection's place on the Updates tab.
  *
- * Sits next to `AppUpdateCard` because it is the same shape of thing: something newer exists on a
- * server, nothing local has changed yet, and it takes an explicit action to pull it down. Fonts that
- * were already synced and then regenerated do not appear here — those become `outdated` catalog
- * entries and show up in the normal update list instead.
+ * Something newer exists on a server, nothing local has changed yet, and it takes an explicit
+ * action to pull it down. Fonts that were already synced and then regenerated do not appear here —
+ * those become `outdated` catalog entries and show up in the normal update list instead. Application
+ * releases are not listed on this tab.
  */
 export function RetailUpdateCard({
   status,

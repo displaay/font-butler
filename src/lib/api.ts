@@ -392,6 +392,8 @@ export const api = {
   configureFolder: (input: {
     root: string
     policy?: FolderPolicyPreset
+    installNew?: boolean
+    autoUpdate?: boolean
     exclusions?: string[]
     id?: string
     destinationId?: DefaultDestinationId

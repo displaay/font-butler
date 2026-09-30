@@ -233,15 +233,12 @@ export function appUpdateRowLabel(status: Pick<AppUpdateStatus, 'updateAvailable
 }
 
 /**
- * `otherUpdateCount` covers updates that are neither a catalog entry nor the app itself — today the
- * retail collection, where the newer bytes are still on the server and no local file has changed yet.
+ * The Updates tab is for font updates. `otherUpdateCount` is the retail collection, where newer
+ * bytes are still on the server and no local file has changed yet. An application release is not
+ * a font update and does not belong on this tab.
  */
-export function shouldShowUpdatesTab(
-  fontUpdateCount: number,
-  hasAppUpdate: boolean,
-  otherUpdateCount = 0,
-): boolean {
-  return fontUpdateCount > 0 || hasAppUpdate || otherUpdateCount > 0
+export function shouldShowUpdatesTab(fontUpdateCount: number, otherUpdateCount = 0): boolean {
+  return fontUpdateCount > 0 || otherUpdateCount > 0
 }
 
 /** Resolve `work` or reject after `timeoutMs`. A hung fetch must not block boot. */

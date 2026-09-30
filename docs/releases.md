@@ -26,8 +26,9 @@ Font Buttler checks [GitHub Releases](https://github.com/displaay/font-butler/re
 5. Surfaces:
 
    - **Settings → General → App updates** — current version, notes, **Download** (asset, opens in the browser to save), **Open release**
-   - **Updates** tab — same card when a newer release exists (font **Reinstall** is unchanged)
    - **Menu bar → Updates** — `Font Buttler {version}` opens the release page; **Download {asset}** opens the file; **Reinstall all fonts** still only reinstalls fonts
+
+   The **Updates** tab lists font updates only. An application release does not appear there.
    - **Font Buttler → Check for Updates…** — refreshes, then focuses Settings
 
 Install and Switch are not part of this path. Offline, GitHub API failures, or a private-repo 404 without a token stay a quiet no-update: no crash, no toast, no Install/Switch/auth churn. A last-good check is kept if one exists.
