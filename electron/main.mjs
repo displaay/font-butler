@@ -46,6 +46,13 @@ import {
   unreadOperationIdsToMark,
 } from './updates-menu.mjs'
 import {
+  applyMainWindowClosed,
+  applyWindowShown,
+  otherAppWindowNeedsDock,
+  shouldQuitOnWindowAllClosed,
+  shouldShowDockOnWindowShow,
+} from './window-lifecycle.mjs'
+import {
   bootstrapErrorPageHtml,
   canRetryPackagedBootstrap,
   detachWindowLifecycleHandlers,
@@ -71,7 +78,15 @@ const debugLog = createDebugLogStore()
 let debugLogFilePath = defaultLogFilePath()
 
 function openDebugConsole() {
-  showDebugConsole({ dirname: __dirname })
+  showDockIcon()
+  showDebugConsole({
+    dirname: __dirname,
+    onFirstOpen(win) {
+      win.on('closed', () => {
+        hideDockIconIfNoAppWindowNeedsIt(win)
+      })
+    },
+  })
 }
 
 function emitDebugLogUi(line) {
@@ -187,6 +202,24 @@ function applyDockIcon() {
   if (image) {
     app.dock.setIcon(image)
   }
+}
+
+function showDockIcon() {
+  const shown = applyWindowShown({ platform: process.platform, dock: app.dock })
+  if (!shouldShowDockOnWindowShow({ platform: process.platform })) return
+  const paint = () => applyDockIcon()
+  if (shown && typeof shown.then === 'function') void shown.then(paint, paint)
+  else paint()
+}
+
+function hideDockIconIfNoAppWindowNeedsIt(closingWindow) {
+  applyMainWindowClosed({
+    isQuitting,
+    platform: process.platform,
+    menuBarIconEnabled: menuBarIconEnabled && Boolean(tray),
+    otherVisibleWindow: otherAppWindowNeedsDock(BrowserWindow.getAllWindows(), closingWindow),
+    dock: app.dock,
+  })
 }
 
 function applyAppIconSetting(style) {
@@ -449,10 +482,12 @@ function createBootstrapShellWindow(kind) {
     return
   }
   if (mainWindow && !mainWindow.isDestroyed()) {
+    showDockIcon()
     mainWindow.show()
     mainWindow.focus()
     return
   }
+  showDockIcon()
   mainWindow = new BrowserWindow({
     width: kind === BOOTSTRAP_STARTING_WINDOW_KIND ? 420 : 560,
     height: kind === BOOTSTRAP_STARTING_WINDOW_KIND ? 220 : 480,
@@ -487,6 +522,7 @@ function createBootstrapShellWindow(kind) {
 
 function createBootstrapErrorWindow(message) {
   destroyMainWindowForReplace()
+  showDockIcon()
   mainWindow = new BrowserWindow({
     width: 560,
     height: 480,
@@ -568,6 +604,7 @@ async function showBootstrapFailure(error) {
 
 function showStartingWindowIfNeeded() {
   if (mainWindow && !mainWindow.isDestroyed()) {
+    showDockIcon()
     mainWindow.show()
     mainWindow.focus()
     return
@@ -576,6 +613,7 @@ function showStartingWindowIfNeeded() {
 }
 
 function showMainWindow() {
+  showDockIcon()
   if (
     shouldIgnoreShowMainWindowDuringBootstrap({
       isPackaged: app.isPackaged,
@@ -662,6 +700,7 @@ function createWindow() {
   if (app.isPackaged && !apiBootstrapReady) {
     return
   }
+  showDockIcon()
   mainWindow = new BrowserWindow({
     width: 1320,
     height: 860,
@@ -689,14 +728,10 @@ function createWindow() {
     }
     return { action: 'deny' }
   })
-  mainWindow.on('close', (event) => {
-    if (!isQuitting && menuBarIconEnabled) {
-      event.preventDefault()
-      mainWindow?.hide()
-    }
-  })
   mainWindow.on('closed', () => {
+    const closedWindow = mainWindow
     mainWindow = null
+    hideDockIconIfNoAppWindowNeedsIt(closedWindow)
   })
 }
 
@@ -1093,6 +1128,13 @@ function buildTrayMenu() {
   const model = buildTrayMenuModel({ operations: activityOperations, families, appUpdate })
   /** @type {import('electron').MenuItemConstructorOptions[]} */
   const items = []
+  items.push({
+    label: 'Show Font Buttler',
+    click: () => {
+      showMainWindow()
+    },
+  })
+  items.push({ type: 'separator' })
   items.push({ label: model.activityHeadline, enabled: false })
   if (model.activityEmpty) {
     items.push({ label: 'No activity', enabled: false })
@@ -1368,9 +1410,10 @@ function applyMenuBarSetting(enabled) {
     return
   }
   destroyTray()
-  if (turningOff && mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
-    showMainWindow()
-  }
+  if (!turningOff) return
+  const windowGone =
+    !mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible() || mainWindow.isMinimized()
+  if (windowGone) showMainWindow()
 }
 
 function handleApiEvent(event) {
@@ -1941,12 +1984,15 @@ if (!gotLock) {
   })
 
   app.on('window-all-closed', () => {
-    if (menuBarIconEnabled) {
+    if (
+      !shouldQuitOnWindowAllClosed({
+        platform: process.platform,
+        menuBarIconEnabled,
+      })
+    ) {
       return
     }
-    if (process.platform !== 'darwin') {
-      app.quit()
-    }
+    app.quit()
   })
 
   app.on('activate', () => {
