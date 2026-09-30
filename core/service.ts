@@ -642,8 +642,8 @@ export class FontButlerService {
         (root) =>
           existing.get(root) ??
           createWatchFolder(root, {
-            installNew: next.installWatchFolderFonts,
-            autoUpdate: next.autoReinstallOnUpdate,
+            installNew: true,
+            autoUpdate: true,
             watching: true,
           }),
       )
@@ -1862,9 +1862,9 @@ export class FontButlerService {
     const folder = applyFolderPatch(
       existing ??
         createWatchFolder(root, {
-          policy: input.policy ?? 'library',
-          installNew: input.installNew,
-          autoUpdate: input.autoUpdate,
+          policy: input.policy,
+          installNew: input.installNew ?? (input.policy ? undefined : true),
+          autoUpdate: input.autoUpdate ?? (input.policy ? undefined : true),
           exclusions: input.exclusions,
           watching: false,
           destinationId: input.destinationId,
@@ -2089,7 +2089,7 @@ export class FontButlerService {
               !imported.previewOnly &&
               (plan.trigger === 'import'
                 ? settings.installAfterUpload
-                : Boolean(folder?.installNew || (!folder && settings.installWatchFolderFonts)))
+                : Boolean(folder?.installNew))
             if (shouldInstall && imported.status !== 'installed') {
               const installed = await this.installEntry(imported.id)
               catalog = loadCatalog(this.paths)

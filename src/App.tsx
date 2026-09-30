@@ -12,7 +12,6 @@ import {
 import { DropFolderDialog } from '@/components/DropFolderDialog'
 import { DuplicatesDialog } from '@/components/DuplicatesDialog'
 import { EmptyState } from '@/components/EmptyState'
-import { AppUpdateCard } from '@/components/AppUpdateCard'
 import { RetailUpdateCard } from '@/components/RetailUpdateCard'
 import { FolderRelinkDialog } from '@/components/FolderRelinkDialog'
 import { FolderSetupDialog } from '@/components/FolderSetupDialog'
@@ -90,6 +89,7 @@ import {
   readSortMode,
   shouldShowOnboarding,
 } from '@/lib/preferences'
+import { closedSettingsFocus, startOnboardingFromSettings } from '@/lib/settingsSession'
 import { actionCopy, emptyImportError, importDoneCopy, progressActionCopy, verbForBatchAction } from '@/lib/notify'
 import { planNeedsReview } from '@/lib/planner'
 import { clearFontDragImage } from '@/lib/dragPreview'
@@ -199,6 +199,13 @@ function AppShell() {
   const retailRef = useRef<RetailSyncStatus | null>(null)
   retailRef.current = retail
   entriesRef.current = entries
+
+  function closeSettings() {
+    const closed = closedSettingsFocus()
+    setSettingsOpen(closed.settingsOpen)
+    setSettingsFocusAppUpdate(closed.focusAppUpdate)
+    setSettingsFocusWatchFolders(closed.focusWatchFolders)
+  }
 
   function applyCatalog(next: CatalogEntry[], revision?: number) {
     if (typeof revision === 'number') {
@@ -849,15 +856,10 @@ function AppShell() {
       : null
 
   useEffect(() => {
-    if (
-      tab === 'updates' &&
-      allUpdates.length === 0 &&
-      !appUpdate?.updateAvailable &&
-      !retailHasLiveUpdates(retail)
-    ) {
+    if (tab === 'updates' && allUpdates.length === 0 && !retailHasLiveUpdates(retail)) {
       setTab('library')
     }
-  }, [tab, allUpdates.length, appUpdate?.updateAvailable, retail])
+  }, [tab, allUpdates.length, retail])
 
   const searchTab = tabWithSearchHits({
     current: tab,
@@ -2101,11 +2103,6 @@ function AppShell() {
                     />
                   </div>
                 ) : null}
-                {!loading && tab === 'updates' && appUpdate?.updateAvailable ? (
-                  <div className="mb-3">
-                    <AppUpdateCard status={appUpdate} compact />
-                  </div>
-                ) : null}
                 {error && (
                   <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>
                 )}
@@ -2951,21 +2948,14 @@ function AppShell() {
             void refreshCatalog()
           }}
         />
-        <OnboardingDialog
-          open={onboardingOpen}
-          settings={settings}
-          onSettingsChange={applySettings}
-          onRetailChange={setRetail}
-          onComplete={() => setOnboardingOpen(false)}
-        />
         <SettingsDialog
           open={settingsOpen}
           onOpenChange={(open) => {
-            setSettingsOpen(open)
             if (!open) {
-              setSettingsFocusAppUpdate(false)
-              setSettingsFocusWatchFolders(false)
+              closeSettings()
+              return
             }
+            setSettingsOpen(true)
           }}
           settings={settings}
           onSettingsChange={applySettings}
@@ -2975,10 +2965,21 @@ function AppShell() {
           onCheckAppUpdate={(refresh) => void loadAppUpdate(refresh)}
           highlightAppUpdate={settingsFocusAppUpdate}
           highlightWatchFolders={settingsFocusWatchFolders}
+          onStartOnboarding={() => {
+            closeSettings()
+            setOnboardingOpen(startOnboardingFromSettings().onboardingOpen)
+          }}
           retail={retail}
           retailFamiliesOnMac={retailFamiliesOnMac}
           onRetailChange={setRetail}
           onRetailSync={() => void syncRetail()}
+        />
+        <OnboardingDialog
+          open={onboardingOpen}
+          settings={settings}
+          onSettingsChange={applySettings}
+          onRetailChange={setRetail}
+          onComplete={() => setOnboardingOpen(false)}
         />
         <RetailCollisionDialog
           open={syncCollisions.length > 0}

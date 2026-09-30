@@ -39,6 +39,29 @@ export function destinationLabel(id: DefaultDestinationId | DestinationId | unde
   return DESTINATIONS.find((item) => item.id === id)?.label ?? 'This Mac'
 }
 
+/** Per-folder choices shown when creating or editing a watch folder. */
+export const WATCH_FOLDER_ACTIONS: {
+  key: 'installNew' | 'autoUpdate'
+  label: string
+  description: string
+}[] = [
+  {
+    key: 'installNew',
+    label: 'Install fonts added to watch folders',
+    description: 'Install font files that show up in this folder.',
+  },
+  {
+    key: 'autoUpdate',
+    label: 'Automatically reinstall when an update is detected',
+    description: 'Replace the active installation when a source in this folder changes.',
+  },
+]
+
+export const NEW_WATCH_FOLDER_ACTIONS = { installNew: true, autoUpdate: true }
+
+export const GLOBAL_AUTO_REINSTALL_DESCRIPTION =
+  'When a tracked source file changes, reinstall the installed copy. A watch folder uses its own checkbox, which wins over this one. Off by default.'
+
 export const FOLDER_POLICIES: {
   id: FolderPolicyPreset
   label: string
