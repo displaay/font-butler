@@ -73,6 +73,12 @@ export type RetailLocalManifest = {
   files: Record<string, RetailLocalFile>
   /** True while a download/install pass is running. Survives a quit so the next launch can resume. */
   incomplete?: boolean
+  /**
+   * True while `incomplete` belongs to an automatic update, not a user Sync.
+   * Resume must keep that pass inside the update set and must not install families that were never synced.
+   * Ignored unless `incomplete` is also true.
+   */
+  incompleteAutomatic?: boolean
   /** Mode of the last successful check. Absent in records written before trial tokens existed. */
   mode?: RetailCollectionMode
 }

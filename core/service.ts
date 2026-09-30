@@ -301,6 +301,7 @@ import {
   resolveDropRetailCollisions as resolveDropRetailCollisionsFn,
   retailStatus as retailStatusFn,
   retailWorkerToken as retailWorkerTokenFn,
+  resumeRetailSync as resumeRetailSyncFn,
   retailSyncNeedsResume as retailSyncNeedsResumeFn,
   stopRetailSync as stopRetailSyncFn,
   syncRetail as syncRetailFn,
@@ -2688,7 +2689,7 @@ export class FontButlerService {
   private resumeIncompleteRetailSync(): void {
     if (this.onboardingWorkDeferred()) return
     if (!retailSyncNeedsResumeFn(this.paths)) return
-    void this.syncRetail()
+    void resumeRetailSyncFn(this.paths, { ...this.retailFetch })
   }
 
   async syncRetail(choices?: Record<string, RetailCollisionAction>): Promise<RetailSyncStatus> {

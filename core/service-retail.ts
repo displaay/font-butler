@@ -139,8 +139,7 @@ async function settleInflightRetailSync(): Promise<void> {
  */
 export async function stopRetailSync(paths: AppPaths): Promise<RetailSyncStatus> {
   await settleInflightRetailSync()
-  const local = loadRetailManifest(paths)
-  if (local.incomplete) saveRetailManifest(paths, { ...local, incomplete: false })
+  clearIncompleteMarker(paths)
   cache.progress = null
   cache.error = null
   return emitRetail(paths)
@@ -395,10 +394,7 @@ export async function configureRetailSync(
   }
   if (!next.enabled) {
     abortInflightRetailSync()
-    const local = loadRetailManifest(paths)
-    if (local.incomplete) {
-      saveRetailManifest(paths, { ...local, incomplete: false })
-    }
+    clearIncompleteMarker(paths)
     if (input.disableAction === 'remove') {
       await removeRetailCollection(paths)
       resetRetailCache()
@@ -1084,6 +1080,31 @@ const RETAIL_UPDATE_DRIFT_KINDS = new Set<RetailDriftItem['kind']>([
   'corrupt-locally',
 ])
 
+/** Keep the automatic-pass marker on every persist while the download is still unfinished. */
+function stampAutomaticManifest(next: RetailLocalManifest): RetailLocalManifest {
+  const saved: RetailLocalManifest = { ...next }
+  if (next.incomplete) saved.incompleteAutomatic = true
+  else delete saved.incompleteAutomatic
+  return saved
+}
+
+function clearIncompleteMarker(paths: AppPaths): void {
+  const local = loadRetailManifest(paths)
+  if (!local.incomplete && !local.incompleteAutomatic) return
+  const next: RetailLocalManifest = { ...local, incomplete: false }
+  delete next.incompleteAutomatic
+  saveRetailManifest(paths, next)
+}
+
+async function persistAutomaticManifest(
+  paths: AppPaths,
+  next: RetailLocalManifest,
+  written?: Array<{ relativePath: string; dest: string; parked: boolean }>,
+): Promise<void> {
+  saveRetailManifest(paths, stampAutomaticManifest(next))
+  if (written?.length) await catalogRetailWrites(paths, written)
+}
+
 function syncedFamilyNames(local: RetailLocalManifest): Set<string> {
   const names = new Set<string>()
   for (const file of Object.values(local.files)) {
@@ -1164,6 +1185,49 @@ async function installDetectedRetailUpdates(
   return inflightSync
 }
 
+async function applyAutomaticDrift(
+  paths: AppPaths,
+  options: {
+    manifest: RetailManifest
+    token: string
+    workerBaseUrl: string
+    todo: RetailDriftItem[]
+    fetchFile?: typeof fetchRetailFile
+    signal?: AbortSignal
+  },
+): Promise<void> {
+  const download = options.fetchFile ?? fetchRetailFile
+  const result = await applyRetailSync({
+    userFontsDir: paths.userFontsDir,
+    stagingDir: path.join(paths.dataRoot, 'staging'),
+    rollbackDir: path.join(paths.dataRoot, 'rollback'),
+    drift: options.todo,
+    manifest: loadRetailManifest(paths),
+    persist: (next, written) => persistAutomaticManifest(paths, next, written),
+    destFor: (relativePath) => destForRelativePath(paths, relativePath),
+    withLock: (task) => runCatalogTask(task),
+    native: getFontNative(),
+    download: (key, expectedSize, signal) =>
+      download({
+        workerBaseUrl: options.workerBaseUrl,
+        token: options.token,
+        key,
+        expectedSize,
+        signal,
+      }),
+    onProgress: (progress) => {
+      if (options.signal?.aborted) return
+      cache.progress = progress
+      emitRetail(paths)
+    },
+    signal: options.signal,
+  })
+  cache.drift = measureDrift(paths, options.manifest)
+  cache.skipped = options.manifest.skipped
+  cache.error = result.errors.length ? result.errors.slice(0, 5).join(' ') : null
+  cache.collisions = []
+}
+
 async function runAutomaticInstall(
   paths: AppPaths,
   options: {
@@ -1191,41 +1255,7 @@ async function runAutomaticInstall(
       cache.progress = null
       return emitRetail(paths)
     }
-    const download = options.fetchFile ?? fetchRetailFile
-    const result = await applyRetailSync({
-      userFontsDir: paths.userFontsDir,
-      stagingDir: path.join(paths.dataRoot, 'staging'),
-      rollbackDir: path.join(paths.dataRoot, 'rollback'),
-      drift: todo,
-      manifest: loadRetailManifest(paths),
-      persist: async (next, written) => {
-        saveRetailManifest(paths, next)
-        if (written?.length) {
-          await catalogRetailWrites(paths, written)
-        }
-      },
-      destFor: (relativePath) => destForRelativePath(paths, relativePath),
-      withLock: (task) => runCatalogTask(task),
-      native: getFontNative(),
-      download: (key, expectedSize, signal) =>
-        download({
-          workerBaseUrl: options.workerBaseUrl,
-          token: options.token,
-          key,
-          expectedSize,
-          signal,
-        }),
-      onProgress: (progress) => {
-        if (options.signal?.aborted) return
-        cache.progress = progress
-        emitRetail(paths)
-      },
-      signal: options.signal,
-    })
-    cache.drift = measureDrift(paths, options.manifest)
-    cache.skipped = options.manifest.skipped
-    cache.error = result.errors.length ? result.errors.slice(0, 5).join(' ') : null
-    cache.collisions = []
+    await applyAutomaticDrift(paths, { ...options, todo })
   } catch (error) {
     if (!options.signal?.aborted) {
       cache.error = error instanceof Error ? error.message : 'Could not install the retail update.'
@@ -1395,6 +1425,105 @@ function collectDropReplacementIncoming(
     items.push({ familyName: raw.familyName, path: raw.path })
   }
   return items
+}
+
+/**
+ * Finish a download the last launch left unfinished.
+ *
+ * `incomplete` alone is a user Sync and resumes every enabled file. `incompleteAutomatic` is an
+ * automatic update and resumes only that restricted drift, so a family that has never been installed
+ * stays pending.
+ */
+export async function resumeRetailSync(
+  paths: AppPaths,
+  options: {
+    fetchManifest?: typeof fetchRetailManifest
+    fetchFile?: typeof fetchRetailFile
+  } = {},
+): Promise<RetailSyncStatus> {
+  if (!loadRetailManifest(paths).incompleteAutomatic) return syncRetail(paths, options)
+  if (inflightSync) return inflightSync
+  inflightSyncAbort = new AbortController()
+  const abort = inflightSyncAbort
+  inflightSync = runAutomaticResume(paths, { ...options, signal: abort.signal }).finally(() => {
+    if (inflightSyncAbort === abort) inflightSyncAbort = null
+    inflightSync = null
+  })
+  return inflightSync
+}
+
+async function runAutomaticResume(
+  paths: AppPaths,
+  options: {
+    fetchManifest?: typeof fetchRetailManifest
+    fetchFile?: typeof fetchRetailFile
+    signal?: AbortSignal
+  },
+): Promise<RetailSyncStatus> {
+  try {
+    const { manifest, token, workerBaseUrl } = await readManifest(paths, {
+      refresh: true,
+      fetchManifest: options.fetchManifest,
+    })
+    if (options.signal?.aborted || tokenChangedSince(paths, token)) {
+      cache.progress = null
+      return emitRetail(paths)
+    }
+    await adoptRetailCollectionMode(paths, manifest)
+    await ensureRetailListings(paths, manifest)
+    await reconcileRetailCatalog(paths, loadRetailManifest(paths))
+
+    const drift = measureDrift(paths, manifest)
+    const config = retailSettings(loadSettings(paths))
+    cache.checkedAt = new Date().toISOString()
+    cache.drift = drift
+    cache.skipped = manifest.skipped
+    cache.error = null
+    cache.fonts = cacheFontsFromSync(
+      retailFontsFromCollections(manifest.collections, [], manifest.skipped, config.familyFormats),
+    )
+    const fonts = listRetailFonts(
+      paths,
+      config.disabledGlyphsFiles,
+      config.familyFormats,
+      optOutModeOf(config),
+    )
+    const todo = driftForAutomaticInstall(drift, config, fonts, loadRetailManifest(paths))
+    if (todo.length === 0 || options.signal?.aborted) {
+      // Nothing left in the update set. Clear the marker so the next launch does not retry, and do
+      // not fall through to a full sync — never-installed families stay listed for a manual Sync.
+      if (!options.signal?.aborted) clearIncompleteMarker(paths)
+      cache.progress = null
+      return emitRetail(paths)
+    }
+
+    const pendingFamilies = retailFamiliesPendingSync(fonts, todo)
+    const remaining = findOutsideCollisionsForRetailFamilies(
+      loadCatalog(paths).entries,
+      pendingFamilies,
+      retailOwnedInstallContext(paths),
+    )
+    cache.collisions = remaining
+    if (remaining.length > 0 || options.signal?.aborted || tokenChangedSince(paths, token)) {
+      cache.progress = null
+      return emitRetail(paths)
+    }
+
+    await applyAutomaticDrift(paths, {
+      manifest,
+      token,
+      workerBaseUrl,
+      todo,
+      fetchFile: options.fetchFile,
+      signal: options.signal,
+    })
+  } catch (error) {
+    if (!options.signal?.aborted) {
+      cache.error = error instanceof Error ? error.message : 'Could not install the retail update.'
+    }
+  }
+  cache.progress = null
+  return emitRetail(paths)
 }
 
 export async function syncRetail(

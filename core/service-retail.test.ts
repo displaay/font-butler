@@ -10,6 +10,7 @@ import { noopFontNative, setFontNative } from './native.ts'
 import { buildPaths, retailTokenPath } from './paths.ts'
 import type { AppPaths } from './paths.ts'
 import {
+  abortInflightRetailSync,
   checkRetail,
   configureRetailSync,
   dropOrphanRetailListings,
@@ -899,10 +900,13 @@ test('turning sync off clears an interrupted download marker', async () => {
     syncedAt: null,
     files: {},
     incomplete: true,
+    incompleteAutomatic: true,
   })
   assert.equal(retailSyncNeedsResume(paths), true)
   await configureRetailSync(paths, { enabled: false })
-  assert.equal(loadRetailManifest(paths).incomplete, false)
+  const cleared = loadRetailManifest(paths)
+  assert.equal(cleared.incomplete, false)
+  assert.equal(cleared.incompleteAutomatic, undefined)
   assert.equal(retailSyncNeedsResume(paths), false)
 })
 
@@ -942,6 +946,146 @@ test('init resumes an interrupted retail download', async () => {
     assert.equal(fs.readFileSync(path.join(paths.userFontsDir, 'B.otf')).length, bytesB.length)
     assert.equal(loadRetailManifest(paths).incomplete, false)
   })
+})
+
+test('an interrupted automatic install resumes without installing a new family', async () => {
+  resetRetailCache()
+  await withService(async (service, paths) => {
+    await service.updateSettings({ onboardingCompleted: true })
+    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await syncRetail(paths, {
+      fetchManifest: async () => manifestWith(4, 'e1'),
+      fetchFile: async () => new Uint8Array(4).fill(1),
+    })
+
+    const next: RetailManifest = {
+      generatedAt: '2026-01-02T00:00:00.000Z',
+      collections: [
+        {
+          glyphsFile: 'Reckless',
+          revisionId: 'rev-1',
+          lastRegeneratedAt: '2026-01-02T00:00:00.000Z',
+          files: [
+            {
+              key: 'Reckless/rev-1/RecklessVF.otf',
+              relativePath: 'Reckless/RecklessVF.otf',
+              size: 6,
+              etag: 'e2',
+              uploaded: '2026-01-02T00:00:00.000Z',
+              familyName: 'Reckless',
+            },
+            {
+              key: 'Reckless/rev-1/Reckless-Bold.otf',
+              relativePath: 'Reckless/Reckless-Bold.otf',
+              size: 4,
+              etag: 'bold',
+              uploaded: '2026-01-02T00:00:00.000Z',
+              familyName: 'Reckless',
+            },
+          ],
+        },
+        {
+          glyphsFile: 'Vinila',
+          revisionId: 'rev-1',
+          lastRegeneratedAt: '2026-01-02T00:00:00.000Z',
+          files: [
+            {
+              key: 'Vinila/rev-1/Vinila.otf',
+              relativePath: 'Vinila/Vinila.otf',
+              size: 4,
+              etag: 'v1',
+              uploaded: '2026-01-02T00:00:00.000Z',
+              familyName: 'Vinila',
+            },
+          ],
+        },
+      ],
+      skipped: [],
+    }
+
+    const gate = deferred()
+    let started!: () => void
+    const startedDownload = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    service.retailFetch = {
+      fetchManifest: async () => next,
+      fetchFile: async () => {
+        started()
+        await gate.promise
+        throw new Error('canceled.')
+      },
+    }
+    const running = service.checkRetail()
+    await startedDownload
+    const interrupted = loadRetailManifest(paths)
+    assert.equal(interrupted.incomplete, true)
+    assert.equal(interrupted.incompleteAutomatic, true)
+    abortInflightRetailSync()
+    gate.resolve()
+    await running
+    const paused = loadRetailManifest(paths)
+    assert.equal(paused.incomplete, true)
+    assert.equal(paused.incompleteAutomatic, true)
+    assert.equal(fs.readFileSync(path.join(paths.userFontsDir, 'RecklessVF.otf')).length, 4)
+    assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'Vinila.otf')), false)
+
+    resetRetailCache()
+    const resumed: string[] = []
+    service.retailFetch = {
+      fetchManifest: async () => next,
+      fetchFile: async ({ key }) => {
+        resumed.push(key)
+        return new Uint8Array(key.endsWith('RecklessVF.otf') ? 6 : 4).fill(2)
+      },
+    }
+    await service.init()
+    const deadline = Date.now() + 5000
+    while (loadRetailManifest(paths).incomplete && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    const local = loadRetailManifest(paths)
+    assert.equal(local.incomplete, false, retailStatus(paths).error ?? 'automatic resume did not finish')
+    assert.equal(local.incompleteAutomatic, undefined)
+    assert.deepEqual(resumed.sort(), [
+      'Reckless/rev-1/Reckless-Bold.otf',
+      'Reckless/rev-1/RecklessVF.otf',
+    ])
+    assert.equal(fs.readFileSync(path.join(paths.userFontsDir, 'RecklessVF.otf')).length, 6)
+    assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'Reckless-Bold.otf')), true)
+    assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'Vinila.otf')), false)
+  })
+})
+
+test('an interrupted Sync does not mark the pass as automatic', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await syncRetail(paths, {
+    fetchManifest: async () => manifestWith(4, 'e1'),
+    fetchFile: async () => new Uint8Array(4).fill(1),
+  })
+  const gate = deferred()
+  let started!: () => void
+  const startedDownload = new Promise<void>((resolve) => {
+    started = resolve
+  })
+  const running = syncRetail(paths, {
+    fetchManifest: async () => manifestWith(6, 'e2'),
+    fetchFile: async () => {
+      started()
+      await gate.promise
+      throw new Error('canceled.')
+    },
+  })
+  await startedDownload
+  assert.equal(loadRetailManifest(paths).incomplete, true)
+  assert.equal(loadRetailManifest(paths).incompleteAutomatic, undefined)
+  abortInflightRetailSync()
+  gate.resolve()
+  await running
+  const paused = loadRetailManifest(paths)
+  assert.equal(paused.incomplete, true)
+  assert.equal(paused.incompleteAutomatic, undefined)
 })
 
 test('leftover listings without an incomplete flag wait for an explicit sync', async () => {

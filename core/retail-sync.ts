@@ -300,11 +300,14 @@ export function loadRetailManifest(paths: AppPaths): RetailLocalManifest {
     for (const [key, value] of Object.entries(parsed.files)) {
       if (isValidLocalFile(value, key)) files[key] = value
     }
+    const incomplete = parsed.incomplete === true
     return {
       version: 1,
       syncedAt: typeof parsed.syncedAt === 'string' ? parsed.syncedAt : null,
       files,
-      incomplete: parsed.incomplete === true,
+      incomplete,
+      // A stale automatic flag must not change resume once the pass has finished.
+      ...(incomplete && parsed.incompleteAutomatic === true ? { incompleteAutomatic: true } : {}),
       ...(normalizeRetailMode(parsed.mode) ? { mode: normalizeRetailMode(parsed.mode) } : {}),
     }
   } catch {

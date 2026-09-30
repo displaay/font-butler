@@ -120,9 +120,11 @@ it is the user's call, not ours.
   turned off are skipped, and `removed` files are not deleted. With the checkbox off, a check only
   records the update and download waits for **Sync**. Turning a family on still downloads it.
   An interrupted download is marked `incomplete` on disk and resumes the next
-  time the app launches. A finished pass is not re-downloaded at startup, even if catalog rows remain
-  uninstalled because they conflicted or left the worker. Updates that are not installed automatically
-  wait for Sync.
+  time the app launches. An interrupted Sync resumes the full sync. An interrupted automatic install
+  also stores that the pass was automatic, and resume stays inside that update set, so a family that
+  was never installed is not pulled in. A finished pass is not re-downloaded at startup, even if catalog
+  rows remain uninstalled because they conflicted or left the worker. Updates that are not installed
+  automatically wait for Sync.
 
 ## Checking
 
