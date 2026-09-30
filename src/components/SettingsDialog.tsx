@@ -159,6 +159,7 @@ export function SettingsDialog({
   onCheckAppUpdate,
   highlightAppUpdate = false,
   highlightWatchFolders = false,
+  onStartOnboarding,
   retail = null,
   retailFamiliesOnMac,
   onRetailChange,
@@ -174,6 +175,7 @@ export function SettingsDialog({
   onCheckAppUpdate?: (refresh?: boolean) => void
   highlightAppUpdate?: boolean
   highlightWatchFolders?: boolean
+  onStartOnboarding?: () => void
   retail?: RetailSyncStatus | null
   retailFamiliesOnMac?: ReadonlySet<string>
   onRetailChange?: (status: RetailSyncStatus) => void
@@ -419,6 +421,7 @@ export function SettingsDialog({
                   checkingAppUpdate={checkingAppUpdate}
                   onCheckAppUpdate={onCheckAppUpdate}
                   highlightAppUpdate={highlightAppUpdate}
+                  onStartOnboarding={onStartOnboarding}
                 />
               )}
               {category === 'folders' && (
@@ -510,6 +513,7 @@ function GeneralPane({
   checkingAppUpdate,
   onCheckAppUpdate,
   highlightAppUpdate,
+  onStartOnboarding,
 }: {
   settings: AppSettings | null
   busy: boolean
@@ -519,6 +523,7 @@ function GeneralPane({
   checkingAppUpdate: boolean
   onCheckAppUpdate?: (refresh?: boolean) => void
   highlightAppUpdate: boolean
+  onStartOnboarding?: () => void
 }) {
   return (
     <div>
@@ -712,6 +717,20 @@ function GeneralPane({
             onCheck={onCheckAppUpdate ? () => onCheckAppUpdate(true) : undefined}
           />
         </div>
+        <SettingsRow
+          label="Onboarding"
+          description="Show the setup screens from the first time you opened Font Buttler."
+        >
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={busy || !onStartOnboarding}
+            onClick={onStartOnboarding}
+          >
+            Start onboarding
+          </Button>
+        </SettingsRow>
       </SettingsSection>
     </div>
   )
