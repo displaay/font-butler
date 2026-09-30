@@ -73,6 +73,12 @@ export type RetailLocalManifest = {
   files: Record<string, RetailLocalFile>
   /** True while a download/install pass is running. Survives a quit so the next launch can resume. */
   incomplete?: boolean
+  /**
+   * True while `incomplete` belongs to an automatic update, not a user Sync.
+   * Resume must keep that pass inside the update set and must not install families that were never synced.
+   * Ignored unless `incomplete` is also true.
+   */
+  incompleteAutomatic?: boolean
   /** Mode of the last successful check. Absent in records written before trial tokens existed. */
   mode?: RetailCollectionMode
 }
@@ -153,6 +159,11 @@ export type RetailSyncStatus = {
   enabled: boolean
   /** Background check interval in minutes; `0` means the app never checks on its own. */
   autoCheckMinutes: number
+  /**
+   * When true, a check installs updates of families already chosen to sync.
+   * Missing on older clients; treat that the same as on.
+   */
+  autoInstallUpdates: boolean
   configured: boolean
   /**
    * True when the user saved a token of their own. Without one the built-in trial token is used, so a

@@ -237,6 +237,11 @@ export type RetailSyncSettings = {
   workerBaseUrl: string
   /** Background check interval in minutes; `0` means the app never checks on its own. */
   autoCheckMinutes: number
+  /**
+   * When true, a check installs updates (`changed`, `missing-locally`, `corrupt-locally`) of families
+   * already chosen to sync. Off leaves that drift pending until Sync. Defaults on.
+   */
+  autoInstallUpdates: boolean
   /** Family names the user turned off. Empty means every loaded family syncs. */
   disabledGlyphsFiles: string[]
   /** Per-family desktop format when both otf and ttf exist. Missing keys default to otf. */

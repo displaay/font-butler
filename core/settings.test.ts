@@ -516,6 +516,7 @@ test('loadSettings keeps stored retail disabled families', () => {
           enabled: true,
           workerBaseUrl: 'https://w.displaay.net',
           autoCheckMinutes: 60,
+          autoInstallUpdates: true,
           disabledGlyphsFiles: [' Zangezi ', 'Reckless', 'Zangezi'],
           familyFormats: { Reckless: 'ttf' },
           familyOptOuts: true,
@@ -536,6 +537,32 @@ test('loadSettings defaults retail disabled families to none', () => {
     assert.deepEqual(loadSettings(paths).retailSync?.disabledGlyphsFiles, [])
     assert.deepEqual(loadSettings(paths).retailSync?.familyFormats, {})
     assert.equal(loadSettings(paths).retailSync?.familyOptOuts, true)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings defaults retail autoInstallUpdates on, including files that omit it', () => {
+  const paths = tempPaths()
+  try {
+    assert.equal(loadSettings(paths).retailSync?.autoInstallUpdates, true)
+    fs.mkdirSync(paths.dataRoot, { recursive: true })
+    fs.writeFileSync(
+      paths.settingsPath,
+      JSON.stringify({
+        version: 1,
+        retailSync: {
+          enabled: true,
+          workerBaseUrl: 'https://w.displaay.net',
+          autoCheckMinutes: 60,
+        },
+      }),
+    )
+    assert.equal(loadSettings(paths).retailSync?.autoInstallUpdates, true)
+    const stored = loadSettings(paths)
+    stored.retailSync = { ...stored.retailSync!, autoInstallUpdates: false }
+    saveSettings(paths, stored)
+    assert.equal(loadSettings(paths).retailSync?.autoInstallUpdates, false)
   } finally {
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }

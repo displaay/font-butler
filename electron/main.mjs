@@ -1522,6 +1522,9 @@ async function loadAppUpdate(refresh = false) {
  * the app-update poll does. Deliberately sends no `refresh`, so the worker answers from its cached
  * manifest — the regenerate webhook purges that cache, so a new generation still surfaces promptly
  * without every client rebuilding the manifest on its own schedule.
+ *
+ * The tick only calls `/api/retail/check`. When "Automatically install updates" is on, that check
+ * installs updates of families already chosen to sync. It does not download families the user turned off.
  */
 async function retailTick() {
   const status = retailStatus

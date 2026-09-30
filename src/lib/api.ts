@@ -411,6 +411,7 @@ export const api = {
       enabled?: boolean
       workerBaseUrl?: string
       autoCheckMinutes?: number
+      autoInstallUpdates?: boolean
       token?: string
       folderId?: string | null
       disabledGlyphsFiles?: string[]
