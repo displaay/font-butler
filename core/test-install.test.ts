@@ -7,6 +7,7 @@ import {
   defaultTestInstallDir,
   deleteTestInstallFiles,
   glyphsTestInstallDirs,
+  isGlyphsTestInstallDir,
   resolveTestInstallFile,
   resolveTestInstallFileInDirs,
   scanTestInstallDir,
@@ -33,6 +34,8 @@ test('glyphs test installs use the Glyphs 3 and Glyphs 4 Temp folders', () => {
     path.join(home, 'Library', 'Application Support', 'Glyphs 4', 'Temp'),
   ])
   assert.deepEqual(testInstallDirs(home), [defaultTestInstallDir(home), ...glyphs])
+  assert.equal(isGlyphsTestInstallDir(glyphs[1]!, home), true)
+  assert.equal(isGlyphsTestInstallDir(defaultTestInstallDir(home), home), false)
 })
 
 test('test install ids stay stable for a path', () => {
@@ -57,15 +60,15 @@ test('scan ignores non-fonts and refuses paths that escape the folder', () => {
   assert.deepEqual(deleteTestInstallFiles(inside, [path.join(outside, 'Secret.otf')]), [])
   assert.equal(fs.existsSync(path.join(outside, 'Secret.otf')), true)
 
-  fs.writeFileSync(path.join(inside, 'Broken.otf'), 'not-a-font')
+  const broken = path.join(inside, 'Broken.otf')
+  fs.writeFileSync(broken, 'not-a-font')
   assert.deepEqual(scanTestInstallDir(inside), [])
-  assert.deepEqual(deleteTestInstallFiles(inside, [path.join(inside, 'Broken.otf')]), [
-    path.join(inside, 'Broken.otf'),
-  ])
+  const brokenReal = fs.realpathSync(broken)
+  assert.deepEqual(deleteTestInstallFiles(inside, [broken]), [brokenReal])
   assert.equal(fs.existsSync(path.join(inside, 'Broken.otf')), false)
 })
 
-test('font builder and glyphs temp fonts share one list and stay at the top level', async () => {
+test('glyphs temp lists only session test installs, not full-export leftovers', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-ti-glyphs-'))
   const homedir = mock.method(os, 'homedir', () => home)
   try {
@@ -79,44 +82,61 @@ test('font builder and glyphs temp fonts share one list and stay at the top leve
     fs.mkdirSync(outside, { recursive: true })
     const builderFile = path.join(builder, 'Builder-Regular.otf')
     const glyphs3File = path.join(glyphs3, 'Glyphs-Regular.otf')
-    const glyphs4File = path.join(glyphs4, 'GlyphsFour-Regular.otf')
+    const exportFile = path.join(glyphs4, 'Exported-Regular.otf')
     const nestedFile = path.join(glyphs3, 'Project', 'Nested.otf')
     writeTestFont(builderFile, 'Builder', 'Builder-Regular', { format: 'otf', codePoints: [65] })
     fs.copyFileSync(builderFile, glyphs3File)
-    fs.copyFileSync(builderFile, glyphs4File)
+    fs.copyFileSync(builderFile, exportFile)
     fs.copyFileSync(builderFile, nestedFile)
     fs.writeFileSync(path.join(outside, 'Secret.otf'), 'not-a-font')
     fs.symlinkSync(path.join(outside, 'Secret.otf'), path.join(glyphs3, 'Secret.otf'))
 
-    const scanned = scanTestInstallDirs(testInstallDirs())
-    assert.deepEqual(
-      scanned.map((font) => font.path).sort(),
-      [builderFile, glyphs3File, glyphs4File].sort(),
-    )
-    assert.equal(resolveTestInstallFile(path.join(glyphs3, 'Secret.otf'), glyphs3), null)
-    assert.equal(resolveTestInstallFileInDirs(path.join(outside, 'Secret.otf'), testInstallDirs()), null)
+    const glyphs3Real = fs.realpathSync(glyphs3File)
+    const builderReal = fs.realpathSync(builderFile)
+    const session = new Set([glyphs3Real])
+    const isSessionFont = (filePath: string) => session.has(filePath)
+    const scanned = scanTestInstallDirs(testInstallDirs(), { isSessionFont })
+    assert.deepEqual(scanned.map((font) => font.path).sort(), [builderReal, glyphs3Real].sort())
+    assert.equal(scanned.some((font) => font.path === exportFile), false)
+    assert.equal(scanned.some((font) => font.path === nestedFile), false)
+    assert.equal(resolveTestInstallFile(exportFile, glyphs4, { isSessionFont }), null)
+    assert.equal(resolveTestInstallFile(glyphs3File, glyphs3, { isSessionFont }), glyphs3Real)
+    assert.equal(resolveTestInstallFile(path.join(glyphs3, 'Secret.otf'), glyphs3, { isSessionFont }), null)
+    assert.equal(resolveTestInstallFileInDirs(path.join(outside, 'Secret.otf'), testInstallDirs(), { isSessionFont }), null)
+    assert.deepEqual(deleteTestInstallFiles(glyphs4, [exportFile], { isSessionFont }), [])
+    assert.equal(fs.existsSync(exportFile), true)
     assert.equal(testInstallId(glyphs3File), testInstallId(glyphs3File))
     assert.notEqual(testInstallId(glyphs3File), testInstallId(builderFile))
 
     await withService(async (service) => {
       const fonts = service.listTestInstalls()
-      assert.deepEqual(fonts.map((font) => font.path).sort(), [builderFile, glyphs3File, glyphs4File].sort())
+      assert.deepEqual(
+        fonts.map((font) => font.path),
+        [builderReal],
+      )
       assert.equal(service.listCatalog().length, 0)
-      const glyphs = fonts.find((font) => font.path === glyphs3File)
-      assert.ok(glyphs)
-      const meta = service.previewMeta(glyphs.id)
-      assert.equal(meta.entryId, glyphs.id)
+      const installed = fonts[0]
+      assert.ok(installed)
+      const meta = service.previewMeta(installed.id)
+      assert.equal(meta.entryId, installed.id)
       assert.equal(meta.faces[0]?.postscriptName, 'Builder-Regular')
-      assert.equal(service.previewGlyph(glyphs.id, 65).name, 'A')
+      assert.equal(service.previewGlyph(installed.id, 65).name, 'A')
 
-      const remaining = service.uninstallTestInstalls([glyphs3File])
-      assert.equal(remaining.some((font) => font.path === glyphs3File), false)
-      assert.equal(fs.existsSync(glyphs3File), false)
-      assert.equal(fs.existsSync(builderFile), true)
-      assert.equal(fs.existsSync(glyphs4File), true)
+      assert.throws(() => service.uninstallTestInstalls([exportFile]), /not test installs/)
+      assert.equal(fs.existsSync(exportFile), true)
+      assert.equal(fs.existsSync(glyphs3File), true)
+
+      const remaining = service.uninstallTestInstalls([builderFile])
+      assert.equal(remaining.some((font) => font.path === builderFile), false)
+      assert.equal(fs.existsSync(builderFile), false)
+      assert.equal(fs.existsSync(exportFile), true)
       assert.equal(fs.existsSync(nestedFile), true)
       assert.throws(() => service.uninstallTestInstalls([path.join(outside, 'Secret.otf')]), /not test installs/)
     })
+
+    assert.deepEqual(deleteTestInstallFiles(glyphs3, [glyphs3File], { isSessionFont: () => true }), [glyphs3Real])
+    assert.equal(fs.existsSync(glyphs3File), false)
+    assert.equal(fs.existsSync(exportFile), true)
   } finally {
     homedir.mock.restore()
     fs.rmSync(home, { recursive: true, force: true })
@@ -135,7 +155,7 @@ test('preview meta and glyph read a test install that is not in the library', as
       const fonts = service.listTestInstalls()
       assert.equal(fonts.length, 1)
       const id = fonts[0]!.id
-      assert.equal(id, testInstallId(file))
+      assert.equal(id, testInstallId(fs.realpathSync(file)))
       assert.equal(service.listCatalog().some((entry) => entry.id === id), false)
 
       const meta = service.previewMeta(id)

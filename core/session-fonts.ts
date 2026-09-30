@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process'
 
 type SessionFontsAddon = {
   unregisterSessionFonts: (paths: string[]) => number
+  isSessionScopedFont: (filePath: string) => boolean
 }
 
 const require = createRequire(import.meta.url)
@@ -21,12 +22,23 @@ function addonCandidates(): string[] {
   ]
 }
 
+function devAddonPaths(): { src: string; out: string } | null {
+  const src = path.join(moduleDir, '../electron/session-fonts.mm')
+  if (!fs.existsSync(src)) return null
+  return { src, out: path.join(moduleDir, '../electron/session-fonts.node') }
+}
+
+function devAddonIsCurrent(src: string, out: string): boolean {
+  if (!fs.existsSync(out)) return false
+  return fs.statSync(out).mtimeMs >= fs.statSync(src).mtimeMs
+}
+
 function compileDevAddon(): string | null {
   if (process.platform !== 'darwin') return null
-  const src = path.join(moduleDir, '../electron/session-fonts.mm')
-  const out = path.join(moduleDir, '../electron/session-fonts.node')
-  if (!fs.existsSync(src)) return null
-  fs.mkdirSync(path.dirname(out), { recursive: true })
+  const paths = devAddonPaths()
+  if (!paths) return null
+  if (devAddonIsCurrent(paths.src, paths.out)) return paths.out
+  fs.mkdirSync(path.dirname(paths.out), { recursive: true })
   const result = spawnSync(
     'clang++',
     [
@@ -42,30 +54,51 @@ function compileDevAddon(): string | null {
       '-framework',
       'Foundation',
       '-o',
-      out,
-      src,
+      paths.out,
+      paths.src,
     ],
     { encoding: 'utf8' },
   )
-  return result.status === 0 && fs.existsSync(out) ? out : null
+  return result.status === 0 && fs.existsSync(paths.out) ? paths.out : null
 }
 
+function addonIsCurrent(addon: Partial<SessionFontsAddon>): addon is SessionFontsAddon {
+  return typeof addon.unregisterSessionFonts === 'function' && typeof addon.isSessionScopedFont === 'function'
+}
+
+let loadedAddon: SessionFontsAddon | null | undefined
+
 function loadAddon(): SessionFontsAddon | null {
+  if (loadedAddon !== undefined) return loadedAddon
+  loadedAddon = null
   if (process.platform !== 'darwin') return null
   const candidates = addonCandidates()
-  if (!candidates.some((candidate) => fs.existsSync(candidate))) {
-    const compiled = compileDevAddon()
-    if (compiled) candidates.unshift(compiled)
-  }
+  const compiled = compileDevAddon()
+  if (compiled) candidates.unshift(compiled)
+  const seen = new Set<string>()
   for (const candidate of candidates) {
-    if (!fs.existsSync(candidate)) continue
+    if (!candidate || seen.has(candidate) || !fs.existsSync(candidate)) continue
+    seen.add(candidate)
     try {
-      return require(candidate) as SessionFontsAddon
+      const addon = require(candidate) as Partial<SessionFontsAddon>
+      if (!addonIsCurrent(addon)) continue
+      loadedAddon = addon
+      return addon
     } catch {
       continue
     }
   }
   return null
+}
+
+/** True when Core Text has this file registered for the session (a Glyphs test install). */
+export function isSessionScopedFont(filePath: string): boolean {
+  if (!filePath || process.platform !== 'darwin') return false
+  try {
+    return loadAddon()?.isSessionScopedFont(filePath) ?? false
+  } catch {
+    return false
+  }
 }
 
 /** Unregister session-scoped Core Text fonts. Missing addon still lets the caller delete files. */
