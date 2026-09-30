@@ -43,9 +43,27 @@ test('appUpdateDownloadUrl is the asset only; Open release uses the GitHub page'
   )
 })
 
-test('shouldShowUpdatesTab keeps the Updates tab for an app release', () => {
-  assert.equal(shouldShowUpdatesTab(0, true), true)
-  assert.equal(shouldShowUpdatesTab(0, false), false)
+test('shouldShowUpdatesTab stays closed for an app release with no font updates', () => {
+  assert.equal(shouldShowUpdatesTab(0), false)
+  assert.equal(shouldShowUpdatesTab(1), true)
+  assert.equal(shouldShowUpdatesTab(0, 1), true)
+})
+
+test('the Updates tab does not render or count an application update', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const { fileURLToPath } = await import('node:url')
+  const app = await readFile(fileURLToPath(new URL('../../src/App.tsx', import.meta.url)), 'utf8')
+  assert.equal(/<AppUpdateCard/.test(app), false)
+  assert.equal(/tab === 'updates' && appUpdate/.test(app), false)
+  const leaveUpdates = app.match(/tab === 'updates' && allUpdates\.length === 0[\s\S]*?setTab\('library'\)/)
+  assert.ok(leaveUpdates, 'expected the Updates tab to close when no font updates remain')
+  assert.equal(/appUpdate/.test(leaveUpdates[0]), false)
+
+  const sidebar = await readFile(fileURLToPath(new URL('../components/Sidebar.tsx', import.meta.url)), 'utf8')
+  const updatesItem = sidebar.match(/item\.id === 'updates'[\s\S]*?hoverAction=/)
+  assert.ok(updatesItem, 'expected the Updates sidebar item')
+  assert.equal(/hasAppUpdate/.test(updatesItem[0]), false)
+  assert.match(sidebar, /shouldShowUpdatesTab\(counts\.updates, retailPending\)/)
 })
 
 test('isAllowedAppUpdateUrl rejects other hosts', () => {

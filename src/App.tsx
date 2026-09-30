@@ -12,7 +12,6 @@ import {
 import { DropFolderDialog } from '@/components/DropFolderDialog'
 import { DuplicatesDialog } from '@/components/DuplicatesDialog'
 import { EmptyState } from '@/components/EmptyState'
-import { AppUpdateCard } from '@/components/AppUpdateCard'
 import { RetailUpdateCard } from '@/components/RetailUpdateCard'
 import { FolderRelinkDialog } from '@/components/FolderRelinkDialog'
 import { FolderSetupDialog } from '@/components/FolderSetupDialog'
@@ -849,15 +848,10 @@ function AppShell() {
       : null
 
   useEffect(() => {
-    if (
-      tab === 'updates' &&
-      allUpdates.length === 0 &&
-      !appUpdate?.updateAvailable &&
-      !retailHasLiveUpdates(retail)
-    ) {
+    if (tab === 'updates' && allUpdates.length === 0 && !retailHasLiveUpdates(retail)) {
       setTab('library')
     }
-  }, [tab, allUpdates.length, appUpdate?.updateAvailable, retail])
+  }, [tab, allUpdates.length, retail])
 
   const searchTab = tabWithSearchHits({
     current: tab,
@@ -2099,11 +2093,6 @@ function AppShell() {
                         setSettingsOpen(true)
                       }}
                     />
-                  </div>
-                ) : null}
-                {!loading && tab === 'updates' && appUpdate?.updateAvailable ? (
-                  <div className="mb-3">
-                    <AppUpdateCard status={appUpdate} compact />
                   </div>
                 ) : null}
                 {error && (
