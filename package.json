@@ -16,10 +16,9 @@
     "dist": "COPYFILE_DISABLE=1 npm run build && npm run bundle:python && node scripts/build-finder-services.mjs && node scripts/build-session-fonts.mjs && COPYFILE_DISABLE=1 electron-builder --mac --publish never",
     "preview": "vite preview --host 127.0.0.1 --port 43181",
     "lint": "oxlint",
-    "test": "FONT_BUTLER_TEST=1 tsx --test --test-concurrency=1 core/**/*.test.ts src/**/*.test.ts electron/**/*.test.mjs && FONT_BUTLER_TEST=1 TSX_TSCONFIG_PATH=tsconfig.app.json tsx --test --test-concurrency=1 tests/LibraryFilterGroups.test.ts",
+    "test": "FONT_BUTLER_TEST=1 tsx --test --test-concurrency=1 core/**/*.test.ts electron/**/*.test.mjs && FONT_BUTLER_TEST=1 TSX_TSCONFIG_PATH=tsconfig.app.json tsx --test --test-concurrency=1 src/**/*.test.ts tests/LibraryFilterGroups.test.ts",
     "test:native": "FONT_BUTLER_TEST=1 FONT_BUTLER_NATIVE=1 tsx --test --test-concurrency=1 core/native.integration.test.ts"
   },
-  "dependencies": {},
   "devDependencies": {
     "@hono/node-server": "^1.19.9",
     "@radix-ui/react-context-menu": "^2.2.16",

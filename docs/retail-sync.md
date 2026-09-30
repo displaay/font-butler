@@ -143,6 +143,8 @@ already synced and then regenerated do not appear on Updates as a collection car
 - The **On/Off** switch gates everything: with the collection off, Check and Sync refuse and never
   contact the worker. Turning it on loads the remote list and does not download. Turning it off asks
   whether to keep installed fonts or uninstall them and remove the listings. There is no watch folder.
+- **Onboarding** uses the same list and token panel. Sync On lists the families and saves which ones
+  to show and install, but does not download. The install runs once, when onboarding closes.
 - Installs go to the Mac Fonts folder only (no Adobe destination unless that is reused later).
 - Occupied Fonts files that are not this retail font stay put. The retail font is still listed as
   **Not installed**; installing it replaces the occupying catalogue copy.

@@ -1,8 +1,8 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { X } from 'lucide-react'
-import { DisplaayMark } from '@/components/DisplaayMark'
 import { FolderSetupDialog } from '@/components/FolderSetupDialog'
+import { RetailPane } from '@/components/RetailPane'
 import { SettingsRow, SettingsSection } from '@/components/SettingsRow'
 import { Button } from '@/components/ui/button'
 import {
@@ -12,7 +12,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Input, PasswordInput } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { api } from '@/lib/api'
 import { APP_ICON_OPTIONS, appIconPreviewSrc, parseAppIconStyle, type AppIconStyle } from '@/lib/appIcon'
@@ -20,14 +19,13 @@ import { collectDropPayload } from '@/lib/drop'
 import { DESTINATIONS, GLOBAL_AUTO_REINSTALL_DESCRIPTION } from '@/lib/folders'
 import { persistNativeNotificationsEnabled, requestNotificationPermission } from '@/lib/notifications'
 import type { AppSettings, DefaultDestinationId, DestinationCapability, RetailSyncStatus, WatchFolder } from '@/lib/types'
-import { cn, CONTROL_H } from '@/lib/utils'
+import { cn } from '@/lib/utils'
 import { watchFolderName } from '@/lib/watchFolders'
 
 const ALL_STEPS = ['welcome', 'folders', 'fonts', 'destinations', 'notify', 'icon', 'done'] as const
 type Step = (typeof ALL_STEPS)[number]
 
 const CHECKBOX_CLASS = 'size-4 shrink-0 cursor-pointer rounded border border-input accent-primary'
-const DEFAULT_WORKER_URL = 'https://w.displaay.net'
 
 function adobeFolderDetected(destinations: DestinationCapability[]): boolean {
   return destinations.some((item) => item.id === 'adobe-shared' && item.supported)
@@ -54,7 +52,7 @@ const COPY: Record<Step, { title: string; description: string }> = {
   folders: {
     title: 'Watch folders',
     description:
-      'Add a folder to watch, or turn on Displaay retail. Nothing is installed until you confirm.',
+      'Add a folder to watch, or turn on Displaay retail. Retail choices are saved now; those fonts install after you finish setup.',
   },
   fonts: {
     title: 'Fonts',
@@ -94,10 +92,13 @@ export function OnboardingDialog({
   onComplete: () => void
 }) {
   const finishedRef = useRef(false)
+  const finishingRef = useRef<Promise<void> | null>(null)
+  const settleRetailRef = useRef<() => Promise<void>>(() => Promise.resolve())
+  const registerRetailSettle = useCallback((settle: () => Promise<void>) => {
+    settleRetailRef.current = settle
+  }, [])
   const settingsRef = useRef(settings)
   const onRetailChangeRef = useRef(onRetailChange)
-  const urlId = useId()
-  const tokenId = useId()
   const installAfterId = useId()
   const autoReinstallId = useId()
   const [step, setStep] = useState<Step>('welcome')
@@ -106,10 +107,7 @@ export function OnboardingDialog({
   const [setupOpen, setSetupOpen] = useState(false)
   const [setupRoots, setSetupRoots] = useState<string[] | undefined>()
   const [folderDragOver, setFolderDragOver] = useState(false)
-  const [retailEnabled, setRetailEnabled] = useState(false)
-  const [hasRetailToken, setHasRetailToken] = useState(false)
-  const [workerUrl, setWorkerUrl] = useState(DEFAULT_WORKER_URL)
-  const [retailToken, setRetailToken] = useState('')
+  const [retailStatus, setRetailStatus] = useState<RetailSyncStatus | null>(null)
   const [adobeAvailable, setAdobeAvailable] = useState(false)
   const adobeAvailableRef = useRef(false)
   const adobeProbeRef = useRef<Promise<boolean> | null>(null)
@@ -154,7 +152,7 @@ export function OnboardingDialog({
     setStep('welcome')
     setBusy(false)
     setOpenAtLogin(settingsRef.current?.openAtLogin === true)
-    setRetailToken('')
+    setRetailStatus(null)
     setDestinationId(settingsRef.current?.defaultDestination ?? 'macos')
     setInstallAfterUpload(settingsRef.current?.installAfterUpload !== false)
     setAutoReinstallOnUpdate(settingsRef.current?.autoReinstallOnUpdate === true)
@@ -168,16 +166,11 @@ export function OnboardingDialog({
     void api.retail
       .status()
       .then((result) => {
-        const status = result.status
-        setRetailEnabled(status.enabled)
-        setHasRetailToken(status.hasToken)
-        setWorkerUrl(status.workerBaseUrl || DEFAULT_WORKER_URL)
-        onRetailChangeRef.current?.(status)
+        setRetailStatus(result.status)
+        onRetailChangeRef.current?.(result.status)
       })
       .catch(() => {
-        setRetailEnabled(false)
-        setHasRetailToken(false)
-        setWorkerUrl(DEFAULT_WORKER_URL)
+        setRetailStatus(null)
       })
   }, [open])
 
@@ -189,14 +182,25 @@ export function OnboardingDialog({
 
   async function finish() {
     if (finishedRef.current) return
-    finishedRef.current = true
-    onComplete()
-    try {
-      await persist({ onboardingCompleted: true })
-    } catch (error) {
-      finishedRef.current = false
-      toast.error(error instanceof Error ? error.message : 'Could not finish setup')
-    }
+    if (finishingRef.current) return finishingRef.current
+    const job = (async () => {
+      setBusy(true)
+      try {
+        await settleRetailRef.current()
+        if (finishedRef.current) return
+        finishedRef.current = true
+        onComplete()
+        await persist({ onboardingCompleted: true })
+      } catch (error) {
+        finishedRef.current = false
+        toast.error(error instanceof Error ? error.message : 'Could not finish setup')
+      } finally {
+        setBusy(false)
+        finishingRef.current = null
+      }
+    })()
+    finishingRef.current = job
+    return job
   }
 
   async function start() {
@@ -211,39 +215,11 @@ export function OnboardingDialog({
     }
   }
 
-  async function persistRetail() {
-    const turningOn = retailEnabled
-    const result = await api.retail.configure(
-      turningOn
-        ? {
-            enabled: true,
-            workerBaseUrl: workerUrl.trim() || DEFAULT_WORKER_URL,
-            ...(retailToken.trim() ? { token: retailToken.trim() } : {}),
-          }
-        : { enabled: false },
-    )
-    setRetailEnabled(result.status.enabled)
-    setHasRetailToken(result.status.hasToken)
-    setWorkerUrl(result.status.workerBaseUrl || DEFAULT_WORKER_URL)
-    if (retailToken.trim()) setRetailToken('')
-    if (turningOn) {
-      const checked = await api.retail.check(false, { credentialsOnly: false })
-      if (checked.status.error) {
-        throw new Error(checked.status.error)
-      }
-      onRetailChangeRef.current?.(checked.status)
-      return
-    }
-    onRetailChangeRef.current?.(result.status)
-  }
-
   async function leaveFolders() {
     setBusy(true)
     try {
-      await persistRetail()
+      await settleRetailRef.current()
       setStep('fonts')
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Could not save Displaay retail')
     } finally {
       setBusy(false)
     }
@@ -343,7 +319,12 @@ export function OnboardingDialog({
           if (!next) void finish()
         }}
       >
-        <DialogContent className="flex max-h-[min(90vh,40rem)] w-[min(92vw,480px)] flex-col overflow-hidden">
+        <DialogContent
+          className={cn(
+            'flex max-h-[min(90vh,44rem)] flex-col overflow-hidden',
+            step === 'folders' ? 'w-[min(94vw,760px)]' : 'w-[min(92vw,480px)]',
+          )}
+        >
           <DialogHeader className="pr-6">
             <DialogTitle>{title}</DialogTitle>
             <DialogDescription>{description}</DialogDescription>
@@ -424,98 +405,16 @@ export function OnboardingDialog({
                 </div>
 
                 <div className="border-t pt-4">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-                        <DisplaayMark className="size-4" />
-                        Displaay retail
-                      </div>
-                      <p className="mt-1 text-[13px] leading-5 text-muted-foreground">
-                        Load the Displaay retail list. Fonts are not downloaded until you Sync All or turn a family on in Settings.
-                      </p>
-                    </div>
-                    <div
-                      role="radiogroup"
-                      aria-label="Displaay retail sync"
-                      className={cn(
-                        'inline-flex shrink-0 items-center gap-0.5 rounded-md border bg-background px-0.5',
-                        CONTROL_H,
-                      )}
-                    >
-                      {(
-                        [
-                          { id: false, label: 'Off' },
-                          { id: true, label: 'On' },
-                        ] as const
-                      ).map((option) => {
-                        const selected = retailEnabled === option.id
-                        return (
-                          <Button
-                            key={option.label}
-                            type="button"
-                            size="sm"
-                            variant="ghost"
-                            role="radio"
-                            aria-checked={selected}
-                            disabled={locked}
-                            className={cn(
-                              'h-7 px-2.5',
-                              selected ? 'bg-muted font-medium' : 'text-muted-foreground',
-                            )}
-                            onClick={() => setRetailEnabled(option.id)}
-                          >
-                            {option.label}
-                          </Button>
-                        )
-                      })}
-                    </div>
-                  </div>
-
-                  {retailEnabled ? (
-                    <div className="mt-3 space-y-3">
-                      <div className="space-y-1.5">
-                        <Label htmlFor={urlId} className="text-sm font-medium text-foreground">
-                          Worker address
-                        </Label>
-                        <Input
-                          id={urlId}
-                          value={workerUrl}
-                          disabled={locked}
-                          placeholder={DEFAULT_WORKER_URL}
-                          onChange={(event) => setWorkerUrl(event.target.value)}
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label htmlFor={tokenId} className="text-sm font-medium text-foreground">
-                          Worker token
-                        </Label>
-                        <PasswordInput
-                          id={tokenId}
-                          value={retailToken}
-                          disabled={locked}
-                          placeholder={hasRetailToken ? '••••••••' : 'Optional'}
-                          onChange={(event) => setRetailToken(event.target.value)}
-                          onReveal={
-                            hasRetailToken
-                              ? async () => {
-                                  if (retailToken) return
-                                  try {
-                                    const result = await api.retail.token()
-                                    setRetailToken(result.token)
-                                  } catch {
-                                    // Keep the field visible; a missing token stays empty.
-                                  }
-                                }
-                              : undefined
-                          }
-                        />
-                        <p className="text-[13px] leading-5 text-muted-foreground">
-                          Leave empty to get the Displaay trial fonts. A token with retail access syncs the full
-                          files instead.
-                        </p>
-                      </div>
-                    </div>
-                  ) : null}
+                  <RetailPane
+                    status={retailStatus}
+                    busy={locked}
+                    deferInstall
+                    onSettle={registerRetailSettle}
+                    onStatus={(status) => {
+                      setRetailStatus(status)
+                      onRetailChangeRef.current?.(status)
+                    }}
+                  />
                 </div>
               </div>
             )}
