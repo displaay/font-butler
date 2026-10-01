@@ -53,7 +53,7 @@ Object.defineProperty(globalThis, 'ResizeObserver', {
 
 const React = await import('react')
 const { createRoot } = await import('react-dom/client')
-const { LibraryFilterGroups, Sidebar } = await import('../src/components/Sidebar.tsx')
+const { LibraryFiltersPanel, Sidebar } = await import('../src/components/Sidebar.tsx')
 
 const groupsOpen = {
   Status: true,
@@ -86,12 +86,15 @@ function buttonByLabel(label: string): HTMLButtonElement | undefined {
 function Harness({ initial }: { initial: LibraryFilter[] }) {
   const [filters, setFilters] = React.useState(initial)
   const [filterGroupsOpen, setFilterGroupsOpen] = React.useState(groupsOpen)
-  return React.createElement(LibraryFilterGroups, {
+  const [filtersPanelOpen, setFiltersPanelOpen] = React.useState(true)
+  return React.createElement(LibraryFiltersPanel, {
     libraryFilters: filters,
     libraryFilterCounts: counts,
     onLibraryFiltersChange: setFilters,
     filterGroupsOpen,
     onFilterGroupsOpenChange: setFilterGroupsOpen,
+    filtersPanelOpen,
+    onFiltersPanelOpenChange: setFiltersPanelOpen,
   })
 }
 
@@ -133,7 +136,11 @@ test('clear filters is hidden with none selected, shown when any are on, and cli
   })
   const one = clearButton()
   assert.ok(one, 'expected × Clear when one filter is selected')
-  assert.equal(one.parentElement?.className.includes('justify-end'), true)
+  assert.equal(
+    one.closest('.group\\/library-filters') != null,
+    true,
+    'expected × Clear in the Filters header row',
+  )
   assert.deepEqual(pressedFilters(), ['Filter installed'])
 
   await React.act(async () => {
@@ -159,6 +166,71 @@ test('clear filters is hidden with none selected, shown when any are on, and cli
   })
   assert.equal(clearButton(), undefined)
   assert.deepEqual(pressedFilters(), [])
+
+  await React.act(async () => {
+    root.unmount()
+  })
+})
+
+test('the filters panel collapses and hides filter chips', async () => {
+  const host = document.createElement('div')
+  document.body.append(host)
+  const root = createRoot(host)
+
+  await React.act(async () => {
+    root.render(React.createElement(Harness, { initial: [] }))
+  })
+  assert.ok(buttonByLabel('Installed'), 'expected filters panel open by default')
+
+  const hideFilters = document.querySelector('button[aria-label="Hide filters"]')
+  assert.ok(hideFilters, 'expected Filters section header')
+  await React.act(async () => {
+    hideFilters!.click()
+  })
+  assert.equal(buttonByLabel('Installed'), undefined)
+  assert.equal(document.querySelector('button[aria-label="Show filters"]') != null, true)
+
+  await React.act(async () => {
+    root.unmount()
+  })
+})
+
+test('save appears in the filters header when criteria are active', async () => {
+  const host = document.createElement('div')
+  document.body.append(host)
+  const root = createRoot(host)
+  let saved = false
+
+  function SaveHarness() {
+    const [filters, setFilters] = React.useState<LibraryFilter[]>(['installed'])
+    const [filterGroupsOpen, setFilterGroupsOpen] = React.useState(groupsOpen)
+    const [filtersPanelOpen, setFiltersPanelOpen] = React.useState(true)
+    return React.createElement(LibraryFiltersPanel, {
+      libraryFilters: filters,
+      libraryFilterCounts: counts,
+      onLibraryFiltersChange: setFilters,
+      filterGroupsOpen,
+      onFilterGroupsOpenChange: setFilterGroupsOpen,
+      filtersPanelOpen,
+      onFiltersPanelOpenChange: setFiltersPanelOpen,
+      hasActiveLibraryCriteria: true,
+      onCreateSavedFilter: () => {
+        saved = true
+      },
+    })
+  }
+
+  await React.act(async () => {
+    root.render(React.createElement(SaveHarness))
+  })
+  const save = buttonByLabel('Save')
+  assert.ok(save, 'expected Save control in Filters header')
+  assert.equal(save!.closest('.group\\/library-filters') != null, true)
+  assert.match(save!.textContent ?? '', /Save/)
+  await React.act(async () => {
+    save!.click()
+  })
+  assert.equal(saved, true)
 
   await React.act(async () => {
     root.unmount()
