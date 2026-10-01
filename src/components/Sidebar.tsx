@@ -18,6 +18,7 @@ import {
   Link2,
   List,
   Filter,
+  Heart,
   Monitor,
   Pencil,
   Plus,
@@ -128,6 +129,90 @@ function navButtonClass(active: boolean, extra?: string) {
   )
 }
 
+export function LibraryFiltersPanel({
+  libraryFilters,
+  libraryFilterCounts,
+  onLibraryFiltersChange,
+  filterGroupsOpen,
+  onFilterGroupsOpenChange,
+  filtersPanelOpen,
+  onFiltersPanelOpenChange,
+  onCreateSavedFilter,
+  hasActiveLibraryCriteria = false,
+}: {
+  libraryFilters: LibraryFilter[]
+  libraryFilterCounts: Record<LibraryFilter, number>
+  onLibraryFiltersChange: (value: LibraryFilter[]) => void
+  filterGroupsOpen: Record<string, boolean>
+  onFilterGroupsOpenChange: (value: Record<string, boolean>) => void
+  filtersPanelOpen: boolean
+  onFiltersPanelOpenChange: (value: boolean) => void
+  onCreateSavedFilter?: () => void
+  hasActiveLibraryCriteria?: boolean
+}) {
+  const showClear = libraryFilters.length > 0
+  const showSave = Boolean(onCreateSavedFilter && hasActiveLibraryCriteria)
+
+  return (
+    <div className="flex w-full flex-col gap-0.5 md:mt-2 md:border-t md:pt-2">
+      <div className="group/library-filters flex w-full items-center gap-0.5 px-1 pt-1">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-1 px-1 text-left"
+          aria-expanded={filtersPanelOpen}
+          aria-label={filtersPanelOpen ? 'Hide filters' : 'Show filters'}
+          onClick={() => onFiltersPanelOpenChange(!filtersPanelOpen)}
+        >
+          <span className="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+            Filters
+          </span>
+          {filtersPanelOpen ? (
+            <ChevronDown className="size-3 opacity-0 transition-opacity group-hover/library-filters:opacity-70" />
+          ) : (
+            <ChevronRight className="size-3 opacity-0 transition-opacity group-hover/library-filters:opacity-70" />
+          )}
+        </button>
+        {showClear ? (
+          <Button
+            type="button"
+            size="default"
+            variant="ghost"
+            className={navButtonClass(false, 'h-6 w-auto shrink-0 px-1.5')}
+            onClick={() => onLibraryFiltersChange([])}
+          >
+            × Clear
+          </Button>
+        ) : null}
+        {showSave ? (
+          <Button
+            type="button"
+            size="default"
+            variant="ghost"
+            className={navButtonClass(false, 'h-6 w-auto shrink-0 gap-1 px-1.5')}
+            aria-label="Save current filter"
+            onClick={(event) => {
+              onCreateSavedFilter?.()
+              event.currentTarget.blur()
+            }}
+          >
+            <Heart className="size-3.5 opacity-70" />
+            <span>Save</span>
+          </Button>
+        ) : null}
+      </div>
+      {filtersPanelOpen ? (
+        <LibraryFilterGroups
+          libraryFilters={libraryFilters}
+          libraryFilterCounts={libraryFilterCounts}
+          onLibraryFiltersChange={onLibraryFiltersChange}
+          filterGroupsOpen={filterGroupsOpen}
+          onFilterGroupsOpenChange={onFilterGroupsOpenChange}
+        />
+      ) : null}
+    </div>
+  )
+}
+
 export function LibraryFilterGroups({
   libraryFilters,
   libraryFilterCounts,
@@ -150,20 +235,7 @@ export function LibraryFilterGroups({
   }
 
   return (
-    <div className="flex w-full flex-wrap gap-3 md:mt-2 md:flex-col md:gap-2 md:border-t md:pt-2">
-      {libraryFilters.length > 0 ? (
-        <div className="flex w-full justify-end">
-          <Button
-            type="button"
-            size="default"
-            variant="ghost"
-            className={navButtonClass(false, 'h-6 w-auto px-1.5')}
-            onClick={() => onLibraryFiltersChange([])}
-          >
-            × Clear
-          </Button>
-        </div>
-      ) : null}
+    <div className="flex w-full flex-wrap gap-3 md:flex-col md:gap-2">
       {LIBRARY_FILTER_GROUPS.map((group) => {
         const groupOpen = filterGroupsOpen[group.heading] ?? true
         const heading = group.heading.toLowerCase()
@@ -496,6 +568,7 @@ export function Sidebar({
   const skipRenameCommitRef = useRef(false)
   const renameSessionRef = useRef<{ id: string; original: string } | null>(null)
   const [savedFiltersOpen, setSavedFiltersOpen] = useState(true)
+  const [filtersPanelOpen, setFiltersPanelOpen] = useState(true)
   const [filterGroupsOpen, setFilterGroupsOpen] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(LIBRARY_FILTER_GROUPS.map((group) => [group.heading, true])),
   )
@@ -515,9 +588,7 @@ export function Sidebar({
     currentCriteria.query.trim().length > 0 ||
     currentCriteria.libraryFilters.length > 0 ||
     Boolean(currentCriteria.watchFolder)
-  const showSavedFilters =
-    tab === 'library' &&
-    (hasSavedFilters || Boolean(onCreateSavedFilter && hasActiveLibraryCriteria))
+  const showSavedFilters = tab === 'library' && hasSavedFilters
   const hasWatchChildren = watchFolders.length > 0 || retailEnabled || testInstallCount > 0
   const fontsActive = tab === 'library' && !watchFolderFilter
 
@@ -999,21 +1070,6 @@ export function Sidebar({
                   <ChevronRight className="size-3 opacity-0 transition-opacity group-hover/filters:opacity-70" />
                 )}
               </button>
-              {onCreateSavedFilter ? (
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="ghost"
-                  className="size-6 text-muted-foreground md:opacity-0 md:transition-opacity md:group-hover/filters:opacity-100"
-                  aria-label="Save current filter"
-                  onClick={(event) => {
-                    onCreateSavedFilter()
-                    event.currentTarget.blur()
-                  }}
-                >
-                  <Plus />
-                </Button>
-              ) : null}
             </div>
             {savedFiltersOpen
               ? (savedFilters ?? []).map((filter) => {
@@ -1137,12 +1193,16 @@ export function Sidebar({
           </div>
         ) : null}
         {tab === 'library' ? (
-          <LibraryFilterGroups
+          <LibraryFiltersPanel
             libraryFilters={libraryFilters}
             libraryFilterCounts={libraryFilterCounts}
             onLibraryFiltersChange={onLibraryFiltersChange}
             filterGroupsOpen={filterGroupsOpen}
             onFilterGroupsOpenChange={setFilterGroupsOpen}
+            filtersPanelOpen={filtersPanelOpen}
+            onFiltersPanelOpenChange={setFiltersPanelOpen}
+            onCreateSavedFilter={onCreateSavedFilter}
+            hasActiveLibraryCriteria={hasActiveLibraryCriteria}
           />
         ) : null}
       </nav>
