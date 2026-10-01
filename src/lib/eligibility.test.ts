@@ -7,7 +7,10 @@ import {
   deactivatableIds,
   familyHasAction,
   familyHasSwitch,
+  instanceContextMenuOpen,
+  instanceHasRevealInFinder,
   instanceMenuLabels,
+  instanceMenuPlan,
   installableIds,
   reinstallableIds,
   repairableIds,
@@ -382,4 +385,29 @@ test('instance menu is scoped to that catalog entry', () => {
 
   const preview = { ...entry('web', 'uninstalled'), previewOnly: true, format: 'woff' as const }
   assert.deepEqual(instanceMenuLabels(preview), [])
+})
+
+test('instance reveal in Finder follows managed installs and tracked sources', () => {
+  const adobeOnly = entry('adobe', 'installed')
+  adobeOnly.installedPath = undefined
+  adobeOnly.installations = [
+    {
+      destinationId: 'adobe-shared',
+      path: '/Library/Application Support/Adobe/Fonts/Booton.otf',
+      verification: 'file-present',
+    },
+  ]
+  const sourceOnly = entry('src', 'uninstalled')
+  sourceOnly.installedPath = undefined
+
+  assert.equal(instanceHasRevealInFinder(adobeOnly), true)
+  assert.equal(instanceHasRevealInFinder(sourceOnly), true)
+  assert.equal(
+    instanceContextMenuOpen(sourceOnly, instanceMenuPlan(sourceOnly)),
+    true,
+  )
+  assert.equal(
+    instanceContextMenuOpen(adobeOnly, instanceMenuPlan(adobeOnly)),
+    true,
+  )
 })

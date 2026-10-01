@@ -14,6 +14,7 @@ import {
   uniqueEntryFormats,
 } from './formats.ts'
 import type { FormatSwap } from './formats.ts'
+import { entryHasTrackedSource, hasManagedInstall } from './group.ts'
 import type { CatalogEntry, FamilyGroup } from './types'
 
 function skipSwapIds(entries: CatalogEntry[]): Set<string> {
@@ -236,6 +237,21 @@ export function hasInstanceMenuActions(plan: InstanceMenuPlan): boolean {
     plan.adobeUninstall ||
     Boolean(plan.formatSwap)
   )
+}
+
+export function instanceHasRevealInFinder(entry: CatalogEntry): boolean {
+  return hasManagedInstall(entry) || entryHasTrackedSource(entry)
+}
+
+export function instanceContextMenuOpen(
+  entry: CatalogEntry,
+  plan: InstanceMenuPlan,
+  options?: { turnRetailSyncOff?: boolean; uninstallOnly?: boolean },
+): boolean {
+  if (options?.uninstallOnly) return true
+  if (options?.turnRetailSyncOff) return true
+  if (entry.previewOnly) return false
+  return hasInstanceMenuActions(plan) || instanceHasRevealInFinder(entry)
 }
 
 export function instanceMenuLabels(

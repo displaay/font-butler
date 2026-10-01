@@ -82,7 +82,7 @@ import {
   renameSavedFilter,
   savedFilterMatches,
 } from '@/lib/savedFilters'
-import { familyNameOf, catalogEntriesMatch, catalogRevealEntry, countFamilyNames, countLibraryFilters, entryIds, familyStatusSummary, groupCatalog, groupSystem, matchesLibraryFilter, matchesQuery, retailFamiliesToOptOut, sortFamilyGroups, uniquePaths } from '@/lib/group'
+import { familyNameOf, catalogEntriesMatch, catalogRevealEntry, countFamilyNames, countLibraryFilters, entryHasTrackedSource, entryIds, familyStatusSummary, groupCatalog, groupSystem, hasManagedInstall, matchesLibraryFilter, matchesQuery, retailFamiliesToOptOut, sortFamilyGroups, uniquePaths } from '@/lib/group'
 import {
   LIBRARY_FILTERS_KEY,
   readLibraryFilters,
@@ -1851,6 +1851,18 @@ function AppShell() {
     }
   }
 
+  function revealCatalogInstance(
+    entryId: string,
+    which: 'source' | 'installed',
+    entries: CatalogEntry[],
+  ) {
+    const entry = entries.find((item) => item.id === entryId)
+    if (!entry) return
+    if (which === 'installed' && !hasManagedInstall(entry)) return
+    if (which === 'source' && !entryHasTrackedSource(entry)) return
+    void revealCatalog(entry, which)
+  }
+
   async function revealSystem(path: string) {
     try {
       const result = await api.reveal({ path })
@@ -2395,6 +2407,9 @@ function AppShell() {
                                 }
                               : undefined
                           }
+                          onRevealInstance={(entryId, which) =>
+                            revealCatalogInstance(entryId, which, group.entries)
+                          }
                           projects={projects}
                           projectFilter={projectFilter}
                           dragIds={useBatch ? catalogSelection.flatMap(entryIds) : entryIds(group)}
@@ -2559,6 +2574,10 @@ function AppShell() {
                             void turnRetailSyncOff(retailOptOutNames([entry]))
                           }
                         : undefined,
+                      onRevealInstalled: (entryId) =>
+                        revealCatalogInstance(entryId, 'installed', selectedGroup.entries),
+                      onRevealSource: (entryId) =>
+                        revealCatalogInstance(entryId, 'source', selectedGroup.entries),
                     }
                   : undefined
               }

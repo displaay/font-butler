@@ -11,7 +11,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
-import { hasInstanceMenuActions, instanceMenuPlan } from '@/lib/eligibility'
+import { hasInstanceMenuActions, instanceContextMenuOpen, instanceMenuPlan } from '@/lib/eligibility'
 import { entryHasPreviewFile } from '@/lib/group'
 import type { InstanceRow } from '@/lib/instances'
 import { cardPreviewSample } from '@/lib/previewSample'
@@ -31,6 +31,8 @@ export type InstanceActions = {
   onFormatSwap?: (entryId: string) => void
   onOpen?: (entryId: string) => void
   onTurnRetailSyncOff?: (entryId: string) => void
+  onRevealInstalled?: (entryId: string) => void
+  onRevealSource?: (entryId: string) => void
   uninstallOnly?: boolean
 }
 
@@ -53,6 +55,8 @@ function InstanceRowMenu({
   onFormatSwap,
   onOpen,
   onTurnRetailSyncOff,
+  onRevealInstalled,
+  onRevealSource,
   retailSynced,
   uninstallOnly = false,
 }: {
@@ -70,12 +74,21 @@ function InstanceRowMenu({
   onFormatSwap?: (entryId: string) => void
   onOpen?: (entryId: string) => void
   onTurnRetailSyncOff?: (entryId: string) => void
+  onRevealInstalled?: (entryId: string) => void
+  onRevealSource?: (entryId: string) => void
   retailSynced?: boolean
   uninstallOnly?: boolean
 }) {
   const plan = instanceMenuPlan(entry, family, adobeAvailable)
   const showTurnSyncOff = Boolean(onTurnRetailSyncOff && retailSynced)
-  if (!uninstallOnly && !hasInstanceMenuActions(plan) && !showTurnSyncOff) return children
+  if (
+    !instanceContextMenuOpen(entry, plan, {
+      turnRetailSyncOff: showTurnSyncOff,
+      uninstallOnly,
+    })
+  ) {
+    return children
+  }
   return (
     <ContextMenu
       onOpenChange={(open) => {
@@ -100,9 +113,12 @@ function InstanceRowMenu({
         ) : null}
         {uninstallOnly ? null : (
         <InstanceMenuItems
+          entry={entry}
           plan={plan}
           entryId={entry.id}
           busy={busy}
+          onRevealInstalled={() => onRevealInstalled?.(entry.id)}
+          onRevealSource={() => onRevealSource?.(entry.id)}
           onInstall={() => onInstall(entry.id)}
           onActivate={() => onActivate(entry.id)}
           onDeactivate={() => onDeactivate(entry.id)}
@@ -206,6 +222,8 @@ export function InstanceList({
                 onFormatSwap={instanceActions.onFormatSwap}
                 onOpen={instanceActions.onOpen}
                 onTurnRetailSyncOff={instanceActions.onTurnRetailSyncOff}
+                onRevealInstalled={instanceActions.onRevealInstalled}
+                onRevealSource={instanceActions.onRevealSource}
                 retailSynced={row.retailSynced}
                 uninstallOnly={instanceActions.uninstallOnly}
               >

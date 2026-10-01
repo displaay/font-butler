@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowLeftRight, CircleMinus, CirclePlus, ListX, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
+import { ArrowLeftRight, CircleMinus, CirclePlus, FolderOpen, ListX, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
 import { AdobeLogo } from '@/components/Badges'
 import { Button } from '@/components/ui/button'
 import { SplitInstallButton, SplitUninstallButton, type SplitUninstallExtra } from '@/components/SplitUninstallButton'
@@ -24,6 +24,8 @@ import {
 } from '@/lib/batch'
 import { hasInstanceMenuActions, type InstanceMenuPlan } from '@/lib/eligibility'
 import { formatSwapLabel, instanceSwapLabel, type FormatSwap } from '@/lib/formats'
+import { entryHasTrackedSource, hasManagedInstall } from '@/lib/group'
+import type { CatalogEntry } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 const destructiveMenuItemClass =
@@ -499,9 +501,12 @@ export function SystemMenuItems({
 }
 
 export function InstanceMenuItems({
+  entry,
   plan,
   entryId,
   busy,
+  onRevealInstalled,
+  onRevealSource,
   onInstall,
   onActivate,
   onDeactivate,
@@ -510,9 +515,12 @@ export function InstanceMenuItems({
   onUninstallFromAdobe,
   onFormatSwap,
 }: {
+  entry: CatalogEntry
   plan: InstanceMenuPlan
   entryId: string
   busy: boolean
+  onRevealInstalled: () => void
+  onRevealSource: () => void
   onInstall: () => void
   onActivate: () => void
   onDeactivate: () => void
@@ -521,9 +529,23 @@ export function InstanceMenuItems({
   onUninstallFromAdobe?: () => void
   onFormatSwap?: () => void
 }) {
-  if (!hasInstanceMenuActions(plan)) return null
+  const showActions = hasInstanceMenuActions(plan)
+  if (!showActions && !hasManagedInstall(entry) && !entryHasTrackedSource(entry)) return null
   return (
     <>
+      <ContextMenuItem
+        disabled={busy || !hasManagedInstall(entry)}
+        onSelect={onRevealInstalled}
+      >
+        <FolderOpen /> Show in Finder
+      </ContextMenuItem>
+      <ContextMenuItem
+        disabled={busy || !entryHasTrackedSource(entry)}
+        onSelect={onRevealSource}
+      >
+        <FolderOpen /> Show source in Finder
+      </ContextMenuItem>
+      {showActions ? <ContextMenuSeparator /> : null}
       {plan.install ? (
         <ContextMenuItem disabled={busy} onSelect={onInstall}>
           <CirclePlus /> Install instance
