@@ -30,6 +30,7 @@ import {
   SlidersHorizontal,
   Type,
   Unlink,
+  X,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -179,7 +180,7 @@ export function LibraryFiltersPanel({
             variant="ghost"
             className={navButtonClass(
               false,
-              cn('h-6 w-auto shrink-0 px-1.5', !showClear && 'pointer-events-none invisible'),
+              cn('h-6 w-auto shrink-0 gap-1 px-1.5', !showClear && 'pointer-events-none invisible'),
             )}
             tabIndex={showClear ? 0 : -1}
             aria-hidden={!showClear}
@@ -187,7 +188,10 @@ export function LibraryFiltersPanel({
               if (showClear) onLibraryFiltersChange([])
             }}
           >
-            × Clear
+            <X className="size-3 opacity-70" />
+            <span className="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+              Clear
+            </span>
           </Button>
           {onCreateSavedFilter ? (
             <Button
@@ -207,8 +211,10 @@ export function LibraryFiltersPanel({
                 event.currentTarget.blur()
               }}
             >
-              <Heart className="size-3.5 opacity-70" />
-              <span>Save</span>
+              <Heart className="size-3 opacity-70" />
+              <span className="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+                Save
+              </span>
             </Button>
           ) : null}
         </div>

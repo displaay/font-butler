@@ -65,15 +65,21 @@ const groupsOpen = {
 
 const counts = Object.fromEntries(FILTERS.map((id) => [id, 1])) as Record<LibraryFilter, number>
 
+function isClearFiltersButton(button: Element): boolean {
+  const text = (button.textContent ?? '').replace(/\s+/g, ' ').trim()
+  return text === 'Clear' && button.querySelector('svg') != null
+}
+
 function clearButton(): HTMLButtonElement | undefined {
-  return [...document.querySelectorAll('button')].find((button) =>
-    /×\s*Clear/.test(button.textContent ?? '') && button.getAttribute('aria-hidden') !== 'true',
+  return [...document.querySelectorAll('button')].find(
+    (button) =>
+      isClearFiltersButton(button) && button.getAttribute('aria-hidden') !== 'true',
   ) as HTMLButtonElement | undefined
 }
 
 function clearButtonSlot(): HTMLButtonElement | undefined {
   return [...document.querySelectorAll('button')].find((button) =>
-    /×\s*Clear/.test(button.textContent ?? ''),
+    isClearFiltersButton(button),
   ) as HTMLButtonElement | undefined
 }
 
@@ -139,7 +145,7 @@ test('clear filters is hidden with none selected, shown when any are on, and cli
     root.render(React.createElement(Harness, { key: 'none', initial: [] }))
   })
   const clearSlot = clearButtonSlot()
-  assert.ok(clearSlot, 'expected × Clear slot in Filters header')
+  assert.ok(clearSlot, 'expected Clear slot in Filters header')
   assert.equal(clearSlot!.getAttribute('aria-hidden'), 'true')
   assert.equal(clearButton(), undefined)
   assert.deepEqual(pressedFilters(), [])
@@ -148,11 +154,11 @@ test('clear filters is hidden with none selected, shown when any are on, and cli
     root.render(React.createElement(Harness, { key: 'one', initial: ['installed'] }))
   })
   const one = clearButton()
-  assert.ok(one, 'expected × Clear when one filter is selected')
+  assert.ok(one, 'expected Clear when one filter is selected')
   assert.equal(
     one.closest('.group\\/library-filters') != null,
     true,
-    'expected × Clear in the Filters header row',
+    'expected Clear in the Filters header row',
   )
   assert.deepEqual(pressedFilters(), ['Filter installed'])
 
@@ -165,7 +171,7 @@ test('clear filters is hidden with none selected, shown when any are on, and cli
     )
   })
   const many = clearButton()
-  assert.ok(many, 'expected × Clear when several filters are selected')
+  assert.ok(many, 'expected Clear when several filters are selected')
   assert.deepEqual(pressedFilters().sort(), [
     'Filter computer',
     'Filter installed',
