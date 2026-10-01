@@ -67,6 +67,12 @@ const counts = Object.fromEntries(FILTERS.map((id) => [id, 1])) as Record<Librar
 
 function clearButton(): HTMLButtonElement | undefined {
   return [...document.querySelectorAll('button')].find((button) =>
+    /×\s*Clear/.test(button.textContent ?? '') && button.getAttribute('aria-hidden') !== 'true',
+  ) as HTMLButtonElement | undefined
+}
+
+function clearButtonSlot(): HTMLButtonElement | undefined {
+  return [...document.querySelectorAll('button')].find((button) =>
     /×\s*Clear/.test(button.textContent ?? ''),
   ) as HTMLButtonElement | undefined
 }
@@ -77,10 +83,14 @@ function pressedFilters(): string[] {
   )
 }
 
-function buttonByLabel(label: string): HTMLButtonElement | undefined {
-  return [...document.querySelectorAll('button')].find((button) =>
-    (button.textContent ?? '').includes(label) || button.getAttribute('aria-label') === label,
-  ) as HTMLButtonElement | undefined
+function buttonByLabel(
+  label: string,
+  { visibleOnly = false }: { visibleOnly?: boolean } = {},
+): HTMLButtonElement | undefined {
+  return [...document.querySelectorAll('button')].find((button) => {
+    if (visibleOnly && button.getAttribute('aria-hidden') === 'true') return false
+    return (button.textContent ?? '').includes(label) || button.getAttribute('aria-label') === label
+  }) as HTMLButtonElement | undefined
 }
 
 function Harness({ initial }: { initial: LibraryFilter[] }) {
@@ -128,6 +138,9 @@ test('clear filters is hidden with none selected, shown when any are on, and cli
   await React.act(async () => {
     root.render(React.createElement(Harness, { key: 'none', initial: [] }))
   })
+  const clearSlot = clearButtonSlot()
+  assert.ok(clearSlot, 'expected × Clear slot in Filters header')
+  assert.equal(clearSlot!.getAttribute('aria-hidden'), 'true')
   assert.equal(clearButton(), undefined)
   assert.deepEqual(pressedFilters(), [])
 
@@ -223,7 +236,7 @@ test('save appears in the filters header when criteria are active', async () => 
   await React.act(async () => {
     root.render(React.createElement(SaveHarness))
   })
-  const save = buttonByLabel('Save')
+  const save = buttonByLabel('Save', { visibleOnly: true })
   assert.ok(save, 'expected Save control in Filters header')
   assert.equal(save!.closest('.group\\/library-filters') != null, true)
   assert.match(save!.textContent ?? '', /Save/)
@@ -271,6 +284,26 @@ test('a collapsed filter group stays collapsed across a tab switch', async () =>
   assert.equal(document.querySelector('button[aria-label="Show type"]') != null, true)
   assert.equal(buttonByLabel('VF'), undefined)
   assert.ok(buttonByLabel('Installed'), 'expected other groups to stay open')
+
+  await React.act(async () => {
+    root.unmount()
+  })
+})
+
+test('filter group headings use capitalize styling', async () => {
+  const host = document.createElement('div')
+  document.body.append(host)
+  const root = createRoot(host)
+
+  await React.act(async () => {
+    root.render(React.createElement(Harness, { initial: [] }))
+  })
+  const statusHeading = [...document.querySelectorAll('span')].find(
+    (span) => span.textContent === 'Status',
+  )
+  assert.ok(statusHeading, 'expected Status group heading')
+  assert.match(statusHeading!.className, /\bcapitalize\b/)
+  assert.doesNotMatch(statusHeading!.className, /\buppercase\b/)
 
   await React.act(async () => {
     root.unmount()
