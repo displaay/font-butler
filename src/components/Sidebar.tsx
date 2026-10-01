@@ -155,7 +155,7 @@ export function LibraryFiltersPanel({
 
   return (
     <div className="flex w-full flex-col gap-0.5 md:mt-2 md:border-t md:pt-2">
-      <div className="group/library-filters flex w-full items-center gap-0.5 px-1 pt-1">
+      <div className="group/library-filters flex w-full min-h-6 items-center gap-0.5 px-1 pt-1">
         <button
           type="button"
           className="flex min-w-0 flex-1 items-center gap-1 px-1 text-left"
@@ -172,33 +172,46 @@ export function LibraryFiltersPanel({
             <ChevronRight className="size-3 opacity-0 transition-opacity group-hover/library-filters:opacity-70" />
           )}
         </button>
-        {showClear ? (
+        <div className="flex shrink-0 items-center gap-0.5">
           <Button
             type="button"
             size="default"
             variant="ghost"
-            className={navButtonClass(false, 'h-6 w-auto shrink-0 px-1.5')}
-            onClick={() => onLibraryFiltersChange([])}
+            className={navButtonClass(
+              false,
+              cn('h-6 w-auto shrink-0 px-1.5', !showClear && 'pointer-events-none invisible'),
+            )}
+            tabIndex={showClear ? 0 : -1}
+            aria-hidden={!showClear}
+            onClick={() => {
+              if (showClear) onLibraryFiltersChange([])
+            }}
           >
             × Clear
           </Button>
-        ) : null}
-        {showSave ? (
-          <Button
-            type="button"
-            size="default"
-            variant="ghost"
-            className={navButtonClass(false, 'h-6 w-auto shrink-0 gap-1 px-1.5')}
-            aria-label="Save current filter"
-            onClick={(event) => {
-              onCreateSavedFilter?.()
-              event.currentTarget.blur()
-            }}
-          >
-            <Heart className="size-3.5 opacity-70" />
-            <span>Save</span>
-          </Button>
-        ) : null}
+          {onCreateSavedFilter ? (
+            <Button
+              type="button"
+              size="default"
+              variant="ghost"
+              className={navButtonClass(
+                false,
+                cn('h-6 w-auto shrink-0 gap-1 px-1.5', !showSave && 'pointer-events-none invisible'),
+              )}
+              aria-label="Save current filter"
+              tabIndex={showSave ? 0 : -1}
+              aria-hidden={!showSave}
+              onClick={(event) => {
+                if (!showSave) return
+                onCreateSavedFilter()
+                event.currentTarget.blur()
+              }}
+            >
+              <Heart className="size-3.5 opacity-70" />
+              <span>Save</span>
+            </Button>
+          ) : null}
+        </div>
       </div>
       {filtersPanelOpen ? (
         <LibraryFilterGroups
@@ -254,7 +267,7 @@ export function LibraryFilterGroups({
                   })
                 }
               >
-                <span className="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+                <span className="text-[10px] font-medium capitalize tracking-wide text-muted-foreground">
                   {group.heading}
                 </span>
                 {groupOpen ? (
