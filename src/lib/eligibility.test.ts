@@ -410,4 +410,14 @@ test('instance reveal in Finder follows managed installs and tracked sources', (
     instanceContextMenuOpen(adobeOnly, instanceMenuPlan(adobeOnly)),
     true,
   )
+
+  const webPreview = {
+    ...entry('web', 'uninstalled'),
+    previewOnly: true,
+    format: 'woff' as const,
+    sourcePath: '/tmp/web.woff2',
+  }
+  assert.deepEqual(instanceMenuLabels(webPreview), [])
+  assert.equal(instanceHasRevealInFinder(webPreview), true)
+  assert.equal(instanceContextMenuOpen(webPreview, instanceMenuPlan(webPreview)), true)
 })

@@ -250,7 +250,6 @@ export function instanceContextMenuOpen(
 ): boolean {
   if (options?.uninstallOnly) return true
   if (options?.turnRetailSyncOff) return true
-  if (entry.previewOnly) return false
   return hasInstanceMenuActions(plan) || instanceHasRevealInFinder(entry)
 }
 
