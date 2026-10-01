@@ -77,6 +77,7 @@ export const LibraryCard = memo(function LibraryCard({
   onDeleteFiles,
   onTurnRetailSyncOff,
   onTurnInstanceRetailSyncOff,
+  onRevealInstance,
   projects,
   projectFilter,
   dragIds,
@@ -132,6 +133,7 @@ export const LibraryCard = memo(function LibraryCard({
   onDeleteFiles: () => void
   onTurnRetailSyncOff?: () => void
   onTurnInstanceRetailSyncOff?: (entryId: string) => void
+  onRevealInstance?: (entryId: string, which: 'source' | 'installed') => void
   projects: ProjectSet[]
   projectFilter: string | null
   dragIds: string[]
@@ -447,6 +449,12 @@ export const LibraryCard = memo(function LibraryCard({
                     onSelectEntry(entryId)
                   },
                   onTurnRetailSyncOff: onTurnInstanceRetailSyncOff,
+                  onRevealInstalled: onRevealInstance
+                    ? (entryId) => onRevealInstance(entryId, 'installed')
+                    : undefined,
+                  onRevealSource: onRevealInstance
+                    ? (entryId) => onRevealInstance(entryId, 'source')
+                    : undefined,
                 }}
               />
             )}
