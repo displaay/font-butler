@@ -82,6 +82,16 @@ function writeUpdateApp(dest, version) {
   writeFileSync(path.join(contents, 'Info.plist'), infoPlist(version))
 }
 
+async function writeUpdatePackageJson(dest, pkg) {
+  const src = path.join(dest, 'asar-src')
+  mkdirSync(src, { recursive: true })
+  writeFileSync(path.join(src, 'package.json'), JSON.stringify(pkg))
+  const resources = path.join(dest, 'Font Buttler.app', 'Contents', 'Resources')
+  mkdirSync(resources, { recursive: true })
+  const asar = await import('@electron/asar')
+  await asar.createPackage(src, path.join(resources, 'app.asar'))
+}
+
 function signedRuntime(extra = {}) {
   return {
     packaged: true,
@@ -1192,6 +1202,11 @@ test('a marked Developer ID build installs from the loopback feed instead of Git
     removeTemp: (target) => rmSync(target, { recursive: true, force: true }),
     unzip: async (_zip, dest) => {
       writeUpdateApp(dest, version)
+      await writeUpdatePackageJson(dest, {
+        name: 'font-butler',
+        version,
+        fontButlerTestFeed: true,
+      })
     },
     verifyDownloadedApp: async () => ({ ok: true }),
     spawnSwap: (swap) => swaps.push(swap),
@@ -1212,4 +1227,161 @@ test('a marked Developer ID build installs from the loopback feed instead of Git
   assert.equal(swaps.length, 1)
   assert.equal(seen.includes(GITHUB_LATEST_API), false)
   rmSync(dir, { recursive: true, force: true })
+})
+
+test('a marked build refuses an unmarked download and an unmarked build still swaps', async () => {
+  const version = '0.9.1'
+  const feed = 'http://127.0.0.1:8765/'
+  const zipBytes = Buffer.from('unmarked-zip')
+  const doc = yml(version, [
+    { name: macArm64ArchiveName(version, 'zip'), sha512: sha512(zipBytes), size: zipBytes.length },
+  ])
+  async function run(runtime, { localFeed = true } = {}) {
+    const swaps = []
+    let quit = false
+    const phases = []
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-marker-swap-'))
+    const installer = createAppUpdateInstaller({
+      currentVersion: '0.3.9',
+      env: localFeed ? { [APP_UPDATE_FEED_ENV]: feed } : {},
+      probeRuntime: () => runtime,
+      makeTempDir: () => dir,
+      removeTemp: (target) => rmSync(target, { recursive: true, force: true }),
+      unzip: async (_zip, dest) => {
+        writeUpdateApp(dest, version)
+        await writeUpdatePackageJson(dest, { name: 'font-butler', version })
+      },
+      verifyDownloadedApp: async () => ({ ok: true }),
+      spawnSwap: (swap) => swaps.push(swap),
+      quit: () => {
+        quit = true
+      },
+      pid: 11,
+      onProgress: (payload) => phases.push(payload.phase),
+      fetch: async (url) => {
+        if (url === GITHUB_LATEST_API) return httpResponse({ body: JSON.stringify(releaseJson(version)) })
+        if (String(url).endsWith('latest-mac.yml')) return httpResponse({ body: doc })
+        if (String(url).endsWith(macArm64ArchiveName(version, 'zip'))) {
+          return httpResponse({ body: zipBytes, contentLength: zipBytes.length })
+        }
+        throw new Error(`unexpected ${url}`)
+      },
+    })
+    const result = await installer.start()
+    return { result, swaps, quit, phases, dir, phase: installer.status().phase, error: result.error }
+  }
+
+  const marked = await run(signedRuntime({ testFeedBuild: true }))
+  try {
+    assert.equal(marked.result.ok, false)
+    assert.match(marked.result.error, /not a test build/)
+    assert.equal(marked.swaps.length, 0)
+    assert.equal(marked.quit, false)
+    assert.equal(marked.phases.includes('installing'), false)
+    assert.equal(marked.phase, 'error')
+    assert.equal(existsSync(marked.dir), false)
+  } finally {
+    rmSync(marked.dir, { recursive: true, force: true })
+  }
+
+  const unmarked = await run(signedRuntime(), { localFeed: false })
+  try {
+    assert.equal(unmarked.result.ok, true, unmarked.result.error)
+    assert.equal(unmarked.result.mode, 'inplace')
+    assert.equal(unmarked.swaps.length, 1)
+  } finally {
+    rmSync(unmarked.dir, { recursive: true, force: true })
+  }
+})
+
+test('a failed record of an opened DMG keeps the file and stays off the error phase', async () => {
+  const version = '0.5.1'
+  const bytes = Buffer.from('dmg-record-fail')
+  const doc = yml(version, [
+    { name: macArm64ArchiveName(version, 'dmg'), sha512: sha512(bytes), size: bytes.length },
+  ])
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-dmg-record-fail-'))
+  const phases = []
+  const errors = []
+  const realError = console.error
+  console.error = (...args) => {
+    errors.push(args.map((part) => String(part?.message ?? part)).join(' '))
+  }
+  let opened = ''
+  try {
+    const installer = createAppUpdateInstaller({
+      currentVersion: '0.0.0',
+      env: {},
+      probeRuntime: () => signedRuntime({ packaged: false }),
+      makeTempDir: () => tempDir,
+      removeTemp: () => {
+        throw new Error('the DMG must stay on disk when recording it fails')
+      },
+      rememberOpenedDmg: () => {
+        throw new Error('disk full')
+      },
+      openPath: async (file) => {
+        opened = file
+        return ''
+      },
+      onProgress: (payload) => phases.push(payload.phase),
+      fetch: async (url) => {
+        if (url === GITHUB_LATEST_API) return httpResponse({ body: JSON.stringify(releaseJson(version)) })
+        if (String(url).endsWith('latest-mac.yml')) return httpResponse({ body: doc })
+        return httpResponse({ body: bytes, contentLength: bytes.length })
+      },
+    })
+    const result = await installer.start()
+    assert.equal(result.ok, true)
+    assert.equal(result.mode, 'dmg')
+    assert.equal(existsSync(opened), true)
+    assert.equal(existsSync(tempDir), true)
+    assert.equal(phases.includes('opening'), true)
+    assert.equal(phases.includes('error'), false)
+    assert.equal(installer.status().phase, 'idle')
+    assert.match(errors.join('\n'), /Could not record the opened update disk image/)
+  } finally {
+    console.error = realError
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('cleanup of a still-mounted DMG logs a failed record write and startup guards that call', () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-dmg-write-fail-'))
+  const dmg = path.join(tempDir, 'Font-Buttler-0.3.9-arm64.dmg')
+  writeFileSync(dmg, 'mounted')
+  const recordDir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-dmg-write-fail-record-'))
+  const record = path.join(recordDir, 'opened-dmgs.json')
+  rememberOpenedDmg({ dmg, tempDir }, record)
+  const errors = []
+  const realError = console.error
+  console.error = (...args) => {
+    errors.push(args.map((part) => String(part?.message ?? part)).join(' '))
+  }
+  try {
+    const still = cleanupOpenedUpdateDmgs({
+      recordFile: record,
+      isMounted: () => true,
+      writeRecord: () => {
+        throw new Error('disk full')
+      },
+    })
+    assert.deepEqual(still, [{ dmg, tempDir }])
+    assert.equal(existsSync(dmg), true)
+    assert.equal(existsSync(tempDir), true)
+    assert.match(errors.join('\n'), /Could not record which update disk images are still open/)
+    const main = readFileSync(new URL('./main.mjs', import.meta.url), 'utf8')
+    const ready = main.slice(main.indexOf('app.whenReady()'))
+    const cleanupAt = ready.indexOf('cleanupOpenedUpdateDmgs()')
+    const bootstrapAt = ready.indexOf('bootstrapApi()')
+    assert.ok(cleanupAt > 0 && cleanupAt < bootstrapAt)
+    assert.match(
+      ready.slice(cleanupAt - 40, cleanupAt + 180),
+      /try \{\s*cleanupOpenedUpdateDmgs\(\)[\s\S]*\} catch/,
+    )
+  } finally {
+    console.error = realError
+    rmSync(tempDir, { recursive: true, force: true })
+    rmSync(recordDir, { recursive: true, force: true })
+  }
 })

@@ -972,7 +972,13 @@ async function runInstall(deps, fetchImpl, tempDir) {
     // DiskImageMounter attaches the image. Never delete here. The path is
     // recorded on disk and removed on a later launch only if it is not mounted.
     const remember = deps.rememberOpenedDmg ?? rememberOpenedDmg
-    remember({ dmg: dest, tempDir })
+    try {
+      remember({ dmg: dest, tempDir })
+    } catch (error) {
+      // openPath already accepted the image. Losing the record must not
+      // delete the DMG or turn this into a failed update.
+      console.error('Could not record the opened update disk image', error)
+    }
     return { mode, keepTemp: true }
   }
 
@@ -990,6 +996,9 @@ async function runInstall(deps, fetchImpl, tempDir) {
     throw new Error(verified?.reason || 'The downloaded app failed signature checks.')
   }
   assertDownloadedAppVersion(nextApp, version, deps.readBundleShortVersion)
+  if (runtime.testFeedBuild === true && !readAppTestFeedMarker(nextApp)) {
+    throw new Error('The downloaded app is not a test build, so it was not installed.')
+  }
   if (!runtime.appPath) throw new Error('The running app bundle could not be found.')
   deps.onProgress?.({ phase: 'installing' })
   const scriptPath = deps.scriptPath ?? path.join(os.tmpdir(), `font-butler-swap-${process.pid}.sh`)
@@ -1084,6 +1093,7 @@ export function isUpdateDmgMounted(dmgPath, spawnImpl = spawnSync) {
 export function cleanupOpenedUpdateDmgs({
   recordFile = OPENED_DMG_RECORD,
   isMounted = isUpdateDmgMounted,
+  writeRecord = (file, text) => fs.writeFileSync(file, text),
 } = {}) {
   const pending = readOpenedDmgRecord(recordFile)
   const stillMounted = []
@@ -1112,7 +1122,11 @@ export function cleanupOpenedUpdateDmgs({
       // No record to remove.
     }
   } else {
-    fs.writeFileSync(recordFile, JSON.stringify(stillMounted))
+    try {
+      writeRecord(recordFile, JSON.stringify(stillMounted))
+    } catch (error) {
+      console.error('Could not record which update disk images are still open', error)
+    }
   }
   return stillMounted
 }

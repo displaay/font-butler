@@ -2003,7 +2003,11 @@ if (!gotLock) {
     const fileWriter = createDebugLogFileWriter(debugLogFilePath)
     attachDebugLogPersistence(debugLog, fileWriter)
     logDebug('main', `Font Buttler ${app.getVersion()} starting`)
-    cleanupOpenedUpdateDmgs()
+    try {
+      cleanupOpenedUpdateDmgs()
+    } catch (error) {
+      console.error('Could not clean up opened update disk images', error)
+    }
     if (process.platform === 'darwin' && app.dock) {
       applyDockIcon()
     }
