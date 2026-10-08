@@ -423,6 +423,7 @@ test('a signed packaged app installs the zip in place and an ad-hoc app opens th
       unzip: async (_zip, dest) => {
         writeFileSync(path.join(dest, 'readme.txt'), 'unpacked')
         writeUpdateApp(dest, `v${version}`)
+        await writeUpdatePackageJson(dest, { name: 'font-butler', version })
       },
       verifyDownloadedApp: async () => {
         verified += 1
@@ -1087,6 +1088,7 @@ test('release builds ignore FONT_BUTLER_UPDATE_FEED_URL and other builds can use
     removeTemp: (target) => rmSync(target, { recursive: true, force: true }),
     unzip: async (_zip, dest) => {
       writeUpdateApp(dest, version)
+      await writeUpdatePackageJson(dest, { name: 'font-butler', version })
     },
     verifyDownloadedApp: async () => ({ ok: true }),
     spawnSwap: () => {},
@@ -1180,6 +1182,8 @@ test('readAppTestFeedMarker reads fontButlerTestFeed from the packaged asar', as
   writeFileSync(path.join(src, 'package.json'), JSON.stringify({ name: 'font-butler', version: '0.3.9' }))
   await asar.createPackage(src, asarPath)
   assert.equal(readAppTestFeedMarker(app), false)
+  writeFileSync(asarPath, 'not-an-asar')
+  assert.equal(readAppTestFeedMarker(app), null)
   rmSync(root, { recursive: true, force: true })
 })
 
@@ -1240,6 +1244,11 @@ test('a marked build refuses an unmarked download and an unmarked build still sw
     const swaps = []
     let quit = false
     const phases = []
+    const logs = []
+    const realError = console.error
+    console.error = (...args) => {
+      logs.push(args.map((part) => String(part?.message ?? part)).join(' '))
+    }
     const dir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-marker-swap-'))
     const installer = createAppUpdateInstaller({
       currentVersion: '0.3.9',
@@ -1267,14 +1276,20 @@ test('a marked build refuses an unmarked download and an unmarked build still sw
         throw new Error(`unexpected ${url}`)
       },
     })
-    const result = await installer.start()
-    return { result, swaps, quit, phases, dir, phase: installer.status().phase, error: result.error }
+    let result
+    try {
+      result = await installer.start()
+    } finally {
+      console.error = realError
+    }
+    return { result, swaps, quit, phases, logs, dir, phase: installer.status().phase, error: result.error }
   }
 
   const marked = await run(signedRuntime({ testFeedBuild: true }))
   try {
     assert.equal(marked.result.ok, false)
-    assert.match(marked.result.error, /not a test build/)
+    assert.equal(marked.result.error, 'Update is not a test build')
+    assert.equal(marked.logs.includes('Update is not a test build'), true)
     assert.equal(marked.swaps.length, 0)
     assert.equal(marked.quit, false)
     assert.equal(marked.phases.includes('installing'), false)
@@ -1303,6 +1318,11 @@ test('an unmarked build refuses a marked download before the swap', async () => 
   const swaps = []
   let quit = false
   const phases = []
+  const logs = []
+  const realError = console.error
+  console.error = (...args) => {
+    logs.push(args.map((part) => String(part?.message ?? part)).join(' '))
+  }
   const dir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-marked-zip-'))
   const installer = createAppUpdateInstaller({
     currentVersion: '0.3.9',
@@ -1337,16 +1357,90 @@ test('an unmarked build refuses a marked download before the swap', async () => 
   try {
     const result = await installer.start()
     assert.equal(result.ok, false)
-    assert.match(result.error, /is a test build/)
+    assert.equal(result.error, 'Update is a test build')
+    assert.equal(logs.includes('Update is a test build'), true)
     assert.equal(swaps.length, 0)
     assert.equal(quit, false)
     assert.equal(phases.includes('installing'), false)
     assert.equal(installer.status().phase, 'error')
     assert.equal(existsSync(dir), false)
   } finally {
+    console.error = realError
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('an unmarked runtime refuses an unreadable update package marker', async () => {
+  await assertUnreadableMarkerRefused(signedRuntime(), false)
+})
+
+test('a marked runtime refuses an unreadable update package marker', async () => {
+  await assertUnreadableMarkerRefused(signedRuntime({ testFeedBuild: true }), true)
+})
+
+async function assertUnreadableMarkerRefused(runtime, localFeed) {
+  const version = '0.9.3'
+  const zipBytes = Buffer.from('unreadable-marker-zip')
+  const doc = yml(version, [
+    { name: macArm64ArchiveName(version, 'zip'), sha512: sha512(zipBytes), size: zipBytes.length },
+  ])
+  const swaps = []
+  let quit = false
+  const phases = []
+  const logs = []
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-unreadable-marker-'))
+  const realError = console.error
+  console.error = (...args) => {
+    logs.push(args.map((part) => String(part?.message ?? part)).join(' '))
+  }
+  const installer = createAppUpdateInstaller({
+    currentVersion: '0.3.9',
+    env: localFeed ? { [APP_UPDATE_FEED_ENV]: 'http://127.0.0.1:8765/' } : {},
+    probeRuntime: () => runtime,
+    makeTempDir: () => dir,
+    removeTemp: (target) => rmSync(target, { recursive: true, force: true }),
+    unzip: async (_zip, dest) => {
+      writeUpdateApp(dest, version)
+      const resources = path.join(dest, 'Font Buttler.app', 'Contents', 'Resources')
+      mkdirSync(resources, { recursive: true })
+      writeFileSync(path.join(resources, 'app.asar'), 'not-an-asar')
+    },
+    verifyDownloadedApp: async () => ({ ok: true }),
+    spawnSwap: (swap) => swaps.push(swap),
+    quit: () => {
+      quit = true
+    },
+    pid: 13,
+    onProgress: (payload) => phases.push(payload.phase),
+    fetch: async (url) => {
+      if (url === GITHUB_LATEST_API) return httpResponse({ body: JSON.stringify(releaseJson(version)) })
+      if (String(url).endsWith('latest-mac.yml')) return httpResponse({ body: doc })
+      if (String(url).endsWith(macArm64ArchiveName(version, 'zip'))) {
+        return httpResponse({ body: zipBytes, contentLength: zipBytes.length })
+      }
+      throw new Error(`unexpected ${url}`)
+    },
+  })
+  try {
+    const result = await installer.start()
+    const message = localFeed
+      ? "Couldn't read the update's package marker (test build)"
+      : "Couldn't read the update's package marker (release build)"
+    assert.equal(result.ok, false)
+    assert.equal(result.error, message)
+    assert.equal(logs.includes(message), true)
+    assert.equal(logs.includes('Update is a test build'), false)
+    assert.equal(logs.includes('Update is not a test build'), false)
+    assert.equal(swaps.length, 0)
+    assert.equal(quit, false)
+    assert.equal(phases.includes('installing'), false)
+    assert.equal(installer.status().phase, 'error')
+    assert.equal(existsSync(dir), false)
+  } finally {
+    console.error = realError
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
 
 test('a failed record of an opened DMG keeps the file and stays off the error phase', async () => {
   const version = '0.5.1'

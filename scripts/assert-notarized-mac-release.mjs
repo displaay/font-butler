@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -8,9 +8,7 @@ import { inflateRawSync } from 'node:zlib'
 import {
   APP_UPDATE_FEED_ENV,
   DEVELOPER_ID_TEAM,
-  packageJsonIsTestFeedBuild,
   readAppTestFeedMarker,
-  readAsarFile,
   resolveUpdateFeedUrl,
 } from '../electron/app-update-install.mjs'
 import { sha512Base64 } from './mac-dmg-staple.mjs'
@@ -234,6 +232,9 @@ export const TEST_FEED_ENV_REFUSAL =
 export const TEST_FEED_MARKER_REFUSAL =
   'This build carries fontButlerTestFeed. Marked test builds are never uploaded.'
 
+export const TEST_FEED_MARKER_UNREADABLE =
+  "Couldn't read the release app's package marker."
+
 /** Any non-empty value counts as set. The pack stamp itself only happens for `=1`. */
 export function testFeedPublishEnvFailures(env = process.env) {
   if (String(env?.[TEST_FEED_BUILD_ENV] ?? '').trim() !== '') return [TEST_FEED_ENV_REFUSAL]
@@ -282,60 +283,70 @@ function zipEntries(buffer) {
   return entries
 }
 
-function packageJsonFromZipEntry(buffer, entry) {
-  let bytes
-  try {
-    bytes = zipEntryBytes(buffer, entry)
-  } catch {
-    return null
-  }
-  if (!bytes) return null
-  if (entry.name.endsWith('Contents/Resources/app/package.json')) {
-    try {
-      return JSON.parse(bytes.toString('utf8'))
-    } catch {
-      return null
-    }
-  }
-  if (entry.name.endsWith('Contents/Resources/app.asar')) {
-    const packed = readAsarFile(bytes, 'package.json')
-    if (!packed) return null
-    try {
-      return JSON.parse(packed.toString('utf8'))
-    } catch {
-      return null
-    }
-  }
-  return null
-}
-
-/** True when a zip's app bundle package.json, loose or inside app.asar, has the test-feed marker. */
-export function zipHasTestFeedMarker(zipPath) {
+/**
+ * `readAppTestFeedMarker` on the app inside a release zip.
+ * The zip's loose package.json and app.asar are written into a temporary
+ * bundle so the install check and this assert share one reader.
+ */
+export function readZipAppTestFeedMarker(zipPath) {
   let buffer
   try {
     buffer = readFileSync(zipPath)
   } catch {
-    return false
+    return null
   }
-  for (const entry of zipEntries(buffer)) {
-    if (
-      !entry.name.endsWith('Contents/Resources/app/package.json') &&
-      !entry.name.endsWith('Contents/Resources/app.asar')
-    ) {
-      continue
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-zip-marker-'))
+  try {
+    const app = path.join(root, 'Font Buttler.app')
+    let wrote = false
+    for (const entry of zipEntries(buffer)) {
+      const loose = entry.name.endsWith('Contents/Resources/app/package.json')
+      const asar = entry.name.endsWith('Contents/Resources/app.asar')
+      if (!loose && !asar) continue
+      let bytes
+      try {
+        bytes = zipEntryBytes(buffer, entry)
+      } catch {
+        return null
+      }
+      if (!bytes) return null
+      const dest = loose
+        ? path.join(app, 'Contents', 'Resources', 'app', 'package.json')
+        : path.join(app, 'Contents', 'Resources', 'app.asar')
+      mkdirSync(path.dirname(dest), { recursive: true })
+      writeFileSync(dest, bytes)
+      wrote = true
     }
-    if (packageJsonIsTestFeedBuild(packageJsonFromZipEntry(buffer, entry))) return true
+    if (!wrote) return null
+    return readAppTestFeedMarker(app)
+  } catch {
+    return null
+  } finally {
+    rmSync(root, { recursive: true, force: true })
   }
-  return false
+}
+
+/** True when a zip's app bundle package.json, loose or inside app.asar, has the test-feed marker. */
+export function zipHasTestFeedMarker(zipPath) {
+  return readZipAppTestFeedMarker(zipPath) === true
+}
+
+function pushFailure(failures, message) {
+  if (!failures.includes(message)) failures.push(message)
 }
 
 export function testFeedArchiveFailures({ zip, appPaths = [] } = {}) {
   const failures = []
-  if (zip && existsSync(zip) && zipHasTestFeedMarker(zip)) failures.push(TEST_FEED_MARKER_REFUSAL)
+  if (zip && existsSync(zip)) {
+    const marker = readZipAppTestFeedMarker(zip)
+    if (marker === true) pushFailure(failures, TEST_FEED_MARKER_REFUSAL)
+    else if (marker == null) pushFailure(failures, TEST_FEED_MARKER_UNREADABLE)
+  }
   for (const appPath of appPaths) {
-    if (appPath && readAppTestFeedMarker(appPath) && !failures.includes(TEST_FEED_MARKER_REFUSAL)) {
-      failures.push(TEST_FEED_MARKER_REFUSAL)
-    }
+    if (!appPath || !existsSync(appPath)) continue
+    const marker = readAppTestFeedMarker(appPath)
+    if (marker === true) pushFailure(failures, TEST_FEED_MARKER_REFUSAL)
+    else if (marker == null) pushFailure(failures, TEST_FEED_MARKER_UNREADABLE)
   }
   return failures
 }

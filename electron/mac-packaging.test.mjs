@@ -8,9 +8,12 @@ import { test } from 'node:test'
 import {
   TEST_FEED_ENV_REFUSAL,
   TEST_FEED_MARKER_REFUSAL,
+  TEST_FEED_MARKER_UNREADABLE,
   assertNotarizedMacRelease,
   notarizationFailures,
   prepareMacPublish,
+  readZipAppTestFeedMarker,
+  testFeedArchiveFailures,
   testFeedPublishEnvFailures,
   updateFeedFailures,
   zipHasTestFeedMarker,
@@ -970,5 +973,32 @@ test('publish refuses a test-feed environment and a zip or app that carries the 
   const marked = await assertNotarizedMacRelease(root, '0.3.8', {})
   assert.ok(marked.includes(TEST_FEED_MARKER_REFUSAL))
   assert.equal(marked.includes(TEST_FEED_ENV_REFUSAL), false)
+  rmSync(root, { recursive: true, force: true })
+})
+
+test('publish fails when the release zip app package marker cannot be read', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-test-feed-null-'))
+  const src = path.join(root, 'pack')
+  const app = path.join(root, 'release', 'mac-arm64', 'Font Buttler.app')
+  mkdirSync(src)
+  mkdirSync(path.join(app, 'Contents', 'Resources'), { recursive: true })
+  writeFileSync(path.join(src, 'package.json'), JSON.stringify({ name: 'font-butler', version: '0.3.8' }))
+  const asar = await import('@electron/asar')
+  await asar.createPackage(src, path.join(app, 'Contents', 'Resources', 'app.asar'))
+  assert.equal(readAppTestFeedMarker(app), false)
+  const broken = path.join(root, 'broken.asar')
+  writeFileSync(broken, 'not-an-asar')
+  const zipPath = path.join(root, 'release', 'Font-Buttler-0.3.8-arm64.zip')
+  execFileSync('python3', [
+    '-c',
+    'import zipfile,sys; z=zipfile.ZipFile(sys.argv[1],"w"); z.write(sys.argv[2], "Font Buttler.app/Contents/Resources/app.asar"); z.close()',
+    zipPath,
+    broken,
+  ])
+  assert.equal(readZipAppTestFeedMarker(zipPath), null)
+  assert.deepEqual(testFeedArchiveFailures({ zip: zipPath, appPaths: [app] }), [TEST_FEED_MARKER_UNREADABLE])
+  const failures = await assertNotarizedMacRelease(root, '0.3.8', {})
+  assert.ok(failures.includes(TEST_FEED_MARKER_UNREADABLE))
+  assert.equal(failures.includes(TEST_FEED_MARKER_REFUSAL), false)
   rmSync(root, { recursive: true, force: true })
 })

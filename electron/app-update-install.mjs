@@ -398,7 +398,7 @@ export function detectAppUpdateRuntime(execPath = process.execPath, spawnImpl = 
     translocated: isTranslocatedAppPath(appPath),
     readOnly: !bundleWritable,
     bundleWritable,
-    testFeedBuild: readAppTestFeedMarker(appPath),
+    testFeedBuild: readAppTestFeedMarker(appPath) === true,
   }
 }
 
@@ -431,22 +431,56 @@ export function readAsarFile(archiveBuffer, fileName) {
   return Buffer.from(archiveBuffer.subarray(start, start + size))
 }
 
-/** True when the packaged app's package.json has `fontButlerTestFeed: true`. */
+/**
+ * `true` when package.json has `fontButlerTestFeed: true`.
+ * `false` when package.json was read and parsed and is not a test build.
+ * `null` when the asar or package.json could not be read or parsed.
+ * A missing loose package.json is normal; the packaged file lives in app.asar.
+ */
 export function readAppTestFeedMarker(appPath) {
-  if (!appPath) return false
-  const loose = path.join(appPath, 'Contents', 'Resources', 'app', 'package.json')
+  if (!appPath) return null
+  const loose = readPackageJsonFile(path.join(appPath, 'Contents', 'Resources', 'app', 'package.json'))
+  if (loose !== undefined && loose !== null && packageJsonIsTestFeedBuild(loose)) return true
+  const packed = readAsarPackageJson(appPath)
+  if (packed !== undefined && packed !== null) return packageJsonIsTestFeedBuild(packed)
+  if (loose !== undefined && loose !== null && packed === undefined) return false
+  return null
+}
+
+/** Parsed JSON, `undefined` when the file is absent, `null` when it cannot be read or parsed. */
+function readPackageJsonFile(filePath) {
+  let text
   try {
-    if (packageJsonIsTestFeedBuild(JSON.parse(fs.readFileSync(loose, 'utf8')))) return true
-  } catch {
-    // The packaged app keeps package.json inside app.asar.
+    text = fs.readFileSync(filePath, 'utf8')
+  } catch (error) {
+    if (error?.code === 'ENOENT') return undefined
+    return null
   }
-  const asarPath = path.join(appPath, 'Contents', 'Resources', 'app.asar')
   try {
-    const bytes = readAsarFile(fs.readFileSync(asarPath), 'package.json')
-    if (!bytes) return false
-    return packageJsonIsTestFeedBuild(JSON.parse(bytes.toString('utf8')))
+    const parsed = JSON.parse(text)
+    return parsed == null ? null : parsed
   } catch {
-    return false
+    return null
+  }
+}
+
+/** Parsed asar package.json, `undefined` when app.asar is absent, `null` when it cannot be read. */
+function readAsarPackageJson(appPath) {
+  const asarPath = path.join(appPath, 'Contents', 'Resources', 'app.asar')
+  let archive
+  try {
+    archive = fs.readFileSync(asarPath)
+  } catch (error) {
+    if (error?.code === 'ENOENT') return undefined
+    return null
+  }
+  const bytes = readAsarFile(archive, 'package.json')
+  if (!bytes) return null
+  try {
+    const parsed = JSON.parse(bytes.toString('utf8'))
+    return parsed == null ? null : parsed
+  } catch {
+    return null
   }
 }
 
@@ -911,6 +945,11 @@ function assertNewerRelease(version, deps) {
   }
 }
 
+function refuseUpdateMarker(message) {
+  console.error(message)
+  throw new Error(message)
+}
+
 async function runInstall(deps, fetchImpl, tempDir) {
   const runtime = await deps.probeRuntime()
   const mode = selectInstallMode(runtime)
@@ -996,15 +1035,19 @@ async function runInstall(deps, fetchImpl, tempDir) {
     throw new Error(verified?.reason || 'The downloaded app failed signature checks.')
   }
   assertDownloadedAppVersion(nextApp, version, deps.readBundleShortVersion)
-  // Equality, both ways. A read failure returns false, so an unmarked
-  // release whose package.json has no marker still matches and installs.
   const runningTestFeed = runtime.testFeedBuild === true
-  if (readAppTestFeedMarker(nextApp) !== runningTestFeed) {
-    throw new Error(
+  const downloadedTestFeed = readAppTestFeedMarker(nextApp)
+  // null is unreadable on either runtime. A parsed package.json with no
+  // marker is false, so a normal release still matches and installs.
+  if (downloadedTestFeed == null) {
+    refuseUpdateMarker(
       runningTestFeed
-        ? 'The downloaded app is not a test build, so it was not installed.'
-        : 'The downloaded app is a test build, so it was not installed.',
+        ? "Couldn't read the update's package marker (test build)"
+        : "Couldn't read the update's package marker (release build)",
     )
+  }
+  if (downloadedTestFeed !== runningTestFeed) {
+    refuseUpdateMarker(downloadedTestFeed ? 'Update is a test build' : 'Update is not a test build')
   }
   if (!runtime.appPath) throw new Error('The running app bundle could not be found.')
   deps.onProgress?.({ phase: 'installing' })
