@@ -102,4 +102,4 @@ People on 0.3.8 or earlier are on an ad-hoc build whose badge does not install. 
 
 The check is not on the cold-start path and times out after a few seconds so a hung GitHub fetch cannot stall first paint. Offline or GitHub failures stay quiet. A public repo needs no token. A private repo can set a read-only `FONT_BUTLER_GITHUB_TOKEN` for the version check only, until Releases are public (see [docs/releases.md](docs/releases.md)). That token is never sent with the file download.
 
-`FONT_BUTLER_UPDATE_FEED_URL` points a non-release run at a local feed (`http://127.0.0.1`, `http://localhost`, or a `file://` directory that contains `latest-mac.yml`) so a newer signed build can be tried without publishing. Packaged Developer ID builds ignore it.
+`FONT_BUTLER_UPDATE_FEED_URL` points a non-release run at a local feed (`http://127.0.0.1`, `http://localhost`, or a `file://` directory that contains `latest-mac.yml`) so a newer signed build can be tried without publishing. A packaged Developer ID build ignores it unless it was packed with `FONT_BUTLER_TEST_FEED_BUILD=1`. Those marked builds are never uploaded. See [docs/releases.md](docs/releases.md).

@@ -46,6 +46,15 @@ export function appUpdateBadgeText(phase?: AppUpdateInstallPhase, percent?: numb
   return 'Update'
 }
 
+export function appUpdateRunningLine(
+  status?: { currentVersion?: string; testFeedBuild?: boolean } | null,
+): string {
+  if (!status?.currentVersion) return 'Check GitHub Releases for a newer build.'
+  return status.testFeedBuild
+    ? `This Mac is running ${status.currentVersion}. TEST BUILD`
+    : `This Mac is running ${status.currentVersion}.`
+}
+
 export function appUpdateBadgeLabel(version: string, phase?: AppUpdateInstallPhase): string {
   if (phase === 'error') return `Update to Font Buttler ${version} failed`
   if (phase && phase !== 'idle') return `Updating to Font Buttler ${version}`

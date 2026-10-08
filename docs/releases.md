@@ -43,7 +43,44 @@ Font Buttler checks [GitHub Releases](https://github.com/displaay/font-butler/re
 
    `autoInstall` stays `"parked"`. `startParkedAutoInstall()` throws. `electron/main.mjs` does not reference `electron-updater`, `autoDownload`, or `autoInstallOnAppQuit`. The click handler is the only start.
 
-7. **Local feed.** `FONT_BUTLER_UPDATE_FEED_URL` may be `http://127.0.0.1/...`, `http://localhost/...`, or a `file://` directory containing `latest-mac.yml` plus the arm64 zip and DMG. Non-release runs (dev Electron, ad-hoc packages) use it for the version check and the click, so a newer signed build can be proven without publishing. A packaged Developer ID build ignores the variable. `scripts/assert-notarized-mac-release.mjs` fails the release if that guard is removed.
+7. **Local feed.** `FONT_BUTLER_UPDATE_FEED_URL` may be `http://127.0.0.1/...`, `http://localhost/...`, or a `file://` directory containing `latest-mac.yml` plus the arm64 zip and DMG. Non-release runs (dev Electron, ad-hoc packages) use it for the version check and the click, so a newer signed build can be proven without publishing. A packaged Developer ID build ignores the variable unless that app was packed with `FONT_BUTLER_TEST_FEED_BUILD=1` (see below). `scripts/assert-notarized-mac-release.mjs` fails the release if the unmarked guard is removed.
+
+## Testing in-place update locally
+
+A real in-place install needs two notarized Developer ID builds: the one you are running, and a newer one in the feed. Mark both with `FONT_BUTLER_TEST_FEED_BUILD=1`. That stamp is `extraMetadata.fontButlerTestFeed: true` in the packaged `package.json`. Only a build with that marker may honor `FONT_BUTLER_UPDATE_FEED_URL` while it is signed with Developer ID. The feed URL then has to be `http://127.0.0.1` or `http://localhost` (any port), or `https`. The asset name, sha512, size, Team ID, signature, staple, and bundle-version checks are unchanged.
+
+Marked builds are never uploaded. `npm run publish:mac` and the release assert refuse to upload when `FONT_BUTLER_TEST_FEED_BUILD` is set, and when the DMG or zip contains the marker. `npm run release:mac` still signs and notarizes, then the assert exits because of the marker. The files in `release/` are the test build. Do not upload them.
+
+Build a marked 0.3.9 (the version already in `package.json`). Do not commit a version change.
+
+```bash
+FONT_BUTLER_TEST_FEED_BUILD=1 npm run release:mac
+```
+
+Copy that app aside before the next pack, because the next command replaces `release/`.
+
+```bash
+cp -R "release/mac-arm64/Font Buttler.app" /tmp/Font-Buttler-0.3.9.app
+```
+
+Build a marked higher version without editing `package.json`. The pack script writes electron-builder `extraMetadata.version` from `FONT_BUTLER_TEST_VERSION`.
+
+```bash
+FONT_BUTLER_TEST_FEED_BUILD=1 FONT_BUTLER_TEST_VERSION=0.9.0 npm run release:mac
+```
+
+Serve `latest-mac.yml` and `Font-Buttler-0.9.0-arm64.zip` from `release/` on loopback.
+
+```bash
+cd release
+python3 -m http.server 8765 --bind 127.0.0.1
+```
+
+Launch the 0.3.9 app with the feed pointed at that server. Settings → General → App updates shows `TEST BUILD` on the version line. Click **Update**. The app installs the zip in place only when the bundle version inside the zip equals `0.9.0`.
+
+```bash
+FONT_BUTLER_UPDATE_FEED_URL=http://127.0.0.1:8765/ open /tmp/Font-Buttler-0.3.9.app
+```
 
 Install and Switch of fonts are not part of this path. Offline, GitHub API failures, or a private-repo 404 without a token stay a quiet no-update: no crash, no toast, no Install/Switch/auth churn. A last-good check is kept if one exists.
 

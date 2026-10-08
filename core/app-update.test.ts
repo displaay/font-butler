@@ -363,6 +363,44 @@ files:
   }
 })
 
+test('a marked Developer ID build checks the loopback feed and reports TEST BUILD', async () => {
+  const feed = 'http://127.0.0.1:8765/'
+  const yml = `version: 0.9.0
+files:
+  - url: Font-Buttler-0.9.0-arm64.dmg
+    sha512: abc+/=
+    size: 4
+  - url: Font-Buttler-0.9.0-arm64.zip
+    sha512: def==
+    size: 4
+`
+  const checker = createAppUpdateChecker()
+  let sawGithub = false
+  const status = await checker.check({
+    currentVersion: '0.3.9',
+    now: 30,
+    env: { [APP_UPDATE_FEED_ENV]: feed },
+    runtime: { packaged: true, developerId: true, teamId: 'A7WWML89LQ', testFeedBuild: true },
+    fetch: async (url) => {
+      if (url === APP_UPDATE_GITHUB_LATEST_API) sawGithub = true
+      if (url === `${feed}latest-mac.yml`) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({}),
+          text: async () => yml,
+        }
+      }
+      throw new Error(`unexpected ${url}`)
+    },
+  })
+  assert.equal(sawGithub, false)
+  assert.equal(status.latestVersion, '0.9.0')
+  assert.equal(status.updateAvailable, true)
+  assert.equal(status.testFeedBuild, true)
+})
+
 test('checkAppUpdate sends the read-only token only on the GitHub Releases request', async () => {
   const checker = createAppUpdateChecker()
   let authorization = ''

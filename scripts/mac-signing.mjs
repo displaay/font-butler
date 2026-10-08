@@ -12,6 +12,8 @@
 export const DEVELOPER_ID_IDENTITY = 'DANIEL QUISEK (A7WWML89LQ)'
 export const NOTARY_KEYCHAIN_PROFILE = 'font-butler-notary'
 export const ADHOC_ENTITLEMENTS = 'build/entitlements.mac.adhoc.plist'
+export const TEST_FEED_BUILD_ENV = 'FONT_BUTLER_TEST_FEED_BUILD'
+export const TEST_FEED_VERSION_ENV = 'FONT_BUTLER_TEST_VERSION'
 
 const NOTARY_ENV_KEYS = [
   'APPLE_ID',
@@ -104,6 +106,33 @@ export function planMacPack({ platform, release, env, developerIdPresent }) {
     keychain: null,
     summary: `Signing with Developer ID identity "${DEVELOPER_ID_IDENTITY}". APPLE_KEYCHAIN_PROFILE is unset, so notarization is skipped. This build must not be published.`,
   }
+}
+
+export function testFeedBuildRequested(env) {
+  return String(env?.[TEST_FEED_BUILD_ENV] ?? '').trim() === '1'
+}
+
+/**
+ * Stamp `fontButlerTestFeed` into the packaged package.json via electron-builder
+ * `extraMetadata`. `FONT_BUTLER_TEST_VERSION` sets `extraMetadata.version` so a
+ * higher test build does not require a committed version bump. Both apply only
+ * when `FONT_BUTLER_TEST_FEED_BUILD=1`.
+ */
+export function applyTestFeedMetadata(build, env) {
+  if (!testFeedBuildRequested(env)) return { build, error: null }
+  const extraMetadata = { ...(build?.extraMetadata ?? {}), fontButlerTestFeed: true }
+  const rawVersion = String(env?.[TEST_FEED_VERSION_ENV] ?? '').trim()
+  if (rawVersion) {
+    const version = rawVersion.replace(/^v/i, '')
+    if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) {
+      return {
+        build,
+        error: `FONT_BUTLER_TEST_VERSION must be a semver version, not "${rawVersion}".`,
+      }
+    }
+    extraMetadata.version = version
+  }
+  return { build: { ...build, extraMetadata }, error: null }
 }
 
 /** Full electron-builder config. Booleans stay booleans: `-c.dmg.sign=true` is the string "true", and dmg signing checks `=== true`. */

@@ -8,6 +8,7 @@ import {
   appUpdateDownloadUrl,
   appUpdateReleaseUrl,
   appUpdateRowLabel,
+  appUpdateRunningLine,
   isAllowedAppUpdateUrl,
   shouldShowUpdatesTab,
 } from './app-update.ts'
@@ -32,6 +33,15 @@ function status(partial: Partial<AppUpdateStatus> = {}): AppUpdateStatus {
     ...partial,
   }
 }
+
+test('the Settings version line marks a test-feed build', () => {
+  assert.equal(appUpdateRunningLine({ currentVersion: '0.3.9' }), 'This Mac is running 0.3.9.')
+  assert.equal(
+    appUpdateRunningLine({ currentVersion: '0.3.9', testFeedBuild: true }),
+    'This Mac is running 0.3.9. TEST BUILD',
+  )
+  assert.equal(appUpdateRunningLine(null), 'Check GitHub Releases for a newer build.')
+})
 
 test('appUpdateRowLabel names the GitHub release version', () => {
   assert.equal(appUpdateRowLabel(status()), 'Font Buttler 0.2.0')

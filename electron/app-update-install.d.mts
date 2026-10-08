@@ -10,6 +10,7 @@ export type AppUpdateRuntimeFacts = {
   readOnly?: boolean
   bundleWritable?: boolean
   appPath?: string | null
+  testFeedBuild?: boolean
 }
 
 export function resolveUpdateFeedUrl(

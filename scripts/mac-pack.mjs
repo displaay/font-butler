@@ -7,6 +7,7 @@ import {
   applyNotaryEnv,
   developerIdInKeychainOutput,
   electronBuilderArgs,
+  applyTestFeedMetadata,
   packConfig,
   planMacPack,
 } from './mac-signing.mjs'
@@ -43,9 +44,22 @@ if (plan.error) {
 console.log(plan.summary)
 
 const pkg = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'))
+const stamped = applyTestFeedMetadata(pkg.build, process.env)
+if (stamped.error) {
+  console.error(stamped.error)
+  process.exit(1)
+}
+if (stamped.build?.extraMetadata?.fontButlerTestFeed === true) {
+  const versionNote = stamped.build.extraMetadata.version
+    ? ` extraMetadata.version is ${stamped.build.extraMetadata.version}.`
+    : ''
+  console.log(
+    `TEST BUILD. The packaged package.json will have fontButlerTestFeed: true.${versionNote} Marked builds are never uploaded.`,
+  )
+}
 const configDir = mkdtempSync(path.join(tmpdir(), 'font-butler-mac-'))
 const configPath = path.join(configDir, 'electron-builder.json')
-writeFileSync(configPath, JSON.stringify(packConfig(pkg.build, plan)))
+writeFileSync(configPath, JSON.stringify(packConfig(stamped.build, plan)))
 
 const cli = path.join(repoRoot, 'node_modules/electron-builder/cli.js')
 let status = 1

@@ -20,7 +20,11 @@
  *
  * `FONT_BUTLER_UPDATE_FEED_URL` points a non-release run at a local feed
  * (`http://127.0.0.1`, `http://localhost`, or `file://`) so a newer build can
- * be tried without publishing. Packaged Developer ID builds ignore it.
+ * be tried without publishing. A packaged Developer ID build ignores it
+ * unless its package.json was stamped `fontButlerTestFeed: true` at pack
+ * time. That marked build may use `http://127.0.0.1`, `http://localhost`, or
+ * `https` only. The asset name, sha512, size, team, signature, staple, and
+ * bundle-version checks still apply.
  */
 
 import { spawn, spawnSync } from 'node:child_process'
@@ -176,11 +180,41 @@ export function normalizeLocalFeedUrl(raw) {
   return parsed.href
 }
 
-/** Null when the env var is unset, not a local feed, or this is a release build. */
+function directoryFeedUrl(parsed) {
+  if (parsed.username || parsed.password) return null
+  if (!parsed.pathname.endsWith('/')) parsed.pathname = `${parsed.pathname}/`
+  parsed.search = ''
+  parsed.hash = ''
+  return parsed.href
+}
+
+/**
+ * Feed URL allowed on a Developer ID build stamped `fontButlerTestFeed`.
+ * `http` is only 127.0.0.1 or localhost, any port. `https` is any host.
+ * `file:` is not a test feed.
+ */
+export function normalizeTestFeedUrl(raw) {
+  let parsed
+  try {
+    parsed = new URL(String(raw ?? '').trim())
+  } catch {
+    return null
+  }
+  if (parsed.username || parsed.password) return null
+  if (parsed.protocol === 'https:') return directoryFeedUrl(parsed)
+  if (parsed.protocol !== 'http:') return null
+  if (parsed.hostname !== '127.0.0.1' && parsed.hostname !== 'localhost') return null
+  return directoryFeedUrl(parsed)
+}
+
+/** Null when the env var is unset, not an allowed feed, or this is an unmarked release build. */
 export function resolveUpdateFeedUrl(env, runtime) {
-  if (isReleaseBuildRuntime(runtime)) return null
   const raw = String(env?.[APP_UPDATE_FEED_ENV] ?? '').trim()
   if (!raw) return null
+  if (isReleaseBuildRuntime(runtime)) {
+    if (runtime?.testFeedBuild !== true) return null
+    return normalizeTestFeedUrl(raw)
+  }
   return normalizeLocalFeedUrl(raw)
 }
 
@@ -364,6 +398,55 @@ export function detectAppUpdateRuntime(execPath = process.execPath, spawnImpl = 
     translocated: isTranslocatedAppPath(appPath),
     readOnly: !bundleWritable,
     bundleWritable,
+    testFeedBuild: readAppTestFeedMarker(appPath),
+  }
+}
+
+export function packageJsonIsTestFeedBuild(pkg) {
+  return pkg?.fontButlerTestFeed === true
+}
+
+/** Read one file out of an asar archive buffer. Electron's pickle header, no asar package. */
+export function readAsarFile(archiveBuffer, fileName) {
+  if (!Buffer.isBuffer(archiveBuffer) || archiveBuffer.length < 16) return null
+  if (archiveBuffer.readUInt32LE(0) !== 4) return null
+  const headerSize = archiveBuffer.readUInt32LE(4)
+  if (headerSize < 8 || 8 + headerSize > archiveBuffer.length) return null
+  const headerBuf = archiveBuffer.subarray(8, 8 + headerSize)
+  const stringLength = headerBuf.readInt32LE(4)
+  if (stringLength < 2 || 8 + stringLength > headerBuf.length) return null
+  let header
+  try {
+    header = JSON.parse(headerBuf.subarray(8, 8 + stringLength).toString('utf8'))
+  } catch {
+    return null
+  }
+  const entry = header?.files?.[fileName]
+  if (!entry || entry.unpacked || entry.offset == null || entry.size == null) return null
+  const offset = Number(entry.offset)
+  const size = Number(entry.size)
+  if (!Number.isInteger(size) || size < 0 || !Number.isFinite(offset) || offset < 0) return null
+  const start = 8 + headerSize + offset
+  if (start + size > archiveBuffer.length) return null
+  return Buffer.from(archiveBuffer.subarray(start, start + size))
+}
+
+/** True when the packaged app's package.json has `fontButlerTestFeed: true`. */
+export function readAppTestFeedMarker(appPath) {
+  if (!appPath) return false
+  const loose = path.join(appPath, 'Contents', 'Resources', 'app', 'package.json')
+  try {
+    if (packageJsonIsTestFeedBuild(JSON.parse(fs.readFileSync(loose, 'utf8')))) return true
+  } catch {
+    // The packaged app keeps package.json inside app.asar.
+  }
+  const asarPath = path.join(appPath, 'Contents', 'Resources', 'app.asar')
+  try {
+    const bytes = readAsarFile(fs.readFileSync(asarPath), 'package.json')
+    if (!bytes) return false
+    return packageJsonIsTestFeedBuild(JSON.parse(bytes.toString('utf8')))
+  } catch {
+    return false
   }
 }
 

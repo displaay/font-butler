@@ -4,9 +4,17 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, u
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { APP_UPDATE_FEED_ENV, DEVELOPER_ID_TEAM, resolveUpdateFeedUrl } from '../electron/app-update-install.mjs'
+import { inflateRawSync } from 'node:zlib'
+import {
+  APP_UPDATE_FEED_ENV,
+  DEVELOPER_ID_TEAM,
+  packageJsonIsTestFeedBuild,
+  readAppTestFeedMarker,
+  readAsarFile,
+  resolveUpdateFeedUrl,
+} from '../electron/app-update-install.mjs'
 import { sha512Base64 } from './mac-dmg-staple.mjs'
-import { DEVELOPER_ID_IDENTITY } from './mac-signing.mjs'
+import { DEVELOPER_ID_IDENTITY, TEST_FEED_BUILD_ENV } from './mac-signing.mjs'
 
 const require = createRequire(import.meta.url)
 const yaml = require('js-yaml')
@@ -220,9 +228,125 @@ export function releaseFeedOverrideFailures() {
   return []
 }
 
-export async function assertNotarizedMacRelease(root = repoRoot, version = readPackVersion(root)) {
+export const TEST_FEED_ENV_REFUSAL =
+  'FONT_BUTLER_TEST_FEED_BUILD is set. Marked test builds are never uploaded.'
+
+export const TEST_FEED_MARKER_REFUSAL =
+  'This build carries fontButlerTestFeed. Marked test builds are never uploaded.'
+
+/** Any non-empty value counts as set. The pack stamp itself only happens for `=1`. */
+export function testFeedPublishEnvFailures(env = process.env) {
+  if (String(env?.[TEST_FEED_BUILD_ENV] ?? '').trim() !== '') return [TEST_FEED_ENV_REFUSAL]
+  return []
+}
+
+function findZipEocd(buffer) {
+  const min = Math.max(0, buffer.length - 22 - 65535)
+  for (let i = buffer.length - 22; i >= min; i -= 1) {
+    if (buffer.readUInt32LE(i) === 0x06054b50) return i
+  }
+  return -1
+}
+
+function zipEntryBytes(buffer, entry) {
+  const local = entry.localOffset
+  if (local < 0 || local + 30 > buffer.length || buffer.readUInt32LE(local) !== 0x04034b50) return null
+  const nameLen = buffer.readUInt16LE(local + 26)
+  const extraLen = buffer.readUInt16LE(local + 28)
+  const start = local + 30 + nameLen + extraLen
+  if (start + entry.compSize > buffer.length) return null
+  const compressed = buffer.subarray(start, start + entry.compSize)
+  if (entry.method === 0) return Buffer.from(compressed)
+  if (entry.method === 8) return inflateRawSync(compressed)
+  return null
+}
+
+function zipEntries(buffer) {
+  const eocd = findZipEocd(buffer)
+  if (eocd < 0) return []
+  const count = buffer.readUInt16LE(eocd + 10)
+  let offset = buffer.readUInt32LE(eocd + 16)
+  const entries = []
+  for (let i = 0; i < count; i += 1) {
+    if (offset + 46 > buffer.length || buffer.readUInt32LE(offset) !== 0x02014b50) break
+    const method = buffer.readUInt16LE(offset + 10)
+    const compSize = buffer.readUInt32LE(offset + 20)
+    const nameLen = buffer.readUInt16LE(offset + 28)
+    const extraLen = buffer.readUInt16LE(offset + 30)
+    const commentLen = buffer.readUInt16LE(offset + 32)
+    const localOffset = buffer.readUInt32LE(offset + 42)
+    const name = buffer.subarray(offset + 46, offset + 46 + nameLen).toString('utf8').replaceAll('\\', '/')
+    entries.push({ name, method, compSize, localOffset })
+    offset += 46 + nameLen + extraLen + commentLen
+  }
+  return entries
+}
+
+function packageJsonFromZipEntry(buffer, entry) {
+  let bytes
+  try {
+    bytes = zipEntryBytes(buffer, entry)
+  } catch {
+    return null
+  }
+  if (!bytes) return null
+  if (entry.name.endsWith('Contents/Resources/app/package.json')) {
+    try {
+      return JSON.parse(bytes.toString('utf8'))
+    } catch {
+      return null
+    }
+  }
+  if (entry.name.endsWith('Contents/Resources/app.asar')) {
+    const packed = readAsarFile(bytes, 'package.json')
+    if (!packed) return null
+    try {
+      return JSON.parse(packed.toString('utf8'))
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+/** True when a zip's app bundle package.json, loose or inside app.asar, has the test-feed marker. */
+export function zipHasTestFeedMarker(zipPath) {
+  let buffer
+  try {
+    buffer = readFileSync(zipPath)
+  } catch {
+    return false
+  }
+  for (const entry of zipEntries(buffer)) {
+    if (
+      !entry.name.endsWith('Contents/Resources/app/package.json') &&
+      !entry.name.endsWith('Contents/Resources/app.asar')
+    ) {
+      continue
+    }
+    if (packageJsonIsTestFeedBuild(packageJsonFromZipEntry(buffer, entry))) return true
+  }
+  return false
+}
+
+export function testFeedArchiveFailures({ zip, appPaths = [] } = {}) {
+  const failures = []
+  if (zip && existsSync(zip) && zipHasTestFeedMarker(zip)) failures.push(TEST_FEED_MARKER_REFUSAL)
+  for (const appPath of appPaths) {
+    if (appPath && readAppTestFeedMarker(appPath) && !failures.includes(TEST_FEED_MARKER_REFUSAL)) {
+      failures.push(TEST_FEED_MARKER_REFUSAL)
+    }
+  }
+  return failures
+}
+
+export async function assertNotarizedMacRelease(root = repoRoot, version = readPackVersion(root), env = process.env) {
   const overrideFailures = releaseFeedOverrideFailures()
   const files = prepareMacPublish(root, version)
+  const testFeedFailures = [
+    ...testFeedPublishEnvFailures(env),
+    ...testFeedArchiveFailures({ zip: files.zip, appPaths: [files.app] }),
+  ]
   const feedFailures =
     existsSync(files.dmg) && existsSync(files.zip) && existsSync(files.feed)
       ? await updateFeedFailures({ dmg: files.dmg, zip: files.zip, feed: files.feed })
@@ -230,12 +354,13 @@ export async function assertNotarizedMacRelease(root = repoRoot, version = readP
   if (process.platform !== 'darwin') {
     return [
       ...overrideFailures,
+      ...testFeedFailures,
       'Refusing to publish a macOS release from a non-macOS host. Notarization can only be checked on macOS.',
       ...feedFailures,
     ]
   }
-  if (overrideFailures.length) return [...overrideFailures, ...files.failures, ...feedFailures]
-  if (files.failures.length) return [...files.failures, ...feedFailures]
+  if (overrideFailures.length) return [...overrideFailures, ...testFeedFailures, ...files.failures, ...feedFailures]
+  if (files.failures.length) return [...testFeedFailures, ...files.failures, ...feedFailures]
 
   const { app, dmg, zip } = files
   const failures = []
@@ -248,6 +373,9 @@ export async function assertNotarizedMacRelease(root = repoRoot, version = readP
       const inside = findAppBundles(mounted.mount).find((bundle) => path.basename(bundle) === 'Font Buttler.app')
       dmgAppStatus = inside ? staplerStatus(inside) : 1
       if (!inside) failures.push('The DMG does not contain Font Buttler.app.')
+      for (const failure of testFeedArchiveFailures({ appPaths: inside ? [inside] : [] })) {
+        if (!testFeedFailures.includes(failure)) testFeedFailures.push(failure)
+      }
     }
   } finally {
     if (mounted.mount) run('hdiutil', ['detach', mounted.mount])
@@ -263,12 +391,16 @@ export async function assertNotarizedMacRelease(root = repoRoot, version = readP
       const inside = findAppBundles(zipDir).find((bundle) => path.basename(bundle) === 'Font Buttler.app')
       zipAppStatus = inside ? staplerStatus(inside) : 1
       if (!inside) failures.push('The update zip does not contain Font Buttler.app.')
+      for (const failure of testFeedArchiveFailures({ appPaths: inside ? [inside] : [] })) {
+        if (!testFeedFailures.includes(failure)) testFeedFailures.push(failure)
+      }
     }
   } finally {
     rmSync(zipDir, { recursive: true, force: true })
   }
 
   failures.push(
+    ...testFeedFailures,
     ...evidenceForApp(app, {
       staplerDmgStatus: staplerStatus(dmg),
       staplerDmgAppStatus: dmgAppStatus,

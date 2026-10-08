@@ -149,32 +149,35 @@ export function createAppUpdateChecker(options: { cacheMs?: number; timeoutMs?: 
     if (!input.refresh && cached && now - cached.at < cacheMs) {
       return cached.status
     }
+    const runtime = input.runtime ?? detectAppUpdateRuntime()
+    const stamp = (status: AppUpdateStatus): AppUpdateStatus =>
+      runtime?.testFeedBuild === true ? { ...status, testFeedBuild: true } : status
     const skipNetwork =
       input.skipNetworkInTest ?? (process.env.FONT_BUTLER_TEST === '1' && !input.fetch)
     if (skipNetwork) {
-      const status = emptyAppUpdateStatus(currentVersion, { checkedAt: now })
+      const status = stamp(emptyAppUpdateStatus(currentVersion, { checkedAt: now }))
       cached = { at: now, status }
       return status
     }
     const fetchImpl: AppUpdateFetch = input.fetch ?? (globalThis.fetch as AppUpdateFetch)
-    const feedUrl = resolveFeedForCheck(input)
+    const feedUrl = resolveFeedForCheck(input, runtime)
     if (feedUrl) {
       try {
         const pieces = await withTimeout(
           loadUpdateFeed(feedUrl, fetchImpl),
           input.timeoutMs ?? timeoutMs,
         )
-        const status = statusFromLocalFeed(pieces, currentVersion, now)
+        const status = stamp(statusFromLocalFeed(pieces, currentVersion, now))
         cached = { at: now, status }
         emitEvent({ type: 'app-update', update: status })
         return status
       } catch (error) {
-        return quietFailure(
+        return stamp(quietFailure(
           cached,
           currentVersion,
           now,
           error instanceof Error ? error.message : 'Could not read the local update feed',
-        )
+        ))
       }
     }
     const controller = new AbortController()
@@ -194,37 +197,37 @@ export function createAppUpdateChecker(options: { cacheMs?: number; timeoutMs?: 
       )
       const { response, json } = github
       if (response.status === 404) {
-        const status = emptyAppUpdateStatus(currentVersion, { checkedAt: now })
+        const status = stamp(emptyAppUpdateStatus(currentVersion, { checkedAt: now }))
         cached = { at: now, status }
         emitEvent({ type: 'app-update', update: status })
         return status
       }
       if (!response.ok) {
-        return quietFailure(
+        return stamp(quietFailure(
           cached,
           currentVersion,
           now,
           `GitHub Releases returned HTTP ${response.status}`,
-        )
+        ))
       }
       if (!json) {
-        return quietFailure(cached, currentVersion, now, 'GitHub Releases returned an empty body')
+        return stamp(quietFailure(cached, currentVersion, now, 'GitHub Releases returned an empty body'))
       }
-      const status = parseGithubRelease(json, currentVersion, {
+      const status = stamp(parseGithubRelease(json, currentVersion, {
         now,
         platform: { platform: process.platform, arch: process.arch },
-      })
+      }))
       cached = { at: now, status }
       emitEvent({ type: 'app-update', update: status })
       return status
     } catch (error) {
       controller.abort()
-      return quietFailure(
+      return stamp(quietFailure(
         cached,
         currentVersion,
         now,
         error instanceof Error ? error.message : 'Could not reach GitHub Releases',
-      )
+      ))
     }
   }
 
@@ -239,10 +242,12 @@ export function createAppUpdateChecker(options: { cacheMs?: number; timeoutMs?: 
   }
 }
 
-function resolveFeedForCheck(input: CheckAppUpdateOptions): string | null {
+function resolveFeedForCheck(
+  input: CheckAppUpdateOptions,
+  runtime: AppUpdateRuntimeFacts,
+): string | null {
   const env = input.env ?? process.env
   if (!String(env[APP_UPDATE_FEED_ENV] ?? '').trim()) return null
-  const runtime = input.runtime ?? detectAppUpdateRuntime()
   return resolveUpdateFeedUrl(env, runtime)
 }
 

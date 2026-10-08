@@ -20,7 +20,10 @@ import {
   isNewerVersion,
   isUpdateDmgMounted,
   macArm64ArchiveName,
+  normalizeTestFeedUrl,
   parseLatestMacYml,
+  readAppTestFeedMarker,
+  readAsarFile,
   readBundleShortVersion,
   rememberOpenedDmg,
   resolveUpdateFeedUrl,
@@ -961,6 +964,29 @@ test('release builds ignore FONT_BUTLER_UPDATE_FEED_URL and other builds can use
     resolveUpdateFeedUrl({ [APP_UPDATE_FEED_ENV]: feed }, signedRuntime({ signatureUnreadable: true, developerId: false, teamId: null })),
     null,
   )
+  assert.equal(
+    resolveUpdateFeedUrl({ [APP_UPDATE_FEED_ENV]: feed }, signedRuntime({ testFeedBuild: true })),
+    feed,
+  )
+  assert.equal(
+    normalizeTestFeedUrl('http://localhost:8765/feed'),
+    'http://localhost:8765/feed/',
+  )
+  assert.equal(
+    resolveUpdateFeedUrl(
+      { [APP_UPDATE_FEED_ENV]: 'https://updates.example/feed' },
+      signedRuntime({ testFeedBuild: true }),
+    ),
+    'https://updates.example/feed/',
+  )
+  assert.equal(
+    resolveUpdateFeedUrl({ [APP_UPDATE_FEED_ENV]: 'file:///tmp/feed/' }, signedRuntime({ testFeedBuild: true })),
+    null,
+  )
+  assert.equal(
+    resolveUpdateFeedUrl({ [APP_UPDATE_FEED_ENV]: 'http://evil.example/feed/' }, signedRuntime({ testFeedBuild: true })),
+    null,
+  )
   assert.equal(resolveUpdateFeedUrl({ [APP_UPDATE_FEED_ENV]: feed }, signedRuntime({ packaged: false })), feed)
   assert.equal(
     resolveUpdateFeedUrl({ [APP_UPDATE_FEED_ENV]: 'https://evil.example/feed/' }, { packaged: false }),
@@ -1091,4 +1117,68 @@ test('a file feed is confined to its directory', async () => {
   assert.match(opened, new RegExp(`${name}$`))
   rmSync(path.dirname(opened), { recursive: true, force: true })
   rmSync(root, { recursive: true, force: true })
+})
+
+test('readAppTestFeedMarker reads fontButlerTestFeed from the packaged asar', async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'font-butler-marker-'))
+  const src = path.join(root, 'pack')
+  const app = path.join(root, 'Font Buttler.app')
+  const resources = path.join(app, 'Contents', 'Resources')
+  mkdirSync(src)
+  mkdirSync(resources, { recursive: true })
+  writeFileSync(
+    path.join(src, 'package.json'),
+    JSON.stringify({ name: 'font-butler', version: '0.3.9', fontButlerTestFeed: true }),
+  )
+  const asarPath = path.join(resources, 'app.asar')
+  const asar = await import('@electron/asar')
+  await asar.createPackage(src, asarPath)
+  const packed = readAsarFile(readFileSync(asarPath), 'package.json')
+  assert.equal(JSON.parse(packed.toString('utf8')).fontButlerTestFeed, true)
+  assert.equal(readAppTestFeedMarker(app), true)
+  writeFileSync(path.join(src, 'package.json'), JSON.stringify({ name: 'font-butler', version: '0.3.9' }))
+  await asar.createPackage(src, asarPath)
+  assert.equal(readAppTestFeedMarker(app), false)
+  rmSync(root, { recursive: true, force: true })
+})
+
+test('a marked Developer ID build installs from the loopback feed instead of GitHub', async () => {
+  const version = '0.9.0'
+  const feed = 'http://127.0.0.1:8765/'
+  const zipBytes = Buffer.from('marked-zip')
+  const doc = yml(version, [
+    { name: macArm64ArchiveName(version, 'dmg'), sha512: sha512(zipBytes), size: zipBytes.length },
+    { name: macArm64ArchiveName(version, 'zip'), sha512: sha512(zipBytes), size: zipBytes.length },
+  ])
+  const seen = []
+  const swaps = []
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-marked-'))
+  const installer = createAppUpdateInstaller({
+    currentVersion: '0.3.9',
+    env: { [APP_UPDATE_FEED_ENV]: feed, GITHUB_TOKEN: 'nope' },
+    probeRuntime: () => signedRuntime({ testFeedBuild: true }),
+    makeTempDir: () => dir,
+    removeTemp: (target) => rmSync(target, { recursive: true, force: true }),
+    unzip: async (_zip, dest) => {
+      writeUpdateApp(dest, version)
+    },
+    verifyDownloadedApp: async () => ({ ok: true }),
+    spawnSwap: (swap) => swaps.push(swap),
+    quit: () => {},
+    pid: 9,
+    fetch: async (url) => {
+      seen.push(url)
+      if (url === `${feed}latest-mac.yml`) return httpResponse({ body: doc })
+      if (url === `${feed}${macArm64ArchiveName(version, 'zip')}`) {
+        return httpResponse({ body: zipBytes, contentLength: zipBytes.length })
+      }
+      throw new Error(`unexpected ${url}`)
+    },
+  })
+  const result = await installer.start()
+  assert.equal(result.ok, true)
+  assert.equal(result.mode, 'inplace')
+  assert.equal(swaps.length, 1)
+  assert.equal(seen.includes(GITHUB_LATEST_API), false)
+  rmSync(dir, { recursive: true, force: true })
 })

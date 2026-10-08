@@ -40,6 +40,7 @@ export type AppUpdateStatus = {
   autoInstall: typeof APP_UPDATE_AUTO_INSTALL
   checkedAt: number
   error?: string
+  testFeedBuild?: boolean
 }
 
 export type GithubReleaseAssetJson = {
