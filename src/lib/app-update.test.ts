@@ -40,6 +40,14 @@ test('the Settings version line marks a test-feed build', () => {
     appUpdateRunningLine({ currentVersion: '0.3.9', testFeedBuild: true }),
     'This Mac is running 0.3.9. TEST BUILD',
   )
+  assert.equal(
+    appUpdateRunningLine({
+      currentVersion: '0.3.9',
+      testFeedBuild: true,
+      testFeedDataDir: '/Users/tester/Library/Application Support/Font Buttler Test/data',
+    }),
+    'This Mac is running 0.3.9. TEST BUILD. Data folder: /Users/tester/Library/Application Support/Font Buttler Test/data',
+  )
   assert.equal(appUpdateRunningLine(null), 'Check GitHub Releases for a newer build.')
 })
 

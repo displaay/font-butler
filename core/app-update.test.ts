@@ -401,6 +401,32 @@ files:
   assert.equal(status.testFeedBuild, true)
 })
 
+test('a marked build reports the isolated data folder and an unmarked build does not', async () => {
+  const previous = process.env.FONT_BUTLER_DATA
+  process.env.FONT_BUTLER_DATA = '/tmp/font-butler-test/data'
+  try {
+    const marked = await createAppUpdateChecker().check({
+      currentVersion: '0.3.9',
+      now: 31,
+      skipNetworkInTest: true,
+      runtime: { packaged: true, developerId: true, teamId: 'A7WWML89LQ', testFeedBuild: true },
+    })
+    assert.equal(marked.testFeedBuild, true)
+    assert.equal(marked.testFeedDataDir, '/tmp/font-butler-test/data')
+    const unmarked = await createAppUpdateChecker().check({
+      currentVersion: '0.3.9',
+      now: 32,
+      skipNetworkInTest: true,
+      runtime: { packaged: true, developerId: true, teamId: 'A7WWML89LQ' },
+    })
+    assert.equal(unmarked.testFeedBuild, undefined)
+    assert.equal(unmarked.testFeedDataDir, undefined)
+  } finally {
+    if (previous === undefined) delete process.env.FONT_BUTLER_DATA
+    else process.env.FONT_BUTLER_DATA = previous
+  }
+})
+
 test('checkAppUpdate sends the read-only token only on the GitHub Releases request', async () => {
   const checker = createAppUpdateChecker()
   let authorization = ''

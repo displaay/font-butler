@@ -24,6 +24,7 @@ import {
   createAppUpdateInstaller,
   detectAppUpdateRuntime,
 } from './app-update-install.mjs'
+import { applyTestFeedDataIsolation } from './test-feed-data.mjs'
 import { macosDockIconPng } from './dock-icon.mjs'
 import { createLoginItemApplier } from './login-item.mjs'
 import {
@@ -79,6 +80,11 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
+
+// Before the single-instance lock and any userData read. LaunchServices
+// relaunches with `open` and drops the environment, so a marked build has to
+// isolate itself from the packaged fontButlerTestFeed marker alone.
+applyTestFeedDataIsolation(app)
 
 const debugLog = createDebugLogStore()
 let debugLogFilePath = defaultLogFilePath()
@@ -1817,6 +1823,12 @@ if (!gotLock) {
           FONT_BUTLER_SERVE: '1',
           FONT_BUTLER_API_PORT: String(port),
           FONT_BUTLER_STATIC_DIR: staticDir,
+          // Set above from the test-feed marker when the parent env did not
+          // already have it. The spread would drop it if this key were omitted
+          // after a future filter, and the worker would then use the real library.
+          ...(process.env.FONT_BUTLER_DATA
+            ? { FONT_BUTLER_DATA: process.env.FONT_BUTLER_DATA }
+            : {}),
         },
       })
       apiChild = child

@@ -405,6 +405,7 @@ export type AppUpdateStatus = {
   checkedAt: number
   error?: string
   testFeedBuild?: boolean
+  testFeedDataDir?: string
 }
 
 export type {

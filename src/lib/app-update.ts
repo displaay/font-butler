@@ -47,12 +47,13 @@ export function appUpdateBadgeText(phase?: AppUpdateInstallPhase, percent?: numb
 }
 
 export function appUpdateRunningLine(
-  status?: { currentVersion?: string; testFeedBuild?: boolean } | null,
+  status?: { currentVersion?: string; testFeedBuild?: boolean; testFeedDataDir?: string } | null,
 ): string {
   if (!status?.currentVersion) return 'Check GitHub Releases for a newer build.'
-  return status.testFeedBuild
-    ? `This Mac is running ${status.currentVersion}. TEST BUILD`
-    : `This Mac is running ${status.currentVersion}.`
+  if (!status.testFeedBuild) return `This Mac is running ${status.currentVersion}.`
+  const dataDir = status.testFeedDataDir?.trim()
+  const base = `This Mac is running ${status.currentVersion}. TEST BUILD`
+  return dataDir ? `${base}. Data folder: ${dataDir}` : base
 }
 
 export function appUpdateBadgeLabel(version: string, phase?: AppUpdateInstallPhase): string {

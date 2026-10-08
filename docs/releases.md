@@ -57,10 +57,11 @@ Build a marked 0.3.9 (the version already in `package.json`). Do not commit a ve
 FONT_BUTLER_TEST_FEED_BUILD=1 npm run release:mac
 ```
 
-Copy that app aside before the next pack, because the next command replaces `release/`.
+Copy that app aside before the next pack, because the next command replaces `release/`. Keep the bundle name `Font Buttler.app`.
 
 ```bash
-cp -R "release/mac-arm64/Font Buttler.app" /tmp/Font-Buttler-0.3.9.app
+mkdir -p "/Applications/Font Buttler Test"
+cp -R "release/mac-arm64/Font Buttler.app" "/Applications/Font Buttler Test/"
 ```
 
 Build a marked higher version without editing `package.json`. The pack script writes electron-builder `extraMetadata.version` from `FONT_BUTLER_TEST_VERSION`.
@@ -76,11 +77,21 @@ cd release
 python3 -m http.server 8765 --bind 127.0.0.1
 ```
 
-Launch the 0.3.9 app with the feed pointed at that server. Settings → General → App updates shows `TEST BUILD` on the version line. Click **Update**. The app installs the zip in place only when the bundle version inside the zip equals `0.9.0`.
+A marked build isolates itself before the single-instance lock, including after the swap relaunches it with plain `open` and no environment. `userData` becomes `~/Library/Application Support/Font Buttler Test`. When `FONT_BUTLER_DATA` is unset, the library, settings, and API token go in `~/Library/Application Support/Font Buttler Test/data`. An unmarked build does not change `userData` or `FONT_BUTLER_DATA`. Settings → General → App updates shows `TEST BUILD` and that data folder on the version line. Confirm the path before clicking **Update**.
+
+The feed variable has to reach the first process. LaunchServices does not keep the shell environment, so `FONT_BUTLER_UPDATE_FEED_URL=... open "Font Buttler.app"` does not pass it. Run the binary directly:
 
 ```bash
-FONT_BUTLER_UPDATE_FEED_URL=http://127.0.0.1:8765/ open /tmp/Font-Buttler-0.3.9.app
+FONT_BUTLER_UPDATE_FEED_URL=http://127.0.0.1:8765/ "/Applications/Font Buttler Test/Font Buttler.app/Contents/MacOS/Font Buttler"
 ```
+
+Or pass it with `open --env`:
+
+```bash
+open --env FONT_BUTLER_UPDATE_FEED_URL=http://127.0.0.1:8765/ "/Applications/Font Buttler Test/Font Buttler.app"
+```
+
+Click **Update**. The app installs the zip in place only when the bundle version inside the zip equals `0.9.0`. The relaunched app stays on the test data folder. It does not keep the feed URL, because the swap starts it with plain `open`. Launch the binary the same way to point it at the feed again.
 
 Install and Switch of fonts are not part of this path. Offline, GitHub API failures, or a private-repo 404 without a token stay a quiet no-update: no crash, no toast, no Install/Switch/auth churn. A last-good check is kept if one exists.
 

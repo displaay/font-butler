@@ -41,6 +41,8 @@ export type AppUpdateStatus = {
   checkedAt: number
   error?: string
   testFeedBuild?: boolean
+  /** Library root for a marked test build. Shown in Settings so it can be confirmed. */
+  testFeedDataDir?: string
 }
 
 export type GithubReleaseAssetJson = {

@@ -150,8 +150,15 @@ export function createAppUpdateChecker(options: { cacheMs?: number; timeoutMs?: 
       return cached.status
     }
     const runtime = input.runtime ?? detectAppUpdateRuntime()
+    const testFeedDataDir = String(process.env.FONT_BUTLER_DATA ?? '').trim()
     const stamp = (status: AppUpdateStatus): AppUpdateStatus =>
-      runtime?.testFeedBuild === true ? { ...status, testFeedBuild: true } : status
+      runtime?.testFeedBuild === true
+        ? {
+            ...status,
+            testFeedBuild: true,
+            ...(testFeedDataDir ? { testFeedDataDir } : {}),
+          }
+        : status
     const skipNetwork =
       input.skipNetworkInTest ?? (process.env.FONT_BUTLER_TEST === '1' && !input.fetch)
     if (skipNetwork) {
