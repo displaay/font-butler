@@ -58,6 +58,21 @@ function italicFromStyleName(name: string, fallback = false): boolean {
   return /italic|oblique/i.test(name) || fallback
 }
 
+export function variableInstanceNames(face: FontFaceInfo): string[] {
+  if (face.instanceNames.length > 0) return face.instanceNames
+  return face.namedInstances?.map((item) => item.name) ?? []
+}
+
+/** CSS variation for a VF named instance, including wght fallback when fvar coords are absent. */
+export function instanceRowVariation(face: FontFaceInfo, instanceName: string): string | undefined {
+  const named = face.namedInstances?.find((item) => item.name === instanceName)
+  if (named?.coordinates && Object.keys(named.coordinates).length > 0) {
+    return variationSettings(named.coordinates)
+  }
+  if (!face.isVariable) return undefined
+  return variationSettings({ wght: weightFromStyleName(instanceName, face.weight) })
+}
+
 function rowsFromFace(
   face: FontFaceInfo,
   entry: Pick<
@@ -79,23 +94,21 @@ function rowsFromFace(
 ): InstanceRow[] {
   const format = entryFormatOf(entry) || undefined
   const dest = entryCopyDestinations(entry)
-  if (face.isVariable && face.instanceNames.length > 0) {
-    return face.instanceNames.map((name) => {
-      const named = face.namedInstances?.find((item) => item.name === name)
-      return {
-        key: `${entry.id}-${face.postscriptName}-${name}`,
-        label: name,
-        sublabel: face.postscriptName,
-        catalogEntryId: entry.id,
-        weight: weightFromStyleName(name, face.weight),
-        italic: italicFromStyleName(name, face.italic),
-        variation: variationSettings(named?.coordinates),
-        previewSample: entry.previewSample,
-        hasSource,
-        retailSynced,
-        retailTrial,
-      }
-    })
+  const instanceNames = variableInstanceNames(face)
+  if (face.isVariable && instanceNames.length > 0) {
+    return instanceNames.map((name) => ({
+      key: `${entry.id}-${face.postscriptName}-${name}`,
+      label: name,
+      sublabel: face.postscriptName,
+      catalogEntryId: entry.id,
+      weight: weightFromStyleName(name, face.weight),
+      italic: italicFromStyleName(name, face.italic),
+      variation: instanceRowVariation(face, name),
+      previewSample: entry.previewSample,
+      hasSource,
+      retailSynced,
+      retailTrial,
+    }))
   }
   return [
     {
@@ -129,6 +142,22 @@ export function catalogInstanceRows(group: FamilyGroup, retail?: RetailSyncView 
     }
   }
   return rows
+}
+
+/**
+ * Instance rows for grid hover preview. When a family mixes static retail cuts with one
+ * variable font file, cycle only that file's named instances so variation interpolation
+ * can run on a single @font-face family.
+ */
+export function catalogHoverInstanceRows(group: FamilyGroup, retail?: RetailSyncView | null): InstanceRow[] {
+  const rows = catalogInstanceRows(group, retail)
+  const vfEntries = group.entries.filter((entry) =>
+    entry.faces.some((face) => face.isVariable && variableInstanceNames(face).length > 0),
+  )
+  if (vfEntries.length !== 1) return rows
+  const vfEntryId = vfEntries[0]!.id
+  const vfRows = rows.filter((row) => row.catalogEntryId === vfEntryId)
+  return vfRows.length >= 2 ? vfRows : rows
 }
 
 function rowsFromSystemFace(face: SystemFace): InstanceRow[] {

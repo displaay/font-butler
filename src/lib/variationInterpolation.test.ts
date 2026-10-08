@@ -47,3 +47,14 @@ test('facesSupportVariationInterpolation requires matching VF variation strings'
     false,
   )
 })
+
+test('facesSupportVariationInterpolation accepts retail VF rows with wght-only variation strings', () => {
+  const family = 'fc-retail-vf'
+  assert.equal(
+    facesSupportVariationInterpolation([
+      { family, italic: false, label: 'Light', variation: "'wght' 300" },
+      { family, italic: false, label: 'Bold', variation: "'wght' 700" },
+    ]),
+    true,
+  )
+})

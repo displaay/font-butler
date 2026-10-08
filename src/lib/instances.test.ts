@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { catalogInstanceRows, systemInstanceRows, variationSettings } from './instances.ts'
+import {
+  catalogHoverInstanceRows,
+  catalogInstanceRows,
+  instanceRowVariation,
+  systemInstanceRows,
+  variationSettings,
+} from './instances.ts'
 import { groupCatalog } from './group.ts'
 import type { CatalogEntry, FamilyGroup, FontFaceInfo, SystemFace } from './types.ts'
 
@@ -72,6 +78,54 @@ test('variable-font instance rows carry named-instance variation settings', () =
       [undefined, undefined, true, undefined, undefined],
     ],
   )
+})
+
+test('variable-font instance rows fall back to wght when namedInstances are missing', () => {
+  const face: FontFaceInfo = {
+    ...vfFace(),
+    namedInstances: undefined,
+  }
+  const rows = catalogInstanceRows(group(face))
+  assert.deepEqual(
+    rows.map((row) => row.variation),
+    ["'wght' 300", "'wght' 400", "'wght' 700"],
+  )
+  assert.equal(instanceRowVariation(face, 'Bold'), "'wght' 700")
+})
+
+test('catalog hover preview keeps only the single VF entry when static retail cuts share the family', () => {
+  const vf: FontFaceInfo = {
+    ...vfFace(),
+    postscriptName: 'AguzzoVF',
+    familyName: 'Aguzzo VF',
+  }
+  const vfEntry: CatalogEntry = {
+    id: 'vf',
+    sourcePath: '/cache/AguzzoVF.ttf',
+    sourceMtimeMs: 1,
+    sourceSize: 1,
+    status: 'installed',
+    faces: [vf],
+    format: 'ttf',
+    addedAt: 1,
+    updatedAt: 1,
+    retailRelativePath: 'Aguzzo/AguzzoVF.ttf',
+    retailFamilyName: 'Aguzzo VF',
+    installedPath: '/Library/Fonts/AguzzoVF.ttf',
+  }
+  const staticEntry = {
+    ...vfEntry,
+    id: 'static',
+    retailRelativePath: 'Aguzzo/Aguzzo-Bold.otf',
+    faces: [staticFace('Aguzzo VF', 'Bold')],
+    format: 'otf',
+  }
+  const grouped = groupCatalog([vfEntry, staticEntry])[0]!
+  const rows = catalogInstanceRows(grouped)
+  assert.equal(rows.length, 4)
+  const hoverRows = catalogHoverInstanceRows(grouped)
+  assert.equal(hoverRows.length, 3)
+  assert.ok(hoverRows.every((row) => row.catalogEntryId === 'vf'))
 })
 
 function staticFace(familyName: string, styleName: string, italic = false): FontFaceInfo {
