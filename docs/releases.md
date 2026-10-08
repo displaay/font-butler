@@ -107,9 +107,9 @@ The profile name is `font-butler-notary`. If it lives in a keychain other than t
    npm run publish:mac
    ```
 
-   If GitHub has no Release for `v<version>`, the command creates a draft with `gh release create v<version> --verify-tag --draft`, uploads the files, checks that the draft lists them, and stops. It does not publish. `/releases/latest` skips drafts, so it does not show a release without a DMG.
+   If GitHub has no Release for `v<version>`, the command creates a draft with `gh release create v<version> --verify-tag --draft`, uploads the files, checks that the draft lists them and no other assets, and stops. It does not publish. `/releases/latest` skips drafts, so it does not show a release without a DMG. Resuming a draft stops before upload when that draft already has an asset this command does not upload. The command does not delete those assets.
 
-   Attached files, and no others:
+   The command enforces that the draft's assets are exactly these files, and no others:
 
    - `Font-Buttler-{version}-arm64.dmg` (signed, notarized, and stapled)
    - `Font-Buttler-{version}-arm64.zip` (the stapled app; this is the update-feed file)

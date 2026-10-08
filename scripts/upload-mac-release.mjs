@@ -17,7 +17,7 @@ export function publishedReleaseMessage(tag) {
   return `GitHub Release ${tag} is already published. Refusing to overwrite it.`
 }
 
-function uploadVerificationError(tag, files, view) {
+function uploadVerificationError(tag, files, view, { allowMissing = false } = {}) {
   if ((view?.status ?? 1) !== 0) return `Could not verify the draft upload for ${tag}.`
   let parsed
   try {
@@ -28,9 +28,24 @@ function uploadVerificationError(tag, files, view) {
   if (parsed.isDraft !== true) {
     return `Release ${tag} is not a draft after upload. This command does not publish it.`
   }
-  const present = new Set((parsed.assets ?? []).map((asset) => asset.name))
-  const missing = files.map((file) => path.basename(file)).filter((name) => !present.has(name))
-  if (missing.length) return `Draft ${tag} is missing ${missing.join(', ')} after upload.`
+  const expectedNames = files.map((file) => path.basename(file))
+  const expected = new Set(expectedNames)
+  const present = new Set()
+  const presentNames = []
+  for (const asset of parsed.assets ?? []) {
+    const name = asset?.name
+    if (typeof name !== 'string' || name.length === 0 || present.has(name)) continue
+    present.add(name)
+    presentNames.push(name)
+  }
+  if (!allowMissing) {
+    const missing = expectedNames.filter((name) => !present.has(name))
+    if (missing.length) return `Draft ${tag} is missing ${missing.join(', ')} after upload.`
+  }
+  const extra = presentNames.filter((name) => !expected.has(name))
+  if (extra.length) {
+    return `Draft ${tag} has extra assets (${extra.join(', ')}). Remove them from the draft. This command does not delete assets.`
+  }
   return null
 }
 
@@ -46,7 +61,15 @@ export async function publishVersionedMacRelease({ tag, files, release, tagOnRem
   if (release?.exists && !release.draft) {
     return { ok: false, draft: false, error: publishedReleaseMessage(tag), commands: [] }
   }
+  const ship = files.filter((file) => !path.basename(file).endsWith('.dmg.blockmap'))
   const commands = []
+  if (release?.exists && release.draft) {
+    const preflightArgs = ['release', 'view', tag, '--json', 'isDraft,assets']
+    const preflight = await exec('gh', preflightArgs)
+    commands.push(['gh', ...preflightArgs])
+    const extraError = uploadVerificationError(tag, ship, preflight, { allowMissing: true })
+    if (extraError) return { ok: false, draft: true, error: extraError, commands }
+  }
   if (!release?.exists) {
     const createArgs = ['release', 'create', tag, '--verify-tag', '--draft', '--title', tag, '--notes', MAC_RELEASE_NOTES]
     const created = await exec('gh', createArgs)
@@ -60,7 +83,6 @@ export async function publishVersionedMacRelease({ tag, files, release, tagOnRem
       }
     }
   }
-  const ship = files.filter((file) => !path.basename(file).endsWith('.dmg.blockmap'))
   const uploadArgs = ['release', 'upload', tag, ...ship, '--clobber']
   const uploaded = await exec('gh', uploadArgs)
   commands.push(['gh', ...uploadArgs])

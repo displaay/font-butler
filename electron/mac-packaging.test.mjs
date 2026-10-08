@@ -677,3 +677,89 @@ test('a missing GitHub Release stays a draft after upload', async () => {
   assert.match(untagged.error, /git push origin v0\.3\.8/)
   assert.deepEqual(untagged.commands, [])
 })
+
+test('resuming a draft rejects extra assets and accepts an exact set', async () => {
+  const files = [
+    'release/Font-Buttler-0.3.8-arm64.dmg',
+    'release/Font-Buttler-0.3.8-arm64.zip',
+    'release/Font-Buttler-0.3.8-arm64.zip.blockmap',
+    'release/latest-mac.yml',
+  ]
+  const expected = files.map((file) => path.basename(file))
+  const extraName = 'Font-Buttler-0.3.7-arm64.dmg'
+
+  const extraCalls = []
+  const extra = await publishVersionedMacRelease({
+    tag: 'v0.3.8',
+    files,
+    release: { exists: true, draft: true },
+    tagOnRemote: true,
+    exec: async (_command, args) => {
+      extraCalls.push(args)
+      if (args[1] === 'view') {
+        return {
+          status: 0,
+          output: JSON.stringify({
+            isDraft: true,
+            assets: [...expected, extraName].map((name) => ({ name })),
+          }),
+        }
+      }
+      return { status: 0, output: '' }
+    },
+  })
+  assert.equal(extra.ok, false)
+  assert.ok(extra.error.includes(extraName))
+  assert.match(extra.error, /does not delete assets/)
+  assert.equal(extraCalls.some((args) => args[1] === 'upload'), false)
+  assert.equal(extraCalls.some((args) => args.some((arg) => String(arg).includes('delete'))), false)
+
+  const afterCalls = []
+  let views = 0
+  const afterUpload = await publishVersionedMacRelease({
+    tag: 'v0.3.8',
+    files,
+    release: { exists: true, draft: true },
+    tagOnRemote: true,
+    exec: async (_command, args) => {
+      afterCalls.push(args)
+      if (args[1] === 'view') {
+        views += 1
+        const names = views === 1 ? expected : [...expected, extraName]
+        return { status: 0, output: JSON.stringify({ isDraft: true, assets: names.map((name) => ({ name })) }) }
+      }
+      return { status: 0, output: '' }
+    },
+  })
+  assert.equal(afterUpload.ok, false)
+  assert.ok(afterUpload.error.includes(extraName))
+  assert.match(afterUpload.error, /does not delete assets/)
+  assert.deepEqual(
+    afterCalls.map((args) => args.slice(0, 2)),
+    [
+      ['release', 'view'],
+      ['release', 'upload'],
+      ['release', 'view'],
+    ],
+  )
+  assert.equal(afterCalls.some((args) => args.some((arg) => String(arg).includes('delete'))), false)
+
+  const exactCalls = []
+  const exact = await publishVersionedMacRelease({
+    tag: 'v0.3.8',
+    files,
+    release: { exists: true, draft: true },
+    tagOnRemote: true,
+    exec: async (_command, args) => ghDraftExec(exactCalls, args),
+  })
+  assert.equal(exact.ok, true)
+  assert.equal(exact.draft, true)
+  assert.deepEqual(
+    exactCalls.map((args) => args.slice(0, 2)),
+    [
+      ['release', 'view'],
+      ['release', 'upload'],
+      ['release', 'view'],
+    ],
+  )
+})
