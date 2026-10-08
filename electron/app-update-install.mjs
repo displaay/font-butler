@@ -792,14 +792,12 @@ async function runInstall(deps, fetchImpl, tempDir) {
     deps.onProgress?.({ phase: 'opening' })
     const opened = await deps.openPath(dest)
     if (typeof opened === 'string' && opened.trim()) throw new Error(opened)
-    const mounted = deps.isDmgMounted ? await deps.isDmgMounted(dest) : isUpdateDmgMounted(dest)
-    if (mounted) {
-      const remember = deps.rememberOpenedDmg ?? rememberOpenedDmg
-      remember({ dmg: dest, tempDir })
-      return { mode, keepTemp: true }
-    }
-    fs.rmSync(dest, { force: true })
-    return { mode, keepTemp: false }
+    // shell.openPath returns when macOS accepts the request, before
+    // DiskImageMounter attaches the image. Never delete here. The path is
+    // recorded on disk and removed on a later launch only if it is not mounted.
+    const remember = deps.rememberOpenedDmg ?? rememberOpenedDmg
+    remember({ dmg: dest, tempDir })
+    return { mode, keepTemp: true }
   }
 
   const unpackDir = path.join(tempDir, 'unpacked')
@@ -868,18 +866,43 @@ export function rememberOpenedDmg(entry, recordFile = OPENED_DMG_RECORD) {
   fs.writeFileSync(recordFile, JSON.stringify(pending))
 }
 
+function existingRealPath(filePath) {
+  try {
+    return fs.realpathSync(filePath)
+  } catch {
+    return null
+  }
+}
+
+/** image-path values from `hdiutil info` text or plist. */
+export function hdiutilImagePaths(output) {
+  const text = String(output ?? '')
+  const paths = []
+  for (const match of text.matchAll(/<key>image-path<\/key>\s*<string>([^<]*)<\/string>/gi)) {
+    const value = match[1].trim()
+    if (value) paths.push(value)
+  }
+  for (const match of text.matchAll(/^\s*image-path\s*:\s*(.+?)\s*$/gm)) {
+    const value = match[1].trim()
+    if (value) paths.push(value)
+  }
+  return paths
+}
+
 export function isUpdateDmgMounted(dmgPath, spawnImpl = spawnSync) {
+  const recorded = existingRealPath(dmgPath)
+  if (!recorded) return false
   try {
     const result = spawnImpl('hdiutil', ['info'], { encoding: 'utf8' })
     if ((result?.status ?? 1) !== 0) return false
     const output = `${result?.stdout ?? ''}\n${result?.stderr ?? ''}`
-    return output.includes(dmgPath)
+    return hdiutilImagePaths(output).some((imagePath) => existingRealPath(imagePath) === recorded)
   } catch {
     return false
   }
 }
 
-/** Delete DMGs that were left behind because they were still mounted. */
+/** On a later launch, delete recorded DMGs that are no longer mounted. */
 export function cleanupOpenedUpdateDmgs({
   recordFile = OPENED_DMG_RECORD,
   isMounted = isUpdateDmgMounted,

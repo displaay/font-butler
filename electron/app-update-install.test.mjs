@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
@@ -272,7 +272,8 @@ test('a real release-asset redirect hop is followed only after the host is allow
   assert.equal(seen.at(-2)?.startsWith('https://github.com/displaay/font-butler/'), true)
   assert.equal(seen.at(-1), cdn)
   assert.match(opened, /Font-Buttler-0\.4\.2-arm64\.dmg$/)
-  assert.equal(existsSync(opened), false)
+  assert.equal(existsSync(opened), true)
+  rmSync(path.dirname(opened), { recursive: true, force: true })
 })
 
 test('a second click is ignored while a download is in progress', async () => {
@@ -597,69 +598,108 @@ test('download progress is reported only when the whole-number percent changes',
   )
 })
 
-test('an opened DMG is deleted unless it is still mounted', async () => {
+test('opening a DMG does not delete it', async () => {
   const version = '0.5.0'
   const bytes = Buffer.from('dmg-bytes-ok')
   const doc = yml(version, [
     { name: macArm64ArchiveName(version, 'dmg'), sha512: sha512(bytes), size: bytes.length },
   ])
-  const gone = mkdtempSync(path.join(os.tmpdir(), 'font-butler-dmg-gone-'))
-  const opened = []
-  const deleted = await createAppUpdateInstaller({
-    currentVersion: '0.0.0',
-    env: {},
-    probeRuntime: () => signedRuntime({ packaged: false }),
-    makeTempDir: () => gone,
-    removeTemp: (target) => rmSync(target, { recursive: true, force: true }),
-    isDmgMounted: async () => false,
-    openPath: async (file) => {
-      opened.push(file)
-      return ''
-    },
-    fetch: async (url) => {
-      if (url === GITHUB_LATEST_API) return httpResponse({ body: JSON.stringify(releaseJson(version)) })
-      if (String(url).endsWith('latest-mac.yml')) return httpResponse({ body: doc })
-      return httpResponse({ body: bytes, contentLength: bytes.length })
-    },
-  }).start()
-  assert.equal(deleted.ok, true)
-  assert.equal(opened.length, 1)
-  assert.equal(existsSync(opened[0]), false)
-  assert.equal(existsSync(gone), false)
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-dmg-open-'))
+  const recordDir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-dmg-record-'))
+  const record = path.join(recordDir, 'opened-dmgs.json')
+  let opened = ''
+  try {
+    const result = await createAppUpdateInstaller({
+      currentVersion: '0.0.0',
+      env: {},
+      probeRuntime: () => signedRuntime({ packaged: false }),
+      makeTempDir: () => tempDir,
+      removeTemp: () => {
+        throw new Error('the DMG must stay on disk after openPath')
+      },
+      rememberOpenedDmg: (entry) => rememberOpenedDmg(entry, record),
+      openPath: async (file) => {
+        opened = file
+        return ''
+      },
+      fetch: async (url) => {
+        if (url === GITHUB_LATEST_API) return httpResponse({ body: JSON.stringify(releaseJson(version)) })
+        if (String(url).endsWith('latest-mac.yml')) return httpResponse({ body: doc })
+        return httpResponse({ body: bytes, contentLength: bytes.length })
+      },
+    }).start()
+    assert.equal(result.ok, true)
+    assert.equal(existsSync(opened), true)
+    assert.equal(existsSync(tempDir), true)
+    const saved = JSON.parse(readFileSync(record, 'utf8'))
+    assert.deepEqual(saved, [{ dmg: opened, tempDir }])
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true })
+    rmSync(recordDir, { recursive: true, force: true })
+  }
+})
 
-  const kept = mkdtempSync(path.join(os.tmpdir(), 'font-butler-dmg-kept-'))
-  const record = path.join(kept, 'record.json')
-  const remembered = []
-  const mounted = await createAppUpdateInstaller({
-    currentVersion: '0.0.0',
-    env: {},
-    probeRuntime: () => signedRuntime({ packaged: false }),
-    makeTempDir: () => kept,
-    removeTemp: () => {
-      throw new Error('mounted DMG temp dir should stay until the next launch')
-    },
-    isDmgMounted: async () => true,
-    rememberOpenedDmg: (entry) => {
-      remembered.push(entry)
-      rememberOpenedDmg(entry, record)
-    },
-    openPath: async () => '',
-    fetch: async (url) => {
-      if (url === GITHUB_LATEST_API) return httpResponse({ body: JSON.stringify(releaseJson(version)) })
-      if (String(url).endsWith('latest-mac.yml')) return httpResponse({ body: doc })
-      return httpResponse({ body: bytes, contentLength: bytes.length })
-    },
-  }).start()
-  assert.equal(mounted.ok, true)
-  assert.equal(remembered.length, 1)
-  assert.equal(existsSync(remembered[0].dmg), true)
-  assert.deepEqual(cleanupOpenedUpdateDmgs({ recordFile: record, isMounted: () => true }).map((entry) => entry.dmg), [
-    remembered[0].dmg,
-  ])
-  assert.equal(existsSync(remembered[0].dmg), true)
-  assert.deepEqual(cleanupOpenedUpdateDmgs({ recordFile: record, isMounted: () => false }), [])
-  assert.equal(existsSync(remembered[0].dmg), false)
-  assert.equal(existsSync(kept), false)
+test('the next launch deletes an opened DMG that is not mounted', () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-dmg-unmounted-'))
+  const dmg = path.join(tempDir, 'Font-Buttler-0.3.9-arm64.dmg')
+  writeFileSync(dmg, 'left-behind')
+  const recordDir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-dmg-unmounted-record-'))
+  const record = path.join(recordDir, 'opened-dmgs.json')
+  rememberOpenedDmg({ dmg, tempDir }, record)
+  try {
+    assert.equal(
+      isUpdateDmgMounted(path.join(tempDir, 'missing.dmg'), () => ({
+        status: 0,
+        stdout: 'image-path: /tmp/missing.dmg\n',
+        stderr: '',
+      })),
+      false,
+    )
+    const still = cleanupOpenedUpdateDmgs({
+      recordFile: record,
+      isMounted: (file) =>
+        isUpdateDmgMounted(file, () => ({ status: 0, stdout: 'image-path: /other/disk.dmg\n', stderr: '' })),
+    })
+    assert.deepEqual(still, [])
+    assert.equal(existsSync(dmg), false)
+    assert.equal(existsSync(tempDir), false)
+    assert.equal(existsSync(record), false)
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true })
+    rmSync(recordDir, { recursive: true, force: true })
+  }
+})
+
+test('the next launch keeps a mounted DMG, including /var versus /private/var', () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'font-butler-dmg-mounted-'))
+  const privateFile = path.join(root, 'private', 'var', 'folders', 'xx', 'Font-Buttler-0.3.9-arm64.dmg')
+  mkdirSync(path.dirname(privateFile), { recursive: true })
+  writeFileSync(privateFile, 'mounted')
+  symlinkSync(path.join(root, 'private', 'var'), path.join(root, 'var'))
+  const recorded = path.join(root, 'var', 'folders', 'xx', 'Font-Buttler-0.3.9-arm64.dmg')
+  const record = path.join(root, 'opened-dmgs.json')
+  rememberOpenedDmg({ dmg: recorded, tempDir: path.dirname(recorded) }, record)
+  try {
+    assert.notEqual(recorded, privateFile)
+    const still = cleanupOpenedUpdateDmgs({
+      recordFile: record,
+      isMounted: (file) =>
+        isUpdateDmgMounted(file, () => ({
+          status: 0,
+          stdout: `image-path      : ${privateFile}\n`,
+          stderr: '',
+        })),
+    })
+    assert.deepEqual(
+      still.map((entry) => entry.dmg),
+      [recorded],
+    )
+    assert.equal(existsSync(privateFile), true)
+    assert.equal(readFileSync(privateFile, 'utf8'), 'mounted')
+    assert.equal(existsSync(record), true)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('the update zip is unpacked with ditto -x -k', async () => {
@@ -672,15 +712,6 @@ test('the update zip is unpacked with ditto -x -k', async () => {
     return child
   })
   assert.deepEqual(seen, ['ditto', ['-x', '-k', '/tmp/Font-Buttler-0.3.9-arm64.zip', '/tmp/out']])
-})
-
-test('a mounted DMG path is recognised from hdiutil info', () => {
-  const dmg = '/tmp/font-butler-update/Font-Buttler-0.3.9-arm64.dmg'
-  assert.equal(
-    isUpdateDmgMounted(dmg, () => ({ status: 0, stdout: `image-path: ${dmg}\n`, stderr: '' })),
-    true,
-  )
-  assert.equal(isUpdateDmgMounted(dmg, () => ({ status: 1, stdout: '', stderr: 'no such command' })), false)
 })
 
 test('publish still rejects a feed that does not match the stapled files and an extra draft asset', () => {
