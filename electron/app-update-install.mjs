@@ -32,8 +32,8 @@ import { createHash, timingSafeEqual } from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
 import https from 'node:https'
-import { Readable } from 'node:stream'
-import { pipeline } from 'node:stream/promises'
+import { once } from 'node:events'
+import { finished } from 'node:stream/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -577,36 +577,36 @@ function copyVerifiedFile(url, dest, expectedSha512, expectedSize) {
 async function writeVerifiedBody(response, dest, expectedSize, onProgress) {
   const hash = createHash('sha512')
   let received = 0
-  let source
-  if (response.stream) source = response.stream
-  else if (response.bodyBuffer) source = Readable.from([response.bodyBuffer])
-  else if (typeof response.arrayBuffer === 'function') source = Readable.from([Buffer.from(await response.arrayBuffer())])
-  else throw new Error('Update download had no body')
-
   const out = fs.createWriteStream(dest)
-  // Open failure is async. A listener has to exist before the first await,
-  // or the error is unhandled and the process exits.
+  // Open and write failures are async. Keep the first one. A listener has to
+  // exist before the next await, or the error is unhandled and the process exits.
   let streamError = null
   out.on('error', (error) => {
     streamError ??= error
   })
+  let source
   try {
-    await pipeline(
-      source,
-      async function* (chunks) {
-        for await (const chunk of chunks) {
-          const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-          received += buf.length
-          if (received > expectedSize) throw new Error('The download was larger than the published size.')
-          hash.update(buf)
-          if (onProgress) onProgress(received)
-          yield buf
-        }
-      },
-      out,
-    )
+    if (response.stream) source = response.stream
+    else if (response.bodyBuffer) source = [response.bodyBuffer]
+    else if (typeof response.arrayBuffer === 'function') source = [Buffer.from(await response.arrayBuffer())]
+    else throw new Error('Update download had no body')
+
+    for await (const chunk of source) {
+      if (streamError) throw streamError
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      received += buf.length
+      if (received > expectedSize) throw new Error('The download was larger than the published size.')
+      hash.update(buf)
+      if (!out.write(buf)) await once(out, 'drain')
+      if (streamError) throw streamError
+      if (onProgress) onProgress(received)
+    }
+    if (streamError) throw streamError
+    out.end()
+    if (streamError) throw streamError
+    await finished(out)
   } catch (error) {
-    source.destroy?.()
+    source?.destroy?.()
     out.destroy()
     throw streamError ?? error
   }
