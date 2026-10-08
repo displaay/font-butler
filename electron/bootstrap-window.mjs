@@ -28,6 +28,16 @@ export function canOpenMainUi({ isPackaged, apiBootstrapReady }) {
   return !isPackaged || apiBootstrapReady
 }
 
+/** True when the renderer exit should show the crash / load-failure page. */
+export function shouldTreatRenderProcessGoneAsCrash(details) {
+  const reason = details?.reason
+  if (!reason) return true
+  // Vite HMR and normal navigations end with clean-exit; treating that as a crash
+  // replaces the dev UI with the bootstrap error page and can hang the window.
+  if (reason === 'clean-exit') return false
+  return true
+}
+
 export function classifyWorkerFailure(error, stderrTail = '') {
   const message = error instanceof Error ? error.message : String(error)
   const timedOut = /did not start/i.test(message)

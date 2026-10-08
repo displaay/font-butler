@@ -59,6 +59,7 @@ import {
   formatBootstrapFailureMessage,
   shouldIgnoreShowMainWindowDuringBootstrap,
   shouldRetryBootstrapOnActivate,
+  shouldTreatRenderProcessGoneAsCrash,
   startingPageHtml,
   BOOTSTRAP_ERROR_WINDOW_KIND,
   BOOTSTRAP_STARTING_WINDOW_KIND,
@@ -459,8 +460,11 @@ function attachMainWindowHandlers(win) {
     void showLoadFailurePage(win, `Could not load the window (${description}).`)
   })
   win.webContents.on('render-process-gone', (_event, details) => {
-    console.error('Renderer exited', details)
     logDebug('window', `render-process-gone ${details.reason} exitCode=${details.exitCode}`)
+    if (!shouldTreatRenderProcessGoneAsCrash(details)) {
+      return
+    }
+    console.error('Renderer exited', details)
     void showLoadFailurePage(win, `The window crashed (${details.reason}).`)
   })
   win.on('unresponsive', () => {

@@ -42,6 +42,14 @@ If an earlier launch failed but the menu bar icon remains, a hidden process may 
 - **Development** (`npm run electron`) — Vite serves the UI on port 43181; the API runs separately.
 - **Packaged `.app`** — UI and static files are served by the API worker. The worker listens first; heavy library work runs in the background.
 
+### Local dev on macOS (PR testing)
+
+1. Quit any running Font Buttler (menu bar → **Quit**, not only closing the window).
+2. Free the dev ports if a previous run crashed: `lsof -ti :43181,:43182 | xargs kill -9` (only when nothing else should use those ports).
+3. From the repo: `git checkout cursor/figma-watch-reinstall-unregister-108c && npm install && npm run electron`.
+4. Expect one Electron Security Warning (CSP) in the log console — normal for Vite. A line like `render-process-gone clean-exit` during HMR is also normal and is not a crash.
+5. If the window hangs, open **Help → Show logs…** (⌘⌥L) and check for real crashes (`crashed`, `oom`) or API errors, not `clean-exit` alone.
+
 ## GitHub release check
 
 Settings → **Check for Updates** uses GitHub Releases with a short timeout. Failures are quiet and do **not** block startup.
