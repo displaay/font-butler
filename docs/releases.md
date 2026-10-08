@@ -35,43 +35,55 @@ Install and Switch are not part of this path. Offline, GitHub API failures, or a
 
 ## How to cut a signed release
 
-Signed releases are built on the release Mac (the machine whose login keychain has `Developer ID Application: DANIEL QUISEK (A7WWML89LQ)`). GitHub Actions does not have that certificate or the notary profile.
+Signed releases are built on the release Mac (the machine whose login keychain has `Developer ID Application: DANIEL QUISEK (A7WWML89LQ)`). GitHub Actions does not have that certificate or the notary profile, and its publish step refuses an ad-hoc package.
+
+Run the release build from a clean worktree of `origin/main` (after the version bump is on `main`):
+
+```bash
+git fetch origin main
+git worktree add ~/git/font-butler-release origin/main
+cd ~/git/font-butler-release
+npm ci
+```
 
 ### One-time: store notary credentials
 
-On that Mac, store an app-specific password in the login keychain. `notarytool` prompts for the password. Do not commit it, and do not put a `.p12` or an API key in the repo.
+On that Mac, store an app-specific password in the login keychain. `notarytool` prompts for the password. Do not commit it, do not put it in a log, and do not put a `.p12` or an API key in the repo.
 
 ```bash
 xcrun notarytool store-credentials font-butler-notary \
-  --apple-id daniel@quisek.com \
+  --apple-id <your-apple-id> \
   --team-id A7WWML89LQ
 ```
 
-The profile name is `font-butler-notary`. If it lives in a keychain other than the default login keychain, set `APPLE_KEYCHAIN` to that keychain’s path when you pack.
+The profile name is `font-butler-notary`. If it lives in a keychain other than the default login keychain, set `APPLE_KEYCHAIN` to that keychain’s path when you pack. Do not set `APPLE_ID` or `APPLE_APP_SPECIFIC_PASSWORD` in the environment. The pack scripts delete those variables and pass only the keychain profile.
 
 ### Each release
 
 1. Bump `version` in `package.json` (semver, no leading `v`).
-2. Commit that bump on `main`.
-3. On the release Mac, from a clean checkout of that commit:
+2. Commit that bump on `main` and push it.
+3. From the clean worktree above:
 
    ```bash
    npm run release:mac
    ```
 
-   `release:mac` sets `APPLE_KEYCHAIN_PROFILE=font-butler-notary` when that variable is unset, then runs the same prepare steps as `npm run dist` (`build`, bundled Python, Finder and session-font addons) and packs with electron-builder `--publish never`. Signing is forced. If the Developer ID certificate is missing, the command fails instead of falling back to ad-hoc.
+   `release:mac` sets `APPLE_KEYCHAIN_PROFILE=font-butler-notary` when that variable is unset, then runs the same prepare steps as `npm run dist` (`build`, bundled Python, Finder and session-font addons) and packs with electron-builder `--publish never`. Signing is forced. If the Developer ID certificate is missing, or signing or notarizing fails, the command stops. It does not fall back to ad-hoc. After a successful pack it runs `scripts/assert-notarized-mac-release.mjs`.
 
-4. Verify the app (Apple silicon build; the bundle is `release/mac-arm64/Font Buttler.app`):
+4. Verify the app, the DMG, and the update zip (Apple silicon build; the bundle is `release/mac-arm64/Font Buttler.app`):
 
    ```bash
    APP="release/mac-arm64/Font Buttler.app"
+   DMG="release/Font-Buttler-$(node -p "require('./package.json').version")-arm64.dmg"
    codesign --verify --deep --strict --verbose=2 "$APP"
    codesign -d --entitlements :- "$APP"
+   spctl -a -vv -t exec "$APP"
    spctl -a -vvv -t exec "$APP"
    xcrun stapler validate "$APP"
+   xcrun stapler validate "$DMG"
    ```
 
-   `codesign -d --entitlements :-` should show `allow-jit` and `allow-unsigned-executable-memory`, and should not show `disable-library-validation`. `spctl` should report `source=Notarized Developer ID`. `stapler validate` should say the ticket is stapled.
+   `codesign -d --entitlements :-` should show `allow-jit` only. It should not show `allow-unsigned-executable-memory`, `disable-library-validation`, or `get-task-allow`. `spctl -a -vv` should report `Notarized Developer ID`. `stapler validate` should pass on both the app and the DMG.
 
    Nested code is signed with the same identity. Spot-check one of each:
 
@@ -81,32 +93,38 @@ The profile name is `font-butler-notary`. If it lives in a keychain other than t
    codesign --verify --verbose=2 "$APP/Contents/Resources/python/bin/python3"
    ```
 
-5. Upload the artifacts onto the GitHub Release for that version (create the Release first if the tag workflow has not). From the release Mac:
+5. Upload from the release Mac. This command checks the staple again and then uploads. A raw `gh release upload` is not the publish path.
 
    ```bash
-   version="$(node -p "require('./package.json').version")"
-   gh release upload "v${version}" \
-     "release/Font-Buttler-${version}-arm64.dmg" \
-     "release/Font-Buttler-${version}-arm64.zip" \
-     "release/Font-Buttler-${version}-arm64.zip.blockmap" \
-     "release/latest-mac.yml" \
-     --clobber
+   npm run publish:mac
    ```
 
    Attached files:
 
-   - `Font-Buttler-{version}-arm64.dmg`
-   - `Font-Buttler-{version}-arm64.zip`
+   - `Font-Buttler-{version}-arm64.dmg` (signed, notarized, and stapled)
+   - `Font-Buttler-{version}-arm64.zip` (the stapled app; this is the update-feed file)
    - `Font-Buttler-{version}-arm64.zip.blockmap`
-   - `latest-mac.yml` (updater feed; electron-updater is not wired yet)
+   - `latest-mac.yml` (updater feed; electron-updater is not wired)
+
+   The DMG blockmap is deleted after stapling because the staple changes the DMG bytes. Do not upload a `*.dmg.blockmap`.
 
 6. Confirm the Release is public so `/releases/latest` returns it.
 
-Tag push still starts [`.github/workflows/release.yml`](../.github/workflows/release.yml). That job runs tests on Ubuntu and `npm run dist` on a macOS runner, then publishes a Release. The runner has no Developer ID certificate, so `npm run dist` **ad-hoc signs** and does not notarize. Those assets are not the signed release. After `npm run release:mac`, upload with `--clobber` so the notarized dmg, zip, blockmap, and `latest-mac.yml` replace them.
+### Release notes
 
-`npm run release:mac` and `npm run dist` both pass `--publish never`. electron-builder still writes `latest-mac.yml` and the zip blockmap next to the dmg. Do not also run `electron-builder --publish always`.
+Paste this into the GitHub Release for the first Developer ID build. People on an ad-hoc build download this version by hand once. Do not turn on auto-install.
 
-To package on GitHub Actions without publishing, open **Actions → Release → Run workflow** and leave **publish** off. That package is still the ad-hoc fallback.
+```text
+This build is signed with Developer ID and notarized by Apple.
+
+If you are using an earlier Font Buttler build, download this version manually once and replace the app. Those builds were ad-hoc signed. The in-app update check compares versions and opens the download in your browser. It does not install the update. Later releases still install the same way: download the file yourself.
+```
+
+Tag push still starts [`.github/workflows/release.yml`](../.github/workflows/release.yml). That job runs tests on Ubuntu and `npm run dist` on a macOS runner. The runner has no Developer ID certificate, so `npm run dist` ad-hoc signs and does not notarize. Before `softprops/action-gh-release`, `scripts/assert-notarized-mac-release.mjs` fails that job. GitHub Actions cannot publish an ad-hoc or un-notarized build. The signed files come from `npm run publish:mac` on the release Mac.
+
+`npm run release:mac` and `npm run dist` both pass `--publish never`. electron-builder still writes `latest-mac.yml` and the zip blockmap. Do not run `electron-builder --publish always`.
+
+To package on GitHub Actions without publishing, open **Actions → Release → Run workflow** and leave **publish** off. That package is the ad-hoc fallback and is not a release.
 
 ## Signing
 
@@ -115,7 +133,7 @@ electron-builder is 26.15.3 (`@electron/notarize` 2.5.0). No upgrade. `mac.notar
 - `APPLE_KEYCHAIN_PROFILE` (required for notarization)
 - `APPLE_KEYCHAIN` (optional; default is the login keychain)
 
-`@electron/notarize` submits the `.app`, waits, and staples the ticket onto the bundle before the dmg and zip are built. The zip and dmg therefore contain an already stapled app, and `latest-mac.yml` hashes that zip.
+`@electron/notarize` submits the `.app`, waits, and staples the ticket onto the bundle before the dmg and zip are built. The zip is created from that stapled app and is not modified afterwards, so its `latest-mac.yml` sha512 stays valid. The dmg is then Developer ID signed (`dmg.sign: true` only on this notarized path), notarized, and stapled in the `afterAllArtifactBuild` hook. Stapling changes the dmg bytes, so the hook rewrites the dmg entry’s sha512 and size in `latest-mac.yml` and deletes the stale dmg blockmap. The top-level sha512 stays the zip. The hook does not submit the zip to notarytool: that would wrap it in another zip and break the blockmap.
 
 ### Identity
 
@@ -125,12 +143,11 @@ electron-builder is 26.15.3 (`@electron/notarize` 2.5.0). No upgrade. `mac.notar
 
 ### Entitlements
 
-The Developer ID plist has:
+The Developer ID plist has one key: `com.apple.security.cs.allow-jit`. That is what V8 on Apple silicon needs (MAP_JIT, Electron 20+). The same file is `entitlementsInherit`, so the Renderer, GPU, and Utility helpers get it too. `mac.type` stays the default `distribution`. `get-task-allow` is not in the plist, and distribution signing does not inject it.
 
-- `com.apple.security.cs.allow-jit` — V8 on Apple silicon (Electron 20+)
-- `com.apple.security.cs.allow-unsigned-executable-memory` — V8’s writable executable memory
+`allow-unsigned-executable-memory` is not set. `@electron/osx-sign` puts that key only on its plugin-helper default, for Pepper and Widevine. The main app, Renderer, and GPU defaults are `allow-jit` alone. Font Buttler does not load plugins.
 
-It does **not** set `com.apple.security.cs.disable-library-validation`. That entitlement is for loading code signed by someone else. A Developer ID build re-signs the whole bundle with one team, so library validation should accept it. The same inherit plist is applied to Electron Helper apps (the Renderer and GPU helpers need `allow-jit`), the unpacked native addons, and the bundled Python Mach-O files. `allow-unsigned-executable-memory` on those nested files is wider than Python needs; electron-builder has one inherit file, not a per-binary plist.
+`disable-library-validation` is not in the release plist. A Developer ID build re-signs the whole bundle with one team, so library validation should accept Electron’s frameworks, the unpacked `.node` addons, and the bundled Python Mach-O files. The ad-hoc plist does set it, because an ad-hoc signature has no team and hardened runtime would otherwise refuse those libraries. That file is used only when `npm run dist` has no Developer ID certificate and no notary profile.
 
 If a notarized build dies at launch with a library-validation crash in Python or a `.node` addon, add `disable-library-validation` to `build/entitlements.mac.plist` and ship another build. Do not add it preemptively.
 
@@ -138,45 +155,39 @@ If a notarized build dies at launch with a library-validation crash in Python or
 
 `@electron/osx-sign` walks `Contents` and signs Mach-O files, `.app` bundles, and frameworks, deepest first. Nothing is `signIgnore`’d, and no extra `binaries` list is required, because the extra code already lives inside the bundle:
 
-- Electron frameworks and Helper apps, including the Utility helper used by `utilityProcess.fork` for the packaged API. Worker threads are threads in that process, not separate executables.
+- Electron frameworks and Helper apps. The packaged API is `utilityProcess.fork` in `electron/main.mjs`, so it runs in the signed Utility helper under the hardened runtime. The font parse worker from the analysis work is a `worker_threads` Worker inside that process (`electron/font-analysis-worker.mjs`). It is JavaScript, not its own Mach-O, and it starts only if that helper is signed and has `allow-jit`.
 - `finder-services.node` and `session-fonts.node`, compiled in the `afterPack` hook, which runs before signing, and unpacked via `asarUnpack: "**/*.node"`.
 - The bundled CPython under `Contents/Resources/python` (`extraResources`). Scripts are not Mach-O and are not signed; `python3` and its `.so` / `.dylib` files are.
 
-Do **not** set `CSC_IDENTITY_AUTO_DISCOVERY=false`. That skips signing and leaves Electron’s linker-signed binaries inside an unsigned bundle. Gatekeeper then reports the download as damaged until `xattr -cr`. Both pack scripts set `COPYFILE_DISABLE=1`, and the after-pack hook strips copyable xattrs before signing so resource forks are not sealed into the bundle. The hook does not run again after stapling.
+Do **not** set `CSC_IDENTITY_AUTO_DISCOVERY=false`. That skips signing and leaves Electron’s linker-signed binaries inside an unsigned bundle. Gatekeeper then reports the download as damaged until `xattr -cr`. Both pack scripts set `COPYFILE_DISABLE=1`, and the after-pack hook strips copyable xattrs before signing so resource forks are not sealed into the bundle. The after-artifact hook strips xattrs on the zip, then notarizes the DMG. It does not strip the DMG, and it does not strip anything after the staple.
 
-### The DMG is not signed or stapled on its own
+### The DMG and the zip
 
-The dmg is a release download. It is still an unsigned container around the stapled app.
+Both release files carry the notarized, stapled app.
 
-electron-builder notarizes during `sign()`, then builds the dmg and zip. `dmg.sign` defaults to false, and electron-builder’s own note says signing the dmg is not required and leads to Gatekeeper errors when the notarization ticket is for the app rather than the disk image. Stapling the dmg afterwards would change the file after `latest-mac.yml` and the zip blockmap are hashed.
+electron-builder notarizes during `sign()`, staples the `.app`, then builds the zip and the dmg. On macOS the zip target uses `zip -r -y`, which keeps the frameworks’ symlinks and the ticket embedded in the app bundle. The zip is not notarized as a zip and is not rewritten, so `xcrun stapler validate` on the app inside the zip passes and the zip blockmap still matches.
 
-Gatekeeper assesses `Font Buttler.app` inside the dmg. The staple is on that app, so the check works offline. The zip used for a future updater is the same stapled app. `xcrun stapler validate` applies to the `.app`, not to the dmg.
+The dmg is a separate signed artifact. `dmg.sign` stays unset in `package.json` (ad-hoc and unsigned local packs must not sign a disk image; the identity `"-"` is a dangerous `find-identity` qualifier). The notarized pack writes a config file with `dmg.sign` set to boolean `true`. Passing `-c.dmg.sign=true` does not work: the CLI value stays the string `"true"`, and electron-builder checks `=== true`. After the dmg is signed, the artifact hook submits it to notarytool and staples it. `xcrun stapler validate` then passes on the dmg file itself. `signDmg` returns without throwing when it cannot find an identity, so the hook checks the Developer ID authority and throws before notarizing. A missing or rejected staple fails the build.
 
 ### Local and CI builds
 
-These rows are for a Mac. On Linux, electron-builder skips macOS signing, and `npm run release:mac` exits before it packs.
+On Linux, `npm run dist` without a notary profile skips macOS signing. `npm run release:mac`, and `npm run dist` with `APPLE_KEYCHAIN_PROFILE` set, exit before they pack.
 
-| Command | Certificate missing | Certificate present, no profile | `release:mac` |
+| Command | Certificate missing | Certificate present, no profile | Profile set, or `release:mac` |
 | --- | --- | --- | --- |
-| `npm run build` | Does not sign or pack | Does not sign or pack | — |
-| `npm run dist` | Ad-hoc sign (`identity: "-"`), hardened runtime, `build/entitlements.mac.adhoc.plist` (this file does disable library validation, because ad-hoc signatures have no shared team). Notarization off. Does not fail. | Developer ID sign, no notarization | — |
-| `npm run release:mac` | Fails (`forceCodeSigning`) | — | Developer ID sign, profile `font-butler-notary`, notarize, staple. macOS only. |
+| `npm run build` | Does not sign or pack | Does not sign or pack | Does not sign or pack |
+| `npm run dist` | Ad-hoc sign (`identity: "-"`), hardened runtime, `build/entitlements.mac.adhoc.plist`. Notarization off. Local only. | Developer ID sign, no notarization. Local only. | Developer ID, `forceCodeSigning`, notarize the app, sign and staple the DMG. Missing certificate or a failed sign/notarize stops the build. Not an ad-hoc fallback. Off macOS, the command errors. |
+| `npm run release:mac` | Fails. No ad-hoc fallback. | — | Developer ID, profile `font-butler-notary` when unset, notarize, staple the app and the DMG, then the notarization assert. macOS only. |
+| `npm run publish:mac` | Refuses to upload | Refuses to upload | Uploads only after `stapler validate` passes on the app, the DMG, the app inside the DMG, and the app inside the zip, and `spctl` reports Notarized Developer ID. |
 
-Notarization runs only when `APPLE_KEYCHAIN_PROFILE` is set. `npm run dist` does not set it. A half-set `APPLE_ID` / API-key trio is removed from the pack environment so it cannot abort a local build; the only notary credentials this repo passes through are the keychain profile and optional `APPLE_KEYCHAIN`.
+Notarization runs only when `APPLE_KEYCHAIN_PROFILE` is set. `npm run dist` does not set it. Setting the profile, including a leftover one in the environment, selects the notarized path. A half-set `APPLE_ID` / API-key trio is removed from the pack environment so it cannot abort a local build or leak into the pack. The only notary credentials this repo passes through are the keychain profile and optional `APPLE_KEYCHAIN`.
 
 `npm run electron` and `npm run dev` are unsigned dev runs. They do not call electron-builder.
 
 ## Auto-update from an ad-hoc build
 
-The in-app check does not use `electron-updater`. **Download** and **Open release** open the browser. Nothing is downloaded or installed by the app. `autoInstall` stays `"parked"`. `startParkedAutoInstall()` in `shared/app-update.ts` throws on purpose.
+Since the GitHub Releases check landed, the in-app check compares the running version with `/releases/latest` and links to the download. **Download** and **Open release** open the browser. Nothing is downloaded or installed by the app. `autoInstall` stays `"parked"`. `startParkedAutoInstall()` throws. `electron/main.mjs` does not reference `electron-updater`, `autoDownload`, or `autoInstallOnAppQuit`. This signing change does not turn auto-install on.
 
-`latest-mac.yml` is still uploaded so a later updater has a feed. Do not switch that on in this signing change.
+`latest-mac.yml` is still produced so a later updater has a feed. Leave that feed unused.
 
-Squirrel.Mac (what `electron-updater` uses on macOS) accepts an update only when the new app satisfies the **running** app’s designated requirement:
-
-- An ad-hoc signature’s requirement is tied to that build’s code directory hash. It does not match a Developer ID signature, and it does not match the next ad-hoc build either.
-- A Developer ID signature’s requirement is stable for the team (`A7WWML89LQ`): identifier, Apple anchor, and the Developer ID leaf. Later builds signed with the same certificate satisfy it.
-
-So anyone on an ad-hoc Font Buttler (every GitHub Release built before Developer ID signing, and any `npm run dist` from a machine or Actions runner without the certificate) **cannot auto-update** to the first Developer ID build. They download the dmg once and replace the app. After that, a future Developer ID build can be an auto-update, if electron-updater is wired with `autoDownload: false` and `autoInstallOnAppQuit: false` and an explicit Install action.
-
-Until that wiring exists, every user, including people already on a Developer ID build, still updates by downloading the release.
+Anyone on an ad-hoc Font Buttler (every GitHub Release built before Developer ID signing, and any `npm run dist` from a machine without the certificate) downloads this notarized version once and replaces the app. The release notes above are the place that says so. After that install, later releases are still a manual download until an explicit Install action exists. Do not enable `electron-updater` in this change. When that work happens, keep `autoDownload` and `autoInstallOnAppQuit` off. A Developer ID designated requirement is stable for team `A7WWML89LQ`; an ad-hoc designated requirement is not, which is why the first signed build cannot be applied by an updater even if one were switched on.

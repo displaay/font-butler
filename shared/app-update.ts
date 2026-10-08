@@ -7,10 +7,7 @@ export const APP_UPDATE_GITHUB_LATEST_API = `https://api.github.com/repos/${APP_
 export const APP_UPDATE_GITHUB_TOKEN_ENV = 'FONT_BUTLER_GITHUB_TOKEN'
 export const APP_UPDATE_GITHUB_TOKEN_FALLBACK_ENV = 'GITHUB_TOKEN'
 
-/**
- * Auto-download and auto-install stay off. Squirrel.Mac cannot move an ad-hoc
- * install onto the first Developer ID build; that hop is a manual download.
- */
+/** Auto-download / auto-install stay off until Apple signing and notarization land. */
 export const APP_UPDATE_AUTO_INSTALL = 'parked' as const
 
 export const APP_UPDATE_CACHE_MS = 60 * 60 * 1000
@@ -18,10 +15,10 @@ export const APP_UPDATE_FETCH_TIMEOUT_MS = 4000
 export const APP_UPDATE_NOTES_LIMIT = 32 * 1024
 
 export const PARKED_AUTO_INSTALL_MESSAGE =
-  'Auto-install stays off. Open the GitHub release to download the update.'
+  'Auto-install is parked until Apple signing lands. Open the GitHub release to download.'
 
 export const PARKED_AUTO_INSTALL_NOTICE =
-  'Download the release and open it yourself. Font Buttler does not install updates automatically.'
+  'Auto-install is pending Apple signing. Download the release or open it in your browser.'
 
 export type AppUpdateAsset = {
   name: string
@@ -260,7 +257,8 @@ export async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Pr
 }
 
 /**
- * Callers must not download or install GitHub assets. See docs/releases.md.
+ * Parked until Developer ID signing + notarization. Callers must not download
+ * or install GitHub assets. See docs/releases.md.
  */
 export function startParkedAutoInstall(): never {
   throw new Error(PARKED_AUTO_INSTALL_MESSAGE)

@@ -58,7 +58,7 @@ jobs:
         run: |
           echo "This runner has no Developer ID certificate or notary profile."
           echo "npm run dist ad-hoc signs when that identity is missing."
-          echo "The notarized release is npm run release:mac on the release Mac. Replace these assets with that output."
+          echo "A publish run refuses that package. The notarized release is npm run release:mac on the release Mac."
           npm run dist
       - name: Check artifacts
         run: |
@@ -75,6 +75,11 @@ jobs:
             fi
           done
           ls -lh "$dmg" "$zip" "$blockmap" "$feed"
+      - name: Refuse an ad-hoc or un-notarized publish
+        if: >-
+          (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+          (github.event_name == 'workflow_dispatch' && inputs.publish && startsWith(github.ref, 'refs/tags/v'))
+        run: node scripts/assert-notarized-mac-release.mjs
       - name: Publish GitHub Release
         if: >-
           (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||

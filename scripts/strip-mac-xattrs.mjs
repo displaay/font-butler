@@ -27,8 +27,18 @@ export async function afterPack(context) {
 }
 
 export async function afterAllArtifactBuild(buildResult) {
-  for (const file of buildResult.artifactPaths ?? []) {
+  const artifacts = buildResult.artifactPaths ?? []
+  const profile = (process.env.APPLE_KEYCHAIN_PROFILE || '').trim()
+  for (const file of artifacts) {
+    // The DMG staple is an xattr. When a notary profile is set the DMG is
+    // already Developer ID signed, so clearing xattrs here would strip that
+    // signature before notarization. Skip it and staple after this loop.
+    if (profile && file.endsWith('.dmg')) continue
     stripMacXattrs(file)
+  }
+  if (profile) {
+    const { stapleSignedDmgs } = await import('./mac-dmg-staple.mjs')
+    await stapleSignedDmgs(artifacts, process.env)
   }
   return []
 }

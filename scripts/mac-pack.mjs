@@ -1,10 +1,13 @@
 import { execFileSync, spawnSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   applyNotaryEnv,
   developerIdInKeychainOutput,
   electronBuilderArgs,
+  packConfig,
   planMacPack,
 } from './mac-signing.mjs'
 
@@ -39,16 +42,41 @@ if (plan.error) {
 
 console.log(plan.summary)
 
-const cli = path.join(repoRoot, 'node_modules/electron-builder/cli.js')
-const result = spawnSync(process.execPath, [cli, ...electronBuilderArgs(plan)], {
-  cwd: repoRoot,
-  env: applyNotaryEnv(process.env, plan),
-  stdio: 'inherit',
-})
+const pkg = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'))
+const configDir = mkdtempSync(path.join(tmpdir(), 'font-butler-mac-'))
+const configPath = path.join(configDir, 'electron-builder.json')
+writeFileSync(configPath, JSON.stringify(packConfig(pkg.build, plan)))
 
-if (result.error) {
-  console.error(result.error.message)
-  process.exit(1)
+const cli = path.join(repoRoot, 'node_modules/electron-builder/cli.js')
+let status = 1
+try {
+  const result = spawnSync(process.execPath, [cli, ...electronBuilderArgs(configPath)], {
+    cwd: repoRoot,
+    env: applyNotaryEnv(process.env, plan),
+    stdio: 'inherit',
+  })
+  if (result.error) {
+    console.error(result.error.message)
+    status = 1
+  } else {
+    status = result.status === null ? 1 : result.status
+  }
+} finally {
+  rmSync(configDir, { recursive: true, force: true })
 }
 
-process.exit(result.status === null ? 1 : result.status)
+if (status !== 0) process.exit(status)
+
+if (plan.keychainProfile) {
+  const check = spawnSync(process.execPath, [path.join(repoRoot, 'scripts/assert-notarized-mac-release.mjs')], {
+    cwd: repoRoot,
+    stdio: 'inherit',
+  })
+  if (check.error) {
+    console.error(check.error.message)
+    process.exit(1)
+  }
+  process.exit(check.status === null ? 1 : check.status)
+}
+
+process.exit(0)

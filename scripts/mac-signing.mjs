@@ -5,7 +5,8 @@
  * `Developer ID Application:` prefix — electron-builder adds that). Notarization
  * is electron-builder 26's built-in step (`mac.notarize: true`), which calls
  * `@electron/notarize` only when `APPLE_KEYCHAIN_PROFILE` is set, then staples
- * the .app. This module does not store passwords or API keys.
+ * the .app before the zip and dmg are built. A set profile also signs and
+ * staples the dmg. This module does not store passwords, Apple ID emails, or API keys.
  */
 
 export const DEVELOPER_ID_IDENTITY = 'DANIEL QUISEK (A7WWML89LQ)'
@@ -27,29 +28,42 @@ export function developerIdInKeychainOutput(output) {
   return output.includes(`Developer ID Application: ${DEVELOPER_ID_IDENTITY}`)
 }
 
+function missingIdentityError(release) {
+  const command = release ? 'npm run release:mac' : 'A build with APPLE_KEYCHAIN_PROFILE set'
+  return `${command} needs Developer ID identity "${DEVELOPER_ID_IDENTITY}" in this keychain. Refusing to fall back to ad-hoc signing.`
+}
+
 /**
  * @param {{ platform: string, release: boolean, env: NodeJS.ProcessEnv, developerIdPresent: boolean }} input
  */
 export function planMacPack({ platform, release, env, developerIdPresent }) {
   const requestedProfile = (env.APPLE_KEYCHAIN_PROFILE || '').trim()
   const requestedKeychain = (env.APPLE_KEYCHAIN || '').trim()
+  const notarize = release || Boolean(requestedProfile)
 
-  if (release) {
-    if (platform !== 'darwin') {
-      return {
-        error:
-          'npm run release:mac only runs on macOS. It needs the Developer ID certificate and the notarytool keychain profile on this Mac.',
-      }
+  if (notarize && platform !== 'darwin') {
+    return {
+      error: release
+        ? 'npm run release:mac only runs on macOS. It needs the Developer ID certificate and the notarytool keychain profile on this Mac.'
+        : 'APPLE_KEYCHAIN_PROFILE is set, but this is not macOS. Refusing to pack an unsigned build that could be published.',
     }
+  }
+
+  if (notarize && !developerIdPresent) {
+    return { error: missingIdentityError(release) }
+  }
+
+  if (notarize) {
     const keychainProfile = requestedProfile || NOTARY_KEYCHAIN_PROFILE
     return {
-      mode: 'release',
+      mode: release ? 'release' : 'notarize',
       identity: DEVELOPER_ID_IDENTITY,
       forceCodeSigning: true,
       adhocEntitlements: null,
+      signDmg: true,
       keychainProfile,
       keychain: requestedKeychain || null,
-      summary: `Signing with Developer ID identity "${DEVELOPER_ID_IDENTITY}" and notarizing with keychain profile "${keychainProfile}".`,
+      summary: `Signing with Developer ID identity "${DEVELOPER_ID_IDENTITY}" and notarizing with keychain profile "${keychainProfile}". The DMG is signed and stapled. Signing or notarization failure stops the build.`,
     }
   }
 
@@ -59,6 +73,7 @@ export function planMacPack({ platform, release, env, developerIdPresent }) {
       identity: DEVELOPER_ID_IDENTITY,
       forceCodeSigning: false,
       adhocEntitlements: null,
+      signDmg: false,
       keychainProfile: null,
       keychain: null,
       summary:
@@ -72,21 +87,10 @@ export function planMacPack({ platform, release, env, developerIdPresent }) {
       identity: '-',
       forceCodeSigning: false,
       adhocEntitlements: ADHOC_ENTITLEMENTS,
+      signDmg: false,
       keychainProfile: null,
       keychain: null,
-      summary: `Developer ID identity "${DEVELOPER_ID_IDENTITY}" is not in the keychain. Ad-hoc signing this build so it still launches. Notarization is skipped.`,
-    }
-  }
-
-  if (!requestedProfile) {
-    return {
-      mode: 'developer-id',
-      identity: DEVELOPER_ID_IDENTITY,
-      forceCodeSigning: false,
-      adhocEntitlements: null,
-      keychainProfile: null,
-      keychain: null,
-      summary: `Signing with Developer ID identity "${DEVELOPER_ID_IDENTITY}". APPLE_KEYCHAIN_PROFILE is unset, so notarization is skipped.`,
+      summary: `Developer ID identity "${DEVELOPER_ID_IDENTITY}" is not in the keychain. Ad-hoc signing this local build so it still launches. Notarization is skipped. This build must not be published.`,
     }
   }
 
@@ -95,26 +99,34 @@ export function planMacPack({ platform, release, env, developerIdPresent }) {
     identity: DEVELOPER_ID_IDENTITY,
     forceCodeSigning: false,
     adhocEntitlements: null,
-    keychainProfile: requestedProfile,
-    keychain: requestedKeychain || null,
-    summary: `Signing with Developer ID identity "${DEVELOPER_ID_IDENTITY}" and notarizing with keychain profile "${requestedProfile}".`,
+    signDmg: false,
+    keychainProfile: null,
+    keychain: null,
+    summary: `Signing with Developer ID identity "${DEVELOPER_ID_IDENTITY}". APPLE_KEYCHAIN_PROFILE is unset, so notarization is skipped. This build must not be published.`,
   }
 }
 
-export function electronBuilderArgs(plan) {
-  const args = ['--mac', '--publish', 'never', `-c.mac.identity=${plan.identity}`]
-  // electron-builder 26 leaves this CLI value as the string "true". The
-  // forceCodeSigning getter treats any non-empty value as on. Do not pass
-  // hardenedRuntime here: the string "false" would not turn it off.
-  if (plan.forceCodeSigning) args.push('-c.mac.forceCodeSigning=true')
+/** Full electron-builder config. Booleans stay booleans: `-c.dmg.sign=true` is the string "true", and dmg signing checks `=== true`. */
+export function packConfig(build, plan) {
+  const mac = {
+    ...build.mac,
+    identity: plan.identity,
+    forceCodeSigning: plan.forceCodeSigning,
+  }
   if (plan.adhocEntitlements) {
-    args.push(`-c.mac.entitlements=${plan.adhocEntitlements}`)
-    args.push(`-c.mac.entitlementsInherit=${plan.adhocEntitlements}`)
+    mac.entitlements = plan.adhocEntitlements
+    mac.entitlementsInherit = plan.adhocEntitlements
   }
-  return args
+  const config = { ...build, mac }
+  if (plan.signDmg) config.dmg = { ...(build.dmg ?? {}), sign: true }
+  return config
 }
 
-/** Notarize only via the keychain profile. Other Apple credential env vars are removed so a partial APPLE_ID cannot fail the pack. */
+export function electronBuilderArgs(configPath) {
+  return ['--mac', '--publish', 'never', '--config', configPath]
+}
+
+/** Notarize only via the keychain profile. Other Apple credential env vars are removed so a partial APPLE_ID cannot fail the pack or show up in the pack environment. */
 export function applyNotaryEnv(baseEnv, plan) {
   const env = { ...baseEnv }
   if (!env.COPYFILE_DISABLE) env.COPYFILE_DISABLE = '1'
@@ -134,23 +146,33 @@ export function releaseConfigErrors(pkg) {
   }
   if (mac?.hardenedRuntime !== true) errors.push('mac.hardenedRuntime must be true')
   if (mac?.notarize !== true) errors.push('mac.notarize must be true')
+  if (mac?.type === 'development') errors.push('mac.type must stay distribution so get-task-allow is not injected')
   if (mac?.entitlements !== 'build/entitlements.mac.plist') {
     errors.push('mac.entitlements must be build/entitlements.mac.plist')
   }
   if (mac?.entitlementsInherit !== 'build/entitlements.mac.plist') {
     errors.push('mac.entitlementsInherit must be build/entitlements.mac.plist')
   }
+  if (mac?.signIgnore != null) errors.push('mac.signIgnore must stay unset so every nested binary is signed')
   if (pkg?.build?.dmg?.sign === true) {
-    errors.push('dmg.sign must stay unset so the disk image is not signed separately')
+    errors.push('package.json must leave dmg.sign unset; only the notarized pack config sets it')
   }
   if (!pkg?.scripts?.['release:mac']?.includes('mac-pack.mjs --release')) {
     errors.push('release:mac must run scripts/mac-pack.mjs --release')
+  }
+  if (!pkg?.scripts?.['publish:mac']?.includes('upload-mac-release.mjs')) {
+    errors.push('publish:mac must run scripts/upload-mac-release.mjs')
   }
   if (pkg?.scripts?.dist?.includes('CSC_IDENTITY_AUTO_DISCOVERY=false')) {
     errors.push('dist must not set CSC_IDENTITY_AUTO_DISCOVERY=false')
   }
   if (pkg?.scripts?.['release:mac']?.includes('CSC_IDENTITY_AUTO_DISCOVERY=false')) {
     errors.push('release:mac must not set CSC_IDENTITY_AUTO_DISCOVERY=false')
+  }
+  for (const name of ['dist', 'release:mac']) {
+    if (!pkg?.scripts?.[name]?.includes('--publish') && !pkg?.scripts?.[name]?.includes('mac-pack.mjs')) {
+      errors.push(`${name} must pack through scripts/mac-pack.mjs`)
+    }
   }
   return errors
 }
