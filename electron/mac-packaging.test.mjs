@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -6,9 +7,12 @@ import path from 'node:path'
 import { test } from 'node:test'
 import { assertNotarizedMacRelease, notarizationFailures, prepareMacPublish, updateFeedFailures } from '../scripts/assert-notarized-mac-release.mjs'
 import {
+  expectedReleaseTag,
   publishVersionedMacRelease,
   releaseCommitGuard,
   remoteTagCommitSha,
+  remoteTagLsRemoteArgs,
+  worktreeDirty,
 } from '../scripts/upload-mac-release.mjs'
 import { rewriteMacUpdateFeed, sha512Base64, stapleSignedDmgs } from '../scripts/mac-dmg-staple.mjs'
 import {
@@ -779,8 +783,17 @@ test('publish requires the remote tag commit to equal HEAD and a clean tree', as
   const other = 'b'.repeat(40)
   const tagObject = 'c'.repeat(40)
   assert.match(readRepo('docs/releases.md'), /git ls-remote origin refs\/tags\/v<version>\^\{}/)
-  assert.match(readRepo('scripts/upload-mac-release.mjs'), /refs\/tags\/\$\{tag\}\^\{}/)
-  assert.match(readRepo('scripts/upload-mac-release.mjs'), /--untracked-files=no/)
+  assert.match(readRepo('docs/releases.md'), /clean checkout of the tag/)
+  const uploadSource = readRepo('scripts/upload-mac-release.mjs')
+  assert.deepEqual(remoteTagLsRemoteArgs('v0.3.8'), [
+    ['ls-remote', 'origin', 'refs/tags/v0.3.8^{}'],
+    ['ls-remote', 'origin', 'refs/tags/v0.3.8'],
+  ])
+  assert.match(uploadSource, /remoteTagLsRemoteArgs/)
+  assert.doesNotMatch(uploadSource, /rev-parse[^\n]*tags/)
+  assert.doesNotMatch(uploadSource, /--untracked-files=no/)
+  assert.doesNotMatch(uploadSource, /--ignored/)
+  assert.match(uploadSource, /git', \['status', '--porcelain'\]/)
 
   const annotated = remoteTagCommitSha(`${head}\trefs/tags/v0.3.8^{}\n`, `${tagObject}\trefs/tags/v0.3.8\n`)
   assert.equal(annotated, head)
@@ -793,6 +806,7 @@ test('publish requires the remote tag commit to equal HEAD and a clean tree', as
     files,
     release: { exists: false, draft: false },
     tagOnRemote: true,
+    version: '0.3.8',
     head,
     remoteSha: annotated,
     dirty: false,
@@ -800,7 +814,8 @@ test('publish requires the remote tag commit to equal HEAD and a clean tree', as
   })
   assert.equal(matched.ok, true)
   assert.equal(matched.draft, true)
-  assert.equal(releaseCommitGuard({ tag: 'v0.3.8', head, remoteSha: annotated, dirty: false }).ok, true)
+  assert.equal(releaseCommitGuard({ tag: 'v0.3.8', version: '0.3.8', head, remoteSha: annotated, dirty: false }).ok, true)
+  assert.equal(expectedReleaseTag('0.3.8'), 'v0.3.8')
   assert.ok(calls.some((args) => args[1] === 'upload'))
 
   const mismatchCalls = []
@@ -840,8 +855,48 @@ test('publish requires the remote tag commit to equal HEAD and a clean tree', as
   })
   assert.equal(dirty.ok, false)
   assert.ok(dirty.error.includes(head))
-  assert.match(dirty.error, /tracked changes/)
+  assert.match(dirty.error, /untracked files that are not ignored/)
   assert.match(dirty.error, /draft was not changed/)
   assert.deepEqual(dirty.commands, [])
   assert.deepEqual(dirtyCalls, [])
+
+  const wrongTagCalls = []
+  const wrongTag = await publishVersionedMacRelease({
+    tag: 'v0.3.7',
+    files,
+    release: { exists: true, draft: true },
+    tagOnRemote: true,
+    version: '0.3.8',
+    head,
+    remoteSha: head,
+    dirty: false,
+    exec: async () => {
+      wrongTagCalls.push('ran')
+      throw new Error('gh should not run')
+    },
+  })
+  assert.equal(wrongTag.ok, false)
+  assert.match(wrongTag.error, /package\.json version 0\.3\.8/)
+  assert.match(wrongTag.error, /v0\.3\.8/)
+  assert.ok(wrongTag.error.includes('v0.3.7'))
+  assert.match(wrongTag.error, /draft was not changed/)
+  assert.deepEqual(wrongTag.commands, [])
+  assert.deepEqual(wrongTagCalls, [])
+
+  assert.equal(worktreeDirty(''), false)
+  assert.equal(worktreeDirty(' M package.json\n'), true)
+  assert.equal(worktreeDirty('?? notes.txt\n'), true)
+  for (const file of [
+    'release/Font-Buttler-0.3.8-arm64.dmg',
+    'dist/index.html',
+    'electron/server.bundle.mjs',
+    'electron/font-analysis-worker.mjs',
+    'electron/finder-services.node',
+    'electron/session-fonts.node',
+    'electron/favicon-16.png',
+    'electron/app-icons/classic.png',
+    'vendor/python/bin/python3',
+  ]) {
+    execFileSync('git', ['check-ignore', '-q', file], { cwd: new URL('..', import.meta.url) })
+  }
 })

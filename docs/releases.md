@@ -62,7 +62,7 @@ The profile name is `font-butler-notary`. If it lives in a keychain other than t
 
 1. Bump `version` in `package.json` (semver, no leading `v`).
 2. Commit that bump on `main` and push it.
-3. From the clean worktree above, tag that commit and push the tag. `npm run publish:mac` does not create the tag. Before it uploads, it resolves `v<version>` on origin with `git ls-remote origin refs/tags/v<version>^{}` and, when that tag is lightweight, falls back to `refs/tags/v<version>`. That commit must equal `HEAD`. If the tag is missing, points at a different commit, or the worktree has tracked changes, the command prints both SHAs when it has them and stops. It does not create or change the draft.
+3. From the clean worktree above, tag that commit and push the tag. The tag name is `v` plus the `version` field in `package.json`. `npm run publish:mac` does not create the tag. Before it uploads, it reads that tag from origin with `git ls-remote origin refs/tags/v<version>^{}` and, when that tag is lightweight, falls back to `refs/tags/v<version>`. It does not read a local tag. That commit must equal `git rev-parse HEAD`. If the tag is missing, its name is not `v` plus `package.json` `version`, it points at a different commit, or the checkout has modified tracked files or untracked files that are not ignored, the command prints both SHAs when it has them and stops. It does not create or change the draft.
 
    ```bash
    version="$(node -p "require('./package.json').version")"
@@ -70,7 +70,7 @@ The profile name is `font-butler-notary`. If it lives in a keychain other than t
    git push origin "v${version}"
    ```
 
-4. Build the signed app from that same worktree:
+4. The release build has to run from a clean checkout of the tag. Build the signed app there:
 
    ```bash
    npm run release:mac
