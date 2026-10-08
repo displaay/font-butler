@@ -1037,7 +1037,7 @@ test('opening a DMG does not delete it', async () => {
   const doc = yml(version, [
     { name: macArm64ArchiveName(version, 'dmg'), sha512: sha512(bytes), size: bytes.length },
   ])
-  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-dmg-open-'))
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-update-'))
   const recordDir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-dmg-record-'))
   const record = path.join(recordDir, 'opened-dmgs.json')
   let opened = ''
@@ -1065,7 +1065,8 @@ test('opening a DMG does not delete it', async () => {
     assert.equal(existsSync(opened), true)
     assert.equal(existsSync(tempDir), true)
     const saved = JSON.parse(readFileSync(record, 'utf8'))
-    assert.deepEqual(saved, [{ dmg: opened, tempDir }])
+    assert.deepEqual(saved, [{ dir: path.basename(tempDir), dmg: path.basename(opened) }])
+    assert.equal(JSON.stringify(saved).includes('/'), false)
   } finally {
     rmSync(tempDir, { recursive: true, force: true })
     rmSync(recordDir, { recursive: true, force: true })
@@ -1103,23 +1104,37 @@ test('the next launch deletes an opened DMG that is not mounted', () => {
   }
 })
 
-test('opened DMG cleanup does not delete a temp dir that is not a direct child of the temp directory', () => {
-  const parent = mkdtempSync(path.join(os.tmpdir(), 'font-butler-sibling-parent-'))
-  const tempDir = path.join(parent, 'font-butler-update-sibling')
-  mkdirSync(tempDir)
-  const dmg = path.join(tempDir, 'Font-Buttler.dmg')
+test('opened DMG cleanup rejects planted names with .., slashes, or an absolute path', () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-update-'))
+  const dmgName = 'Font-Buttler.dmg'
+  const dmg = path.join(tempDir, dmgName)
   const keep = path.join(tempDir, 'keep.txt')
   writeFileSync(dmg, 'keep-dmg')
   writeFileSync(keep, 'keep-dir')
-  const record = path.join(parent, 'opened-dmgs.json')
-  writeFileSync(record, JSON.stringify([{ dmg, tempDir }]))
+  const base = path.basename(tempDir)
+  const recordDir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-name-record-'))
+  const record = path.join(recordDir, 'opened-update-dmgs.json')
+  const attacks = [
+    { dir: '..', dmg: dmgName },
+    { dir: `../${base}`, dmg: dmgName },
+    { dir: `${base}/..`, dmg: dmgName },
+    { dir: `font-butler-update-foo/bar`, dmg: dmgName },
+    { dir: tempDir, dmg: dmgName },
+    { dir: base, dmg: dmg },
+    { dir: base, dmg: `../${dmgName}` },
+    { dir: `font-butler-update-\0hidden`, dmg: dmgName },
+  ]
   try {
-    const still = cleanupOpenedUpdateDmgs({ recordFile: record, isMounted: () => false })
-    assert.deepEqual(still, [])
-    assert.equal(readFileSync(keep, 'utf8'), 'keep-dir')
-    assert.equal(readFileSync(dmg, 'utf8'), 'keep-dmg')
+    for (const entry of attacks) {
+      writeFileSync(record, JSON.stringify([entry]))
+      const still = cleanupOpenedUpdateDmgs({ recordFile: record, isMounted: () => false })
+      assert.deepEqual(still, [])
+      assert.equal(readFileSync(keep, 'utf8'), 'keep-dir')
+      assert.equal(readFileSync(dmg, 'utf8'), 'keep-dmg')
+    }
   } finally {
-    rmSync(parent, { recursive: true, force: true })
+    rmSync(tempDir, { recursive: true, force: true })
+    rmSync(recordDir, { recursive: true, force: true })
   }
 })
 
@@ -1127,13 +1142,14 @@ test('opened DMG cleanup does not delete through a symlink temp dir', () => {
   const realDir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-update-target-'))
   const link = path.join(os.tmpdir(), `font-butler-update-link-${process.pid}-${Date.now()}`)
   symlinkSync(realDir, link)
-  const dmg = path.join(realDir, 'Font-Buttler.dmg')
+  const dmgName = 'Font-Buttler.dmg'
+  const dmg = path.join(realDir, dmgName)
   const keep = path.join(realDir, 'keep.txt')
   writeFileSync(dmg, 'keep-dmg')
   writeFileSync(keep, 'keep-dir')
   const recordDir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-link-record-'))
-  const record = path.join(recordDir, 'opened-dmgs.json')
-  writeFileSync(record, JSON.stringify([{ dmg, tempDir: link }]))
+  const record = path.join(recordDir, 'opened-update-dmgs.json')
+  writeFileSync(record, JSON.stringify([{ dir: path.basename(link), dmg: dmgName }]))
   try {
     cleanupOpenedUpdateDmgs({ recordFile: record, isMounted: () => false })
     assert.equal(lstatSync(link).isSymbolicLink(), true)
@@ -1149,11 +1165,12 @@ test('opened DMG cleanup does not delete through a symlink temp dir', () => {
 
 test('opened DMG cleanup does not delete a temp dir with the wrong prefix', () => {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-not-update-'))
-  const dmg = path.join(tempDir, 'Font-Buttler.dmg')
+  const dmgName = 'Font-Buttler.dmg'
+  const dmg = path.join(tempDir, dmgName)
   writeFileSync(dmg, 'keep-dmg')
   const recordDir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-prefix-record-'))
-  const record = path.join(recordDir, 'opened-dmgs.json')
-  writeFileSync(record, JSON.stringify([{ dmg, tempDir }]))
+  const record = path.join(recordDir, 'opened-update-dmgs.json')
+  writeFileSync(record, JSON.stringify([{ dir: path.basename(tempDir), dmg: dmgName }]))
   try {
     cleanupOpenedUpdateDmgs({ recordFile: record, isMounted: () => false })
     assert.equal(existsSync(tempDir), true)
@@ -1164,23 +1181,51 @@ test('opened DMG cleanup does not delete a temp dir with the wrong prefix', () =
   }
 })
 
-test('opened DMG cleanup does not delete a disk image outside its temp dir', () => {
+test('opened DMG cleanup does not delete a folder owned by a different uid', () => {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-update-'))
-  const outside = mkdtempSync(path.join(os.tmpdir(), 'font-butler-outside-dmg-'))
-  const dmg = path.join(outside, 'Font-Buttler.dmg')
-  const keep = path.join(tempDir, 'keep.txt')
+  const dmgName = 'Font-Buttler.dmg'
+  const dmg = path.join(tempDir, dmgName)
   writeFileSync(dmg, 'keep-dmg')
-  writeFileSync(keep, 'keep-dir')
-  const record = path.join(outside, 'opened-dmgs.json')
-  writeFileSync(record, JSON.stringify([{ dmg, tempDir }]))
+  const recordDir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-uid-record-'))
+  const record = path.join(recordDir, 'opened-update-dmgs.json')
+  writeFileSync(record, JSON.stringify([{ dir: path.basename(tempDir), dmg: dmgName }]))
+  const owner = lstatSync(tempDir).uid
   try {
-    cleanupOpenedUpdateDmgs({ recordFile: record, isMounted: () => false })
+    cleanupOpenedUpdateDmgs({
+      recordFile: record,
+      isMounted: () => false,
+      getuid: () => owner + 1,
+    })
     assert.equal(existsSync(tempDir), true)
-    assert.equal(readFileSync(keep, 'utf8'), 'keep-dir')
     assert.equal(readFileSync(dmg, 'utf8'), 'keep-dmg')
   } finally {
     rmSync(tempDir, { recursive: true, force: true })
-    rmSync(outside, { recursive: true, force: true })
+    rmSync(recordDir, { recursive: true, force: true })
+  }
+})
+
+test('opened DMG cleanup does nothing when no record path is provided', () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-update-'))
+  const dmg = path.join(tempDir, 'Font-Buttler.dmg')
+  writeFileSync(dmg, 'keep-dmg')
+  const stray = [
+    path.join(os.tmpdir(), 'opened-update-dmgs.json'),
+    path.join(os.tmpdir(), 'font-butler-opened-dmgs.json'),
+  ]
+  const before = stray.map((file) => (existsSync(file) ? readFileSync(file) : null))
+  const source = readFileSync(new URL('./app-update-install.mjs', import.meta.url), 'utf8')
+  try {
+    rememberOpenedDmg({ dmg, tempDir })
+    assert.deepEqual(cleanupOpenedUpdateDmgs(), [])
+    assert.deepEqual(
+      stray.map((file) => (existsSync(file) ? readFileSync(file) : null)),
+      before,
+    )
+    assert.equal(readFileSync(dmg, 'utf8'), 'keep-dmg')
+    assert.doesNotMatch(source, /font-butler-opened-dmgs\.json/)
+    assert.doesNotMatch(source, /tmpdir\(\),\s*['"]opened-update-dmgs/)
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true })
   }
 })
 
@@ -1204,14 +1249,11 @@ test('the next launch keeps a mounted DMG, including /var versus /private/var', 
       isMounted: (file) =>
         isUpdateDmgMounted(file, () => ({
           status: 0,
-          stdout: `image-path      : ${privateFile}\n`,
+          stdout: `image-path      : ${recorded}\n`,
           stderr: '',
         })),
     })
-    assert.deepEqual(
-      still.map((entry) => entry.dmg),
-      [recorded],
-    )
+    assert.deepEqual(still, [{ dir: path.basename(tempDir), dmg: dmgName }])
     assert.equal(existsSync(privateFile), true)
     assert.equal(readFileSync(privateFile, 'utf8'), 'mounted')
     assert.equal(existsSync(record), true)
@@ -1477,7 +1519,7 @@ test('recursive update cleanup deletes an app.asar when the Electron fs shim wou
   mkdirSync(path.dirname(asarPath), { recursive: true })
   writeFileSync(asarPath, 'asar-bytes')
   writeFileSync(dmg, 'dmg')
-  writeFileSync(record, JSON.stringify([{ dmg, tempDir }]))
+  writeFileSync(record, JSON.stringify([{ dir: path.basename(tempDir), dmg: path.basename(dmg) }]))
   const original = nodeFs.rmSync
   nodeFs.rmSync = function asarShim(target, options) {
     if (String(target).includes('.asar')) {
@@ -1914,7 +1956,7 @@ test('cleanup of a still-mounted DMG logs a failed record write and startup guar
         throw new Error('disk full')
       },
     })
-    assert.deepEqual(still, [{ dmg, tempDir }])
+    assert.deepEqual(still, [{ dir: path.basename(tempDir), dmg: path.basename(dmg) }])
     assert.equal(existsSync(dmg), true)
     assert.equal(existsSync(tempDir), true)
     assert.match(errors.join('\n'), /Could not record which update disk images are still open/)

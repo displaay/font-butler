@@ -1027,8 +1027,7 @@ async function runInstall(deps, fetchImpl, tempDir) {
     // DiskImageMounter attaches the image. Never delete here. The path is
     // recorded on disk and removed on a later launch only if it is not mounted.
     const remember =
-      deps.rememberOpenedDmg ??
-      ((entry) => rememberOpenedDmg(entry, deps.openedDmgRecord ?? OPENED_DMG_RECORD))
+      deps.rememberOpenedDmg ?? ((entry) => rememberOpenedDmg(entry, deps.openedDmgRecord))
     try {
       remember({ dmg: dest, tempDir })
     } catch (error) {
@@ -1102,81 +1101,117 @@ export function unpackZipArchive(zipPath, destDir, spawnImpl = spawn) {
   })
 }
 
-export const OPENED_DMG_RECORD = path.join(os.tmpdir(), 'font-butler-opened-dmgs.json')
 const UPDATE_TEMP_PREFIX = 'font-butler-update-'
 
 /** Per-user record. A marked build's userData is already the test folder. */
 export function openedUpdateDmgRecordFile(userDataDir) {
-  return path.join(userDataDir, 'font-butler-opened-dmgs.json')
+  return path.join(userDataDir, 'opened-update-dmgs.json')
 }
 
-function ownedByCurrentUser(stat) {
-  if (typeof process.getuid !== 'function') return false
-  return stat.uid === process.getuid()
+/** A single path segment. Empty, `.`, `..`, slashes, and NUL are refused. */
+function safeOpenedName(name) {
+  if (typeof name !== 'string' || name.length === 0) return false
+  if (name.includes('/') || name.includes('\0')) return false
+  if (name === '.' || name === '..' || name.includes('..')) return false
+  return true
 }
 
-/**
- * A real `font-butler-update-*` directory that is a direct child of
- * `os.tmpdir()`. Symlinks and anything outside that directory are refused.
- * Returns the real path, or null.
- */
-function safeOpenedUpdateTempDir(tempDir) {
-  if (typeof tempDir !== 'string' || tempDir.length === 0) return null
-  let stat
+function openedUpdateDirName(value) {
+  if (typeof value !== 'string' || value.includes('\0')) return null
+  const name = path.basename(value)
+  if (!safeOpenedName(name) || !name.startsWith(UPDATE_TEMP_PREFIX)) return null
+  return name
+}
+
+function openedUpdateDmgName(value) {
+  if (typeof value !== 'string' || value.includes('\0')) return null
+  const name = path.basename(value)
+  if (!safeOpenedName(name) || !name.endsWith('.dmg')) return null
+  return name
+}
+
+function callerUid(getuid) {
   try {
-    stat = fs.lstatSync(tempDir)
+    const uid = getuid()
+    return typeof uid === 'number' ? uid : null
   } catch {
     return null
   }
-  if (!stat.isDirectory() || stat.isSymbolicLink() || !ownedByCurrentUser(stat)) return null
-  let realTemp
-  let realTmp
-  try {
-    realTemp = fs.realpathSync(tempDir)
-    realTmp = fs.realpathSync(os.tmpdir())
-  } catch {
-    return null
-  }
-  if (path.dirname(realTemp) !== realTmp) return null
-  if (!path.basename(realTemp).startsWith(UPDATE_TEMP_PREFIX)) return null
-  return realTemp
 }
 
 /** Regular `.dmg` inside that temp dir, or a missing file whose parent is that dir. */
-function safeOpenedUpdateDmg(dmg, realTemp) {
-  if (typeof dmg !== 'string' || !dmg.endsWith('.dmg') || !realTemp) return false
+function safeOpenedUpdateDmg(dmgPath, realTemp) {
   let stat
   try {
-    stat = fs.lstatSync(dmg)
+    stat = fs.lstatSync(dmgPath)
   } catch (error) {
     if (error?.code !== 'ENOENT') return false
     try {
-      return fs.realpathSync(path.dirname(dmg)) === realTemp
+      return fs.realpathSync(path.dirname(dmgPath)) === realTemp
     } catch {
       return false
     }
   }
   if (stat.isSymbolicLink() || !stat.isFile()) return false
   try {
-    return fs.realpathSync(path.dirname(dmg)) === realTemp
+    return fs.realpathSync(path.dirname(dmgPath)) === realTemp
   } catch {
     return false
   }
 }
 
-export function readOpenedDmgRecord(recordFile = OPENED_DMG_RECORD) {
+/**
+ * Rebuild `font-butler-update-*` / `*.dmg` names under the real temp directory.
+ * Returns null when the names or the directory fail the ownership checks.
+ */
+function resolvedOpenedUpdate(entry, getuid) {
+  if (!entry || !safeOpenedName(entry.dir) || !safeOpenedName(entry.dmg)) return null
+  if (!entry.dir.startsWith(UPDATE_TEMP_PREFIX) || !entry.dmg.endsWith('.dmg')) return null
+  let tmpRoot
+  try {
+    tmpRoot = fs.realpathSync(os.tmpdir())
+  } catch {
+    return null
+  }
+  const tempDir = path.join(tmpRoot, entry.dir)
+  const dmgPath = path.join(tempDir, entry.dmg)
+  let stat
+  try {
+    stat = fs.lstatSync(tempDir)
+  } catch {
+    return null
+  }
+  const uid = callerUid(getuid)
+  if (!stat.isDirectory() || stat.isSymbolicLink() || uid == null || stat.uid !== uid) return null
+  let realTemp
+  try {
+    realTemp = fs.realpathSync(tempDir)
+  } catch {
+    return null
+  }
+  if (path.dirname(realTemp) !== tmpRoot) return null
+  if (!safeOpenedUpdateDmg(dmgPath, realTemp)) return null
+  return { tempDir, dmgPath }
+}
+
+export function readOpenedDmgRecord(recordFile) {
+  if (!recordFile) return []
   try {
     const parsed = JSON.parse(fs.readFileSync(recordFile, 'utf8'))
     if (!Array.isArray(parsed)) return []
-    return parsed.filter((entry) => entry && typeof entry.dmg === 'string' && entry.dmg.length > 0)
+    return parsed.filter((entry) => entry && typeof entry.dir === 'string' && typeof entry.dmg === 'string')
   } catch {
     return []
   }
 }
 
-export function rememberOpenedDmg(entry, recordFile = OPENED_DMG_RECORD) {
-  const pending = readOpenedDmgRecord(recordFile).filter((item) => item.dmg !== entry.dmg)
-  pending.push({ dmg: entry.dmg, tempDir: entry.tempDir ?? null })
+export function rememberOpenedDmg(entry, recordFile) {
+  if (!recordFile) return
+  const dir = openedUpdateDirName(entry?.dir ?? entry?.tempDir)
+  const dmg = openedUpdateDmgName(entry?.dmg)
+  if (!dir || !dmg) return
+  const pending = readOpenedDmgRecord(recordFile).filter((item) => item.dir !== dir || item.dmg !== dmg)
+  pending.push({ dir, dmg })
   fs.mkdirSync(path.dirname(recordFile), { recursive: true })
   fs.writeFileSync(recordFile, JSON.stringify(pending))
 }
@@ -1217,28 +1252,33 @@ export function isUpdateDmgMounted(dmgPath, spawnImpl = spawnSync) {
   }
 }
 
-/** On a later launch, delete recorded DMGs that are no longer mounted. */
+/**
+ * On a later launch, delete recorded DMGs that are no longer mounted.
+ * `recordFile` is required. Without it this does nothing. There is no temp-directory record.
+ */
 export function cleanupOpenedUpdateDmgs({
-  recordFile = OPENED_DMG_RECORD,
+  recordFile,
   isMounted = isUpdateDmgMounted,
   writeRecord = (file, text) => fs.writeFileSync(file, text),
+  getuid = () => (typeof process.getuid === 'function' ? process.getuid() : undefined),
 } = {}) {
+  if (!recordFile) return []
   const pending = readOpenedDmgRecord(recordFile)
   const stillMounted = []
   for (const entry of pending) {
-    const realTemp = safeOpenedUpdateTempDir(entry.tempDir)
-    if (!realTemp || !safeOpenedUpdateDmg(entry.dmg, realTemp)) continue
-    if (isMounted(entry.dmg)) {
-      stillMounted.push(entry)
+    const resolved = resolvedOpenedUpdate(entry, getuid)
+    if (!resolved) continue
+    if (isMounted(resolved.dmgPath)) {
+      stillMounted.push({ dir: entry.dir, dmg: entry.dmg })
       continue
     }
     try {
-      fs.rmSync(entry.dmg, { force: true })
+      fs.rmSync(resolved.dmgPath, { force: true })
     } catch {
       // Already gone.
     }
     try {
-      rawFs().rmSync(entry.tempDir, { recursive: true, force: true })
+      rawFs().rmSync(resolved.tempDir, { recursive: true, force: true })
     } catch {
       // raw-fs walks app.asar. A shim failure must not escape startup or
       // skip the rest of the recorded disk images.
