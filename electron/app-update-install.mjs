@@ -398,6 +398,7 @@ export function detectAppUpdateRuntime(execPath = process.execPath, spawnImpl = 
     translocated: isTranslocatedAppPath(appPath),
     readOnly: !bundleWritable,
     bundleWritable,
+    // Only true is a marked build. null on the running app stays unmarked.
     testFeedBuild: readAppTestFeedMarker(appPath) === true,
   }
 }

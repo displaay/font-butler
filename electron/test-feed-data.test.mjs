@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
+import { detectAppUpdateRuntime, readAppTestFeedMarker } from './app-update-install.mjs'
 import { applyTestFeedDataIsolation, planTestFeedDataIsolation, TEST_FEED_USER_DATA_DIR } from './test-feed-data.mjs'
 
 function fakeApp(appData, { ready = false } = {}) {
@@ -95,6 +96,39 @@ test('an unmarked build does not change userData or FONT_BUTLER_DATA', () => {
       planTestFeedDataIsolation({ testFeedBuild: false, appData, env: { FONT_BUTLER_DATA: '/tmp/real' } }),
       { isolate: false, userData: null, dataDir: null, setDataEnv: false },
     )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('an unreadable running-app marker stays unmarked and does not isolate', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'fb-test-feed-null-'))
+  try {
+    const appPath = path.join(root, 'Font Buttler.app')
+    const execPath = path.join(appPath, 'Contents', 'MacOS', 'Font Buttler')
+    mkdirSync(path.dirname(execPath), { recursive: true })
+    mkdirSync(path.join(appPath, 'Contents', 'Resources'), { recursive: true })
+    writeFileSync(execPath, '')
+    writeFileSync(path.join(appPath, 'Contents', 'Resources', 'app.asar'), 'not-an-asar')
+    assert.equal(readAppTestFeedMarker(appPath), null)
+
+    const runtime = detectAppUpdateRuntime(execPath, () => ({ status: 1, stdout: '', stderr: '' }))
+    assert.equal(runtime.packaged, true)
+    assert.equal(runtime.testFeedBuild, false)
+
+    const appData = path.join(root, 'Application Support')
+    const app = fakeApp(appData)
+    const originalUserData = app.paths.userData
+    const env = {}
+    const plan = applyTestFeedDataIsolation(app, env, execPath)
+    assert.equal(plan.isolate, false)
+    assert.equal(plan.userData, null)
+    assert.equal(plan.dataDir, null)
+    assert.equal(plan.setDataEnv, false)
+    assert.equal(app.paths.userData, originalUserData)
+    assert.equal(app.setPathCalls.length, 0)
+    assert.equal(env.FONT_BUTLER_DATA, undefined)
+    assert.equal(originalUserData.endsWith(TEST_FEED_USER_DATA_DIR), false)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

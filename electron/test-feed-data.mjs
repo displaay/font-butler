@@ -28,9 +28,9 @@ export function planTestFeedDataIsolation({ testFeedBuild = false, appData = '',
  */
 export function applyTestFeedDataIsolation(app, env = process.env, execPath = process.execPath) {
   const appPath = outermostAppBundle(execPath)
-  // The packaged package.json marker is the only switch. Environment variables
-  // cannot turn isolation on, and cannot turn it off.
-  const testFeedBuild = Boolean(appPath && readAppTestFeedMarker(appPath))
+  // Only an explicit true marker isolates. null (unreadable) and false stay
+  // on the real library. runInstall is what refuses a null download.
+  const testFeedBuild = readAppTestFeedMarker(appPath) === true
   const plan = planTestFeedDataIsolation({
     testFeedBuild,
     appData: app.getPath('appData'),
