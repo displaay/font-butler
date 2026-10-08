@@ -24,7 +24,7 @@ import { applyFontDragImage } from '@/lib/dragPreview'
 import { formatAddedAt } from '@/lib/dates'
 import { mixedFormatWarning, occupyingFormats, uniqueEntryFormats, formatSwap } from '@/lib/formats'
 import { familyBadgeEntry, familyStatusSummary, hasManagedInstall, hasRetailSyncedSource, hasSourceMissing, hasTrackedSource, entryHasPreviewFile } from '@/lib/group'
-import { catalogInstanceRows } from '@/lib/instances'
+import { catalogHoverInstanceRows, catalogInstanceRows } from '@/lib/instances'
 import { projectContainsAll, writeFontButlerEntries } from '@/lib/projects'
 import { displayStateParts, familyCopyDestinations, isNotInstalledLabel, needsLocateSource } from '@/lib/state'
 import type { FamilyGroup, ProjectSet, RetailSyncView, ViewLayout } from '@/lib/types'
@@ -155,6 +155,7 @@ export const LibraryCard = memo(function LibraryCard({
   const deactivated = displayStateParts(badgeEntry).includes('Deactivated')
   const missingSource = hasSourceMissing(group)
   const instances = useMemo(() => catalogInstanceRows(group, retail), [group, retail])
+  const hoverInstances = useMemo(() => catalogHoverInstanceRows(group, retail), [group, retail])
   const showInstances = instances.length > 0 && layout === 'list'
   const previewFamily = catalogFontFamily(group.previewEntryId)
   const previewWeight = preview.faces[0]?.weight
@@ -166,7 +167,7 @@ export const LibraryCard = memo(function LibraryCard({
   )
   const previewFaces = useMemo(
     () =>
-      instances.map((row) => {
+      hoverInstances.map((row) => {
         const rowEntry = row.catalogEntryId
           ? group.entries.find((item) => item.id === row.catalogEntryId)
           : undefined
@@ -179,7 +180,7 @@ export const LibraryCard = memo(function LibraryCard({
           wait: entryHasPreviewFile(rowEntry ?? preview),
         }
       }),
-    [instances, previewFamily, group.entries, preview],
+    [hoverInstances, previewFamily, group.entries, preview],
   )
   const plan = batch ?? familyCardPlan(group, adobeAvailable)
   const inCurrentProject = Boolean(

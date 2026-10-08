@@ -178,6 +178,7 @@ export function InstanceList({
               family={family}
               weight={row.weight}
               italic={row.italic}
+              variation={row.variation}
               sample={cardPreviewSample(entry ? entryHasPreviewFile(entry) : true, row.previewSample)}
               wait={entry ? entryHasPreviewFile(entry) : true}
             />

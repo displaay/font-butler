@@ -12,6 +12,7 @@ import { Loader2 } from 'lucide-react'
 import { usePreviewFontReady } from '@/hooks/usePreviewFontReady'
 import { paintedPreviewIndices } from '@/lib/cyclingPreview'
 import { fitPreviewTransform } from '@/lib/fitPreview'
+import { facesSupportVariationInterpolation } from '@/lib/variationInterpolation'
 import { applyLatinPreviewSample, DEFAULT_LATIN_PREVIEW_TEXT } from '@/lib/latinPreview'
 import { cn } from '@/lib/utils'
 
@@ -100,6 +101,7 @@ function AaGlyph({
   wait = true,
   sample,
   fit = false,
+  animateVariation = false,
 }: {
   family: string
   weight?: number
@@ -109,6 +111,7 @@ function AaGlyph({
   wait?: boolean
   sample?: string
   fit?: boolean
+  animateVariation?: boolean
 }) {
   const ready = usePreviewFontReady(family, weight, italic, wait)
   const latinText = useContext(LatinPreviewContext)
@@ -168,6 +171,8 @@ function AaGlyph({
       className={cn(
         'font-preview select-none whitespace-nowrap',
         !fit && 'translate-y-px overflow-hidden',
+        animateVariation &&
+          'transition-[font-variation-settings,font-weight] duration-[600ms] ease-out motion-reduce:transition-none',
       )}
       dir="auto"
       style={{
@@ -196,6 +201,7 @@ export function AaPreview({
   family,
   weight = 400,
   italic = false,
+  variation,
   size = 'md',
   sample,
   wait,
@@ -203,6 +209,7 @@ export function AaPreview({
   family: string
   weight?: number
   italic?: boolean
+  variation?: string
   size?: 'sm' | 'md'
   sample?: string
   wait?: boolean
@@ -215,7 +222,15 @@ export function AaPreview({
         previewBoxClass(size),
       )}
     >
-      <AaGlyph family={family} weight={weight} italic={italic} pendingSize={size} sample={sample} wait={wait} />
+      <AaGlyph
+        family={family}
+        weight={weight}
+        italic={italic}
+        variation={variation}
+        pendingSize={size}
+        sample={sample}
+        wait={wait}
+      />
     </div>
   )
 }
@@ -246,7 +261,11 @@ export function CyclingAaPreview({
   const index = useHoverCycle(faces.length, cycling, restIndex)
   const layers = faces.length > 0 ? faces : [rest]
   const visibleIndex = cycling ? index : restIndex
-  const painted = paintedPreviewIndices(layers.length, visibleIndex, cycling)
+  const interpolateVariation = facesSupportVariationInterpolation(layers)
+  const painted = interpolateVariation
+    ? [visibleIndex]
+    : paintedPreviewIndices(layers.length, visibleIndex, cycling)
+  const visibleFace = layers[visibleIndex] ?? rest
 
   return (
     <div
@@ -256,32 +275,49 @@ export function CyclingAaPreview({
       )}
       style={{ fontSize: `${size}rem`, minHeight: `${size * 2}rem` }}
     >
-      {painted.map((faceIndex) => {
-        const face = layers[faceIndex]
-        if (!face) return null
-        return (
-          <div
-            key={`${face.family}-${face.weight ?? 400}-${face.italic ? 'i' : 'r'}-${face.label}-${faceIndex}`}
-            className={cn(
-              'absolute inset-0 flex items-center justify-center transition-opacity duration-150 ease-out motion-reduce:transition-none',
-              faceIndex === visibleIndex ? 'opacity-100' : 'opacity-0',
-            )}
-            aria-hidden={faceIndex !== visibleIndex}
-          >
-            <AaGlyph
-              family={face.family}
-              weight={face.weight}
-              italic={face.italic}
-              variation={face.variation}
-              pendingSize="glyph"
-              wait={face.wait !== false}
-              sample={sample}
-              fit
-            />
-            {cycling ? <PreviewLabel>{face.label}</PreviewLabel> : null}
-          </div>
-        )
-      })}
+      {interpolateVariation ? (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <AaGlyph
+            family={visibleFace.family}
+            weight={visibleFace.weight}
+            italic={visibleFace.italic}
+            variation={visibleFace.variation}
+            pendingSize="glyph"
+            wait={visibleFace.wait !== false}
+            sample={sample}
+            fit
+            animateVariation={cycling}
+          />
+          {cycling ? <PreviewLabel>{visibleFace.label}</PreviewLabel> : null}
+        </div>
+      ) : (
+        painted.map((faceIndex) => {
+          const face = layers[faceIndex]
+          if (!face) return null
+          return (
+            <div
+              key={`${face.family}-${face.weight ?? 400}-${face.italic ? 'i' : 'r'}-${face.label}-${faceIndex}`}
+              className={cn(
+                'absolute inset-0 flex items-center justify-center transition-opacity duration-150 ease-out motion-reduce:transition-none',
+                faceIndex === visibleIndex ? 'opacity-100' : 'opacity-0',
+              )}
+              aria-hidden={faceIndex !== visibleIndex}
+            >
+              <AaGlyph
+                family={face.family}
+                weight={face.weight}
+                italic={face.italic}
+                variation={face.variation}
+                pendingSize="glyph"
+                wait={face.wait !== false}
+                sample={sample}
+                fit
+              />
+              {cycling ? <PreviewLabel>{face.label}</PreviewLabel> : null}
+            </div>
+          )
+        })
+      )}
     </div>
   )
 }
