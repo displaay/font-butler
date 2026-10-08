@@ -14,7 +14,12 @@ electron/server.bundle.mjs
 electron/font-analysis-worker.mjs
 electron/finder-services.node
 electron/session-fonts.node
-release
+electron/app-icons/
+electron/apple-touch-icon.png
+electron/favicon-16.png
+electron/favicon-32.png
+electron/favicon-64.png
+release/
 *.local
 
 # App data created at runtime

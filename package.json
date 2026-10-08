@@ -13,7 +13,9 @@
     "electron": "concurrently -k -n server,vite,app -c cyan,magenta,green \"npm run server\" \"vite\" \"wait-on http://127.0.0.1:43181 http-get://127.0.0.1:43182/api/health && electron .\"",
     "build": "tsc -b && vite build && node scripts/bundle-server.mjs",
     "bundle:python": "COPYFILE_DISABLE=1 node scripts/bundle-python-runtime.mjs",
-    "dist": "COPYFILE_DISABLE=1 npm run build && npm run bundle:python && node scripts/build-finder-services.mjs && node scripts/build-session-fonts.mjs && COPYFILE_DISABLE=1 electron-builder --mac --publish never",
+    "dist": "COPYFILE_DISABLE=1 npm run build && npm run bundle:python && node scripts/build-finder-services.mjs && node scripts/build-session-fonts.mjs && COPYFILE_DISABLE=1 node scripts/mac-pack.mjs",
+    "release:mac": "COPYFILE_DISABLE=1 npm run build && npm run bundle:python && node scripts/build-finder-services.mjs && node scripts/build-session-fonts.mjs && COPYFILE_DISABLE=1 node scripts/mac-pack.mjs --release",
+    "publish:mac": "node scripts/upload-mac-release.mjs",
     "preview": "vite preview --host 127.0.0.1 --port 43181",
     "lint": "oxlint",
     "test": "FONT_BUTLER_TEST=1 tsx --test --test-concurrency=1 core/**/*.test.ts electron/**/*.test.mjs && FONT_BUTLER_TEST=1 TSX_TSCONFIG_PATH=tsconfig.app.json tsx --test --test-concurrency=1 src/**/*.test.ts tests/LibraryFilterGroups.test.ts",
@@ -100,7 +102,9 @@
       "releaseType": "release"
     },
     "mac": {
-      "identity": "-",
+      "identity": "DANIEL QUISEK (A7WWML89LQ)",
+      "hardenedRuntime": true,
+      "notarize": true,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "icon": "build/icon.icns",
