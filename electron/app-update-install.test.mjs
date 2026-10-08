@@ -622,6 +622,34 @@ test('the swap script restores the previous app if the new bundle cannot be move
   assert.throws(() => buildMacSwapScript({ pid: 0, currentApp: '/a', nextApp: '/b', tempDir: '/t', scriptPath: '/s' }))
 })
 
+test('a marked swap relaunches with open -n and an unmarked swap keeps plain open', () => {
+  const args = {
+    pid: 50,
+    currentApp: '/Applications/Font Buttler Test/Font Buttler.app',
+    nextApp: '/tmp/next/Font Buttler.app',
+    tempDir: '/tmp/font-butler-update',
+    scriptPath: '/tmp/font-butler-swap.sh',
+  }
+  const openLines = (script) =>
+    script
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith('open '))
+  const marked = buildMacSwapScript({ ...args, testFeedBuild: true })
+  const unmarked = buildMacSwapScript(args)
+  const quoted = "'/Applications/Font Buttler Test/Font Buttler.app'"
+  assert.deepEqual(openLines(marked), [`open -n ${quoted} || true`, `open -n ${quoted}`])
+  assert.deepEqual(openLines(unmarked), [`open ${quoted} || true`, `open ${quoted}`])
+  assert.equal(marked.includes('open -n'), true)
+  assert.equal(unmarked.includes('open -n'), false)
+  const markedRestore = marked.slice(marked.indexOf('reopen_original() {'), marked.indexOf("trap 'reopen_original"))
+  const unmarkedRestore = unmarked.slice(unmarked.indexOf('reopen_original() {'), unmarked.indexOf("trap 'reopen_original"))
+  assert.match(markedRestore, /open -n /)
+  assert.doesNotMatch(unmarkedRestore, /open -n /)
+  assert.match(marked.slice(marked.lastIndexOf('moved=0')), /open -n /)
+  assert.doesNotMatch(unmarked.slice(unmarked.lastIndexOf('moved=0')), /open -n /)
+})
+
 function runSwapFailure(fail) {
   const root = mkdtempSync(path.join(os.tmpdir(), 'font-butler-swap-'))
   const bin = path.join(root, 'bin')

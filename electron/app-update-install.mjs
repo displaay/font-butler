@@ -713,7 +713,7 @@ export function shellQuote(value) {
  * before the backup is moved back, and only when this script has moved the
  * original aside (`moved=1`) and the backup is a directory.
  */
-export function buildMacSwapScript({ pid, currentApp, nextApp, tempDir, scriptPath }) {
+export function buildMacSwapScript({ pid, currentApp, nextApp, tempDir, scriptPath, testFeedBuild = false }) {
   const id = Number(pid)
   if (!Number.isInteger(id) || id <= 1) throw new Error('Invalid update process id.')
   const backup = `${currentApp}.font-butler-previous`
@@ -722,6 +722,9 @@ export function buildMacSwapScript({ pid, currentApp, nextApp, tempDir, scriptPa
   const next = shellQuote(nextApp)
   const temp = shellQuote(tempDir)
   const script = shellQuote(scriptPath)
+  // Same bundle id as the real app. `open -n` starts this bundle instead of
+  // activating the copy that is already running. Only a marked test build.
+  const openApp = testFeedBuild === true ? `open -n ${current}` : `open ${current}`
   return `#!/bin/bash
 set -euo pipefail
 moved=0
@@ -733,7 +736,7 @@ reopen_original() {
       moved=0
     fi
   fi
-  open ${current} || true
+  ${openApp} || true
 }
 trap 'reopen_original; exit 1' ERR
 while kill -0 ${id} 2>/dev/null; do
@@ -751,7 +754,7 @@ if ! mv ${next} ${current}; then
 fi
 moved=0
 rm -rf ${previous}
-open ${current}
+${openApp}
 rm -rf ${temp}
 rm -f ${script}
 `
@@ -996,6 +999,7 @@ async function runInstall(deps, fetchImpl, tempDir) {
     nextApp,
     tempDir,
     scriptPath,
+    testFeedBuild: runtime.testFeedBuild === true,
   })
   if (deps.spawnSwap) await deps.spawnSwap({ script, scriptPath })
   else spawnSwapScript({ script, scriptPath })

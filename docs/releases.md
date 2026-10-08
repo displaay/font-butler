@@ -77,7 +77,9 @@ cd release
 python3 -m http.server 8765 --bind 127.0.0.1
 ```
 
-A marked build isolates itself before the single-instance lock, including after the swap relaunches it with plain `open` and no environment. `userData` becomes `~/Library/Application Support/Font Buttler Test`. When `FONT_BUTLER_DATA` is unset, the library, settings, and API token go in `~/Library/Application Support/Font Buttler Test/data`. An unmarked build does not change `userData` or `FONT_BUTLER_DATA`. Settings → General → App updates shows `TEST BUILD` and that data folder on the version line. Confirm the path before clicking **Update**.
+A marked build isolates itself before `app.requestSingleInstanceLock()` and before the app is ready, including after the swap relaunches it with no environment. `userData` becomes `~/Library/Application Support/Font Buttler Test`. When `FONT_BUTLER_DATA` is unset, the library, settings, and API token go in `~/Library/Application Support/Font Buttler Test/data`. Only the packaged `fontButlerTestFeed` marker does this. No environment variable can turn it on, and an unmarked build leaves `userData` and `FONT_BUTLER_DATA` alone. Settings → General → App updates shows `TEST BUILD` and that data folder on the version line. Confirm the path before clicking **Update**.
+
+The real Font Buttler uses the same bundle id and may be running. A marked build's swap relaunches with `open -n`, on both the success path and the restore path, so macOS opens this bundle instead of bringing the other app forward. An unmarked build still uses plain `open`.
 
 The feed variable has to reach the first process. LaunchServices does not keep the shell environment, so `FONT_BUTLER_UPDATE_FEED_URL=... open "Font Buttler.app"` does not pass it. Run the binary directly:
 
@@ -91,7 +93,7 @@ Or pass it with `open --env`:
 open --env FONT_BUTLER_UPDATE_FEED_URL=http://127.0.0.1:8765/ "/Applications/Font Buttler Test/Font Buttler.app"
 ```
 
-Click **Update**. The app installs the zip in place only when the bundle version inside the zip equals `0.9.0`. The relaunched app stays on the test data folder. It does not keep the feed URL, because the swap starts it with plain `open`. Launch the binary the same way to point it at the feed again.
+Click **Update**. The app installs the zip in place only when the bundle version inside the zip equals `0.9.0`. The relaunched app stays on the test data folder. `open -n` does not pass the feed URL. Launch the binary the same way to point it at the feed again.
 
 Install and Switch of fonts are not part of this path. Offline, GitHub API failures, or a private-repo 404 without a token stay a quiet no-update: no crash, no toast, no Install/Switch/auth churn. A last-good check is kept if one exists.
 

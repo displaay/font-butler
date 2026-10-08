@@ -28,6 +28,8 @@ export function planTestFeedDataIsolation({ testFeedBuild = false, appData = '',
  */
 export function applyTestFeedDataIsolation(app, env = process.env, execPath = process.execPath) {
   const appPath = outermostAppBundle(execPath)
+  // The packaged package.json marker is the only switch. Environment variables
+  // cannot turn isolation on, and cannot turn it off.
   const testFeedBuild = Boolean(appPath && readAppTestFeedMarker(appPath))
   const plan = planTestFeedDataIsolation({
     testFeedBuild,
@@ -35,6 +37,9 @@ export function applyTestFeedDataIsolation(app, env = process.env, execPath = pr
     env,
   })
   if (!plan.isolate) return plan
+  if (typeof app.isReady === 'function' && app.isReady()) {
+    throw new Error('A marked test build must set userData before the app is ready.')
+  }
   app.setPath('userData', plan.userData)
   if (plan.setDataEnv) env.FONT_BUTLER_DATA = plan.dataDir
   return plan

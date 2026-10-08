@@ -5,14 +5,20 @@ import path from 'node:path'
 import { test } from 'node:test'
 import { applyTestFeedDataIsolation, planTestFeedDataIsolation, TEST_FEED_USER_DATA_DIR } from './test-feed-data.mjs'
 
-function fakeApp(appData) {
+function fakeApp(appData, { ready = false } = {}) {
   const paths = { appData, userData: path.join(appData, 'Font Buttler') }
+  const setPathCalls = []
   return {
     paths,
+    setPathCalls,
+    isReady() {
+      return ready
+    },
     getPath(name) {
       return paths[name]
     },
     setPath(name, value) {
+      setPathCalls.push([name, value])
       paths[name] = value
       return undefined
     },
@@ -82,6 +88,7 @@ test('an unmarked build does not change userData or FONT_BUTLER_DATA', () => {
     assert.equal(plan.userData, null)
     assert.equal(plan.dataDir, null)
     assert.equal(app.paths.userData, originalUserData)
+    assert.equal(app.setPathCalls.length, 0)
     assert.equal(env.FONT_BUTLER_DATA, undefined)
     assert.equal(env.OTHER, 'kept')
     assert.deepEqual(
@@ -93,13 +100,58 @@ test('an unmarked build does not change userData or FONT_BUTLER_DATA', () => {
   }
 })
 
-test('main isolates a test-feed build before the single-instance lock and the worker inherits FONT_BUTLER_DATA', () => {
+test('no environment variable can turn isolation on, and only the marker can', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'fb-test-feed-'))
+  try {
+    const unmarked = writeBundle(path.join(root, 'plain'), { name: 'font-butler', version: '0.3.9' })
+    const marked = writeBundle(path.join(root, 'marked'), { name: 'font-butler', fontButlerTestFeed: true })
+    const tempting = {
+      FONT_BUTLER_TEST_FEED_BUILD: '1',
+      FONT_BUTLER_UPDATE_FEED_URL: 'http://127.0.0.1:8765/',
+      FONT_BUTLER_TEST_FEED: '1',
+      fontButlerTestFeed: 'true',
+    }
+    const plainApp = fakeApp(path.join(root, 'Application Support'))
+    const plain = applyTestFeedDataIsolation(plainApp, tempting, unmarked)
+    assert.equal(plain.isolate, false)
+    assert.equal(plainApp.setPathCalls.length, 0)
+    assert.equal(tempting.FONT_BUTLER_DATA, undefined)
+
+    const off = {
+      FONT_BUTLER_TEST_FEED_BUILD: '0',
+      FONT_BUTLER_UPDATE_FEED_URL: '',
+      FONT_BUTLER_TEST_FEED: '0',
+    }
+    const markedApp = fakeApp(path.join(root, 'Application Support'))
+    const turnedOn = applyTestFeedDataIsolation(markedApp, off, marked)
+    assert.equal(turnedOn.isolate, true)
+    assert.deepEqual(markedApp.setPathCalls, [['userData', path.join(root, 'Application Support', TEST_FEED_USER_DATA_DIR)]])
+    assert.equal(off.FONT_BUTLER_DATA, path.join(root, 'Application Support', TEST_FEED_USER_DATA_DIR, 'data'))
+
+    const late = fakeApp(path.join(root, 'Application Support'), { ready: true })
+    assert.throws(
+      () => applyTestFeedDataIsolation(late, {}, marked),
+      /before the app is ready/,
+    )
+    assert.equal(late.setPathCalls.length, 0)
+    const helper = readFileSync(new URL('./test-feed-data.mjs', import.meta.url), 'utf8')
+    assert.doesNotMatch(helper, /FONT_BUTLER_TEST_FEED_BUILD|FONT_BUTLER_UPDATE_FEED_URL|FONT_BUTLER_TEST_FEED\b/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('main sets test-feed userData and FONT_BUTLER_DATA before the single-instance lock and app ready', () => {
   const main = readFileSync(new URL('./main.mjs', import.meta.url), 'utf8')
   const applyAt = main.indexOf('applyTestFeedDataIsolation(app)')
-  const lockAt = main.indexOf('requestSingleInstanceLock')
-  const readyAt = main.indexOf('app.whenReady')
+  const lockAt = main.indexOf('app.requestSingleInstanceLock()')
+  const readyAt = main.indexOf('app.whenReady()')
   assert.ok(applyAt > 0)
   assert.ok(applyAt < lockAt)
   assert.ok(applyAt < readyAt)
+  assert.doesNotMatch(main.slice(readyAt), /setPath\('userData'|applyTestFeedDataIsolation/)
+  const helper = readFileSync(new URL('./test-feed-data.mjs', import.meta.url), 'utf8')
+  assert.match(helper, /app\.setPath\('userData', plan\.userData\)/)
+  assert.match(helper, /env\.FONT_BUTLER_DATA = plan\.dataDir/)
   assert.match(main, /FONT_BUTLER_DATA: process\.env\.FONT_BUTLER_DATA/)
 })

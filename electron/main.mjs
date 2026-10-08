@@ -81,9 +81,9 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
 
-// Before the single-instance lock and any userData read. LaunchServices
-// relaunches with `open` and drops the environment, so a marked build has to
-// isolate itself from the packaged fontButlerTestFeed marker alone.
+// Before requestSingleInstanceLock and before app ready. Only the packaged
+// fontButlerTestFeed marker selects this. A LaunchServices relaunch has no
+// environment, so the marker alone has to isolate the test build.
 applyTestFeedDataIsolation(app)
 
 const debugLog = createDebugLogStore()
