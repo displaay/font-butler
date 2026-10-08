@@ -582,7 +582,8 @@ export function shellQuote(value) {
  * Any failure restores the original bundle if it was moved, then opens that app.
  * An early `rm` failure is not left to `set -e`: the ERR trap opens the original app.
  * A cross-volume `mv` can leave a partial destination. That directory is removed
- * before the backup is moved back, and only when the backup is still present.
+ * before the backup is moved back, and only when this script has moved the
+ * original aside (`moved=1`) and the backup is a directory.
  */
 export function buildMacSwapScript({ pid, currentApp, nextApp, tempDir, scriptPath }) {
   const id = Number(pid)
@@ -597,7 +598,7 @@ export function buildMacSwapScript({ pid, currentApp, nextApp, tempDir, scriptPa
 set -euo pipefail
 moved=0
 reopen_original() {
-  if [[ "$moved" -eq 1 && -e ${previous} ]]; then
+  if [[ "$moved" -eq 1 && -d ${previous} ]]; then
     rm -rf ${current} || true
     if [[ ! -e ${current} ]]; then
       mv ${previous} ${current} || true

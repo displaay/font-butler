@@ -1239,10 +1239,13 @@ export function Sidebar({
       </nav>
       </ScrollArea>
       <div className="border-t px-3 py-2">
-        <div className="relative">
+        <div className="group/settings relative">
           <Button
             variant="ghost"
-            className={navButtonClass(false, 'w-full')}
+            className={navButtonClass(
+              false,
+              'w-full group-hover/settings:bg-black/[0.05] dark:group-hover/settings:bg-white/[0.08]',
+            )}
             title={hasAppUpdate ? 'App update available' : undefined}
             onClick={onOpenSettings}
           >

@@ -98,6 +98,9 @@ test('settings button shows a blue Update badge when an app release is available
   const settingsButton = source.slice(buttonAt, buttonEnd + '</Button>'.length)
   assert.doesNotMatch(settingsButton, /<button/)
   assert.match(settingsButton, /hasAppUpdate \?/)
+  assert.match(source.slice(source.lastIndexOf('<div className="', buttonAt), buttonAt), /group\/settings relative/)
+  assert.match(settingsButton, /group-hover\/settings:bg-black\/\[0\.05\]/)
+  assert.match(settingsButton, /dark:group-hover\/settings:bg-white\/\[0\.08\]/)
   const badge = source.slice(buttonEnd, source.indexOf('</aside>', buttonEnd))
   assert.match(badge, /<button/)
   assert.match(badge, /bg-blue-50 text-blue-700/)
@@ -106,7 +109,9 @@ test('settings button shows a blue Update badge when an app release is available
   assert.match(badge, /appUpdateBadgeLabel/)
   assert.match(badge, /appUpdateClickIgnored/)
   assert.match(badge, /onInstallAppUpdate/)
-  assert.doesNotMatch(badge.slice(0, badge.indexOf('</button>') + '</button>'.length), /onOpenSettings/)
+  const badgeButton = badge.slice(0, badge.indexOf('</button>') + '</button>'.length)
+  assert.doesNotMatch(badgeButton, /onOpenSettings/)
+  assert.doesNotMatch(badgeButton, /group-hover/)
 })
 
 test('the Update badge names the version and ignores clicks while busy', () => {

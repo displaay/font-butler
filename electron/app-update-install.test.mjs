@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
@@ -493,7 +493,10 @@ test('the swap script restores the previous app if the new bundle cannot be move
     "mv '/Applications/Font Buttler.app.font-butler-previous' '/Applications/Font Buttler.app'",
   )
   assert.ok(removePartial !== -1 && restoreBackup > removePartial)
-  assert.match(reopen, /-e '\/Applications\/Font Buttler.app.font-butler-previous'/)
+  assert.match(
+    reopen,
+    /"\$moved" -eq 1 && -d '\/Applications\/Font Buttler.app.font-butler-previous'/,
+  )
   assert.match(script, /if ! mv '\/tmp\/next\/Font Buttler.app' '\/Applications\/Font Buttler.app'; then\n  reopen_original/)
   assert.throws(() => buildMacSwapScript({ pid: 0, currentApp: '/a', nextApp: '/b', tempDir: '/t', scriptPath: '/s' }))
 })
@@ -510,10 +513,16 @@ function runSwapFailure(fail) {
   mkdirSync(tempDir)
   writeFileSync(path.join(current, 'marker'), 'original')
   writeFileSync(path.join(next, 'marker'), 'new')
+  const backup = `${current}.font-butler-previous`
+  const before = statSync(current)
+  const markerBefore = statSync(path.join(current, 'marker'))
   const openLog = path.join(root, 'opened')
   writeFileSync(
     path.join(bin, 'mv'),
     `#!/bin/bash
+if [[ ${JSON.stringify(fail)} == "aside" && "$1" == ${JSON.stringify(current)} && "$2" == ${JSON.stringify(backup)} ]]; then
+  exit 1
+fi
 if [[ "$1" == ${JSON.stringify(next)} ]]; then
   if [[ ${JSON.stringify(fail)} == "mv" ]]; then
     exit 1
@@ -556,8 +565,19 @@ printf '%s\\n' "$1" >> ${JSON.stringify(openLog)}
     env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
   })
   const opened = existsSync(openLog) ? readFileSync(openLog, 'utf8').trim().split('\n') : []
-  const marker = existsSync(path.join(current, 'marker')) ? readFileSync(path.join(current, 'marker'), 'utf8') : ''
-  return { result, opened, marker, current, root }
+  const markerPath = path.join(current, 'marker')
+  const marker = existsSync(markerPath) ? readFileSync(markerPath, 'utf8') : ''
+  return {
+    result,
+    opened,
+    marker,
+    current,
+    root,
+    before,
+    markerBefore,
+    after: existsSync(current) ? statSync(current) : null,
+    markerAfter: existsSync(markerPath) ? statSync(markerPath) : null,
+  }
 }
 
 test('a failing mv or rm reopens the original app', () => {
@@ -577,6 +597,20 @@ test('a failing mv or rm reopens the original app', () => {
     assert.equal(existsSync(`${removed.current}.font-butler-previous`), false)
   } finally {
     rmSync(removed.root, { recursive: true, force: true })
+  }
+})
+
+test('a failed move aside leaves the original bundle untouched', () => {
+  const aside = runSwapFailure('aside')
+  try {
+    assert.notEqual(aside.result.status, 0)
+    assert.equal(aside.marker, 'original')
+    assert.equal(aside.after?.ino, aside.before.ino)
+    assert.equal(aside.markerAfter?.ino, aside.markerBefore.ino)
+    assert.equal(existsSync(`${aside.current}.font-butler-previous`), false)
+    assert.deepEqual(aside.opened, [aside.current])
+  } finally {
+    rmSync(aside.root, { recursive: true, force: true })
   }
 })
 
