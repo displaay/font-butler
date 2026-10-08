@@ -116,7 +116,7 @@ The profile name is `font-butler-notary`. If it lives in a keychain other than t
    - `Font-Buttler-{version}-arm64.zip.blockmap`
    - `latest-mac.yml` (updater feed; electron-updater is not wired)
 
-   The DMG blockmap is deleted by `scripts/mac-pack.mjs` after electron-builder returns, because stapling changes the DMG bytes. Do not upload a `*.dmg.blockmap`.
+   The DMG blockmap is deleted after electron-builder returns, because stapling changes the DMG bytes and the blockmap is not regenerated. `npm run publish:mac` deletes a leftover `*.dmg.blockmap` and does not upload one. Auto-install is off, so nothing reads that file.
 
 7. Download the DMG from the draft Release and open it. After that file is the one you want to ship, publish the Release yourself. This step is not part of `npm run publish:mac`.
 
@@ -150,7 +150,7 @@ electron-builder is 26.15.3 (`@electron/notarize` 2.5.0). No upgrade. `mac.notar
 - `APPLE_KEYCHAIN_PROFILE` (required for notarization)
 - `APPLE_KEYCHAIN` (optional; default is the login keychain)
 
-`@electron/notarize` submits the `.app`, waits, and staples the ticket onto the bundle before the dmg and zip are built. The zip is created from that stapled app and is not modified afterwards. The dmg is then Developer ID signed (`dmg.sign: true` only on this notarized path), notarized, and stapled in the `afterAllArtifactBuild` hook. That hook does not submit the zip to notarytool: that would wrap it in another zip and break the blockmap. It also does not rewrite `latest-mac.yml`. electron-builder 26.15.3 writes that file in `publishManager.awaitTasks()`, which runs after the hook, and the sha512 it records for the dmg is the pre-staple hash. After the builder process has returned, `scripts/mac-pack.mjs` rewrites sha512 and size for the stapled dmg and the zip from the bytes on disk, deletes the stale dmg blockmap, and then runs `scripts/assert-notarized-mac-release.mjs`. The top-level sha512 stays the zip.
+`@electron/notarize` submits the `.app`, waits, and staples the ticket onto the bundle before the dmg and zip are built. The zip is created from that stapled app and is not modified afterwards. The dmg is then Developer ID signed (`dmg.sign: true` only on this notarized path), notarized, and stapled in the `afterAllArtifactBuild` hook. That hook does not submit the zip to notarytool: that would wrap it in another zip and break the blockmap. It also does not rewrite `latest-mac.yml`. electron-builder 26.15.3 writes that file in `publishManager.awaitTasks()`, which runs after the hook, and the sha512 it records for the dmg is the pre-staple hash. After the builder process has returned, `scripts/mac-pack.mjs` rewrites sha512 and size for the stapled dmg and the zip from the bytes on disk, deletes the stale dmg blockmap, and then runs `scripts/assert-notarized-mac-release.mjs`. That check hashes the dmg and zip on disk and fails if either sha512 or size differs from `latest-mac.yml`. The top-level sha512 stays the zip.
 
 ### Identity
 
@@ -195,7 +195,7 @@ On Linux, `npm run dist` without a notary profile skips macOS signing. `npm run 
 | `npm run build` | Does not sign or pack | Does not sign or pack | Does not sign or pack |
 | `npm run dist` | Ad-hoc sign (`identity: "-"`), hardened runtime, `build/entitlements.mac.adhoc.plist`. Notarization off. Local only. | Developer ID sign, no notarization. Local only. | Developer ID, `forceCodeSigning`, notarize the app, sign and staple the DMG. Missing certificate or a failed sign/notarize stops the build. Not an ad-hoc fallback. Off macOS, the command errors. |
 | `npm run release:mac` | Fails. No ad-hoc fallback. | — | Developer ID, profile `font-butler-notary` when unset, notarize, staple the app and the DMG, rewrite `latest-mac.yml` from the files on disk, then the notarization assert. macOS only. |
-| `npm run publish:mac` | Refuses to upload | Refuses to upload | Uploads a draft after `stapler validate` passes on the app, the DMG, the app inside the DMG, and the app inside the zip, and `spctl` reports Notarized Developer ID. Leaves the Release as a draft. |
+| `npm run publish:mac` | Refuses to upload | Refuses to upload | Uploads a draft after `stapler validate` passes on the app, the DMG, the app inside the DMG, and the app inside the zip, `spctl` reports Notarized Developer ID, and `latest-mac.yml` sha512 and size match the DMG and zip on disk. Does not upload a DMG blockmap. Leaves the Release as a draft. |
 
 Notarization runs only when `APPLE_KEYCHAIN_PROFILE` is set. `npm run dist` does not set it. Setting the profile, including a leftover one in the environment, selects the notarized path. A half-set `APPLE_ID` / API-key trio is removed from the pack environment so it cannot abort a local build or leak into the pack. The only notary credentials this repo passes through are the keychain profile and optional `APPLE_KEYCHAIN`.
 

@@ -1,9 +1,14 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { sha512Base64 } from './mac-dmg-staple.mjs'
 import { DEVELOPER_ID_IDENTITY } from './mac-signing.mjs'
+
+const require = createRequire(import.meta.url)
+const yaml = require('js-yaml')
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -84,6 +89,48 @@ export function readPackVersion(root) {
   return JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version
 }
 
+/**
+ * Compare latest-mac.yml to the DMG and zip now on disk. Stapling changes the
+ * DMG bytes after electron-builder hashed them, so a feed that still has the
+ * pre-staple sha512 or size must fail the publish.
+ */
+export async function updateFeedFailures({ dmg, zip, feed }) {
+  const feedName = path.basename(feed)
+  if (!existsSync(feed)) return [`${feedName} is missing, so the update feed cannot be checked.`]
+  let doc
+  try {
+    doc = yaml.load(readFileSync(feed, 'utf8'))
+  } catch {
+    return [`Could not read ${feedName}.`]
+  }
+  if (!doc || !Array.isArray(doc.files)) return [`${feedName} has no files list.`]
+  const failures = []
+  const zipName = path.basename(zip)
+  const dmgName = path.basename(dmg)
+  for (const name of [zipName, dmgName]) {
+    const file = name === zipName ? zip : dmg
+    const entry = doc.files.find((item) => item && path.basename(String(item.url ?? '')) === name)
+    if (!entry) {
+      failures.push(`${feedName} has no entry for ${name}.`)
+      continue
+    }
+    if (!existsSync(file)) {
+      failures.push(`${name} is missing on disk.`)
+      continue
+    }
+    const sha512 = await sha512Base64(file)
+    const size = statSync(file).size
+    if (entry.sha512 !== sha512) failures.push(`${feedName} sha512 for ${name} does not match the file on disk.`)
+    if (entry.size !== size) failures.push(`${feedName} size for ${name} does not match the file on disk.`)
+  }
+  if (path.basename(String(doc.path ?? '')) !== zipName) {
+    failures.push(`${feedName} path must be ${zipName}.`)
+  } else if (existsSync(zip) && doc.sha512 !== (await sha512Base64(zip))) {
+    failures.push(`${feedName} sha512 does not match ${zipName}.`)
+  }
+  return failures
+}
+
 /** Archives for this version only. Any other .dmg or .zip in release/ is a hard failure. */
 export function prepareMacPublish(root, version) {
   const releaseDir = path.join(root, 'release')
@@ -93,6 +140,11 @@ export function prepareMacPublish(root, version) {
     names = readdirSync(releaseDir)
   } catch {
     names = []
+  }
+  // Stapling invalidates the DMG blockmap. It is not regenerated. Delete any
+  // copy still in release/ so publish cannot upload a stale one.
+  for (const name of names) {
+    if (name.endsWith('.dmg.blockmap')) unlinkSync(path.join(releaseDir, name))
   }
   const archives = names.filter((name) => name.endsWith('.dmg') || name.endsWith('.zip'))
   const unexpected = archives.filter((name) => name !== expected.dmg && name !== expected.zip)
@@ -115,7 +167,9 @@ export function prepareMacPublish(root, version) {
   for (const [file, label] of required) {
     if (!existsSync(file)) failures.push(`Missing release/${label} for version ${version}.`)
   }
-  const upload = failures.length ? [] : [dmg, zip, zipBlockmap, feed]
+  const upload = (failures.length ? [] : [dmg, zip, zipBlockmap, feed]).filter(
+    (file) => !path.basename(file).endsWith('.dmg.blockmap'),
+  )
   return { expected, unexpected, failures, dmg, zip, zipBlockmap, feed, app, upload }
 }
 
@@ -148,12 +202,19 @@ function evidenceForApp(app, extra) {
   })
 }
 
-export function assertNotarizedMacRelease(root = repoRoot, version = readPackVersion(root)) {
-  if (process.platform !== 'darwin') {
-    return ['Refusing to publish a macOS release from a non-macOS host. Notarization can only be checked on macOS.']
-  }
+export async function assertNotarizedMacRelease(root = repoRoot, version = readPackVersion(root)) {
   const files = prepareMacPublish(root, version)
-  if (files.failures.length) return files.failures
+  const feedFailures =
+    existsSync(files.dmg) && existsSync(files.zip) && existsSync(files.feed)
+      ? await updateFeedFailures({ dmg: files.dmg, zip: files.zip, feed: files.feed })
+      : []
+  if (process.platform !== 'darwin') {
+    return [
+      'Refusing to publish a macOS release from a non-macOS host. Notarization can only be checked on macOS.',
+      ...feedFailures,
+    ]
+  }
+  if (files.failures.length) return [...files.failures, ...feedFailures]
 
   const { app, dmg, zip } = files
   const failures = []
@@ -192,13 +253,14 @@ export function assertNotarizedMacRelease(root = repoRoot, version = readPackVer
       staplerDmgAppStatus: dmgAppStatus,
       staplerZipAppStatus: zipAppStatus,
     }),
+    ...feedFailures,
   )
   return failures
 }
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 if (isMain) {
-  const failures = assertNotarizedMacRelease()
+  const failures = await assertNotarizedMacRelease()
   if (failures.length) {
     console.error('Refusing to publish this macOS build.')
     for (const failure of failures) console.error(`- ${failure}`)

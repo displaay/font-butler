@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { notarizationFailures, prepareMacPublish } from '../scripts/assert-notarized-mac-release.mjs'
+import { assertNotarizedMacRelease, notarizationFailures, prepareMacPublish, updateFeedFailures } from '../scripts/assert-notarized-mac-release.mjs'
 import { publishVersionedMacRelease } from '../scripts/upload-mac-release.mjs'
 import { rewriteMacUpdateFeed, sha512Base64, stapleSignedDmgs } from '../scripts/mac-dmg-staple.mjs'
 import {
@@ -439,6 +439,84 @@ test('latest-mac.yml is rewritten after the builder, not inside the DMG staple h
     )
   } finally {
     rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('the publish check hashes the stapled DMG and zip and does not upload a DMG blockmap', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-feed-assert-'))
+  try {
+    const releaseDir = writeVersionedRelease(root, '0.3.8')
+    const dmgName = 'Font-Buttler-0.3.8-arm64.dmg'
+    const zipName = 'Font-Buttler-0.3.8-arm64.zip'
+    const dmg = path.join(releaseDir, dmgName)
+    const zip = path.join(releaseDir, zipName)
+    const feed = path.join(releaseDir, 'latest-mac.yml')
+    const dmgBlockmap = `${dmg}.blockmap`
+    const dmgBytes = 'stapled-dmg-bytes'
+    const zipBytes = 'stapled-zip-bytes'
+    writeFileSync(dmg, dmgBytes)
+    writeFileSync(zip, zipBytes)
+    writeFileSync(dmgBlockmap, 'stale-dmg-blockmap')
+    writeFileSync(
+      feed,
+      yaml.dump({
+        version: '0.3.8',
+        files: [
+          { url: zipName, sha512: 'stale-zip-sha', size: 1 },
+          { url: dmgName, sha512: 'stale-dmg-sha', size: 2 },
+        ],
+        path: zipName,
+        sha512: 'stale-zip-sha',
+      }),
+    )
+    await rewriteMacUpdateFeed(releaseDir)
+    const doc = yaml.load(readFileSync(feed, 'utf8'))
+    const dmgSha = await sha512Base64(dmg)
+    const zipSha = await sha512Base64(zip)
+    assert.equal(doc.files.find((entry) => entry.url === dmgName).sha512, dmgSha)
+    assert.equal(doc.files.find((entry) => entry.url === dmgName).size, Buffer.byteLength(dmgBytes))
+    assert.equal(doc.files.find((entry) => entry.url === zipName).sha512, zipSha)
+    assert.equal(doc.files.find((entry) => entry.url === zipName).size, Buffer.byteLength(zipBytes))
+    assert.equal(doc.sha512, zipSha)
+    assert.deepEqual(await updateFeedFailures({ dmg, zip, feed }), [])
+    assert.equal(existsSync(dmgBlockmap), false)
+
+    writeFileSync(dmgBlockmap, 'stale-dmg-blockmap')
+    const prepared = prepareMacPublish(root, '0.3.8')
+    assert.equal(existsSync(dmgBlockmap), false)
+    assert.equal(prepared.failures.length, 0)
+    assert.equal(prepared.upload.some((file) => file.endsWith('.dmg.blockmap')), false)
+    const calls = []
+    const published = await publishVersionedMacRelease({
+      tag: 'v0.3.8',
+      files: [...prepared.upload, dmgBlockmap],
+      release: { exists: false, draft: false },
+      tagOnRemote: true,
+      exec: async (_command, args) => ghDraftExec(calls, args),
+    })
+    assert.equal(published.ok, true)
+    const upload = calls.find((args) => args[0] === 'release' && args[1] === 'upload')
+    assert.equal(upload.some((arg) => String(arg).endsWith('.dmg.blockmap')), false)
+
+    writeFileSync(dmg, 'dmg-bytes-changed-after-the-feed-was-written')
+    const mismatched = await updateFeedFailures({ dmg, zip, feed })
+    assert.ok(mismatched.some((failure) => failure.includes(dmgName) && failure.includes('sha512')))
+    assert.ok(mismatched.some((failure) => failure.includes(dmgName) && failure.includes('size')))
+    assert.equal(mismatched.some((failure) => failure.includes(zipName)), false)
+    const asserted = await assertNotarizedMacRelease(root, '0.3.8')
+    assert.ok(asserted.some((failure) => failure.includes(dmgName) && failure.includes('sha512')))
+    assert.ok(asserted.some((failure) => failure.includes(dmgName) && failure.includes('size')))
+
+    writeFileSync(dmg, dmgBytes)
+    const zipOnly = yaml.load(readFileSync(feed, 'utf8'))
+    zipOnly.files.find((entry) => entry.url === zipName).size = 1
+    writeFileSync(feed, yaml.dump(zipOnly))
+    const sizeMismatch = await updateFeedFailures({ dmg, zip, feed })
+    assert.deepEqual(sizeMismatch, [`latest-mac.yml size for ${zipName} does not match the file on disk.`])
+    const sizeAsserted = await assertNotarizedMacRelease(root, '0.3.8')
+    assert.ok(sizeAsserted.includes(`latest-mac.yml size for ${zipName} does not match the file on disk.`))
+  } finally {
+    rmSync(root, { recursive: true, force: true })
   }
 })
 

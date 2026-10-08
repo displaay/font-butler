@@ -24,8 +24,10 @@ export function sha512Base64(file) {
  * which runs after `afterAllArtifactBuild`. By then the DMG staple has already
  * changed the DMG bytes, so the file on disk does not match the hashes in that
  * yml. Recompute sha512 and size for the zip and the DMG from the bytes on disk,
- * and drop the stale DMG blockmap. The zip blockmap stays: the zip is built
- * from the already-stapled app and is not modified here.
+ * and drop the stale DMG blockmap. That blockmap is not regenerated: auto-install
+ * is off, so nothing reads it, and a stale one must not be shipped. The zip
+ * blockmap stays: the zip is built from the already-stapled app and is not
+ * modified here.
  */
 export async function rewriteMacUpdateFeed(releaseDir) {
   const ymlPath = path.join(releaseDir, 'latest-mac.yml')

@@ -60,7 +60,8 @@ export async function publishVersionedMacRelease({ tag, files, release, tagOnRem
       }
     }
   }
-  const uploadArgs = ['release', 'upload', tag, ...files, '--clobber']
+  const ship = files.filter((file) => !path.basename(file).endsWith('.dmg.blockmap'))
+  const uploadArgs = ['release', 'upload', tag, ...ship, '--clobber']
   const uploaded = await exec('gh', uploadArgs)
   commands.push(['gh', ...uploadArgs])
   if ((uploaded?.status ?? 1) !== 0) {
@@ -74,7 +75,7 @@ export async function publishVersionedMacRelease({ tag, files, release, tagOnRem
   const viewArgs = ['release', 'view', tag, '--json', 'isDraft,assets']
   const viewed = await exec('gh', viewArgs)
   commands.push(['gh', ...viewArgs])
-  const verificationError = uploadVerificationError(tag, files, viewed)
+  const verificationError = uploadVerificationError(tag, ship, viewed)
   if (verificationError) {
     return { ok: false, draft: true, error: verificationError, commands }
   }
@@ -125,7 +126,7 @@ async function main() {
     for (const failure of prepared.failures) console.error(`- ${failure}`)
     process.exit(1)
   }
-  const notarized = assertNotarizedMacRelease(repoRoot, version)
+  const notarized = await assertNotarizedMacRelease(repoRoot, version)
   if (notarized.length) {
     console.error('Refusing to upload this macOS build.')
     for (const failure of notarized) console.error(`- ${failure}`)
