@@ -344,6 +344,10 @@ test('a second start while the disk image is opening returns that phase', async 
     { name: macArm64ArchiveName(version, 'dmg'), sha512: sha512(published), size: published.length },
   ])
   let releaseOpen
+  let markOpenCalled
+  const openCalled = new Promise((resolve) => {
+    markOpenCalled = resolve
+  })
   const dir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-opening-'))
   const record = path.join(dir, 'opened.json')
   const installer = createAppUpdateInstaller({
@@ -356,6 +360,7 @@ test('a second start while the disk image is opening returns that phase', async 
     openPath: () =>
       new Promise((resolve) => {
         releaseOpen = () => resolve('')
+        markOpenCalled()
       }),
     fetch: async (url) => {
       if (url === GITHUB_LATEST_API) return httpResponse({ body: JSON.stringify(releaseJson(version)) })
@@ -364,9 +369,7 @@ test('a second start while the disk image is opening returns that phase', async 
     },
   })
   const first = installer.start()
-  for (let attempt = 0; attempt < 50 && installer.status().phase !== 'opening'; attempt += 1) {
-    await new Promise((resolve) => setImmediate(resolve))
-  }
+  await Promise.race([openCalled, first])
   assert.equal(installer.status().phase, 'opening')
   const second = await installer.start()
   assert.equal(second.ok, false)
