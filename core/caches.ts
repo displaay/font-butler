@@ -326,11 +326,10 @@ function isEnabled(filePath, available) {
 function registerUrl(filePath, register) {
   const url = $.NSURL.fileURLWithPath(filePath)
   const fn = register ? $.CTFontManagerRegisterFontsForURL : $.CTFontManagerUnregisterFontsForURL
-  // Prefer the user/session scope so the Electron renderer and other applications
-  // can see the registration after this helper returns. macOS rejects that scope
-  // for paths outside the user's font domain (including isolated test paths), so
-  // fall back to process scope for those locations. The ensure operation verifies
-  // the fallback registration before this helper exits.
+  // macOS user-visible registration is kCTFontManagerScopeSession (3). Scope 2 is persistent and
+  // often returns paramErr (-50) for ~/Library/Fonts paths. Scope 1 is process-only, which made
+  // Figma and other apps miss fonts while fc-list still saw the files on disk.
+  if (Boolean(ObjC.unwrap(fn(url, 3, null)))) return true
   if (Boolean(ObjC.unwrap(fn(url, 2, null)))) return true
   return Boolean(ObjC.unwrap(fn(url, 1, null)))
 }
