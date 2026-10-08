@@ -10,27 +10,51 @@ export const MAC_RELEASE_NOTES = `This build is signed with Developer ID and not
 If you are using an earlier Font Buttler build, download this version manually once and replace the app. Those builds were ad-hoc signed. The in-app update check compares versions and opens the download in your browser. It does not install the update. Later releases still install the same way: download the file yourself.`
 
 export function missingTagMessage(tag) {
-  return `Tag ${tag} is not on origin. Create it from the release commit and push it before publishing:\n  git tag ${tag}\n  git push origin ${tag}`
+  return `Tag ${tag} is not on origin. Create it from the release commit and push it before uploading:\n  git tag ${tag}\n  git push origin ${tag}`
+}
+
+export function publishedReleaseMessage(tag) {
+  return `GitHub Release ${tag} is already published. Refusing to overwrite it.`
+}
+
+function uploadVerificationError(tag, files, view) {
+  if ((view?.status ?? 1) !== 0) return `Could not verify the draft upload for ${tag}.`
+  let parsed
+  try {
+    parsed = JSON.parse(view.output ?? '')
+  } catch {
+    return `Could not read the assets on draft ${tag}.`
+  }
+  if (parsed.isDraft !== true) {
+    return `Release ${tag} is not a draft after upload. This command does not publish it.`
+  }
+  const present = new Set((parsed.assets ?? []).map((asset) => asset.name))
+  const missing = files.map((file) => path.basename(file)).filter((name) => !present.has(name))
+  if (missing.length) return `Draft ${tag} is missing ${missing.join(', ')} after upload.`
+  return null
 }
 
 /**
- * Create a draft when the GitHub Release is missing, upload, then mark it
- * public only after the upload succeeds. /releases/latest skips drafts, so a
- * failed upload cannot advertise a release that has no DMG.
+ * Create a draft when the GitHub Release is missing, upload the version-matched
+ * files, and stop. Publishing (`gh release edit <tag> --draft=false`) is a
+ * separate manual step. A release that is already public is left untouched.
  */
 export async function publishVersionedMacRelease({ tag, files, release, tagOnRemote, exec }) {
   if (!tagOnRemote) {
-    return { ok: false, error: missingTagMessage(tag), commands: [] }
+    return { ok: false, draft: false, error: missingTagMessage(tag), commands: [] }
+  }
+  if (release?.exists && !release.draft) {
+    return { ok: false, draft: false, error: publishedReleaseMessage(tag), commands: [] }
   }
   const commands = []
-  const createdDraft = !release?.exists
-  if (createdDraft) {
+  if (!release?.exists) {
     const createArgs = ['release', 'create', tag, '--verify-tag', '--draft', '--title', tag, '--notes', MAC_RELEASE_NOTES]
     const created = await exec('gh', createArgs)
     commands.push(['gh', ...createArgs])
     if ((created?.status ?? 1) !== 0) {
       return {
         ok: false,
+        draft: false,
         error: `Could not create draft release ${tag}. ${(created?.output || '').trim()}`.trim(),
         commands,
       }
@@ -40,25 +64,21 @@ export async function publishVersionedMacRelease({ tag, files, release, tagOnRem
   const uploaded = await exec('gh', uploadArgs)
   commands.push(['gh', ...uploadArgs])
   if ((uploaded?.status ?? 1) !== 0) {
-    const stayed =
-      createdDraft || release?.draft
-        ? 'The release stays a draft so /releases/latest does not show a release without a DMG.'
-        : `The existing ${tag} release was left unchanged.`
-    return { ok: false, error: `Upload to ${tag} failed. ${stayed}`, commands }
-  }
-  if (createdDraft || release?.draft) {
-    const editArgs = ['release', 'edit', tag, '--draft=false']
-    const edited = await exec('gh', editArgs)
-    commands.push(['gh', ...editArgs])
-    if ((edited?.status ?? 1) !== 0) {
-      return {
-        ok: false,
-        error: `Uploaded ${tag}, but publishing the draft failed. It is still a draft.`,
-        commands,
-      }
+    return {
+      ok: false,
+      draft: true,
+      error: `Upload to ${tag} failed. The release stays a draft so /releases/latest does not show a release without a DMG.`,
+      commands,
     }
   }
-  return { ok: true, commands }
+  const viewArgs = ['release', 'view', tag, '--json', 'isDraft,assets']
+  const viewed = await exec('gh', viewArgs)
+  commands.push(['gh', ...viewArgs])
+  const verificationError = uploadVerificationError(tag, files, viewed)
+  if (verificationError) {
+    return { ok: false, draft: true, error: verificationError, commands }
+  }
+  return { ok: true, draft: true, commands }
 }
 
 function spawnCaptured(command, args) {
@@ -122,18 +142,24 @@ async function main() {
     console.error(release.error)
     process.exit(1)
   }
-  const published = await publishVersionedMacRelease({
+  const uploaded = await publishVersionedMacRelease({
     tag,
     files: prepared.upload,
     release,
     tagOnRemote: remote.present,
-    exec: async (_command, args) => spawnGh(args),
+    exec: async (_command, args) => {
+      if (args[0] === 'release' && args[1] === 'view') {
+        const result = spawnSync('gh', args, { cwd: repoRoot, encoding: 'utf8' })
+        return { status: result.status ?? 1, output: result.stdout ?? '' }
+      }
+      return spawnGh(args)
+    },
   })
-  if (!published.ok) {
-    console.error(published.error)
+  if (!uploaded.ok) {
+    console.error(uploaded.error)
     process.exit(1)
   }
-  console.log(`Published ${tag} with ${prepared.expected.dmg} and ${prepared.expected.zip}.`)
+  console.log(`Uploaded ${prepared.expected.dmg} and ${prepared.expected.zip} to draft ${tag}. The release is still a draft.`)
 }
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)

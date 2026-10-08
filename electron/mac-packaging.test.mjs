@@ -320,8 +320,8 @@ test('publish evidence fails closed for an ad-hoc or unstapled build', () => {
     spctlStatus: 1,
   })
   assert.ok(adHoc.some((failure) => /ad-hoc/.test(failure)))
+  assert.ok(adHoc.some((failure) => /library validation/.test(failure)))
   assert.ok(adHoc.some((failure) => /stapler|spctl|Developer ID/.test(failure)))
-  assert.equal(adHoc.some((failure) => /library validation/.test(failure)), false)
 
   const libraryValidation = notarizationFailures({
     codesignDisplay: `Authority=Developer ID Application: ${DEVELOPER_ID_IDENTITY}`,
@@ -334,7 +334,8 @@ test('publish evidence fails closed for an ad-hoc or unstapled build', () => {
     spctlOutput: 'source=Notarized Developer ID',
     spctlStatus: 0,
   })
-  assert.deepEqual(libraryValidation, [])
+  assert.ok(libraryValidation.some((failure) => /library validation/.test(failure)))
+  assert.equal(libraryValidation.some((failure) => /get-task-allow/.test(failure)), false)
 
   const debuggable = notarizationFailures({
     codesignDisplay: `Authority=Developer ID Application: ${DEVELOPER_ID_IDENTITY}`,
@@ -434,12 +435,11 @@ test('publish uploads only the version-matched arm64 archives', async () => {
       files: prepared.upload,
       release: { exists: false, draft: false },
       tagOnRemote: true,
-      exec: async (_command, args) => {
-        calls.push(args)
-        return { status: 0, output: '' }
-      },
+      exec: async (_command, args) => ghDraftExec(calls, args),
     })
     assert.equal(published.ok, true)
+    assert.equal(published.draft, true)
+    assert.equal(calls.some((args) => args.includes('--draft=false')), false)
     const upload = calls.find((args) => args[0] === 'release' && args[1] === 'upload')
     assert.deepEqual(
       upload.slice(3, -1).map((file) => path.basename(file)),
@@ -456,7 +456,24 @@ test('publish uploads only the version-matched arm64 archives', async () => {
   }
 })
 
-test('a missing GitHub Release is drafted, then published only after the upload', async () => {
+function ghDraftExec(calls, args, { uploadStatus = 0 } = {}) {
+  calls.push(args)
+  if (args[1] === 'view') {
+    const names = args.includes('--json')
+      ? [
+          'Font-Buttler-0.3.8-arm64.dmg',
+          'Font-Buttler-0.3.8-arm64.zip',
+          'Font-Buttler-0.3.8-arm64.zip.blockmap',
+          'latest-mac.yml',
+        ]
+      : []
+    return { status: 0, output: JSON.stringify({ isDraft: true, assets: names.map((name) => ({ name })) }) }
+  }
+  if (args[1] === 'upload') return { status: uploadStatus, output: uploadStatus === 0 ? '' : 'upload failed' }
+  return { status: 0, output: '' }
+}
+
+test('a missing GitHub Release stays a draft after upload', async () => {
   const files = [
     'release/Font-Buttler-0.3.8-arm64.dmg',
     'release/Font-Buttler-0.3.8-arm64.zip',
@@ -464,30 +481,27 @@ test('a missing GitHub Release is drafted, then published only after the upload'
     'release/latest-mac.yml',
   ]
   const calls = []
-  const published = await publishVersionedMacRelease({
+  const drafted = await publishVersionedMacRelease({
     tag: 'v0.3.8',
     files,
     release: { exists: false, draft: false },
     tagOnRemote: true,
-    exec: async (_command, args) => {
-      calls.push(args)
-      return { status: 0, output: '' }
-    },
+    exec: async (_command, args) => ghDraftExec(calls, args),
   })
-  assert.equal(published.ok, true)
+  assert.equal(drafted.ok, true)
+  assert.equal(drafted.draft, true)
   assert.deepEqual(
     calls.map((args) => args.slice(0, 3)),
     [
       ['release', 'create', 'v0.3.8'],
       ['release', 'upload', 'v0.3.8'],
-      ['release', 'edit', 'v0.3.8'],
+      ['release', 'view', 'v0.3.8'],
     ],
   )
   assert.ok(calls[0].includes('--verify-tag'))
   assert.ok(calls[0].includes('--draft'))
-  assert.equal(calls[0].includes('--draft=false'), false)
-  assert.ok(calls[2].includes('--draft=false'))
-  assert.equal(calls.findIndex((args) => args[1] === 'upload') < calls.findIndex((args) => args.includes('--draft=false')), true)
+  assert.equal(calls.some((args) => args.includes('--draft=false')), false)
+  assert.equal(calls.some((args) => args[1] === 'edit'), false)
 
   const failedCalls = []
   const failed = await publishVersionedMacRelease({
@@ -495,15 +509,29 @@ test('a missing GitHub Release is drafted, then published only after the upload'
     files,
     release: { exists: false, draft: false },
     tagOnRemote: true,
-    exec: async (_command, args) => {
-      failedCalls.push(args)
-      if (args[1] === 'upload') return { status: 1, output: 'upload failed' }
-      return { status: 0, output: '' }
-    },
+    exec: async (_command, args) => ghDraftExec(failedCalls, args, { uploadStatus: 1 }),
   })
   assert.equal(failed.ok, false)
   assert.match(failed.error, /draft/)
   assert.equal(failedCalls.some((args) => args.includes('--draft=false')), false)
+  assert.equal(failedCalls.some((args) => args[1] === 'edit'), false)
+
+  const overwriteCalls = []
+  const overwrite = await publishVersionedMacRelease({
+    tag: 'v0.3.8',
+    files,
+    release: { exists: true, draft: false },
+    tagOnRemote: true,
+    exec: async () => {
+      overwriteCalls.push('ran')
+      throw new Error('gh should not run')
+    },
+  })
+  assert.equal(overwrite.ok, false)
+  assert.match(overwrite.error, /already published/)
+  assert.match(overwrite.error, /overwrite/)
+  assert.deepEqual(overwrite.commands, [])
+  assert.deepEqual(overwriteCalls, [])
 
   const untagged = await publishVersionedMacRelease({
     tag: 'v0.3.8',

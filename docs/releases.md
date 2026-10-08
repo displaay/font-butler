@@ -101,13 +101,13 @@ The profile name is `font-butler-notary`. If it lives in a keychain other than t
    codesign --verify --verbose=2 "$APP/Contents/Resources/python/bin/python3"
    ```
 
-6. Upload from the release Mac. This checks the staple for `Font-Buttler-<version>-arm64` only, then publishes. A raw `gh release upload` is not the publish path. Another version’s `.dmg` or `.zip` left in `release/` stops the command.
+6. Upload a draft from the release Mac. This checks the staple for `Font-Buttler-<version>-arm64` only. A raw `gh release upload` is not the upload path. Another version’s `.dmg` or `.zip` left in `release/` stops the command. If `v<version>` is already a published GitHub Release, the command stops and does not replace its files.
 
    ```bash
    npm run publish:mac
    ```
 
-   If GitHub has no Release for `v<version>`, the command creates a draft with `gh release create v<version> --verify-tag --draft`, uploads the files, and runs `gh release edit v<version> --draft=false` only after that upload succeeds. A failed upload leaves the draft unpublished, so `/releases/latest` does not show a release without a DMG.
+   If GitHub has no Release for `v<version>`, the command creates a draft with `gh release create v<version> --verify-tag --draft`, uploads the files, checks that the draft lists them, and stops. It does not publish. `/releases/latest` skips drafts, so it does not show a release without a DMG.
 
    Attached files, and no others:
 
@@ -118,7 +118,14 @@ The profile name is `font-butler-notary`. If it lives in a keychain other than t
 
    The DMG blockmap is deleted after stapling because the staple changes the DMG bytes. Do not upload a `*.dmg.blockmap`.
 
-7. Confirm `/releases/latest` returns the release, and that its assets include the DMG.
+7. Download the DMG from the draft Release and open it. After that file is the one you want to ship, publish the Release yourself. This step is not part of `npm run publish:mac`.
+
+   ```bash
+   version="$(node -p "require('./package.json').version")"
+   gh release edit "v${version}" --draft=false
+   ```
+
+   Then confirm `/releases/latest` returns it and that its assets include the DMG.
 
 ### Release notes
 
@@ -130,7 +137,7 @@ This build is signed with Developer ID and notarized by Apple.
 If you are using an earlier Font Buttler build, download this version manually once and replace the app. Those builds were ad-hoc signed. The in-app update check compares versions and opens the download in your browser. It does not install the update. Later releases still install the same way: download the file yourself.
 ```
 
-Tag push still starts [`.github/workflows/release.yml`](../.github/workflows/release.yml). That job runs tests on Ubuntu and `npm run dist` on a macOS runner. The runner has no Developer ID certificate, so `npm run dist` ad-hoc signs and does not notarize. Before `softprops/action-gh-release`, `scripts/assert-notarized-mac-release.mjs` fails that job. GitHub Actions cannot publish an ad-hoc or un-notarized build. The signed files come from `npm run publish:mac` on the release Mac.
+Tag push still starts [`.github/workflows/release.yml`](../.github/workflows/release.yml). That job runs tests on Ubuntu and `npm run dist` on a macOS runner. The runner has no Developer ID certificate, so `npm run dist` ad-hoc signs and does not notarize. Before `softprops/action-gh-release`, `scripts/assert-notarized-mac-release.mjs` fails that job. GitHub Actions cannot publish an ad-hoc or un-notarized build. The signed files are uploaded as a draft by `npm run publish:mac` on the release Mac. A person publishes that draft only after checking the downloaded DMG.
 
 `npm run release:mac` and `npm run dist` both pass `--publish never`. electron-builder still writes `latest-mac.yml` and the zip blockmap. Do not run `electron-builder --publish always`.
 
@@ -159,7 +166,7 @@ The Developer ID plist has one key: `com.apple.security.cs.allow-jit`. That is w
 
 `disable-library-validation` is not in the release plist. A Developer ID build re-signs the whole bundle with one team, so library validation should accept Electron’s frameworks, the unpacked `.node` addons, and the bundled Python Mach-O files. The ad-hoc plist does set it, because an ad-hoc signature has no team and hardened runtime would otherwise refuse those libraries. That file is used only when `npm run dist` has no Developer ID certificate and no notary profile.
 
-If a notarized build dies at launch with a library-validation crash in Python or a `.node` addon, add `disable-library-validation` to `build/entitlements.mac.plist` and ship another build. Do not add it preemptively. The publish check rejects `get-task-allow`. It still accepts `disable-library-validation` when that follow-up build has to set it.
+The publish check rejects `get-task-allow` and `disable-library-validation`. Any new entitlement, `disable-library-validation` included, has to change `scripts/assert-notarized-mac-release.mjs` and its tests in the same pull request. Do not add a key to the plist and leave the check as it is.
 
 ### What gets signed
 
@@ -188,7 +195,7 @@ On Linux, `npm run dist` without a notary profile skips macOS signing. `npm run 
 | `npm run build` | Does not sign or pack | Does not sign or pack | Does not sign or pack |
 | `npm run dist` | Ad-hoc sign (`identity: "-"`), hardened runtime, `build/entitlements.mac.adhoc.plist`. Notarization off. Local only. | Developer ID sign, no notarization. Local only. | Developer ID, `forceCodeSigning`, notarize the app, sign and staple the DMG. Missing certificate or a failed sign/notarize stops the build. Not an ad-hoc fallback. Off macOS, the command errors. |
 | `npm run release:mac` | Fails. No ad-hoc fallback. | — | Developer ID, profile `font-butler-notary` when unset, notarize, staple the app and the DMG, then the notarization assert. macOS only. |
-| `npm run publish:mac` | Refuses to upload | Refuses to upload | Uploads only after `stapler validate` passes on the app, the DMG, the app inside the DMG, and the app inside the zip, and `spctl` reports Notarized Developer ID. |
+| `npm run publish:mac` | Refuses to upload | Refuses to upload | Uploads a draft after `stapler validate` passes on the app, the DMG, the app inside the DMG, and the app inside the zip, and `spctl` reports Notarized Developer ID. Leaves the Release as a draft. |
 
 Notarization runs only when `APPLE_KEYCHAIN_PROFILE` is set. `npm run dist` does not set it. Setting the profile, including a leftover one in the environment, selects the notarized path. A half-set `APPLE_ID` / API-key trio is removed from the pack environment so it cannot abort a local build or leak into the pack. The only notary credentials this repo passes through are the keychain profile and optional `APPLE_KEYCHAIN`.
 

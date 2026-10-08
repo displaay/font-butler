@@ -24,6 +24,9 @@ export function notarizationFailures({
     failures.push(`The app is not signed with Developer ID identity "${DEVELOPER_ID_IDENTITY}".`)
   }
   if (/get-task-allow/.test(entitlements)) failures.push('Release entitlements include get-task-allow.')
+  if (/disable-library-validation/.test(entitlements)) {
+    failures.push('Release entitlements disable library validation.')
+  }
   if (codesignVerifyStatus !== 0) {
     failures.push('codesign --verify --deep --strict failed. A helper, framework, or native module is unsigned.')
   }
