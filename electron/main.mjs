@@ -23,6 +23,7 @@ import {
   cleanupOpenedUpdateDmgs,
   createAppUpdateInstaller,
   detectAppUpdateRuntime,
+  openedUpdateDmgRecordFile,
 } from './app-update-install.mjs'
 import { applyTestFeedDataIsolation } from './test-feed-data.mjs'
 import { macosDockIconPng } from './dock-icon.mjs'
@@ -1525,6 +1526,7 @@ function appUpdateInstaller() {
       currentVersion: () => app.getVersion(),
       probeRuntime: () => probeInstallRuntime(),
       openPath: (file) => shell.openPath(file),
+      openedDmgRecord: openedUpdateDmgRecordFile(app.getPath('userData')),
       quit: () => {
         isQuitting = true
         app.quit()
@@ -2004,7 +2006,9 @@ if (!gotLock) {
     attachDebugLogPersistence(debugLog, fileWriter)
     logDebug('main', `Font Buttler ${app.getVersion()} starting`)
     try {
-      cleanupOpenedUpdateDmgs()
+      cleanupOpenedUpdateDmgs({
+        recordFile: openedUpdateDmgRecordFile(app.getPath('userData')),
+      })
     } catch (error) {
       console.error('Could not clean up opened update disk images', error)
     }

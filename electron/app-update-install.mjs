@@ -1026,7 +1026,9 @@ async function runInstall(deps, fetchImpl, tempDir) {
     // shell.openPath returns when macOS accepts the request, before
     // DiskImageMounter attaches the image. Never delete here. The path is
     // recorded on disk and removed on a later launch only if it is not mounted.
-    const remember = deps.rememberOpenedDmg ?? rememberOpenedDmg
+    const remember =
+      deps.rememberOpenedDmg ??
+      ((entry) => rememberOpenedDmg(entry, deps.openedDmgRecord ?? OPENED_DMG_RECORD))
     try {
       remember({ dmg: dest, tempDir })
     } catch (error) {
@@ -1101,6 +1103,66 @@ export function unpackZipArchive(zipPath, destDir, spawnImpl = spawn) {
 }
 
 export const OPENED_DMG_RECORD = path.join(os.tmpdir(), 'font-butler-opened-dmgs.json')
+const UPDATE_TEMP_PREFIX = 'font-butler-update-'
+
+/** Per-user record. A marked build's userData is already the test folder. */
+export function openedUpdateDmgRecordFile(userDataDir) {
+  return path.join(userDataDir, 'font-butler-opened-dmgs.json')
+}
+
+function ownedByCurrentUser(stat) {
+  if (typeof process.getuid !== 'function') return false
+  return stat.uid === process.getuid()
+}
+
+/**
+ * A real `font-butler-update-*` directory that is a direct child of
+ * `os.tmpdir()`. Symlinks and anything outside that directory are refused.
+ * Returns the real path, or null.
+ */
+function safeOpenedUpdateTempDir(tempDir) {
+  if (typeof tempDir !== 'string' || tempDir.length === 0) return null
+  let stat
+  try {
+    stat = fs.lstatSync(tempDir)
+  } catch {
+    return null
+  }
+  if (!stat.isDirectory() || stat.isSymbolicLink() || !ownedByCurrentUser(stat)) return null
+  let realTemp
+  let realTmp
+  try {
+    realTemp = fs.realpathSync(tempDir)
+    realTmp = fs.realpathSync(os.tmpdir())
+  } catch {
+    return null
+  }
+  if (path.dirname(realTemp) !== realTmp) return null
+  if (!path.basename(realTemp).startsWith(UPDATE_TEMP_PREFIX)) return null
+  return realTemp
+}
+
+/** Regular `.dmg` inside that temp dir, or a missing file whose parent is that dir. */
+function safeOpenedUpdateDmg(dmg, realTemp) {
+  if (typeof dmg !== 'string' || !dmg.endsWith('.dmg') || !realTemp) return false
+  let stat
+  try {
+    stat = fs.lstatSync(dmg)
+  } catch (error) {
+    if (error?.code !== 'ENOENT') return false
+    try {
+      return fs.realpathSync(path.dirname(dmg)) === realTemp
+    } catch {
+      return false
+    }
+  }
+  if (stat.isSymbolicLink() || !stat.isFile()) return false
+  try {
+    return fs.realpathSync(path.dirname(dmg)) === realTemp
+  } catch {
+    return false
+  }
+}
 
 export function readOpenedDmgRecord(recordFile = OPENED_DMG_RECORD) {
   try {
@@ -1164,6 +1226,8 @@ export function cleanupOpenedUpdateDmgs({
   const pending = readOpenedDmgRecord(recordFile)
   const stillMounted = []
   for (const entry of pending) {
+    const realTemp = safeOpenedUpdateTempDir(entry.tempDir)
+    if (!realTemp || !safeOpenedUpdateDmg(entry.dmg, realTemp)) continue
     if (isMounted(entry.dmg)) {
       stillMounted.push(entry)
       continue
@@ -1173,13 +1237,11 @@ export function cleanupOpenedUpdateDmgs({
     } catch {
       // Already gone.
     }
-    if (entry.tempDir) {
-      try {
-        rawFs().rmSync(entry.tempDir, { recursive: true, force: true })
-      } catch {
-        // raw-fs walks app.asar. A shim failure must not escape startup or
-        // skip the rest of the recorded disk images.
-      }
+    try {
+      rawFs().rmSync(entry.tempDir, { recursive: true, force: true })
+    } catch {
+      // raw-fs walks app.asar. A shim failure must not escape startup or
+      // skip the rest of the recorded disk images.
     }
   }
   if (stillMounted.length === 0) {
