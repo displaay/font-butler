@@ -281,6 +281,24 @@ function addPathKey(out, value) {
     out['/private' + s] = true
   }
 }
+function pathExists(filePath) {
+  return Boolean(ObjC.unwrap($.NSFileManager.defaultManager.fileExistsAtPath(String(filePath))))
+}
+function isUserFontsDomainPath(filePath) {
+  const s = String(filePath)
+  if (s.indexOf('/System/Library/Fonts/') >= 0) return false
+  if (/\\/Users\\/[^\\/]+\\/Library\\/Fonts\\//.test(s)) return true
+  if (/\\/Library\\/Application Support\\/(Font Buttler|Font Butler)\\/user-fonts\\//.test(s)) return true
+  // FONT_BUTLER_DATA isolated installs (temp dirs) use .../user-fonts/ as the macOS destination.
+  if (s.indexOf('/user-fonts/') >= 0 && s.indexOf('/System/') < 0) return true
+  return false
+}
+function canRenderUserFont(filePath) {
+  const descs = descriptorsFor(filePath)
+  if (!descs || Number(descs.count) === 0) return false
+  const font = $.CTFontCreateWithFontDescriptor(descs.objectAtIndex(0), 12.0, null)
+  return font != null
+}
 function isEnabled(filePath, available) {
   const url = $.NSURL.fileURLWithPath(filePath)
   const candidates = [filePath, ObjC.unwrap(url.path)]
@@ -297,16 +315,21 @@ function isEnabled(filePath, available) {
     if (candidate && String(candidate).startsWith('/private/var/') && available[String(candidate).replace(/^\\/private/, '')]) return true
     if (candidate && String(candidate).startsWith('/private/tmp/') && available[String(candidate).replace(/^\\/private/, '')]) return true
   }
+  // macOS loads ~/Library/Fonts without listing every file in CTFontManagerCopyAvailableFontURLs.
+  // Font Book still treats them as installed; fc-list and CTFontCreate see them. Treat absence from
+  // the URL set as inconclusive, not disabled, when the file renders.
+  if (isUserFontsDomainPath(filePath) && pathExists(filePath) && canRenderUserFont(filePath)) {
+    return true
+  }
   return false
 }
 function registerUrl(filePath, register) {
   const url = $.NSURL.fileURLWithPath(filePath)
   const fn = register ? $.CTFontManagerRegisterFontsForURL : $.CTFontManagerUnregisterFontsForURL
-  // Prefer the user/session scope so the Electron renderer and other applications
-  // can see the registration after this helper returns. macOS rejects that scope
-  // for paths outside the user's font domain (including isolated test paths), so
-  // fall back to process scope for those locations. The ensure operation verifies
-  // the fallback registration before this helper exits.
+  // macOS user-visible registration is kCTFontManagerScopeSession (3). Scope 2 is persistent and
+  // often returns paramErr (-50) for ~/Library/Fonts paths. Scope 1 is process-only, which made
+  // Figma and other apps miss fonts while fc-list still saw the files on disk.
+  if (Boolean(ObjC.unwrap(fn(url, 3, null)))) return true
   if (Boolean(ObjC.unwrap(fn(url, 2, null)))) return true
   return Boolean(ObjC.unwrap(fn(url, 1, null)))
 }
@@ -342,6 +365,10 @@ function run(argv) {
     const descs = descriptorsFor(filePath)
     if (!descs || Number(descs.count) === 0) return 'fail'
     $.CTFontManagerEnableFontDescriptors(descs, enabled)
+    if (isUserFontsDomainPath(filePath)) {
+      if (!enabled) return 'ok'
+      if (pathExists(filePath) && canRenderUserFont(filePath)) return 'ok'
+    }
     const on = isEnabled(filePath, availableUrlSet())
     return on === enabled ? 'ok' : 'fail'
   }

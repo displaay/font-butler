@@ -433,6 +433,7 @@ export class FontButlerService {
   /** Heavier startup work; safe to run while read-only API serves the catalog. */
   async initBackgroundPhase(): Promise<void> {
     await this.adoptUserFonts()
+    await this.ensureLiveMacosFontsActivated()
     await this.detachRenamedInstallSources()
     await this.seedIfEmpty()
     await this.refreshSourceStatuses(true, { fingerprintOnly: true })
@@ -4307,6 +4308,28 @@ export class FontButlerService {
     }
   }
 
+  /** Re-apply Core Text enablement for Butler-managed macOS copies (retail, watch, manual). */
+  private async ensureLiveMacosFontsActivated(): Promise<void> {
+    if (!isMac()) return
+    const catalog = loadCatalog(this.paths)
+    const roots = this.macosFontRoots()
+    for (const entry of catalog.entries) {
+      if (entry.previewOnly || entry.status !== 'installed') continue
+      if (!entry.installedPath || !fs.existsSync(entry.installedPath)) continue
+      if (!isUnderAnyRoot(entry.installedPath, roots)) continue
+      const managed =
+        Boolean(entry.retailRelativePath) ||
+        Boolean(entry.activationOwners?.length) ||
+        Boolean(entry.installations?.some((copy) => copy.destinationId === 'macos'))
+      if (!managed) continue
+      try {
+        await ensureFontActivation(getFontNative(), entry.installedPath, true)
+      } catch {
+        // On-disk fonts remain; fc-list may still list them even when CT URL queries omit the path.
+      }
+    }
+  }
+
   private async adoptUserFonts(): Promise<void> {
     const destinations = installDestinationRoots(this.paths)
     const macosFiles = uniqueResolvedFiles(
@@ -4331,8 +4354,18 @@ export class FontButlerService {
       const queriedOn = useActivation && activation.ok
         ? (activation.states[resolved] ?? activation.states[filePath])
         : undefined
+      // Only treat an explicit true from Core Text as proof the font is on. A false
+      // result usually means the path is missing from CTFontManagerCopyAvailableFontURLs,
+      // not that the user disabled it — flipping installed rows off breaks watch installs
+      // and leaves fonts on disk invisible to apps that trust catalog activation state.
       const isOn = useActivation
-        ? (queriedOn ?? (existing ? existing.status !== 'deactivated' : true))
+        ? (queriedOn === true
+            ? true
+            : queriedOn === false && !existing
+              ? false
+              : existing
+                ? existing.status !== 'deactivated'
+                : true)
         : true
       if (existing) {
         if (entryHasParkedBytes(existing)) {
@@ -4368,16 +4401,8 @@ export class FontButlerService {
             changed = true
           }
           if (destId === 'macos') {
-            if (queriedOn !== undefined && isOn && existing.status === 'deactivated') {
+            if (queriedOn === true && existing.status === 'deactivated') {
               existing.status = 'installed'
-              touchEntry(existing)
-              changed = true
-            } else if (
-              queriedOn !== undefined &&
-              !isOn &&
-              (existing.status === 'installed' || existing.status === 'outdated')
-            ) {
-              existing.status = 'deactivated'
               touchEntry(existing)
               changed = true
             }
