@@ -17,6 +17,38 @@ export function publishedReleaseMessage(tag) {
   return `GitHub Release ${tag} is already published. Refusing to overwrite it.`
 }
 
+export function shaFromLsRemote(output) {
+  const line = String(output ?? '')
+    .split('\n')
+    .map((row) => row.trim())
+    .find(Boolean)
+  if (!line) return null
+  const sha = line.split(/\s+/)[0]?.toLowerCase()
+  return /^[0-9a-f]{40}$/.test(sha) ? sha : null
+}
+
+/** Peeled `refs/tags/<tag>^{}` is the commit for an annotated tag. A lightweight tag has no peel, so use the tag ref. */
+export function remoteTagCommitSha(peeledOutput, tagOutput) {
+  return shaFromLsRemote(peeledOutput) ?? shaFromLsRemote(tagOutput)
+}
+
+export function tagCommitMismatchMessage(tag, head, remoteSha) {
+  return `Tag ${tag} on origin points at ${remoteSha}, but HEAD is ${head}. Refusing to upload. The draft was not changed.`
+}
+
+export function dirtyWorktreeMessage(tag, head, remoteSha) {
+  return `Tag ${tag} on origin points at ${remoteSha} and HEAD is ${head}, but the working tree has tracked changes. Refusing to upload. The draft was not changed.`
+}
+
+export function releaseCommitGuard({ tag, head, remoteSha, dirty = false }) {
+  const remote = remoteSha ? String(remoteSha).toLowerCase() : null
+  const local = head ? String(head).toLowerCase() : null
+  if (!remote) return { ok: false, error: missingTagMessage(tag) }
+  if (local !== remote) return { ok: false, error: tagCommitMismatchMessage(tag, local, remote) }
+  if (dirty) return { ok: false, error: dirtyWorktreeMessage(tag, local, remote) }
+  return { ok: true, remoteSha: remote, head: local }
+}
+
 function uploadVerificationError(tag, files, view, { allowMissing = false } = {}) {
   if ((view?.status ?? 1) !== 0) return `Could not verify the draft upload for ${tag}.`
   let parsed
@@ -54,8 +86,11 @@ function uploadVerificationError(tag, files, view, { allowMissing = false } = {}
  * files, and stop. Publishing (`gh release edit <tag> --draft=false`) is a
  * separate manual step. A release that is already public is left untouched.
  */
-export async function publishVersionedMacRelease({ tag, files, release, tagOnRemote, exec }) {
-  if (!tagOnRemote) {
+export async function publishVersionedMacRelease({ tag, files, release, tagOnRemote, exec, head, remoteSha, dirty = false }) {
+  if (head !== undefined || remoteSha !== undefined || dirty) {
+    const guard = releaseCommitGuard({ tag, head, remoteSha, dirty })
+    if (!guard.ok) return { ok: false, draft: false, error: guard.error, commands: [] }
+  } else if (!tagOnRemote) {
     return { ok: false, draft: false, error: missingTagMessage(tag), commands: [] }
   }
   if (release?.exists && !release.draft) {
@@ -112,12 +147,34 @@ function spawnCaptured(command, args) {
   }
 }
 
-function tagOnOrigin(tag) {
-  const result = spawnCaptured('git', ['ls-remote', '--tags', 'origin', `refs/tags/${tag}`])
-  if (result.status !== 0) {
-    return { error: `Could not check whether ${tag} is on origin. ${result.output.trim()}` }
+function remoteTagCommit(tag) {
+  const peeledRef = `refs/tags/${tag}^{}`
+  const peeled = spawnCaptured('git', ['ls-remote', 'origin', peeledRef])
+  if (peeled.status !== 0) {
+    return { error: `Could not read ${peeledRef} on origin. ${peeled.output.trim()}` }
   }
-  return { present: result.output.trim().length > 0 }
+  const peeledSha = shaFromLsRemote(peeled.output)
+  if (peeledSha) return { sha: peeledSha }
+  const tagRef = `refs/tags/${tag}`
+  const lightweight = spawnCaptured('git', ['ls-remote', 'origin', tagRef])
+  if (lightweight.status !== 0) {
+    return { error: `Could not read ${tagRef} on origin. ${lightweight.output.trim()}` }
+  }
+  return { sha: shaFromLsRemote(lightweight.output) }
+}
+
+function localHeadCommit() {
+  const result = spawnCaptured('git', ['rev-parse', 'HEAD'])
+  if (result.status !== 0) return { error: `Could not read HEAD. ${result.output.trim()}` }
+  const sha = shaFromLsRemote(result.output)
+  if (!sha) return { error: 'Could not read HEAD.' }
+  return { sha }
+}
+
+function trackedWorktreeChanges() {
+  const result = spawnCaptured('git', ['status', '--porcelain', '--untracked-files=no'])
+  if (result.status !== 0) return { error: `Could not read the working tree. ${result.output.trim()}` }
+  return { dirty: result.output.trim().length > 0 }
 }
 
 function viewRelease(tag) {
@@ -155,12 +212,27 @@ async function main() {
     process.exit(1)
   }
   const tag = `v${version}`
-  const remote = tagOnOrigin(tag)
+  const remote = remoteTagCommit(tag)
   if (remote.error) {
     console.error(remote.error)
     process.exit(1)
   }
-  const release = remote.present ? viewRelease(tag) : { exists: false, draft: false }
+  const head = localHeadCommit()
+  if (head.error) {
+    console.error(head.error)
+    process.exit(1)
+  }
+  const tree = trackedWorktreeChanges()
+  if (tree.error) {
+    console.error(tree.error)
+    process.exit(1)
+  }
+  const guard = releaseCommitGuard({ tag, head: head.sha, remoteSha: remote.sha, dirty: tree.dirty })
+  if (!guard.ok) {
+    console.error(guard.error)
+    process.exit(1)
+  }
+  const release = viewRelease(tag)
   if (release.error) {
     console.error(release.error)
     process.exit(1)
@@ -169,7 +241,10 @@ async function main() {
     tag,
     files: prepared.upload,
     release,
-    tagOnRemote: remote.present,
+    tagOnRemote: true,
+    head: head.sha,
+    remoteSha: remote.sha,
+    dirty: tree.dirty,
     exec: async (_command, args) => {
       if (args[0] === 'release' && args[1] === 'view') {
         const result = spawnSync('gh', args, { cwd: repoRoot, encoding: 'utf8' })

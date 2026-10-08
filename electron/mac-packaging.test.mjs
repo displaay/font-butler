@@ -5,7 +5,11 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { assertNotarizedMacRelease, notarizationFailures, prepareMacPublish, updateFeedFailures } from '../scripts/assert-notarized-mac-release.mjs'
-import { publishVersionedMacRelease } from '../scripts/upload-mac-release.mjs'
+import {
+  publishVersionedMacRelease,
+  releaseCommitGuard,
+  remoteTagCommitSha,
+} from '../scripts/upload-mac-release.mjs'
 import { rewriteMacUpdateFeed, sha512Base64, stapleSignedDmgs } from '../scripts/mac-dmg-staple.mjs'
 import {
   ADHOC_ENTITLEMENTS,
@@ -762,4 +766,82 @@ test('resuming a draft rejects extra assets and accepts an exact set', async () 
       ['release', 'view'],
     ],
   )
+})
+
+test('publish requires the remote tag commit to equal HEAD and a clean tree', async () => {
+  const files = [
+    'release/Font-Buttler-0.3.8-arm64.dmg',
+    'release/Font-Buttler-0.3.8-arm64.zip',
+    'release/Font-Buttler-0.3.8-arm64.zip.blockmap',
+    'release/latest-mac.yml',
+  ]
+  const head = 'a'.repeat(40)
+  const other = 'b'.repeat(40)
+  const tagObject = 'c'.repeat(40)
+  assert.match(readRepo('docs/releases.md'), /git ls-remote origin refs\/tags\/v<version>\^\{}/)
+  assert.match(readRepo('scripts/upload-mac-release.mjs'), /refs\/tags\/\$\{tag\}\^\{}/)
+  assert.match(readRepo('scripts/upload-mac-release.mjs'), /--untracked-files=no/)
+
+  const annotated = remoteTagCommitSha(`${head}\trefs/tags/v0.3.8^{}\n`, `${tagObject}\trefs/tags/v0.3.8\n`)
+  assert.equal(annotated, head)
+  assert.equal(remoteTagCommitSha('', `${head}\trefs/tags/v0.3.8\n`), head)
+  assert.equal(remoteTagCommitSha('', ''), null)
+
+  const calls = []
+  const matched = await publishVersionedMacRelease({
+    tag: 'v0.3.8',
+    files,
+    release: { exists: false, draft: false },
+    tagOnRemote: true,
+    head,
+    remoteSha: annotated,
+    dirty: false,
+    exec: async (_command, args) => ghDraftExec(calls, args),
+  })
+  assert.equal(matched.ok, true)
+  assert.equal(matched.draft, true)
+  assert.equal(releaseCommitGuard({ tag: 'v0.3.8', head, remoteSha: annotated, dirty: false }).ok, true)
+  assert.ok(calls.some((args) => args[1] === 'upload'))
+
+  const mismatchCalls = []
+  const mismatch = await publishVersionedMacRelease({
+    tag: 'v0.3.8',
+    files,
+    release: { exists: true, draft: true },
+    tagOnRemote: true,
+    head,
+    remoteSha: other,
+    dirty: false,
+    exec: async () => {
+      mismatchCalls.push('ran')
+      throw new Error('gh should not run')
+    },
+  })
+  assert.equal(mismatch.ok, false)
+  assert.ok(mismatch.error.includes(head))
+  assert.ok(mismatch.error.includes(other))
+  assert.match(mismatch.error, /draft was not changed/)
+  assert.deepEqual(mismatch.commands, [])
+  assert.deepEqual(mismatchCalls, [])
+
+  const dirtyCalls = []
+  const dirty = await publishVersionedMacRelease({
+    tag: 'v0.3.8',
+    files,
+    release: { exists: true, draft: true },
+    tagOnRemote: true,
+    head,
+    remoteSha: head,
+    dirty: true,
+    exec: async () => {
+      dirtyCalls.push('ran')
+      throw new Error('gh should not run')
+    },
+  })
+  assert.equal(dirty.ok, false)
+  assert.ok(dirty.error.includes(head))
+  assert.match(dirty.error, /tracked changes/)
+  assert.match(dirty.error, /draft was not changed/)
+  assert.deepEqual(dirty.commands, [])
+  assert.deepEqual(dirtyCalls, [])
 })
