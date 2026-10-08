@@ -609,6 +609,39 @@ test('an Adobe file does not stamp live occupancy onto a deactivated row', async
   }
 })
 
+test('init keeps a watch-installed font installed when Core Text omits it from activation query', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  const font = path.join(inbox, 'Managed.ttf')
+  writeTestFont(font, 'Managed', 'Managed-Regular')
+  setFontNative(
+    noopFontNative({
+      async fontActivationStates(filePaths) {
+        const states: Record<string, boolean> = {}
+        for (const filePath of filePaths) states[filePath] = false
+        return { ok: true, native: true, states }
+      },
+    }),
+  )
+  const service = new FontButlerService(paths)
+  try {
+    await service.updateSettings({ watchFolders: [inbox], onboardingCompleted: true })
+    const before = service.listCatalog().find((entry) => entry.faces[0]?.familyName === 'Managed')
+    assert.ok(before)
+    assert.equal(before.status, 'installed')
+    assert.ok(before.installedPath && fs.existsSync(before.installedPath))
+    await service.init()
+    const after = service.listCatalog().find((entry) => entry.id === before.id)
+    assert.ok(after)
+    assert.equal(after.status, 'installed')
+  } finally {
+    setFontNative(null)
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
 function fontBookNative(offPaths: () => string[]) {
   return noopFontNative({
     async fontActivationStates(filePaths) {

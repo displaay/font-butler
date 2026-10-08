@@ -4331,8 +4331,18 @@ export class FontButlerService {
       const queriedOn = useActivation && activation.ok
         ? (activation.states[resolved] ?? activation.states[filePath])
         : undefined
+      // Only treat an explicit true from Core Text as proof the font is on. A false
+      // result usually means the path is missing from CTFontManagerCopyAvailableFontURLs,
+      // not that the user disabled it — flipping installed rows off breaks watch installs
+      // and leaves fonts on disk invisible to apps that trust catalog activation state.
       const isOn = useActivation
-        ? (queriedOn ?? (existing ? existing.status !== 'deactivated' : true))
+        ? (queriedOn === true
+            ? true
+            : queriedOn === false && !existing
+              ? false
+              : existing
+                ? existing.status !== 'deactivated'
+                : true)
         : true
       if (existing) {
         if (entryHasParkedBytes(existing)) {
@@ -4368,16 +4378,8 @@ export class FontButlerService {
             changed = true
           }
           if (destId === 'macos') {
-            if (queriedOn !== undefined && isOn && existing.status === 'deactivated') {
+            if (queriedOn === true && existing.status === 'deactivated') {
               existing.status = 'installed'
-              touchEntry(existing)
-              changed = true
-            } else if (
-              queriedOn !== undefined &&
-              !isOn &&
-              (existing.status === 'installed' || existing.status === 'outdated')
-            ) {
-              existing.status = 'deactivated'
               touchEntry(existing)
               changed = true
             }
