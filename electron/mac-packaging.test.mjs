@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { notarizationFailures } from '../scripts/assert-notarized-mac-release.mjs'
+import { notarizationFailures, prepareMacPublish } from '../scripts/assert-notarized-mac-release.mjs'
+import { publishVersionedMacRelease } from '../scripts/upload-mac-release.mjs'
 import { refreshDmgUpdateInfo, sha512Base64 } from '../scripts/mac-dmg-staple.mjs'
 import {
   ADHOC_ENTITLEMENTS,
@@ -57,6 +58,8 @@ test('mac release config signs with the Developer ID identity and notarizes via 
   assert.doesNotMatch(readRepo('docs/releases.md'), /quisek\.com/)
   assert.match(readRepo('docs/releases.md'), /<your-apple-id>/)
   assert.match(readRepo('docs/releases.md'), /git worktree add ~\/git\/font-butler-release origin\/main/)
+  assert.match(readRepo('docs/releases.md'), /git tag "v\$\{version\}"/)
+  assert.match(readRepo('docs/releases.md'), /git push origin "v\$\{version\}"/)
   assert.match(readRepo('docs/releases.md'), /download this version manually once/i)
 })
 
@@ -317,7 +320,21 @@ test('publish evidence fails closed for an ad-hoc or unstapled build', () => {
     spctlStatus: 1,
   })
   assert.ok(adHoc.some((failure) => /ad-hoc/.test(failure)))
-  assert.ok(adHoc.some((failure) => /get-task-allow|library validation|stapler|spctl|Developer ID/.test(failure)))
+  assert.ok(adHoc.some((failure) => /stapler|spctl|Developer ID/.test(failure)))
+  assert.equal(adHoc.some((failure) => /library validation/.test(failure)), false)
+
+  const libraryValidation = notarizationFailures({
+    codesignDisplay: `Authority=Developer ID Application: ${DEVELOPER_ID_IDENTITY}`,
+    codesignVerifyStatus: 0,
+    entitlements: 'com.apple.security.cs.allow-jit\ncom.apple.security.cs.disable-library-validation',
+    staplerAppStatus: 0,
+    staplerDmgStatus: 0,
+    staplerZipAppStatus: 0,
+    staplerDmgAppStatus: 0,
+    spctlOutput: 'source=Notarized Developer ID',
+    spctlStatus: 0,
+  })
+  assert.deepEqual(libraryValidation, [])
 
   const debuggable = notarizationFailures({
     codesignDisplay: `Authority=Developer ID Application: ${DEVELOPER_ID_IDENTITY}`,
@@ -370,4 +387,135 @@ test('stapling the DMG refreshes only the DMG hash in latest-mac.yml', async () 
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+function writeVersionedRelease(root, version) {
+  const releaseDir = path.join(root, 'release')
+  mkdirSync(path.join(releaseDir, 'mac-arm64', 'Font Buttler.app'), { recursive: true })
+  mkdirSync(path.join(releaseDir, 'mac', 'Font Buttler.app'), { recursive: true })
+  const stem = `Font-Buttler-${version}-arm64`
+  for (const name of [`${stem}.dmg`, `${stem}.zip`, `${stem}.zip.blockmap`, 'latest-mac.yml']) {
+    writeFileSync(path.join(releaseDir, name), name)
+  }
+  return releaseDir
+}
+
+test('a stale archive from another version blocks publish', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-assets-'))
+  try {
+    const releaseDir = writeVersionedRelease(root, '0.3.8')
+    writeFileSync(path.join(releaseDir, 'Font-Buttler-0.3.7-arm64.dmg'), 'old')
+    const prepared = prepareMacPublish(root, '0.3.8')
+    assert.equal(prepared.upload.length, 0)
+    assert.ok(prepared.failures.some((failure) => failure.includes('Font-Buttler-0.3.7-arm64.dmg')))
+    assert.equal(prepared.app, path.join(releaseDir, 'mac-arm64', 'Font Buttler.app'))
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('publish uploads only the version-matched arm64 archives', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-upload-'))
+  try {
+    writeVersionedRelease(root, '0.3.8')
+    const prepared = prepareMacPublish(root, '0.3.8')
+    assert.deepEqual(
+      prepared.upload.map((file) => path.basename(file)),
+      [
+        'Font-Buttler-0.3.8-arm64.dmg',
+        'Font-Buttler-0.3.8-arm64.zip',
+        'Font-Buttler-0.3.8-arm64.zip.blockmap',
+        'latest-mac.yml',
+      ],
+    )
+    const calls = []
+    const published = await publishVersionedMacRelease({
+      tag: 'v0.3.8',
+      files: prepared.upload,
+      release: { exists: false, draft: false },
+      tagOnRemote: true,
+      exec: async (_command, args) => {
+        calls.push(args)
+        return { status: 0, output: '' }
+      },
+    })
+    assert.equal(published.ok, true)
+    const upload = calls.find((args) => args[0] === 'release' && args[1] === 'upload')
+    assert.deepEqual(
+      upload.slice(3, -1).map((file) => path.basename(file)),
+      [
+        'Font-Buttler-0.3.8-arm64.dmg',
+        'Font-Buttler-0.3.8-arm64.zip',
+        'Font-Buttler-0.3.8-arm64.zip.blockmap',
+        'latest-mac.yml',
+      ],
+    )
+    assert.equal(upload.some((arg) => String(arg).includes('0.3.7')), false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a missing GitHub Release is drafted, then published only after the upload', async () => {
+  const files = [
+    'release/Font-Buttler-0.3.8-arm64.dmg',
+    'release/Font-Buttler-0.3.8-arm64.zip',
+    'release/Font-Buttler-0.3.8-arm64.zip.blockmap',
+    'release/latest-mac.yml',
+  ]
+  const calls = []
+  const published = await publishVersionedMacRelease({
+    tag: 'v0.3.8',
+    files,
+    release: { exists: false, draft: false },
+    tagOnRemote: true,
+    exec: async (_command, args) => {
+      calls.push(args)
+      return { status: 0, output: '' }
+    },
+  })
+  assert.equal(published.ok, true)
+  assert.deepEqual(
+    calls.map((args) => args.slice(0, 3)),
+    [
+      ['release', 'create', 'v0.3.8'],
+      ['release', 'upload', 'v0.3.8'],
+      ['release', 'edit', 'v0.3.8'],
+    ],
+  )
+  assert.ok(calls[0].includes('--verify-tag'))
+  assert.ok(calls[0].includes('--draft'))
+  assert.equal(calls[0].includes('--draft=false'), false)
+  assert.ok(calls[2].includes('--draft=false'))
+  assert.equal(calls.findIndex((args) => args[1] === 'upload') < calls.findIndex((args) => args.includes('--draft=false')), true)
+
+  const failedCalls = []
+  const failed = await publishVersionedMacRelease({
+    tag: 'v0.3.8',
+    files,
+    release: { exists: false, draft: false },
+    tagOnRemote: true,
+    exec: async (_command, args) => {
+      failedCalls.push(args)
+      if (args[1] === 'upload') return { status: 1, output: 'upload failed' }
+      return { status: 0, output: '' }
+    },
+  })
+  assert.equal(failed.ok, false)
+  assert.match(failed.error, /draft/)
+  assert.equal(failedCalls.some((args) => args.includes('--draft=false')), false)
+
+  const untagged = await publishVersionedMacRelease({
+    tag: 'v0.3.8',
+    files,
+    release: { exists: false, draft: false },
+    tagOnRemote: false,
+    exec: async () => {
+      throw new Error('gh should not run')
+    },
+  })
+  assert.equal(untagged.ok, false)
+  assert.match(untagged.error, /not on origin/)
+  assert.match(untagged.error, /git push origin v0\.3\.8/)
+  assert.deepEqual(untagged.commands, [])
 })

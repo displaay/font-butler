@@ -62,7 +62,15 @@ The profile name is `font-butler-notary`. If it lives in a keychain other than t
 
 1. Bump `version` in `package.json` (semver, no leading `v`).
 2. Commit that bump on `main` and push it.
-3. From the clean worktree above:
+3. From the clean worktree above, tag that commit and push the tag. `npm run publish:mac` does not create the tag. If `v<version>` is not on `origin`, it stops.
+
+   ```bash
+   version="$(node -p "require('./package.json').version")"
+   git tag "v${version}"
+   git push origin "v${version}"
+   ```
+
+4. Build the signed app from that same worktree:
 
    ```bash
    npm run release:mac
@@ -70,7 +78,7 @@ The profile name is `font-butler-notary`. If it lives in a keychain other than t
 
    `release:mac` sets `APPLE_KEYCHAIN_PROFILE=font-butler-notary` when that variable is unset, then runs the same prepare steps as `npm run dist` (`build`, bundled Python, Finder and session-font addons) and packs with electron-builder `--publish never`. Signing is forced. If the Developer ID certificate is missing, or signing or notarizing fails, the command stops. It does not fall back to ad-hoc. After a successful pack it runs `scripts/assert-notarized-mac-release.mjs`.
 
-4. Verify the app, the DMG, and the update zip (Apple silicon build; the bundle is `release/mac-arm64/Font Buttler.app`):
+5. Verify the app, the DMG, and the update zip (Apple silicon build; the bundle is `release/mac-arm64/Font Buttler.app`):
 
    ```bash
    APP="release/mac-arm64/Font Buttler.app"
@@ -93,13 +101,15 @@ The profile name is `font-butler-notary`. If it lives in a keychain other than t
    codesign --verify --verbose=2 "$APP/Contents/Resources/python/bin/python3"
    ```
 
-5. Upload from the release Mac. This command checks the staple again and then uploads. A raw `gh release upload` is not the publish path.
+6. Upload from the release Mac. This checks the staple for `Font-Buttler-<version>-arm64` only, then publishes. A raw `gh release upload` is not the publish path. Another version’s `.dmg` or `.zip` left in `release/` stops the command.
 
    ```bash
    npm run publish:mac
    ```
 
-   Attached files:
+   If GitHub has no Release for `v<version>`, the command creates a draft with `gh release create v<version> --verify-tag --draft`, uploads the files, and runs `gh release edit v<version> --draft=false` only after that upload succeeds. A failed upload leaves the draft unpublished, so `/releases/latest` does not show a release without a DMG.
+
+   Attached files, and no others:
 
    - `Font-Buttler-{version}-arm64.dmg` (signed, notarized, and stapled)
    - `Font-Buttler-{version}-arm64.zip` (the stapled app; this is the update-feed file)
@@ -108,11 +118,11 @@ The profile name is `font-butler-notary`. If it lives in a keychain other than t
 
    The DMG blockmap is deleted after stapling because the staple changes the DMG bytes. Do not upload a `*.dmg.blockmap`.
 
-6. Confirm the Release is public so `/releases/latest` returns it.
+7. Confirm `/releases/latest` returns the release, and that its assets include the DMG.
 
 ### Release notes
 
-Paste this into the GitHub Release for the first Developer ID build. People on an ad-hoc build download this version by hand once. Do not turn on auto-install.
+`npm run publish:mac` writes this text when it creates the Release. People on an ad-hoc build download this version by hand once. Do not turn on auto-install.
 
 ```text
 This build is signed with Developer ID and notarized by Apple.
@@ -149,7 +159,7 @@ The Developer ID plist has one key: `com.apple.security.cs.allow-jit`. That is w
 
 `disable-library-validation` is not in the release plist. A Developer ID build re-signs the whole bundle with one team, so library validation should accept Electron’s frameworks, the unpacked `.node` addons, and the bundled Python Mach-O files. The ad-hoc plist does set it, because an ad-hoc signature has no team and hardened runtime would otherwise refuse those libraries. That file is used only when `npm run dist` has no Developer ID certificate and no notary profile.
 
-If a notarized build dies at launch with a library-validation crash in Python or a `.node` addon, add `disable-library-validation` to `build/entitlements.mac.plist` and ship another build. Do not add it preemptively.
+If a notarized build dies at launch with a library-validation crash in Python or a `.node` addon, add `disable-library-validation` to `build/entitlements.mac.plist` and ship another build. Do not add it preemptively. The publish check rejects `get-task-allow`. It still accepts `disable-library-validation` when that follow-up build has to set it.
 
 ### What gets signed
 

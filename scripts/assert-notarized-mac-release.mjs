@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -24,9 +24,6 @@ export function notarizationFailures({
     failures.push(`The app is not signed with Developer ID identity "${DEVELOPER_ID_IDENTITY}".`)
   }
   if (/get-task-allow/.test(entitlements)) failures.push('Release entitlements include get-task-allow.')
-  if (/disable-library-validation/.test(entitlements)) {
-    failures.push('Release entitlements disable library validation.')
-  }
   if (codesignVerifyStatus !== 0) {
     failures.push('codesign --verify --deep --strict failed. A helper, framework, or native module is unsigned.')
   }
@@ -69,27 +66,54 @@ export function findAppBundles(dir) {
   return found
 }
 
-export function macReleaseFiles(root) {
+export function macReleaseAssetNames(version) {
+  const stem = `Font-Buttler-${version}-arm64`
+  return {
+    dmg: `${stem}.dmg`,
+    zip: `${stem}.zip`,
+    zipBlockmap: `${stem}.zip.blockmap`,
+    feed: 'latest-mac.yml',
+    appRelative: path.join('mac-arm64', 'Font Buttler.app'),
+  }
+}
+
+export function readPackVersion(root) {
+  return JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version
+}
+
+/** Archives for this version only. Any other .dmg or .zip in release/ is a hard failure. */
+export function prepareMacPublish(root, version) {
   const releaseDir = path.join(root, 'release')
+  const expected = macReleaseAssetNames(version)
   let names = []
   try {
     names = readdirSync(releaseDir)
   } catch {
-    return { releaseDir, dmgs: [], zips: [], zipBlockmaps: [], feed: path.join(releaseDir, 'latest-mac.yml'), apps: [] }
+    names = []
   }
-  const dmgs = names.filter((name) => name.endsWith('.dmg')).map((name) => path.join(releaseDir, name))
-  const zips = names.filter((name) => name.endsWith('.zip')).map((name) => path.join(releaseDir, name))
-  const zipBlockmaps = names
-    .filter((name) => name.endsWith('.zip.blockmap'))
-    .map((name) => path.join(releaseDir, name))
-  return {
-    releaseDir,
-    dmgs,
-    zips,
-    zipBlockmaps,
-    feed: path.join(releaseDir, 'latest-mac.yml'),
-    apps: findAppBundles(releaseDir).filter((app) => path.basename(app) === 'Font Buttler.app'),
+  const archives = names.filter((name) => name.endsWith('.dmg') || name.endsWith('.zip'))
+  const unexpected = archives.filter((name) => name !== expected.dmg && name !== expected.zip)
+  const dmg = path.join(releaseDir, expected.dmg)
+  const zip = path.join(releaseDir, expected.zip)
+  const zipBlockmap = path.join(releaseDir, expected.zipBlockmap)
+  const feed = path.join(releaseDir, expected.feed)
+  const app = path.join(releaseDir, expected.appRelative)
+  const failures = unexpected.map(
+    (name) =>
+      `release/${name} is not ${expected.dmg} or ${expected.zip}. Remove macOS archives from other versions before publishing.`,
+  )
+  const required = [
+    [dmg, expected.dmg],
+    [zip, expected.zip],
+    [zipBlockmap, expected.zipBlockmap],
+    [feed, expected.feed],
+    [app, expected.appRelative],
+  ]
+  for (const [file, label] of required) {
+    if (!existsSync(file)) failures.push(`Missing release/${label} for version ${version}.`)
   }
+  const upload = failures.length ? [] : [dmg, zip, zipBlockmap, feed]
+  return { expected, unexpected, failures, dmg, zip, zipBlockmap, feed, app, upload }
 }
 
 function attachDmg(dmg) {
@@ -121,20 +145,15 @@ function evidenceForApp(app, extra) {
   })
 }
 
-export function assertNotarizedMacRelease(root = repoRoot) {
+export function assertNotarizedMacRelease(root = repoRoot, version = readPackVersion(root)) {
   if (process.platform !== 'darwin') {
     return ['Refusing to publish a macOS release from a non-macOS host. Notarization can only be checked on macOS.']
   }
-  const files = macReleaseFiles(root)
-  const failures = []
-  if (files.apps.length === 0) failures.push('No Font Buttler.app was found under release/.')
-  if (files.dmgs.length === 0) failures.push('No DMG was found under release/.')
-  if (files.zips.length === 0) failures.push('No update zip was found under release/.')
-  if (failures.length) return failures
+  const files = prepareMacPublish(root, version)
+  if (files.failures.length) return files.failures
 
-  const app = files.apps[0]
-  const dmg = files.dmgs[0]
-  const zip = files.zips[0]
+  const { app, dmg, zip } = files
+  const failures = []
   const mounted = attachDmg(dmg)
   let dmgAppStatus = 1
   try {
