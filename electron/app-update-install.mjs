@@ -787,9 +787,9 @@ if ! mv ${next} ${current}; then
   reopen_original
   exit 1
 fi
+${openApp}
 moved=0
 rm -rf ${previous}
-${openApp}
 rm -rf ${temp}
 rm -f ${script}
 `

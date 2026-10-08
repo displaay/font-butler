@@ -660,11 +660,12 @@ test('a marked swap relaunches with open -n and an unmarked swap keeps plain ope
   const unmarkedRestore = unmarked.slice(unmarked.indexOf('reopen_original() {'), unmarked.indexOf("trap 'reopen_original"))
   assert.match(markedRestore, /open -n /)
   assert.doesNotMatch(unmarkedRestore, /open -n /)
-  assert.match(marked.slice(marked.lastIndexOf('moved=0')), /open -n /)
-  assert.doesNotMatch(unmarked.slice(unmarked.lastIndexOf('moved=0')), /open -n /)
+  assert.match(marked, /open -n '[^']+'\nmoved=0\n/)
+  assert.match(unmarked, /open '[^']+'\nmoved=0\n/)
+  assert.doesNotMatch(unmarked, /open -n /)
 })
 
-function runSwapFailure(fail) {
+function runSwapFailure(fail, { testFeedBuild = false } = {}) {
   const root = mkdtempSync(path.join(os.tmpdir(), 'font-butler-swap-'))
   const bin = path.join(root, 'bin')
   const current = path.join(root, 'Font Buttler.app')
@@ -711,7 +712,18 @@ exec /bin/rm "$@"
   writeFileSync(
     path.join(bin, 'open'),
     `#!/bin/bash
-printf '%s\\n' "$1" >> ${JSON.stringify(openLog)}
+target="$1"
+if [[ "$1" == "-n" ]]; then
+  target="$2"
+fi
+marker=""
+if [[ -f "$target/marker" ]]; then
+  marker=$(cat "$target/marker")
+fi
+if [[ ${JSON.stringify(fail)} == "open" && "$marker" == "new" ]]; then
+  exit 1
+fi
+printf '%s\\n' "$target" >> ${JSON.stringify(openLog)}
 `,
   )
   for (const name of ['mv', 'rm', 'open']) chmodSync(path.join(bin, name), 0o755)
@@ -720,7 +732,7 @@ printf '%s\\n' "$1" >> ${JSON.stringify(openLog)}
   const scriptPath = path.join(root, 'swap.sh')
   writeFileSync(
     scriptPath,
-    buildMacSwapScript({ pid, currentApp: current, nextApp: next, tempDir, scriptPath }),
+    buildMacSwapScript({ pid, currentApp: current, nextApp: next, tempDir, scriptPath, testFeedBuild }),
     { mode: 0o700 },
   )
   const result = spawnSync('/bin/bash', [scriptPath], {
@@ -760,6 +772,20 @@ test('a failing mv or rm reopens the original app', () => {
     assert.equal(existsSync(`${removed.current}.font-butler-previous`), false)
   } finally {
     rmSync(removed.root, { recursive: true, force: true })
+  }
+})
+
+test('a failing final open restores and reopens the original bundle', () => {
+  for (const testFeedBuild of [false, true]) {
+    const failed = runSwapFailure('open', { testFeedBuild })
+    try {
+      assert.notEqual(failed.result.status, 0, failed.result.stderr)
+      assert.equal(failed.marker, 'original')
+      assert.deepEqual(failed.opened, [failed.current])
+      assert.equal(existsSync(`${failed.current}.font-butler-previous`), false)
+    } finally {
+      rmSync(failed.root, { recursive: true, force: true })
+    }
   }
 })
 
