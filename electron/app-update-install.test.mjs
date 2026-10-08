@@ -9,6 +9,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 import { pathToFileURL } from 'node:url'
 import { releaseFeedOverrideFailures, updateFeedFailures } from '../scripts/assert-notarized-mac-release.mjs'
+import { rawFs } from './raw-fs.mjs'
 import { isNewerVersion as sharedIsNewerVersion } from '../shared/app-update.ts'
 import {
   APP_UPDATE_FEED_ENV,
@@ -1481,6 +1482,70 @@ test('an unmarked build refuses a marked download before the swap', async () => 
     assert.equal(installer.status().phase, 'error')
     assert.equal(existsSync(dir), false)
   } finally {
+    console.error = realError
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('a throwing temp cleanup still returns the marker refusal', async () => {
+  const version = '0.9.3'
+  const zipBytes = Buffer.from('unreadable-marker-zip')
+  const doc = yml(version, [
+    { name: macArm64ArchiveName(version, 'zip'), sha512: sha512(zipBytes), size: zipBytes.length },
+  ])
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-cleanup-throw-'))
+  const raw = rawFs()
+  const originalRm = raw.rmSync
+  let cleanupCalls = 0
+  raw.rmSync = () => {
+    cleanupCalls += 1
+    const error = new Error(`ENOENT: no such file or directory, rm '${dir}'`)
+    error.code = 'ENOENT'
+    throw error
+  }
+  const logs = []
+  const realError = console.error
+  console.error = (...args) => {
+    logs.push(args.map((part) => String(part?.message ?? part)).join(' '))
+  }
+  const installer = createAppUpdateInstaller({
+    currentVersion: '0.3.9',
+    env: {},
+    probeRuntime: () => signedRuntime(),
+    makeTempDir: () => dir,
+    unzip: async (_zip, dest) => {
+      writeUpdateApp(dest, version)
+      const resources = path.join(dest, 'Font Buttler.app', 'Contents', 'Resources')
+      mkdirSync(resources, { recursive: true })
+      writeFileSync(path.join(resources, 'app.asar'), 'not-an-asar')
+    },
+    verifyDownloadedApp: async () => ({ ok: true }),
+    spawnSwap: () => {
+      throw new Error('refused update must not swap')
+    },
+    quit: () => {
+      throw new Error('refused update must not quit')
+    },
+    pid: 13,
+    fetch: async (url) => {
+      if (url === GITHUB_LATEST_API) return httpResponse({ body: JSON.stringify(releaseJson(version)) })
+      if (String(url).endsWith('latest-mac.yml')) return httpResponse({ body: doc })
+      if (String(url).endsWith(macArm64ArchiveName(version, 'zip'))) {
+        return httpResponse({ body: zipBytes, contentLength: zipBytes.length })
+      }
+      throw new Error(`unexpected ${url}`)
+    },
+  })
+  try {
+    const result = await installer.start()
+    assert.equal(cleanupCalls, 1)
+    assert.equal(result.ok, false)
+    assert.equal(result.error, "Couldn't read the update's package marker (release build)")
+    assert.equal(logs.includes(result.error), true)
+    assert.equal(installer.status().phase, 'error')
+    assert.equal(existsSync(dir), true)
+  } finally {
+    raw.rmSync = originalRm
     console.error = realError
     rmSync(dir, { recursive: true, force: true })
   }

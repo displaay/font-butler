@@ -925,8 +925,13 @@ export function createAppUpdateInstaller(deps) {
     } finally {
       running = false
       if (tempDir && !keepTemp) {
-        if (deps.removeTemp) deps.removeTemp(tempDir)
-        else rawFs().rmSync(tempDir, { recursive: true, force: true })
+        try {
+          if (deps.removeTemp) deps.removeTemp(tempDir)
+          else rawFs().rmSync(tempDir, { recursive: true, force: true })
+        } catch {
+          // Electron's fs shim throws while walking app.asar. That must not
+          // replace the { ok, error } this attempt already produced.
+        }
       }
     }
   }
@@ -1163,7 +1168,8 @@ export function cleanupOpenedUpdateDmgs({
       try {
         rawFs().rmSync(entry.tempDir, { recursive: true, force: true })
       } catch {
-        // The temp directory was already removed.
+        // raw-fs walks app.asar. A shim failure must not escape startup or
+        // skip the rest of the recorded disk images.
       }
     }
   }
