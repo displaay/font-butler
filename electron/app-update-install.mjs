@@ -6,7 +6,8 @@
  * in-place only for a packaged Developer ID build on team A7WWML89LQ whose
  * bundle is writable and not translocated or read-only. Every other case
  * downloads the DMG, checks it, and opens it. The downloaded app is swapped
- * only after sha512, size, Developer ID team, and a notarization staple match.
+ * only after sha512, size, Developer ID team, a notarization staple, and
+ * CFBundleShortVersionString equal to the feed version all match.
  *
  * Redirects: GitHub release assets answer 302. A public asset URL
  * (`https://github.com/<owner>/<repo>/releases/download/<tag>/<file>`)
@@ -573,6 +574,50 @@ export function verifyDownloadedDeveloperIdApp(appPath, spawnImpl = spawnSync) {
   return { ok: true }
 }
 
+/** CFBundleShortVersionString from a bundle's Info.plist. Binary plists go through `plutil`. */
+export function readBundleShortVersion(appPath, spawnImpl = spawnSync) {
+  const plistPath = path.join(appPath, 'Contents', 'Info.plist')
+  let raw
+  try {
+    raw = fs.readFileSync(plistPath)
+  } catch {
+    throw new Error('The downloaded app is missing Info.plist.')
+  }
+  const text = plistAsXml(raw, plistPath, spawnImpl)
+  const version = shortVersionFromPlistXml(text)
+  if (!version) throw new Error('The downloaded app has no CFBundleShortVersionString.')
+  return version
+}
+
+export function shortVersionFromPlistXml(text) {
+  const source = String(text ?? '')
+  const keyAt = source.indexOf('>CFBundleShortVersionString<')
+  const start = keyAt === -1 ? source.indexOf('CFBundleShortVersionString') : keyAt
+  if (start === -1) return ''
+  const match = source.slice(start).match(/<string>\s*([^<]*?)\s*<\/string>/)
+  return match ? match[1].trim() : ''
+}
+
+function plistAsXml(raw, plistPath, spawnImpl) {
+  const asText = raw.toString('utf8')
+  if (!raw.includes(0) && asText.includes('<plist')) return asText
+  const converted = spawnImpl('plutil', ['-convert', 'xml1', '-o', '-', plistPath], { encoding: 'utf8' })
+  const stdout = String(converted?.stdout ?? '')
+  if ((converted?.status ?? 1) !== 0 || !stdout.includes('<plist')) {
+    throw new Error('The downloaded app Info.plist could not be read.')
+  }
+  return stdout
+}
+
+function assertDownloadedAppVersion(appPath, feedVersion, readImpl) {
+  const actualRaw = (readImpl ?? readBundleShortVersion)(appPath)
+  const expected = normalizeReleaseVersion(feedVersion)
+  const actual = normalizeReleaseVersion(actualRaw)
+  if (!expected || actual !== expected) {
+    throw new Error(`The downloaded app is ${actual || 'an unknown version'}, not ${expected || 'the feed version'}.`)
+  }
+}
+
 export function shellQuote(value) {
   return `'${String(value).replaceAll("'", `'\\''`)}'`
 }
@@ -735,22 +780,29 @@ export function createAppUpdateInstaller(deps) {
     if (running) return { ok: false, ignored: true, ...status() }
     running = true
     note({ phase: 'downloading', percent: 0 })
-    const tempDir = deps.makeTempDir
-      ? deps.makeTempDir()
-      : fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-update-'))
+    let tempDir = null
     let keepTemp = false
     try {
+      tempDir = deps.makeTempDir
+        ? deps.makeTempDir()
+        : fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-update-'))
       const result = await runInstall({ ...deps, onProgress: note }, fetchImpl, tempDir)
       keepTemp = result.keepTemp === true
       note({ phase: 'idle' })
       return { ok: true, mode: result.mode }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'The update could not be installed.'
-      note({ phase: 'error', error: message })
+      if (tempDir == null) {
+        // Nothing was created, so the installer is idle again. The returned
+        // error is what this attempt shows; the next start() is not ignored.
+        note({ phase: 'idle' })
+      } else {
+        note({ phase: 'error', error: message })
+      }
       return { ok: false, error: message }
     } finally {
       running = false
-      if (!keepTemp) {
+      if (tempDir && !keepTemp) {
         if (deps.removeTemp) deps.removeTemp(tempDir)
         else fs.rmSync(tempDir, { recursive: true, force: true })
       }
@@ -851,6 +903,7 @@ async function runInstall(deps, fetchImpl, tempDir) {
   if (!verified?.ok) {
     throw new Error(verified?.reason || 'The downloaded app failed signature checks.')
   }
+  assertDownloadedAppVersion(nextApp, version, deps.readBundleShortVersion)
   if (!runtime.appPath) throw new Error('The running app bundle could not be found.')
   deps.onProgress?.({ phase: 'installing' })
   const scriptPath = deps.scriptPath ?? path.join(os.tmpdir(), `font-butler-swap-${process.pid}.sh`)

@@ -21,6 +21,7 @@ import {
   isUpdateDmgMounted,
   macArm64ArchiveName,
   parseLatestMacYml,
+  readBundleShortVersion,
   rememberOpenedDmg,
   resolveUpdateFeedUrl,
   selectExactArm64Assets,
@@ -60,6 +61,22 @@ function yml(version, files) {
     lines.push(`  - url: ${file.name}`, `    sha512: ${file.sha512}`, `    size: ${file.size}`)
   }
   return `${lines.join('\n')}\n`
+}
+
+function infoPlist(version) {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleShortVersionString</key>
+  <string>${version}</string>
+</dict></plist>
+`
+}
+
+function writeUpdateApp(dest, version) {
+  const contents = path.join(dest, 'Font Buttler.app', 'Contents')
+  mkdirSync(contents, { recursive: true })
+  writeFileSync(path.join(contents, 'Info.plist'), infoPlist(version))
 }
 
 function signedRuntime(extra = {}) {
@@ -389,8 +406,7 @@ test('a signed packaged app installs the zip in place and an ad-hoc app opens th
       removeTemp: (target) => rmSync(target, { recursive: true, force: true }),
       unzip: async (_zip, dest) => {
         writeFileSync(path.join(dest, 'readme.txt'), 'unpacked')
-        const { mkdirSync } = await import('node:fs')
-        mkdirSync(path.join(dest, 'Font Buttler.app'))
+        writeUpdateApp(dest, `v${version}`)
       },
       verifyDownloadedApp: async () => {
         verified += 1
@@ -473,6 +489,108 @@ test('a failed signature check does not swap the running app', async () => {
   assert.match(result.error, /staple/)
   assert.deepEqual(swaps, [])
   assert.equal(existsSync(dir), false)
+})
+
+test('a signed zip whose bundle version is not the feed version is not installed', async () => {
+  const version = '0.4.8'
+  const stale = '0.3.0'
+  const zipBytes = Buffer.from('stale-zip')
+  const doc = yml(version, [
+    { name: macArm64ArchiveName(version, 'dmg'), sha512: sha512(zipBytes), size: zipBytes.length },
+    { name: macArm64ArchiveName(version, 'zip'), sha512: sha512(zipBytes), size: zipBytes.length },
+  ])
+  const swaps = []
+  const phases = []
+  let quit = false
+  const root = mkdtempSync(path.join(os.tmpdir(), 'font-butler-stale-'))
+  const dir = path.join(root, 'download')
+  const current = path.join(root, 'running.app')
+  mkdirSync(dir)
+  mkdirSync(current)
+  const installer = createAppUpdateInstaller({
+    currentVersion: '0.4.0',
+    env: {},
+    probeRuntime: () => signedRuntime({ appPath: current }),
+    makeTempDir: () => dir,
+    removeTemp: (target) => rmSync(target, { recursive: true, force: true }),
+    unzip: async (_zip, dest) => {
+      writeUpdateApp(dest, stale)
+    },
+    verifyDownloadedApp: async () => ({ ok: true }),
+    spawnSwap: (swap) => swaps.push(swap),
+    quit: () => {
+      quit = true
+    },
+    onProgress: (payload) => phases.push(payload.phase),
+    fetch: async (url) => {
+      if (url === GITHUB_LATEST_API) return httpResponse({ body: JSON.stringify(releaseJson(version)) })
+      if (String(url).endsWith('latest-mac.yml')) return httpResponse({ body: doc })
+      return httpResponse({ body: zipBytes, contentLength: zipBytes.length })
+    },
+  })
+  const result = await installer.start()
+  assert.equal(result.ok, false)
+  assert.match(result.error, new RegExp(`The downloaded app is ${stale}, not ${version}`))
+  assert.deepEqual(swaps, [])
+  assert.equal(quit, false)
+  assert.equal(phases.includes('installing'), false)
+  assert.equal(existsSync(current), true)
+  assert.equal(existsSync(dir), false)
+  assert.equal(installer.status().phase, 'error')
+  rmSync(root, { recursive: true, force: true })
+})
+
+test('a temp directory failure leaves the installer idle so the next start is not ignored', async () => {
+  let created = 0
+  const removed = []
+  const installer = createAppUpdateInstaller({
+    currentVersion: '0.0.0',
+    probeRuntime: () => signedRuntime(),
+    makeTempDir: () => {
+      created += 1
+      if (created === 1) throw new Error('temp directory could not be created')
+      return mkdtempSync(path.join(os.tmpdir(), 'font-butler-retry-'))
+    },
+    removeTemp: (target) => {
+      removed.push(target)
+      rmSync(target, { recursive: true, force: true })
+    },
+    fetch: async () => {
+      throw new Error('feed unavailable')
+    },
+  })
+  const first = await installer.start()
+  assert.equal(first.ok, false)
+  assert.equal(first.ignored, undefined)
+  assert.match(first.error, /temp directory could not be created/)
+  assert.deepEqual(installer.status(), { phase: 'idle' })
+  assert.deepEqual(removed, [])
+  const second = await installer.start()
+  assert.equal(second.ignored, undefined)
+  assert.equal(second.ok, false)
+  assert.match(second.error, /feed unavailable/)
+  assert.equal(created, 2)
+  assert.equal(installer.status().phase, 'error')
+  assert.equal(removed.length, 1)
+})
+
+test('readBundleShortVersion reads CFBundleShortVersionString and converts a binary plist', () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'font-butler-plist-'))
+  const app = path.join(root, 'Font Buttler.app')
+  const plistPath = path.join(app, 'Contents', 'Info.plist')
+  mkdirSync(path.dirname(plistPath), { recursive: true })
+  writeFileSync(plistPath, infoPlist('0.4.4'))
+  assert.equal(readBundleShortVersion(app), '0.4.4')
+  writeFileSync(plistPath, Buffer.concat([Buffer.from('bplist00'), Buffer.from([0])]))
+  assert.equal(
+    readBundleShortVersion(app, () => ({ status: 0, stdout: infoPlist('0.9.1') })),
+    '0.9.1',
+  )
+  assert.throws(
+    () => readBundleShortVersion(app, () => ({ status: 1, stdout: '' })),
+    /could not be read/,
+  )
+  rmSync(root, { recursive: true, force: true })
 })
 
 test('the swap script restores the previous app if the new bundle cannot be moved', () => {
@@ -901,8 +1019,7 @@ test('release builds ignore FONT_BUTLER_UPDATE_FEED_URL and other builds can use
     makeTempDir: () => releaseDir,
     removeTemp: (target) => rmSync(target, { recursive: true, force: true }),
     unzip: async (_zip, dest) => {
-      const { mkdirSync } = await import('node:fs')
-      mkdirSync(path.join(dest, 'Font Buttler.app'))
+      writeUpdateApp(dest, version)
     },
     verifyDownloadedApp: async () => ({ ok: true }),
     spawnSwap: () => {},
