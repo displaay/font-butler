@@ -401,6 +401,47 @@ test('folder auto-reinstall off blocks an update even when the global switch is 
   }
 })
 
+test('folder auto-reinstall applies two sequential source updates', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  const font = path.join(inbox, 'Twice.ttf')
+  writeTestFont(font, 'Twice', 'Twice-Regular')
+  const service = new FontButlerService(paths)
+  try {
+    await service.updateSettings({
+      autoReinstallOnUpdate: true,
+      onboardingCompleted: true,
+    })
+    const configured = await service.configureFolder({ root: inbox })
+    await service.startWatching(configured.folder.id)
+    const added = service.listCatalog().find((entry) => entry.faces[0]?.familyName === 'Twice')
+    assert.ok(added)
+    assert.equal(added.status, 'installed')
+    assert.ok(added.installedPath)
+    const v1 = fs.readFileSync(added.installedPath)
+
+    writeTestFont(font, 'Twice', 'Twice-Regular', { version: 'Version 2.000' })
+    enqueueSourceStatusRefresh(paths, font)
+    const afterV2 = await waitForEntry(service, added.id, (entry) => {
+      if (entry.status !== 'installed' || !entry.installedPath) return false
+      return !fs.readFileSync(entry.installedPath).equals(v1)
+    })
+    const v2 = fs.readFileSync(afterV2.installedPath!)
+
+    writeTestFont(font, 'Twice', 'Twice-Regular', { version: 'Version 3.000' })
+    enqueueSourceStatusRefresh(paths, font)
+    const afterV3 = await waitForEntry(service, added.id, (entry) => {
+      if (entry.status !== 'installed' || !entry.installedPath) return false
+      return !fs.readFileSync(entry.installedPath).equals(v2)
+    })
+    assert.equal(afterV3.status, 'installed')
+  } finally {
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
 test('folder auto-reinstall on still reinstalls when the global switch is off', async () => {
   const paths = tempPaths()
   const inbox = path.join(paths.dataRoot, 'inbox')

@@ -10,6 +10,7 @@ import {
   shouldRetryBootstrapOnActivate,
   canRetryPackagedBootstrap,
   detachWindowLifecycleHandlers,
+  shouldTreatRenderProcessGoneAsCrash,
 } from './bootstrap-window.mjs'
 
 test('Dock activate during bootstrap shows starting, not a sticky error window', () => {
@@ -63,6 +64,12 @@ test('retry is blocked while bootstrapping', () => {
     canRetryPackagedBootstrap({ isPackaged: true, bootstrapping: false, hasBootstrapRunner: true }),
     true,
   )
+})
+
+test('shouldTreatRenderProcessGoneAsCrash ignores clean-exit (Vite reload)', () => {
+  assert.equal(shouldTreatRenderProcessGoneAsCrash({ reason: 'clean-exit', exitCode: 1 }), false)
+  assert.equal(shouldTreatRenderProcessGoneAsCrash({ reason: 'crashed', exitCode: 1 }), true)
+  assert.equal(shouldTreatRenderProcessGoneAsCrash({ reason: 'oom', exitCode: 1 }), true)
 })
 
 test('detachWindowLifecycleHandlers removes close and closed listeners', () => {
