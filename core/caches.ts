@@ -281,6 +281,24 @@ function addPathKey(out, value) {
     out['/private' + s] = true
   }
 }
+function pathExists(filePath) {
+  return Boolean(ObjC.unwrap($.NSFileManager.defaultManager.fileExistsAtPath(String(filePath))))
+}
+function isUserFontsDomainPath(filePath) {
+  const s = String(filePath)
+  if (s.indexOf('/System/Library/Fonts/') >= 0) return false
+  if (/\\/Users\\/[^\\/]+\\/Library\\/Fonts\\//.test(s)) return true
+  if (/\\/Library\\/Application Support\\/(Font Buttler|Font Butler)\\/user-fonts\\//.test(s)) return true
+  // FONT_BUTLER_DATA isolated installs (temp dirs) use .../user-fonts/ as the macOS destination.
+  if (s.indexOf('/user-fonts/') >= 0 && s.indexOf('/System/') < 0) return true
+  return false
+}
+function canRenderUserFont(filePath) {
+  const descs = descriptorsFor(filePath)
+  if (!descs || Number(descs.count) === 0) return false
+  const font = $.CTFontCreateWithFontDescriptor(descs.objectAtIndex(0), 12.0, null)
+  return font != null
+}
 function isEnabled(filePath, available) {
   const url = $.NSURL.fileURLWithPath(filePath)
   const candidates = [filePath, ObjC.unwrap(url.path)]
@@ -296,6 +314,12 @@ function isEnabled(filePath, available) {
     if (candidate && String(candidate).startsWith('/tmp/') && available['/private' + String(candidate)]) return true
     if (candidate && String(candidate).startsWith('/private/var/') && available[String(candidate).replace(/^\\/private/, '')]) return true
     if (candidate && String(candidate).startsWith('/private/tmp/') && available[String(candidate).replace(/^\\/private/, '')]) return true
+  }
+  // macOS loads ~/Library/Fonts without listing every file in CTFontManagerCopyAvailableFontURLs.
+  // Font Book still treats them as installed; fc-list and CTFontCreate see them. Treat absence from
+  // the URL set as inconclusive, not disabled, when the file renders.
+  if (isUserFontsDomainPath(filePath) && pathExists(filePath) && canRenderUserFont(filePath)) {
+    return true
   }
   return false
 }
@@ -342,6 +366,10 @@ function run(argv) {
     const descs = descriptorsFor(filePath)
     if (!descs || Number(descs.count) === 0) return 'fail'
     $.CTFontManagerEnableFontDescriptors(descs, enabled)
+    if (isUserFontsDomainPath(filePath)) {
+      if (!enabled) return 'ok'
+      if (pathExists(filePath) && canRenderUserFont(filePath)) return 'ok'
+    }
     const on = isEnabled(filePath, availableUrlSet())
     return on === enabled ? 'ok' : 'fail'
   }

@@ -433,6 +433,7 @@ export class FontButlerService {
   /** Heavier startup work; safe to run while read-only API serves the catalog. */
   async initBackgroundPhase(): Promise<void> {
     await this.adoptUserFonts()
+    await this.ensureLiveMacosFontsActivated()
     await this.detachRenamedInstallSources()
     await this.seedIfEmpty()
     await this.refreshSourceStatuses(true, { fingerprintOnly: true })
@@ -4304,6 +4305,28 @@ export class FontButlerService {
       })
     } catch {
       return undefined
+    }
+  }
+
+  /** Re-apply Core Text enablement for Butler-managed macOS copies (retail, watch, manual). */
+  private async ensureLiveMacosFontsActivated(): Promise<void> {
+    if (!isMac()) return
+    const catalog = loadCatalog(this.paths)
+    const roots = this.macosFontRoots()
+    for (const entry of catalog.entries) {
+      if (entry.previewOnly || entry.status !== 'installed') continue
+      if (!entry.installedPath || !fs.existsSync(entry.installedPath)) continue
+      if (!isUnderAnyRoot(entry.installedPath, roots)) continue
+      const managed =
+        Boolean(entry.retailRelativePath) ||
+        Boolean(entry.activationOwners?.length) ||
+        Boolean(entry.installations?.some((copy) => copy.destinationId === 'macos'))
+      if (!managed) continue
+      try {
+        await ensureFontActivation(getFontNative(), entry.installedPath, true)
+      } catch {
+        // On-disk fonts remain; fc-list may still list them even when CT URL queries omit the path.
+      }
     }
   }
 
