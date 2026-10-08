@@ -54,9 +54,15 @@ export async function commitInstalledFile(options: {
   fs.mkdirSync(path.dirname(dest), { recursive: true })
   fs.mkdirSync(rollbackDir, { recursive: true })
   let rollback: string | undefined
-  if (fs.existsSync(dest)) {
+  const replacing = fs.existsSync(dest)
+  if (replacing) {
     rollback = path.join(rollbackDir, `${crypto.randomUUID()}${path.extname(dest) || '.ttf'}`)
     await fs.promises.copyFile(dest, rollback)
+    // Drop the old Core Text registration before overwriting bytes at the same path.
+    // In-place copies leave running apps (Figma, etc.) serving stale outlines on later updates.
+    await native.unregisterFont(dest).catch(() => {
+      // Best-effort; a failed unregister should not block installing the new bytes.
+    })
   }
   try {
     await fs.promises.copyFile(stagedPath, dest)
