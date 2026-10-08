@@ -93,7 +93,7 @@ test('variable-font instance rows fall back to wght when namedInstances are miss
   assert.equal(instanceRowVariation(face, 'Bold'), "'wght' 700")
 })
 
-test('catalog hover preview keeps only the single VF entry when static retail cuts share the family', () => {
+test('catalog hover preview drops duplicate static retail cuts but keeps distinct static styles', () => {
   const vf: FontFaceInfo = {
     ...vfFace(),
     postscriptName: 'AguzzoVF',
@@ -113,19 +113,53 @@ test('catalog hover preview keeps only the single VF entry when static retail cu
     retailFamilyName: 'Aguzzo VF',
     installedPath: '/Library/Fonts/AguzzoVF.ttf',
   }
-  const staticEntry = {
+  const staticBold = {
     ...vfEntry,
-    id: 'static',
+    id: 'static-bold',
     retailRelativePath: 'Aguzzo/Aguzzo-Bold.otf',
     faces: [staticFace('Aguzzo VF', 'Bold')],
     format: 'otf',
   }
-  const grouped = groupCatalog([vfEntry, staticEntry])[0]!
+  const staticItalic = {
+    ...vfEntry,
+    id: 'static-italic',
+    retailRelativePath: 'Aguzzo/Aguzzo-Italic.otf',
+    faces: [staticFace('Aguzzo VF', 'Italic', true)],
+    format: 'otf',
+  }
+  const grouped = groupCatalog([vfEntry, staticBold, staticItalic])[0]!
   const rows = catalogInstanceRows(grouped)
-  assert.equal(rows.length, 4)
+  assert.equal(rows.length, 5)
   const hoverRows = catalogHoverInstanceRows(grouped)
-  assert.equal(hoverRows.length, 3)
-  assert.ok(hoverRows.every((row) => row.catalogEntryId === 'vf'))
+  assert.equal(hoverRows.length, 4)
+  assert.ok(hoverRows.every((row) => row.catalogEntryId === 'vf' || row.catalogEntryId === 'static-italic'))
+  assert.ok(hoverRows.some((row) => row.label === 'Italic'))
+  assert.ok(!hoverRows.some((row) => row.catalogEntryId === 'static-bold'))
+})
+
+test('catalog hover preview leaves non-retail static styles in mixed VF families', () => {
+  const vf: FontFaceInfo = {
+    ...vfFace(),
+    familyName: 'Booton',
+    postscriptName: 'BootonVF',
+  }
+  const vfEntry: CatalogEntry = {
+    id: 'vf',
+    sourcePath: '/tmp/BootonVF.ttf',
+    sourceMtimeMs: 1,
+    sourceSize: 1,
+    status: 'installed',
+    faces: [vf],
+    format: 'ttf',
+    addedAt: 1,
+    updatedAt: 1,
+    installedPath: '/Library/Fonts/BootonVF.ttf',
+  }
+  const staticItalic = staticEntry('local-italic', 'Italic', 'installed')
+  staticItalic.faces = [staticFace('Booton', 'Italic', true)]
+  const grouped = groupCatalog([vfEntry, staticItalic])[0]!
+  const hoverRows = catalogHoverInstanceRows(grouped)
+  assert.equal(hoverRows.length, 4)
 })
 
 function staticFace(familyName: string, styleName: string, italic = false): FontFaceInfo {

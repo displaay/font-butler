@@ -144,10 +144,36 @@ export function catalogInstanceRows(group: FamilyGroup, retail?: RetailSyncView 
   return rows
 }
 
+function isDuplicateRetailStaticCut(
+  group: FamilyGroup,
+  row: InstanceRow,
+  vfEntryId: string,
+  vfFace: FontFaceInfo,
+): boolean {
+  if (row.catalogEntryId === vfEntryId) return false
+  const entry = group.entries.find((item) => item.id === row.catalogEntryId)
+  if (!entry?.retailRelativePath) return false
+  const face = entry.faces.find((item) => !item.isVariable) ?? entry.faces[0]
+  if (!face || face.isVariable) return false
+  const staticItalic = face.italic
+  const staticStyle = face.styleName.trim()
+  for (const name of variableInstanceNames(vfFace)) {
+    const instanceItalic = italicFromStyleName(name, vfFace.italic)
+    if (instanceItalic !== staticItalic) continue
+    if (staticStyle.toLowerCase() === name.trim().toLowerCase()) return true
+    if (
+      weightFromStyleName(staticStyle, face.weight) === weightFromStyleName(name, vfFace.weight)
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
 /**
- * Instance rows for grid hover preview. When a family mixes static retail cuts with one
- * variable font file, cycle only that file's named instances so variation interpolation
- * can run on a single @font-face family.
+ * Instance rows for grid hover preview. Drops static retail files that duplicate a named
+ * instance on the family's single VF file so variation interpolation can run; distinct
+ * static cuts (e.g. italic alongside a roman-only VF) stay in the hover cycle.
  */
 export function catalogHoverInstanceRows(group: FamilyGroup, retail?: RetailSyncView | null): InstanceRow[] {
   const rows = catalogInstanceRows(group, retail)
@@ -155,9 +181,16 @@ export function catalogHoverInstanceRows(group: FamilyGroup, retail?: RetailSync
     entry.faces.some((face) => face.isVariable && variableInstanceNames(face).length > 0),
   )
   if (vfEntries.length !== 1) return rows
-  const vfEntryId = vfEntries[0]!.id
+  const vfEntry = vfEntries[0]!
+  const vfFace = vfEntry.faces.find(
+    (face) => face.isVariable && variableInstanceNames(face).length > 0,
+  )
+  if (!vfFace) return rows
+  const vfEntryId = vfEntry.id
   const vfRows = rows.filter((row) => row.catalogEntryId === vfEntryId)
-  return vfRows.length >= 2 ? vfRows : rows
+  if (vfRows.length < 2) return rows
+  const filtered = rows.filter((row) => !isDuplicateRetailStaticCut(group, row, vfEntryId, vfFace))
+  return filtered.length < rows.length ? filtered : rows
 }
 
 function rowsFromSystemFace(face: SystemFace): InstanceRow[] {
