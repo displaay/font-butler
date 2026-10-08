@@ -9,10 +9,14 @@ import {
   TEST_FEED_ENV_REFUSAL,
   TEST_FEED_MARKER_REFUSAL,
   TEST_FEED_MARKER_UNREADABLE,
+  TEST_FEED_MARKER_PROBE_FAILURE,
   assertNotarizedMacRelease,
+  macReleaseAssetNames,
   notarizationFailures,
+  packagedElectronMarkerFailures,
   prepareMacPublish,
   readZipAppTestFeedMarker,
+  releaseAssetVersion,
   testFeedArchiveFailures,
   testFeedPublishEnvFailures,
   updateFeedFailures,
@@ -1001,4 +1005,81 @@ test('publish fails when the release zip app package marker cannot be read', asy
   assert.ok(failures.includes(TEST_FEED_MARKER_UNREADABLE))
   assert.equal(failures.includes(TEST_FEED_MARKER_REFUSAL), false)
   rmSync(root, { recursive: true, force: true })
+})
+
+test('release asset names follow FONT_BUTLER_TEST_VERSION on a marked build', async () => {
+  assert.equal(releaseAssetVersion('0.3.9', {}), '0.3.9')
+  assert.equal(releaseAssetVersion('0.3.9', { [TEST_FEED_VERSION_ENV]: '0.9.0' }), '0.3.9')
+  assert.equal(
+    releaseAssetVersion('0.3.9', { [TEST_FEED_BUILD_ENV]: '1', [TEST_FEED_VERSION_ENV]: 'v0.9.0' }),
+    '0.9.0',
+  )
+  assert.equal(
+    macReleaseAssetNames('0.9.0').zip,
+    'Font-Buttler-0.9.0-arm64.zip',
+  )
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-test-version-'))
+  try {
+    writeVersionedRelease(root, '0.9.0')
+    const failures = await assertNotarizedMacRelease(root, '0.3.9', {
+      [TEST_FEED_BUILD_ENV]: '1',
+      [TEST_FEED_VERSION_ENV]: '0.9.0',
+    })
+    assert.equal(failures.some((failure) => failure.includes('0.3.9')), false)
+    assert.equal(failures.some((failure) => failure.includes('Missing release/')), false)
+    assert.ok(failures.includes(TEST_FEED_ENV_REFUSAL))
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('the packaged Electron marker gate fails closed on true, null, and a dead probe', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-marker-probe-'))
+  const app = path.join(root, 'Font Buttler.app')
+  const binary = path.join(app, 'Contents', 'MacOS', 'Font Buttler')
+  mkdirSync(path.dirname(binary), { recursive: true })
+  writeFileSync(binary, '')
+  const probe = (stdout, status = 0, extra = {}) => () => ({ status, stdout, stderr: '', ...extra })
+  try {
+    assert.deepEqual(packagedElectronMarkerFailures(app, { spawnImpl: probe('{"marker":false}\n') }), [])
+    assert.deepEqual(packagedElectronMarkerFailures(app, { spawnImpl: probe('{"marker":true}') }), [
+      TEST_FEED_MARKER_REFUSAL,
+    ])
+    assert.deepEqual(packagedElectronMarkerFailures(app, { spawnImpl: probe('{"marker":null}') }), [
+      TEST_FEED_MARKER_UNREADABLE,
+    ])
+    assert.deepEqual(
+      packagedElectronMarkerFailures(app, { spawnImpl: probe('', 1, { error: new Error('spawn ENOENT') }) }),
+      [TEST_FEED_MARKER_PROBE_FAILURE],
+    )
+    assert.match(TEST_FEED_MARKER_PROBE_FAILURE, /RunAsNode/)
+    assert.match(TEST_FEED_MARKER_PROBE_FAILURE, /Do not skip it/)
+    assert.deepEqual(packagedElectronMarkerFailures(path.join(root, 'missing')), [])
+    const release = mkdtempSync(path.join(tmpdir(), 'font-butler-marker-probe-release-'))
+    try {
+      writeVersionedRelease(release, '0.3.8')
+      const releaseApp = path.join(release, 'release', 'mac-arm64', 'Font Buttler.app')
+      const releaseBinary = path.join(releaseApp, 'Contents', 'MacOS', 'Font Buttler')
+      mkdirSync(path.dirname(releaseBinary), { recursive: true })
+      writeFileSync(releaseBinary, '')
+      let calls = 0
+      const failures = await assertNotarizedMacRelease(release, '0.3.8', {}, (command, args, options) => {
+        calls += 1
+        assert.equal(command, releaseBinary)
+        assert.equal(args[0], '--input-type=module')
+        assert.match(args[2], /readAppTestFeedMarker/)
+        assert.match(args[2], /original-fs/)
+        assert.equal(options.env.ELECTRON_RUN_AS_NODE, '1')
+        assert.equal(options.env.FONT_BUTLER_MARKER_APP, releaseApp)
+        return { status: 0, stdout: '{"marker":false}\n', stderr: '' }
+      })
+      assert.equal(calls, 1)
+      assert.equal(failures.includes(TEST_FEED_MARKER_PROBE_FAILURE), false)
+      assert.equal(failures.includes(TEST_FEED_MARKER_REFUSAL), false)
+    } finally {
+      rmSync(release, { recursive: true, force: true })
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })

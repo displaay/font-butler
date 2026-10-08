@@ -38,6 +38,7 @@ import { finished } from 'node:stream/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { rawFs } from './raw-fs.mjs'
 
 export const DEVELOPER_ID_TEAM = 'A7WWML89LQ'
 export const APP_UPDATE_FEED_ENV = 'FONT_BUTLER_UPDATE_FEED_URL'
@@ -470,7 +471,7 @@ function readAsarPackageJson(appPath) {
   const asarPath = path.join(appPath, 'Contents', 'Resources', 'app.asar')
   let archive
   try {
-    archive = fs.readFileSync(asarPath)
+    archive = rawFs().readFileSync(asarPath)
   } catch (error) {
     if (error?.code === 'ENOENT') return undefined
     return null
@@ -925,7 +926,7 @@ export function createAppUpdateInstaller(deps) {
       running = false
       if (tempDir && !keepTemp) {
         if (deps.removeTemp) deps.removeTemp(tempDir)
-        else fs.rmSync(tempDir, { recursive: true, force: true })
+        else rawFs().rmSync(tempDir, { recursive: true, force: true })
       }
     }
   }
@@ -1160,7 +1161,7 @@ export function cleanupOpenedUpdateDmgs({
     }
     if (entry.tempDir) {
       try {
-        fs.rmSync(entry.tempDir, { recursive: true, force: true })
+        rawFs().rmSync(entry.tempDir, { recursive: true, force: true })
       } catch {
         // The temp directory was already removed.
       }

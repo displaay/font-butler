@@ -1,7 +1,12 @@
 import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { assertNotarizedMacRelease, prepareMacPublish, readPackVersion } from './assert-notarized-mac-release.mjs'
+import {
+  assertNotarizedMacRelease,
+  prepareMacPublish,
+  readPackVersion,
+  releaseAssetVersion,
+} from './assert-notarized-mac-release.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -233,7 +238,7 @@ function spawnGh(args) {
 }
 
 async function main() {
-  const version = readPackVersion(repoRoot)
+  const version = releaseAssetVersion(readPackVersion(repoRoot))
   const prepared = prepareMacPublish(repoRoot, version)
   if (prepared.failures.length) {
     console.error('Refusing to upload this macOS build.')

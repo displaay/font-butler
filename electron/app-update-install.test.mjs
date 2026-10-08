@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import nodeFs from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
@@ -1211,6 +1212,95 @@ test('readAppTestFeedMarker reads fontButlerTestFeed from the packaged asar', as
   writeFileSync(asarPath, 'not-an-asar')
   assert.equal(readAppTestFeedMarker(app), null)
   rmSync(root, { recursive: true, force: true })
+})
+
+test('readAppTestFeedMarker reads app.asar when the Electron fs shim hides it', async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'font-butler-marker-shim-'))
+  const src = path.join(root, 'pack')
+  const app = path.join(root, 'Font Buttler.app')
+  const resources = path.join(app, 'Contents', 'Resources')
+  mkdirSync(src)
+  mkdirSync(resources, { recursive: true })
+  writeFileSync(
+    path.join(src, 'package.json'),
+    JSON.stringify({ name: 'font-butler', version: '0.3.9', fontButlerTestFeed: true }),
+  )
+  const asarPath = path.join(resources, 'app.asar')
+  const asar = await import('@electron/asar')
+  await asar.createPackage(src, asarPath)
+  const original = nodeFs.readFileSync
+  nodeFs.readFileSync = function asarShim(file, ...args) {
+    if (String(file).includes('.asar')) {
+      const error = new Error(`ENOENT: no such file or directory, open '${file}'`)
+      error.code = 'ENOENT'
+      throw error
+    }
+    return original.call(this, file, ...args)
+  }
+  try {
+    assert.throws(
+      () => nodeFs.readFileSync(asarPath),
+      (error) => error?.code === 'ENOENT',
+    )
+    assert.equal(readAppTestFeedMarker(app), true)
+  } finally {
+    nodeFs.readFileSync = original
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('recursive update cleanup deletes an app.asar when the Electron fs shim would stop', () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'font-butler-asar-rm-'))
+  const tempDir = path.join(root, 'update-temp')
+  const asarPath = path.join(tempDir, 'unpacked', 'Font Buttler.app', 'Contents', 'Resources', 'app.asar')
+  const dmg = path.join(root, 'update.dmg')
+  const record = path.join(root, 'opened.json')
+  mkdirSync(path.dirname(asarPath), { recursive: true })
+  writeFileSync(asarPath, 'asar-bytes')
+  writeFileSync(dmg, 'dmg')
+  writeFileSync(record, JSON.stringify([{ dmg, tempDir }]))
+  const original = nodeFs.rmSync
+  nodeFs.rmSync = function asarShim(target, options) {
+    if (String(target).includes('.asar')) {
+      const error = new Error(`ENOENT: no such file or directory, rm '${target}'`)
+      error.code = 'ENOENT'
+      throw error
+    }
+    if (options?.recursive) {
+      const pending = [String(target)]
+      while (pending.length) {
+        const current = pending.pop()
+        let entries = []
+        try {
+          entries = readdirSync(current, { withFileTypes: true })
+        } catch {
+          continue
+        }
+        for (const entry of entries) {
+          const full = path.join(current, entry.name)
+          if (full.includes('.asar')) {
+            const error = new Error(`ENOENT: no such file or directory, rm '${full}'`)
+            error.code = 'ENOENT'
+            throw error
+          }
+          if (entry.isDirectory()) pending.push(full)
+        }
+      }
+    }
+    return original.call(this, target, options)
+  }
+  try {
+    assert.throws(
+      () => nodeFs.rmSync(tempDir, { recursive: true, force: true }),
+      (error) => error?.code === 'ENOENT',
+    )
+    assert.equal(existsSync(asarPath), true)
+    cleanupOpenedUpdateDmgs({ recordFile: record, isMounted: () => false })
+    assert.equal(existsSync(asarPath), false)
+  } finally {
+    nodeFs.rmSync = original
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('a marked Developer ID build installs from the loopback feed instead of GitHub', async () => {

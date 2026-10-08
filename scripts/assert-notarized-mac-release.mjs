@@ -12,7 +12,7 @@ import {
   resolveUpdateFeedUrl,
 } from '../electron/app-update-install.mjs'
 import { sha512Base64 } from './mac-dmg-staple.mjs'
-import { DEVELOPER_ID_IDENTITY, TEST_FEED_BUILD_ENV } from './mac-signing.mjs'
+import { DEVELOPER_ID_IDENTITY, TEST_FEED_BUILD_ENV, TEST_FEED_VERSION_ENV } from './mac-signing.mjs'
 
 const require = createRequire(import.meta.url)
 const yaml = require('js-yaml')
@@ -94,6 +94,19 @@ export function macReleaseAssetNames(version) {
 
 export function readPackVersion(root) {
   return JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version
+}
+
+const TEST_FEED_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/
+
+/**
+ * Artifact names follow `FONT_BUTLER_TEST_VERSION` only for a marked pack.
+ * A stray version variable does not retarget a real 0.3.9 publish.
+ */
+export function releaseAssetVersion(packageVersion, env = process.env) {
+  const marked = String(env?.[TEST_FEED_BUILD_ENV] ?? '').trim() === '1'
+  const raw = String(env?.[TEST_FEED_VERSION_ENV] ?? '').trim().replace(/^v/i, '')
+  if (marked && TEST_FEED_VERSION_PATTERN.test(raw)) return raw
+  return packageVersion
 }
 
 /**
@@ -235,6 +248,114 @@ export const TEST_FEED_MARKER_REFUSAL =
 export const TEST_FEED_MARKER_UNREADABLE =
   "Couldn't read the release app's package marker."
 
+export const TEST_FEED_MARKER_PROBE_FAILURE =
+  "Couldn't run the packaged app's test-feed marker check under ELECTRON_RUN_AS_NODE. If the RunAsNode fuse is disabled, this check cannot run inside the release binary. Do not skip it. Use a helper Electron binary that still allows ELECTRON_RUN_AS_NODE, or enable the RunAsNode fuse for the assert."
+
+const PACKAGED_MARKER_PROBE = `
+import { createRequire } from 'node:module'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
+
+const require = createRequire(import.meta.url)
+const app = process.env.FONT_BUTLER_MARKER_APP
+const asarPath = path.join(app, 'Contents', 'Resources', 'app.asar')
+const readerInsideAsar = path.join(asarPath, 'electron', 'app-update-install.mjs')
+
+function headerEntry(archive, fileName) {
+  if (!Buffer.isBuffer(archive) || archive.length < 16) return null
+  if (archive.readUInt32LE(0) !== 4) return null
+  const headerSize = archive.readUInt32LE(4)
+  if (headerSize < 8 || 8 + headerSize > archive.length) return null
+  const headerBuf = archive.subarray(8, 8 + headerSize)
+  const stringLength = headerBuf.readInt32LE(4)
+  if (stringLength < 2 || 8 + stringLength > headerBuf.length) return null
+  let header
+  try {
+    header = JSON.parse(headerBuf.subarray(8, 8 + stringLength).toString('utf8'))
+  } catch {
+    return null
+  }
+  let node = header
+  for (const part of fileName.split('/')) {
+    node = node?.files?.[part]
+    if (!node) return null
+  }
+  if (node.unpacked || node.offset == null || node.size == null) return null
+  const offset = Number(node.offset)
+  const size = Number(node.size)
+  if (!Number.isInteger(size) || size < 0 || !Number.isFinite(offset) || offset < 0) return null
+  const start = 8 + headerSize + offset
+  if (start + size > archive.length) return null
+  return Buffer.from(archive.subarray(start, start + size))
+}
+
+async function importReader() {
+  try {
+    return await import(pathToFileURL(readerInsideAsar).href)
+  } catch {
+    const raw = process.versions?.electron ? require('original-fs') : require('node:fs')
+    const archive = raw.readFileSync(asarPath)
+    const dir = mkdtempSync(path.join(tmpdir(), 'font-butler-marker-'))
+    try {
+      for (const name of ['electron/raw-fs.mjs', 'electron/app-update-install.mjs']) {
+        const bytes = headerEntry(archive, name)
+        if (!bytes) throw new Error('missing ' + name)
+        const dest = path.join(dir, name)
+        mkdirSync(path.dirname(dest), { recursive: true })
+        writeFileSync(dest, bytes)
+      }
+      return await import(pathToFileURL(path.join(dir, 'electron', 'app-update-install.mjs')).href)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+}
+
+const mod = await importReader()
+process.stdout.write(JSON.stringify({ marker: mod.readAppTestFeedMarker(app) }))
+`
+
+function markerFromProbeStdout(stdout) {
+  const lines = String(stdout ?? '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (!lines[index].startsWith('{')) continue
+    try {
+      return JSON.parse(lines[index])
+    } catch {
+      // A later line may be the marker payload.
+    }
+  }
+  return null
+}
+
+/** Run the shipped reader inside the release binary. Missing binary skips; null and a dead probe fail. */
+export function packagedElectronMarkerFailures(appPath, { spawnImpl = spawnSync, env = process.env } = {}) {
+  if (!appPath || !existsSync(appPath)) return []
+  const binary = path.join(appPath, 'Contents', 'MacOS', 'Font Buttler')
+  if (!existsSync(binary)) return []
+  let result
+  try {
+    result = spawnImpl(binary, ['--input-type=module', '--eval', PACKAGED_MARKER_PROBE], {
+      env: { ...env, ELECTRON_RUN_AS_NODE: '1', FONT_BUTLER_MARKER_APP: appPath },
+      encoding: 'utf8',
+      timeout: 20000,
+    })
+  } catch {
+    return [TEST_FEED_MARKER_PROBE_FAILURE]
+  }
+  if (!result || result.error || (result.status ?? 1) !== 0) return [TEST_FEED_MARKER_PROBE_FAILURE]
+  const parsed = markerFromProbeStdout(result.stdout)
+  if (!parsed || !Object.prototype.hasOwnProperty.call(parsed, 'marker')) return [TEST_FEED_MARKER_PROBE_FAILURE]
+  if (parsed.marker === true) return [TEST_FEED_MARKER_REFUSAL]
+  if (parsed.marker === false) return []
+  return [TEST_FEED_MARKER_UNREADABLE]
+}
+
 /** Any non-empty value counts as set. The pack stamp itself only happens for `=1`. */
 export function testFeedPublishEnvFailures(env = process.env) {
   if (String(env?.[TEST_FEED_BUILD_ENV] ?? '').trim() !== '') return [TEST_FEED_ENV_REFUSAL]
@@ -351,13 +472,23 @@ export function testFeedArchiveFailures({ zip, appPaths = [] } = {}) {
   return failures
 }
 
-export async function assertNotarizedMacRelease(root = repoRoot, version = readPackVersion(root), env = process.env) {
+export async function assertNotarizedMacRelease(
+  root = repoRoot,
+  version = readPackVersion(root),
+  env = process.env,
+  spawnImpl = spawnSync,
+) {
+  version = releaseAssetVersion(version, env)
   const overrideFailures = releaseFeedOverrideFailures()
   const files = prepareMacPublish(root, version)
-  const testFeedFailures = [
+  const testFeedFailures = []
+  for (const message of [
     ...testFeedPublishEnvFailures(env),
     ...testFeedArchiveFailures({ zip: files.zip, appPaths: [files.app] }),
-  ]
+    ...packagedElectronMarkerFailures(files.app, { spawnImpl, env }),
+  ]) {
+    pushFailure(testFeedFailures, message)
+  }
   const feedFailures =
     existsSync(files.dmg) && existsSync(files.zip) && existsSync(files.feed)
       ? await updateFeedFailures({ dmg: files.dmg, zip: files.zip, feed: files.feed })
