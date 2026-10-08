@@ -62,7 +62,13 @@ import {
 } from '@/lib/projects'
 import { savedFilterMatches } from '@/lib/savedFilters'
 import { hasInsetTrafficLights } from '@/lib/desktop'
-import { shouldShowUpdatesTab } from '@/lib/app-update'
+import {
+  appUpdateBadgeLabel,
+  appUpdateBadgeText,
+  appUpdateClickIgnored,
+  type AppUpdateInstallPhase,
+  shouldShowUpdatesTab,
+} from '@/lib/app-update'
 import { cn } from '@/lib/utils'
 import { watchFolderLabel, RETAIL_LIBRARY_FILTER, RETAIL_LIBRARY_LABEL, TEST_INSTALL_FILTER, TEST_INSTALL_LABEL } from '@/lib/watchFolders'
 
@@ -518,6 +524,9 @@ export function Sidebar({
   onReinstallAllUpdates,
   onOpenSettings,
   onOpenWatchFoldersSettings,
+  appUpdateVersion = null,
+  appUpdateInstall = null,
+  onInstallAppUpdate,
 }: {
   query: string
   onQueryChange: (value: string) => void
@@ -569,6 +578,9 @@ export function Sidebar({
   onReinstallAllUpdates?: () => void
   onOpenSettings: () => void
   onOpenWatchFoldersSettings?: () => void
+  appUpdateVersion?: string | null
+  appUpdateInstall?: { phase?: AppUpdateInstallPhase; percent?: number; error?: string } | null
+  onInstallAppUpdate?: () => void
 }) {
   const insetTrafficLights = hasInsetTrafficLights()
   const [fontsOpen, setFontsOpen] = useState(true)
@@ -1227,20 +1239,49 @@ export function Sidebar({
       </nav>
       </ScrollArea>
       <div className="border-t px-3 py-2">
-        <Button
-          variant="ghost"
-          className={navButtonClass(false, 'w-full')}
-          title={hasAppUpdate ? 'App update available' : undefined}
-          onClick={onOpenSettings}
-        >
-          <Settings className="size-3.5 opacity-70" />
-          <span className="min-w-0 truncate">Settings</span>
+        <div className="relative">
+          <Button
+            variant="ghost"
+            className={navButtonClass(false, 'w-full')}
+            title={hasAppUpdate ? 'App update available' : undefined}
+            onClick={onOpenSettings}
+          >
+            <Settings className="size-3.5 opacity-70" />
+            <span className="min-w-0 truncate">Settings</span>
+            {hasAppUpdate ? (
+              <span
+                aria-hidden="true"
+                className="ml-auto inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium tracking-wide uppercase invisible"
+              >
+                {appUpdateBadgeText(appUpdateInstall?.phase, appUpdateInstall?.percent)}
+              </span>
+            ) : null}
+          </Button>
           {hasAppUpdate ? (
-            <Badge tone="info" className="ml-auto">
-              Update
-            </Badge>
+            <button
+              type="button"
+              className={cn(
+                'absolute top-1/2 right-2.5 z-10 -translate-y-1/2',
+                'inline-flex cursor-pointer items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium tracking-wide uppercase',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+                appUpdateInstall?.phase === 'error'
+                  ? 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-400'
+                  : 'bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-400',
+              )}
+              aria-label={appUpdateBadgeLabel(appUpdateVersion || 'the new version', appUpdateInstall?.phase)}
+              aria-busy={appUpdateClickIgnored(appUpdateInstall?.phase) || undefined}
+              title={appUpdateInstall?.phase === 'error' ? appUpdateInstall.error : undefined}
+              onClick={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                if (appUpdateClickIgnored(appUpdateInstall?.phase)) return
+                onInstallAppUpdate?.()
+              }}
+            >
+              {appUpdateBadgeText(appUpdateInstall?.phase, appUpdateInstall?.percent)}
+            </button>
           ) : null}
-        </Button>
+        </div>
       </div>
     </aside>
   )

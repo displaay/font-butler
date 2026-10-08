@@ -7,7 +7,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 
 export const MAC_RELEASE_NOTES = `This build is signed with Developer ID and notarized by Apple.
 
-If you are using an earlier Font Buttler build, download this version manually once and replace the app. Those builds were ad-hoc signed. The in-app update check compares versions and opens the download in your browser. It does not install the update. Later releases still install the same way: download the file yourself.`
+If you are on Font Buttler 0.3.8 or earlier, download this version manually once and replace the app. Those builds were ad-hoc signed, and their Update badge does not install. After this signed version is the one you run, later releases install from the Update badge next to Settings.`
 
 export function missingTagMessage(tag) {
   return `Tag ${tag} is not on origin. Create it from the release commit and push it before uploading:\n  git tag ${tag}\n  git push origin ${tag}`

@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
+  appUpdateBadgeLabel,
+  appUpdateBadgeText,
+  appUpdateClickIgnored,
   appUpdateDownloadUrl,
   appUpdateReleaseUrl,
   appUpdateRowLabel,
@@ -87,9 +90,32 @@ test('settings button shows a blue Update badge when an app release is available
   const { readFile } = await import('node:fs/promises')
   const { fileURLToPath } = await import('node:url')
   const source = await readFile(fileURLToPath(new URL('../components/Sidebar.tsx', import.meta.url)), 'utf8')
-  const settings = source.match(/onClick=\{onOpenSettings\}[\s\S]*?<\/Button>/)
-  assert.ok(settings, 'expected Settings button in the sidebar')
-  assert.match(settings[0], /hasAppUpdate \?/)
-  assert.match(settings[0], /tone="info"/)
-  assert.match(settings[0], />\s*Update\s*</)
+  const openAt = source.lastIndexOf('onClick={onOpenSettings}')
+  const buttonAt = source.lastIndexOf('<Button', openAt)
+  const buttonEnd = source.indexOf('</Button>', openAt)
+  assert.ok(openAt !== -1 && buttonAt !== -1 && buttonEnd !== -1, 'expected Settings button in the sidebar')
+  const settingsButton = source.slice(buttonAt, buttonEnd + '</Button>'.length)
+  assert.doesNotMatch(settingsButton, /<button/)
+  assert.match(settingsButton, /hasAppUpdate \?/)
+  const badge = source.slice(buttonEnd, source.indexOf('</aside>', buttonEnd))
+  assert.match(badge, /<button/)
+  assert.match(badge, /bg-blue-50 text-blue-700/)
+  assert.match(badge, /cursor-pointer/)
+  assert.match(badge, /focus-visible:ring-2/)
+  assert.match(badge, /appUpdateBadgeLabel/)
+  assert.match(badge, /appUpdateClickIgnored/)
+  assert.match(badge, /onInstallAppUpdate/)
+  assert.doesNotMatch(badge.slice(0, badge.indexOf('</button>') + '</button>'.length), /onOpenSettings/)
+})
+
+test('the Update badge names the version and ignores clicks while busy', () => {
+  assert.equal(appUpdateBadgeText(), 'Update')
+  assert.equal(appUpdateBadgeText('downloading', 40), '40%')
+  assert.equal(appUpdateBadgeText('verifying'), '…')
+  assert.equal(appUpdateBadgeText('error'), 'Error')
+  assert.equal(appUpdateBadgeLabel('0.4.0'), 'Update to Font Buttler 0.4.0')
+  assert.equal(appUpdateBadgeLabel('0.4.0', 'downloading'), 'Updating to Font Buttler 0.4.0')
+  assert.equal(appUpdateClickIgnored('downloading'), true)
+  assert.equal(appUpdateClickIgnored('idle'), false)
+  assert.equal(appUpdateClickIgnored('error'), false)
 })

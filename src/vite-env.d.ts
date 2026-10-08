@@ -13,6 +13,10 @@ declare global {
       requestNotifications: () => Promise<'granted' | 'denied' | 'default'>
       onOpenSettings: (callback: (payload?: { focus?: string }) => void) => () => void
       openExternal?: (url: string) => Promise<boolean>
+      installAppUpdate?: () => Promise<{ ok: boolean; ignored?: boolean; error?: string; mode?: 'inplace' | 'dmg' }>
+      onAppUpdateInstall?: (
+        callback: (payload: { phase?: string; percent?: number; error?: string }) => void,
+      ) => () => void
       onReinstallFonts: (callback: (payload: { ids?: string[] }) => void) => () => void
       onOpenTab: (callback: (payload: { tab?: string; operationId?: string }) => void) => () => void
       onFinderLinkTo?: (callback: (payload: { paths?: string[] }) => void) => () => void

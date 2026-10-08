@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, u
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { APP_UPDATE_FEED_ENV, DEVELOPER_ID_TEAM, resolveUpdateFeedUrl } from '../electron/app-update-install.mjs'
 import { sha512Base64 } from './mac-dmg-staple.mjs'
 import { DEVELOPER_ID_IDENTITY } from './mac-signing.mjs'
 
@@ -202,7 +203,25 @@ function evidenceForApp(app, extra) {
   })
 }
 
+/**
+ * Packaged Developer ID builds must not honour FONT_BUTLER_UPDATE_FEED_URL.
+ * Called from the notarization assert so a release that drops the guard fails closed.
+ */
+export function releaseFeedOverrideFailures() {
+  const feed = resolveUpdateFeedUrl(
+    { [APP_UPDATE_FEED_ENV]: 'http://127.0.0.1:9/feed/' },
+    { packaged: true, developerId: true, teamId: DEVELOPER_ID_TEAM },
+  )
+  if (feed) {
+    return [
+      'A packaged Developer ID build honoured FONT_BUTLER_UPDATE_FEED_URL. Release builds must ignore that local feed.',
+    ]
+  }
+  return []
+}
+
 export async function assertNotarizedMacRelease(root = repoRoot, version = readPackVersion(root)) {
+  const overrideFailures = releaseFeedOverrideFailures()
   const files = prepareMacPublish(root, version)
   const feedFailures =
     existsSync(files.dmg) && existsSync(files.zip) && existsSync(files.feed)
@@ -210,10 +229,12 @@ export async function assertNotarizedMacRelease(root = repoRoot, version = readP
       : []
   if (process.platform !== 'darwin') {
     return [
+      ...overrideFailures,
       'Refusing to publish a macOS release from a non-macOS host. Notarization can only be checked on macOS.',
       ...feedFailures,
     ]
   }
+  if (overrideFailures.length) return [...overrideFailures, ...files.failures, ...feedFailures]
   if (files.failures.length) return [...files.failures, ...feedFailures]
 
   const { app, dmg, zip } = files

@@ -1,6 +1,6 @@
 # GitHub Releases
 
-Font Buttler checks [GitHub Releases](https://github.com/displaay/font-butler/releases) for a newer app version. It never downloads or installs that build by itself.
+Font Buttler checks [GitHub Releases](https://github.com/displaay/font-butler/releases) for a newer app version. It downloads and installs that build only after a click on the **Update** badge next to Settings. It does not download on its own.
 
 ## How the app reads releases
 
@@ -13,7 +13,7 @@ Font Buttler checks [GitHub Releases](https://github.com/displaay/font-butler/re
 2. **Auth**
 
    - **Public repo / public releases** — no token. Unauthenticated reads work.
-   - **Private repo** — unauthenticated `GET /releases/latest` returns 404 (GitHub hides the repo). Font Butler treats that as a quiet no-update, so the app looks up to date. Until Releases are public, set a **read-only** token in `FONT_BUTLER_GITHUB_TOKEN` (or `GITHUB_TOKEN` as a fallback). Fine-grained: Contents read on `displaay/font-butler`. The token is used only for this check, not for Install, Switch, or the local API.
+   - **Private repo** — unauthenticated `GET /releases/latest` returns 404 (GitHub hides the repo). Font Butler treats that as a quiet no-update, so the app looks up to date. Until Releases are public, set a **read-only** token in `FONT_BUTLER_GITHUB_TOKEN` (or `GITHUB_TOKEN` as a fallback). Fine-grained: Contents read on `displaay/font-butler`. The token is used only for this version check, not for the update download, Install, Switch, or the local API. The file download is always unauthenticated.
 
      ```bash
      FONT_BUTLER_GITHUB_TOKEN=ghp_... npm run electron
@@ -25,13 +25,27 @@ Font Buttler checks [GitHub Releases](https://github.com/displaay/font-butler/re
 
 5. Surfaces:
 
-   - **Settings → General → App updates** — current version, notes, **Download** (asset, opens in the browser to save), **Open release**
+   - **Settings button → Update** — downloads and installs. The badge keeps its place and colours. It is a button: pointer cursor, a visible focus ring, Enter/Space, and the label `Update to Font Buttler {version}`. While the download runs it shows progress and ignores further clicks. A bad download turns the badge into an error and deletes the temp file.
+   - **Settings → General → App updates** — current version, notes, **Download** (opens the asset in the browser), **Open release**
    - **Menu bar → Updates** — `Font Buttler {version}` opens the release page; **Download {asset}** opens the file; **Reinstall all fonts** still only reinstalls fonts
 
    The **Updates** tab lists font updates only. An application release does not appear there.
-   - **Font Buttler → Check for Updates…** — refreshes, then focuses Settings
+   - **Font Buttler → Check for Updates…** — refreshes, then focuses Settings. It does not download.
 
-Install and Switch are not part of this path. Offline, GitHub API failures, or a private-repo 404 without a token stay a quiet no-update: no crash, no toast, no Install/Switch/auth churn. A last-good check is kept if one exists.
+6. What the badge installs depends on the running app's signature, not its version:
+
+   - **In place** when the app is packaged, signed with Developer ID for team `A7WWML89LQ`, and the bundle is writable. Not when it was launched from a mounted DMG, from App Translocation, or from a read-only folder. The zip named exactly `Font-Buttler-{version}-arm64.zip` is checked against `latest-mac.yml` (sha512 and size). The app inside must be Developer ID for the same team and stapled. Then the bundle is swapped and Font Buttler relaunches. A failed check does not replace the app.
+   - **DMG** otherwise, including dev Electron (`!app.isPackaged`), ad-hoc or unsigned builds, and a bundle that cannot be written. The file is the asset named exactly `Font-Buttler-{version}-arm64.dmg`. It is checked the same way, then opened. The temp DMG is deleted after it opens, or on the next launch if the image is still mounted.
+
+   Neither path downloads or installs unless that release version is strictly newer than the running app.
+
+   GitHub release downloads redirect to `release-assets.githubusercontent.com`. Older assets redirected to `objects.githubusercontent.com`. Those hosts are allowlisted and every hop is checked. The first URL still has to be `https://github.com/displaay/font-butler/...`. The sha512 check still runs after the redirect. No GitHub token is sent.
+
+   `autoInstall` stays `"parked"`. `startParkedAutoInstall()` throws. `electron/main.mjs` does not reference `electron-updater`, `autoDownload`, or `autoInstallOnAppQuit`. The click handler is the only start.
+
+7. **Local feed.** `FONT_BUTLER_UPDATE_FEED_URL` may be `http://127.0.0.1/...`, `http://localhost/...`, or a `file://` directory containing `latest-mac.yml` plus the arm64 zip and DMG. Non-release runs (dev Electron, ad-hoc packages) use it for the version check and the click, so a newer signed build can be proven without publishing. A packaged Developer ID build ignores the variable. `scripts/assert-notarized-mac-release.mjs` fails the release if that guard is removed.
+
+Install and Switch of fonts are not part of this path. Offline, GitHub API failures, or a private-repo 404 without a token stay a quiet no-update: no crash, no toast, no Install/Switch/auth churn. A last-good check is kept if one exists.
 
 ## How to cut a signed release
 
@@ -114,7 +128,7 @@ The profile name is `font-butler-notary`. If it lives in a keychain other than t
    - `Font-Buttler-{version}-arm64.dmg` (signed, notarized, and stapled)
    - `Font-Buttler-{version}-arm64.zip` (the stapled app; this is the update-feed file)
    - `Font-Buttler-{version}-arm64.zip.blockmap`
-   - `latest-mac.yml` (updater feed; electron-updater is not wired)
+   - `latest-mac.yml` (sha512 and size for the zip and the DMG; the app checks this before it opens or swaps anything)
 
    The DMG blockmap is deleted after electron-builder returns, because stapling changes the DMG bytes and the blockmap is not regenerated. `npm run publish:mac` deletes a leftover `*.dmg.blockmap` and does not upload one. Auto-install is off, so nothing reads that file.
 
@@ -134,7 +148,7 @@ The profile name is `font-butler-notary`. If it lives in a keychain other than t
 ```text
 This build is signed with Developer ID and notarized by Apple.
 
-If you are using an earlier Font Buttler build, download this version manually once and replace the app. Those builds were ad-hoc signed. The in-app update check compares versions and opens the download in your browser. It does not install the update. Later releases still install the same way: download the file yourself.
+If you are on Font Buttler 0.3.8 or earlier, download this version manually once and replace the app. Those builds were ad-hoc signed, and their Update badge does not install. After this signed version is the one you run, later releases install from the Update badge next to Settings.
 ```
 
 Tag push still starts [`.github/workflows/release.yml`](../.github/workflows/release.yml). That job runs tests on Ubuntu and `npm run dist` on a macOS runner. The runner has no Developer ID certificate, so `npm run dist` ad-hoc signs and does not notarize. Before `softprops/action-gh-release`, `scripts/assert-notarized-mac-release.mjs` fails that job. GitHub Actions cannot publish an ad-hoc or un-notarized build. The signed files are uploaded as a draft by `npm run publish:mac` on the release Mac. A person publishes that draft only after checking the downloaded DMG.
@@ -201,10 +215,10 @@ Notarization runs only when `APPLE_KEYCHAIN_PROFILE` is set. `npm run dist` does
 
 `npm run electron` and `npm run dev` are unsigned dev runs. They do not call electron-builder.
 
-## Auto-update from an ad-hoc build
+## Installing the next version
 
-Since the GitHub Releases check landed, the in-app check compares the running version with `/releases/latest` and links to the download. **Download** and **Open release** open the browser. Nothing is downloaded or installed by the app. `autoInstall` stays `"parked"`. `startParkedAutoInstall()` throws. `electron/main.mjs` does not reference `electron-updater`, `autoDownload`, or `autoInstallOnAppQuit`. This signing change does not turn auto-install on.
+`latest-mac.yml` is the checksum feed for the click. The app does not poll it in the background and does not download until the Update badge is clicked. `autoInstall` stays `"parked"`. `startParkedAutoInstall()` throws. `electron/main.mjs` does not reference `electron-updater`, `autoDownload`, or `autoInstallOnAppQuit`.
 
-`latest-mac.yml` is still produced so a later updater has a feed. Leave that feed unused.
+The in-place swap is a small shell script that runs after this process exits. It moves the current app aside, moves the verified app into place, and puts the old app back if that second move fails. It does not edit the running bundle in place.
 
-Anyone on an ad-hoc Font Buttler (every GitHub Release built before Developer ID signing, and any `npm run dist` from a machine without the certificate) downloads this notarized version once and replaces the app. The release notes above are the place that says so. After that install, later releases are still a manual download until an explicit Install action exists. Do not enable `electron-updater` in this change. When that work happens, keep `autoDownload` and `autoInstallOnAppQuit` off. A Developer ID designated requirement is stable for team `A7WWML89LQ`; an ad-hoc designated requirement is not, which is why the first signed build cannot be applied by an updater even if one were switched on.
+Anyone on 0.3.8 or earlier (every ad-hoc GitHub Release, and any `npm run dist` from a machine without the Developer ID certificate) has a non-clickable or non-installing badge. They download this notarized version manually once and replace the app. The release notes above are the place that says so. A Developer ID designated requirement is stable for team `A7WWML89LQ`; an ad-hoc designated requirement is not, which is why that first signed build cannot be applied by the updater inside an older ad-hoc app. After the signed app is what you run, the next click can replace it, as long as it is not launched from the DMG.

@@ -1,0 +1,836 @@
+import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { EventEmitter } from 'node:events'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { test } from 'node:test'
+import { pathToFileURL } from 'node:url'
+import { releaseFeedOverrideFailures, updateFeedFailures } from '../scripts/assert-notarized-mac-release.mjs'
+import { isNewerVersion as sharedIsNewerVersion } from '../shared/app-update.ts'
+import {
+  APP_UPDATE_FEED_ENV,
+  DEVELOPER_ID_TEAM,
+  GITHUB_LATEST_API,
+  buildMacSwapScript,
+  cleanupOpenedUpdateDmgs,
+  createAppUpdateInstaller,
+  isAllowedUpdateRequest,
+  isNewerVersion,
+  isUpdateDmgMounted,
+  macArm64ArchiveName,
+  parseLatestMacYml,
+  rememberOpenedDmg,
+  resolveUpdateFeedUrl,
+  selectExactArm64Assets,
+  selectInstallMode,
+  unpackZipArchive,
+  updateDownloadHeaders,
+} from './app-update-install.mjs'
+
+const TEAM = DEVELOPER_ID_TEAM
+
+function sha512(bytes) {
+  return createHash('sha512').update(bytes).digest('base64')
+}
+
+function headerMap(map = {}) {
+  const lower = new Map(Object.entries(map).map(([key, value]) => [key.toLowerCase(), value]))
+  return { get: (name) => lower.get(String(name).toLowerCase()) ?? null }
+}
+
+function httpResponse({ status = 200, location, body = Buffer.alloc(0), contentLength } = {}) {
+  const buf = Buffer.isBuffer(body) ? body : Buffer.from(body)
+  const headers = {}
+  if (location) headers.location = location
+  if (contentLength !== undefined) headers['content-length'] = String(contentLength)
+  return {
+    status,
+    ok: status >= 200 && status < 300,
+    headers: headerMap(headers),
+    bodyBuffer: buf,
+    text: async () => buf.toString('utf8'),
+  }
+}
+
+function yml(version, files) {
+  const lines = [`version: ${version}`, 'files:']
+  for (const file of files) {
+    lines.push(`  - url: ${file.name}`, `    sha512: ${file.sha512}`, `    size: ${file.size}`)
+  }
+  return `${lines.join('\n')}\n`
+}
+
+function signedRuntime(extra = {}) {
+  return {
+    packaged: true,
+    developerId: true,
+    teamId: TEAM,
+    adhoc: false,
+    signatureUnreadable: false,
+    translocated: false,
+    readOnly: false,
+    bundleWritable: true,
+    appPath: '/Applications/Font Buttler.app',
+    ...extra,
+  }
+}
+
+function releaseJson(version, extraAssets = []) {
+  const tag = `v${version}`
+  const base = `https://github.com/displaay/font-butler/releases/download/${tag}`
+  const names = [
+    macArm64ArchiveName(version, 'dmg'),
+    macArm64ArchiveName(version, 'zip'),
+    'latest-mac.yml',
+    ...extraAssets,
+  ]
+  return {
+    tag_name: tag,
+    draft: false,
+    prerelease: false,
+    assets: names.map((name) => ({ name, browser_download_url: `${base}/${name}` })),
+  }
+}
+
+test('install mode follows the running signature, not the version', () => {
+  assert.equal(selectInstallMode(signedRuntime()), 'inplace')
+  assert.equal(selectInstallMode(signedRuntime({ packaged: false })), 'dmg')
+  assert.equal(selectInstallMode(signedRuntime({ developerId: false, adhoc: true })), 'dmg')
+  assert.equal(selectInstallMode(signedRuntime({ developerId: false, teamId: null })), 'dmg')
+  assert.equal(selectInstallMode(signedRuntime({ teamId: 'OTHERTEAM1' })), 'dmg')
+  assert.equal(
+    selectInstallMode(signedRuntime({ translocated: true, appPath: '/private/var/folders/x/T/AppTranslocation/ABC/d/Font Buttler.app' })),
+    'dmg',
+  )
+  assert.equal(selectInstallMode(signedRuntime({ readOnly: true })), 'dmg')
+  assert.equal(selectInstallMode(signedRuntime({ bundleWritable: false })), 'dmg')
+  assert.equal(selectInstallMode(undefined), 'dmg')
+})
+
+test('asset selection is an exact arm64 archive name', () => {
+  const version = '0.3.9'
+  const dmg = macArm64ArchiveName(version, 'dmg')
+  const assets = [
+    { name: `${dmg}.blockmap` },
+    { name: 'Font-Buttler-0.3.90-arm64.dmg' },
+    { name: 'Font-Buttler-0.3.9-x64.dmg' },
+    { name: 'font-buttler-0.3.9-arm64.dmg' },
+    { name: dmg, url: 'https://github.com/displaay/font-butler/releases/download/v0.3.9/Font-Buttler-0.3.9-arm64.dmg' },
+    { name: macArm64ArchiveName(version, 'zip') },
+    { name: 'latest-mac.yml' },
+  ]
+  const selected = selectExactArm64Assets(assets, version)
+  assert.equal(selected.dmg?.name, 'Font-Buttler-0.3.9-arm64.dmg')
+  assert.equal(selected.zip?.name, 'Font-Buttler-0.3.9-arm64.zip')
+  assert.equal(selected.feed?.name, 'latest-mac.yml')
+  assert.equal(selectExactArm64Assets([{ name: 'Font-Buttler-0.3.9-arm64.dmg.txt' }], version).dmg, null)
+})
+
+test('redirect policy allowlists GitHub release-asset hosts and checks every hop', () => {
+  // Observed with curl -sI on a public release asset (electron v32.0.0 darwin arm64 zip):
+  // HTTP 302 from github.com/.../releases/download/... to
+  // https://release-assets.githubusercontent.com/github-production-release-asset/<id>/<uuid>?sp=r&sv=2018-11-09&...
+  // Older assets redirected to objects.githubusercontent.com instead.
+  const first = 'https://github.com/displaay/font-butler/releases/download/v0.3.9/Font-Buttler-0.3.9-arm64.dmg'
+  const releaseAssets =
+    'https://release-assets.githubusercontent.com/github-production-release-asset/1/abc?sp=r&sv=2018-11-09&sr=b'
+  const objects =
+    'https://objects.githubusercontent.com/github-production-release-asset-2e65be/1/abc?X-Amz-Algorithm=AWS4-HMAC-SHA256'
+  assert.equal(isAllowedUpdateRequest(first, { hop: 0 }), true)
+  assert.equal(isAllowedUpdateRequest(releaseAssets, { hop: 1 }), true)
+  assert.equal(isAllowedUpdateRequest(objects, { hop: 1 }), true)
+  assert.equal(isAllowedUpdateRequest(releaseAssets, { hop: 0 }), false)
+  assert.equal(isAllowedUpdateRequest('https://evil.example/Font-Buttler-0.3.9-arm64.dmg', { hop: 1 }), false)
+  assert.equal(isAllowedUpdateRequest('http://github.com/displaay/font-butler/releases/download/v0.3.9/a.dmg', { hop: 0 }), false)
+  assert.equal(isAllowedUpdateRequest('https://github.com/displaay/other/releases/download/v0.3.9/a.dmg', { hop: 1 }), false)
+  assert.equal(
+    isAllowedUpdateRequest('http://127.0.0.1:9/feed/Font-Buttler-0.3.9-arm64.dmg', {
+      hop: 0,
+      feedOrigin: 'http://127.0.0.1:9',
+    }),
+    true,
+  )
+  assert.equal(
+    isAllowedUpdateRequest(releaseAssets, { hop: 1, feedOrigin: 'http://127.0.0.1:9' }),
+    false,
+  )
+  const headers = updateDownloadHeaders()
+  assert.equal(headers.Authorization, undefined)
+  assert.equal('authorization' in headers, false)
+})
+
+test('a checksum mismatch deletes the download and does not open or install it', async () => {
+  const version = '0.4.0'
+  const bytes = Buffer.from('not-the-real-bytes')
+  const published = Buffer.from('the-real-dmg-bytes')
+  const doc = yml(version, [
+    { name: macArm64ArchiveName(version, 'dmg'), sha512: sha512(published), size: published.length },
+    { name: macArm64ArchiveName(version, 'zip'), sha512: sha512(published), size: published.length },
+  ])
+  const opened = []
+  const swaps = []
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-mismatch-'))
+  const installer = createAppUpdateInstaller({
+    currentVersion: '0.0.0',
+    env: { GITHUB_TOKEN: 'should-not-be-sent', FONT_BUTLER_GITHUB_TOKEN: 'also-not-sent' },
+    probeRuntime: () => signedRuntime(),
+    makeTempDir: () => dir,
+    removeTemp: (target) => rmSync(target, { recursive: true, force: true }),
+    openPath: async (file) => {
+      opened.push(file)
+      return ''
+    },
+    spawnSwap: (swap) => {
+      swaps.push(swap)
+    },
+    fetch: async (_url, init) => {
+      assert.equal(init?.headers?.Authorization, undefined)
+      if (_url === GITHUB_LATEST_API) return httpResponse({ body: JSON.stringify(releaseJson(version)) })
+      if (String(_url).endsWith('latest-mac.yml')) return httpResponse({ body: doc })
+      return httpResponse({ body: bytes, contentLength: bytes.length })
+    },
+  })
+  const result = await installer.start()
+  assert.equal(result.ok, false)
+  assert.match(result.error, /checksum/)
+  assert.deepEqual(opened, [])
+  assert.deepEqual(swaps, [])
+  assert.equal(existsSync(dir), false)
+})
+
+test('an evil redirect is refused before the body is saved', async () => {
+  const version = '0.4.1'
+  const published = Buffer.from('dmg-bytes')
+  const doc = yml(version, [
+    { name: macArm64ArchiveName(version, 'dmg'), sha512: sha512(published), size: published.length },
+    { name: macArm64ArchiveName(version, 'zip'), sha512: sha512(published), size: published.length },
+  ])
+  const seen = []
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-redirect-'))
+  const installer = createAppUpdateInstaller({
+    currentVersion: '0.0.0',
+    env: {},
+    probeRuntime: () => signedRuntime({ packaged: false }),
+    makeTempDir: () => dir,
+    removeTemp: (target) => rmSync(target, { recursive: true, force: true }),
+    openPath: async () => '',
+    fetch: async (url) => {
+      seen.push(url)
+      if (url === GITHUB_LATEST_API) return httpResponse({ body: JSON.stringify(releaseJson(version)) })
+      if (String(url).endsWith('latest-mac.yml')) return httpResponse({ body: doc })
+      if (String(url).startsWith('https://github.com/')) {
+        return httpResponse({ status: 302, location: 'https://evil.example/stolen.dmg' })
+      }
+      return httpResponse({ body: published })
+    },
+  })
+  const result = await installer.start()
+  assert.equal(result.ok, false)
+  assert.match(result.error, /Blocked update URL/)
+  assert.equal(seen.some((url) => url.startsWith('https://evil.example/')), false)
+  assert.equal(existsSync(dir), false)
+})
+
+test('a real release-asset redirect hop is followed only after the host is allowlisted', async () => {
+  const version = '0.4.2'
+  const published = Buffer.from('verified-dmg')
+  const doc = yml(version, [
+    { name: macArm64ArchiveName(version, 'dmg'), sha512: sha512(published), size: published.length },
+    { name: macArm64ArchiveName(version, 'zip'), sha512: sha512(Buffer.from('zip')), size: 3 },
+  ])
+  const cdn =
+    'https://release-assets.githubusercontent.com/github-production-release-asset/9384267/abc?sp=r&sv=2018-11-09'
+  const seen = []
+  let opened = ''
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-cdn-'))
+  const installer = createAppUpdateInstaller({
+    currentVersion: '0.0.0',
+    env: {},
+    probeRuntime: () => signedRuntime({ packaged: false, developerId: false, teamId: null }),
+    makeTempDir: () => dir,
+    removeTemp: (target) => rmSync(target, { recursive: true, force: true }),
+    openPath: async (file) => {
+      opened = file
+      return ''
+    },
+    fetch: async (url) => {
+      seen.push(url)
+      if (url === GITHUB_LATEST_API) return httpResponse({ body: JSON.stringify(releaseJson(version)) })
+      if (String(url).endsWith('latest-mac.yml')) return httpResponse({ body: doc })
+      if (String(url).startsWith('https://github.com/')) {
+        return httpResponse({ status: 302, location: cdn })
+      }
+      assert.equal(url, cdn)
+      return httpResponse({ body: published, contentLength: published.length })
+    },
+  })
+  const result = await installer.start()
+  assert.equal(result.ok, true)
+  assert.equal(result.mode, 'dmg')
+  assert.equal(seen.at(-2)?.startsWith('https://github.com/displaay/font-butler/'), true)
+  assert.equal(seen.at(-1), cdn)
+  assert.match(opened, /Font-Buttler-0\.4\.2-arm64\.dmg$/)
+  assert.equal(existsSync(opened), false)
+})
+
+test('a second click is ignored while a download is in progress', async () => {
+  const version = '0.4.3'
+  const published = Buffer.from('dmg')
+  const doc = yml(version, [
+    { name: macArm64ArchiveName(version, 'dmg'), sha512: sha512(published), size: published.length },
+    { name: macArm64ArchiveName(version, 'zip'), sha512: sha512(published), size: published.length },
+  ])
+  let releaseDownload
+  let assetFetches = 0
+  const installer = createAppUpdateInstaller({
+    currentVersion: '0.0.0',
+    env: {},
+    probeRuntime: () => signedRuntime({ packaged: false }),
+    makeTempDir: () => mkdtempSync(path.join(os.tmpdir(), 'font-butler-busy-')),
+    removeTemp: (target) => rmSync(target, { recursive: true, force: true }),
+    openPath: async () => '',
+    fetch: async (url) => {
+      if (url === GITHUB_LATEST_API) return httpResponse({ body: JSON.stringify(releaseJson(version)) })
+      if (String(url).endsWith('latest-mac.yml')) return httpResponse({ body: doc })
+      assetFetches += 1
+      await new Promise((resolve) => {
+        releaseDownload = resolve
+      })
+      return httpResponse({ body: published, contentLength: published.length })
+    },
+  })
+  const first = installer.start()
+  const second = await installer.start()
+  assert.equal(second.ignored, true)
+  assert.equal(second.ok, false)
+  for (let attempt = 0; attempt < 20 && !releaseDownload; attempt += 1) {
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  assert.equal(typeof releaseDownload, 'function')
+  releaseDownload()
+  const result = await first
+  assert.equal(result.ok, true)
+  assert.equal(assetFetches, 1)
+})
+
+test('a signed packaged app installs the zip in place and an ad-hoc app opens the dmg', async () => {
+  const version = '0.4.4'
+  const zipBytes = Buffer.from('zip-bytes')
+  const dmgBytes = Buffer.from('dmg-bytes')
+  const doc = yml(version, [
+    { name: macArm64ArchiveName(version, 'dmg'), sha512: sha512(dmgBytes), size: dmgBytes.length },
+    { name: macArm64ArchiveName(version, 'zip'), sha512: sha512(zipBytes), size: zipBytes.length },
+  ])
+  const release = releaseJson(version, [
+    'Font-Buttler-0.4.4-arm64.dmg.blockmap',
+    'Font-Buttler-0.4.40-arm64.dmg',
+    'Font-Buttler-0.4.4-x64.dmg',
+  ])
+
+  async function run(runtime) {
+    const swaps = []
+    const opened = []
+    const downloaded = []
+    let verified = 0
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-mode-'))
+    const installer = createAppUpdateInstaller({
+    currentVersion: '0.0.0',
+      env: { GITHUB_TOKEN: 'nope' },
+      probeRuntime: () => runtime,
+      makeTempDir: () => dir,
+      removeTemp: (target) => rmSync(target, { recursive: true, force: true }),
+      unzip: async (_zip, dest) => {
+        writeFileSync(path.join(dest, 'readme.txt'), 'unpacked')
+        const { mkdirSync } = await import('node:fs')
+        mkdirSync(path.join(dest, 'Font Buttler.app'))
+      },
+      verifyDownloadedApp: async () => {
+        verified += 1
+        return { ok: true }
+      },
+      openPath: async (file) => {
+        opened.push(file)
+        return ''
+      },
+      spawnSwap: (swap) => swaps.push(swap),
+      quit: () => {},
+      pid: 4242,
+      fetch: async (url, init) => {
+        assert.equal(init?.headers?.Authorization, undefined)
+        downloaded.push(url)
+        if (url === GITHUB_LATEST_API) return httpResponse({ body: JSON.stringify(release) })
+        if (String(url).endsWith('latest-mac.yml')) return httpResponse({ body: doc })
+        const name = String(url).split('/').at(-1)
+        const body = name?.endsWith('.zip') ? zipBytes : dmgBytes
+        return httpResponse({ body, contentLength: body.length })
+      },
+    })
+    const result = await installer.start()
+    return { result, swaps, opened, downloaded, verified, dir }
+  }
+
+  const inplace = await run(signedRuntime())
+  assert.equal(inplace.result.mode, 'inplace')
+  assert.equal(inplace.verified, 1)
+  assert.equal(inplace.swaps.length, 1)
+  assert.match(inplace.swaps[0].script, /mv .*Font Buttler\.app/)
+  assert.match(inplace.swaps[0].script, /font-butler-previous/)
+  assert.equal(inplace.opened.length, 0)
+  assert.equal(inplace.downloaded.some((url) => url.endsWith('/Font-Buttler-0.4.4-arm64.zip')), true)
+  assert.equal(inplace.downloaded.some((url) => url.includes('0.4.40')), false)
+  assert.equal(inplace.downloaded.some((url) => url.includes('x64')), false)
+  rmSync(inplace.dir, { recursive: true, force: true })
+
+  const adhoc = await run(signedRuntime({ developerId: false, adhoc: true, teamId: null }))
+  assert.equal(adhoc.result.mode, 'dmg')
+  assert.equal(adhoc.swaps.length, 0)
+  assert.equal(adhoc.verified, 0)
+  assert.equal(adhoc.opened.length, 1)
+  assert.match(adhoc.opened[0], /Font-Buttler-0\.4\.4-arm64\.dmg$/)
+  rmSync(path.dirname(adhoc.opened[0]), { recursive: true, force: true })
+})
+
+test('a failed signature check does not swap the running app', async () => {
+  const version = '0.4.5'
+  const zipBytes = Buffer.from('zip-bytes')
+  const doc = yml(version, [
+    { name: macArm64ArchiveName(version, 'dmg'), sha512: sha512(zipBytes), size: zipBytes.length },
+    { name: macArm64ArchiveName(version, 'zip'), sha512: sha512(zipBytes), size: zipBytes.length },
+  ])
+  const swaps = []
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-sig-'))
+  const installer = createAppUpdateInstaller({
+    currentVersion: '0.0.0',
+    env: {},
+    probeRuntime: () => signedRuntime(),
+    makeTempDir: () => dir,
+    removeTemp: (target) => rmSync(target, { recursive: true, force: true }),
+    unzip: async (_zip, dest) => {
+      const { mkdirSync } = await import('node:fs')
+      mkdirSync(path.join(dest, 'Font Buttler.app'))
+    },
+    verifyDownloadedApp: async () => ({ ok: false, reason: 'The downloaded app has no notarization staple.' }),
+    spawnSwap: (swap) => swaps.push(swap),
+    quit: () => {
+      throw new Error('quit should not run')
+    },
+    fetch: async (url) => {
+      if (url === GITHUB_LATEST_API) return httpResponse({ body: JSON.stringify(releaseJson(version)) })
+      if (String(url).endsWith('latest-mac.yml')) return httpResponse({ body: doc })
+      return httpResponse({ body: zipBytes, contentLength: zipBytes.length })
+    },
+  })
+  const result = await installer.start()
+  assert.equal(result.ok, false)
+  assert.match(result.error, /staple/)
+  assert.deepEqual(swaps, [])
+  assert.equal(existsSync(dir), false)
+})
+
+test('the swap script restores the previous app if the new bundle cannot be moved', () => {
+  const script = buildMacSwapScript({
+    pid: 50,
+    currentApp: '/Applications/Font Buttler.app',
+    nextApp: '/tmp/next/Font Buttler.app',
+    tempDir: '/tmp/font-butler-update',
+    scriptPath: '/tmp/font-butler-swap.sh',
+  })
+  assert.match(script, /mv '\/tmp\/next\/Font Buttler.app' '\/Applications\/Font Buttler.app'/)
+  assert.match(script, /mv '\/Applications\/Font Buttler.app.font-butler-previous' '\/Applications\/Font Buttler.app'/)
+  assert.match(script, /open '\/Applications\/Font Buttler.app'/)
+  assert.match(script, /trap 'reopen_original; exit 1' ERR/)
+  assert.throws(() => buildMacSwapScript({ pid: 0, currentApp: '/a', nextApp: '/b', tempDir: '/t', scriptPath: '/s' }))
+})
+
+function runSwapFailure(fail) {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'font-butler-swap-'))
+  const bin = path.join(root, 'bin')
+  const current = path.join(root, 'Font Buttler.app')
+  const next = path.join(root, 'next.app')
+  const tempDir = path.join(root, 'temp')
+  mkdirSync(bin)
+  mkdirSync(current)
+  mkdirSync(next)
+  mkdirSync(tempDir)
+  writeFileSync(path.join(current, 'marker'), 'original')
+  writeFileSync(path.join(next, 'marker'), 'new')
+  const openLog = path.join(root, 'opened')
+  writeFileSync(
+    path.join(bin, 'mv'),
+    `#!/bin/bash
+if [[ ${JSON.stringify(fail)} == "mv" && "$1" == ${JSON.stringify(next)} ]]; then
+  exit 1
+fi
+exec /bin/mv "$@"
+`,
+  )
+  writeFileSync(
+    path.join(bin, 'rm'),
+    `#!/bin/bash
+if [[ ${JSON.stringify(fail)} == "rm" ]]; then
+  exit 1
+fi
+exec /bin/rm "$@"
+`,
+  )
+  writeFileSync(
+    path.join(bin, 'open'),
+    `#!/bin/bash
+printf '%s\\n' "$1" >> ${JSON.stringify(openLog)}
+`,
+  )
+  for (const name of ['mv', 'rm', 'open']) chmodSync(path.join(bin, name), 0o755)
+  const dead = spawnSync('/bin/bash', ['-c', 'echo $$'], { encoding: 'utf8' })
+  const pid = Number(dead.stdout.trim())
+  const scriptPath = path.join(root, 'swap.sh')
+  writeFileSync(
+    scriptPath,
+    buildMacSwapScript({ pid, currentApp: current, nextApp: next, tempDir, scriptPath }),
+    { mode: 0o700 },
+  )
+  const result = spawnSync('/bin/bash', [scriptPath], {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+  })
+  const opened = existsSync(openLog) ? readFileSync(openLog, 'utf8').trim().split('\n') : []
+  const marker = existsSync(path.join(current, 'marker')) ? readFileSync(path.join(current, 'marker'), 'utf8') : ''
+  return { result, opened, marker, current, root }
+}
+
+test('a failing mv or rm reopens the original app', () => {
+  const moved = runSwapFailure('mv')
+  try {
+    assert.notEqual(moved.result.status, 0)
+    assert.equal(moved.marker, 'original')
+    assert.deepEqual(moved.opened, [moved.current])
+  } finally {
+    rmSync(moved.root, { recursive: true, force: true })
+  }
+  const removed = runSwapFailure('rm')
+  try {
+    assert.notEqual(removed.result.status, 0)
+    assert.equal(removed.marker, 'original')
+    assert.deepEqual(removed.opened, [removed.current])
+    assert.equal(existsSync(`${removed.current}.font-butler-previous`), false)
+  } finally {
+    rmSync(removed.root, { recursive: true, force: true })
+  }
+})
+
+test('an equal or older release is not downloaded', async () => {
+  const version = '0.4.8'
+  const bytes = Buffer.from('should-not-download')
+  const doc = yml(version, [
+    { name: macArm64ArchiveName(version, 'dmg'), sha512: sha512(bytes), size: bytes.length },
+  ])
+  for (const currentVersion of [version, '0.4.9']) {
+    const fetched = []
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-older-'))
+    const installer = createAppUpdateInstaller({
+      currentVersion,
+      env: {},
+      probeRuntime: () => signedRuntime({ packaged: false }),
+      makeTempDir: () => dir,
+      removeTemp: (target) => rmSync(target, { recursive: true, force: true }),
+      openPath: async () => {
+        throw new Error('open should not run')
+      },
+      fetch: async (url) => {
+        fetched.push(String(url))
+        if (url === GITHUB_LATEST_API) return httpResponse({ body: JSON.stringify(releaseJson(version)) })
+        if (String(url).endsWith('latest-mac.yml')) return httpResponse({ body: doc })
+        return httpResponse({ body: bytes, contentLength: bytes.length })
+      },
+    })
+    const result = await installer.start()
+    assert.equal(result.ok, false)
+    assert.match(result.error, /will not install/)
+    assert.equal(fetched.some((url) => url.endsWith('.dmg') || url.endsWith('.zip')), false)
+    assert.equal(existsSync(dir), false)
+  }
+  assert.equal(isNewerVersion('0.3.9', '0.3.9'), false)
+  assert.equal(isNewerVersion('0.3.8', '0.3.9'), false)
+  assert.equal(isNewerVersion('0.3.9', '0.3.8'), true)
+  assert.equal(isNewerVersion('0.3.9', '0.3.8'), sharedIsNewerVersion('0.3.9', '0.3.8'))
+  assert.equal(isNewerVersion('1.0.0-beta', '1.0.0'), sharedIsNewerVersion('1.0.0-beta', '1.0.0'))
+})
+
+test('download progress is reported only when the whole-number percent changes', async () => {
+  const version = '0.4.9'
+  const size = 1000
+  const bytes = Buffer.alloc(size, 1)
+  const doc = yml(version, [
+    { name: macArm64ArchiveName(version, 'dmg'), sha512: sha512(bytes), size },
+  ])
+  const progress = []
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-percent-'))
+  const installer = createAppUpdateInstaller({
+    currentVersion: '0.0.0',
+    env: {},
+    probeRuntime: () => signedRuntime({ packaged: false }),
+    makeTempDir: () => dir,
+    removeTemp: (target) => rmSync(target, { recursive: true, force: true }),
+    isDmgMounted: async () => false,
+    openPath: async () => '',
+    fetch: async (url) => {
+      if (url === GITHUB_LATEST_API) return httpResponse({ body: JSON.stringify(releaseJson(version)) })
+      if (String(url).endsWith('latest-mac.yml')) return httpResponse({ body: doc })
+      const chunks = [bytes.subarray(0, 1), bytes.subarray(1, 2), bytes.subarray(2, 12), bytes.subarray(12)]
+      return {
+        status: 200,
+        ok: true,
+        headers: headerMap({ 'content-length': String(size) }),
+        stream: (async function* () {
+          for (const chunk of chunks) yield chunk
+        })(),
+      }
+    },
+    onProgress: (payload) => progress.push(payload),
+  })
+  const result = await installer.start()
+  assert.equal(result.ok, true)
+  assert.deepEqual(
+    progress.filter((payload) => payload.phase === 'downloading').map((payload) => payload.percent),
+    [0, 1, 100],
+  )
+})
+
+test('an opened DMG is deleted unless it is still mounted', async () => {
+  const version = '0.5.0'
+  const bytes = Buffer.from('dmg-bytes-ok')
+  const doc = yml(version, [
+    { name: macArm64ArchiveName(version, 'dmg'), sha512: sha512(bytes), size: bytes.length },
+  ])
+  const gone = mkdtempSync(path.join(os.tmpdir(), 'font-butler-dmg-gone-'))
+  const opened = []
+  const deleted = await createAppUpdateInstaller({
+    currentVersion: '0.0.0',
+    env: {},
+    probeRuntime: () => signedRuntime({ packaged: false }),
+    makeTempDir: () => gone,
+    removeTemp: (target) => rmSync(target, { recursive: true, force: true }),
+    isDmgMounted: async () => false,
+    openPath: async (file) => {
+      opened.push(file)
+      return ''
+    },
+    fetch: async (url) => {
+      if (url === GITHUB_LATEST_API) return httpResponse({ body: JSON.stringify(releaseJson(version)) })
+      if (String(url).endsWith('latest-mac.yml')) return httpResponse({ body: doc })
+      return httpResponse({ body: bytes, contentLength: bytes.length })
+    },
+  }).start()
+  assert.equal(deleted.ok, true)
+  assert.equal(opened.length, 1)
+  assert.equal(existsSync(opened[0]), false)
+  assert.equal(existsSync(gone), false)
+
+  const kept = mkdtempSync(path.join(os.tmpdir(), 'font-butler-dmg-kept-'))
+  const record = path.join(kept, 'record.json')
+  const remembered = []
+  const mounted = await createAppUpdateInstaller({
+    currentVersion: '0.0.0',
+    env: {},
+    probeRuntime: () => signedRuntime({ packaged: false }),
+    makeTempDir: () => kept,
+    removeTemp: () => {
+      throw new Error('mounted DMG temp dir should stay until the next launch')
+    },
+    isDmgMounted: async () => true,
+    rememberOpenedDmg: (entry) => {
+      remembered.push(entry)
+      rememberOpenedDmg(entry, record)
+    },
+    openPath: async () => '',
+    fetch: async (url) => {
+      if (url === GITHUB_LATEST_API) return httpResponse({ body: JSON.stringify(releaseJson(version)) })
+      if (String(url).endsWith('latest-mac.yml')) return httpResponse({ body: doc })
+      return httpResponse({ body: bytes, contentLength: bytes.length })
+    },
+  }).start()
+  assert.equal(mounted.ok, true)
+  assert.equal(remembered.length, 1)
+  assert.equal(existsSync(remembered[0].dmg), true)
+  assert.deepEqual(cleanupOpenedUpdateDmgs({ recordFile: record, isMounted: () => true }).map((entry) => entry.dmg), [
+    remembered[0].dmg,
+  ])
+  assert.equal(existsSync(remembered[0].dmg), true)
+  assert.deepEqual(cleanupOpenedUpdateDmgs({ recordFile: record, isMounted: () => false }), [])
+  assert.equal(existsSync(remembered[0].dmg), false)
+  assert.equal(existsSync(kept), false)
+})
+
+test('the update zip is unpacked with ditto -x -k', async () => {
+  let seen
+  await unpackZipArchive('/tmp/Font-Buttler-0.3.9-arm64.zip', '/tmp/out', (command, args) => {
+    seen = [command, args]
+    const child = new EventEmitter()
+    child.unref = () => {}
+    queueMicrotask(() => child.emit('exit', 0))
+    return child
+  })
+  assert.deepEqual(seen, ['ditto', ['-x', '-k', '/tmp/Font-Buttler-0.3.9-arm64.zip', '/tmp/out']])
+})
+
+test('a mounted DMG path is recognised from hdiutil info', () => {
+  const dmg = '/tmp/font-butler-update/Font-Buttler-0.3.9-arm64.dmg'
+  assert.equal(
+    isUpdateDmgMounted(dmg, () => ({ status: 0, stdout: `image-path: ${dmg}\n`, stderr: '' })),
+    true,
+  )
+  assert.equal(isUpdateDmgMounted(dmg, () => ({ status: 1, stdout: '', stderr: 'no such command' })), false)
+})
+
+test('publish still rejects a feed that does not match the stapled files and an extra draft asset', () => {
+  const assertSource = readFileSync(new URL('../scripts/assert-notarized-mac-release.mjs', import.meta.url), 'utf8')
+  const uploadSource = readFileSync(new URL('../scripts/upload-mac-release.mjs', import.meta.url), 'utf8')
+  assert.match(assertSource, /export async function updateFeedFailures/)
+  assert.match(assertSource, /export async function assertNotarizedMacRelease/)
+  assert.match(assertSource, /releaseFeedOverrideFailures\(\)/)
+  assert.match(assertSource, /\.dmg\.blockmap/)
+  assert.equal(typeof updateFeedFailures, 'function')
+  assert.match(uploadSource, /extra assets/)
+  assert.match(uploadSource, /This command does not delete assets/)
+})
+
+test('release builds ignore FONT_BUTLER_UPDATE_FEED_URL and other builds can use a local feed', async () => {
+  const feed = 'http://127.0.0.1:9/feed/'
+  assert.equal(resolveUpdateFeedUrl({ [APP_UPDATE_FEED_ENV]: feed }, signedRuntime()), null)
+  assert.equal(
+    resolveUpdateFeedUrl({ [APP_UPDATE_FEED_ENV]: feed }, signedRuntime({ signatureUnreadable: true, developerId: false, teamId: null })),
+    null,
+  )
+  assert.equal(resolveUpdateFeedUrl({ [APP_UPDATE_FEED_ENV]: feed }, signedRuntime({ packaged: false })), feed)
+  assert.equal(
+    resolveUpdateFeedUrl({ [APP_UPDATE_FEED_ENV]: 'https://evil.example/feed/' }, { packaged: false }),
+    null,
+  )
+  assert.deepEqual(releaseFeedOverrideFailures(), [])
+  const assertSource = readFileSync(new URL('../scripts/assert-notarized-mac-release.mjs', import.meta.url), 'utf8')
+  assert.match(assertSource, /releaseFeedOverrideFailures\(\)/)
+
+  const version = '0.4.6'
+  const dmg = Buffer.from('local-dmg')
+  const doc = yml(version, [
+    { name: macArm64ArchiveName(version, 'dmg'), sha512: sha512(dmg), size: dmg.length },
+    { name: macArm64ArchiveName(version, 'zip'), sha512: sha512(dmg), size: dmg.length },
+  ])
+  const seen = []
+  let opened = ''
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-feed-'))
+  const local = createAppUpdateInstaller({
+    currentVersion: '0.0.0',
+    env: { [APP_UPDATE_FEED_ENV]: feed, GITHUB_TOKEN: 'nope' },
+    probeRuntime: () => signedRuntime({ packaged: false, developerId: false, teamId: null }),
+    makeTempDir: () => dir,
+    removeTemp: (target) => rmSync(target, { recursive: true, force: true }),
+    openPath: async (file) => {
+      opened = file
+      return ''
+    },
+    fetch: async (url, init) => {
+      seen.push(url)
+      assert.equal(init?.headers?.Authorization, undefined)
+      if (url === `${feed}latest-mac.yml`) return httpResponse({ body: doc })
+      if (url === `${feed}${macArm64ArchiveName(version, 'dmg')}`) {
+        return httpResponse({ body: dmg, contentLength: dmg.length })
+      }
+      throw new Error(`unexpected ${url}`)
+    },
+  })
+  const localResult = await local.start()
+  assert.equal(localResult.mode, 'dmg')
+  assert.equal(seen.includes(GITHUB_LATEST_API), false)
+  assert.match(opened, /Font-Buttler-0\.4\.6-arm64\.dmg$/)
+  rmSync(path.dirname(opened), { recursive: true, force: true })
+
+  const releaseSeen = []
+  const published = Buffer.from('github-dmg')
+  const githubDoc = yml(version, [
+    { name: macArm64ArchiveName(version, 'dmg'), sha512: sha512(published), size: published.length },
+    { name: macArm64ArchiveName(version, 'zip'), sha512: sha512(published), size: published.length },
+  ])
+  const releaseDir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-release-feed-'))
+  const releaseInstaller = createAppUpdateInstaller({
+    currentVersion: '0.0.0',
+    env: { [APP_UPDATE_FEED_ENV]: feed },
+    probeRuntime: () => signedRuntime(),
+    makeTempDir: () => releaseDir,
+    removeTemp: (target) => rmSync(target, { recursive: true, force: true }),
+    unzip: async (_zip, dest) => {
+      const { mkdirSync } = await import('node:fs')
+      mkdirSync(path.join(dest, 'Font Buttler.app'))
+    },
+    verifyDownloadedApp: async () => ({ ok: true }),
+    spawnSwap: () => {},
+    quit: () => {},
+    pid: 7,
+    fetch: async (url) => {
+      releaseSeen.push(url)
+      if (String(url).includes('127.0.0.1')) throw new Error('release build used the local feed')
+      if (url === GITHUB_LATEST_API) return httpResponse({ body: JSON.stringify(releaseJson(version)) })
+      if (String(url).endsWith('latest-mac.yml')) return httpResponse({ body: githubDoc })
+      return httpResponse({ body: published, contentLength: published.length })
+    },
+  })
+  const releaseResult = await releaseInstaller.start()
+  assert.equal(releaseResult.mode, 'inplace')
+  assert.equal(releaseSeen[0], GITHUB_LATEST_API)
+  rmSync(releaseDir, { recursive: true, force: true })
+})
+
+test('parseLatestMacYml reads electron-builder sha512 and size', () => {
+  const doc = parseLatestMacYml(`version: 0.3.9
+files:
+  - url: Font-Buttler-0.3.9-arm64.zip
+    sha512: abc+/=
+    size: 10
+  - url: Font-Buttler-0.3.9-arm64.dmg
+    sha512: def==
+    size: 20
+path: Font-Buttler-0.3.9-arm64.zip
+sha512: abc+/=
+`)
+  assert.equal(doc.version, '0.3.9')
+  assert.equal(doc.files[1].sha512, 'def==')
+  assert.equal(doc.files[1].size, 20)
+})
+
+test('a file feed is confined to its directory', async () => {
+  const version = '0.4.7'
+  const dmg = Buffer.from('file-feed-dmg')
+  const root = mkdtempSync(path.join(os.tmpdir(), 'font-butler-file-feed-'))
+  const name = macArm64ArchiveName(version, 'dmg')
+  writeFileSync(path.join(root, name), dmg)
+  writeFileSync(
+    path.join(root, 'latest-mac.yml'),
+    yml(version, [
+      { name, sha512: sha512(dmg), size: dmg.length },
+      { name: macArm64ArchiveName(version, 'zip'), sha512: sha512(dmg), size: dmg.length },
+    ]),
+  )
+  const feed = pathToFileURL(root).href
+  let opened = ''
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-file-install-'))
+  const installer = createAppUpdateInstaller({
+    currentVersion: '0.0.0',
+    env: { [APP_UPDATE_FEED_ENV]: feed },
+    probeRuntime: () => ({ packaged: false, developerId: false, teamId: null, bundleWritable: false }),
+    makeTempDir: () => dir,
+    removeTemp: (target) => rmSync(target, { recursive: true, force: true }),
+    openPath: async (file) => {
+      opened = file
+      return ''
+    },
+    fetch: async () => {
+      throw new Error('file feed should not fetch')
+    },
+  })
+  const result = await installer.start()
+  assert.equal(result.ok, true)
+  assert.match(opened, new RegExp(`${name}$`))
+  rmSync(path.dirname(opened), { recursive: true, force: true })
+  rmSync(root, { recursive: true, force: true })
+})

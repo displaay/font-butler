@@ -19,6 +19,11 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readApiTokenFile } from './api-token.mjs'
 import { isAllowedAppUpdateUrl, trayTooltip } from './app-update.mjs'
+import {
+  cleanupOpenedUpdateDmgs,
+  createAppUpdateInstaller,
+  detectAppUpdateRuntime,
+} from './app-update-install.mjs'
 import { macosDockIconPng } from './dock-icon.mjs'
 import { createLoginItemApplier } from './login-item.mjs'
 import {
@@ -1500,8 +1505,37 @@ async function loadActivity() {
   }
 }
 
+function probeInstallRuntime() {
+  const detected = detectAppUpdateRuntime(process.execPath)
+  if (!app.isPackaged) return { ...detected, packaged: false }
+  return { ...detected, packaged: true }
+}
+
+let appUpdateInstall
+function appUpdateInstaller() {
+  if (!appUpdateInstall) {
+    appUpdateInstall = createAppUpdateInstaller({
+      env: process.env,
+      currentVersion: () => app.getVersion(),
+      probeRuntime: () => probeInstallRuntime(),
+      openPath: (file) => shell.openPath(file),
+      quit: () => {
+        isQuitting = true
+        app.quit()
+      },
+      pid: process.pid,
+      onProgress: (payload) => {
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed()) win.webContents.send('app-update-install', payload)
+        }
+      },
+    })
+  }
+  return appUpdateInstall
+}
+
 async function loadAppUpdate(refresh = false) {
-  // PARKED AUTO-INSTALL: never download or install GitHub assets. See docs/releases.md.
+  // Version check only. Downloading waits for a click on the Settings Update badge.
   try {
     await ensureApiToken()
     const url = `${API}/api/app-update${refresh ? '?refresh=1' : ''}`
@@ -1957,6 +1991,7 @@ if (!gotLock) {
     const fileWriter = createDebugLogFileWriter(debugLogFilePath)
     attachDebugLogPersistence(debugLog, fileWriter)
     logDebug('main', `Font Buttler ${app.getVersion()} starting`)
+    cleanupOpenedUpdateDmgs()
     if (process.platform === 'darwin' && app.dock) {
       applyDockIcon()
     }
@@ -2052,6 +2087,8 @@ ipcMain.handle('open-external', async (_event, url) => {
   if (typeof url !== 'string') return false
   return openExternalUrl(url)
 })
+
+ipcMain.handle('install-app-update', () => appUpdateInstaller().start())
 
 ipcMain.handle('request-notifications', () => electronNotificationPermission(Notification))
 
