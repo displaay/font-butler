@@ -218,6 +218,6 @@ export function parkedAutoInstallState(): {
   return {
     autoInstall: APP_UPDATE_AUTO_INSTALL,
     reason:
-      'After Developer ID signing and notarization, enable electron-updater with the GitHub provider, keep autoDownload and autoInstallOnAppQuit off, then offer an explicit Install action. See docs/releases.md.',
+      'electron-updater stays unwired. Squirrel.Mac checks the new app against the running app’s designated requirement, so an ad-hoc install cannot auto-update to the first Developer ID build and must be downloaded by hand. Keep autoDownload and autoInstallOnAppQuit off. See docs/releases.md.',
   }
 }

@@ -55,7 +55,11 @@ jobs:
             exit 1
           fi
       - name: Package
-        run: npm run dist
+        run: |
+          echo "This runner has no Developer ID certificate or notary profile."
+          echo "npm run dist ad-hoc signs when that identity is missing."
+          echo "The notarized release is npm run release:mac on the release Mac. Replace these assets with that output."
+          npm run dist
       - name: Check artifacts
         run: |
           version="$(node -p "require('./package.json').version")"
