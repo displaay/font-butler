@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
+import { Writable } from 'node:stream'
 import nodeFs from 'node:fs'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
@@ -230,6 +231,74 @@ test('a checksum mismatch deletes the download and does not open or install it',
   assert.deepEqual(opened, [])
   assert.deepEqual(swaps, [])
   assert.equal(existsSync(dir), false)
+})
+
+test('an early write-stream error stays an installer error and removes the temp file', async () => {
+  const version = '0.4.2'
+  const bytes = Buffer.from('dmg-bytes-that-never-land')
+  const doc = yml(version, [
+    { name: macArm64ArchiveName(version, 'dmg'), sha512: sha512(bytes), size: bytes.length },
+    { name: macArm64ArchiveName(version, 'zip'), sha512: sha512(bytes), size: bytes.length },
+  ])
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-write-error-'))
+  const dest = path.join(dir, macArm64ArchiveName(version, 'zip'))
+  const removed = []
+  const originalCreate = nodeFs.createWriteStream
+  const originalRm = nodeFs.rmSync
+  const unhandled = []
+  const onException = (error) => {
+    unhandled.push(error)
+  }
+  const onRejection = (error) => {
+    unhandled.push(error)
+  }
+  nodeFs.createWriteStream = () => {
+    const failure = Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' })
+    const out = new Writable({
+      write(_chunk, _encoding, callback) {
+        out.once('error', () => callback(failure))
+      },
+    })
+    process.nextTick(() => {
+      out.destroy(failure)
+    })
+    return out
+  }
+  nodeFs.rmSync = function rmSyncSpy(target, options) {
+    removed.push(String(target))
+    return originalRm.call(this, target, options)
+  }
+  process.on('uncaughtException', onException)
+  process.on('unhandledRejection', onRejection)
+  const installer = createAppUpdateInstaller({
+    currentVersion: '0.0.0',
+    env: {},
+    probeRuntime: () => signedRuntime(),
+    makeTempDir: () => dir,
+    removeTemp: (target) => rmSync(target, { recursive: true, force: true }),
+    fetch: async (url) => {
+      if (url === GITHUB_LATEST_API) return httpResponse({ body: JSON.stringify(releaseJson(version)) })
+      if (String(url).endsWith('latest-mac.yml')) return httpResponse({ body: doc })
+      return httpResponse({ body: bytes, contentLength: bytes.length })
+    },
+  })
+  try {
+    const result = await installer.start()
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(result.ok, false)
+    assert.equal(result.error, 'ENOSPC: no space left on device, write')
+    assert.equal(installer.status().phase, 'error')
+    assert.equal(existsSync(dest), false)
+    assert.equal(existsSync(dir), false)
+    assert.equal(removed.includes(dest), true)
+    assert.deepEqual(unhandled, [])
+  } finally {
+    process.off('uncaughtException', onException)
+    process.off('unhandledRejection', onRejection)
+    nodeFs.createWriteStream = originalCreate
+    nodeFs.rmSync = originalRm
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('an evil redirect is refused before the body is saved', async () => {

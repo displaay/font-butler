@@ -29,12 +29,11 @@
 
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash, timingSafeEqual } from 'node:crypto'
-import { createWriteStream } from 'node:fs'
 import fs from 'node:fs'
 import http from 'node:http'
 import https from 'node:https'
-import { once } from 'node:events'
-import { finished } from 'node:stream/promises'
+import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -578,28 +577,38 @@ function copyVerifiedFile(url, dest, expectedSha512, expectedSize) {
 async function writeVerifiedBody(response, dest, expectedSize, onProgress) {
   const hash = createHash('sha512')
   let received = 0
-  const out = createWriteStream(dest)
   let source
   if (response.stream) source = response.stream
-  else if (response.bodyBuffer) source = [response.bodyBuffer]
-  else if (typeof response.arrayBuffer === 'function') source = [Buffer.from(await response.arrayBuffer())]
+  else if (response.bodyBuffer) source = Readable.from([response.bodyBuffer])
+  else if (typeof response.arrayBuffer === 'function') source = Readable.from([Buffer.from(await response.arrayBuffer())])
   else throw new Error('Update download had no body')
 
+  const out = fs.createWriteStream(dest)
+  // Open failure is async. A listener has to exist before the first await,
+  // or the error is unhandled and the process exits.
+  let streamError = null
+  out.on('error', (error) => {
+    streamError ??= error
+  })
   try {
-    for await (const chunk of source) {
-      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-      received += buf.length
-      if (received > expectedSize) throw new Error('The download was larger than the published size.')
-      hash.update(buf)
-      if (!out.write(buf)) await once(out, 'drain')
-      if (onProgress) onProgress(received)
-    }
-    out.end()
-    await finished(out)
+    await pipeline(
+      source,
+      async function* (chunks) {
+        for await (const chunk of chunks) {
+          const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+          received += buf.length
+          if (received > expectedSize) throw new Error('The download was larger than the published size.')
+          hash.update(buf)
+          if (onProgress) onProgress(received)
+          yield buf
+        }
+      },
+      out,
+    )
   } catch (error) {
     source.destroy?.()
     out.destroy()
-    throw error
+    throw streamError ?? error
   }
   return { received, sha512: hash.digest('base64') }
 }
