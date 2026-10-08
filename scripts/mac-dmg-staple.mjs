@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { createReadStream, existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { createReadStream, existsSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { DEVELOPER_ID_IDENTITY } from './mac-signing.mjs'
@@ -19,35 +19,57 @@ export function sha512Base64(file) {
   })
 }
 
-/** Stapling the DMG changes its bytes after electron-builder hashed it. Keep the zip hash. Drop the stale DMG blockmap. */
-export async function refreshDmgUpdateInfo(ymlPath, dmgPaths) {
-  const doc = yaml.load(readFileSync(ymlPath, 'utf8'))
-  if (!doc || !Array.isArray(doc.files)) {
-    throw new Error(`latest-mac.yml has no files list (${ymlPath}).`)
-  }
-  const zipPath = doc.path
-  const zipSha = doc.sha512
-  if (typeof zipPath !== 'string' || !zipPath.endsWith('.zip')) {
-    throw new Error('latest-mac.yml path must stay the update zip.')
-  }
-  const byName = new Map(dmgPaths.map((file) => [path.basename(file), file]))
-  let updated = 0
-  for (const entry of doc.files) {
-    const file = byName.get(entry.url)
-    if (!file) continue
-    entry.sha512 = await sha512Base64(file)
-    entry.size = statSync(file).size
-    updated += 1
-    const blockmap = `${file}.blockmap`
-    if (existsSync(blockmap)) unlinkSync(blockmap)
-  }
-  if (updated !== dmgPaths.length) {
+/**
+ * electron-builder 26 writes `latest-mac.yml` in `publishManager.awaitTasks()`,
+ * which runs after `afterAllArtifactBuild`. By then the DMG staple has already
+ * changed the DMG bytes, so the file on disk does not match the hashes in that
+ * yml. Recompute sha512 and size for the zip and the DMG from the bytes on disk,
+ * and drop the stale DMG blockmap. The zip blockmap stays: the zip is built
+ * from the already-stapled app and is not modified here.
+ */
+export async function rewriteMacUpdateFeed(releaseDir) {
+  const ymlPath = path.join(releaseDir, 'latest-mac.yml')
+  if (!existsSync(ymlPath)) {
     throw new Error(
-      `latest-mac.yml is missing ${dmgPaths.length - updated} stapled DMG ${dmgPaths.length - updated === 1 ? 'entry' : 'entries'}.`,
+      `${ymlPath} is missing after electron-builder finished. The update feed would not match the stapled files.`,
     )
   }
-  if (doc.path !== zipPath || doc.sha512 !== zipSha) {
-    throw new Error('Refusing to rewrite latest-mac.yml because the zip hash would change.')
+  const doc = yaml.load(readFileSync(ymlPath, 'utf8'))
+  if (!doc || !Array.isArray(doc.files) || doc.files.length === 0) {
+    throw new Error(`latest-mac.yml has no files list (${ymlPath}).`)
+  }
+  if (typeof doc.path !== 'string' || !doc.path.endsWith('.zip')) {
+    throw new Error('latest-mac.yml path must be the update zip.')
+  }
+  let dmgEntries = 0
+  let zipEntry = null
+  for (const entry of doc.files) {
+    if (!entry || typeof entry.url !== 'string' || entry.url.length === 0) {
+      throw new Error(`latest-mac.yml has a files entry without a url (${ymlPath}).`)
+    }
+    const name = path.basename(entry.url)
+    const file = path.join(releaseDir, name)
+    if (!existsSync(file)) {
+      throw new Error(`latest-mac.yml lists ${entry.url}, but ${file} is not on disk.`)
+    }
+    entry.sha512 = await sha512Base64(file)
+    entry.size = statSync(file).size
+    if (name === path.basename(doc.path)) zipEntry = entry
+    if (name.endsWith('.dmg')) {
+      dmgEntries += 1
+      delete entry.blockMapSize
+    }
+  }
+  if (dmgEntries === 0) {
+    throw new Error('latest-mac.yml has no DMG entry to match the stapled disk image.')
+  }
+  if (!zipEntry) {
+    throw new Error(`latest-mac.yml path ${doc.path} is not in files.`)
+  }
+  doc.sha512 = zipEntry.sha512
+  if (typeof doc.size === 'number') doc.size = zipEntry.size
+  for (const name of readdirSync(releaseDir)) {
+    if (name.endsWith('.dmg.blockmap')) unlinkSync(path.join(releaseDir, name))
   }
   writeFileSync(ymlPath, serializeToYaml(doc, false, true))
 }
@@ -66,11 +88,21 @@ function signedByDeveloperId(file) {
  * Sign happened inside electron-builder (`dmg.sign: true`). Notarize and staple
  * afterwards. `xattr -cr` must not run on the DMG after this: the staple is an
  * xattr, and stripping it would leave an unstapled disk image.
+ *
+ * Do not read or write `latest-mac.yml` here. electron-builder 26.15.3 writes
+ * that file in `publishManager.awaitTasks()` after this hook returns, so it
+ * does not exist yet. `scripts/mac-pack.mjs` rewrites the feed once the
+ * builder process has exited.
+ *
+ * `deps` is for tests that simulate this hook on a non-macOS host. Production
+ * calls omit it and notarize with the keychain profile.
  */
-export async function stapleSignedDmgs(artifactPaths, env = process.env) {
+export async function stapleSignedDmgs(artifactPaths, env = process.env, deps = {}) {
   const profile = (env.APPLE_KEYCHAIN_PROFILE || '').trim()
   if (!profile) return
-  if (process.platform !== 'darwin') {
+  const notarize = deps.notarize
+  const verifySignature = deps.verifySignature ?? signedByDeveloperId
+  if (!notarize && process.platform !== 'darwin') {
     throw new Error(
       'APPLE_KEYCHAIN_PROFILE is set, but this is not macOS. Refusing to finish without notarizing the DMG.',
     )
@@ -79,25 +111,20 @@ export async function stapleSignedDmgs(artifactPaths, env = process.env) {
   if (dmgs.length === 0) {
     throw new Error('APPLE_KEYCHAIN_PROFILE is set, but no DMG was produced. Refusing to finish an unnotarized release.')
   }
-  const { notarize } = await import('@electron/notarize')
+  const notarizeDmg = notarize ?? (await import('@electron/notarize')).notarize
   const keychain = (env.APPLE_KEYCHAIN || '').trim()
   for (const dmg of dmgs) {
-    const check = signedByDeveloperId(dmg)
+    const check = verifySignature(dmg)
     if (!check.signed) {
       throw new Error(
         `Refusing to notarize ${path.basename(dmg)} because it is not signed with Developer ID identity "${DEVELOPER_ID_IDENTITY}". The build will not fall back to an unsigned disk image.\n${check.output}`,
       )
     }
     console.log(`Notarizing and stapling ${path.basename(dmg)}`)
-    await notarize({
+    await notarizeDmg({
       appPath: dmg,
       keychainProfile: profile,
       ...(keychain ? { keychain } : {}),
     })
   }
-  const ymlPath = path.join(path.dirname(dmgs[0]), 'latest-mac.yml')
-  if (!existsSync(ymlPath)) {
-    throw new Error(`Stapled the DMG but ${ymlPath} is missing, so the update feed would not match the file.`)
-  }
-  await refreshDmgUpdateInfo(ymlPath, dmgs)
 }

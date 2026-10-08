@@ -6,7 +6,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 import { notarizationFailures, prepareMacPublish } from '../scripts/assert-notarized-mac-release.mjs'
 import { publishVersionedMacRelease } from '../scripts/upload-mac-release.mjs'
-import { refreshDmgUpdateInfo, sha512Base64 } from '../scripts/mac-dmg-staple.mjs'
+import { rewriteMacUpdateFeed, sha512Base64, stapleSignedDmgs } from '../scripts/mac-dmg-staple.mjs'
 import {
   ADHOC_ENTITLEMENTS,
   DEVELOPER_ID_IDENTITY,
@@ -54,7 +54,13 @@ test('mac release config signs with the Developer ID identity and notarizes via 
   assert.match(readRepo('scripts/strip-mac-xattrs.mjs'), /compileFinderServicesAddon/)
   assert.match(readRepo('scripts/strip-mac-xattrs.mjs'), /stapleSignedDmgs/)
   assert.match(readRepo('scripts/mac-pack.mjs'), /find-identity/)
-  assert.match(readRepo('scripts/mac-pack.mjs'), /assert-notarized-mac-release/)
+  const macPack = readRepo('scripts/mac-pack.mjs')
+  const feedRewrite = macPack.indexOf('rewriteMacUpdateFeed')
+  const notarizationAssert = macPack.indexOf('assert-notarized-mac-release')
+  assert.ok(feedRewrite !== -1 && notarizationAssert !== -1 && feedRewrite < notarizationAssert)
+  const stapleSource = readRepo('scripts/mac-dmg-staple.mjs')
+  const stapleBody = stapleSource.slice(stapleSource.indexOf('export async function stapleSignedDmgs'))
+  assert.doesNotMatch(stapleBody, /latest-mac\.yml/)
   assert.doesNotMatch(readRepo('docs/releases.md'), /quisek\.com/)
   assert.match(readRepo('docs/releases.md'), /<your-apple-id>/)
   assert.match(readRepo('docs/releases.md'), /git worktree add ~\/git\/font-butler-release origin\/main/)
@@ -351,39 +357,85 @@ test('publish evidence fails closed for an ad-hoc or unstapled build', () => {
   assert.ok(debuggable.some((failure) => /get-task-allow/.test(failure)))
 })
 
-test('stapling the DMG refreshes only the DMG hash in latest-mac.yml', async () => {
+test('latest-mac.yml is rewritten after the builder, not inside the DMG staple hook', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'font-butler-feed-'))
   try {
-    const dmg = path.join(dir, 'Font-Buttler-0.3.8-arm64.dmg')
-    const blockmap = `${dmg}.blockmap`
-    writeFileSync(dmg, 'stapled-dmg-bytes')
-    writeFileSync(blockmap, 'stale-blockmap')
-    const zipSha = 'zip-sha-must-stay'
+    const dmgName = 'Font-Buttler-0.3.8-arm64.dmg'
+    const zipName = 'Font-Buttler-0.3.8-arm64.zip'
+    const dmg = path.join(dir, dmgName)
+    const zip = path.join(dir, zipName)
+    const dmgBlockmap = `${dmg}.blockmap`
+    const zipBlockmap = `${zip}.blockmap`
+    const dmgBytes = 'stapled-dmg-bytes'
+    const zipBytes = 'zip-bytes-on-disk'
+    writeFileSync(dmg, dmgBytes)
+    writeFileSync(zip, zipBytes)
+    writeFileSync(dmgBlockmap, 'stale-dmg-blockmap')
+    writeFileSync(zipBlockmap, 'zip-blockmap')
     const ymlPath = path.join(dir, 'latest-mac.yml')
+
+    // afterAllArtifactBuild staples the DMG while publishManager.awaitTasks()
+    // has not written latest-mac.yml yet. That must not fail the build.
+    let notarized = null
+    await stapleSignedDmgs([dmg, zip], { APPLE_KEYCHAIN_PROFILE: 'font-butler-notary' }, {
+      notarize: async ({ appPath }) => {
+        notarized = appPath
+      },
+      verifySignature: () => ({ signed: true, output: '' }),
+    })
+    assert.equal(notarized, dmg)
+    assert.equal(existsSync(ymlPath), false)
+    assert.equal(existsSync(dmgBlockmap), true)
+    await assert.rejects(() => rewriteMacUpdateFeed(dir), /latest-mac\.yml is missing/)
+
+    // The builder then writes the feed with the pre-staple hashes.
     writeFileSync(
       ymlPath,
       yaml.dump({
         version: '0.3.8',
         files: [
-          { url: 'Font-Buttler-0.3.8-arm64.zip', sha512: zipSha, size: 10 },
-          { url: 'Font-Buttler-0.3.8-arm64.dmg', sha512: 'old-dmg-sha', size: 1 },
+          { url: zipName, sha512: 'stale-zip-sha', size: 1, blockMapSize: 9 },
+          { url: dmgName, sha512: 'stale-dmg-sha', size: 2, blockMapSize: 8 },
         ],
-        path: 'Font-Buttler-0.3.8-arm64.zip',
-        sha512: zipSha,
+        path: zipName,
+        sha512: 'stale-zip-sha',
+        releaseDate: '2026-01-01T00:00:00.000Z',
       }),
     )
-    await refreshDmgUpdateInfo(ymlPath, [dmg])
+    await rewriteMacUpdateFeed(dir)
     const doc = yaml.load(readFileSync(ymlPath, 'utf8'))
-    assert.equal(doc.path, 'Font-Buttler-0.3.8-arm64.zip')
+    const zipSha = await sha512Base64(zip)
+    const dmgSha = await sha512Base64(dmg)
+    assert.equal(doc.path, zipName)
     assert.equal(doc.sha512, zipSha)
+    assert.equal(doc.files[0].url, zipName)
     assert.equal(doc.files[0].sha512, zipSha)
-    assert.equal(doc.files[1].sha512, await sha512Base64(dmg))
-    assert.equal(doc.files[1].size, Buffer.byteLength('stapled-dmg-bytes'))
-    assert.equal(existsSync(blockmap), false)
-    assert.equal(readFileSync(ymlPath, 'utf8').includes('old-dmg-sha'), false)
+    assert.equal(doc.files[0].size, Buffer.byteLength(zipBytes))
+    assert.equal(doc.files[0].blockMapSize, 9)
+    assert.equal(doc.files[1].url, dmgName)
+    assert.equal(doc.files[1].sha512, dmgSha)
+    assert.equal(doc.files[1].size, Buffer.byteLength(dmgBytes))
+    assert.equal(doc.files[1].blockMapSize, undefined)
+    assert.equal(doc.releaseDate, '2026-01-01T00:00:00.000Z')
+    assert.equal(existsSync(dmgBlockmap), false)
+    assert.equal(readFileSync(zipBlockmap, 'utf8'), 'zip-blockmap')
+    const written = readFileSync(ymlPath, 'utf8')
+    assert.equal(written.includes('stale-dmg-sha'), false)
+    assert.equal(written.includes('stale-zip-sha'), false)
+
+    writeFileSync(
+      ymlPath,
+      yaml.dump({
+        version: '0.3.8',
+        files: [{ url: zipName, sha512: 'stale-zip-sha', size: 1 }],
+        path: zipName,
+        sha512: 'stale-zip-sha',
+      }),
+    )
+    await assert.rejects(() => rewriteMacUpdateFeed(dir), /no DMG entry/)
     await assert.rejects(
-      () => refreshDmgUpdateInfo(ymlPath, [path.join(dir, 'Font-Buttler-0.3.8-x64.dmg')]),
-      /missing 1 stapled DMG entry/,
+      () => rewriteMacUpdateFeed(path.join(dir, 'missing-release')),
+      /latest-mac\.yml is missing/,
     )
   } finally {
     rmSync(dir, { recursive: true, force: true })

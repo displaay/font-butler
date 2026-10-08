@@ -68,6 +68,17 @@ try {
 if (status !== 0) process.exit(status)
 
 if (plan.keychainProfile) {
+  // The DMG was stapled inside afterAllArtifactBuild. electron-builder writes
+  // latest-mac.yml only after that hook, in publishManager.awaitTasks(), with
+  // the pre-staple DMG hash. Rewrite sha512/size from the files now on disk
+  // and drop the stale DMG blockmap before the notarization assert.
+  const { rewriteMacUpdateFeed } = await import('./mac-dmg-staple.mjs')
+  try {
+    await rewriteMacUpdateFeed(path.join(repoRoot, 'release'))
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error))
+    process.exit(1)
+  }
   const check = spawnSync(process.execPath, [path.join(repoRoot, 'scripts/assert-notarized-mac-release.mjs')], {
     cwd: repoRoot,
     stdio: 'inherit',
