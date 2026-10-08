@@ -314,6 +314,51 @@ test('a second click is ignored while a download is in progress', async () => {
   const result = await first
   assert.equal(result.ok, true)
   assert.equal(assetFetches, 1)
+  assert.equal(installer.status().phase, 'idle')
+})
+
+test('a second start while the disk image is opening returns that phase', async () => {
+  const version = '0.4.31'
+  const published = Buffer.from('dmg-opening')
+  const doc = yml(version, [
+    { name: macArm64ArchiveName(version, 'dmg'), sha512: sha512(published), size: published.length },
+  ])
+  let releaseOpen
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-opening-'))
+  const record = path.join(dir, 'opened.json')
+  const installer = createAppUpdateInstaller({
+    currentVersion: '0.0.0',
+    env: {},
+    probeRuntime: () => signedRuntime({ packaged: false }),
+    makeTempDir: () => dir,
+    removeTemp: (target) => rmSync(target, { recursive: true, force: true }),
+    rememberOpenedDmg: (entry) => rememberOpenedDmg(entry, record),
+    openPath: () =>
+      new Promise((resolve) => {
+        releaseOpen = () => resolve('')
+      }),
+    fetch: async (url) => {
+      if (url === GITHUB_LATEST_API) return httpResponse({ body: JSON.stringify(releaseJson(version)) })
+      if (String(url).endsWith('latest-mac.yml')) return httpResponse({ body: doc })
+      return httpResponse({ body: published, contentLength: published.length })
+    },
+  })
+  const first = installer.start()
+  for (let attempt = 0; attempt < 50 && installer.status().phase !== 'opening'; attempt += 1) {
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  assert.equal(installer.status().phase, 'opening')
+  const second = await installer.start()
+  assert.equal(second.ok, false)
+  assert.equal(second.ignored, true)
+  assert.equal(second.phase, 'opening')
+  assert.equal(typeof releaseOpen, 'function')
+  releaseOpen()
+  const result = await first
+  assert.equal(result.ok, true)
+  assert.equal(result.mode, 'dmg')
+  assert.equal(installer.status().phase, 'idle')
+  rmSync(dir, { recursive: true, force: true })
 })
 
 test('a signed packaged app installs the zip in place and an ad-hoc app opens the dmg', async () => {
@@ -442,6 +487,14 @@ test('the swap script restores the previous app if the new bundle cannot be move
   assert.match(script, /mv '\/Applications\/Font Buttler.app.font-butler-previous' '\/Applications\/Font Buttler.app'/)
   assert.match(script, /open '\/Applications\/Font Buttler.app'/)
   assert.match(script, /trap 'reopen_original; exit 1' ERR/)
+  const reopen = script.slice(script.indexOf('reopen_original() {'), script.indexOf("trap 'reopen_original"))
+  const removePartial = reopen.indexOf("rm -rf '/Applications/Font Buttler.app'")
+  const restoreBackup = reopen.indexOf(
+    "mv '/Applications/Font Buttler.app.font-butler-previous' '/Applications/Font Buttler.app'",
+  )
+  assert.ok(removePartial !== -1 && restoreBackup > removePartial)
+  assert.match(reopen, /-e '\/Applications\/Font Buttler.app.font-butler-previous'/)
+  assert.match(script, /if ! mv '\/tmp\/next\/Font Buttler.app' '\/Applications\/Font Buttler.app'; then\n  reopen_original/)
   assert.throws(() => buildMacSwapScript({ pid: 0, currentApp: '/a', nextApp: '/b', tempDir: '/t', scriptPath: '/s' }))
 })
 
@@ -461,8 +514,15 @@ function runSwapFailure(fail) {
   writeFileSync(
     path.join(bin, 'mv'),
     `#!/bin/bash
-if [[ ${JSON.stringify(fail)} == "mv" && "$1" == ${JSON.stringify(next)} ]]; then
-  exit 1
+if [[ "$1" == ${JSON.stringify(next)} ]]; then
+  if [[ ${JSON.stringify(fail)} == "mv" ]]; then
+    exit 1
+  fi
+  if [[ ${JSON.stringify(fail)} == "partial" ]]; then
+    mkdir -p "$2"
+    printf 'partial\\n' > "$2/marker"
+    exit 1
+  fi
 fi
 exec /bin/mv "$@"
 `,
@@ -517,6 +577,22 @@ test('a failing mv or rm reopens the original app', () => {
     assert.equal(existsSync(`${removed.current}.font-butler-previous`), false)
   } finally {
     rmSync(removed.root, { recursive: true, force: true })
+  }
+})
+
+test('rollback removes a partial destination before restoring the backup', () => {
+  const partial = runSwapFailure('partial')
+  try {
+    assert.notEqual(partial.result.status, 0)
+    assert.equal(partial.marker, 'original')
+    assert.deepEqual(partial.opened, [partial.current])
+    assert.equal(existsSync(`${partial.current}.font-butler-previous`), false)
+    assert.equal(
+      existsSync(path.join(partial.current, `${path.basename(partial.current)}.font-butler-previous`)),
+      false,
+    )
+  } finally {
+    rmSync(partial.root, { recursive: true, force: true })
   }
 })
 

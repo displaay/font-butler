@@ -62,6 +62,7 @@ import {
   unreadActivityCount,
   unreadOperationIdsToMark,
 } from '@/lib/activityInbox'
+import { appUpdateInstallFromMain } from '@/lib/app-update'
 import { desktopPathForFile, hasInsetTrafficLights } from '@/lib/desktop'
 import {
   collectDropPayload,
@@ -202,6 +203,7 @@ function AppShell() {
   }>({ phase: 'idle' })
   const appUpdateInstallPhase = useRef(appUpdateInstall.phase)
   appUpdateInstallPhase.current = appUpdateInstall.phase
+  const appUpdateInstallEpoch = useRef(0)
   const [retail, setRetail] = useState<RetailSyncStatus | null>(null)
   const retailRef = useRef<RetailSyncStatus | null>(null)
   retailRef.current = retail
@@ -355,11 +357,17 @@ function AppShell() {
     }
     const start = window.fontButlerDesktop?.installAppUpdate
     if (!start) return
+    appUpdateInstallEpoch.current += 1
     appUpdateInstallPhase.current = 'downloading'
     setAppUpdateInstall({ phase: 'downloading', percent: 0 })
     try {
       const result = await start()
-      if (result?.ignored) return
+      if (result?.ignored) {
+        const next = appUpdateInstallFromMain(result)
+        appUpdateInstallPhase.current = next.phase
+        setAppUpdateInstall(next)
+        return
+      }
       if (result?.ok) {
         appUpdateInstallPhase.current = 'idle'
         setAppUpdateInstall({ phase: 'idle' })
@@ -718,22 +726,19 @@ function AppShell() {
     }
     window.addEventListener('keydown', onKeyDown)
     const stopInstall = window.fontButlerDesktop?.onAppUpdateInstall?.((payload) => {
-      const phase = payload?.phase
-      if (
-        phase !== 'downloading' &&
-        phase !== 'verifying' &&
-        phase !== 'installing' &&
-        phase !== 'opening' &&
-        phase !== 'error'
-      ) {
-        return
-      }
-      appUpdateInstallPhase.current = phase
-      setAppUpdateInstall({
-        phase,
-        percent: typeof payload.percent === 'number' ? payload.percent : undefined,
-        error: typeof payload.error === 'string' ? payload.error : undefined,
-      })
+      const next = appUpdateInstallFromMain(payload)
+      appUpdateInstallEpoch.current += 1
+      appUpdateInstallPhase.current = next.phase
+      setAppUpdateInstall(next)
+    })
+    const epoch = appUpdateInstallEpoch.current
+    void window.fontButlerDesktop?.getAppUpdateInstallState?.().then((state) => {
+      if (appUpdateInstallEpoch.current !== epoch) return
+      if (appUpdateInstallPhase.current !== 'idle') return
+      const next = appUpdateInstallFromMain(state)
+      if (next.phase === 'idle') return
+      appUpdateInstallPhase.current = next.phase
+      setAppUpdateInstall(next)
     })
     const stopDesktop = window.fontButlerDesktop?.onOpenSettings((payload) => {
       setSettingsFocusAppUpdate(payload?.focus === 'app-update')

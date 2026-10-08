@@ -55,3 +55,28 @@ export function appUpdateBadgeLabel(version: string, phase?: AppUpdateInstallPha
 export function appUpdateClickIgnored(phase?: AppUpdateInstallPhase): boolean {
   return phase === 'downloading' || phase === 'verifying' || phase === 'installing' || phase === 'opening'
 }
+
+const APP_UPDATE_INSTALL_PHASES = new Set<AppUpdateInstallPhase>([
+  'idle',
+  'downloading',
+  'verifying',
+  'installing',
+  'opening',
+  'error',
+])
+
+export function appUpdateInstallFromMain(payload?: {
+  phase?: string
+  percent?: number
+  error?: string
+} | null): { phase: AppUpdateInstallPhase; percent?: number; error?: string } {
+  const phase = payload && APP_UPDATE_INSTALL_PHASES.has(payload.phase as AppUpdateInstallPhase)
+    ? (payload.phase as AppUpdateInstallPhase)
+    : 'idle'
+  if (phase === 'idle') return { phase: 'idle' }
+  return {
+    phase,
+    ...(typeof payload?.percent === 'number' ? { percent: payload.percent } : {}),
+    ...(typeof payload?.error === 'string' ? { error: payload.error } : {}),
+  }
+}

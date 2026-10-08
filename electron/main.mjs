@@ -2090,6 +2090,8 @@ ipcMain.handle('open-external', async (_event, url) => {
 
 ipcMain.handle('install-app-update', () => appUpdateInstaller().start())
 
+ipcMain.handle('app-update-install-state', () => appUpdateInstaller().status())
+
 ipcMain.handle('request-notifications', () => electronNotificationPermission(Notification))
 
 ipcMain.handle('pick-file', async () => {

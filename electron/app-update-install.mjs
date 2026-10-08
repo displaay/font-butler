@@ -581,6 +581,8 @@ export function shellQuote(value) {
  * Replace the bundle only after this process exits.
  * Any failure restores the original bundle if it was moved, then opens that app.
  * An early `rm` failure is not left to `set -e`: the ERR trap opens the original app.
+ * A cross-volume `mv` can leave a partial destination. That directory is removed
+ * before the backup is moved back, and only when the backup is still present.
  */
 export function buildMacSwapScript({ pid, currentApp, nextApp, tempDir, scriptPath }) {
   const id = Number(pid)
@@ -595,9 +597,12 @@ export function buildMacSwapScript({ pid, currentApp, nextApp, tempDir, scriptPa
 set -euo pipefail
 moved=0
 reopen_original() {
-  if [[ "$moved" -eq 1 ]]; then
-    mv ${previous} ${current} || true
-    moved=0
+  if [[ "$moved" -eq 1 && -e ${previous} ]]; then
+    rm -rf ${current} || true
+    if [[ ! -e ${current} ]]; then
+      mv ${previous} ${current} || true
+      moved=0
+    fi
   fi
   open ${current} || true
 }
@@ -612,9 +617,7 @@ if ! mv ${current} ${previous}; then
 fi
 moved=1
 if ! mv ${next} ${current}; then
-  mv ${previous} ${current} || true
-  moved=0
-  open ${current} || true
+  reopen_original
   exit 1
 fi
 moved=0
@@ -693,22 +696,56 @@ function fileUrlForAsset(feedUrl, fileName, asset) {
 
 export function createAppUpdateInstaller(deps) {
   let running = false
+  let phase = 'idle'
+  let percent
+  let errorMessage
   const fetchImpl = deps.fetch ?? nodeManualFetch
 
+  function status() {
+    const snapshot = { phase }
+    if (typeof percent === 'number') snapshot.percent = percent
+    if (errorMessage) snapshot.error = errorMessage
+    return snapshot
+  }
+
+  function note(payload) {
+    const nextPhase = payload?.phase
+    const known =
+      nextPhase === 'idle' ||
+      nextPhase === 'downloading' ||
+      nextPhase === 'verifying' ||
+      nextPhase === 'installing' ||
+      nextPhase === 'opening' ||
+      nextPhase === 'error'
+    if (!known) {
+      deps.onProgress?.(payload)
+      return
+    }
+    const nextPercent = typeof payload.percent === 'number' ? payload.percent : undefined
+    const nextError = typeof payload.error === 'string' ? payload.error : undefined
+    if (nextPhase === phase && nextPercent === percent && nextError === errorMessage) return
+    phase = nextPhase
+    percent = nextPercent
+    errorMessage = nextError
+    deps.onProgress?.(payload)
+  }
+
   async function start() {
-    if (running) return { ok: false, ignored: true }
+    if (running) return { ok: false, ignored: true, ...status() }
     running = true
+    note({ phase: 'downloading', percent: 0 })
     const tempDir = deps.makeTempDir
       ? deps.makeTempDir()
       : fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-update-'))
     let keepTemp = false
     try {
-      const result = await runInstall(deps, fetchImpl, tempDir)
+      const result = await runInstall({ ...deps, onProgress: note }, fetchImpl, tempDir)
       keepTemp = result.keepTemp === true
+      note({ phase: 'idle' })
       return { ok: true, mode: result.mode }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'The update could not be installed.'
-      deps.onProgress?.({ phase: 'error', error: message })
+      note({ phase: 'error', error: message })
       return { ok: false, error: message }
     } finally {
       running = false
@@ -719,7 +756,7 @@ export function createAppUpdateInstaller(deps) {
     }
   }
 
-  return { start }
+  return { start, status }
 }
 
 function runningAppVersion(deps) {

@@ -4,6 +4,7 @@ import {
   appUpdateBadgeLabel,
   appUpdateBadgeText,
   appUpdateClickIgnored,
+  appUpdateInstallFromMain,
   appUpdateDownloadUrl,
   appUpdateReleaseUrl,
   appUpdateRowLabel,
@@ -118,4 +119,32 @@ test('the Update badge names the version and ignores clicks while busy', () => {
   assert.equal(appUpdateClickIgnored('downloading'), true)
   assert.equal(appUpdateClickIgnored('idle'), false)
   assert.equal(appUpdateClickIgnored('error'), false)
+})
+
+test('an ignored install adopts the main-process phase, or idle when that phase is missing', () => {
+  assert.deepEqual(appUpdateInstallFromMain({ phase: 'opening' }), { phase: 'opening' })
+  assert.deepEqual(appUpdateInstallFromMain({ phase: 'downloading', percent: 40 }), {
+    phase: 'downloading',
+    percent: 40,
+  })
+  assert.deepEqual(appUpdateInstallFromMain({ phase: 'error', error: 'disk' }), {
+    phase: 'error',
+    error: 'disk',
+  })
+  assert.deepEqual(appUpdateInstallFromMain({}), { phase: 'idle' })
+  assert.deepEqual(appUpdateInstallFromMain({ phase: 'later' }), { phase: 'idle' })
+  assert.deepEqual(appUpdateInstallFromMain(null), { phase: 'idle' })
+})
+
+test('a new window reads the installer phase and an ignored result replaces downloading', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const { fileURLToPath } = await import('node:url')
+  const source = await readFile(fileURLToPath(new URL('../../src/App.tsx', import.meta.url)), 'utf8')
+  const ignored = source.match(/if \(result\?\.ignored\) \{[\s\S]*?return/)
+  assert.ok(ignored, 'expected an ignored install result to update renderer state')
+  assert.match(ignored[0], /appUpdateInstallFromMain\(result\)/)
+  assert.match(ignored[0], /setAppUpdateInstall\(next\)/)
+  assert.match(source, /getAppUpdateInstallState\?\.\(\)/)
+  assert.match(source, /appUpdateInstallEpoch\.current !== epoch/)
+  assert.match(source, /appUpdateInstallPhase\.current !== 'idle'/)
 })
