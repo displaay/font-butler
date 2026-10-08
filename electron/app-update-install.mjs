@@ -933,6 +933,9 @@ export function createAppUpdateInstaller(deps) {
       return { ok: false, error: message }
     } finally {
       running = false
+      // In-place handoff sets keepTemp only after the swap script is launched,
+      // so this cleanup does not remove tempDir before bash runs. A failed
+      // exclusive create throws first and still deletes the directory.
       if (tempDir && !keepTemp) {
         try {
           if (deps.removeTemp) deps.removeTemp(tempDir)
@@ -1068,7 +1071,7 @@ async function runInstall(deps, fetchImpl, tempDir) {
   }
   if (!runtime.appPath) throw new Error('The running app bundle could not be found.')
   deps.onProgress?.({ phase: 'installing' })
-  const scriptPath = deps.scriptPath ?? path.join(os.tmpdir(), `font-butler-swap-${process.pid}.sh`)
+  const scriptPath = path.join(tempDir, 'swap.sh')
   const script = buildMacSwapScript({
     pid: deps.pid ?? process.pid,
     currentApp: runtime.appPath,
@@ -1301,7 +1304,8 @@ export function cleanupOpenedUpdateDmgs({
 }
 
 function spawnSwapScript({ script, scriptPath }) {
-  fs.writeFileSync(scriptPath, script, { mode: 0o700 })
+  // 'wx' fails if the path exists, including a symlink, and does not follow it.
+  fs.writeFileSync(scriptPath, script, { flag: 'wx', mode: 0o700 })
   const child = spawn('/bin/bash', [scriptPath], {
     detached: true,
     stdio: 'ignore',

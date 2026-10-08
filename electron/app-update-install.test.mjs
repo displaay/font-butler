@@ -588,6 +588,8 @@ test('a signed packaged app installs the zip in place and an ad-hoc app opens th
   assert.equal(inplace.result.mode, 'inplace')
   assert.equal(inplace.verified, 1)
   assert.equal(inplace.swaps.length, 1)
+  assert.equal(inplace.swaps[0].scriptPath, path.join(inplace.dir, 'swap.sh'))
+  assert.equal(existsSync(inplace.dir), true)
   assert.match(inplace.swaps[0].script, /mv .*Font Buttler\.app/)
   assert.match(inplace.swaps[0].script, /font-butler-previous/)
   assert.equal(inplace.opened.length, 0)
@@ -603,6 +605,102 @@ test('a signed packaged app installs the zip in place and an ad-hoc app opens th
   assert.equal(adhoc.opened.length, 1)
   assert.match(adhoc.opened[0], /Font-Buttler-0\.4\.4-arm64\.dmg$/)
   rmSync(path.dirname(adhoc.opened[0]), { recursive: true, force: true })
+})
+
+test('a swap script is created only inside the update temp dir and an existing path fails closed', async () => {
+  const version = '0.4.9'
+  const zipBytes = Buffer.from('swap-script-zip')
+  const doc = yml(version, [
+    { name: macArm64ArchiveName(version, 'dmg'), sha512: sha512(zipBytes), size: zipBytes.length },
+    { name: macArm64ArchiveName(version, 'zip'), sha512: sha512(zipBytes), size: zipBytes.length },
+  ])
+  const outside = mkdtempSync(path.join(os.tmpdir(), 'font-butler-swap-sentinel-'))
+  const oldSentinel = path.join(outside, 'old-sentinel')
+  const newSentinel = path.join(outside, 'new-sentinel')
+  writeFileSync(oldSentinel, 'old-sentinel')
+  writeFileSync(newSentinel, 'new-sentinel')
+  const oldPath = path.join(os.tmpdir(), `font-butler-swap-${process.pid}.sh`)
+  const roots = []
+  const source = readFileSync(new URL('./app-update-install.mjs', import.meta.url), 'utf8')
+  assert.doesNotMatch(source, /font-butler-swap-\$\{/)
+
+  async function attempt(plant) {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'font-butler-swap-root-'))
+    roots.push(root)
+    const dir = path.join(root, 'download')
+    const current = path.join(root, 'running.app')
+    mkdirSync(dir)
+    mkdirSync(current)
+    writeFileSync(path.join(current, 'marker'), 'original')
+    plant(dir)
+    let quit = false
+    let planted = null
+    const installer = createAppUpdateInstaller({
+      currentVersion: '0.0.0',
+      env: {},
+      probeRuntime: () => signedRuntime({ appPath: current }),
+      makeTempDir: () => dir,
+      removeTemp: (target) => {
+        const scriptFile = path.join(target, 'swap.sh')
+        planted = {
+          link: lstatSync(scriptFile).isSymbolicLink(),
+          body: readFileSync(scriptFile, 'utf8'),
+        }
+        rmSync(target, { recursive: true, force: true })
+      },
+      unzip: async (_zip, dest) => {
+        writeUpdateApp(dest, version)
+        await writeUpdatePackageJson(dest, { name: 'font-butler', version })
+      },
+      verifyDownloadedApp: async () => ({ ok: true }),
+      quit: () => {
+        quit = true
+      },
+      pid: 4242,
+      fetch: async (url) => {
+        if (url === GITHUB_LATEST_API) return httpResponse({ body: JSON.stringify(releaseJson(version)) })
+        if (String(url).endsWith('latest-mac.yml')) return httpResponse({ body: doc })
+        return httpResponse({ body: zipBytes, contentLength: zipBytes.length })
+      },
+    })
+    const result = await installer.start()
+    return { result, quit, planted, current }
+  }
+
+  try {
+    const asFile = await attempt((dir) => {
+      writeFileSync(oldPath, 'old-file')
+      writeFileSync(path.join(dir, 'swap.sh'), 'new-file')
+    })
+    assert.equal(asFile.result.ok, false)
+    assert.equal(typeof asFile.result.error, 'string')
+    assert.equal(asFile.result.error.length > 0, true)
+    assert.equal(asFile.quit, false)
+    assert.equal(asFile.planted.link, false)
+    assert.equal(asFile.planted.body, 'new-file')
+    assert.equal(lstatSync(oldPath).isSymbolicLink(), false)
+    assert.equal(readFileSync(oldPath, 'utf8'), 'old-file')
+    assert.equal(readFileSync(path.join(asFile.current, 'marker'), 'utf8'), 'original')
+
+    rmSync(oldPath, { force: true })
+    const asLink = await attempt((dir) => {
+      symlinkSync(oldSentinel, oldPath)
+      symlinkSync(newSentinel, path.join(dir, 'swap.sh'))
+    })
+    assert.equal(asLink.result.ok, false)
+    assert.equal(typeof asLink.result.error, 'string')
+    assert.equal(asLink.quit, false)
+    assert.equal(asLink.planted.link, true)
+    assert.equal(asLink.planted.body, 'new-sentinel')
+    assert.equal(lstatSync(oldPath).isSymbolicLink(), true)
+    assert.equal(readFileSync(oldSentinel, 'utf8'), 'old-sentinel')
+    assert.equal(readFileSync(newSentinel, 'utf8'), 'new-sentinel')
+    assert.equal(readFileSync(path.join(asLink.current, 'marker'), 'utf8'), 'original')
+  } finally {
+    for (const root of roots) rmSync(root, { recursive: true, force: true })
+    rmSync(oldPath, { force: true })
+    rmSync(outside, { recursive: true, force: true })
+  }
 })
 
 test('a failed signature check does not swap the running app', async () => {
