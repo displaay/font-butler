@@ -1294,6 +1294,60 @@ test('a marked build refuses an unmarked download and an unmarked build still sw
   }
 })
 
+test('an unmarked build refuses a marked download before the swap', async () => {
+  const version = '0.9.2'
+  const zipBytes = Buffer.from('marked-zip-refused')
+  const doc = yml(version, [
+    { name: macArm64ArchiveName(version, 'zip'), sha512: sha512(zipBytes), size: zipBytes.length },
+  ])
+  const swaps = []
+  let quit = false
+  const phases = []
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-marked-zip-'))
+  const installer = createAppUpdateInstaller({
+    currentVersion: '0.3.9',
+    env: {},
+    probeRuntime: () => signedRuntime(),
+    makeTempDir: () => dir,
+    removeTemp: (target) => rmSync(target, { recursive: true, force: true }),
+    unzip: async (_zip, dest) => {
+      writeUpdateApp(dest, version)
+      await writeUpdatePackageJson(dest, {
+        name: 'font-butler',
+        version,
+        fontButlerTestFeed: true,
+      })
+    },
+    verifyDownloadedApp: async () => ({ ok: true }),
+    spawnSwap: (swap) => swaps.push(swap),
+    quit: () => {
+      quit = true
+    },
+    pid: 12,
+    onProgress: (payload) => phases.push(payload.phase),
+    fetch: async (url) => {
+      if (url === GITHUB_LATEST_API) return httpResponse({ body: JSON.stringify(releaseJson(version)) })
+      if (String(url).endsWith('latest-mac.yml')) return httpResponse({ body: doc })
+      if (String(url).endsWith(macArm64ArchiveName(version, 'zip'))) {
+        return httpResponse({ body: zipBytes, contentLength: zipBytes.length })
+      }
+      throw new Error(`unexpected ${url}`)
+    },
+  })
+  try {
+    const result = await installer.start()
+    assert.equal(result.ok, false)
+    assert.match(result.error, /is a test build/)
+    assert.equal(swaps.length, 0)
+    assert.equal(quit, false)
+    assert.equal(phases.includes('installing'), false)
+    assert.equal(installer.status().phase, 'error')
+    assert.equal(existsSync(dir), false)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('a failed record of an opened DMG keeps the file and stays off the error phase', async () => {
   const version = '0.5.1'
   const bytes = Buffer.from('dmg-record-fail')

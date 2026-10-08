@@ -996,8 +996,15 @@ async function runInstall(deps, fetchImpl, tempDir) {
     throw new Error(verified?.reason || 'The downloaded app failed signature checks.')
   }
   assertDownloadedAppVersion(nextApp, version, deps.readBundleShortVersion)
-  if (runtime.testFeedBuild === true && !readAppTestFeedMarker(nextApp)) {
-    throw new Error('The downloaded app is not a test build, so it was not installed.')
+  // Equality, both ways. A read failure returns false, so an unmarked
+  // release whose package.json has no marker still matches and installs.
+  const runningTestFeed = runtime.testFeedBuild === true
+  if (readAppTestFeedMarker(nextApp) !== runningTestFeed) {
+    throw new Error(
+      runningTestFeed
+        ? 'The downloaded app is not a test build, so it was not installed.'
+        : 'The downloaded app is a test build, so it was not installed.',
+    )
   }
   if (!runtime.appPath) throw new Error('The running app bundle could not be found.')
   deps.onProgress?.({ phase: 'installing' })
