@@ -5,6 +5,8 @@ import path from 'node:path'
 import { test } from 'node:test'
 import { onEvent } from './events.ts'
 import { fingerprintFile } from './fingerprint.ts'
+import { loadOperations } from './operations.ts'
+import type { AppPaths } from './paths.ts'
 import { peekFontAnalysis, rememberFontAnalysis } from './font-analysis.ts'
 import {
   INBOX_CORRUPT_ATTEMPT_LIMIT,
@@ -362,6 +364,63 @@ test('a corrupt watch file is reported once after repeated failures', async () =
     stop()
     await closeAllWatchers()
     fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a reported startup failure overwritten later is recorded as watch', async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-startup-watch-'))
+  const paths: AppPaths = {
+    dataRoot,
+    catalogPath: path.join(dataRoot, 'catalog.json'),
+    settingsPath: path.join(dataRoot, 'settings.json'),
+    apiTokenPath: path.join(dataRoot, 'token'),
+    installDir: path.join(dataRoot, 'install'),
+    disabledDir: path.join(dataRoot, 'disabled'),
+    sourcesDir: path.join(dataRoot, 'sources'),
+    uploadsDir: path.join(dataRoot, 'uploads'),
+    systemCachePath: path.join(dataRoot, 'system.json'),
+    seedDir: path.join(dataRoot, 'seed'),
+    userFontsDir: path.join(dataRoot, 'user-fonts'),
+    computerFontsDir: path.join(dataRoot, 'computer-fonts'),
+    systemFontsDir: path.join(dataRoot, 'system-fonts'),
+    supplementalFontsDir: path.join(dataRoot, 'supplemental'),
+    officeFontCacheDir: path.join(dataRoot, 'office-cache'),
+    atsCacheDir: path.join(dataRoot, 'ats-cache'),
+    adobeFontsDir: path.join(dataRoot, 'adobe-fonts'),
+  }
+  const root = path.join(dataRoot, 'inbox')
+  fs.mkdirSync(root, { recursive: true })
+  const font = path.join(root, 'Bad.ttf')
+  fs.writeFileSync(font, Buffer.from('not-a-font'))
+  const failure = { path: font, message: 'Not a font file.' }
+  try {
+    await syncInboxWatcher([root], async () => ({ failedPaths: [] }), paths)
+    for (let attempt = 0; attempt < INBOX_CORRUPT_ATTEMPT_LIMIT; attempt += 1) {
+      recordInboxImportResult([font], [font], { failures: [failure], immediate: true })
+    }
+    const startup = loadOperations(paths).find((operation) =>
+      operation.items.some((item) => item.label === path.resolve(font)),
+    )
+    assert.equal(startup?.trigger, 'startup')
+
+    fs.writeFileSync(font, Buffer.from('still-not-a-font-but-longer'))
+    for (let attempt = 0; attempt < INBOX_CORRUPT_ATTEMPT_LIMIT; attempt += 1) {
+      recordInboxImportResult([font], [font], {
+        failures: [{ path: font, message: 'Still not a font file.' }],
+      })
+    }
+    const failures = loadOperations(paths).filter((operation) =>
+      operation.items.some((item) => item.label === path.resolve(font)),
+    )
+    assert.equal(failures.filter((operation) => operation.trigger === 'startup').length, 1)
+    assert.equal(failures.filter((operation) => operation.trigger === 'watch').length, 1)
+    assert.equal(
+      failures.find((operation) => operation.trigger === 'watch')?.items[0]?.reason,
+      'Still not a font file.',
+    )
+  } finally {
+    await closeAllWatchers()
+    fs.rmSync(dataRoot, { recursive: true, force: true })
   }
 })
 

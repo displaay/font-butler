@@ -601,7 +601,7 @@ export type InboxFileStamp = {
   reported: boolean
   /** Bytes that failed. A later write with the same size and mtime is imported when this changes. */
   fingerprint?: string
-  /** True when this failure started in startup discovery. Later retries keep that trigger. */
+  /** True while an unreported failure still belongs to startup discovery. */
   startup?: boolean
 }
 
@@ -786,7 +786,7 @@ function rememberInboxRejection(
   const attempts = sameStamp ? previous.attempts + 1 : 1
   const fingerprint =
     sameStamp && previous.fingerprint ? previous.fingerprint : tryFingerprintFile(filePath)
-  const fromStartup = immediate || previous?.startup === true
+  const fromStartup = immediate || (previous?.startup && !previous.reported)
   inboxRejected.set(filePath, {
     size: stamp.size,
     mtimeMs: stamp.mtimeMs,
