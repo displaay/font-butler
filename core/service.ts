@@ -4065,7 +4065,9 @@ export class FontButlerService {
         ),
       ].filter((filePath) => !known.has(filePath))
       if (discovered.length) {
-        await runInboxImportBatch(discovered, () => this.importInboxFiles(discovered))
+        await runInboxImportBatch(discovered, () => this.importInboxFiles(discovered), {
+          immediate: true,
+        })
       }
     }
   }

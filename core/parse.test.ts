@@ -5,6 +5,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 import {
   glyphNameForCodePoint,
+  inspectSfntTables,
   parseFontFile,
   previewUsesInstalledBytes,
   resolveFamilyNames,
@@ -320,9 +321,39 @@ test('sfntTablesFit rejects tables past the end of the file and a zero-filled he
     overrun.writeUInt32BE(bytes.length + 64, 12 + 12)
     const overrunPath = path.join(root, 'Overrun.ttf')
     fs.writeFileSync(overrunPath, overrun)
-    assert.equal(sfntTablesFit(overrunPath), false)
+    const overrunCheck = inspectSfntTables(overrunPath)
+    assert.equal(overrunCheck.ok, false)
+    if (!overrunCheck.ok) assert.match(overrunCheck.reason, /extends past the end/)
 
     const numTables = bytes.readUInt16BE(4)
+    let lastIndex = 0
+    let lastEnd = -1
+    for (let index = 0; index < numTables; index += 1) {
+      const base = 12 + index * 16
+      const end = bytes.readUInt32BE(base + 8) + bytes.readUInt32BE(base + 12)
+      if (end > lastEnd) {
+        lastEnd = end
+        lastIndex = index
+      }
+    }
+    const slack = Buffer.from(bytes)
+    const offsetAt = 12 + lastIndex * 16 + 8
+    const lengthAt = offsetAt + 4
+    const tableOffset = bytes.readUInt32BE(offsetAt)
+    slack.writeUInt32BE(bytes.length + 3 - tableOffset, lengthAt)
+    const slackPath = path.join(root, 'Slack.ttf')
+    fs.writeFileSync(slackPath, slack)
+    assert.equal(sfntTablesFit(slackPath), true)
+    slack.writeUInt32BE(bytes.length + 4 - tableOffset, lengthAt)
+    fs.writeFileSync(slackPath, slack)
+    const slackOver = inspectSfntTables(slackPath)
+    assert.equal(slackOver.ok, false)
+    if (!slackOver.ok) assert.match(slackOver.reason, /extends past the end/)
+
+    const truncatedCheck = inspectSfntTables(truncated)
+    assert.equal(truncatedCheck.ok, false)
+    if (!truncatedCheck.ok) assert.match(truncatedCheck.reason, /table directory|sfnt header/)
+
     const blankHead = Buffer.from(bytes)
     let zeroedHead = false
     for (let index = 0; index < numTables; index += 1) {
@@ -336,7 +367,9 @@ test('sfntTablesFit rejects tables past the end of the file and a zero-filled he
     assert.equal(zeroedHead, true)
     const blankHeadPath = path.join(root, 'BlankHead.ttf')
     fs.writeFileSync(blankHeadPath, blankHead)
-    assert.equal(sfntTablesFit(blankHeadPath), false)
+    const blankCheck = inspectSfntTables(blankHeadPath)
+    assert.equal(blankCheck.ok, false)
+    if (!blankCheck.ok) assert.match(blankCheck.reason, /head table is still zero-filled/)
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }

@@ -13,6 +13,7 @@ import {
   saveCatalog,
 } from './catalog.ts'
 import { emitEvent } from './events.ts'
+import { emitNotice } from './service-helpers.ts'
 import { countInstallableFormats, isWebFontFile } from './formats.ts'
 import { forgetFontAnalysis } from './font-analysis.ts'
 import { tryFingerprintFile } from './fingerprint.ts'
@@ -35,14 +36,21 @@ let inboxSession = 0
 let inboxFlushing = false
 let inboxFlushAgain = false
 const inboxInFlight = new Set<string>()
-const inboxRejected = new Map<string, { size: number; mtimeMs: number }>()
+const inboxRejected = new Map<string, InboxFileStamp>()
 const inboxImportedFingerprint = new Map<string, string>()
+const inboxSettleTimers = new Map<string, ReturnType<typeof setTimeout>>()
 let scheduleActiveInboxFlush: (() => void) | null = null
 let inboxWork: Promise<void> = Promise.resolve()
+/** Bumped when the inbox watcher stops so an in-flight flush does not record after close. */
+let inboxRecordEpoch = 0
 
 /** How long a watched font must stop growing before it is parsed. */
 export const INBOX_WRITE_STABILITY_MS = 2000
 export const INBOX_WRITE_POLL_MS = 100
+/** Report a corrupt file once it has failed this many times without a new stamp. */
+export const INBOX_CORRUPT_ATTEMPT_LIMIT = 3
+/** Report a corrupt file when it sits unchanged for this long after a failed read. */
+export const INBOX_CORRUPT_SETTLE_MS = 10_000
 const INBOX_BATCH_MS = 350
 let sourceStatusListener: ((entry: CatalogEntry) => void) | undefined
 let pendingSourceStatusPaths = new Set<string>()
@@ -567,13 +575,24 @@ export function inspectDropPaths(inputPaths: string[]): DropInspect {
   }
 }
 
+export type InboxPathFailure = { path: string; message: string }
+export type InboxPathFingerprint = { path: string; fingerprint: string }
+
 export type InboxWatchBatchResult = {
   failedPaths?: readonly string[]
+  failures?: readonly InboxPathFailure[]
+  fingerprints?: readonly InboxPathFingerprint[]
 }
 
-type InboxFileStamp = { size: number; mtimeMs: number }
+export type InboxFileStamp = {
+  size: number
+  mtimeMs: number
+  attempts: number
+  reason: string
+  reported: boolean
+}
 
-function inboxFileStamp(filePath: string): InboxFileStamp {
+function inboxFileStamp(filePath: string): { size: number; mtimeMs: number } {
   try {
     return readFileStat(filePath)
   } catch {
@@ -588,25 +607,88 @@ function inboxFileStamp(filePath: string): InboxFileStamp {
  * can succeed on incomplete bytes and then change without a new size.
  */
 export function inboxChangeShouldImport(
-  rejection: InboxFileStamp | undefined,
+  rejection: { reported?: boolean; size: number; mtimeMs: number } | undefined,
   nextFingerprint: string | undefined,
   previousFingerprint: string | undefined,
   inFlight: boolean,
+  nextStamp?: { size: number; mtimeMs: number },
 ): boolean {
   if (inFlight) return true
-  if (rejection) return true
+  if (rejection) {
+    if (!rejection.reported) return true
+    if (!nextStamp || nextStamp.size !== rejection.size || nextStamp.mtimeMs !== rejection.mtimeMs) {
+      return true
+    }
+    return false
+  }
   return Boolean(
     previousFingerprint && nextFingerprint && previousFingerprint !== nextFingerprint,
   )
 }
 
-function rememberInboxRejection(filePath: string): void {
+function clearInboxFailureTimer(filePath: string): void {
+  const timer = inboxSettleTimers.get(filePath)
+  if (!timer) return
+  clearTimeout(timer)
+  inboxSettleTimers.delete(filePath)
+}
+
+function reportInboxFailure(filePath: string): void {
+  const current = inboxRejected.get(filePath)
+  if (!current || current.reported) return
+  current.reported = true
+  clearInboxFailureTimer(filePath)
+  emitNotice({
+    kind: 'error',
+    message: `${filePath}: ${current.reason}`,
+  })
+}
+
+function rememberInboxRejection(
+  filePath: string,
+  reason: string,
+  immediate: boolean,
+): void {
   const stamp = inboxFileStamp(filePath)
   if (stamp.size < 0) {
     inboxRejected.delete(filePath)
+    clearInboxFailureTimer(filePath)
     return
   }
-  inboxRejected.set(filePath, stamp)
+  const previous = inboxRejected.get(filePath)
+  const sameStamp =
+    previous !== undefined && previous.size === stamp.size && previous.mtimeMs === stamp.mtimeMs
+  if (sameStamp && previous.reported) return
+  const attempts = sameStamp ? previous.attempts + 1 : 1
+  inboxRejected.set(filePath, {
+    size: stamp.size,
+    mtimeMs: stamp.mtimeMs,
+    attempts,
+    reason,
+    reported: false,
+  })
+  clearInboxFailureTimer(filePath)
+  if (immediate || attempts >= INBOX_CORRUPT_ATTEMPT_LIMIT) {
+    reportInboxFailure(filePath)
+    return
+  }
+  const timer = setTimeout(() => {
+    inboxSettleTimers.delete(filePath)
+    const current = inboxRejected.get(filePath)
+    if (!current || current.reported) return
+    const live = inboxFileStamp(filePath)
+    if (live.size !== current.size || live.mtimeMs !== current.mtimeMs) return
+    reportInboxFailure(filePath)
+  }, INBOX_CORRUPT_SETTLE_MS)
+  timer.unref?.()
+  inboxSettleTimers.set(filePath, timer)
+}
+
+function rememberedFingerprint(filePath: string, paths?: AppPaths): string | undefined {
+  const cached = inboxImportedFingerprint.get(filePath)
+  if (cached) return cached
+  if (!paths) return undefined
+  return findBySourcePath(loadCatalog(paths), filePath)?.sourceFingerprint
 }
 
 function enqueueInboxWork(task: () => Promise<void>): Promise<void> {
@@ -621,24 +703,47 @@ function enqueueInboxWork(task: () => Promise<void>): Promise<void> {
 export function recordInboxImportResult(
   filePaths: readonly string[],
   failedPaths: readonly string[] = [],
+  detail: {
+    failures?: readonly InboxPathFailure[]
+    fingerprints?: readonly InboxPathFingerprint[]
+    immediate?: boolean
+    recordEpoch?: number
+  } = {},
 ): void {
+  if (detail.recordEpoch !== undefined && detail.recordEpoch !== inboxRecordEpoch) return
   const failed = new Set(failedPaths.map((filePath) => path.resolve(filePath)))
+  const reasons = new Map<string, string>()
+  for (const failure of detail.failures ?? []) {
+    reasons.set(path.resolve(failure.path), failure.message)
+  }
+  const fingerprints = new Map<string, string>()
+  for (const item of detail.fingerprints ?? []) {
+    if (item.fingerprint) fingerprints.set(path.resolve(item.path), item.fingerprint)
+  }
   const seen = new Set<string>()
   for (const filePath of filePaths) {
     const resolved = path.resolve(filePath)
     seen.add(resolved)
     if (failed.has(resolved)) {
-      rememberInboxRejection(resolved)
+      rememberInboxRejection(
+        resolved,
+        reasons.get(resolved) || 'Could not read that font.',
+        detail.immediate === true,
+      )
     } else {
       inboxRejected.delete(resolved)
-      const fingerprint = tryFingerprintFile(resolved)
+      clearInboxFailureTimer(resolved)
+      const fingerprint = fingerprints.get(resolved)
       if (fingerprint) inboxImportedFingerprint.set(resolved, fingerprint)
-      else inboxImportedFingerprint.delete(resolved)
     }
   }
   for (const filePath of failed) {
     if (seen.has(filePath)) continue
-    rememberInboxRejection(filePath)
+    rememberInboxRejection(
+      filePath,
+      reasons.get(filePath) || 'Could not read that font.',
+      detail.immediate === true,
+    )
   }
 }
 
@@ -649,20 +754,31 @@ export function recordInboxImportResult(
 export function runInboxImportBatch(
   filePaths: readonly string[],
   task: () => Promise<InboxWatchBatchResult | void>,
+  options: { immediate?: boolean } = {},
 ): Promise<void> {
   const batch = [...new Set(filePaths.map((filePath) => path.resolve(filePath)))]
+  const recordEpoch = inboxRecordEpoch
   for (const filePath of batch) inboxInFlight.add(filePath)
   return enqueueInboxWork(async () => {
     let failed: readonly string[] = []
+    let result: InboxWatchBatchResult | undefined
     try {
-      const result = await task()
-      if (result) failed = result.failedPaths ?? []
+      const produced = await task()
+      if (produced) {
+        result = produced
+        failed = produced.failedPaths ?? []
+      }
     } catch {
       failed = batch
     } finally {
       for (const filePath of batch) inboxInFlight.delete(filePath)
     }
-    recordInboxImportResult(batch, failed)
+    recordInboxImportResult(batch, failed, {
+      failures: result?.failures,
+      fingerprints: result?.fingerprints,
+      immediate: options.immediate,
+      recordEpoch,
+    })
   }).finally(() => {
     if (inboxPending.length > 0) scheduleActiveInboxFlush?.()
   })
@@ -704,6 +820,7 @@ export async function syncInboxWatcher(
   onBatch: (filePaths: string[]) => void | Promise<void | InboxWatchBatchResult>,
   paths?: AppPaths,
 ): Promise<void> {
+  if (existingWatchFolders(folders).length === 0) inboxRecordEpoch += 1
   const session = ++inboxSession
   if (inboxTimer) {
     clearTimeout(inboxTimer)
@@ -723,6 +840,8 @@ export async function syncInboxWatcher(
     inboxImportedFingerprint.clear()
     inboxPending = []
     inboxFlushAgain = false
+    for (const timer of inboxSettleTimers.values()) clearTimeout(timer)
+    inboxSettleTimers.clear()
     scheduleActiveInboxFlush = null
     return
   }
@@ -747,6 +866,7 @@ export async function syncInboxWatcher(
       return
     }
     inboxFlushing = true
+    const recordEpoch = inboxRecordEpoch
     void enqueueInboxWork(async () => {
       try {
         do {
@@ -757,15 +877,23 @@ export async function syncInboxWatcher(
           if (batch.length === 0) continue
           for (const filePath of batch) inboxInFlight.add(filePath)
           let failed: readonly string[] = []
+          let result: InboxWatchBatchResult | undefined
           try {
-            const result = await Promise.resolve(onBatch(batch))
-            if (result) failed = result.failedPaths ?? []
+            const produced = await Promise.resolve(onBatch(batch))
+            if (produced) {
+              result = produced
+              failed = produced.failedPaths ?? []
+            }
           } catch {
             failed = batch
           } finally {
             for (const filePath of batch) inboxInFlight.delete(filePath)
           }
-          recordInboxImportResult(batch, failed)
+          recordInboxImportResult(batch, failed, {
+            failures: result?.failures,
+            fingerprints: result?.fingerprints,
+            recordEpoch,
+          })
         } while (session === inboxSession && (inboxFlushAgain || inboxPending.length > 0))
       } finally {
         inboxFlushing = false
@@ -780,17 +908,28 @@ export async function syncInboxWatcher(
     if (event === 'change') {
       const rejection = inboxRejected.get(resolved)
       const inFlight = inboxInFlight.has(resolved)
-      const previousFingerprint = inboxImportedFingerprint.get(resolved)
-      const nextFingerprint =
-        !rejection && !inFlight && previousFingerprint
-          ? tryFingerprintFile(resolved)
-          : undefined
-      if (!inboxChangeShouldImport(rejection, nextFingerprint, previousFingerprint, inFlight)) {
+      if (inFlight) forgetFontAnalysis(resolved)
+      const previousFingerprint = inFlight ? undefined : rememberedFingerprint(resolved, paths)
+      let nextStamp: { size: number; mtimeMs: number } | undefined
+      let nextFingerprint: string | undefined
+      if (!inFlight && rejection?.reported) {
+        try {
+          nextStamp = readFileStat(resolved)
+        } catch {
+          nextStamp = undefined
+        }
+      } else if (!inFlight && !rejection && previousFingerprint) {
+        nextFingerprint = tryFingerprintFile(resolved)
+      }
+      if (
+        !inboxChangeShouldImport(rejection, nextFingerprint, previousFingerprint, inFlight, nextStamp)
+      ) {
         return
       }
       if (previousFingerprint && nextFingerprint && previousFingerprint !== nextFingerprint) {
         forgetFontAnalysis(resolved)
       }
+      if (rejection) clearInboxFailureTimer(resolved)
     }
     inboxPending.push(resolved)
     scheduleFlush()
@@ -813,6 +952,7 @@ export async function syncInboxWatcher(
     const resolved = path.resolve(filePath)
     inboxRejected.delete(resolved)
     inboxImportedFingerprint.delete(resolved)
+    clearInboxFailureTimer(resolved)
     if (paths) enqueueSourceStatusRefresh(paths, filePath)
   })
   if (inboxPending.length) scheduleFlush()

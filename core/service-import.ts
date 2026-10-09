@@ -23,10 +23,10 @@ import { tryFingerprintFile } from './fingerprint.ts'
 import { folderForPath, isExcluded, mostSpecificOwner } from './folders.ts'
 import {
   applyParsedFont,
+  inspectSfntTables,
   isFontFile,
   isPreviewableFontFile,
   readFileStat,
-  sfntTablesFit,
 } from './parse.ts'
 import { classifyImportFile, isInactiveRetailListing, isWatchIdentityDuplicate } from './planner.ts'
 import type { AppPaths } from './paths.ts'
@@ -160,8 +160,15 @@ export type InboxImportHost = {
   install(id: string): Promise<CatalogEntry>
 }
 
+export type InboxImportFailure = {
+  path: string
+  message: string
+}
+
 export type InboxImportResult = {
   failedPaths: string[]
+  failures: InboxImportFailure[]
+  fingerprints: Array<{ path: string; fingerprint: string }>
 }
 
 function importErrorPath(error: string, candidates: readonly string[]): string | undefined {
@@ -190,24 +197,36 @@ export async function importInboxFiles(
   const catalog = loadCatalog(host.paths)
   const auto: string[] = []
   const unreadable = new Set<string>()
+  const failureReasons = new Map<string, string>()
   let notified = 0
   for (const filePath of allowed) {
     const resolved = path.resolve(filePath)
-    if (isFontFile(resolved) && !sfntTablesFit(resolved)) {
-      unreadable.add(resolved)
-      continue
+    if (isFontFile(resolved)) {
+      const tables = inspectSfntTables(resolved)
+      if (tables.ok === false) {
+        unreadable.add(resolved)
+        failureReasons.set(resolved, tables.reason)
+        continue
+      }
     }
     let analysis
     let parseFailed = false
     try {
       analysis = await analyzeFontFile(filePath)
-    } catch {
+    } catch (error) {
       analysis = undefined
       parseFailed = true
+      failureReasons.set(
+        resolved,
+        error instanceof Error ? error.message : 'Could not read that font.',
+      )
     }
     const item = classifyImportFile(filePath, catalog, { paths: host.paths, analysis })
     if (parseFailed || item.classification === 'unsupported') {
       unreadable.add(resolved)
+      if (!failureReasons.has(resolved)) {
+        failureReasons.set(resolved, item.reason || 'Could not read that font.')
+      }
     }
     if (isWatchIdentityDuplicate(item)) {
       const occupying = occupyingSiblingsForIncoming(
@@ -254,7 +273,7 @@ export async function importInboxFiles(
   }
   if (auto.length === 0) {
     for (const filePath of unreadable) forgetFontAnalysis(filePath)
-    return { failedPaths: [...unreadable] }
+    return inboxFailureResult(unreadable, failureReasons)
   }
   const beforeIds = new Set(host.listCatalog().map((entry) => entry.id))
   const result = await host.importPaths(auto)
@@ -265,7 +284,13 @@ export async function importInboxFiles(
   }
   for (const error of result.errors) {
     const match = importErrorPath(error, auto)
-    if (match && !imported.has(match)) failed.add(match)
+    if (match && !imported.has(match)) {
+      failed.add(match)
+      if (!failureReasons.has(match)) {
+        const prefix = `${match}: `
+        failureReasons.set(match, error.startsWith(prefix) ? error.slice(prefix.length) : error)
+      }
+    }
   }
   for (const filePath of failed) forgetFontAnalysis(filePath)
   const added = result.entries.filter((entry) => !beforeIds.has(entry.id))
@@ -316,5 +341,28 @@ export async function importInboxFiles(
       message: lingering.join('\n'),
     })
   }
-  return { failedPaths: [...failed] }
+  return {
+    ...inboxFailureResult(failed, failureReasons),
+    fingerprints: result.entries.flatMap((entry) => {
+      const fingerprint = entry.sourceFingerprint
+      const resolved = path.resolve(entry.sourcePath)
+      if (!fingerprint || failed.has(resolved)) return []
+      return [{ path: resolved, fingerprint }]
+    }),
+  }
+}
+
+function inboxFailureResult(
+  failed: Set<string>,
+  reasons: Map<string, string>,
+): InboxImportResult {
+  const failedPaths = [...failed]
+  return {
+    failedPaths,
+    failures: failedPaths.map((filePath) => ({
+      path: filePath,
+      message: reasons.get(filePath) || 'Could not read that font.',
+    })),
+    fingerprints: [],
+  }
 }

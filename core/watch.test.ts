@@ -3,7 +3,11 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
+import { onEvent } from './events.ts'
+import { peekFontAnalysis, rememberFontAnalysis } from './font-analysis.ts'
 import {
+  INBOX_CORRUPT_ATTEMPT_LIMIT,
+  INBOX_WRITE_STABILITY_MS,
   closeAllWatchers,
   expandImportPaths,
   inboxChangeShouldImport,
@@ -239,7 +243,7 @@ test('a resync during a flush still imports paths queued for the new session', a
 test('a path stays in flight until the startup import finishes', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-inflight-'))
   const font = path.join(root, 'Startup.ttf')
-  fs.writeFileSync(font, Buffer.from('partial'))
+  fs.writeFileSync(font, Buffer.from('partial-font!!'))
   const seen: string[][] = []
   try {
     await syncInboxWatcher([root], async (files) => {
@@ -249,7 +253,8 @@ test('a path stays in flight until the startup import finishes', async () => {
     let during = false
     await runInboxImportBatch([font], async () => {
       during = inboxInFlightForTest(font)
-      queueInboxPathForTest(font)
+      fs.writeFileSync(font, Buffer.from('partial-font??'))
+      await delay(INBOX_WRITE_STABILITY_MS + 800)
       return { failedPaths: [font] }
     })
     assert.equal(during, true)
@@ -260,6 +265,92 @@ test('a path stays in flight until the startup import finishes', async () => {
     )
     assert.equal(inboxInFlightForTest(font), false)
   } finally {
+    await closeAllWatchers()
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('an in-flight change drops cached analysis before the follow-up import', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-forget-'))
+  const font = path.join(root, 'Cached.ttf')
+  fs.writeFileSync(font, Buffer.alloc(32, 1))
+  const stat = fs.statSync(font)
+  rememberFontAnalysis({
+    path: path.resolve(font),
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+    fingerprint: 'stale',
+    parsed: { faces: [], format: 'ttf', previewSample: 'Aa' },
+  })
+  assert.ok(peekFontAnalysis(font))
+  try {
+    await syncInboxWatcher([root], async () => ({ failedPaths: [] }))
+    await runInboxImportBatch([font], async () => {
+      const before = fs.statSync(font)
+      fs.writeFileSync(font, Buffer.alloc(before.size, 2))
+      fs.utimesSync(font, before.atime, before.mtime)
+      await delay(INBOX_WRITE_STABILITY_MS + 800)
+      assert.equal(peekFontAnalysis(font), undefined)
+      return { failedPaths: [font] }
+    })
+  } finally {
+    await closeAllWatchers()
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('closeAllWatchers does not record a flush that finishes afterwards', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-closed-'))
+  const font = path.join(root, 'Late.ttf')
+  fs.writeFileSync(font, Buffer.from('late'))
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  try {
+    await syncInboxWatcher([root], async (files) => {
+      await gate
+      return {
+        failedPaths: files,
+        failures: [{ path: files[0] ?? font, message: 'bad' }],
+      }
+    })
+    queueInboxPathForTest(font)
+    await waitFor(() => inboxInFlightForTest(font), 3000, 'flush did not start')
+    const closed = closeAllWatchers()
+    release()
+    await closed
+    await delay(50)
+    assert.equal(inboxRejectionForTest(font), undefined)
+  } finally {
+    release()
+    await closeAllWatchers()
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a corrupt watch file is reported once after repeated failures', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-attempts-'))
+  const font = path.join(root, 'Bad.ttf')
+  fs.writeFileSync(font, Buffer.from('not-a-font'))
+  const notices: string[] = []
+  const stop = onEvent((event) => {
+    if (event.type === 'notice' && event.notice.kind === 'error') notices.push(event.notice.message)
+  })
+  try {
+    const failure = { path: font, message: 'Not a font file.' }
+    for (let attempt = 1; attempt < INBOX_CORRUPT_ATTEMPT_LIMIT; attempt += 1) {
+      recordInboxImportResult([font], [font], { failures: [failure] })
+      assert.equal(notices.length, 0)
+    }
+    recordInboxImportResult([font], [font], { failures: [failure] })
+    assert.equal(notices.length, 1)
+    assert.match(notices[0] ?? '', /Not a font file/)
+    recordInboxImportResult([font], [font], { failures: [failure] })
+    assert.equal(notices.length, 1)
+    assert.equal(inboxRejectionForTest(font)?.reported, true)
+  } finally {
+    stop()
     await closeAllWatchers()
     fs.rmSync(root, { recursive: true, force: true })
   }
