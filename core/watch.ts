@@ -601,6 +601,8 @@ export type InboxFileStamp = {
   reported: boolean
   /** Bytes that failed. A later write with the same size and mtime is imported when this changes. */
   fingerprint?: string
+  /** True when this failure started in startup discovery. Later retries keep that trigger. */
+  startup?: boolean
 }
 
 function inboxFileStamp(filePath: string): { size: number; mtimeMs: number } {
@@ -784,6 +786,7 @@ function rememberInboxRejection(
   const attempts = sameStamp ? previous.attempts + 1 : 1
   const fingerprint =
     sameStamp && previous.fingerprint ? previous.fingerprint : tryFingerprintFile(filePath)
+  const fromStartup = immediate || previous?.startup === true
   inboxRejected.set(filePath, {
     size: stamp.size,
     mtimeMs: stamp.mtimeMs,
@@ -791,10 +794,11 @@ function rememberInboxRejection(
     reason,
     reported: false,
     fingerprint,
+    startup: fromStartup,
   })
   clearInboxFailureTimer(filePath)
   if (attempts >= INBOX_CORRUPT_ATTEMPT_LIMIT) {
-    reportInboxFailure(filePath, immediate)
+    reportInboxFailure(filePath, fromStartup)
     return
   }
   const timer = setTimeout(() => {
@@ -808,7 +812,7 @@ function rememberInboxRejection(
     if (!current || current.reported) return
     const live = inboxFileStamp(filePath)
     if (live.size !== current.size || live.mtimeMs !== current.mtimeMs) return
-    reportInboxFailure(filePath, false)
+    reportInboxFailure(filePath, current.startup === true)
   }, INBOX_CORRUPT_SETTLE_MS)
   timer.unref?.()
   inboxSettleTimers.set(filePath, timer)

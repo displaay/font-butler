@@ -750,6 +750,54 @@ test('a file still growing at startup imports with no failure notice', async () 
   }
 })
 
+test('a font that stays truncated at startup is reported once', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  const staged = path.join(paths.dataRoot, 'staged-stuck.ttf')
+  fs.mkdirSync(inbox, { recursive: true })
+  writeTestFont(staged, 'Stuck', 'Stuck-Regular')
+  const bytes = fs.readFileSync(staged)
+  const font = path.join(inbox, 'Stuck.ttf')
+  fs.writeFileSync(font, bytes.subarray(0, 32))
+  const service = new FontButlerService(paths)
+  const errors: string[] = []
+  const stop = onEvent((event) => {
+    if (event.type === 'notice' && event.notice.kind === 'error') errors.push(event.notice.message)
+  })
+  try {
+    await service.updateSettings({ onboardingCompleted: true })
+    const configured = await service.configureFolder({ root: inbox, installNew: true })
+    await service.startWatching(configured.folder.id)
+    await waitFor(
+      () => inboxRejectionForTest(font)?.size === 32 && errors.length === 0,
+      8000,
+      'startup import did not see the truncated font',
+    )
+    await waitFor(
+      () => errors.length === 1,
+      INBOX_WRITE_STABILITY_MS + INBOX_CORRUPT_SETTLE_MS + 4000,
+      'truncated startup font was not reported',
+    )
+    assert.match(errors[0] ?? '', /^Stuck\.ttf:/)
+    const failures = service
+      .listActivity()
+      .filter((operation) => operation.items.some((item) => item.label === path.resolve(font)))
+    assert.equal(failures.length, 1)
+    assert.equal(failures[0]?.trigger, 'startup')
+    assert.equal(failures[0]?.action, 'import')
+    assert.equal(failures[0]?.items[0]?.outcome, 'failed')
+    assert.equal(failures[0]?.items[0]?.label, path.resolve(font))
+    await delay(500)
+    assert.equal(errors.length, 1)
+    assert.equal(entriesForSource(service, font).length, 0)
+  } finally {
+    stop()
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
 test('a garbage font dropped into a watch folder is reported once it settles', async () => {
   const paths = tempPaths()
   const inbox = path.join(paths.dataRoot, 'inbox')
