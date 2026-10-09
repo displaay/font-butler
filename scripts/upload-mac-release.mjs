@@ -12,7 +12,11 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 
 export const MAC_RELEASE_NOTES = `This build is signed with Developer ID and notarized by Apple.
 
-If you are on Font Buttler 0.3.8 or earlier, download this version manually once and replace the app. Those builds were ad-hoc signed, and their Update badge does not install. After this signed version is the one you run, later releases install from the Update badge next to Settings.`
+If you are on Font Buttler 0.3.8 or earlier, download this version manually once and replace the app. Those builds were ad-hoc signed, and their Update badge does not install. After this signed version is the one you run, later releases install from the Update badge next to Settings.
+
+Font previews that time out show a Failed state with a Retry button, which refetches the font (#57).
+
+Watch folders import fonts that are copied in slowly, report a font that stays corrupt once with a clear message (file name in the toast, full path in Activity), and no longer lose or replay startup warnings (#58).`
 
 export function missingTagMessage(tag) {
   return `Tag ${tag} is not on origin. Create it from the release commit and push it before uploading:\n  git tag ${tag}\n  git push origin ${tag}`
