@@ -144,7 +144,7 @@ function variableFontWithInstance(defaultName: string, instanceName: string): Bu
   })
   const axis = Buffer.alloc(20)
   axis.write('wght', 0, 4, 'ascii')
-  const fvar = Buffer.alloc(16 + 20 + 8)
+  const fvar = Buffer.alloc(16 + 20 + 10)
   fvar.writeUInt16BE(1, 0)
   fvar.writeUInt16BE(0, 2)
   fvar.writeUInt16BE(16, 4)
@@ -152,13 +152,13 @@ function variableFontWithInstance(defaultName: string, instanceName: string): Bu
   fvar.writeUInt16BE(1, 8)
   fvar.writeUInt16BE(20, 10)
   fvar.writeUInt16BE(1, 12)
-  fvar.writeUInt16BE(8, 14)
+  fvar.writeUInt16BE(10, 14)
   axis.copy(fvar, 16)
   const instance = 16 + 20
   fvar.writeUInt16BE(2, instance)
   fvar.writeUInt16BE(0, instance + 2)
-  fvar.writeInt16BE(0, instance + 4)
-  fvar.writeUInt16BE(256, instance + 6)
+  fvar.writeInt32BE(0, instance + 4)
+  fvar.writeUInt16BE(256, instance + 8)
   const tables = [
     { tag: 'fvar', buffer: fvar },
     { tag: 'name', buffer: name },

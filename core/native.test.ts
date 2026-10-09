@@ -13,8 +13,10 @@ import {
   FONT_LOOKUP_SCRIPT,
   fontActivationStates,
   fontManagerSucceeded,
+  LOGOUT_CANCELLED,
   LOGOUT_FALLBACK,
   logoutResultFromExecError,
+  verificationFaceChecks,
   REGISTRATION_SCOPES,
   registrationSucceeded,
   versionsMatch,
@@ -25,7 +27,7 @@ import {
   noopFontNative,
   setFontNative,
 } from './native.ts'
-import { writeTestFont } from './test-util.ts'
+import { writeTestCollection, writeTestFont } from './test-util.ts'
 
 test('the test adapter reports native failures without claiming success', async () => {
   const previous = getFontNative()
@@ -148,6 +150,14 @@ test('ensure fails on register failure and never falls back to process scope', (
   assert.equal(denied.requested, false)
   assert.equal(denied.message, LOGOUT_FALLBACK)
   assert.match(denied.error, /-1743/)
+  const cancelled = logoutResultFromExecError({
+    message: 'osascript failed',
+    stderr: 'execution error: User canceled. (-128)',
+  })
+  assert.equal(cancelled.requested, false)
+  assert.equal(cancelled.message, LOGOUT_CANCELLED)
+  assert.notEqual(cancelled.message, LOGOUT_FALLBACK)
+  assert.match(cancelled.error, /-128/)
   for (const script of [FONT_ENABLE_SCRIPT, FONT_LOOKUP_SCRIPT]) {
     const file = path.join(os.tmpdir(), `font-butler-script-${process.pid}-${Math.random().toString(16).slice(2)}.js`)
     fs.writeFileSync(file, script)
@@ -202,6 +212,28 @@ test('ensureFontActivation does not register a user-library font or fall back wh
   } finally {
     if (previous === undefined) delete process.env.FONT_BUTLER_USER_FONTS_DIR
     else process.env.FONT_BUTLER_USER_FONTS_DIR = previous
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('unnamed collection faces keep the original face index', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-face-index-'))
+  const filePath = path.join(root, 'Family.ttc')
+  try {
+    writeTestCollection(filePath, [
+      { family: 'First', psName: 'First-Regular', version: 'Version 1.000' },
+      { family: 'Second', psName: 'Second-Bold', style: 'Bold', version: 'Version 2.000' },
+    ])
+    const checks = verificationFaceChecks(filePath, [
+      { postscriptName: '' },
+      { postscriptName: 'Second-Bold' },
+    ])
+    assert.equal(checks.length, 1)
+    assert.equal(checks[0]?.index, 1)
+    assert.equal(checks[0]?.ps, 'Second-Bold')
+    assert.match(checks[0]?.version ?? '', /2\.000/)
+    assert.ok(checks[0]?.acceptable.has('Second-Bold'))
+  } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
 })

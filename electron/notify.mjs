@@ -14,7 +14,7 @@ export function shouldShowNativeNotice({
 }) {
   if (!enabled) return false
   if (!windowHidden) return false
-  if (kind !== 'installed' && kind !== 'reinstalled') return false
+  if (kind !== 'installed' && kind !== 'reinstalled' && kind !== 'warning') return false
   if (key && key === lastKey && typeof lastAt === 'number' && now - lastAt < windowMs) {
     return false
   }

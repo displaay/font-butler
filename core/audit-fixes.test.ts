@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { test } from 'node:test'
+import { loadCatalog, saveCatalog } from './catalog.ts'
 import { fingerprintFile } from './fingerprint.ts'
 import {
   beginJournal,
@@ -224,7 +225,7 @@ test('relink records a source path separately from revision retention', async ()
   })
 })
 
-test('a failed activate keeps a live file installed instead of showing it deactivated', async () => {
+test('a failed activate restores a parked font without a stray live copy', async () => {
   await withService(async (service, paths) => {
     const entry = await importFont(service, paths, 'source/Regular.ttf')
     await service.install(entry.id)
@@ -232,12 +233,143 @@ test('a failed activate keeps a live file installed instead of showing it deacti
     setFontNative(noopFontNative({
       ensureActivation: async () => ({ ok: false, native: true, error: 'Injected activation failure' }),
     }))
-    const activated = await service.activate(entry.id)
-    assert.equal(activated.status, 'installed')
-    assert.equal(fs.existsSync(parked.installedPath!), true)
-    assert.equal(fs.existsSync(parked.disabledPath!), false)
-    const operation = service.listActivity().find((item) => item.action === 'activate')
-    assert.match(operation?.items[0]?.reason ?? '', /Injected activation failure/)
+    await assert.rejects(() => service.activate(entry.id), /Injected activation failure/)
+    assert.equal(fs.existsSync(parked.installedPath!), false)
+    assert.equal(fs.existsSync(parked.disabledPath!), true)
+    assert.equal(service.listCatalog().find((item) => item.id === entry.id)?.status, 'deactivated')
+  })
+})
+
+test('a same-entry deactivate waits until the install check finishes', async () => {
+  await withService(async (service, paths) => {
+    const entry = await importFont(service, paths, 'source/Regular.ttf')
+    let releaseCheck!: () => void
+    const check = new Promise<void>((resolve) => {
+      releaseCheck = resolve
+    })
+    let inCheck = false
+    setFontNative(
+      noopFontNative({
+        async ensureActivation() {
+          inCheck = true
+          await check
+          return { ok: true, native: true }
+        },
+      }),
+    )
+    const installing = service.install(entry.id)
+    while (!inCheck) {
+      await new Promise((resolve) => setImmediate(resolve))
+    }
+    let deactivateSettled = false
+    const deactivating = service.deactivate(entry.id).then(
+      (result) => {
+        deactivateSettled = true
+        return result
+      },
+      (error: unknown) => {
+        deactivateSettled = true
+        throw error
+      },
+    )
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    assert.equal(deactivateSettled, false)
+    assert.notEqual(service.listCatalog().find((item) => item.id === entry.id)?.status, 'deactivated')
+    const parkedDuring = fs.existsSync(paths.disabledDir) ? fs.readdirSync(paths.disabledDir) : []
+    assert.deepEqual(parkedDuring, [])
+    releaseCheck()
+    const installed = await installing
+    assert.equal(installed.status, 'installed')
+    assert.equal(fs.existsSync(installed.installedPath!), true)
+    const deactivated = await deactivating
+    assert.equal(deactivated.status, 'deactivated')
+    assert.equal(fs.existsSync(installed.installedPath!), false)
+    assert.equal(fs.existsSync(deactivated.disabledPath!), true)
+    assert.equal(service.listCatalog().find((item) => item.id === entry.id)?.status, 'deactivated')
+  })
+})
+
+async function installUserFontThenPointAtOtf(
+  service: Parameters<Parameters<typeof withService>[0]>[0],
+  paths: Parameters<Parameters<typeof withService>[0]>[1],
+) {
+  const source = path.join(paths.dataRoot, 'source/Regular.ttf')
+  writeTestFont(source, 'Audit', 'Audit-Regular')
+  const imported = (await service.importPaths([source])).entries[0]!
+  const installed = await service.install(imported.id)
+  const oldPath = installed.installedPath!
+  const oldBytes = fs.readFileSync(oldPath)
+  const otfSource = path.join(paths.dataRoot, 'source/Regular.otf')
+  writeTestFont(otfSource, 'Audit', 'Audit-Regular', { format: 'otf' })
+  const catalog = loadCatalog(paths)
+  const row = catalog.entries.find((item) => item.id === imported.id)
+  assert.ok(row)
+  row.sourcePath = otfSource
+  saveCatalog(paths, catalog)
+  return { id: imported.id, oldPath, oldBytes, otfDest: path.join(paths.userFontsDir, 'Regular.otf') }
+}
+
+test('a user-font format change moves the old file aside before the new file is activated', async () => {
+  await withService(async (service, paths) => {
+    const previousFonts = process.env.FONT_BUTLER_USER_FONTS_DIR
+    process.env.FONT_BUTLER_USER_FONTS_DIR = paths.userFontsDir
+    const renameSync = fs.renameSync
+    try {
+      const { id, oldPath, otfDest } = await installUserFontThenPointAtOtf(service, paths)
+      let parkedBeforeNewFile = false
+      fs.renameSync = function (from, to) {
+        const target = String(to)
+        if (target.includes(`${path.sep}rollback${path.sep}previous-`) && String(from) === oldPath) {
+          parkedBeforeNewFile = !fs.existsSync(otfDest)
+        }
+        return renameSync(from, to)
+      }
+      const updated = await service.reinstall(id)
+      assert.equal(parkedBeforeNewFile, true)
+      assert.equal(fs.existsSync(oldPath), false)
+      assert.equal(updated.installedPath, otfDest)
+      assert.equal(fs.existsSync(otfDest), true)
+      const rollbackDir = path.join(paths.dataRoot, 'rollback')
+      const leftovers = fs.existsSync(rollbackDir)
+        ? fs.readdirSync(rollbackDir).filter((name) => name.startsWith('previous-'))
+        : []
+      assert.deepEqual(leftovers, [])
+    } finally {
+      fs.renameSync = renameSync
+      if (previousFonts === undefined) delete process.env.FONT_BUTLER_USER_FONTS_DIR
+      else process.env.FONT_BUTLER_USER_FONTS_DIR = previousFonts
+    }
+  })
+})
+
+test('a failed user-font format change restores the file it moved aside', async () => {
+  await withService(async (service, paths) => {
+    const previousFonts = process.env.FONT_BUTLER_USER_FONTS_DIR
+    process.env.FONT_BUTLER_USER_FONTS_DIR = paths.userFontsDir
+    const promiseRename = fs.promises.rename
+    try {
+      const { id, oldPath, oldBytes, otfDest } = await installUserFontThenPointAtOtf(service, paths)
+      let injected = false
+      fs.promises.rename = async (from, to) => {
+        if (!injected && String(to) === otfDest) {
+          injected = true
+          throw new Error('Injected format install failure')
+        }
+        return promiseRename(from, to)
+      }
+      await assert.rejects(() => service.reinstall(id), /Injected format install failure/)
+      assert.equal(fs.existsSync(otfDest), false)
+      assert.equal(fs.existsSync(oldPath), true)
+      assert.deepEqual(fs.readFileSync(oldPath), oldBytes)
+      const after = service.listCatalog().find((item) => item.id === id)
+      assert.equal(after?.status, 'installed')
+      assert.equal(after?.installedPath, oldPath)
+      assert.equal(oldBytes.readUInt32BE(0), 0x00010000)
+    } finally {
+      fs.promises.rename = promiseRename
+      if (previousFonts === undefined) delete process.env.FONT_BUTLER_USER_FONTS_DIR
+      else process.env.FONT_BUTLER_USER_FONTS_DIR = previousFonts
+    }
   })
 })
 

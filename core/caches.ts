@@ -4,7 +4,6 @@ import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { assertSafeShellPath } from './auth.ts'
-import { pauseCatalogTask } from './catalog.ts'
 import { logMain } from './main-log.ts'
 import { parseFontFile } from './parse.ts'
 import { getPaths, isMac } from './paths.ts'
@@ -37,6 +36,9 @@ export const MAC_LOGOUT_APPLESCRIPT = 'tell application "System Events" to log o
 
 /** Shown when Font Buttler cannot send the logout Apple event (for example -1743). */
 export const LOGOUT_FALLBACK = 'Use Apple menu > Log Out'
+
+/** Shown when the user dismisses the System Events logout confirm (-128). */
+export const LOGOUT_CANCELLED = 'Log out was cancelled.'
 
 export const FONT_NOT_VISIBLE_WARNING = 'Not visible to other apps yet'
 
@@ -281,6 +283,9 @@ export function logoutResultFromExecError(error: unknown): {
       .filter((part) => typeof part === 'string' && part.trim())
       .join('\n') || String(error)
   logMain('install', `logout failed ${detail}`)
+  if (/\(-128\)/.test(detail)) {
+    return { requested: false, message: LOGOUT_CANCELLED, error: detail }
+  }
   return { requested: false, message: LOGOUT_FALLBACK, error: detail }
 }
 
@@ -887,30 +892,46 @@ function keptVerificationError(filePath: string, message: string, keep: boolean)
   return new InstalledFontKept(text)
 }
 
+/**
+ * Faces that have a PostScript name, keyed by their original collection index.
+ * Filtering first would renumber a later face and read the wrong name table.
+ */
+export function verificationFaceChecks(
+  filePath: string,
+  faces: Array<{ postscriptName: string }>,
+): Array<{ index: number; ps: string; acceptable: Set<string>; version: string }> {
+  return faces.flatMap((face, index) => {
+    const ps = face.postscriptName.trim()
+    if (!ps) return []
+    return [
+      {
+        index,
+        ps,
+        acceptable: new Set([ps, ...readAcceptablePostScriptNames(filePath, index)]),
+        version: readFontName(filePath, 5, index),
+      },
+    ]
+  })
+}
+
 export async function verifyInstalledFont(filePath: string): Promise<void> {
   if (!nativeFontVerificationEnabled()) {
     logMain('verify', `skip ${filePath}`)
     return
   }
-  await pauseCatalogTask(() => verifyInstalledFontNow(filePath))
+  // Stay on the catalog queue. The check is capped at VERIFY_BUDGET_MS, and
+  // releasing the queue here lets another task save over this one.
+  await verifyInstalledFontNow(filePath)
 }
 
 async function verifyInstalledFontNow(filePath: string): Promise<void> {
   const parsed = parseFontFile(filePath)
-  const faces = parsed.faces.filter((face) => face.postscriptName.trim())
-  if (faces.length === 0) {
+  const checks = verificationFaceChecks(filePath, parsed.faces)
+  if (checks.length === 0) {
     const message = 'Could not read a PostScript name from the installed font.'
     logMain('verify', `fail ${filePath} ${message}`)
     throw keptVerificationError(filePath, message, false)
   }
-  const checks = faces.map((face, index) => {
-    const ps = face.postscriptName.trim()
-    return {
-      ps,
-      acceptable: new Set([ps, ...readAcceptablePostScriptNames(filePath, index)]),
-      version: readFontName(filePath, 5, index),
-    }
-  })
   const userFont = isMacUserFontFile(filePath)
   const deadline = Date.now() + VERIFY_BUDGET_MS
   let lastError = 'Core Text did not activate the installed font.'

@@ -167,7 +167,8 @@ function fvarInstancePostScriptNameIds(buf: Buffer): number[] {
   const instanceCount = buf.readUInt16BE(12)
   const instanceSize = buf.readUInt16BE(14)
   if (axisCount <= 0 || axisSize <= 0 || instanceCount <= 0 || instanceSize <= 0) return []
-  const postScriptOffset = 4 + axisCount * 2
+  // Instance coords are 16.16 Fixed (4 bytes each), after the name ID and flags.
+  const postScriptOffset = 4 + axisCount * 4
   if (instanceSize < postScriptOffset + 2) return []
   const ids: number[] = []
   for (let i = 0; i < instanceCount; i++) {

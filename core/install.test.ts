@@ -147,6 +147,32 @@ test('a failed user-font check keeps the new bytes', async () => {
   }
 })
 
+test('a duplicate PostScript name keeps the new bytes on a registered path', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-duplicate-ps-'))
+  const dest = path.join(root, 'Family.ttf')
+  const stagedPath = path.join(root, 'staged.ttf')
+  const rollbackDir = path.join(root, 'rollback')
+  fs.writeFileSync(dest, 'old-bytes')
+  fs.writeFileSync(stagedPath, 'new-bytes')
+  try {
+    const warning = await commitInstalledFile({
+      dest,
+      stagedPath,
+      rollbackDir,
+      native: noopFontNative(),
+      activate: async () => {
+        throw new InstalledFontKept(
+          'Family is already served from /Library/Fonts/Family.ttf. The installed file was kept.',
+        )
+      },
+    })
+    assert.match(warning ?? '', /already served/)
+    assert.equal(fs.readFileSync(dest, 'utf8'), 'new-bytes')
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('a failed check on a registered path rolls the previous bytes back', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-rollback-'))
   const dest = path.join(root, 'Family.ttf')

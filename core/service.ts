@@ -19,7 +19,7 @@ import {
 } from './catalog.ts'
 import { getOrCreateApiToken } from './auth.ts'
 import { readFontPreviewBytes } from './font-bytes.ts'
-import { locateAdobeFontCache, locateOfficeFontCache, requestMacLogout } from './caches.ts'
+import { isKeptInstall, locateAdobeFontCache, locateOfficeFontCache, requestMacLogout } from './caches.ts'
 import {
   adobeInvestigation,
   copyAt,
@@ -3439,20 +3439,19 @@ export class FontButlerService {
       try {
         await ensureFontActivation(getFontNative(), dest, true)
       } catch (error) {
-        if (restoreToComputer && dest !== entry.disabledPath && fs.existsSync(dest)) {
-          fs.renameSync(dest, entry.disabledPath)
+        if (!isKeptInstall(error)) {
+          if (
+            entry.disabledPath &&
+            fs.existsSync(dest) &&
+            path.resolve(dest) !== path.resolve(entry.disabledPath)
+          ) {
+            fs.mkdirSync(path.dirname(entry.disabledPath), { recursive: true })
+            fs.renameSync(dest, entry.disabledPath)
+          }
+          throw error
         }
-        const stillLive =
-          fs.existsSync(dest) && !isUnderAnyRoot(dest, [this.paths.disabledDir])
-        if (!stillLive) throw error
         const message = error instanceof Error ? error.message : String(error)
-        const warning =
-          isMacUserFontFile(dest) &&
-          !/not visible to other apps yet/i.test(message) &&
-          !/already served/i.test(message)
-            ? `${message} The font is not visible to other apps yet.`
-            : message
-        this.recordInstallWarning(warning, entry.id)
+        this.recordInstallWarning(message, entry.id)
       }
       entry.installedPath = dest
       entry.disabledPath = undefined
