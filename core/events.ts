@@ -6,14 +6,19 @@ bus.setMaxListeners(20)
 const pendingWatchFailures: Notice[] = []
 
 export function emitEvent(event: ServiceEvent): void {
-  if (event.type === 'notice' && event.notice.kind === 'error' && event.notice.source === 'watch') {
+  if (
+    event.type === 'notice' &&
+    event.notice.kind === 'error' &&
+    event.notice.source === 'watch' &&
+    bus.listenerCount('event') === 0
+  ) {
     pendingWatchFailures.push(event.notice)
     if (pendingWatchFailures.length > 50) pendingWatchFailures.shift()
   }
   bus.emit('event', event)
 }
 
-/** Watch failures emitted before any event stream was open. The first subscriber takes them. */
+/** Watch failures emitted while nobody was listening. The next subscriber takes them. */
 export function takePendingWatchFailureNotices(): Notice[] {
   return pendingWatchFailures.splice(0, pendingWatchFailures.length)
 }
