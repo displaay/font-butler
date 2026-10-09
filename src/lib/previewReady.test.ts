@@ -465,6 +465,32 @@ test('a timed-out preview becomes ready when the face finishes loading', async (
   }
 })
 
+test('retry re-arms the per-key timeout after a failed load', async () => {
+  setPreviewLoadTimeoutForTests(20)
+  const restore = mockFonts({
+    check: false,
+    faces: [{ family: 'fc-rearm', weight: 400, style: 'normal', status: 'loading' }],
+    load: () => new Promise(() => {}),
+  })
+  try {
+    assert.equal(isPreviewFontReady('fc-rearm', 400), false)
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    assert.equal(isPreviewFontFailed('fc-rearm', 400), true)
+    retryPreviewFamily('fc-rearm')
+    assert.equal(isPreviewFontFailed('fc-rearm', 400), false)
+    assert.equal(isPreviewFontReady('fc-rearm', 400), false)
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    assert.equal(
+      isPreviewFontFailed('fc-rearm', 400),
+      true,
+      'the timeout starts again after Retry',
+    )
+  } finally {
+    setPreviewLoadTimeoutForTests(PREVIEW_LOAD_TIMEOUT_MS)
+    restore()
+  }
+})
+
 test('withRetryParam appends r without reordering the signed query', () => {
   const signed = '/api/font-file/abc?v=rev&which=source&exp=10&sig=ab'
   assert.equal(withRetryParam(signed, 0), signed)

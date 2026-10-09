@@ -21,6 +21,17 @@ import {
 import type { CatalogEntry, SystemFace } from '@/lib/types'
 
 const REFRESH_MS = 15 * 60 * 1000
+let previewFaceRefreshMs = REFRESH_MS
+let previewCssWriteGate: (() => Promise<void>) | null = null
+
+export function setPreviewFaceRefreshForTests(ms: number): void {
+  previewFaceRefreshMs = ms
+}
+
+/** Pause after preview CSS is built and before it is written, so tests can bump the retry counter mid-refresh. */
+export function setPreviewCssWriteGateForTests(gate: (() => Promise<void>) | null): void {
+  previewCssWriteGate = gate
+}
 
 type PreviewFaceSession = {
   catalogStyles: Map<string, HTMLStyleElement>
@@ -104,26 +115,94 @@ async function systemPathCss(
   return catalogFontFaceRules(family, bustedPreviewUrl(signed, family), faces).join('\n')
 }
 
+const FONT_FACE_RULE = 5
+
+function quotedFamily(rule: string): string | null {
+  return rule.match(/font-family:\s*["']([^"']+)["']/)?.[1] ?? null
+}
+
 function rewriteStyleRule(rule: string, family: string, generation: number): string {
-  const needle = `font-family:"${family}"`
-  if (!rule.includes(needle)) return rule
-  return rule.replace(/src:url\("([^"]*)"\)/g, (_match, url: string) => {
-    return `src:url("${withRetryParam(url, generation)}")`
+  if (quotedFamily(rule) !== family || generation <= 0) return rule
+  return rule.replace(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)"'\s]+))\s*\)/g, (match, doubleQuoted: string | undefined, singleQuoted: string | undefined, bare: string | undefined) => {
+    const url = doubleQuoted ?? singleQuoted ?? bare ?? ''
+    const next = withRetryParam(url, generation)
+    return next === url ? match : `url("${next}")`
   })
 }
 
+function cssWithRetryCounters(css: string): string {
+  return css
+    .split('\n')
+    .map((rule) => {
+      const family = quotedFamily(rule)
+      if (!family) return rule
+      return rewriteStyleRule(rule, family, previewRetryGeneration(family))
+    })
+    .join('\n')
+}
+
+function fontFaceFamily(rule: CSSRule): string | null {
+  if (rule.type !== FONT_FACE_RULE) return null
+  const raw = (rule as CSSFontFaceRule).style.getPropertyValue('font-family')
+  return raw.replace(/^["']+|["']+$/g, '').trim() || null
+}
+
+function bustFontFaceCss(cssText: string, generation: number): string {
+  return cssText.replace(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)"'\s]+))\s*\)/g, (match, doubleQuoted: string | undefined, singleQuoted: string | undefined, bare: string | undefined) => {
+    const url = doubleQuoted ?? singleQuoted ?? bare ?? ''
+    const next = withRetryParam(url, generation)
+    return next === url ? match : `url("${next}")`
+  })
+}
+
+function rewriteStyleText(style: HTMLStyleElement, family: string, generation: number) {
+  const css = style.textContent ?? ''
+  const next = css
+    .split('\n')
+    .map((rule) => rewriteStyleRule(rule, family, generation))
+    .join('\n')
+  if (next !== css) style.textContent = next
+}
+
+function replaceFamilyRules(style: HTMLStyleElement, family: string, generation: number) {
+  const sheet = style.sheet
+  if (!sheet || generation <= 0) {
+    rewriteStyleText(style, family, generation)
+    return
+  }
+  const matches: Array<{ index: number; cssText: string }> = []
+  for (let index = 0; index < sheet.cssRules.length; index += 1) {
+    const rule = sheet.cssRules[index]
+    if (!rule || fontFaceFamily(rule) !== family) continue
+    const next = bustFontFaceCss(rule.cssText, generation)
+    if (next === rule.cssText) continue
+    matches.push({ index, cssText: next })
+  }
+  if (matches.length === 0) {
+    if (!cssContainsFamily(style.textContent ?? '', family)) return
+    rewriteStyleText(style, family, generation)
+    return
+  }
+  try {
+    for (let index = matches.length - 1; index >= 0; index -= 1) {
+      const match = matches[index]!
+      sheet.deleteRule(match.index)
+      sheet.insertRule(match.cssText, match.index)
+    }
+  } catch {
+    rewriteStyleText(style, family, generation)
+  }
+}
+
+function cssContainsFamily(css: string, family: string): boolean {
+  return css.split('\n').some((rule) => quotedFamily(rule) === family)
+}
+
 function rewriteMountedFamily(family: string, generation: number) {
-  const needle = `font-family:"${family}"`
   const maps = [previewFaceSession.catalogStyles, previewFaceSession.systemStyles]
   for (const map of maps) {
     for (const style of map.values()) {
-      const css = style.textContent ?? ''
-      if (!css.includes(needle)) continue
-      const next = css
-        .split('\n')
-        .map((rule) => rewriteStyleRule(rule, family, generation))
-        .join('\n')
-      if (next !== css) style.textContent = next
+      replaceFamilyRules(style, family, generation)
     }
   }
 }
@@ -237,10 +316,12 @@ export function FontFaceStyles({
         const cssById = await Promise.all(
           changed.map(async (entry) => [entry.id, await catalogEntryCss(entry, secret, cache, refresh)] as const),
         )
+        if (previewCssWriteGate) await previewCssWriteGate()
         if (cancelled) return
         for (const [id, css] of cssById) {
           const style = ensureStyle(styles, id, 'data-font-butler-face')
-          if (style.textContent !== css) style.textContent = css
+          const next = cssWithRetryCounters(css)
+          if (style.textContent !== next) style.textContent = next
         }
         pruneStyles(styles, keep, (id) => [
           cssFamily(id),
@@ -255,7 +336,7 @@ export function FontFaceStyles({
     }
 
     void apply(false)
-    const timer = window.setInterval(() => void apply(true), REFRESH_MS)
+    const timer = window.setInterval(() => void apply(true), previewFaceRefreshMs)
     return () => {
       cancelled = true
       window.clearInterval(timer)
@@ -292,10 +373,12 @@ export function FontFaceStyles({
         const cssByKey = await Promise.all(
           changed.map(async (group) => [group.key, await systemPathCss(group.faces, secret, cache, refresh)] as const),
         )
+        if (previewCssWriteGate) await previewCssWriteGate()
         if (cancelled) return
         for (const [key, css] of cssByKey) {
           const style = ensureStyle(styles, key, 'data-font-butler-system')
-          if (style.textContent !== css) style.textContent = css
+          const next = cssWithRetryCounters(css)
+          if (style.textContent !== next) style.textContent = next
         }
         pruneStyles(styles, keep, (key) => [systemFontFamily(key.split('\t')[0] ?? key)])
         previewFaceSession.systemFingerprints = fingerprints
@@ -306,7 +389,7 @@ export function FontFaceStyles({
     }
 
     void apply(false)
-    const timer = window.setInterval(() => void apply(true), REFRESH_MS)
+    const timer = window.setInterval(() => void apply(true), previewFaceRefreshMs)
     return () => {
       cancelled = true
       window.clearInterval(timer)

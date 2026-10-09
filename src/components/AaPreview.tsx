@@ -98,15 +98,62 @@ function positionedAncestor(node: HTMLElement): HTMLElement | null {
   return node.parentElement
 }
 
-function cardButtonForRetry(retry: HTMLElement): HTMLButtonElement | null {
-  const parent = retry.parentElement
-  if (!parent) return null
-  const buttons = parent.querySelectorAll(':scope > button')
+function isDisabledTarget(element: HTMLElement): boolean {
+  return element.hasAttribute('disabled') || element.getAttribute('aria-disabled') === 'true'
+}
+
+function canTakeFocus(element: HTMLElement): boolean {
+  if (element === document.body || element === document.documentElement) return false
+  if (isDisabledTarget(element)) return false
+  if (element.getAttribute('aria-hidden') === 'true') return false
+  if (element.hasAttribute('data-preview-retry')) return false
+  const tag = element.tagName
+  if (tag === 'BUTTON' || tag === 'A' || tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') {
+    return true
+  }
+  if (!element.hasAttribute('tabindex')) return false
+  const tabIndex = Number(element.getAttribute('tabindex'))
+  return Number.isFinite(tabIndex)
+}
+
+function expandedCardButton(card: HTMLElement, retry: HTMLElement): HTMLElement | null {
+  const buttons = card.querySelectorAll('button')
+  let fallback: HTMLElement | null = null
+  const rowList = retry.closest('ul')
   for (let index = 0; index < buttons.length; index += 1) {
     const button = buttons[index]
-    if (button && button !== retry && !button.hasAttribute('data-preview-retry')) {
-      return button as HTMLButtonElement
+    if (!button || button === retry) continue
+    if (button.hasAttribute('data-preview-retry')) continue
+    if (isDisabledTarget(button)) continue
+    if (rowList && button.closest('ul') === rowList) continue
+    if (button.hasAttribute('data-no-marquee')) {
+      if (!fallback) fallback = button
+      continue
     }
+    return button
+  }
+  return fallback
+}
+
+function cardButtonForRetry(retry: HTMLElement): HTMLElement | null {
+  const parent = retry.parentElement
+  if (parent) {
+    const buttons = parent.querySelectorAll(':scope > button')
+    for (let index = 0; index < buttons.length; index += 1) {
+      const button = buttons[index] as HTMLElement | undefined
+      if (!button || button === retry || button.hasAttribute('data-preview-retry')) continue
+      if (isDisabledTarget(button)) continue
+      return button
+    }
+  }
+  let node = retry.parentElement
+  while (node) {
+    if (node.hasAttribute('data-family-key')) {
+      const cardButton = expandedCardButton(node, retry)
+      if (cardButton) return cardButton
+    }
+    if (canTakeFocus(node)) return node
+    node = node.parentElement
   }
   return null
 }
