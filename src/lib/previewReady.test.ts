@@ -3,28 +3,33 @@ import { test } from 'node:test'
 import {
   invalidatePreviewReadyFamilies,
   isGenericPreviewFamily,
+  isPreviewFontFailed,
   isPreviewFontReady,
   normalizePreviewFamily,
   notifyPreviewCssMounted,
+  PREVIEW_LOAD_TIMEOUT_MS,
   previewFacesFailed,
+  retryPreviewFamily,
+  setPreviewLoadTimeoutForTests,
   subscribePreviewFonts,
 } from './previewReady.ts'
 
 type MockFace = { family: string; weight?: number | string; style?: string; status?: string }
 
 function mockFonts(options: {
-  check?: boolean
+  check?: boolean | ((spec: string) => boolean)
   faces?: MockFace[]
   onLoad?: () => void
   /** Replaces the default load() that resolves empty. */
-  load?: () => Promise<unknown>
+  load?: (spec: string) => Promise<unknown>
 }): () => void {
   const faces = options.faces ?? []
   const fonts = {
-    check: () => Boolean(options.check),
-    load: () => {
+    check: (spec: string) =>
+      typeof options.check === 'function' ? options.check(spec) : Boolean(options.check),
+    load: (spec: string) => {
       options.onLoad?.()
-      return options.load ? options.load() : Promise.resolve([])
+      return options.load ? options.load(spec) : Promise.resolve([])
     },
     addEventListener() {},
     removeEventListener() {},
@@ -138,7 +143,7 @@ test('fonts.load waits until a matching FontFace is mounted', () => {
   }
 })
 
-test('settled preview loads stay cached so system cards cannot retry-storm', async () => {
+test('a settled empty load retries once and then stops instead of retry-storming', async () => {
   let loads = 0
   const restore = mockFonts({
     check: false,
@@ -151,8 +156,11 @@ test('settled preview loads stay cached so system cards cannot retry-storm', asy
     assert.equal(isPreviewFontReady('fc-reload'), false)
     assert.equal(loads, 1)
     await new Promise((resolve) => setTimeout(resolve, 0))
-    assert.equal(isPreviewFontReady('fc-reload'), false)
-    assert.equal(loads, 1)
+    assert.equal(loads, 2)
+    assert.equal(isPreviewFontReady('fc-reload'), true)
+    assert.equal(isPreviewFontFailed('fc-reload'), true)
+    assert.equal(isPreviewFontReady('fc-reload'), true)
+    assert.equal(loads, 2)
   } finally {
     restore()
   }
@@ -216,11 +224,12 @@ test('invalidating a family lets fonts.load run again after a prune', async () =
     assert.equal(isPreviewFontReady('fc-pruned'), false)
     assert.equal(loads, 1)
     await new Promise((resolve) => setTimeout(resolve, 0))
-    assert.equal(isPreviewFontReady('fc-pruned'), false)
-    assert.equal(loads, 1)
-    invalidatePreviewReadyFamilies(['fc-pruned'])
-    assert.equal(isPreviewFontReady('fc-pruned'), false)
     assert.equal(loads, 2)
+    assert.equal(isPreviewFontFailed('fc-pruned'), true)
+    invalidatePreviewReadyFamilies(['fc-pruned'])
+    assert.equal(isPreviewFontFailed('fc-pruned'), false)
+    assert.equal(isPreviewFontReady('fc-pruned'), false)
+    assert.equal(loads, 3)
   } finally {
     restore()
   }
@@ -267,6 +276,8 @@ test('an errored variable face does not leave a watch-folder preview loading for
 })
 
 test('a FontFace load that never settles does not leave the preview pending', async () => {
+  assert.ok(PREVIEW_LOAD_TIMEOUT_MS >= 3000 && PREVIEW_LOAD_TIMEOUT_MS <= 8000)
+  setPreviewLoadTimeoutForTests(20)
   const faces = [{ family: 'fc-hang-watch', weight: 400, style: 'normal', status: 'loading' }]
   const restore = mockFonts({
     check: false,
@@ -290,7 +301,9 @@ test('a FontFace load that never settles does not leave the preview pending', as
     ])
     stop()
     assert.equal(cleared, true, 'a hung document.fonts.load() must time out into a visible error')
+    assert.equal(isPreviewFontFailed('fc-hang-watch', 400), true)
   } finally {
+    setPreviewLoadTimeoutForTests(PREVIEW_LOAD_TIMEOUT_MS)
     restore()
   }
 })
@@ -325,17 +338,54 @@ test('one failed weight does not mark another weight as failed', async () => {
   const faces = [{ family: '"fc-mix"', weight: 700, style: 'normal', status: 'error' }]
   const restore = mockFonts({ check: false, faces })
   try {
-    assert.equal(isPreviewFontReady('fc-mix', 400), false)
-    await new Promise((resolve) => setImmediate(resolve))
-    assert.equal(
-      isPreviewFontReady('fc-mix', 400),
-      false,
-      'weight 400 must stay retryable when only 700 errored',
-    )
     assert.equal(isPreviewFontReady('fc-mix', 700), false)
     await new Promise((resolve) => setImmediate(resolve))
     assert.equal(isPreviewFontReady('fc-mix', 700), true)
+    assert.equal(isPreviewFontFailed('fc-mix', 700), true)
+    assert.equal(
+      isPreviewFontFailed('fc-mix', 400),
+      false,
+      'weight 400 stays unmarked when only 700 errored',
+    )
+    assert.equal(isPreviewFontFailed('fc-mix-other', 400), false)
+    assert.equal(isPreviewFontReady('fc-mix-other', 400), false)
   } finally {
+    restore()
+  }
+})
+
+test('a hung family times out without failing a neighbor, and retry reloads only that family', async () => {
+  setPreviewLoadTimeoutForTests(20)
+  let loads = 0
+  const restore = mockFonts({
+    check: (spec) => spec.includes('fc-neighbor'),
+    faces: [
+      { family: 'fc-hang-family', weight: 400, style: 'normal', status: 'loading' },
+      { family: 'fc-neighbor', weight: 400, style: 'normal', status: 'loaded' },
+    ],
+    load: (spec) => {
+      loads += 1
+      if (spec.includes('fc-hang-family')) return new Promise(() => {})
+      return Promise.resolve([])
+    },
+  })
+  try {
+    assert.equal(isPreviewFontReady('fc-neighbor', 400), true)
+    assert.equal(isPreviewFontReady('fc-hang-family', 400), false)
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    assert.equal(isPreviewFontFailed('fc-hang-family', 400), true)
+    assert.equal(isPreviewFontFailed('fc-hang-family', 700), true)
+    assert.equal(isPreviewFontReady('fc-neighbor', 400), true)
+    assert.equal(isPreviewFontFailed('fc-neighbor', 400), false)
+    const loadsBeforeRetry = loads
+    retryPreviewFamily('fc-hang-family')
+    assert.equal(isPreviewFontFailed('fc-hang-family', 400), false)
+    assert.equal(isPreviewFontReady('fc-hang-family', 400), false)
+    assert.equal(loads, loadsBeforeRetry + 1)
+    assert.equal(isPreviewFontReady('fc-neighbor', 400), true)
+    assert.equal(isPreviewFontFailed('fc-neighbor', 400), false)
+  } finally {
+    setPreviewLoadTimeoutForTests(PREVIEW_LOAD_TIMEOUT_MS)
     restore()
   }
 })

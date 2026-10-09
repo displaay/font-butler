@@ -18,6 +18,7 @@ import {
   upsertEntry,
 } from './catalog.ts'
 import { getOrCreateApiToken } from './auth.ts'
+import { readMaterializedFontBytes } from './font-bytes.ts'
 import { locateAdobeFontCache, locateOfficeFontCache } from './caches.ts'
 import {
   adobeInvestigation,
@@ -1655,7 +1656,7 @@ export class FontButlerService {
       throw new Error('No font file is available to preview.')
     }
     return {
-      buffer: fs.readFileSync(filePath),
+      buffer: readMaterializedFontBytes(filePath),
       mime: mimeForFont(filePath),
       filename: path.basename(filePath),
     }
@@ -1670,7 +1671,7 @@ export class FontButlerService {
       throw new Error('Font file is missing.')
     }
     return {
-      buffer: fs.readFileSync(resolved),
+      buffer: readMaterializedFontBytes(resolved),
       mime: mimeForFont(resolved),
       filename: path.basename(resolved),
     }
@@ -3015,7 +3016,7 @@ export class FontButlerService {
     const testFile = this.readableTestInstallPath(id)
     if (testFile) {
       return {
-        buffer: fs.readFileSync(testFile),
+        buffer: readMaterializedFontBytes(testFile),
         mime: mimeForFont(testFile),
         filename: path.basename(testFile),
       }
@@ -3034,7 +3035,7 @@ export class FontButlerService {
     }
     if (which === 'source' && entry.sourcePath && fs.existsSync(entry.sourcePath)) {
       return {
-        buffer: fs.readFileSync(entry.sourcePath),
+        buffer: readMaterializedFontBytes(entry.sourcePath),
         mime: mimeForFont(entry.sourcePath),
         filename: path.basename(entry.sourcePath),
       }

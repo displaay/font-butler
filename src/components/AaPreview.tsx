@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from 'react'
 import { Loader2 } from 'lucide-react'
-import { usePreviewFontReady } from '@/hooks/usePreviewFontReady'
+import { usePreviewFontStatus } from '@/hooks/usePreviewFontReady'
 import { paintedPreviewIndices } from '@/lib/cyclingPreview'
 import { fitPreviewTransform } from '@/lib/fitPreview'
 import { facesSupportVariationInterpolation } from '@/lib/variationInterpolation'
@@ -69,6 +69,50 @@ function previewBoxClass(size: 'sm' | 'md') {
     : 'size-11 overflow-hidden text-[24px] rounded-md'
 }
 
+export function PreviewLoadError({
+  onRetry,
+  compact = false,
+}: {
+  onRetry: () => void
+  compact?: boolean
+}) {
+  return (
+    <span
+      className={cn(
+        'inline-flex max-w-full flex-col items-center justify-center text-center',
+        previewPaintClass,
+        compact ? 'gap-px' : 'gap-1',
+      )}
+      role="alert"
+    >
+      <span
+        className={cn(
+          'leading-none',
+          compact ? 'text-[10px] text-destructive' : 'text-xs text-muted-foreground',
+        )}
+      >
+        {compact ? 'Failed' : 'Preview failed'}
+      </span>
+      <button
+        type="button"
+        className={cn(
+          'rounded-sm bg-background font-medium text-foreground shadow-[inset_0_0_0_1px_var(--border)]',
+          compact ? 'px-1 py-px text-[10px] leading-none' : 'px-1.5 py-0.5 text-xs',
+        )}
+        onPointerDown={(event) => event.stopPropagation()}
+        onMouseDown={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          onRetry()
+        }}
+      >
+        Retry
+      </button>
+    </span>
+  )
+}
+
 function PreviewPending({ size }: { size: 'sm' | 'md' | 'glyph' }) {
   return (
     <span
@@ -113,7 +157,7 @@ function AaGlyph({
   fit?: boolean
   animateVariation?: boolean
 }) {
-  const ready = usePreviewFontReady(family, weight, italic, wait)
+  const { ready, failed, retry } = usePreviewFontStatus(family, weight, italic, wait)
   const latinText = useContext(LatinPreviewContext)
   const text = applyLatinPreviewSample(sample, latinText)
   const glyphRef = useRef<HTMLSpanElement>(null)
@@ -162,6 +206,9 @@ function AaGlyph({
     }
   }, [fit, ready, family, weight, italic, variation, text])
 
+  if (failed) {
+    return <PreviewLoadError onRetry={retry} compact={pendingSize !== 'glyph'} />
+  }
   if (sample == null || !ready) {
     return <PreviewPending size={pendingSize} />
   }
