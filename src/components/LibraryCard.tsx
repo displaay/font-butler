@@ -1,6 +1,6 @@
 import { memo, useMemo, useRef, useState, type DragEvent, type MouseEvent } from 'react'
 import { Check, ChevronDown, FolderMinus, FolderOpen, Plus } from 'lucide-react'
-import { AaPreview, CyclingAaPreview } from '@/components/AaPreview'
+import { AaPreview, CyclingAaPreview, PreviewRetryBoundary } from '@/components/AaPreview'
 import { NameWithFormatTags, RetailBadge, SourceBadge, StateBadges, DestinationIcons, TrialBadge } from '@/components/Badges'
 import { Badge } from '@/components/ui/badge'
 import { CatalogMenuItems } from '@/components/BatchActions'
@@ -209,6 +209,7 @@ export const LibraryCard = memo(function LibraryCard({
       event.preventDefault()
       return
     }
+    event.stopPropagation()
     writeFontButlerEntries(event.dataTransfer, dragIds)
     applyFontDragImage(event.nativeEvent, projectFamilyNames)
     onFontDragStart()
@@ -349,66 +350,66 @@ export const LibraryCard = memo(function LibraryCard({
           </div>
         ) : null}
         {layout === 'grid' ? (
-          <ContextMenuTrigger asChild>
-            <button
-              type="button"
-              draggable={!uninstallOnly}
-              onDragStart={startFontDrag}
-              onClick={handleCardClick}
-              onContextMenu={skipClickAfterContextMenu}
-              onDoubleClick={onInspect}
-              className="flex w-full flex-col text-left"
-            >
-              <CyclingAaPreview
-                faces={previewFaces}
-                rest={
-                  previewFaces.find((face) => face.family === previewFamily && !face.italic) ??
-                  previewFaces.find((face) => face.family === previewFamily) ?? {
-                    family: previewFamily,
-                    weight: previewWeight,
-                    italic: previewItalic,
-                    label: preview.faces[0]?.styleName ?? 'Regular',
+          <PreviewRetryBoundary>
+            <ContextMenuTrigger asChild>
+              <button
+                type="button"
+                onClick={handleCardClick}
+                onContextMenu={skipClickAfterContextMenu}
+                onDoubleClick={onInspect}
+                className="flex w-full flex-col text-left"
+              >
+                <CyclingAaPreview
+                  faces={previewFaces}
+                  rest={
+                    previewFaces.find((face) => face.family === previewFamily && !face.italic) ??
+                    previewFaces.find((face) => face.family === previewFamily) ?? {
+                      family: previewFamily,
+                      weight: previewWeight,
+                      italic: previewItalic,
+                      label: preview.faces[0]?.styleName ?? 'Regular',
+                    }
                   }
-                }
-                active={hovered}
-                size={previewSize}
-                sample={previewSample}
-              />
-              <div className={previewSize < 3.25 ? 'p-2' : 'p-3'}>{identity}</div>
-            </button>
-          </ContextMenuTrigger>
+                  active={hovered}
+                  size={previewSize}
+                  sample={previewSample}
+                />
+                <div className={previewSize < 3.25 ? 'p-2' : 'p-3'}>{identity}</div>
+              </button>
+            </ContextMenuTrigger>
+          </PreviewRetryBoundary>
         ) : (
           <>
             <ContextMenuTrigger asChild>
               <div className="flex items-stretch">
-                <button
-                  type="button"
-                  draggable={!uninstallOnly}
-                  onDragStart={startFontDrag}
-                  onClick={handleCardClick}
-                  onContextMenu={skipClickAfterContextMenu}
-                  onDoubleClick={onInspect}
-                  className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left"
-                >
-                  <AaPreview
-                    family={previewFamily}
-                    weight={previewWeight}
-                    italic={previewItalic}
-                    sample={previewSample}
-                    wait={entryHasPreviewFile(preview)}
-                  />
-                  <div className="min-w-0 flex-1">{identity}</div>
-                  {locationBadges ? (
-                    <span
-                      className={cn(
-                        'ml-auto flex shrink-0 items-center gap-1',
-                        !batch && (selected || actionsVisible) && 'invisible',
-                      )}
-                    >
-                      {locationBadges}
-                    </span>
-                  ) : null}
-                </button>
+                <PreviewRetryBoundary>
+                  <button
+                    type="button"
+                    onClick={handleCardClick}
+                    onContextMenu={skipClickAfterContextMenu}
+                    onDoubleClick={onInspect}
+                    className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left"
+                  >
+                    <AaPreview
+                      family={previewFamily}
+                      weight={previewWeight}
+                      italic={previewItalic}
+                      sample={previewSample}
+                      wait={entryHasPreviewFile(preview)}
+                    />
+                    <div className="min-w-0 flex-1">{identity}</div>
+                    {locationBadges ? (
+                      <span
+                        className={cn(
+                          'ml-auto flex shrink-0 items-center gap-1',
+                          !batch && (selected || actionsVisible) && 'invisible',
+                        )}
+                      >
+                        {locationBadges}
+                      </span>
+                    ) : null}
+                  </button>
+                </PreviewRetryBoundary>
                 {showInstances && (
                   <button
                     type="button"

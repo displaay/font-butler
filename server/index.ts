@@ -1126,10 +1126,10 @@ app.get('/api/preview-glyph/:id', (c) => {
   }
 })
 
-app.get('/api/font-file/:id', (c) => {
+app.get('/api/font-file/:id', async (c) => {
   try {
     const which = (c.req.query('which') ?? 'installed') as 'source' | 'installed' | 'revision'
-    const file = service.fontBytesForRevision(c.req.param('id'), which, c.req.query('revision') ?? undefined)
+    const file = await service.fontBytesForRevision(c.req.param('id'), which, c.req.query('revision') ?? undefined)
     return new Response(file.buffer, {
       headers: {
         'Content-Type': file.mime,

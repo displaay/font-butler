@@ -10,7 +10,8 @@ import { SpecimenWorkspace } from '@/components/SpecimenWorkspace'
 import { DropdownActionButton, SplitInstallButton, SplitUninstallButton, type SplitUninstallExtra } from '@/components/SplitUninstallButton'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { usePreviewFontReady } from '@/hooks/usePreviewFontReady'
+import { usePreviewFontStatus } from '@/hooks/usePreviewFontReady'
+import { PreviewLoadError } from '@/components/AaPreview'
 import { api } from '@/lib/api'
 import { activateActionLabel, catalogBatchPlan, deactivateActionLabel, deleteSourcesLabel, forgetSourcesLabel } from '@/lib/batch'
 import type { InspectorDensity } from '@/lib/inspector'
@@ -673,7 +674,8 @@ function InspectorLayout({
       <div
         id={`${tablistId}-panel`}
         role="tabpanel"
-        className="min-h-0 flex-1 overflow-hidden"
+        tabIndex={-1}
+        className="min-h-0 flex-1 overflow-hidden focus-visible:outline-none"
       >
         {glyphsTab ? (
           <div className="flex h-full min-h-0 flex-col">{panel}</div>
@@ -710,7 +712,11 @@ function SystemInspectorBody({
 }) {
   const instances = useMemo(() => systemInstanceRows(systemGroup), [systemGroup])
   const previewFamily = face ? systemFontFamily(face.path) : ''
-  const previewReady = usePreviewFontReady(previewFamily, face?.weight ?? 400, Boolean(face?.italic))
+  const {
+    ready: previewReady,
+    failed: previewFailed,
+    retry: retryPreview,
+  } = usePreviewFontStatus(previewFamily, face?.weight ?? 400, Boolean(face?.italic))
   const header = (
     <div>
       <h2 className="text-base font-semibold tracking-tight">{systemGroup.familyName}</h2>
@@ -723,9 +729,13 @@ function SystemInspectorBody({
   )
   const preview = (
     <div className="font-preview relative min-h-[16rem] rounded-lg border bg-muted/40 p-6 text-5xl leading-tight">
-      {!previewFamily || !previewReady ? (
+      {!previewFamily || (!previewReady && !previewFailed) ? (
         <div className="flex min-h-[13rem] items-center justify-center" role="status" aria-label="Loading preview">
           <Loader2 className="size-6 animate-spin text-muted-foreground/70 motion-reduce:animate-none" />
+        </div>
+      ) : previewFailed ? (
+        <div className="flex min-h-[13rem] items-center justify-center">
+          <PreviewLoadError onRetry={retryPreview} />
         </div>
       ) : (
         <div style={{ fontFamily: `"${previewFamily}"` }}>{SAMPLE}</div>

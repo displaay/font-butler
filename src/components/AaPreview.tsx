@@ -1,15 +1,18 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
+  useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
   type ReactNode,
 } from 'react'
 import { Loader2 } from 'lucide-react'
-import { usePreviewFontReady } from '@/hooks/usePreviewFontReady'
+import { usePreviewFontStatus } from '@/hooks/usePreviewFontReady'
 import { paintedPreviewIndices } from '@/lib/cyclingPreview'
 import { fitPreviewTransform } from '@/lib/fitPreview'
 import { facesSupportVariationInterpolation } from '@/lib/variationInterpolation'
@@ -69,6 +72,287 @@ function previewBoxClass(size: 'sm' | 'md') {
     : 'size-11 overflow-hidden text-[24px] rounded-md'
 }
 
+function retryControlClass(compact: boolean) {
+  return cn(
+    'rounded-sm bg-background font-medium text-foreground shadow-[inset_0_0_0_1px_var(--border)]',
+    compact ? 'px-1 py-px text-[10px] leading-none' : 'px-1.5 py-0.5 text-xs',
+  )
+}
+
+type RetrySlot = {
+  id: string
+  compact: boolean
+  retry: () => void
+  getAnchor: () => HTMLElement | null
+}
+
+type PreviewRetryHost = {
+  register: (slot: RetrySlot) => () => void
+}
+
+const PreviewRetryContext = createContext<PreviewRetryHost | null>(null)
+
+function positionedAncestor(node: HTMLElement): HTMLElement | null {
+  const offset = node.offsetParent as HTMLElement | null
+  if (offset) return offset
+  return node.parentElement
+}
+
+function isDisabledTarget(element: HTMLElement): boolean {
+  return element.hasAttribute('disabled') || element.getAttribute('aria-disabled') === 'true'
+}
+
+function canTakeFocus(element: HTMLElement): boolean {
+  if (element === document.body || element === document.documentElement) return false
+  if (isDisabledTarget(element)) return false
+  if (element.getAttribute('aria-hidden') === 'true') return false
+  if (element.hasAttribute('data-preview-retry')) return false
+  const tag = element.tagName
+  if (tag === 'BUTTON' || tag === 'A' || tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') {
+    return true
+  }
+  if (!element.hasAttribute('tabindex')) return false
+  const tabIndex = Number(element.getAttribute('tabindex'))
+  return Number.isFinite(tabIndex)
+}
+
+function expandedCardButton(card: HTMLElement, retry: HTMLElement): HTMLElement | null {
+  const buttons = card.querySelectorAll('button')
+  let fallback: HTMLElement | null = null
+  const rowList = retry.closest('ul')
+  for (let index = 0; index < buttons.length; index += 1) {
+    const button = buttons[index]
+    if (!button || button === retry) continue
+    if (button.hasAttribute('data-preview-retry')) continue
+    if (isDisabledTarget(button)) continue
+    if (rowList && button.closest('ul') === rowList) continue
+    if (button.hasAttribute('data-no-marquee')) {
+      if (!fallback) fallback = button
+      continue
+    }
+    return button
+  }
+  return fallback
+}
+
+function cardButtonForRetry(retry: HTMLElement): HTMLElement | null {
+  const parent = retry.parentElement
+  if (parent) {
+    const buttons = parent.querySelectorAll(':scope > button')
+    for (let index = 0; index < buttons.length; index += 1) {
+      const button = buttons[index] as HTMLElement | undefined
+      if (!button || button === retry || button.hasAttribute('data-preview-retry')) continue
+      if (isDisabledTarget(button)) continue
+      return button
+    }
+  }
+  let node = retry.parentElement
+  while (node) {
+    if (node.hasAttribute('data-family-key')) {
+      const cardButton = expandedCardButton(node, retry)
+      if (cardButton) return cardButton
+    }
+    if (canTakeFocus(node)) return node
+    node = node.parentElement
+  }
+  return null
+}
+
+function PreviewRetryButton({ slot }: { slot: RetrySlot }) {
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const fromKey = useRef(false)
+  const focused = useRef(false)
+  const [box, setBox] = useState<{ top: number; left: number; width: number; height: number } | null>(null)
+
+  useLayoutEffect(() => {
+    const button = buttonRef.current
+    return () => {
+      if (!focused.current || !button) return
+      cardButtonForRetry(button)?.focus()
+    }
+  }, [])
+
+  useLayoutEffect(() => {
+    function place() {
+      const anchor = slot.getAnchor()
+      const button = buttonRef.current
+      if (!anchor || !button) return
+      const parent = positionedAncestor(button)
+      if (!parent) return
+      const anchorRect = anchor.getBoundingClientRect()
+      const parentRect = parent.getBoundingClientRect()
+      const next = {
+        top: anchorRect.top - parentRect.top - parent.clientTop + parent.scrollTop,
+        left: anchorRect.left - parentRect.left - parent.clientLeft + parent.scrollLeft,
+        width: anchorRect.width,
+        height: anchorRect.height,
+      }
+      setBox((current) =>
+        current &&
+        current.top === next.top &&
+        current.left === next.left &&
+        current.width === next.width &&
+        current.height === next.height
+          ? current
+          : next,
+      )
+    }
+
+    place()
+    if (typeof ResizeObserver === 'undefined') return
+    const anchor = slot.getAnchor()
+    const parent = buttonRef.current ? positionedAncestor(buttonRef.current) : null
+    const observer = new ResizeObserver(place)
+    if (anchor) observer.observe(anchor)
+    if (parent) observer.observe(parent)
+    return () => observer.disconnect()
+  }, [slot])
+
+  function activate(event: { preventDefault(): void; stopPropagation(): void }) {
+    event.preventDefault()
+    event.stopPropagation()
+    slot.retry()
+  }
+
+  return (
+    <button
+      ref={buttonRef}
+      type="button"
+      data-preview-retry=""
+      className={cn(retryControlClass(slot.compact), 'absolute z-10', box ? undefined : 'invisible')}
+      style={box ?? undefined}
+      draggable
+      onDragStart={(event) => {
+        event.preventDefault()
+        event.stopPropagation()
+      }}
+      onFocus={() => {
+        focused.current = true
+      }}
+      onBlur={() => {
+        if (buttonRef.current?.isConnected) focused.current = false
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        if (document.activeElement === buttonRef.current) focused.current = true
+        fromKey.current = true
+        activate(event)
+        queueMicrotask(() => {
+          fromKey.current = false
+        })
+      }}
+      onClick={(event) => {
+        if (fromKey.current) {
+          fromKey.current = false
+          event.preventDefault()
+          event.stopPropagation()
+          return
+        }
+        activate(event)
+      }}
+      onPointerDown={(event) => event.stopPropagation()}
+      onMouseDown={(event) => event.stopPropagation()}
+    >
+      Retry
+    </button>
+  )
+}
+
+/** Lifts Retry out of a card `<button>` and paints it as the next sibling. */
+export function PreviewRetryBoundary({ children }: { children: ReactNode }) {
+  const [slot, setSlot] = useState<RetrySlot | null>(null)
+  const register = useCallback((next: RetrySlot) => {
+    setSlot(next)
+    return () => {
+      setSlot((current) => (current === next ? null : current))
+    }
+  }, [])
+  const host = useMemo(() => ({ register }), [register])
+
+  return (
+    <PreviewRetryContext.Provider value={host}>
+      {children}
+      {slot ? <PreviewRetryButton slot={slot} /> : null}
+    </PreviewRetryContext.Provider>
+  )
+}
+
+export function PreviewLoadError({
+  onRetry,
+  compact = false,
+  showRetry = true,
+}: {
+  onRetry: () => void
+  compact?: boolean
+  /** Hidden cycling layers omit Retry so it is not focusable inside aria-hidden. */
+  showRetry?: boolean
+}) {
+  const host = useContext(PreviewRetryContext)
+  const lift = Boolean(host) && showRetry
+  const anchorRef = useRef<HTMLSpanElement>(null)
+  const onRetryRef = useRef(onRetry)
+  const id = useId()
+
+  useLayoutEffect(() => {
+    onRetryRef.current = onRetry
+  })
+
+  useLayoutEffect(() => {
+    if (!lift || !host) return
+    return host.register({
+      id,
+      compact,
+      getAnchor: () => anchorRef.current,
+      retry: () => onRetryRef.current(),
+    })
+  }, [lift, host, id, compact])
+
+  return (
+    <span
+      className={cn(
+        'inline-flex max-w-full flex-col items-center justify-center text-center',
+        previewPaintClass,
+        compact ? 'gap-px' : 'gap-1',
+      )}
+      role="alert"
+    >
+      <span
+        className={cn(
+          'leading-none',
+          compact ? 'text-[10px] text-destructive' : 'text-xs text-muted-foreground',
+        )}
+      >
+        {compact ? 'Failed' : 'Preview failed'}
+      </span>
+      {showRetry && lift ? (
+        <span
+          ref={anchorRef}
+          data-preview-retry-spacer=""
+          aria-hidden="true"
+          className={cn(retryControlClass(compact), 'invisible')}
+        >
+          Retry
+        </span>
+      ) : null}
+      {showRetry && !lift ? (
+        <button
+          type="button"
+          className={retryControlClass(compact)}
+          onPointerDown={(event) => event.stopPropagation()}
+          onMouseDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            onRetry()
+          }}
+        >
+          Retry
+        </button>
+      ) : null}
+    </span>
+  )
+}
+
 function PreviewPending({ size }: { size: 'sm' | 'md' | 'glyph' }) {
   return (
     <span
@@ -102,6 +386,7 @@ function AaGlyph({
   sample,
   fit = false,
   animateVariation = false,
+  showRetry = true,
 }: {
   family: string
   weight?: number
@@ -112,8 +397,9 @@ function AaGlyph({
   sample?: string
   fit?: boolean
   animateVariation?: boolean
+  showRetry?: boolean
 }) {
-  const ready = usePreviewFontReady(family, weight, italic, wait)
+  const { ready, failed, retry } = usePreviewFontStatus(family, weight, italic, wait)
   const latinText = useContext(LatinPreviewContext)
   const text = applyLatinPreviewSample(sample, latinText)
   const glyphRef = useRef<HTMLSpanElement>(null)
@@ -162,6 +448,11 @@ function AaGlyph({
     }
   }, [fit, ready, family, weight, italic, variation, text])
 
+  if (failed) {
+    return (
+      <PreviewLoadError onRetry={retry} compact={pendingSize !== 'glyph'} showRetry={showRetry} />
+    )
+  }
   if (sample == null || !ready) {
     return <PreviewPending size={pendingSize} />
   }
@@ -312,6 +603,7 @@ export function CyclingAaPreview({
                 wait={face.wait !== false}
                 sample={sample}
                 fit
+                showRetry={faceIndex === visibleIndex}
               />
               {cycling ? <PreviewLabel>{face.label}</PreviewLabel> : null}
             </div>

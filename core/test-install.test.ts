@@ -169,7 +169,7 @@ test('preview meta and glyph read a test install that is not in the library', as
       assert.equal(glyph.code, 65)
       assert.equal(glyph.name, 'A')
 
-      const bytes = service.fontBytesForRevision(id)
+      const bytes = await service.fontBytesForRevision(id)
       assert.equal(bytes.filename, 'Session-Regular.otf')
       assert.ok(bytes.buffer.length > 0)
 

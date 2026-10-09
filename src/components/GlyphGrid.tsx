@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Copy, Loader2, Search, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { catalogFontFamily } from '@/components/FontFaceStyles'
-import { usePreviewFontReady } from '@/hooks/usePreviewFontReady'
+import { usePreviewFontStatus } from '@/hooks/usePreviewFontReady'
+import { PreviewLoadError } from '@/components/AaPreview'
 import {
   Dialog,
   DialogContent,
@@ -46,7 +47,11 @@ const OVERSCAN = 3
 export function GlyphGrid({ entry }: { entry: CatalogEntry }) {
   const family = catalogFontFamily(entry.id)
   const face = entry.faces[0]
-  const ready = usePreviewFontReady(
+  const {
+    ready,
+    failed: fontFailed,
+    retry: retryFont,
+  } = usePreviewFontStatus(
     family,
     face?.weight ?? 400,
     Boolean(face?.italic),
@@ -169,6 +174,14 @@ export function GlyphGrid({ entry }: { entry: CatalogEntry }) {
 
   if (points.length === 0) {
     return <p className="p-5 text-sm text-muted-foreground">No glyphs to show for this font.</p>
+  }
+
+  if (fontFailed) {
+    return (
+      <div className="flex h-full min-h-48 items-center justify-center p-5">
+        <PreviewLoadError onRetry={retryFont} />
+      </div>
+    )
   }
 
   return (
@@ -360,7 +373,7 @@ function GlyphCell({
           <span
             className="font-preview select-none"
             style={{
-              fontFamily: `"${family}", ui-sans-serif, system-ui`,
+              fontFamily: ready ? `"${family}", ui-sans-serif, system-ui` : 'ui-sans-serif, system-ui',
               fontWeight: weight,
               fontStyle: italic ? 'italic' : 'normal',
               fontSynthesis: 'none',
@@ -437,7 +450,7 @@ function GlyphPreviewDialog({
                 <span
                   className={cn('font-preview leading-none', !ready && 'text-transparent')}
                   style={{
-                    fontFamily: `"${family}", ui-sans-serif, system-ui`,
+                    fontFamily: ready ? `"${family}", ui-sans-serif, system-ui` : 'ui-sans-serif, system-ui',
                     fontWeight: weight,
                     fontStyle: italic ? 'italic' : 'normal',
                     fontSynthesis: 'none',

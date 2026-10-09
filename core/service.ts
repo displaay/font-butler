@@ -18,6 +18,7 @@ import {
   upsertEntry,
 } from './catalog.ts'
 import { getOrCreateApiToken } from './auth.ts'
+import { readFontPreviewBytes } from './font-bytes.ts'
 import { locateAdobeFontCache, locateOfficeFontCache } from './caches.ts'
 import {
   adobeInvestigation,
@@ -1639,11 +1640,11 @@ export class FontButlerService {
     return resolved
   }
 
-  fontBytesForEntry(
+  async fontBytesForEntry(
     id: string,
     resolvedEntry?: CatalogEntry,
     catalogEntries?: CatalogEntry[],
-  ): { buffer: Buffer; mime: string; filename: string } {
+  ): Promise<{ buffer: Buffer; mime: string; filename: string }> {
     const loaded = resolvedEntry && catalogEntries ? undefined : loadCatalog(this.paths)
     const catalog = catalogEntries ?? loaded!.entries
     const entry = resolvedEntry ?? findById(loaded!, id)
@@ -1655,7 +1656,7 @@ export class FontButlerService {
       throw new Error('No font file is available to preview.')
     }
     return {
-      buffer: fs.readFileSync(filePath),
+      buffer: await readFontPreviewBytes(filePath),
       mime: mimeForFont(filePath),
       filename: path.basename(filePath),
     }
@@ -3007,15 +3008,15 @@ export class FontButlerService {
     }
   }
 
-  fontBytesForRevision(
+  async fontBytesForRevision(
     id: string,
     which: 'source' | 'installed' | 'revision' = 'installed',
     fingerprint?: string,
-  ): { buffer: Buffer; mime: string; filename: string } {
+  ): Promise<{ buffer: Buffer; mime: string; filename: string }> {
     const testFile = this.readableTestInstallPath(id)
     if (testFile) {
       return {
-        buffer: fs.readFileSync(testFile),
+        buffer: await readFontPreviewBytes(testFile),
         mime: mimeForFont(testFile),
         filename: path.basename(testFile),
       }
@@ -3024,17 +3025,24 @@ export class FontButlerService {
     const entry = findById(catalog, id)
     if (!entry) throw new Error('Font is not in the library.')
     if (which === 'revision' && fingerprint) {
-      const bytes = readRevisionBytes(this.paths, fingerprint)
-      if (!bytes) throw new Error('That revision is no longer available.')
+      let revisionFile: string
+      try {
+        revisionFile = revisionFilePath(this.paths, fingerprint)
+      } catch {
+        throw new Error('That revision is no longer available.')
+      }
+      if (!fs.existsSync(revisionFile)) {
+        throw new Error('That revision is no longer available.')
+      }
       return {
-        buffer: bytes,
+        buffer: await readFontPreviewBytes(revisionFile),
         mime: mimeForFont(entry.sourcePath),
         filename: `${fingerprint}${path.extname(entry.sourcePath) || '.ttf'}`,
       }
     }
     if (which === 'source' && entry.sourcePath && fs.existsSync(entry.sourcePath)) {
       return {
-        buffer: fs.readFileSync(entry.sourcePath),
+        buffer: await readFontPreviewBytes(entry.sourcePath),
         mime: mimeForFont(entry.sourcePath),
         filename: path.basename(entry.sourcePath),
       }

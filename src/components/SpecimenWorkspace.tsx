@@ -6,7 +6,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Slider } from '@/components/ui/slider'
-import { usePreviewFontReady } from '@/hooks/usePreviewFontReady'
+import { usePreviewFontStatus } from '@/hooks/usePreviewFontReady'
+import { PreviewLoadError } from '@/components/AaPreview'
 import { api } from '@/lib/api'
 import { formatMissingCharacters, missingCodePoints } from '@/lib/coverage'
 import { entryHasPreviewFile, hasManagedInstall } from '@/lib/group'
@@ -461,7 +462,7 @@ function SpecimenPane({
   onSliderCommit?: () => void
   onTextChange: (text: string) => void
 }) {
-  const ready = usePreviewFontReady(family, 400, false, wait)
+  const { ready, failed, retry } = usePreviewFontStatus(family, 400, false, wait)
   const textRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
@@ -508,7 +509,16 @@ function SpecimenPane({
         ) : null}
       </div>
       <div className={cn('relative', large && 'min-h-[16rem]')}>
-        {!ready ? (
+        {failed ? (
+          <div
+            className={cn(
+              'flex items-center justify-center',
+              large ? 'min-h-[16rem]' : 'min-h-[4.5rem]',
+            )}
+          >
+            <PreviewLoadError onRetry={retry} />
+          </div>
+        ) : !ready ? (
           <div
             className={cn(
               'flex items-center justify-center',
