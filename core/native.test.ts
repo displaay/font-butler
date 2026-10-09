@@ -13,9 +13,12 @@ import {
   FONT_LOOKUP_SCRIPT,
   fontActivationStates,
   fontManagerSucceeded,
+  InstalledFontKept,
+  installedFontCheckError,
   LOGOUT_CANCELLED,
   LOGOUT_FALLBACK,
   logoutResultFromExecError,
+  parseActivatedFontLookup,
   verificationFaceChecks,
   REGISTRATION_SCOPES,
   registrationSucceeded,
@@ -212,6 +215,52 @@ test('ensureFontActivation does not register a user-library font or fall back wh
   } finally {
     if (previous === undefined) delete process.env.FONT_BUTLER_USER_FONTS_DIR
     else process.env.FONT_BUTLER_USER_FONTS_DIR = previous
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a broken lookup returns fail: and is not kept as not visible yet', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-lookup-fail-'))
+  const logFile = path.join(root, 'main.log')
+  const fonts = path.join(root, 'Fonts')
+  const previousLog = process.env.FONT_BUTLER_LOG
+  const previousFonts = process.env.FONT_BUTLER_USER_FONTS_DIR
+  process.env.FONT_BUTLER_LOG = logFile
+  process.env.FONT_BUTLER_USER_FONTS_DIR = fonts
+  try {
+    const failSource = FONT_LOOKUP_SCRIPT.slice(
+      FONT_LOOKUP_SCRIPT.indexOf('function fail'),
+      FONT_LOOKUP_SCRIPT.indexOf('function objcString'),
+    )
+    const fail = new Function(`${failSource}; return fail`)() as (error: unknown) => string
+    assert.equal(fail(new Error('Ref has no type')), 'fail:Ref has no type')
+    assert.match(FONT_LOOKUP_SCRIPT, /return fail\(error\)/)
+    assert.doesNotMatch(FONT_LOOKUP_SCRIPT, /catch \(fallback\)/)
+    const missed = parseActivatedFontLookup(
+      JSON.stringify({ ok: false, reason: 'missing', postscript: '', family: '', version: '', path: '', listed: false }),
+      'Face-Regular',
+    )
+    assert.equal(missed.error, 'missing')
+    const lookup = parseActivatedFontLookup('fail:Ref has no type', 'Face-Regular')
+    assert.equal(lookup.ok, false)
+    assert.equal(lookup.error, 'fail:Ref has no type')
+    assert.match(fs.readFileSync(logFile, 'utf8'), /\[verify\s+\] lookup Face-Regular fail:Ref has no type/)
+    const broken = installedFontCheckError(path.join(fonts, 'Face.ttf'), lookup.error!, true)
+    assert.equal(broken instanceof InstalledFontKept, false)
+    assert.equal(broken.message, 'fail:Ref has no type')
+    assert.doesNotMatch(broken.message, /not visible to other apps yet/)
+    const visible = installedFontCheckError(
+      path.join(fonts, 'Face.ttf'),
+      'Core Text did not resolve Face-Regular.',
+      true,
+    )
+    assert.equal(visible instanceof InstalledFontKept, true)
+    assert.match(visible.message, /not visible to other apps yet/)
+  } finally {
+    if (previousLog === undefined) delete process.env.FONT_BUTLER_LOG
+    else process.env.FONT_BUTLER_LOG = previousLog
+    if (previousFonts === undefined) delete process.env.FONT_BUTLER_USER_FONTS_DIR
+    else process.env.FONT_BUTLER_USER_FONTS_DIR = previousFonts
     fs.rmSync(root, { recursive: true, force: true })
   }
 })

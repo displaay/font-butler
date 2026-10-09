@@ -681,12 +681,21 @@ export type ActivatedFontLookup = {
 export const FONT_LOOKUP_SCRIPT = `ObjC.import('CoreText')
 ObjC.import('Foundation')
 ObjC.import('AppKit')
+function fail(error) {
+  let message = 'Font lookup failed.'
+  try {
+    if (typeof error === 'string' && error.trim()) message = error.trim()
+    else if (error && error.message) message = String(error.message)
+    else if (error != null) message = String(error)
+  } catch (stringifyError) {
+    message = 'Font lookup failed.'
+  }
+  message = String(message).replace(/\\s+/g, ' ').trim() || 'Font lookup failed.'
+  return 'fail:' + message
+}
 function objcString(value) {
   if (value == null) return ''
-  try { return String(ObjC.unwrap(ObjC.castRefToObject(value)) || '') }
-  catch (error) {
-    try { return String(ObjC.unwrap(value) || '') } catch (fallback) { throw error }
-  }
+  return String(ObjC.unwrap(ObjC.castRefToObject(value)) || '')
 }
 function miss(reason, extra) {
   const body = extra || {}
@@ -699,56 +708,30 @@ function miss(reason, extra) {
   if (body.listed !== true) body.listed = false
   return JSON.stringify(body)
 }
-function run(argv) {
-  const psName = String(argv[0] || '')
-  let font = null
-  try {
-    font = $.CTFontCreateWithName($(psName), 12, null)
-  } catch (error) {
-    return miss(error)
-  }
+function lookupFont(psName) {
+  const font = $.CTFontCreateWithName($(psName), 12, null)
   if (!font) return miss('missing')
-  let actual = ''
-  let family = ''
-  try {
-    actual = objcString($.CTFontCopyPostScriptName(font))
-    family = objcString($.CTFontCopyFamilyName(font))
-  } catch (error) {
-    return miss(error)
-  }
-  let version = ''
-  try {
-    version = objcString($.CTFontCopyName(font, $.kCTFontVersionNameKey))
-  } catch (error) {
-    return miss(error, { postscript: actual, family: family })
-  }
+  const actual = objcString($.CTFontCopyPostScriptName(font))
+  const family = objcString($.CTFontCopyFamilyName(font))
+  const version = objcString($.CTFontCopyName(font, $.kCTFontVersionNameKey))
   const found = { postscript: actual, family: family, version: version }
-  let filePath = ''
-  try {
-    const nsFont = $.NSFont.fontWithNameSize($(psName), 12)
-    if (!nsFont) return miss('NSFont could not open ' + psName, found)
-    const url = nsFont.fontDescriptor.objectForKey('NSCTFontFileURLAttribute')
-    if (!url || url.path == null) return miss('NSFont has no file URL for ' + psName, found)
-    filePath = String(ObjC.unwrap(url.path) || '')
-    if (!filePath) return miss('NSFont file URL for ' + psName + ' was empty', found)
-  } catch (error) {
-    return miss(error, found)
-  }
+  const nsFont = $.NSFont.fontWithNameSize($(psName), 12)
+  if (!nsFont) return miss('NSFont could not open ' + psName, found)
+  const url = nsFont.fontDescriptor.objectForKey('NSCTFontFileURLAttribute')
+  if (!url || url.path == null) return miss('NSFont has no file URL for ' + psName, found)
+  const filePath = String(ObjC.unwrap(url.path) || '')
+  if (!filePath) return miss('NSFont file URL for ' + psName + ' was empty', found)
   let listed = false
-  try {
-    const families = $.CTFontManagerCopyAvailableFontFamilyNames()
-    const arr = families ? ObjC.castRefToObject(families) : null
-    if (arr) {
-      const n = Number(arr.count)
-      for (let i = 0; i < n; i++) {
-        if (String(ObjC.unwrap(arr.objectAtIndex(i))) === family) {
-          listed = true
-          break
-        }
+  const families = $.CTFontManagerCopyAvailableFontFamilyNames()
+  const arr = families ? ObjC.castRefToObject(families) : null
+  if (arr) {
+    const n = Number(arr.count)
+    for (let i = 0; i < n; i++) {
+      if (String(ObjC.unwrap(arr.objectAtIndex(i))) === family) {
+        listed = true
+        break
       }
     }
-  } catch (error) {
-    return miss(error, { postscript: actual, family: family, version: version, path: filePath })
   }
   return JSON.stringify({
     ok: true,
@@ -758,6 +741,13 @@ function run(argv) {
     path: filePath,
     listed: listed
   })
+}
+function run(argv) {
+  try {
+    return lookupFont(String(argv[0] || ''))
+  } catch (error) {
+    return fail(error)
+  }
 }
 `
 
@@ -796,25 +786,33 @@ export function versionsMatch(reported: string, expected: string): boolean {
   return strip(actual).toLowerCase() === strip(wanted).toLowerCase()
 }
 
-export async function lookupActivatedFont(postscriptName: string): Promise<ActivatedFontLookup> {
-  const empty: ActivatedFontLookup = {
-    ok: false,
-    postscript: '',
-    family: '',
-    version: '',
-    path: '',
-    listed: false,
-  }
-  if (!postscriptName.trim()) {
-    return { ...empty, error: 'The font has no PostScript name.' }
+const emptyLookup = (): ActivatedFontLookup => ({
+  ok: false,
+  postscript: '',
+  family: '',
+  version: '',
+  path: '',
+  listed: false,
+})
+
+/** A script or bridge failure. This is not a "font not visible yet" result. */
+export function brokenLookupMessage(detail: string): string {
+  const line = detail
+    .split('\n')
+    .map((part) => part.trim())
+    .find(Boolean) || 'Font lookup failed.'
+  return line.startsWith('fail:') ? line : `fail:${line}`
+}
+
+export function parseActivatedFontLookup(stdout: string, postscriptName = ''): ActivatedFontLookup {
+  const text = stdout.trim()
+  if (!text || text.startsWith('fail:') || !text.startsWith('{')) {
+    const message = brokenLookupMessage(text || 'Font lookup returned nothing.')
+    logMain('verify', `lookup ${postscriptName} ${message}`)
+    return { ...emptyLookup(), error: message }
   }
   try {
-    const { stdout } = await execFileAsync(
-      'osascript',
-      ['-l', 'JavaScript', '-e', FONT_LOOKUP_SCRIPT, postscriptName],
-      { timeout: 20_000 },
-    )
-    const parsed = JSON.parse(stdout.trim() || '{}') as Partial<ActivatedFontLookup> & { reason?: string }
+    const parsed = JSON.parse(text) as Partial<ActivatedFontLookup> & { reason?: string }
     const reason = parsed.reason ? String(parsed.reason) : ''
     return {
       ok: Boolean(parsed.ok),
@@ -826,16 +824,37 @@ export async function lookupActivatedFont(postscriptName: string): Promise<Activ
       error: parsed.ok ? undefined : reason || 'Could not look up the font.',
     }
   } catch (error) {
+    const message = brokenLookupMessage(error instanceof Error ? error.message : 'Could not read the font lookup.')
+    logMain('verify', `lookup ${postscriptName} ${message}`)
+    return { ...emptyLookup(), error: message }
+  }
+}
+
+export async function lookupActivatedFont(postscriptName: string): Promise<ActivatedFontLookup> {
+  if (!postscriptName.trim()) {
+    return { ...emptyLookup(), error: 'The font has no PostScript name.' }
+  }
+  try {
+    const { stdout } = await execFileAsync(
+      'osascript',
+      ['-l', 'JavaScript', '-e', FONT_LOOKUP_SCRIPT, postscriptName],
+      { timeout: 20_000 },
+    )
+    return parseActivatedFontLookup(stdout, postscriptName)
+  } catch (error) {
     const err = error as { message?: string; stderr?: string | Buffer; stdout?: string | Buffer }
+    const stdout = Buffer.isBuffer(err?.stdout) ? err.stdout.toString('utf8') : err?.stdout
+    if (typeof stdout === 'string' && stdout.trim().startsWith('fail:')) {
+      return parseActivatedFontLookup(stdout, postscriptName)
+    }
     const detail =
       [err?.stderr, err?.stdout, err?.message]
         .map((part) => (Buffer.isBuffer(part) ? part.toString('utf8') : part))
         .filter((part) => typeof part === 'string' && part.trim())
         .join('\n') || 'Could not look up the font.'
-    return {
-      ...empty,
-      error: detail,
-    }
+    const message = brokenLookupMessage(detail)
+    logMain('verify', `lookup ${postscriptName} ${message}`)
+    return { ...emptyLookup(), error: message }
   }
 }
 
@@ -879,6 +898,11 @@ export async function awaitActivatedFont(
     if (attempt + 1 < attempts) await waitForFont(400)
   }
   return last
+}
+
+export function installedFontCheckError(filePath: string, message: string, keep: boolean): Error {
+  if (message.startsWith('fail:')) return new Error(message)
+  return keptVerificationError(filePath, message, keep)
 }
 
 function keptVerificationError(filePath: string, message: string, keep: boolean): Error {
@@ -930,7 +954,7 @@ async function verifyInstalledFontNow(filePath: string): Promise<void> {
   if (checks.length === 0) {
     const message = 'Could not read a PostScript name from the installed font.'
     logMain('verify', `fail ${filePath} ${message}`)
-    throw keptVerificationError(filePath, message, false)
+    throw installedFontCheckError(filePath, message, false)
   }
   const userFont = isMacUserFontFile(filePath)
   const deadline = Date.now() + VERIFY_BUDGET_MS
@@ -947,6 +971,10 @@ async function verifyInstalledFontNow(filePath: string): Promise<void> {
       )
       if (!lookup.ok) {
         failed = lookup.error || `Core Text did not resolve ${check.ps}.`
+        if (failed.startsWith('fail:')) {
+          logMain('verify', `fail ${filePath} ${failed}`)
+          throw installedFontCheckError(filePath, failed, false)
+        }
         keep = userFont
         break
       }
@@ -980,5 +1008,5 @@ async function verifyInstalledFontNow(filePath: string): Promise<void> {
     await waitForFont(Math.min(VERIFY_INTERVAL_MS, remaining))
   }
   logMain('verify', `fail ${filePath} ${lastError}`)
-  throw keptVerificationError(filePath, lastError, lastKeep)
+  throw installedFontCheckError(filePath, lastError, lastKeep)
 }
