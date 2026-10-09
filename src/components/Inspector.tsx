@@ -675,7 +675,7 @@ function InspectorLayout({
         id={`${tablistId}-panel`}
         role="tabpanel"
         tabIndex={-1}
-        className="min-h-0 flex-1 overflow-hidden"
+        className="min-h-0 flex-1 overflow-hidden focus-visible:outline-none"
       >
         {glyphsTab ? (
           <div className="flex h-full min-h-0 flex-col">{panel}</div>

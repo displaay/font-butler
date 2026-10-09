@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react'
+import { previewFaceRefreshInterval, runPreviewCssWriteGate } from '@/components/fontFaceTestHooks'
 import { getApiToken } from '@/lib/api'
 import {
   cachedSignedCatalogFontUrl,
@@ -19,19 +20,6 @@ import {
   withRetryParam,
 } from '@/lib/previewReady'
 import type { CatalogEntry, SystemFace } from '@/lib/types'
-
-const REFRESH_MS = 15 * 60 * 1000
-let previewFaceRefreshMs = REFRESH_MS
-let previewCssWriteGate: (() => Promise<void>) | null = null
-
-export function setPreviewFaceRefreshForTests(ms: number): void {
-  previewFaceRefreshMs = ms
-}
-
-/** Pause after preview CSS is built and before it is written, so tests can bump the retry counter mid-refresh. */
-export function setPreviewCssWriteGateForTests(gate: (() => Promise<void>) | null): void {
-  previewCssWriteGate = gate
-}
 
 type PreviewFaceSession = {
   catalogStyles: Map<string, HTMLStyleElement>
@@ -316,7 +304,7 @@ export function FontFaceStyles({
         const cssById = await Promise.all(
           changed.map(async (entry) => [entry.id, await catalogEntryCss(entry, secret, cache, refresh)] as const),
         )
-        if (previewCssWriteGate) await previewCssWriteGate()
+        await runPreviewCssWriteGate()
         if (cancelled) return
         for (const [id, css] of cssById) {
           const style = ensureStyle(styles, id, 'data-font-butler-face')
@@ -336,7 +324,7 @@ export function FontFaceStyles({
     }
 
     void apply(false)
-    const timer = window.setInterval(() => void apply(true), previewFaceRefreshMs)
+    const timer = window.setInterval(() => void apply(true), previewFaceRefreshInterval())
     return () => {
       cancelled = true
       window.clearInterval(timer)
@@ -373,7 +361,7 @@ export function FontFaceStyles({
         const cssByKey = await Promise.all(
           changed.map(async (group) => [group.key, await systemPathCss(group.faces, secret, cache, refresh)] as const),
         )
-        if (previewCssWriteGate) await previewCssWriteGate()
+        await runPreviewCssWriteGate()
         if (cancelled) return
         for (const [key, css] of cssByKey) {
           const style = ensureStyle(styles, key, 'data-font-butler-system')
@@ -389,7 +377,7 @@ export function FontFaceStyles({
     }
 
     void apply(false)
-    const timer = window.setInterval(() => void apply(true), previewFaceRefreshMs)
+    const timer = window.setInterval(() => void apply(true), previewFaceRefreshInterval())
     return () => {
       cancelled = true
       window.clearInterval(timer)

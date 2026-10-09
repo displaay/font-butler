@@ -337,6 +337,26 @@ test('remounting after an empty FontFace load must not keep the spinner latched'
   }
 })
 
+test('a loaded face keeps the key from failing when a sibling face at the same weight errored', async () => {
+  const faces = [
+    { family: 'fc-sibling-face', weight: 400, style: 'normal', status: 'loaded' },
+    { family: 'fc-sibling-face', weight: 400, style: 'normal', status: 'error' },
+  ]
+  const restore = mockFonts({ check: true, faces })
+  try {
+    assert.equal(isPreviewFontReady('fc-sibling-face', 400), true)
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(
+      isPreviewFontFailed('fc-sibling-face', 400),
+      false,
+      'one errored face does not fail the key while a sibling face has loaded',
+    )
+    assert.equal(isPreviewFontReady('fc-sibling-face', 400), true)
+  } finally {
+    restore()
+  }
+})
+
 test('one failed weight does not mark another weight as failed', async () => {
   const faces = [{ family: '"fc-mix"', weight: 700, style: 'normal', status: 'error' }]
   const restore = mockFonts({ check: false, faces })

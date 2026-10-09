@@ -141,13 +141,10 @@ const { createRoot } = await import('react-dom/client')
 const { LibraryCard } = await import('./LibraryCard.tsx')
 const { SystemCard } = await import('./SystemCard.tsx')
 const { InstanceList } = await import('./InstanceList.tsx')
-const {
-  FontFaceStyles,
-  catalogFontFamily,
-  setPreviewCssWriteGateForTests,
-  setPreviewFaceRefreshForTests,
-  systemFontFamily,
-} = await import('./FontFaceStyles.tsx')
+const { FontFaceStyles, catalogFontFamily, systemFontFamily } = await import('./FontFaceStyles.tsx')
+const { setPreviewCssWriteGateForTests, setPreviewFaceRefreshForTests } = await import(
+  './fontFaceTestHooks.ts'
+)
 const { usePreviewFontStatus } = await import('../hooks/usePreviewFontReady.ts')
 const { verifyFontPreviewQuery } = await import('../../core/font-access.ts')
 const { TooltipProvider } = await import('./ui/tooltip.tsx')

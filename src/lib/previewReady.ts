@@ -108,17 +108,19 @@ function faceWeightMatches(faceWeight: string | number | undefined, weight: numb
 
 function previewFaceStatus(name: string, weight: number, italic: boolean): string | undefined {
   if (typeof document === 'undefined' || !document.fonts) return undefined
-  let status: string | undefined
-  let sawError = false
+  const statuses: string[] = []
   document.fonts.forEach((face) => {
     if (normalizePreviewFamily(face.family).toLowerCase() !== name.toLowerCase()) return
     if (!faceWeightMatches(face.weight, weight)) return
     const faceItalic = face.style === 'italic' || face.style === 'oblique'
     if (faceItalic !== italic) return
-    if (face.status === 'error') sawError = true
-    status = face.status
+    statuses.push(face.status)
   })
-  return sawError ? 'error' : status
+  if (statuses.length === 0) return undefined
+  if (statuses.some((status) => status === 'loaded')) return 'loaded'
+  if (statuses.some((status) => status === 'loading')) return 'loading'
+  if (previewFacesFailed(statuses)) return 'error'
+  return statuses.find((status) => status !== 'error')
 }
 
 function previewSpec(name: string, weight: number, italic: boolean): string {
