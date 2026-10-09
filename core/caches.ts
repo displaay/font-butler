@@ -675,34 +675,59 @@ export type ActivatedFontLookup = {
 
 export const FONT_LOOKUP_SCRIPT = `ObjC.import('CoreText')
 ObjC.import('Foundation')
+ObjC.import('AppKit')
 function objcString(value) {
   if (value == null) return ''
   try { return String(ObjC.unwrap(ObjC.castRefToObject(value)) || '') }
   catch (error) {
-    try { return String(ObjC.unwrap(value) || '') } catch (fallback) { return '' }
+    try { return String(ObjC.unwrap(value) || '') } catch (fallback) { throw error }
   }
+}
+function miss(reason, extra) {
+  const body = extra || {}
+  body.ok = false
+  body.reason = String(reason)
+  if (!body.postscript) body.postscript = ''
+  if (!body.family) body.family = ''
+  if (!body.version) body.version = ''
+  if (!body.path) body.path = ''
+  if (body.listed !== true) body.listed = false
+  return JSON.stringify(body)
 }
 function run(argv) {
   const psName = String(argv[0] || '')
-  const font = $.CTFontCreateWithName(psName, 12, null)
-  if (!font) return JSON.stringify({ ok: false, reason: 'missing' })
-  const actual = objcString($.CTFontCopyPostScriptName(font))
-  const family = objcString($.CTFontCopyFamilyName(font))
+  let font = null
+  try {
+    font = $.CTFontCreateWithName($(psName), 12, null)
+  } catch (error) {
+    return miss(error)
+  }
+  if (!font) return miss('missing')
+  let actual = ''
+  let family = ''
+  try {
+    actual = objcString($.CTFontCopyPostScriptName(font))
+    family = objcString($.CTFontCopyFamilyName(font))
+  } catch (error) {
+    return miss(error)
+  }
   let version = ''
   try {
     version = objcString($.CTFontCopyName(font, $.kCTFontVersionNameKey))
   } catch (error) {
-    version = ''
+    return miss(error, { postscript: actual, family: family })
   }
+  const found = { postscript: actual, family: family, version: version }
   let filePath = ''
   try {
-    const urlRef = $.CTFontCopyAttribute(font, $.kCTFontURLAttribute)
-    if (urlRef) {
-      const url = ObjC.castRefToObject(urlRef)
-      filePath = String(ObjC.unwrap(url.path) || '')
-    }
+    const nsFont = $.NSFont.fontWithNameSize($(psName), 12)
+    if (!nsFont) return miss('NSFont could not open ' + psName, found)
+    const url = nsFont.fontDescriptor.objectForKey('NSCTFontFileURLAttribute')
+    if (!url || url.path == null) return miss('NSFont has no file URL for ' + psName, found)
+    filePath = String(ObjC.unwrap(url.path) || '')
+    if (!filePath) return miss('NSFont file URL for ' + psName + ' was empty', found)
   } catch (error) {
-    filePath = ''
+    return miss(error, found)
   }
   let listed = false
   try {
@@ -718,7 +743,7 @@ function run(argv) {
       }
     }
   } catch (error) {
-    listed = false
+    return miss(error, { postscript: actual, family: family, version: version, path: filePath })
   }
   return JSON.stringify({
     ok: true,
@@ -785,6 +810,7 @@ export async function lookupActivatedFont(postscriptName: string): Promise<Activ
       { timeout: 20_000 },
     )
     const parsed = JSON.parse(stdout.trim() || '{}') as Partial<ActivatedFontLookup> & { reason?: string }
+    const reason = parsed.reason ? String(parsed.reason) : ''
     return {
       ok: Boolean(parsed.ok),
       postscript: String(parsed.postscript || ''),
@@ -792,12 +818,18 @@ export async function lookupActivatedFont(postscriptName: string): Promise<Activ
       version: String(parsed.version || ''),
       path: String(parsed.path || ''),
       listed: Boolean(parsed.listed),
-      error: parsed.ok ? undefined : parsed.reason || 'Could not look up the font.',
+      error: parsed.ok ? undefined : reason || 'Could not look up the font.',
     }
   } catch (error) {
+    const err = error as { message?: string; stderr?: string | Buffer; stdout?: string | Buffer }
+    const detail =
+      [err?.stderr, err?.stdout, err?.message]
+        .map((part) => (Buffer.isBuffer(part) ? part.toString('utf8') : part))
+        .filter((part) => typeof part === 'string' && part.trim())
+        .join('\n') || 'Could not look up the font.'
     return {
       ...empty,
-      error: error instanceof Error ? error.message : 'Could not look up the font.',
+      error: detail,
     }
   }
 }

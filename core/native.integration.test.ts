@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { awaitActivatedFont, fontPathsMatch } from './caches.ts'
+import { awaitActivatedFont, fontPathsMatch, lookupActivatedFont } from './caches.ts'
 import { realFontNative, setFontNative } from './native.ts'
 import { testDesktopShell, setDesktopShell } from './reveal.ts'
 import { FontButlerService } from './service.ts'
@@ -140,4 +140,20 @@ test('a ~/Library/Fonts update is visible in a fresh process without logout', as
     else process.env.FONT_BUTLER_USER_FONTS_DIR = previousFonts
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
+})
+
+test('lookupActivatedFont resolves Menlo-Regular to the system Menlo collection', async (t) => {
+  if (process.platform !== 'darwin' || process.env.FONT_BUTLER_NATIVE !== '1') {
+    t.skip('requires macOS and FONT_BUTLER_NATIVE=1')
+    return
+  }
+  const lookup = await lookupActivatedFont('Menlo-Regular')
+  assert.equal(lookup.ok, true, lookup.error)
+  assert.equal(lookup.postscript, 'Menlo-Regular')
+  assert.equal(lookup.listed, true, JSON.stringify(lookup))
+  assert.equal(
+    fontPathsMatch(lookup.path, '/System/Library/Fonts/Menlo.ttc'),
+    true,
+    JSON.stringify(lookup),
+  )
 })
