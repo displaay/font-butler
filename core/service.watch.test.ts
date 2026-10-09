@@ -722,7 +722,15 @@ test('a font still copying at startup lands once with the final fingerprint', as
       8000,
       'startup import did not report the partial font',
     )
+    assert.match(errors[0] ?? '', /^Startup\.ttf:/)
     assert.match(errors[0] ?? '', /table directory|past the end|sfnt header/)
+    assert.equal((errors[0] ?? '').includes(inbox), false)
+    const startupFailure = service
+      .listActivity()
+      .find((operation) => operation.items.some((item) => item.label === path.resolve(font)))
+    assert.ok(startupFailure)
+    assert.equal(startupFailure.trigger, 'startup')
+    assert.equal(startupFailure.items[0]?.label, path.resolve(font))
     assert.equal(entriesForSource(service, font).length, 0)
 
     fs.writeFileSync(font, bytes)
@@ -771,7 +779,16 @@ test('a garbage font dropped into a watch folder is reported once it settles', a
       INBOX_CORRUPT_SETTLE_MS + 3000,
       'settled garbage font was not reported',
     )
-    assert.match(errors[0] ?? '', /Garbage\.otf/)
+    assert.match(errors[0] ?? '', /^Garbage\.otf:/)
+    assert.equal((errors[0] ?? '').includes(inbox), false)
+    const activity = service
+      .listActivity()
+      .find((operation) => operation.items.some((item) => item.label === path.resolve(font)))
+    assert.ok(activity)
+    assert.equal(activity.trigger, 'watch')
+    assert.equal(activity.action, 'import')
+    assert.equal(activity.familyName, 'Garbage.otf')
+    assert.equal(activity.items[0]?.label, path.resolve(font))
     await delay(500)
     assert.equal(errors.length, 1)
     assert.equal(service.listCatalog().length, 0)
@@ -850,6 +867,57 @@ test('a corrupt watch file imports once it is replaced with a real font', async 
       () => finishedWatchEntry(service, font, 'Repaired'),
       INBOX_WRITE_STABILITY_MS + 8000,
       'repaired watch font did not import',
+    )
+    assert.equal(entriesForSource(service, font).length, 1)
+    assert.equal(entriesForSource(service, font)[0]?.sourceFingerprint, fingerprintFile(font))
+    assert.equal(inboxRejectionForTest(font), undefined)
+    await delay(500)
+    assert.equal(errors.length, 1)
+  } finally {
+    stop()
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('a reported corrupt font imports when a valid font keeps the same size and mtime', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  const staged = path.join(paths.dataRoot, 'staged-swap.ttf')
+  fs.mkdirSync(inbox, { recursive: true })
+  writeTestFont(staged, 'Swapped', 'Swapped-Regular')
+  const good = fs.readFileSync(staged)
+  const font = path.join(inbox, 'Swapped.ttf')
+  const service = new FontButlerService(paths)
+  const errors: string[] = []
+  const stop = onEvent((event) => {
+    if (event.type === 'notice' && event.notice.kind === 'error') errors.push(event.notice.message)
+  })
+  try {
+    await service.updateSettings({ onboardingCompleted: true })
+    const configured = await service.configureFolder({ root: inbox, installNew: true })
+    await service.startWatching(configured.folder.id)
+    fs.writeFileSync(font, Buffer.alloc(good.length, 0x61))
+    const preserved = new Date(Math.floor(Date.now() / 1000) * 1000)
+    fs.utimesSync(font, preserved, preserved)
+    await waitFor(
+      () => errors.length === 1 && inboxRejectionForTest(font)?.reported === true,
+      INBOX_WRITE_STABILITY_MS + INBOX_CORRUPT_SETTLE_MS + 8000,
+      'corrupt watch file was not reported',
+    )
+    const rejection = inboxRejectionForTest(font)
+    assert.ok(rejection?.fingerprint)
+    assert.notEqual(rejection.fingerprint, fingerprintFile(staged))
+    fs.writeFileSync(font, good)
+    fs.utimesSync(font, preserved, preserved)
+    const swapped = fs.statSync(font)
+    assert.equal(swapped.size, rejection.size)
+    assert.equal(swapped.mtimeMs, rejection.mtimeMs)
+    await waitFor(
+      () => finishedWatchEntry(service, font, 'Swapped'),
+      INBOX_WRITE_STABILITY_MS + 8000,
+      'same-size replacement was not imported',
     )
     assert.equal(entriesForSource(service, font).length, 1)
     assert.equal(entriesForSource(service, font)[0]?.sourceFingerprint, fingerprintFile(font))

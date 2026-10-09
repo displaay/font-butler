@@ -10,6 +10,7 @@ export const ACTIVITY_ACTION_LABELS: Record<string, string> = {
   reinstall: 'reinstalled',
   repair: 'repaired',
   'apply-plan': 'imported',
+  import: 'could not be imported',
   'relink-source': 'source linked',
   'relink-folder': 'folder relinked',
   'restore-revision': 'version restored',

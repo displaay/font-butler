@@ -35,6 +35,17 @@ declare global {
       quitApp?: () => Promise<void>
       showDebugLogs?: () => Promise<boolean>
       signalAppMounted?: () => void
+      onWatchNotices?: (
+        callback: (
+          notices: Array<{
+            kind: 'installed' | 'reinstalled' | 'error' | 'info'
+            message: string
+            entryId?: string
+            operationId?: string
+            source?: 'watch'
+          }>,
+        ) => void,
+      ) => () => void
     }
   }
 }

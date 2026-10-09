@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { onEvent } from './events.ts'
+import { fingerprintFile } from './fingerprint.ts'
 import { peekFontAnalysis, rememberFontAnalysis } from './font-analysis.ts'
 import {
   INBOX_CORRUPT_ATTEMPT_LIMIT,
@@ -177,6 +178,11 @@ test('a rejected watch file is not a settled seen entry', () => {
   assert.equal(inboxChangeShouldImport(failed, 'same', 'same', false), true)
   assert.equal(inboxChangeShouldImport(undefined, 'next', 'previous', false), true)
   assert.equal(inboxChangeShouldImport(undefined, 'same', 'same', false), false)
+  const reported = { size: 32, mtimeMs: 10, reported: true, fingerprint: 'bad' }
+  const sameStamp = { size: 32, mtimeMs: 10 }
+  assert.equal(inboxChangeShouldImport(reported, 'good', undefined, false, sameStamp), true)
+  assert.equal(inboxChangeShouldImport(reported, 'bad', undefined, false, sameStamp), false)
+  assert.equal(inboxChangeShouldImport(reported, undefined, undefined, false, sameStamp), false)
 })
 
 test('recording a missing watch file does not store a negative stamp', () => {
@@ -349,6 +355,9 @@ test('a corrupt watch file is reported once after repeated failures', async () =
     recordInboxImportResult([font], [font], { failures: [failure] })
     assert.equal(notices.length, 1)
     assert.equal(inboxRejectionForTest(font)?.reported, true)
+    assert.equal(inboxRejectionForTest(font)?.fingerprint, fingerprintFile(font))
+    assert.match(notices[0] ?? '', /^Bad\.ttf:/)
+    assert.equal((notices[0] ?? '').includes(root), false)
   } finally {
     stop()
     await closeAllWatchers()

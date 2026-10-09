@@ -335,8 +335,6 @@ const SFNT_TRUE_TAG = 0x74727565
 const SFNT_TYP1 = 0x74797031
 const SFNT_TTCF = 0x74746366
 const SFNT_HEAD = 0x68656164
-/** Real fonts pad the last table to a 4-byte boundary, which can sit past EOF by up to 3 bytes. */
-const SFNT_LAST_TABLE_EOF_SLACK = 3
 
 export type SfntTableCheck =
   | { ok: true }
@@ -365,20 +363,15 @@ function readExact(fd: number, size: number, position: number): Buffer | undefin
 type SfntTableSpan = { tag: number; offset: number; length: number; end: number }
 
 function rejectTables(fileSize: number, tables: SfntTableSpan[]): SfntTableCheck {
-  let maxEnd = 0
-  for (const table of tables) {
-    if (table.length > 0 && table.end > maxEnd) maxEnd = table.end
-  }
   for (const table of tables) {
     if (table.length === 0) continue
     const name = sfntTagName(table.tag)
     if (table.offset > fileSize) {
       return { ok: false, reason: `The ${name} table starts past the end of the file.` }
     }
-    const overrun = table.end - fileSize
-    if (overrun <= 0) continue
-    if (table.end === maxEnd && overrun <= SFNT_LAST_TABLE_EOF_SLACK) continue
-    return { ok: false, reason: `The ${name} table extends past the end of the file.` }
+    if (table.end > fileSize) {
+      return { ok: false, reason: `The ${name} table extends past the end of the file.` }
+    }
   }
   return { ok: true }
 }
@@ -445,7 +438,8 @@ function collectionTablesFit(fd: number, fileSize: number): SfntTableCheck {
 /**
  * Why an sfnt file cannot be imported yet, or `ok` when it is not an sfnt container.
  * Web fonts are not sfnt containers and return ok so the normal parser decides.
- * The last table may extend up to 3 bytes past EOF for alignment padding.
+ * A table that extends past EOF is rejected. Chromium's OTS does the same, and a
+ * font we accepted with trailing slack spun forever in the preview.
  */
 export function inspectSfntTables(filePath: string): SfntTableCheck {
   let fd: number | undefined

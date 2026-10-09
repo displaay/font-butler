@@ -57,6 +57,8 @@ export type AnalyzeFontOptions = {
 
 const cache = new Map<string, FontAnalysis>()
 const inflight = new Map<string, Promise<FontAnalysis>>()
+const inflightGeneration = new Map<string, number>()
+const cacheGeneration = new Map<string, number>()
 const stats: FontAnalysisStats = {
   parses: 0,
   fingerprints: 0,
@@ -97,16 +99,23 @@ function isComplete(analysis: FontAnalysis): boolean {
   return typeof analysis.parsed.previewSample === 'string'
 }
 
-function remember(key: string, analysis: FontAnalysis): void {
+function generationOf(filePath: string): number {
+  return cacheGeneration.get(path.resolve(filePath)) ?? 0
+}
+
+function remember(key: string, analysis: FontAnalysis, generation = generationOf(analysis.path)): void {
+  if (generationOf(analysis.path) !== generation) return
   cache.set(key, analysis)
 }
 
 /** Drop cached parses for a path so a later write is not served the failed bytes. */
 export function forgetFontAnalysis(filePath: string): void {
-  const prefix = `${path.resolve(filePath)}\0`
+  const resolved = path.resolve(filePath)
+  const prefix = `${resolved}\0`
   for (const key of cache.keys()) {
     if (key.startsWith(prefix)) cache.delete(key)
   }
+  cacheGeneration.set(resolved, generationOf(resolved) + 1)
 }
 
 export function fontAnalysisStats(): FontAnalysisStats {
@@ -116,6 +125,8 @@ export function fontAnalysisStats(): FontAnalysisStats {
 export function resetFontAnalysisCache(): void {
   cache.clear()
   inflight.clear()
+  inflightGeneration.clear()
+  cacheGeneration.clear()
   stats.parses = 0
   stats.fingerprints = 0
   stats.cacheHits = 0
@@ -378,13 +389,14 @@ export async function analyzeFontFile(
   const resolved = path.resolve(filePath)
   const stat = readFileStat(resolved)
   const key = cacheKey(resolved, stat, options?.previewMeta)
+  const generation = generationOf(resolved)
   const cached = cache.get(key)
   if (cached && isComplete(cached)) {
     stats.cacheHits += 1
     return cached
   }
   const running = inflight.get(key)
-  if (running) {
+  if (running && inflightGeneration.get(key) === generation) {
     if (cached) options?.onPartial?.(cached)
     return running
   }
@@ -395,33 +407,37 @@ export async function analyzeFontFile(
         ? await postWorkerJob(thread, resolved, {
             previewMeta: options?.previewMeta,
             onPartial(partial) {
-              remember(key, partial)
+              remember(key, partial, generation)
               options?.onPartial?.(partial)
             },
           })
         : analyzeOnThisThread(resolved, options)
-      remember(key, analysis)
+      remember(key, analysis, generation)
       return analysis
     } catch (error) {
       // Per-file worker errors must not retry on the API thread.
       // Only fall back when a posted worker job died with the worker itself.
       if (thread && workerFailed && !(error instanceof FontAnalysisWorkerJobError)) {
         const analysis = analyzeOnThisThread(resolved, options)
-        remember(key, analysis)
+        remember(key, analysis, generation)
         return analysis
       }
       // A partial remember must not stick. The next add/change of a file that
       // failed because it was still being copied has to parse the new bytes,
       // even when mtime and size happen to match this attempt.
-      cache.delete(key)
+      if (generationOf(resolved) === generation) cache.delete(key)
       throw error
     }
   })()
   inflight.set(key, job)
+  inflightGeneration.set(key, generation)
   try {
     return await job
   } finally {
-    inflight.delete(key)
+    if (inflight.get(key) === job) {
+      inflight.delete(key)
+      inflightGeneration.delete(key)
+    }
   }
 }
 

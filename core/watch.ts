@@ -1,4 +1,5 @@
 import chokidar, { type FSWatcher } from 'chokidar'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -13,6 +14,7 @@ import {
   saveCatalog,
 } from './catalog.ts'
 import { emitEvent } from './events.ts'
+import { createOperation, finishOperation, loadOperations, upsertOperation } from './operations.ts'
 import { emitNotice } from './service-helpers.ts'
 import { countInstallableFormats, isWebFontFile } from './formats.ts'
 import { forgetFontAnalysis } from './font-analysis.ts'
@@ -39,6 +41,9 @@ const inboxInFlight = new Set<string>()
 const inboxRejected = new Map<string, InboxFileStamp>()
 const inboxImportedFingerprint = new Map<string, string>()
 const inboxSettleTimers = new Map<string, ReturnType<typeof setTimeout>>()
+let inboxPaths: AppPaths | undefined
+/** One catalog read shared by the change events of a batch. */
+let catalogFingerprintByPath: Map<string, string> | null = null
 let scheduleActiveInboxFlush: (() => void) | null = null
 let inboxWork: Promise<void> = Promise.resolve()
 /** Bumped when the inbox watcher stops so an in-flight flush does not record after close. */
@@ -590,6 +595,8 @@ export type InboxFileStamp = {
   attempts: number
   reason: string
   reported: boolean
+  /** Bytes that failed. A later write with the same size and mtime is imported when this changes. */
+  fingerprint?: string
 }
 
 function inboxFileStamp(filePath: string): { size: number; mtimeMs: number } {
@@ -607,7 +614,9 @@ function inboxFileStamp(filePath: string): { size: number; mtimeMs: number } {
  * can succeed on incomplete bytes and then change without a new size.
  */
 export function inboxChangeShouldImport(
-  rejection: { reported?: boolean; size: number; mtimeMs: number } | undefined,
+  rejection:
+    | { reported?: boolean; size: number; mtimeMs: number; fingerprint?: string }
+    | undefined,
   nextFingerprint: string | undefined,
   previousFingerprint: string | undefined,
   inFlight: boolean,
@@ -619,7 +628,9 @@ export function inboxChangeShouldImport(
     if (!nextStamp || nextStamp.size !== rejection.size || nextStamp.mtimeMs !== rejection.mtimeMs) {
       return true
     }
-    return false
+    return Boolean(
+      nextFingerprint && rejection.fingerprint && nextFingerprint !== rejection.fingerprint,
+    )
   }
   return Boolean(
     previousFingerprint && nextFingerprint && previousFingerprint !== nextFingerprint,
@@ -633,14 +644,52 @@ function clearInboxFailureTimer(filePath: string): void {
   inboxSettleTimers.delete(filePath)
 }
 
-function reportInboxFailure(filePath: string): void {
+function invalidateCatalogFingerprints(): void {
+  catalogFingerprintByPath = null
+}
+
+function recordWatchFailure(
+  filePath: string,
+  reason: string,
+  trigger: 'watch' | 'startup',
+): string | undefined {
+  if (!inboxPaths) return undefined
+  const operation = finishOperation(
+    createOperation({
+      trigger,
+      action: 'import',
+      familyName: path.basename(filePath),
+    }),
+    [
+      {
+        id: crypto.randomUUID(),
+        label: filePath,
+        outcome: 'failed',
+        reason,
+      },
+    ],
+  )
+  upsertOperation(inboxPaths, operation)
+  emitEvent({ type: 'operations', operations: loadOperations(inboxPaths) })
+  return operation.id
+}
+
+function reportInboxFailure(filePath: string, immediate: boolean): void {
   const current = inboxRejected.get(filePath)
   if (!current || current.reported) return
   current.reported = true
   clearInboxFailureTimer(filePath)
+  let operationId: string | undefined
+  try {
+    operationId = recordWatchFailure(filePath, current.reason, immediate ? 'startup' : 'watch')
+  } catch {
+    operationId = undefined
+  }
   emitNotice({
     kind: 'error',
-    message: `${filePath}: ${current.reason}`,
+    message: `${path.basename(filePath)}: ${current.reason}`,
+    operationId,
+    source: 'watch',
   })
 }
 
@@ -658,18 +707,27 @@ function rememberInboxRejection(
   const previous = inboxRejected.get(filePath)
   const sameStamp =
     previous !== undefined && previous.size === stamp.size && previous.mtimeMs === stamp.mtimeMs
-  if (sameStamp && previous.reported) return
+  if (sameStamp && previous.reported) {
+    const fingerprint = tryFingerprintFile(filePath)
+    if (fingerprint && fingerprint !== previous.fingerprint) {
+      inboxRejected.set(filePath, { ...previous, fingerprint })
+    }
+    return
+  }
   const attempts = sameStamp ? previous.attempts + 1 : 1
+  const fingerprint =
+    sameStamp && previous.fingerprint ? previous.fingerprint : tryFingerprintFile(filePath)
   inboxRejected.set(filePath, {
     size: stamp.size,
     mtimeMs: stamp.mtimeMs,
     attempts,
     reason,
     reported: false,
+    fingerprint,
   })
   clearInboxFailureTimer(filePath)
   if (immediate || attempts >= INBOX_CORRUPT_ATTEMPT_LIMIT) {
-    reportInboxFailure(filePath)
+    reportInboxFailure(filePath, immediate)
     return
   }
   const timer = setTimeout(() => {
@@ -678,7 +736,7 @@ function rememberInboxRejection(
     if (!current || current.reported) return
     const live = inboxFileStamp(filePath)
     if (live.size !== current.size || live.mtimeMs !== current.mtimeMs) return
-    reportInboxFailure(filePath)
+    reportInboxFailure(filePath, false)
   }, INBOX_CORRUPT_SETTLE_MS)
   timer.unref?.()
   inboxSettleTimers.set(filePath, timer)
@@ -688,7 +746,17 @@ function rememberedFingerprint(filePath: string, paths?: AppPaths): string | und
   const cached = inboxImportedFingerprint.get(filePath)
   if (cached) return cached
   if (!paths) return undefined
-  return findBySourcePath(loadCatalog(paths), filePath)?.sourceFingerprint
+  if (!catalogFingerprintByPath) {
+    catalogFingerprintByPath = new Map()
+    for (const entry of loadCatalog(paths).entries) {
+      if (!entry.sourcePath || !entry.sourceFingerprint) continue
+      const resolved = path.resolve(entry.sourcePath)
+      if (!catalogFingerprintByPath.has(resolved)) {
+        catalogFingerprintByPath.set(resolved, entry.sourceFingerprint)
+      }
+    }
+  }
+  return catalogFingerprintByPath.get(filePath)
 }
 
 function enqueueInboxWork(task: () => Promise<void>): Promise<void> {
@@ -721,6 +789,7 @@ export function recordInboxImportResult(
     if (item.fingerprint) fingerprints.set(path.resolve(item.path), item.fingerprint)
   }
   const seen = new Set<string>()
+  invalidateCatalogFingerprints()
   for (const filePath of filePaths) {
     const resolved = path.resolve(filePath)
     seen.add(resolved)
@@ -821,6 +890,7 @@ export async function syncInboxWatcher(
   paths?: AppPaths,
 ): Promise<void> {
   if (existingWatchFolders(folders).length === 0) inboxRecordEpoch += 1
+  inboxPaths = paths
   const session = ++inboxSession
   if (inboxTimer) {
     clearTimeout(inboxTimer)
@@ -838,6 +908,8 @@ export async function syncInboxWatcher(
     inboxRejected.clear()
     inboxInFlight.clear()
     inboxImportedFingerprint.clear()
+    invalidateCatalogFingerprints()
+    inboxPaths = undefined
     inboxPending = []
     inboxFlushAgain = false
     for (const timer of inboxSettleTimers.values()) clearTimeout(timer)
@@ -875,7 +947,11 @@ export async function syncInboxWatcher(
           const batch = [...new Set(inboxPending)]
           inboxPending = []
           if (batch.length === 0) continue
-          for (const filePath of batch) inboxInFlight.add(filePath)
+          invalidateCatalogFingerprints()
+          for (const filePath of batch) {
+            forgetFontAnalysis(filePath)
+            inboxInFlight.add(filePath)
+          }
           let failed: readonly string[] = []
           let result: InboxWatchBatchResult | undefined
           try {
@@ -918,6 +994,14 @@ export async function syncInboxWatcher(
         } catch {
           nextStamp = undefined
         }
+        if (
+          nextStamp &&
+          nextStamp.size === rejection.size &&
+          nextStamp.mtimeMs === rejection.mtimeMs &&
+          rejection.fingerprint
+        ) {
+          nextFingerprint = tryFingerprintFile(resolved)
+        }
       } else if (!inFlight && !rejection && previousFingerprint) {
         nextFingerprint = tryFingerprintFile(resolved)
       }
@@ -926,9 +1010,10 @@ export async function syncInboxWatcher(
       ) {
         return
       }
-      if (previousFingerprint && nextFingerprint && previousFingerprint !== nextFingerprint) {
-        forgetFontAnalysis(resolved)
-      }
+      const bytesChanged =
+        (previousFingerprint && nextFingerprint && previousFingerprint !== nextFingerprint) ||
+        (rejection?.fingerprint && nextFingerprint && rejection.fingerprint !== nextFingerprint)
+      if (bytesChanged) forgetFontAnalysis(resolved)
       if (rejection) clearInboxFailureTimer(resolved)
     }
     inboxPending.push(resolved)

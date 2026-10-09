@@ -45,6 +45,7 @@ import {
   suggestedFamilyName,
 } from './finder-install.mjs'
 import { deliverNativeNotice, electronNotificationPermission } from './notify.mjs'
+import { createWatchNoticeBuffer, isWatchFailureNotice } from './watch-notices.mjs'
 import {
   buildTrayMenuModel,
   menuBarUpdateBadge,
@@ -265,6 +266,7 @@ let clearAdobeFontCacheEnabled = true
 let nativeNotificationsEnabled = false
 let lastNoticeKey = ''
 let lastNoticeAt = 0
+const watchNoticeBuffer = createWatchNoticeBuffer()
 let isQuitting = false
 const queuedFiles = []
 const finderJobs = createFinderJobQueue((action, filePaths) => runFinderJob(action, filePaths))
@@ -279,11 +281,11 @@ let retailStatus = null
 let runPackagedBootstrap = null
 
 function startMainUiAfterBootstrap() {
+  void listenForApiEvents()
   createWindow()
   void loadCatalog()
   void loadActivity()
   void loadAppUpdate()
-  void listenForApiEvents()
   void loadRetailStatus()
 }
 
@@ -459,7 +461,23 @@ function destroyMainWindowForReplace() {
   win.destroy()
 }
 
+function deliverWatchNotices(notices) {
+  if (!notices?.length) return
+  const win = mainWindow
+  if (!win || win.isDestroyed() || mainWindowKind !== 'main') return
+  win.webContents.send('watch-notices', notices)
+}
+
+function flushWatchNotices() {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindowKind !== 'main') return
+  deliverWatchNotices(watchNoticeBuffer.markReady())
+}
+
 function attachMainWindowHandlers(win) {
+  win.webContents.on('did-finish-load', () => {
+    if (win !== mainWindow || mainWindowKind !== 'main') return
+    flushWatchNotices()
+  })
   win.webContents.on('console-message', (_event, level, message, line, sourceId) => {
     if (level < 2) return
     const levelLabel = level === 2 ? 'warn' : 'error'
@@ -1472,6 +1490,9 @@ function handleApiEvent(event) {
   }
   if (event.type === 'notice' && event.notice) {
     maybeNotify(event.notice)
+    if (isWatchFailureNotice(event.notice)) {
+      deliverWatchNotices(watchNoticeBuffer.push(event.notice))
+    }
   }
   if (event.type === 'app-update' && event.update) {
     appUpdate = event.update
@@ -2061,6 +2082,10 @@ if (!gotLock) {
     showMainWindow()
   })
 }
+
+ipcMain.on('renderer-app-mounted', () => {
+  flushWatchNotices()
+})
 
 ipcMain.handle('quit-app', () => {
   isQuitting = true

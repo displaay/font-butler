@@ -173,6 +173,8 @@ export type Notice = {
   message: string
   entryId?: string
   operationId?: string
+  /** Watch-folder failures are buffered until the window can show them. */
+  source?: 'watch'
 }
 
 export type ViewLayout = 'list' | 'grid'
