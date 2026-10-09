@@ -12,7 +12,13 @@ import { isUnderAnyRoot } from './containment.ts'
 import { duplicateNotifyKey, upsertDuplicateWarning } from './duplicates.ts'
 import { occupyingSiblingsForIncoming } from './identity.ts'
 import { assertNotWebFont, isWebFontFile, isWebFontFormat } from './formats.ts'
-import { analyzeFontFile, analyzeFontFileSync, peekFontAnalysis, type FontAnalysis } from './font-analysis.ts'
+import {
+  analyzeFontFile,
+  analyzeFontFileSync,
+  forgetFontAnalysis,
+  peekFontAnalysis,
+  type FontAnalysis,
+} from './font-analysis.ts'
 import { tryFingerprintFile } from './fingerprint.ts'
 import { folderForPath, isExcluded, mostSpecificOwner } from './folders.ts'
 import { applyParsedFont, isFontFile, isPreviewableFontFile, readFileStat } from './parse.ts'
@@ -143,7 +149,22 @@ export type InboxImportHost = {
   install(id: string): Promise<CatalogEntry>
 }
 
-export async function importInboxFiles(host: InboxImportHost, filePaths: string[]): Promise<void> {
+export type InboxImportResult = {
+  failedPaths: string[]
+}
+
+function importErrorPath(error: string, candidates: readonly string[]): string | undefined {
+  for (const filePath of candidates) {
+    const resolved = path.resolve(filePath)
+    if (error === resolved || error.startsWith(`${resolved}:`)) return resolved
+  }
+  return undefined
+}
+
+export async function importInboxFiles(
+  host: InboxImportHost,
+  filePaths: string[],
+): Promise<InboxImportResult> {
   const settings = loadSettings(host.paths)
   const allowed = filePaths.filter((filePath) => {
     const folder = folderForPath(settings.folders, filePath)
@@ -153,15 +174,22 @@ export async function importInboxFiles(host: InboxImportHost, filePaths: string[
   })
   const catalog = loadCatalog(host.paths)
   const auto: string[] = []
+  const unreadable = new Set<string>()
   let notified = 0
   for (const filePath of allowed) {
+    const resolved = path.resolve(filePath)
     let analysis
+    let parseFailed = false
     try {
       analysis = await analyzeFontFile(filePath)
     } catch {
       analysis = undefined
+      parseFailed = true
     }
     const item = classifyImportFile(filePath, catalog, { paths: host.paths, analysis })
+    if (parseFailed || item.classification === 'unsupported') {
+      unreadable.add(resolved)
+    }
     if (isWatchIdentityDuplicate(item)) {
       const occupying = occupyingSiblingsForIncoming(
         catalog.entries,
@@ -206,10 +234,21 @@ export async function importInboxFiles(host: InboxImportHost, filePaths: string[
     })
   }
   if (auto.length === 0) {
-    return
+    for (const filePath of unreadable) forgetFontAnalysis(filePath)
+    return { failedPaths: [...unreadable] }
   }
   const beforeIds = new Set(host.listCatalog().map((entry) => entry.id))
   const result = await host.importPaths(auto)
+  const imported = new Set(result.entries.map((entry) => path.resolve(entry.sourcePath)))
+  const failed = new Set<string>()
+  for (const filePath of unreadable) {
+    if (!imported.has(filePath)) failed.add(filePath)
+  }
+  for (const error of result.errors) {
+    const match = importErrorPath(error, auto)
+    if (match && !imported.has(match)) failed.add(match)
+  }
+  for (const filePath of failed) forgetFontAnalysis(filePath)
   const added = result.entries.filter((entry) => !beforeIds.has(entry.id))
   const installed: CatalogEntry[] = []
   for (const entry of added) {
@@ -254,4 +293,5 @@ export async function importInboxFiles(host: InboxImportHost, filePaths: string[
       message: result.errors.join('\n'),
     })
   }
+  return { failedPaths: [...failed] }
 }

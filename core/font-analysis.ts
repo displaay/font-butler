@@ -101,6 +101,14 @@ function remember(key: string, analysis: FontAnalysis): void {
   cache.set(key, analysis)
 }
 
+/** Drop cached parses for a path so a later write is not served the failed bytes. */
+export function forgetFontAnalysis(filePath: string): void {
+  const prefix = `${path.resolve(filePath)}\0`
+  for (const key of cache.keys()) {
+    if (key.startsWith(prefix)) cache.delete(key)
+  }
+}
+
 export function fontAnalysisStats(): FontAnalysisStats {
   return { ...stats }
 }
@@ -402,6 +410,10 @@ export async function analyzeFontFile(
         remember(key, analysis)
         return analysis
       }
+      // A partial remember must not stick. The next add/change of a file that
+      // failed because it was still being copied has to parse the new bytes,
+      // even when mtime and size happen to match this attempt.
+      cache.delete(key)
       throw error
     }
   })()

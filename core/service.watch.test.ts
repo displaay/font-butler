@@ -8,7 +8,13 @@ import type { AppPaths } from './paths.ts'
 import { FontButlerService } from './service.ts'
 import { canAutomateUpdates, effectiveUpdatePolicy } from './state.ts'
 import type { CatalogEntry } from './types.ts'
-import { closeAllWatchers, enqueueSourceStatusRefresh, syncInboxWatcher } from './watch.ts'
+import {
+  INBOX_WRITE_STABILITY_MS,
+  closeAllWatchers,
+  enqueueSourceStatusRefresh,
+  inboxRejectionForTest,
+  syncInboxWatcher,
+} from './watch.ts'
 
 function tempPaths(): AppPaths {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-watch-settings-'))
@@ -469,6 +475,115 @@ test('folder auto-reinstall on still reinstalls when the global switch is off', 
       return !fs.readFileSync(entry.installedPath).equals(before)
     })
     assert.equal(after.status, 'installed')
+  } finally {
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs: number, label: string): Promise<void> {
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    if (predicate()) return
+    await delay(40)
+  }
+  assert.fail(label)
+}
+
+async function writeBytesInChunks(dest: string, bytes: Buffer, parts: number, gapMs: number): Promise<void> {
+  const fd = fs.openSync(dest, 'w')
+  try {
+    const size = Math.max(1, Math.ceil(bytes.length / parts))
+    for (let offset = 0; offset < bytes.length; offset += size) {
+      const length = Math.min(size, bytes.length - offset)
+      fs.writeSync(fd, bytes, offset, length, offset)
+      fs.fsyncSync(fd)
+      if (offset + length < bytes.length) await delay(gapMs)
+    }
+  } finally {
+    fs.closeSync(fd)
+  }
+}
+
+test('a font copied slowly into a watch folder appears after the write settles', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  const staged = path.join(paths.dataRoot, 'staged-slow.ttf')
+  fs.mkdirSync(inbox, { recursive: true })
+  writeTestFont(staged, 'SlowDrop', 'SlowDrop-Regular')
+  const bytes = fs.readFileSync(staged)
+  const font = path.join(inbox, 'SlowDrop.ttf')
+  const service = new FontButlerService(paths)
+  try {
+    await service.updateSettings({ onboardingCompleted: true })
+    const configured = await service.configureFolder({ root: inbox, installNew: true })
+    await service.startWatching(configured.folder.id)
+    assert.equal(service.listCatalog().length, 0)
+
+    const copying = writeBytesInChunks(font, bytes, 4, 600)
+    await delay(700)
+    assert.equal(
+      service.listCatalog().some((entry) => entry.faces[0]?.familyName === 'SlowDrop'),
+      false,
+    )
+    await copying
+    await waitFor(
+      () => service.listCatalog().some((entry) => entry.faces[0]?.familyName === 'SlowDrop'),
+      INBOX_WRITE_STABILITY_MS + 8000,
+      'slow watch-folder copy never landed in the library',
+    )
+    const entry = service.listCatalog().find((item) => item.faces[0]?.familyName === 'SlowDrop')
+    assert.ok(entry)
+    assert.equal(entry.status, 'installed')
+    assert.equal(inboxRejectionForTest(font), undefined)
+  } finally {
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('a truncated watch-folder font is imported after a later change', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  const staged = path.join(paths.dataRoot, 'staged-recover.ttf')
+  fs.mkdirSync(inbox, { recursive: true })
+  writeTestFont(staged, 'Recovered', 'Recovered-Regular')
+  const bytes = fs.readFileSync(staged)
+  const font = path.join(inbox, 'Recovered.ttf')
+  const service = new FontButlerService(paths)
+  try {
+    await service.updateSettings({ onboardingCompleted: true })
+    const configured = await service.configureFolder({ root: inbox, installNew: true })
+    await service.startWatching(configured.folder.id)
+
+    fs.writeFileSync(font, bytes.subarray(0, 32))
+    await waitFor(
+      () => inboxRejectionForTest(font)?.size === 32,
+      INBOX_WRITE_STABILITY_MS + 8000,
+      'truncated watch file was not rejected',
+    )
+    assert.equal(
+      service.listCatalog().some((entry) => entry.faces[0]?.familyName === 'Recovered'),
+      false,
+    )
+
+    fs.writeFileSync(font, bytes)
+    await waitFor(
+      () => service.listCatalog().some((entry) => entry.faces[0]?.familyName === 'Recovered'),
+      INBOX_WRITE_STABILITY_MS + 8000,
+      'completed watch file did not recover after the change',
+    )
+    const entry = service.listCatalog().find((item) => item.faces[0]?.familyName === 'Recovered')
+    assert.ok(entry)
+    assert.equal(entry.status, 'installed')
+    assert.equal(entry.sourceSize, bytes.length)
+    assert.equal(inboxRejectionForTest(font), undefined)
   } finally {
     service.dispose()
     await closeAllWatchers()

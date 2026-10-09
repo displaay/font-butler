@@ -3,7 +3,13 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { expandImportPaths, inferExpandedFolderDrops, inspectDropPaths, listFontFilesInTree } from './watch.ts'
+import {
+  expandImportPaths,
+  inboxChangeShouldImport,
+  inferExpandedFolderDrops,
+  inspectDropPaths,
+  listFontFilesInTree,
+} from './watch.ts'
 
 function makeTree(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-walk-'))
@@ -150,6 +156,16 @@ test('inferExpandedFolderDrops ignores extra woff files from a folder drop', () 
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
+})
+
+test('a rejected watch file is not a settled seen entry', () => {
+  const failed = { size: 32, mtimeMs: 10 }
+  assert.equal(inboxChangeShouldImport(undefined, failed, false), false)
+  assert.equal(inboxChangeShouldImport(undefined, undefined, true), true)
+  assert.equal(inboxChangeShouldImport(failed, { size: 32, mtimeMs: 10 }, false), true)
+  assert.equal(inboxChangeShouldImport(failed, { size: 900, mtimeMs: 10 }, false), true)
+  assert.equal(inboxChangeShouldImport(failed, { size: 32, mtimeMs: 80 }, false), true)
+  assert.equal(inboxChangeShouldImport(failed, undefined, false), true)
 })
 
 test('inferExpandedFolderDrops ignores a partial file selection', () => {

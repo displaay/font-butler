@@ -263,6 +263,7 @@ import {
   listFontFilesInTree,
   listInboxFontFiles,
   reconcileWatchedSources,
+  recordInboxImportResult,
   setSourceStatusListener,
   syncInboxWatcher,
   syncUserFontsWatcher,
@@ -4046,9 +4047,7 @@ export class FontButlerService {
     }
     await syncInboxWatcher(
       folders,
-      (filePaths) => {
-        void this.importInboxFiles(filePaths)
-      },
+      (filePaths) => this.importInboxFiles(filePaths),
       this.paths,
     )
     if (options.importExisting && folders.length) {
@@ -4066,12 +4065,13 @@ export class FontButlerService {
         ),
       ].filter((filePath) => !known.has(filePath))
       if (discovered.length) {
-        await this.importInboxFiles(discovered)
+        const outcome = await this.importInboxFiles(discovered)
+        recordInboxImportResult(discovered, outcome.failedPaths)
       }
     }
   }
 
-  private async importInboxFiles(filePaths: string[]): Promise<void> {
+  private importInboxFiles(filePaths: string[]) {
     return importInboxFilesFn(this, filePaths)
   }
 
