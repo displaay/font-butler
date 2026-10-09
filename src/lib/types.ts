@@ -404,6 +404,8 @@ export type AppUpdateStatus = {
   autoInstall: 'parked'
   checkedAt: number
   error?: string
+  testFeedBuild?: boolean
+  testFeedDataDir?: string
 }
 
 export type {

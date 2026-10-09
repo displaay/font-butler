@@ -36,3 +36,57 @@ export function appUpdateDownloadUrl(
 ): string | null {
   return status.preferredAsset?.url ?? null
 }
+
+export type AppUpdateInstallPhase = 'idle' | 'downloading' | 'verifying' | 'installing' | 'opening' | 'error'
+
+export function appUpdateBadgeText(phase?: AppUpdateInstallPhase, percent?: number): string {
+  if (phase === 'error') return 'Error'
+  if (phase === 'downloading') return typeof percent === 'number' ? `${percent}%` : '…'
+  if (phase === 'verifying' || phase === 'installing' || phase === 'opening') return '…'
+  return 'Update'
+}
+
+export function appUpdateRunningLine(
+  status?: { currentVersion?: string; testFeedBuild?: boolean; testFeedDataDir?: string } | null,
+): string {
+  if (!status?.currentVersion) return 'Check GitHub Releases for a newer build.'
+  if (!status.testFeedBuild) return `This Mac is running ${status.currentVersion}.`
+  const dataDir = status.testFeedDataDir?.trim()
+  const base = `This Mac is running ${status.currentVersion}. TEST BUILD`
+  return dataDir ? `${base}. Data folder: ${dataDir}` : base
+}
+
+export function appUpdateBadgeLabel(version: string, phase?: AppUpdateInstallPhase): string {
+  if (phase === 'error') return `Update to Font Buttler ${version} failed`
+  if (phase && phase !== 'idle') return `Updating to Font Buttler ${version}`
+  return `Update to Font Buttler ${version}`
+}
+
+export function appUpdateClickIgnored(phase?: AppUpdateInstallPhase): boolean {
+  return phase === 'downloading' || phase === 'verifying' || phase === 'installing' || phase === 'opening'
+}
+
+const APP_UPDATE_INSTALL_PHASES = new Set<AppUpdateInstallPhase>([
+  'idle',
+  'downloading',
+  'verifying',
+  'installing',
+  'opening',
+  'error',
+])
+
+export function appUpdateInstallFromMain(payload?: {
+  phase?: string
+  percent?: number
+  error?: string
+} | null): { phase: AppUpdateInstallPhase; percent?: number; error?: string } {
+  const phase = payload && APP_UPDATE_INSTALL_PHASES.has(payload.phase as AppUpdateInstallPhase)
+    ? (payload.phase as AppUpdateInstallPhase)
+    : 'idle'
+  if (phase === 'idle') return { phase: 'idle' }
+  return {
+    phase,
+    ...(typeof payload?.percent === 'number' ? { percent: payload.percent } : {}),
+    ...(typeof payload?.error === 'string' ? { error: payload.error } : {}),
+  }
+}

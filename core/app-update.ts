@@ -3,13 +3,24 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { emitEvent } from './events.ts'
 import {
+  APP_UPDATE_FEED_ENV,
+  detectAppUpdateRuntime,
+  loadUpdateFeed,
+  macArm64ArchiveName,
+  resolveUpdateFeedUrl,
+  type AppUpdateRuntimeFacts,
+} from '../electron/app-update-install.mjs'
+import {
   APP_UPDATE_AUTO_INSTALL,
   APP_UPDATE_CACHE_MS,
   APP_UPDATE_FETCH_TIMEOUT_MS,
   APP_UPDATE_GITHUB_LATEST_API,
+  APP_UPDATE_GITHUB_RELEASES_URL,
   APP_UPDATE_GITHUB_TOKEN_ENV,
   APP_UPDATE_GITHUB_TOKEN_FALLBACK_ENV,
   emptyAppUpdateStatus,
+  isNewerVersion,
+  normalizeVersion,
   parseGithubRelease,
   withTimeout,
   type AppUpdateStatus,
@@ -60,6 +71,9 @@ export type CheckAppUpdateOptions = {
   githubToken?: string
   skipNetworkInTest?: boolean
   timeoutMs?: number
+  /** Test seam. Production reads `process.env` and probes the running app. */
+  env?: NodeJS.ProcessEnv
+  runtime?: AppUpdateRuntimeFacts
 }
 
 type CacheEntry = { at: number; status: AppUpdateStatus }
@@ -135,14 +149,44 @@ export function createAppUpdateChecker(options: { cacheMs?: number; timeoutMs?: 
     if (!input.refresh && cached && now - cached.at < cacheMs) {
       return cached.status
     }
+    const runtime = input.runtime ?? detectAppUpdateRuntime()
+    const testFeedDataDir = String(process.env.FONT_BUTLER_DATA ?? '').trim()
+    const stamp = (status: AppUpdateStatus): AppUpdateStatus =>
+      runtime?.testFeedBuild === true
+        ? {
+            ...status,
+            testFeedBuild: true,
+            ...(testFeedDataDir ? { testFeedDataDir } : {}),
+          }
+        : status
     const skipNetwork =
       input.skipNetworkInTest ?? (process.env.FONT_BUTLER_TEST === '1' && !input.fetch)
     if (skipNetwork) {
-      const status = emptyAppUpdateStatus(currentVersion, { checkedAt: now })
+      const status = stamp(emptyAppUpdateStatus(currentVersion, { checkedAt: now }))
       cached = { at: now, status }
       return status
     }
     const fetchImpl: AppUpdateFetch = input.fetch ?? (globalThis.fetch as AppUpdateFetch)
+    const feedUrl = resolveFeedForCheck(input, runtime)
+    if (feedUrl) {
+      try {
+        const pieces = await withTimeout(
+          loadUpdateFeed(feedUrl, fetchImpl),
+          input.timeoutMs ?? timeoutMs,
+        )
+        const status = stamp(statusFromLocalFeed(pieces, currentVersion, now))
+        cached = { at: now, status }
+        emitEvent({ type: 'app-update', update: status })
+        return status
+      } catch (error) {
+        return stamp(quietFailure(
+          cached,
+          currentVersion,
+          now,
+          error instanceof Error ? error.message : 'Could not read the local update feed',
+        ))
+      }
+    }
     const controller = new AbortController()
     try {
       const github = await withTimeout(
@@ -160,37 +204,37 @@ export function createAppUpdateChecker(options: { cacheMs?: number; timeoutMs?: 
       )
       const { response, json } = github
       if (response.status === 404) {
-        const status = emptyAppUpdateStatus(currentVersion, { checkedAt: now })
+        const status = stamp(emptyAppUpdateStatus(currentVersion, { checkedAt: now }))
         cached = { at: now, status }
         emitEvent({ type: 'app-update', update: status })
         return status
       }
       if (!response.ok) {
-        return quietFailure(
+        return stamp(quietFailure(
           cached,
           currentVersion,
           now,
           `GitHub Releases returned HTTP ${response.status}`,
-        )
+        ))
       }
       if (!json) {
-        return quietFailure(cached, currentVersion, now, 'GitHub Releases returned an empty body')
+        return stamp(quietFailure(cached, currentVersion, now, 'GitHub Releases returned an empty body'))
       }
-      const status = parseGithubRelease(json, currentVersion, {
+      const status = stamp(parseGithubRelease(json, currentVersion, {
         now,
         platform: { platform: process.platform, arch: process.arch },
-      })
+      }))
       cached = { at: now, status }
       emitEvent({ type: 'app-update', update: status })
       return status
     } catch (error) {
       controller.abort()
-      return quietFailure(
+      return stamp(quietFailure(
         cached,
         currentVersion,
         now,
         error instanceof Error ? error.message : 'Could not reach GitHub Releases',
-      )
+      ))
     }
   }
 
@@ -202,6 +246,38 @@ export function createAppUpdateChecker(options: { cacheMs?: number; timeoutMs?: 
     snapshot(): AppUpdateStatus | null {
       return cached?.status ?? null
     },
+  }
+}
+
+function resolveFeedForCheck(
+  input: CheckAppUpdateOptions,
+  runtime: AppUpdateRuntimeFacts,
+): string | null {
+  const env = input.env ?? process.env
+  if (!String(env[APP_UPDATE_FEED_ENV] ?? '').trim()) return null
+  return resolveUpdateFeedUrl(env, runtime)
+}
+
+function statusFromLocalFeed(
+  pieces: { version: string; assets: { name: string; url: string; size?: number }[] },
+  currentVersion: string,
+  now: number,
+): AppUpdateStatus {
+  const current = normalizeVersion(currentVersion) || currentVersion
+  const latest = normalizeVersion(pieces.version)
+  const dmgName = latest ? macArm64ArchiveName(latest, 'dmg') : ''
+  return {
+    currentVersion: current,
+    latestVersion: latest || null,
+    updateAvailable: latest ? isNewerVersion(latest, current) : false,
+    releaseName: latest ? `Font Buttler ${latest}` : null,
+    releaseNotes: null,
+    htmlUrl: APP_UPDATE_GITHUB_RELEASES_URL,
+    publishedAt: null,
+    assets: pieces.assets,
+    preferredAsset: pieces.assets.find((asset) => asset.name === dmgName) ?? null,
+    autoInstall: APP_UPDATE_AUTO_INSTALL,
+    checkedAt: now,
   }
 }
 
@@ -218,6 +294,6 @@ export function parkedAutoInstallState(): {
   return {
     autoInstall: APP_UPDATE_AUTO_INSTALL,
     reason:
-      'After Developer ID signing and notarization, enable electron-updater with the GitHub provider, keep autoDownload and autoInstallOnAppQuit off, then offer an explicit Install action. See docs/releases.md.',
+      'Automatic download and install stay off. The Update badge downloads only after a click, then installs in place for a packaged Developer ID build on team A7WWML89LQ or opens a verified DMG otherwise. See docs/releases.md.',
   }
 }

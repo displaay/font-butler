@@ -89,4 +89,17 @@ replaces them with the full files. See [docs/retail-sync.md](docs/retail-sync.md
 
 ## App updates
 
-Font Buttler compares its running version to the latest [GitHub Release](https://github.com/displaay/font-butler/releases). When a newer release exists, Settings and the menu bar show the version, notes, **Download**, and **Open release**. The Updates tab lists font updates only. Nothing is downloaded or installed automatically. The check is not on the cold-start path and times out after a few seconds so a hung GitHub fetch cannot stall first paint. Offline or GitHub failures stay quiet. A public repo needs no token; a private repo needs a read-only `FONT_BUTLER_GITHUB_TOKEN` until Releases are public (see [docs/releases.md](docs/releases.md)).
+Font Buttler compares its running version to the latest [GitHub Release](https://github.com/displaay/font-butler/releases). When a newer release exists, a blue **Update** badge appears on **Settings** in the left column. Click that badge to download and install the release. Nothing is downloaded until the click, and further clicks are ignored while a download is already running. The Updates tab lists font updates only.
+
+The install path follows the signature of the running app, not its version number:
+
+- A packaged build signed with Developer ID for team `A7WWML89LQ`, from a writable location, is replaced in place and relaunched. The downloaded app must be signed by that same team, carry a notarization staple, and match the sha512 and size in `latest-mac.yml`.
+- Anything else downloads the DMG, checks those same bytes, and opens it. That includes `npm run electron`, an ad-hoc or unsigned build, an app launched from the mounted DMG or from App Translocation, and a bundle folder that is not writable.
+
+The download is unauthenticated and does not send a GitHub token. GitHub redirects release files to `release-assets.githubusercontent.com` (older files used `objects.githubusercontent.com`). Every redirect hop has to stay on an allowlisted host, and a checksum mismatch leaves the current app untouched.
+
+People on 0.3.8 or earlier are on an ad-hoc build whose badge does not install. Download the first signed version by hand once and replace the app. After that, later releases use the badge.
+
+The check is not on the cold-start path and times out after a few seconds so a hung GitHub fetch cannot stall first paint. Offline or GitHub failures stay quiet. A public repo needs no token. A private repo can set a read-only `FONT_BUTLER_GITHUB_TOKEN` for the version check only, until Releases are public (see [docs/releases.md](docs/releases.md)). That token is never sent with the file download.
+
+`FONT_BUTLER_UPDATE_FEED_URL` points a non-release run at a local feed (`http://127.0.0.1`, `http://localhost`, or a `file://` directory that contains `latest-mac.yml`) so a newer signed build can be tried without publishing. A packaged Developer ID build ignores it unless it was packed with `FONT_BUTLER_TEST_FEED_BUILD=1`. Those marked builds are never uploaded. See [docs/releases.md](docs/releases.md).

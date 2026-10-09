@@ -5,7 +5,23 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { assertNotarizedMacRelease, notarizationFailures, prepareMacPublish, updateFeedFailures } from '../scripts/assert-notarized-mac-release.mjs'
+import {
+  TEST_FEED_ENV_REFUSAL,
+  TEST_FEED_MARKER_REFUSAL,
+  TEST_FEED_MARKER_UNREADABLE,
+  TEST_FEED_MARKER_PROBE_FAILURE,
+  assertNotarizedMacRelease,
+  macReleaseAssetNames,
+  notarizationFailures,
+  packagedElectronMarkerFailures,
+  prepareMacPublish,
+  readZipAppTestFeedMarker,
+  releaseAssetVersion,
+  testFeedArchiveFailures,
+  testFeedPublishEnvFailures,
+  updateFeedFailures,
+  zipHasTestFeedMarker,
+} from '../scripts/assert-notarized-mac-release.mjs'
 import {
   expectedReleaseTag,
   publishVersionedMacRelease,
@@ -19,13 +35,17 @@ import {
   ADHOC_ENTITLEMENTS,
   DEVELOPER_ID_IDENTITY,
   NOTARY_KEYCHAIN_PROFILE,
+  TEST_FEED_BUILD_ENV,
+  TEST_FEED_VERSION_ENV,
   applyNotaryEnv,
+  applyTestFeedMetadata,
   developerIdInKeychainOutput,
   electronBuilderArgs,
   packConfig,
   planMacPack,
   releaseConfigErrors,
 } from '../scripts/mac-signing.mjs'
+import { readAppTestFeedMarker } from '../electron/app-update-install.mjs'
 
 const require = createRequire(import.meta.url)
 const yaml = require('js-yaml')
@@ -898,5 +918,168 @@ test('publish requires the remote tag commit to equal HEAD and a clean tree', as
     'vendor/python/bin/python3',
   ]) {
     execFileSync('git', ['check-ignore', '-q', file], { cwd: new URL('..', import.meta.url) })
+  }
+})
+
+test('a test-feed pack stamps extraMetadata and does not change a normal pack', () => {
+  const build = pkg().build
+  const plain = applyTestFeedMetadata(build, {})
+  assert.equal(plain.error, null)
+  assert.equal(plain.build.extraMetadata, undefined)
+  const marked = applyTestFeedMetadata(build, { [TEST_FEED_BUILD_ENV]: '1' })
+  assert.equal(marked.error, null)
+  assert.equal(marked.build.extraMetadata.fontButlerTestFeed, true)
+  assert.equal(marked.build.extraMetadata.version, undefined)
+  const higher = applyTestFeedMetadata(build, {
+    [TEST_FEED_BUILD_ENV]: '1',
+    [TEST_FEED_VERSION_ENV]: 'v0.9.0',
+  })
+  assert.equal(higher.build.extraMetadata.version, '0.9.0')
+  assert.equal(higher.build.extraMetadata.fontButlerTestFeed, true)
+  const stray = applyTestFeedMetadata(build, { [TEST_FEED_VERSION_ENV]: '0.9.0' })
+  assert.equal(stray.build.extraMetadata, undefined)
+  const bad = applyTestFeedMetadata(build, { [TEST_FEED_BUILD_ENV]: '1', [TEST_FEED_VERSION_ENV]: 'latest' })
+  assert.match(bad.error, /FONT_BUTLER_TEST_VERSION/)
+  assert.match(readRepo('scripts/mac-pack.mjs'), /applyTestFeedMetadata/)
+})
+
+test('publish refuses a test-feed environment and a zip or app that carries the marker', async () => {
+  assert.deepEqual(testFeedPublishEnvFailures({}), [])
+  assert.deepEqual(testFeedPublishEnvFailures({ [TEST_FEED_BUILD_ENV]: '' }), [])
+  assert.deepEqual(testFeedPublishEnvFailures({ [TEST_FEED_BUILD_ENV]: '1' }), [TEST_FEED_ENV_REFUSAL])
+
+  const empty = mkdtempSync(path.join(tmpdir(), 'font-butler-test-feed-env-'))
+  const envRefusal = await assertNotarizedMacRelease(empty, '0.3.8', { [TEST_FEED_BUILD_ENV]: '1' })
+  assert.ok(envRefusal.includes(TEST_FEED_ENV_REFUSAL))
+  rmSync(empty, { recursive: true, force: true })
+
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-test-feed-zip-'))
+  const src = path.join(root, 'pack')
+  const app = path.join(root, 'release', 'mac-arm64', 'Font Buttler.app')
+  mkdirSync(src)
+  mkdirSync(path.join(app, 'Contents', 'Resources'), { recursive: true })
+  writeFileSync(
+    path.join(src, 'package.json'),
+    JSON.stringify({ name: 'font-butler', version: '0.3.8', fontButlerTestFeed: true }),
+  )
+  const asarPath = path.join(app, 'Contents', 'Resources', 'app.asar')
+  const asar = await import('@electron/asar')
+  await asar.createPackage(src, asarPath)
+  assert.equal(readAppTestFeedMarker(app), true)
+  const zipPath = path.join(root, 'release', 'Font-Buttler-0.3.8-arm64.zip')
+  execFileSync('python3', [
+    '-c',
+    'import zipfile,sys; z=zipfile.ZipFile(sys.argv[1],"w"); z.write(sys.argv[2], "Font Buttler.app/Contents/Resources/app.asar"); z.close()',
+    zipPath,
+    asarPath,
+  ])
+  assert.equal(zipHasTestFeedMarker(zipPath), true)
+  const marked = await assertNotarizedMacRelease(root, '0.3.8', {})
+  assert.ok(marked.includes(TEST_FEED_MARKER_REFUSAL))
+  assert.equal(marked.includes(TEST_FEED_ENV_REFUSAL), false)
+  rmSync(root, { recursive: true, force: true })
+})
+
+test('publish fails when the release zip app package marker cannot be read', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-test-feed-null-'))
+  const src = path.join(root, 'pack')
+  const app = path.join(root, 'release', 'mac-arm64', 'Font Buttler.app')
+  mkdirSync(src)
+  mkdirSync(path.join(app, 'Contents', 'Resources'), { recursive: true })
+  writeFileSync(path.join(src, 'package.json'), JSON.stringify({ name: 'font-butler', version: '0.3.8' }))
+  const asar = await import('@electron/asar')
+  await asar.createPackage(src, path.join(app, 'Contents', 'Resources', 'app.asar'))
+  assert.equal(readAppTestFeedMarker(app), false)
+  const broken = path.join(root, 'broken.asar')
+  writeFileSync(broken, 'not-an-asar')
+  const zipPath = path.join(root, 'release', 'Font-Buttler-0.3.8-arm64.zip')
+  execFileSync('python3', [
+    '-c',
+    'import zipfile,sys; z=zipfile.ZipFile(sys.argv[1],"w"); z.write(sys.argv[2], "Font Buttler.app/Contents/Resources/app.asar"); z.close()',
+    zipPath,
+    broken,
+  ])
+  assert.equal(readZipAppTestFeedMarker(zipPath), null)
+  assert.deepEqual(testFeedArchiveFailures({ zip: zipPath, appPaths: [app] }), [TEST_FEED_MARKER_UNREADABLE])
+  const failures = await assertNotarizedMacRelease(root, '0.3.8', {})
+  assert.ok(failures.includes(TEST_FEED_MARKER_UNREADABLE))
+  assert.equal(failures.includes(TEST_FEED_MARKER_REFUSAL), false)
+  rmSync(root, { recursive: true, force: true })
+})
+
+test('release asset names follow FONT_BUTLER_TEST_VERSION on a marked build', async () => {
+  assert.equal(releaseAssetVersion('0.3.9', {}), '0.3.9')
+  assert.equal(releaseAssetVersion('0.3.9', { [TEST_FEED_VERSION_ENV]: '0.9.0' }), '0.3.9')
+  assert.equal(
+    releaseAssetVersion('0.3.9', { [TEST_FEED_BUILD_ENV]: '1', [TEST_FEED_VERSION_ENV]: 'v0.9.0' }),
+    '0.9.0',
+  )
+  assert.equal(
+    macReleaseAssetNames('0.9.0').zip,
+    'Font-Buttler-0.9.0-arm64.zip',
+  )
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-test-version-'))
+  try {
+    writeVersionedRelease(root, '0.9.0')
+    const failures = await assertNotarizedMacRelease(root, '0.3.9', {
+      [TEST_FEED_BUILD_ENV]: '1',
+      [TEST_FEED_VERSION_ENV]: '0.9.0',
+    })
+    assert.equal(failures.some((failure) => failure.includes('0.3.9')), false)
+    assert.equal(failures.some((failure) => failure.includes('Missing release/')), false)
+    assert.ok(failures.includes(TEST_FEED_ENV_REFUSAL))
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('the packaged Electron marker gate fails closed on true, null, and a dead probe', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-marker-probe-'))
+  const app = path.join(root, 'Font Buttler.app')
+  const binary = path.join(app, 'Contents', 'MacOS', 'Font Buttler')
+  mkdirSync(path.dirname(binary), { recursive: true })
+  writeFileSync(binary, '')
+  const probe = (stdout, status = 0, extra = {}) => () => ({ status, stdout, stderr: '', ...extra })
+  try {
+    assert.deepEqual(packagedElectronMarkerFailures(app, { spawnImpl: probe('{"marker":false}\n') }), [])
+    assert.deepEqual(packagedElectronMarkerFailures(app, { spawnImpl: probe('{"marker":true}') }), [
+      TEST_FEED_MARKER_REFUSAL,
+    ])
+    assert.deepEqual(packagedElectronMarkerFailures(app, { spawnImpl: probe('{"marker":null}') }), [
+      TEST_FEED_MARKER_UNREADABLE,
+    ])
+    assert.deepEqual(
+      packagedElectronMarkerFailures(app, { spawnImpl: probe('', 1, { error: new Error('spawn ENOENT') }) }),
+      [TEST_FEED_MARKER_PROBE_FAILURE],
+    )
+    assert.match(TEST_FEED_MARKER_PROBE_FAILURE, /RunAsNode/)
+    assert.match(TEST_FEED_MARKER_PROBE_FAILURE, /Do not skip it/)
+    assert.deepEqual(packagedElectronMarkerFailures(path.join(root, 'missing')), [])
+    const release = mkdtempSync(path.join(tmpdir(), 'font-butler-marker-probe-release-'))
+    try {
+      writeVersionedRelease(release, '0.3.8')
+      const releaseApp = path.join(release, 'release', 'mac-arm64', 'Font Buttler.app')
+      const releaseBinary = path.join(releaseApp, 'Contents', 'MacOS', 'Font Buttler')
+      mkdirSync(path.dirname(releaseBinary), { recursive: true })
+      writeFileSync(releaseBinary, '')
+      let calls = 0
+      const failures = await assertNotarizedMacRelease(release, '0.3.8', {}, (command, args, options) => {
+        calls += 1
+        assert.equal(command, releaseBinary)
+        assert.equal(args[0], '--input-type=module')
+        assert.match(args[2], /readAppTestFeedMarker/)
+        assert.match(args[2], /original-fs/)
+        assert.equal(options.env.ELECTRON_RUN_AS_NODE, '1')
+        assert.equal(options.env.FONT_BUTLER_MARKER_APP, releaseApp)
+        return { status: 0, stdout: '{"marker":false}\n', stderr: '' }
+      })
+      assert.equal(calls, 1)
+      assert.equal(failures.includes(TEST_FEED_MARKER_PROBE_FAILURE), false)
+      assert.equal(failures.includes(TEST_FEED_MARKER_REFUSAL), false)
+    } finally {
+      rmSync(release, { recursive: true, force: true })
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true })
   }
 })

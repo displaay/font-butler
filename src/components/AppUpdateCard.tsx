@@ -5,6 +5,7 @@ import {
   PARKED_AUTO_INSTALL_NOTICE,
   appUpdateDownloadUrl,
   appUpdateReleaseUrl,
+  appUpdateRunningLine,
   openAppUpdateUrl,
   type AppUpdateStatus,
 } from '@/lib/app-update'
@@ -43,9 +44,7 @@ export function AppUpdateCard({
               : 'Font Buttler is up to date'}
           </div>
           <p className="mt-0.5 text-[13px] leading-5 text-muted-foreground">
-            {status
-              ? `This Mac is running ${status.currentVersion}.`
-              : 'Check GitHub Releases for a newer build.'}
+            {appUpdateRunningLine(status)}
             {updateAvailable ? ` ${PARKED_AUTO_INSTALL_NOTICE}` : ''}
           </p>
         </div>

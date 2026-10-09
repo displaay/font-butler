@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { APP_UPDATE_FEED_ENV } from '../electron/app-update-install.mjs'
 import {
   APP_UPDATE_AUTO_INSTALL,
   APP_UPDATE_GITHUB_LATEST_API,
@@ -242,7 +247,8 @@ test('withTimeout rejects a hung promise instead of waiting forever', async () =
 
 test('startParkedAutoInstall refuses to download or install', () => {
   assert.throws(() => startParkedAutoInstall(), { message: PARKED_AUTO_INSTALL_MESSAGE })
-  assert.match(parkedAutoInstallState().reason, /electron-updater/)
+  assert.match(parkedAutoInstallState().reason, /Automatic download/)
+  assert.match(parkedAutoInstallState().reason, /click/)
   assert.equal(parkedAutoInstallState().autoInstall, 'parked')
 })
 
@@ -301,6 +307,124 @@ test('a hung GitHub response body times out as a quiet no-update', async () => {
   assert.ok(Date.now() - started < 500, `hung body took ${Date.now() - started}ms; expected a hard timeout`)
   assert.equal(status.updateAvailable, false)
   assert.equal(status.error, undefined)
+})
+
+test('a local feed overrides the GitHub check except on a packaged Developer ID build', async () => {
+  const version = '0.4.0'
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-check-feed-'))
+  const yml = `version: ${version}
+files:
+  - url: Font-Buttler-${version}-arm64.dmg
+    sha512: abc+/=
+    size: 4
+  - url: Font-Buttler-${version}-arm64.zip
+    sha512: def==
+    size: 4
+`
+  writeFileSync(path.join(root, 'latest-mac.yml'), yml)
+  const feed = pathToFileURL(root).href
+  try {
+    const local = createAppUpdateChecker()
+    let githubCalls = 0
+    const status = await local.check({
+      currentVersion: '0.3.8',
+      now: 20,
+      env: { [APP_UPDATE_FEED_ENV]: feed },
+      runtime: { packaged: false, developerId: false, teamId: null },
+      fetch: async () => {
+        githubCalls += 1
+        throw new Error('local feed should not call GitHub')
+      },
+    })
+    assert.equal(githubCalls, 0)
+    assert.equal(status.updateAvailable, true)
+    assert.equal(status.latestVersion, version)
+    assert.equal(status.preferredAsset?.name, `Font-Buttler-${version}-arm64.dmg`)
+    assert.match(status.preferredAsset?.url ?? '', /Font-Buttler-0\.4\.0-arm64\.dmg$/)
+    assert.equal(status.autoInstall, 'parked')
+
+    const release = createAppUpdateChecker()
+    let api = ''
+    const ignored = await release.check({
+      currentVersion: '0.3.8',
+      now: 21,
+      env: { [APP_UPDATE_FEED_ENV]: feed },
+      runtime: { packaged: true, developerId: true, teamId: 'A7WWML89LQ' },
+      fetch: async (url, init) => {
+        api = url
+        assert.equal(init?.headers?.Authorization, undefined)
+        return jsonFetch(404, { message: 'Not Found' })(url)
+      },
+    })
+    assert.equal(api, APP_UPDATE_GITHUB_LATEST_API)
+    assert.equal(ignored.updateAvailable, false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a marked Developer ID build checks the loopback feed and reports TEST BUILD', async () => {
+  const feed = 'http://127.0.0.1:8765/'
+  const yml = `version: 0.9.0
+files:
+  - url: Font-Buttler-0.9.0-arm64.dmg
+    sha512: abc+/=
+    size: 4
+  - url: Font-Buttler-0.9.0-arm64.zip
+    sha512: def==
+    size: 4
+`
+  const checker = createAppUpdateChecker()
+  let sawGithub = false
+  const status = await checker.check({
+    currentVersion: '0.3.9',
+    now: 30,
+    env: { [APP_UPDATE_FEED_ENV]: feed },
+    runtime: { packaged: true, developerId: true, teamId: 'A7WWML89LQ', testFeedBuild: true },
+    fetch: async (url) => {
+      if (url === APP_UPDATE_GITHUB_LATEST_API) sawGithub = true
+      if (url === `${feed}latest-mac.yml`) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({}),
+          text: async () => yml,
+        }
+      }
+      throw new Error(`unexpected ${url}`)
+    },
+  })
+  assert.equal(sawGithub, false)
+  assert.equal(status.latestVersion, '0.9.0')
+  assert.equal(status.updateAvailable, true)
+  assert.equal(status.testFeedBuild, true)
+})
+
+test('a marked build reports the isolated data folder and an unmarked build does not', async () => {
+  const previous = process.env.FONT_BUTLER_DATA
+  process.env.FONT_BUTLER_DATA = '/tmp/font-butler-test/data'
+  try {
+    const marked = await createAppUpdateChecker().check({
+      currentVersion: '0.3.9',
+      now: 31,
+      skipNetworkInTest: true,
+      runtime: { packaged: true, developerId: true, teamId: 'A7WWML89LQ', testFeedBuild: true },
+    })
+    assert.equal(marked.testFeedBuild, true)
+    assert.equal(marked.testFeedDataDir, '/tmp/font-butler-test/data')
+    const unmarked = await createAppUpdateChecker().check({
+      currentVersion: '0.3.9',
+      now: 32,
+      skipNetworkInTest: true,
+      runtime: { packaged: true, developerId: true, teamId: 'A7WWML89LQ' },
+    })
+    assert.equal(unmarked.testFeedBuild, undefined)
+    assert.equal(unmarked.testFeedDataDir, undefined)
+  } finally {
+    if (previous === undefined) delete process.env.FONT_BUTLER_DATA
+    else process.env.FONT_BUTLER_DATA = previous
+  }
 })
 
 test('checkAppUpdate sends the read-only token only on the GitHub Releases request', async () => {

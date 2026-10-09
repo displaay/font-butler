@@ -23,6 +23,13 @@ contextBridge.exposeInMainWorld('fontButlerDesktop', {
     return () => ipcRenderer.removeListener('open-settings', listener)
   },
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
+  installAppUpdate: () => ipcRenderer.invoke('install-app-update'),
+  getAppUpdateInstallState: () => ipcRenderer.invoke('app-update-install-state'),
+  onAppUpdateInstall: (callback) => {
+    const listener = (_event, payload) => callback(payload)
+    ipcRenderer.on('app-update-install', listener)
+    return () => ipcRenderer.removeListener('app-update-install', listener)
+  },
   onReinstallFonts: (callback) => {
     const listener = (_event, payload) => callback(payload)
     ipcRenderer.on('reinstall-fonts', listener)

@@ -15,10 +15,10 @@ export const APP_UPDATE_FETCH_TIMEOUT_MS = 4000
 export const APP_UPDATE_NOTES_LIMIT = 32 * 1024
 
 export const PARKED_AUTO_INSTALL_MESSAGE =
-  'Auto-install is parked until Apple signing lands. Open the GitHub release to download.'
+  'Font Buttler does not download or install an update on its own. Click Update next to Settings.'
 
 export const PARKED_AUTO_INSTALL_NOTICE =
-  'Auto-install is pending Apple signing. Download the release or open it in your browser.'
+  'Click Update next to Settings to download and install this version. Nothing is downloaded until you click.'
 
 export type AppUpdateAsset = {
   name: string
@@ -40,6 +40,9 @@ export type AppUpdateStatus = {
   autoInstall: typeof APP_UPDATE_AUTO_INSTALL
   checkedAt: number
   error?: string
+  testFeedBuild?: boolean
+  /** Library root for a marked test build. Shown in Settings so it can be confirmed. */
+  testFeedDataDir?: string
 }
 
 export type GithubReleaseAssetJson = {
@@ -257,8 +260,8 @@ export async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Pr
 }
 
 /**
- * Parked until Developer ID signing + notarization. Callers must not download
- * or install GitHub assets. See docs/releases.md.
+ * Automatic install stays off. A click on the Settings Update badge is the
+ * only download. See docs/releases.md.
  */
 export function startParkedAutoInstall(): never {
   throw new Error(PARKED_AUTO_INSTALL_MESSAGE)

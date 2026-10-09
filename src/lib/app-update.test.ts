@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
+  appUpdateBadgeLabel,
+  appUpdateBadgeText,
+  appUpdateClickIgnored,
+  appUpdateInstallFromMain,
   appUpdateDownloadUrl,
   appUpdateReleaseUrl,
   appUpdateRowLabel,
+  appUpdateRunningLine,
   isAllowedAppUpdateUrl,
   shouldShowUpdatesTab,
 } from './app-update.ts'
@@ -28,6 +33,23 @@ function status(partial: Partial<AppUpdateStatus> = {}): AppUpdateStatus {
     ...partial,
   }
 }
+
+test('the Settings version line marks a test-feed build', () => {
+  assert.equal(appUpdateRunningLine({ currentVersion: '0.3.9' }), 'This Mac is running 0.3.9.')
+  assert.equal(
+    appUpdateRunningLine({ currentVersion: '0.3.9', testFeedBuild: true }),
+    'This Mac is running 0.3.9. TEST BUILD',
+  )
+  assert.equal(
+    appUpdateRunningLine({
+      currentVersion: '0.3.9',
+      testFeedBuild: true,
+      testFeedDataDir: '/Users/tester/Library/Application Support/Font Buttler Test/data',
+    }),
+    'This Mac is running 0.3.9. TEST BUILD. Data folder: /Users/tester/Library/Application Support/Font Buttler Test/data',
+  )
+  assert.equal(appUpdateRunningLine(null), 'Check GitHub Releases for a newer build.')
+})
 
 test('appUpdateRowLabel names the GitHub release version', () => {
   assert.equal(appUpdateRowLabel(status()), 'Font Buttler 0.2.0')
@@ -87,9 +109,65 @@ test('settings button shows a blue Update badge when an app release is available
   const { readFile } = await import('node:fs/promises')
   const { fileURLToPath } = await import('node:url')
   const source = await readFile(fileURLToPath(new URL('../components/Sidebar.tsx', import.meta.url)), 'utf8')
-  const settings = source.match(/onClick=\{onOpenSettings\}[\s\S]*?<\/Button>/)
-  assert.ok(settings, 'expected Settings button in the sidebar')
-  assert.match(settings[0], /hasAppUpdate \?/)
-  assert.match(settings[0], /tone="info"/)
-  assert.match(settings[0], />\s*Update\s*</)
+  const openAt = source.lastIndexOf('onClick={onOpenSettings}')
+  const buttonAt = source.lastIndexOf('<Button', openAt)
+  const buttonEnd = source.indexOf('</Button>', openAt)
+  assert.ok(openAt !== -1 && buttonAt !== -1 && buttonEnd !== -1, 'expected Settings button in the sidebar')
+  const settingsButton = source.slice(buttonAt, buttonEnd + '</Button>'.length)
+  assert.doesNotMatch(settingsButton, /<button/)
+  assert.match(settingsButton, /hasAppUpdate \?/)
+  assert.match(source.slice(source.lastIndexOf('<div className="', buttonAt), buttonAt), /group\/settings relative/)
+  assert.match(settingsButton, /group-hover\/settings:bg-black\/\[0\.05\]/)
+  assert.match(settingsButton, /dark:group-hover\/settings:bg-white\/\[0\.08\]/)
+  const badge = source.slice(buttonEnd, source.indexOf('</aside>', buttonEnd))
+  assert.match(badge, /<button/)
+  assert.match(badge, /bg-blue-50 text-blue-700/)
+  assert.match(badge, /cursor-pointer/)
+  assert.match(badge, /focus-visible:ring-2/)
+  assert.match(badge, /appUpdateBadgeLabel/)
+  assert.match(badge, /appUpdateClickIgnored/)
+  assert.match(badge, /onInstallAppUpdate/)
+  const badgeButton = badge.slice(0, badge.indexOf('</button>') + '</button>'.length)
+  assert.doesNotMatch(badgeButton, /onOpenSettings/)
+  assert.doesNotMatch(badgeButton, /group-hover/)
+})
+
+test('the Update badge names the version and ignores clicks while busy', () => {
+  assert.equal(appUpdateBadgeText(), 'Update')
+  assert.equal(appUpdateBadgeText('downloading', 40), '40%')
+  assert.equal(appUpdateBadgeText('verifying'), '…')
+  assert.equal(appUpdateBadgeText('error'), 'Error')
+  assert.equal(appUpdateBadgeLabel('0.4.0'), 'Update to Font Buttler 0.4.0')
+  assert.equal(appUpdateBadgeLabel('0.4.0', 'downloading'), 'Updating to Font Buttler 0.4.0')
+  assert.equal(appUpdateClickIgnored('downloading'), true)
+  assert.equal(appUpdateClickIgnored('idle'), false)
+  assert.equal(appUpdateClickIgnored('error'), false)
+})
+
+test('an ignored install adopts the main-process phase, or idle when that phase is missing', () => {
+  assert.deepEqual(appUpdateInstallFromMain({ phase: 'opening' }), { phase: 'opening' })
+  assert.deepEqual(appUpdateInstallFromMain({ phase: 'downloading', percent: 40 }), {
+    phase: 'downloading',
+    percent: 40,
+  })
+  assert.deepEqual(appUpdateInstallFromMain({ phase: 'error', error: 'disk' }), {
+    phase: 'error',
+    error: 'disk',
+  })
+  assert.deepEqual(appUpdateInstallFromMain({}), { phase: 'idle' })
+  assert.deepEqual(appUpdateInstallFromMain({ phase: 'later' }), { phase: 'idle' })
+  assert.deepEqual(appUpdateInstallFromMain(null), { phase: 'idle' })
+})
+
+test('a new window reads the installer phase and an ignored result replaces downloading', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const { fileURLToPath } = await import('node:url')
+  const source = await readFile(fileURLToPath(new URL('../../src/App.tsx', import.meta.url)), 'utf8')
+  const ignored = source.match(/if \(result\?\.ignored\) \{[\s\S]*?return/)
+  assert.ok(ignored, 'expected an ignored install result to update renderer state')
+  assert.match(ignored[0], /appUpdateInstallFromMain\(result\)/)
+  assert.match(ignored[0], /setAppUpdateInstall\(next\)/)
+  assert.match(source, /getAppUpdateInstallState\?\.\(\)/)
+  assert.match(source, /appUpdateInstallEpoch\.current !== epoch/)
+  assert.match(source, /appUpdateInstallPhase\.current !== 'idle'/)
 })

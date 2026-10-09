@@ -62,6 +62,7 @@ import {
   unreadActivityCount,
   unreadOperationIdsToMark,
 } from '@/lib/activityInbox'
+import { appUpdateInstallFromMain } from '@/lib/app-update'
 import { desktopPathForFile, hasInsetTrafficLights } from '@/lib/desktop'
 import {
   collectDropPayload,
@@ -195,6 +196,14 @@ function AppShell() {
   const [settingsFocusAppUpdate, setSettingsFocusAppUpdate] = useState(false)
   const [settingsFocusWatchFolders, setSettingsFocusWatchFolders] = useState(false)
   const [appUpdate, setAppUpdate] = useState<AppUpdateStatus | null>(null)
+  const [appUpdateInstall, setAppUpdateInstall] = useState<{
+    phase: 'idle' | 'downloading' | 'verifying' | 'installing' | 'opening' | 'error'
+    percent?: number
+    error?: string
+  }>({ phase: 'idle' })
+  const appUpdateInstallPhase = useRef(appUpdateInstall.phase)
+  appUpdateInstallPhase.current = appUpdateInstall.phase
+  const appUpdateInstallEpoch = useRef(0)
   const [retail, setRetail] = useState<RetailSyncStatus | null>(null)
   const retailRef = useRef<RetailSyncStatus | null>(null)
   retailRef.current = retail
@@ -338,6 +347,39 @@ function AppShell() {
       applySettings(result.settings)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not save settings')
+    }
+  }
+
+  async function installAppUpdate() {
+    const phase = appUpdateInstallPhase.current
+    if (phase === 'downloading' || phase === 'verifying' || phase === 'installing' || phase === 'opening') {
+      return
+    }
+    const start = window.fontButlerDesktop?.installAppUpdate
+    if (!start) return
+    appUpdateInstallEpoch.current += 1
+    appUpdateInstallPhase.current = 'downloading'
+    setAppUpdateInstall({ phase: 'downloading', percent: 0 })
+    try {
+      const result = await start()
+      if (result?.ignored) {
+        const next = appUpdateInstallFromMain(result)
+        appUpdateInstallPhase.current = next.phase
+        setAppUpdateInstall(next)
+        return
+      }
+      if (result?.ok) {
+        appUpdateInstallPhase.current = 'idle'
+        setAppUpdateInstall({ phase: 'idle' })
+        return
+      }
+      const error = result?.error || 'The update could not be installed.'
+      appUpdateInstallPhase.current = 'error'
+      setAppUpdateInstall({ phase: 'error', error })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'The update could not be installed.'
+      appUpdateInstallPhase.current = 'error'
+      setAppUpdateInstall({ phase: 'error', error: message })
     }
   }
 
@@ -683,6 +725,21 @@ function AppShell() {
       }
     }
     window.addEventListener('keydown', onKeyDown)
+    const stopInstall = window.fontButlerDesktop?.onAppUpdateInstall?.((payload) => {
+      const next = appUpdateInstallFromMain(payload)
+      appUpdateInstallEpoch.current += 1
+      appUpdateInstallPhase.current = next.phase
+      setAppUpdateInstall(next)
+    })
+    const epoch = appUpdateInstallEpoch.current
+    void window.fontButlerDesktop?.getAppUpdateInstallState?.().then((state) => {
+      if (appUpdateInstallEpoch.current !== epoch) return
+      if (appUpdateInstallPhase.current !== 'idle') return
+      const next = appUpdateInstallFromMain(state)
+      if (next.phase === 'idle') return
+      appUpdateInstallPhase.current = next.phase
+      setAppUpdateInstall(next)
+    })
     const stopDesktop = window.fontButlerDesktop?.onOpenSettings((payload) => {
       setSettingsFocusAppUpdate(payload?.focus === 'app-update')
       setSettingsOpen(true)
@@ -716,6 +773,7 @@ function AppShell() {
     })
     return () => {
       window.removeEventListener('keydown', onKeyDown)
+      stopInstall?.()
       stopDesktop?.()
       stopReinstall?.()
       stopOpenTab?.()
@@ -1987,6 +2045,11 @@ function AppShell() {
           testInstallCount={watchFolderCounts[TEST_INSTALL_FILTER] ?? 0}
           onSyncRetail={() => void syncRetail()}
           onReinstallAllUpdates={() => void reinstallAllUpdates()}
+          appUpdateVersion={appUpdate?.latestVersion}
+          appUpdateInstall={appUpdateInstall}
+          onInstallAppUpdate={() => {
+            void installAppUpdate()
+          }}
           onOpenSettings={() => {
             setSettingsFocusAppUpdate(Boolean(appUpdate?.updateAvailable))
             setSettingsFocusWatchFolders(false)

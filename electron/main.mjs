@@ -19,6 +19,13 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readApiTokenFile } from './api-token.mjs'
 import { isAllowedAppUpdateUrl, trayTooltip } from './app-update.mjs'
+import {
+  cleanupOpenedUpdateDmgs,
+  createAppUpdateInstaller,
+  detectAppUpdateRuntime,
+  openedUpdateDmgRecordFile,
+} from './app-update-install.mjs'
+import { applyTestFeedDataIsolation } from './test-feed-data.mjs'
 import { macosDockIconPng } from './dock-icon.mjs'
 import { createLoginItemApplier } from './login-item.mjs'
 import {
@@ -74,6 +81,11 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
+
+// Before requestSingleInstanceLock and before app ready. Only the packaged
+// fontButlerTestFeed marker selects this. A LaunchServices relaunch has no
+// environment, so the marker alone has to isolate the test build.
+applyTestFeedDataIsolation(app)
 
 const debugLog = createDebugLogStore()
 let debugLogFilePath = defaultLogFilePath()
@@ -1500,8 +1512,38 @@ async function loadActivity() {
   }
 }
 
+function probeInstallRuntime() {
+  const detected = detectAppUpdateRuntime(process.execPath)
+  if (!app.isPackaged) return { ...detected, packaged: false }
+  return { ...detected, packaged: true }
+}
+
+let appUpdateInstall
+function appUpdateInstaller() {
+  if (!appUpdateInstall) {
+    appUpdateInstall = createAppUpdateInstaller({
+      env: process.env,
+      currentVersion: () => app.getVersion(),
+      probeRuntime: () => probeInstallRuntime(),
+      openPath: (file) => shell.openPath(file),
+      openedDmgRecord: openedUpdateDmgRecordFile(app.getPath('userData')),
+      quit: () => {
+        isQuitting = true
+        app.quit()
+      },
+      pid: process.pid,
+      onProgress: (payload) => {
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed()) win.webContents.send('app-update-install', payload)
+        }
+      },
+    })
+  }
+  return appUpdateInstall
+}
+
 async function loadAppUpdate(refresh = false) {
-  // PARKED AUTO-INSTALL: never download or install GitHub assets. See docs/releases.md.
+  // Version check only. Downloading waits for a click on the Settings Update badge.
   try {
     await ensureApiToken()
     const url = `${API}/api/app-update${refresh ? '?refresh=1' : ''}`
@@ -1783,6 +1825,12 @@ if (!gotLock) {
           FONT_BUTLER_SERVE: '1',
           FONT_BUTLER_API_PORT: String(port),
           FONT_BUTLER_STATIC_DIR: staticDir,
+          // Set above from the test-feed marker when the parent env did not
+          // already have it. The spread would drop it if this key were omitted
+          // after a future filter, and the worker would then use the real library.
+          ...(process.env.FONT_BUTLER_DATA
+            ? { FONT_BUTLER_DATA: process.env.FONT_BUTLER_DATA }
+            : {}),
         },
       })
       apiChild = child
@@ -1957,6 +2005,13 @@ if (!gotLock) {
     const fileWriter = createDebugLogFileWriter(debugLogFilePath)
     attachDebugLogPersistence(debugLog, fileWriter)
     logDebug('main', `Font Buttler ${app.getVersion()} starting`)
+    try {
+      cleanupOpenedUpdateDmgs({
+        recordFile: openedUpdateDmgRecordFile(app.getPath('userData')),
+      })
+    } catch (error) {
+      console.error('Could not clean up opened update disk images', error)
+    }
     if (process.platform === 'darwin' && app.dock) {
       applyDockIcon()
     }
@@ -2052,6 +2107,10 @@ ipcMain.handle('open-external', async (_event, url) => {
   if (typeof url !== 'string') return false
   return openExternalUrl(url)
 })
+
+ipcMain.handle('install-app-update', () => appUpdateInstaller().start())
+
+ipcMain.handle('app-update-install-state', () => appUpdateInstaller().status())
 
 ipcMain.handle('request-notifications', () => electronNotificationPermission(Notification))
 
