@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { Writable } from 'node:stream'
+import { Readable, Writable } from 'node:stream'
 import nodeFs from 'node:fs'
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
@@ -356,6 +356,113 @@ test('a mid-download write error with no drain pending returns an installer erro
     assert.equal(second.ok, false)
     assert.equal(installer.status().phase, 'error')
     assert.deepEqual(unhandled, [])
+  } finally {
+    process.off('uncaughtException', onException)
+    process.off('unhandledRejection', onRejection)
+    nodeFs.createWriteStream = originalCreate
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('a write error during a pending drain wait rejects and the next start downloads again', async () => {
+  const version = '0.4.6'
+  const bytes = Buffer.from('drain-wait-bytes')
+  const doc = yml(version, [
+    { name: macArm64ArchiveName(version, 'dmg'), sha512: sha512(bytes), size: bytes.length },
+    { name: macArm64ArchiveName(version, 'zip'), sha512: sha512(bytes), size: bytes.length },
+  ])
+  const zipName = macArm64ArchiveName(version, 'zip')
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-drain-wait-'))
+  const originalCreate = nodeFs.createWriteStream
+  const streams = []
+  const destroyed = []
+  const cancelled = []
+  let zipFetches = 0
+  const partialStillThere = []
+  const unhandled = []
+  const onException = (error) => {
+    unhandled.push(error)
+  }
+  const onRejection = (error) => {
+    unhandled.push(error)
+  }
+  const failure = Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' })
+  nodeFs.createWriteStream = (file) => {
+    const out = new Writable({ write() {} })
+    out.write = () => {
+      writeFileSync(file, 'partial')
+      process.nextTick(() => out.destroy(failure))
+      return false
+    }
+    streams.push(out)
+    return out
+  }
+  process.on('uncaughtException', onException)
+  process.on('unhandledRejection', onRejection)
+  const installer = createAppUpdateInstaller({
+    currentVersion: '0.0.0',
+    env: {},
+    probeRuntime: () => signedRuntime(),
+    makeTempDir: () => dir,
+    removeTemp: (target) => {
+      partialStillThere.push(existsSync(path.join(target, zipName)))
+      rmSync(target, { recursive: true, force: true })
+    },
+    fetch: async (url) => {
+      if (url === GITHUB_LATEST_API) return httpResponse({ body: JSON.stringify(releaseJson(version)) })
+      if (String(url).endsWith('latest-mac.yml')) return httpResponse({ body: doc })
+      zipFetches += 1
+      const stream = Readable.from([bytes])
+      const originalDestroy = stream.destroy
+      stream.destroy = function destroy(...args) {
+        destroyed.push(stream)
+        return originalDestroy.apply(this, args)
+      }
+      return {
+        ...httpResponse({ body: bytes, contentLength: bytes.length }),
+        stream,
+        body: {
+          cancel() {
+            cancelled.push(stream)
+          },
+        },
+      }
+    },
+  })
+  try {
+    const result = await Promise.race([
+      installer.start(),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('drain wait hung')), 1000)
+      }),
+    ])
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(result.ok, false)
+    assert.equal(result.error, 'ENOSPC: no space left on device, write')
+    assert.equal(result.ignored, undefined)
+    assert.equal(installer.status().phase, 'error')
+    assert.equal(installer.status().error, 'ENOSPC: no space left on device, write')
+    assert.equal(existsSync(dir), false)
+    assert.equal(partialStillThere[0], false)
+    assert.equal(zipFetches, 1)
+    assert.ok(destroyed.length >= 1)
+    assert.equal(cancelled.length, 1)
+    assert.equal(streams[0].listenerCount('drain'), 0)
+    assert.equal(streams[0].listenerCount('close'), 0)
+    assert.equal(streams[0].listenerCount('error') <= 1, true)
+    assert.deepEqual(unhandled, [])
+
+    const second = await Promise.race([
+      installer.start(),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('second download hung')), 1000)
+      }),
+    ])
+    assert.equal(second.ignored, undefined)
+    assert.equal(second.ok, false)
+    assert.equal(zipFetches, 2)
+    assert.equal(partialStillThere[1], false)
+    assert.equal(existsSync(dir), false)
   } finally {
     process.off('uncaughtException', onException)
     process.off('unhandledRejection', onRejection)

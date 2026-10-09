@@ -32,7 +32,6 @@ import { createHash, timingSafeEqual } from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
 import https from 'node:https'
-import { once } from 'node:events'
 import { finished } from 'node:stream/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -597,7 +596,7 @@ async function writeVerifiedBody(response, dest, expectedSize, onProgress) {
       received += buf.length
       if (received > expectedSize) throw new Error('The download was larger than the published size.')
       hash.update(buf)
-      if (!out.write(buf)) await once(out, 'drain')
+      if (!out.write(buf)) await waitForWriteDrain(out)
       if (streamError) throw streamError
       if (onProgress) onProgress(received)
     }
@@ -607,8 +606,45 @@ async function writeVerifiedBody(response, dest, expectedSize, onProgress) {
     await finished(out)
   } catch (error) {
     source?.destroy?.()
+    try {
+      const cancel = response.body?.cancel?.()
+      if (cancel && typeof cancel.then === 'function') cancel.catch(() => {})
+    } catch {
+      // The body is already closed.
+    }
+    if (response.stream && response.stream !== source) response.stream.destroy?.()
     out.destroy()
+    try {
+      fs.rmSync(dest, { force: true })
+    } catch {
+      // downloadVerifiedFile removes a partial file as well.
+    }
     throw streamError ?? error
+  }
+
+  function waitForWriteDrain(stream) {
+    return new Promise((resolve, reject) => {
+      let settled = false
+      const finish = (settle) => {
+        if (settled) return
+        settled = true
+        stream.off('drain', onDrain)
+        stream.off('error', onError)
+        stream.off('close', onClose)
+        settle()
+      }
+      const onDrain = () => finish(resolve)
+      const onError = (error) => {
+        streamError ??= error
+        finish(() => reject(streamError))
+      }
+      const onClose = () => {
+        finish(() => reject(streamError ?? new Error('The download write closed before it could drain.')))
+      }
+      stream.on('drain', onDrain)
+      stream.on('error', onError)
+      stream.on('close', onClose)
+    })
   }
   return { received, sha512: hash.digest('base64') }
 }
