@@ -92,9 +92,9 @@ export function importOneUnlocked(
     }
     applyParsedFont(existing, parsed)
     if (fingerprint) {
-      // Same path is an update of this file, including a partial copy that already
-      // landed. A different byte stream must replace the stored fingerprint.
-      if (samePath) existing.sourceFingerprint = fingerprint
+      // Only the source file owns sourceFingerprint. Opening the installed copy
+      // matches samePath too, and must not replace the source hash.
+      if (path.resolve(existing.sourcePath) === resolved) existing.sourceFingerprint = fingerprint
       else existing.sourceFingerprint = existing.sourceFingerprint ?? fingerprint
     }
     if (!inUserFonts || isExternalSource(existing)) {
