@@ -1,7 +1,7 @@
 import { memo, useMemo, useRef, useState, type DragEvent, type MouseEvent } from 'react'
 import { Check, ChevronDown, FolderMinus, FolderOpen, Plus } from 'lucide-react'
 import { AaPreview, CyclingAaPreview, PreviewRetryBoundary } from '@/components/AaPreview'
-import { NameWithFormatTags, RetailBadge, SourceBadge, StateBadges, DestinationIcons, TrialBadge } from '@/components/Badges'
+import { DuplicateCopyBadges, NameWithFormatTags, RetailBadge, SourceBadge, StateBadges, DestinationIcons, TrialBadge } from '@/components/Badges'
 import { Badge } from '@/components/ui/badge'
 import { CatalogMenuItems } from '@/components/BatchActions'
 import { DisplaayMark } from '@/components/DisplaayMark'
@@ -273,6 +273,7 @@ export const LibraryCard = memo(function LibraryCard({
           hideNotInstalled={layout === 'grid'}
           hideDeactivated={layout === 'grid'}
         />
+        <DuplicateCopyBadges entries={group.entries} />
         {mixedSummary ? (
           <Badge tone="muted" title={mixedSummary}>
             {mixedSummary}

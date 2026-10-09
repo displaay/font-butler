@@ -9,6 +9,7 @@ import {
   setFontEnabled as realSetFontEnabled,
   ensureFontActivationNative as realEnsureFontActivation,
   unregisterFont as realUnregisterFont,
+  unregisterErrorIsAlreadyGone,
   verifyInstalledFont,
   type ActivationQuery,
 } from './caches.ts'
@@ -177,7 +178,7 @@ export async function ensureFontActivation(
       'register',
       `unregister ${filePath} ok=${removed.ok}${removed.error ? ` ${removed.error}` : ''}`,
     )
-    if (!removed.ok) {
+    if (!removed.ok && !unregisterErrorIsAlreadyGone(removed.error)) {
       throw new Error(removed.error || 'Could not unregister the font.')
     }
     return

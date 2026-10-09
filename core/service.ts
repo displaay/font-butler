@@ -19,7 +19,14 @@ import {
 } from './catalog.ts'
 import { getOrCreateApiToken } from './auth.ts'
 import { readFontPreviewBytes } from './font-bytes.ts'
-import { isKeptInstall, locateAdobeFontCache, locateOfficeFontCache, requestMacLogout } from './caches.ts'
+import {
+  assignActivationWarning,
+  isKeptInstall,
+  locateAdobeFontCache,
+  locateOfficeFontCache,
+  requestMacLogout,
+  withVerificationBatch,
+} from './caches.ts'
 import {
   adobeInvestigation,
   copyAt,
@@ -998,7 +1005,7 @@ export class FontButlerService {
     familyName?: string,
     options?: InstallOptions,
   ): Promise<CatalogEntry[]> {
-    return runCatalogTask(async () => {
+    return runCatalogTask(() => withVerificationBatch(async () => {
       const catalog = loadCatalog(this.paths)
       const toInstall = ids
         .map((id) => findById(catalog, id))
@@ -1082,7 +1089,7 @@ export class FontButlerService {
         return result
       }
       return entries
-    })
+    }))
   }
 
   async uninstall(id: string, options?: { deleteSource?: boolean }): Promise<CatalogEntry> {
@@ -1235,7 +1242,7 @@ export class FontButlerService {
   }
 
   async activateMany(ids: string[], options?: InstallOptions): Promise<CatalogEntry[]> {
-    return runCatalogTask(async () => {
+    return runCatalogTask(() => withVerificationBatch(async () => {
       const catalog = loadCatalog(this.paths)
       const toActivate = ids
         .map((id) => findById(catalog, id))
@@ -1293,7 +1300,7 @@ export class FontButlerService {
         return result
       }
       return entries
-    })
+    }))
   }
 
   async reinstall(id: string, options?: InstallOptions): Promise<CatalogEntry> {
@@ -1347,7 +1354,7 @@ export class FontButlerService {
   }
 
   async reinstallMany(ids: string[], options?: InstallOptions): Promise<CatalogEntry[]> {
-    return runCatalogTask(async () => {
+    return runCatalogTask(() => withVerificationBatch(async () => {
       const entries: CatalogEntry[] = []
       const beforeRevisions = new Map<string, string | undefined>()
       const errors: string[] = []
@@ -1422,7 +1429,7 @@ export class FontButlerService {
         return result
       }
       return entries
-    })
+    }))
   }
 
   async forget(id: string, options: { deleteFiles?: boolean } = {}): Promise<void> {
@@ -3435,6 +3442,7 @@ export class FontButlerService {
         }
         fs.renameSync(entry.disabledPath, dest)
       }
+      let activationWarning: string | undefined
       try {
         await ensureFontActivation(getFontNative(), dest, true)
       } catch (error) {
@@ -3449,9 +3457,10 @@ export class FontButlerService {
           }
           throw error
         }
-        const message = error instanceof Error ? error.message : String(error)
-        this.recordInstallWarning(message, entry.id)
+        activationWarning = error instanceof Error ? error.message : String(error)
+        this.recordInstallWarning(activationWarning, entry.id)
       }
+      assignActivationWarning(entry, activationWarning)
       entry.installedPath = dest
       entry.disabledPath = undefined
       if (restoreToComputer) {

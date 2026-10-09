@@ -12,7 +12,14 @@ import {
   resolveUpdateFeedUrl,
 } from '../electron/app-update-install.mjs'
 import { sha512Base64 } from './mac-dmg-staple.mjs'
-import { DEVELOPER_ID_IDENTITY, TEST_FEED_BUILD_ENV, TEST_FEED_VERSION_ENV } from './mac-signing.mjs'
+import {
+  DEVELOPER_ID_IDENTITY,
+  PRODUCTION_APP_ID,
+  TEST_FEED_APP_ID,
+  TEST_FEED_BUILD_ENV,
+  TEST_FEED_PRODUCT_NAME,
+  TEST_FEED_VERSION_ENV,
+} from './mac-signing.mjs'
 
 const require = createRequire(import.meta.url)
 const yaml = require('js-yaml')
@@ -356,6 +363,52 @@ export function packagedElectronMarkerFailures(appPath, { spawnImpl = spawnSync,
   return [TEST_FEED_MARKER_UNREADABLE]
 }
 
+function plistString(xml, key) {
+  const match = new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`).exec(xml)
+  return match ? match[1] : ''
+}
+
+/**
+ * Test builds must not share the real app's bundle id. Release builds must
+ * keep the production id. Missing apps are skipped; a present app without a
+ * readable identity fails.
+ */
+export function releaseBundleIdentityFailures(appPath, { testFeed = false } = {}) {
+  if (!appPath || !existsSync(appPath)) return []
+  const plistPath = path.join(appPath, 'Contents', 'Info.plist')
+  if (!existsSync(plistPath)) {
+    return [`${path.basename(appPath)} has no Info.plist to check the bundle id.`]
+  }
+  let xml = ''
+  try {
+    xml = readFileSync(plistPath, 'utf8')
+  } catch {
+    return [`Couldn't read ${path.basename(appPath)} Info.plist to check the bundle id.`]
+  }
+  const bundleId = plistString(xml, 'CFBundleIdentifier')
+  const bundleName = plistString(xml, 'CFBundleName')
+  if (testFeed) {
+    const failures = []
+    if (bundleId !== TEST_FEED_APP_ID) {
+      failures.push(
+        `A test-feed build must use bundle id ${TEST_FEED_APP_ID} so TCC permissions stay separate from Font Buttler. Found ${bundleId || 'no CFBundleIdentifier'}.`,
+      )
+    }
+    if (bundleName !== TEST_FEED_PRODUCT_NAME) {
+      failures.push(
+        `A test-feed build must use product name ${TEST_FEED_PRODUCT_NAME}. Found ${bundleName || 'no CFBundleName'}.`,
+      )
+    }
+    return failures
+  }
+  if (bundleId !== PRODUCTION_APP_ID) {
+    return [
+      `A release build must use bundle id ${PRODUCTION_APP_ID}. Found ${bundleId || 'no CFBundleIdentifier'}.`,
+    ]
+  }
+  return []
+}
+
 /** Any non-empty value counts as set. The pack stamp itself only happens for `=1`. */
 export function testFeedPublishEnvFailures(env = process.env) {
   if (String(env?.[TEST_FEED_BUILD_ENV] ?? '').trim() !== '') return [TEST_FEED_ENV_REFUSAL]
@@ -481,11 +534,14 @@ export async function assertNotarizedMacRelease(
   version = releaseAssetVersion(version, env)
   const overrideFailures = releaseFeedOverrideFailures()
   const files = prepareMacPublish(root, version)
+  const testFeed =
+    String(env?.[TEST_FEED_BUILD_ENV] ?? '').trim() === '1' || readAppTestFeedMarker(files.app) === true
   const testFeedFailures = []
   for (const message of [
     ...testFeedPublishEnvFailures(env),
     ...testFeedArchiveFailures({ zip: files.zip, appPaths: [files.app] }),
     ...packagedElectronMarkerFailures(files.app, { spawnImpl, env }),
+    ...releaseBundleIdentityFailures(files.app, { testFeed }),
   ]) {
     pushFailure(testFeedFailures, message)
   }

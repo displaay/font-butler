@@ -13,6 +13,7 @@ import {
   FONT_LOOKUP_SCRIPT,
   fontActivationStates,
   fontManagerSucceeded,
+  unregisterSucceeded,
   awaitMacLogoutRequest,
   InstalledFontKept,
   installedFontCheckError,
@@ -22,7 +23,10 @@ import {
   logoutResultFromExecError,
   parseActivatedFontLookup,
   requestMacLogout,
+  resetUserFontCopyCache,
   runInstalledFontVerification,
+  userFontCopyReadCount,
+  withVerificationBatch,
   verificationFaceChecks,
   REGISTRATION_SCOPES,
   registrationSucceeded,
@@ -136,6 +140,11 @@ test('ensure fails on register failure and never falls back to process scope', (
   assert.equal(fontManagerSucceeded('fail:105'), true)
   assert.equal(fontManagerSucceeded('fail:-50'), false)
   assert.equal(fontManagerSucceeded('fail:0'), false)
+  assert.equal(fontManagerSucceeded('fail:201'), false)
+  assert.equal(unregisterSucceeded('fail:201'), true)
+  assert.equal(unregisterSucceeded('fail:105'), true)
+  assert.equal(unregisterSucceeded('ok'), true)
+  assert.equal(unregisterSucceeded('fail:-50'), false)
   assert.match(FONT_ENABLE_SCRIPT, /if \(!enabled\) return registerAtScopes\(filePath, false\)/)
   assert.match(FONT_ENABLE_SCRIPT, /CTFontManagerEnableFontDescriptors\(descs, true\)/)
   assert.doesNotMatch(FONT_ENABLE_SCRIPT, /CTFontManagerEnableFontDescriptors\(descs, enabled\)/)
@@ -561,8 +570,9 @@ test('a registered install warns when user Fonts already has that PostScript nam
         }),
       (error: unknown) => {
         assert.ok(error instanceof InstalledFontKept)
-        assert.match(error.message, /already served/)
+        assert.match(error.message, /Both copies of NewAzeret-Regular are installed/)
         assert.match(error.message, /NewAzeret-Regular\.ttf/)
+        assert.doesNotMatch(error.message, /served/)
         return true
       },
     )
@@ -571,5 +581,175 @@ test('a registered install warns when user Fonts already has that PostScript nam
     if (previousFonts === undefined) delete process.env.FONT_BUTLER_USER_FONTS_DIR
     else process.env.FONT_BUTLER_USER_FONTS_DIR = previousFonts
     fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a user-font duplicate scan reads name tables once per batch and stops at the budget', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-many-copies-'))
+  const fonts = path.join(root, 'Library', 'Fonts')
+  const installed = path.join(root, 'installed', 'NewAzeret.ttf')
+  const previousFonts = process.env.FONT_BUTLER_USER_FONTS_DIR
+  process.env.FONT_BUTLER_USER_FONTS_DIR = fonts
+  resetUserFontCopyCache()
+  try {
+    fs.mkdirSync(fonts, { recursive: true })
+    fs.mkdirSync(path.dirname(installed), { recursive: true })
+    writeTestFont(path.join(fonts, '000-NewAzeret.ttf'), 'NewAzeret', 'NewAzeret-Regular', {
+      version: 'Version 1.000',
+    })
+    for (let index = 0; index < 20; index += 1) {
+      const name = `Decoy${String(index).padStart(2, '0')}`
+      writeTestFont(path.join(fonts, `z-decoy-${String(index).padStart(2, '0')}.ttf`), name, `${name}-Regular`)
+    }
+    writeTestFont(installed, 'NewAzeret', 'NewAzeret-Regular', { version: 'Version 2.000' })
+    let clock = 0
+    const now = () => {
+      const value = clock
+      clock += 3_000
+      return value
+    }
+    const lookups: string[] = []
+    await withVerificationBatch(async () => {
+      await assert.rejects(
+        () =>
+          runInstalledFontVerification(installed, {
+            now,
+            lookup: async (postscriptName) => {
+              lookups.push(postscriptName)
+              return {
+                ok: true,
+                postscript: postscriptName,
+                family: 'NewAzeret',
+                version: 'Version 2.000',
+                path: installed,
+                listed: true,
+              }
+            },
+          }),
+        (error: unknown) => {
+          assert.ok(error instanceof InstalledFontKept)
+          assert.match(error.message, /Both copies of NewAzeret-Regular are installed/)
+          assert.match(error.message, /000-NewAzeret\.ttf/)
+          assert.doesNotMatch(error.message, /served/)
+          return true
+        },
+      )
+      const reads = userFontCopyReadCount()
+      assert.ok(reads > 0)
+      assert.ok(reads < 21)
+      await assert.rejects(
+        () =>
+          runInstalledFontVerification(installed, {
+            now,
+            lookup: async (postscriptName) => {
+              lookups.push(postscriptName)
+              return {
+                ok: true,
+                postscript: postscriptName,
+                family: 'NewAzeret',
+                version: 'Version 2.000',
+                path: installed,
+                listed: true,
+              }
+            },
+          }),
+        (error: unknown) => error instanceof InstalledFontKept,
+      )
+      assert.equal(userFontCopyReadCount(), reads)
+    }, { now, budgetMs: 10_000 })
+    assert.deepEqual(lookups, [])
+  } finally {
+    resetUserFontCopyCache()
+    if (previousFonts === undefined) delete process.env.FONT_BUTLER_USER_FONTS_DIR
+    else process.env.FONT_BUTLER_USER_FONTS_DIR = previousFonts
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('misses in one verification batch share a single deadline', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-batch-budget-'))
+  const fonts = path.join(root, 'Library', 'Fonts')
+  const first = path.join(root, 'A.ttf')
+  const second = path.join(root, 'B.ttf')
+  const previousFonts = process.env.FONT_BUTLER_USER_FONTS_DIR
+  process.env.FONT_BUTLER_USER_FONTS_DIR = fonts
+  resetUserFontCopyCache()
+  try {
+    fs.mkdirSync(fonts, { recursive: true })
+    writeTestFont(first, 'BatchA', 'BatchA-Regular')
+    writeTestFont(second, 'BatchB', 'BatchB-Regular')
+    let clock = 0
+    const now = () => clock
+    const lookups: string[] = []
+    await withVerificationBatch(
+      async () => {
+        await assert.rejects(() =>
+          runInstalledFontVerification(first, {
+            now,
+            lookup: async (postscriptName) => {
+              lookups.push(postscriptName)
+              clock = 10_000
+              return {
+                ok: false,
+                postscript: '',
+                family: '',
+                version: '',
+                path: '',
+                listed: false,
+                error: 'Core Text did not resolve the font.',
+              }
+            },
+          }),
+        )
+        await assert.rejects(() =>
+          runInstalledFontVerification(second, {
+            now,
+            lookup: async (postscriptName) => {
+              lookups.push(postscriptName)
+              return {
+                ok: true,
+                postscript: postscriptName,
+                family: 'BatchB',
+                version: '',
+                path: second,
+                listed: true,
+              }
+            },
+          }),
+        )
+      },
+      { now, budgetMs: 10_000 },
+    )
+    assert.deepEqual(lookups, ['BatchA-Regular'])
+  } finally {
+    resetUserFontCopyCache()
+    if (previousFonts === undefined) delete process.env.FONT_BUTLER_USER_FONTS_DIR
+    else process.env.FONT_BUTLER_USER_FONTS_DIR = previousFonts
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('logout request and result are written to main.log', async () => {
+  const logFile = path.join(os.tmpdir(), `font-butler-logout-${process.pid}.log`)
+  const previous = process.env.FONT_BUTLER_LOG
+  process.env.FONT_BUTLER_LOG = logFile
+  try {
+    assert.match(requestMacLogout.toString(), /logout request/)
+    const accepted = await awaitMacLogoutRequest((report) => {
+      report({ requested: true })
+    })
+    assert.equal(accepted.requested, true)
+    const denied = await awaitMacLogoutRequest((report) => {
+      report(logoutResultFromExecError({ stderr: 'osascript is not allowed to send keystrokes. (-1743)' }))
+    })
+    assert.equal(denied.requested, false)
+    const text = fs.readFileSync(logFile, 'utf8')
+    assert.match(text, /\[install\s+\] logout result requested=true/)
+    assert.match(text, /\[install\s+\] logout result requested=false/)
+    assert.match(text, /logout failed/)
+  } finally {
+    if (previous === undefined) delete process.env.FONT_BUTLER_LOG
+    else process.env.FONT_BUTLER_LOG = previous
+    fs.rmSync(logFile, { force: true })
   }
 })

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -7,7 +8,7 @@ import { assertSafeShellPath } from './auth.ts'
 import { logMain } from './main-log.ts'
 import { parseFontFile } from './parse.ts'
 import { getPaths, isMac } from './paths.ts'
-import { readAcceptablePostScriptNames, readFontName } from './rename.ts'
+import { readAcceptablePostScriptNames, readFilePostScriptNames, readFontName } from './rename.ts'
 import type { AdobeFontCacheInfo, OfficeFontCacheInfo } from './types.ts'
 import { isMacUserFontFile, macUserFontsRoot } from './user-fonts.ts'
 
@@ -15,6 +16,8 @@ import { isMacUserFontFile, macUserFontsRoot } from './user-fonts.ts'
 export const REGISTRATION_SCOPES = [3, 2] as const
 /** kCTFontManagerErrorAlreadyRegistered */
 export const ALREADY_REGISTERED_CODE = 105
+/** kCTFontManagerErrorNotRegistered. After logout the session registration is already gone. */
+export const NOT_REGISTERED_CODE = 201
 
 export function registrationSucceeded(attempts: Array<{ ok: boolean; code: number }>): boolean {
   return attempts.some((attempt) => attempt.ok || attempt.code === ALREADY_REGISTERED_CODE)
@@ -323,6 +326,10 @@ export function awaitMacLogoutRequest(
       }
       settled = true
       clearTimeout(timer)
+      logMain(
+        'install',
+        `logout result requested=${result.requested}${result.message ? ` ${result.message}` : ''}${result.error ? ` ${result.error}` : ''}`.trim(),
+      )
       resolve(result)
     }
     const timer = setTimeout(() => finish({ requested: true }), acceptAfterMs)
@@ -336,6 +343,7 @@ export async function requestMacLogout(): Promise<MacLogoutResult> {
   if (process.env.FONT_BUTLER_TEST === '1' && process.env.FONT_BUTLER_NATIVE !== '1') {
     return { requested: false, message: LOGOUT_FALLBACK }
   }
+  logMain('install', 'logout request')
   return awaitMacLogoutRequest((report) => {
     const child = execFile('osascript', ['-e', MAC_LOGOUT_APPLESCRIPT], (error) => {
       if (error) report(logoutResultFromExecError(error))
@@ -569,6 +577,19 @@ export function fontManagerSucceeded(stdout: string): boolean {
   return false
 }
 
+/** Unregister may report 105 or 201 when this process no longer holds the registration. */
+export function unregisterSucceeded(stdout: string): boolean {
+  if (fontManagerSucceeded(stdout)) return true
+  const fail = /^fail:(-?\d+)/.exec(stdout.trim())
+  if (!fail) return false
+  const code = Number(fail[1])
+  return code === NOT_REGISTERED_CODE || code === ALREADY_REGISTERED_CODE
+}
+
+export function unregisterErrorIsAlreadyGone(error: string | undefined): boolean {
+  return new RegExp(`fail:(?:${NOT_REGISTERED_CODE}|${ALREADY_REGISTERED_CODE})\\b`).test(error || '')
+}
+
 function fontManagerError(mode: string, detail: string): string {
   if (detail.startsWith('fail')) {
     if (mode === 'register') return `Could not register the font (${detail}).`
@@ -590,7 +611,8 @@ async function runFontManager(mode: string, filePath: string, extra: string[] = 
     )
     const detail = stdout.trim()
     logMain('register', `${mode} ${safePath} ${detail}`)
-    if (!fontManagerSucceeded(detail)) {
+    const succeeded = mode === 'unregister' ? unregisterSucceeded(detail) : fontManagerSucceeded(detail)
+    if (!succeeded) {
       return { ok: false, native: true, error: fontManagerError(mode, detail) }
     }
     return { ok: true, native: true }
@@ -969,7 +991,7 @@ export function installedFontCheckError(filePath: string, message: string, keep:
 function keptVerificationError(filePath: string, message: string, keep: boolean): Error {
   const userFont = isMacUserFontFile(filePath)
   if (!(keep || userFont)) return new Error(message)
-  const anotherCopy = /already served/.test(message)
+  const anotherCopy = isDuplicateCopyWarning(message)
   const text =
     userFont && !anotherCopy && !/not visible to other apps yet/i.test(message)
       ? `${message} The font is ${FONT_NOT_VISIBLE_WARNING.toLowerCase()}.`
@@ -1001,23 +1023,64 @@ export function verificationFaceChecks(
 
 const USER_FONT_COPY_EXTENSIONS = new Set(['.ttf', '.otf', '.ttc', '.otc'])
 
-function fontFileHasPostScript(filePath: string, wanted: Set<string>): boolean {
-  try {
-    const parsed = parseFontFile(filePath, { previewSample: false })
-    return parsed.faces.some((face, index) => {
-      if (face.postscriptName && wanted.has(face.postscriptName)) return true
-      return readAcceptablePostScriptNames(filePath, index).some((name) => wanted.has(name))
-    })
-  } catch {
-    return false
-  }
+type VerificationBatch = {
+  deadline: number
+  now: () => number
+  /** Set after one walk, including a walk that stopped at the deadline. */
+  scanned: boolean
+  /** PostScript name to every file that produced it during this batch's walk. */
+  byName: Map<string, string[]>
 }
 
-/** Another file under ~/Library/Fonts (or the test override) with one of these PostScript names. */
-export function findOtherUserFontCopy(installedPath: string, names: Iterable<string>): string | undefined {
-  const wanted = new Set([...names].map((name) => name.trim()).filter(Boolean))
-  const root = macUserFontsRoot()
-  if (wanted.size === 0 || !root || !fs.existsSync(root)) return undefined
+const verificationBatch = new AsyncLocalStorage<VerificationBatch>()
+const userFontNameCache = new Map<string, string[]>()
+let userFontNameReads = 0
+
+export function resetUserFontCopyCache(): void {
+  userFontNameCache.clear()
+  userFontNameReads = 0
+}
+
+export function userFontCopyReadCount(): number {
+  return userFontNameReads
+}
+
+/** One deadline for every activation check inside `run`, including not-found retries. */
+export function withVerificationBatch<T>(
+  run: () => Promise<T>,
+  options: { now?: () => number; budgetMs?: number } = {},
+): Promise<T> {
+  if (verificationBatch.getStore()) return run()
+  const now = options.now ?? Date.now
+  return verificationBatch.run(
+    {
+      deadline: now() + (options.budgetMs ?? VERIFY_BUDGET_MS),
+      now,
+      scanned: false,
+      byName: new Map(),
+    },
+    run,
+  )
+}
+
+export function duplicateCopyWarning(name: string, otherPath: string): string {
+  return `Both copies of ${name} are installed. The other file is ${otherPath}.`
+}
+
+export function isDuplicateCopyWarning(message: string): boolean {
+  return /Both copies of .+ are installed\./.test(message) || /already served/.test(message)
+}
+
+export function assignActivationWarning(
+  entry: { activationWarning?: string },
+  warning: string | undefined,
+): void {
+  if (warning && isDuplicateCopyWarning(warning)) entry.activationWarning = warning
+  else delete entry.activationWarning
+}
+
+function listUserFontFiles(root: string): string[] {
+  const files: string[] = []
   const seen = new Set<string>()
   const pending = [root]
   while (pending.length > 0) {
@@ -1040,16 +1103,102 @@ export function findOtherUserFontCopy(installedPath: string, names: Iterable<str
     for (const entry of entries) {
       if (entry.name.startsWith('.')) continue
       const full = path.join(resolved, entry.name)
-      if (entry.isDirectory()) {
+      let stat: fs.Stats
+      try {
+        stat = fs.statSync(full)
+      } catch {
+        continue
+      }
+      if (stat.isDirectory()) {
         pending.push(full)
         continue
       }
       if (!USER_FONT_COPY_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) continue
-      if (fontPathsMatch(full, installedPath)) continue
-      if (fontFileHasPostScript(full, wanted)) return full
+      files.push(full)
     }
   }
+  files.sort()
+  return files
+}
+
+/** `budget` means the deadline passed before this cache-miss read. */
+function cachedPostScriptNames(
+  filePath: string,
+  now: () => number,
+  deadline: number,
+): string[] | 'budget' {
+  let stat: fs.Stats
+  try {
+    stat = fs.statSync(filePath)
+  } catch {
+    return []
+  }
+  const key = `${path.resolve(filePath)}\0${stat.mtimeMs}\0${stat.size}`
+  const hit = userFontNameCache.get(key)
+  if (hit) return hit
+  if (now() >= deadline) return 'budget'
+  userFontNameReads += 1
+  const names = readFilePostScriptNames(filePath)
+  userFontNameCache.set(key, names)
+  return names
+}
+
+function otherCopyFromMap(
+  byName: Map<string, string[]>,
+  wanted: Set<string>,
+  installedPath: string,
+): string | undefined {
+  for (const name of wanted) {
+    const paths = byName.get(name)
+    if (!paths) continue
+    const other = paths.find((candidate) => !fontPathsMatch(candidate, installedPath))
+    if (other) return other
+  }
   return undefined
+}
+
+/**
+ * Another file under ~/Library/Fonts (or the test override) with one of these
+ * PostScript names. Name tables only, cached by path, mtime, and size. One
+ * walk per verification batch, and each uncached read counts against `deadline`.
+ */
+export function findOtherUserFontCopy(
+  installedPath: string,
+  names: Iterable<string>,
+  options: { now?: () => number; deadline?: number } = {},
+): string | undefined {
+  const wanted = new Set([...names].map((name) => name.trim()).filter(Boolean))
+  const batch = verificationBatch.getStore()
+  const now = options.now ?? batch?.now ?? Date.now
+  const deadline = options.deadline ?? batch?.deadline ?? now() + VERIFY_BUDGET_MS
+  if (wanted.size === 0) return undefined
+  if (batch?.scanned) return otherCopyFromMap(batch.byName, wanted, installedPath)
+  const root = macUserFontsRoot()
+  if (!root || !fs.existsSync(root)) {
+    if (batch) batch.scanned = true
+    return undefined
+  }
+  if (now() >= deadline) {
+    if (batch) batch.scanned = true
+    return undefined
+  }
+  const byName = batch?.byName ?? new Map<string, string[]>()
+  let match: string | undefined
+  for (const full of listUserFontFiles(root)) {
+    const psNames = cachedPostScriptNames(full, now, deadline)
+    if (psNames === 'budget') break
+    for (const name of psNames) {
+      const paths = byName.get(name)
+      if (paths) {
+        if (!paths.some((candidate) => fontPathsMatch(candidate, full))) paths.push(full)
+      } else {
+        byName.set(name, [full])
+      }
+      if (!match && wanted.has(name) && !fontPathsMatch(full, installedPath)) match = full
+    }
+  }
+  if (batch) batch.scanned = true
+  return match ?? otherCopyFromMap(byName, wanted, installedPath)
 }
 
 type FontLookup = (
@@ -1076,7 +1225,9 @@ export async function runInstalledFontVerification(
   } = {},
 ): Promise<void> {
   const lookup = options.lookup ?? ((postscriptName, lookupOptions) => lookupActivatedFont(postscriptName, lookupOptions))
-  const now = options.now ?? Date.now
+  const batch = verificationBatch.getStore()
+  const now = options.now ?? batch?.now ?? Date.now
+  const deadline = batch ? batch.deadline : now() + (options.budgetMs ?? VERIFY_BUDGET_MS)
   const parsed = parseFontFile(filePath)
   const checks = verificationFaceChecks(filePath, parsed.faces)
   if (checks.length === 0) {
@@ -1090,13 +1241,12 @@ export async function runInstalledFontVerification(
     watched.add(check.ps)
     for (const name of check.acceptable) watched.add(name)
   }
-  const otherCopy = findOtherUserFontCopy(filePath, watched)
+  const otherCopy = findOtherUserFontCopy(filePath, watched, { now, deadline })
   if (otherCopy) {
-    const message = `${checks[0]?.ps ?? 'The font'} is already served from ${otherCopy}. The installed file was kept.`
+    const message = duplicateCopyWarning(checks[0]?.ps ?? 'the font', otherCopy)
     logMain('verify', `kept ${filePath} ${message}`)
     throw installedFontCheckError(filePath, message, true)
   }
-  const deadline = now() + (options.budgetMs ?? VERIFY_BUDGET_MS)
   let lastError = 'Core Text did not activate the installed font.'
   let lastKeep = userFont
   while (true) {
@@ -1136,7 +1286,7 @@ export async function runInstalledFontVerification(
         break
       }
       if (!fontPathsMatch(result.path, filePath)) {
-        failed = `${check.ps} is already served from ${result.path || 'another file'}. The installed file was kept.`
+        failed = duplicateCopyWarning(check.ps, result.path || 'another file')
         keep = true
         break
       }

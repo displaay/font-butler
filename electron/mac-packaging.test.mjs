@@ -11,6 +11,7 @@ import {
   TEST_FEED_MARKER_UNREADABLE,
   TEST_FEED_MARKER_PROBE_FAILURE,
   assertNotarizedMacRelease,
+  releaseBundleIdentityFailures,
   macReleaseAssetNames,
   notarizationFailures,
   packagedElectronMarkerFailures,
@@ -35,7 +36,10 @@ import {
   ADHOC_ENTITLEMENTS,
   DEVELOPER_ID_IDENTITY,
   NOTARY_KEYCHAIN_PROFILE,
+  PRODUCTION_APP_ID,
+  TEST_FEED_APP_ID,
   TEST_FEED_BUILD_ENV,
+  TEST_FEED_PRODUCT_NAME,
   TEST_FEED_VERSION_ENV,
   applyNotaryEnv,
   applyTestFeedMetadata,
@@ -933,6 +937,11 @@ test('a test-feed pack stamps extraMetadata and does not change a normal pack', 
   assert.equal(marked.error, null)
   assert.equal(marked.build.extraMetadata.fontButlerTestFeed, true)
   assert.equal(marked.build.extraMetadata.version, undefined)
+  assert.equal(marked.build.appId, TEST_FEED_APP_ID)
+  assert.equal(marked.build.productName, TEST_FEED_PRODUCT_NAME)
+  assert.equal(plain.build.appId, build.appId)
+  assert.equal(plain.build.productName, build.productName)
+  assert.notEqual(plain.build.appId, TEST_FEED_APP_ID)
   const higher = applyTestFeedMetadata(build, {
     [TEST_FEED_BUILD_ENV]: '1',
     [TEST_FEED_VERSION_ENV]: 'v0.9.0',
@@ -944,6 +953,33 @@ test('a test-feed pack stamps extraMetadata and does not change a normal pack', 
   const bad = applyTestFeedMetadata(build, { [TEST_FEED_BUILD_ENV]: '1', [TEST_FEED_VERSION_ENV]: 'latest' })
   assert.match(bad.error, /FONT_BUTLER_TEST_VERSION/)
   assert.match(readRepo('scripts/mac-pack.mjs'), /applyTestFeedMetadata/)
+  assert.equal(PRODUCTION_APP_ID, 'app.fontbutler.desktop')
+})
+
+test('the release check rejects a test build that still uses the real bundle id', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-bundle-id-'))
+  const app = path.join(root, 'Font Buttler Test.app')
+  const plist = path.join(app, 'Contents', 'Info.plist')
+  mkdirSync(path.dirname(plist), { recursive: true })
+  const xml = (id, name) =>
+    `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>${id}</string><key>CFBundleName</key><string>${name}</string></dict></plist>\n`
+  try {
+    writeFileSync(plist, xml(PRODUCTION_APP_ID, 'Font Buttler'))
+    const shared = releaseBundleIdentityFailures(app, { testFeed: true })
+    assert.equal(shared.length, 2)
+    assert.match(shared[0], new RegExp(TEST_FEED_APP_ID))
+    assert.match(shared[1], new RegExp(TEST_FEED_PRODUCT_NAME.replace(/ /g, '\\s+')))
+    writeFileSync(plist, xml(TEST_FEED_APP_ID, TEST_FEED_PRODUCT_NAME))
+    assert.deepEqual(releaseBundleIdentityFailures(app, { testFeed: true }), [])
+    const releaseUsesTestId = releaseBundleIdentityFailures(app, { testFeed: false })
+    assert.equal(releaseUsesTestId.length, 1)
+    assert.match(releaseUsesTestId[0], new RegExp(PRODUCTION_APP_ID))
+    writeFileSync(plist, xml(PRODUCTION_APP_ID, 'Font Buttler'))
+    assert.deepEqual(releaseBundleIdentityFailures(app, { testFeed: false }), [])
+    assert.match(readRepo('scripts/assert-notarized-mac-release.mjs'), /releaseBundleIdentityFailures/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('publish refuses a test-feed environment and a zip or app that carries the marker', async () => {

@@ -111,6 +111,8 @@ export type CatalogEntry = {
   format: string
   /** Font Book-style library-card glyph(s), derived from cmap coverage. */
   previewSample?: string
+  /** Persistent duplicate-copy warning shown on the library card. */
+  activationWarning?: string
   addedAt: number
   updatedAt: number
 }

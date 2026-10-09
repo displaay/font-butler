@@ -55,6 +55,30 @@ test('native activation failure does not persist a successful deactivate', async
   })
 })
 
+test('unregister fail:201 still parks the font', async () => {
+  const { noopFontNative } = await import('./native.ts')
+  await withService(
+    async (service, paths) => {
+      await service.init()
+      const source = path.join(paths.dataRoot, 'Gone.ttf')
+      writeTestFont(source, 'Gone', 'Gone-Regular')
+      const imported = await service.importPaths([source])
+      const installed = await service.install(imported.entries[0].id)
+      const parked = await service.deactivate(installed.id)
+      assert.equal(parked.status, 'deactivated')
+      assert.equal(fs.existsSync(installed.installedPath!), false)
+      assert.equal(fs.existsSync(parked.disabledPath!), true)
+    },
+    {
+      native: noopFontNative({
+        async unregisterFont() {
+          return { ok: false, native: true, error: 'Could not unregister the font (fail:201).' }
+        },
+      }),
+    },
+  )
+})
+
 test('deactivating a registered font unregisters that file and does not disable by name', async () => {
   const { noopFontNative } = await import('./native.ts')
   const calls: string[] = []

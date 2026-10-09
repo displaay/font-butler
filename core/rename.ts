@@ -198,10 +198,37 @@ export function readFontName(filePath: string, nameID: number, faceIndex = 0): s
   }
 }
 
-/**
- * Default name ID 6 plus any fvar named-instance PostScript names.
- * Core Text may report an instance name for a variable font.
- */
+/** Name ID 6 and fvar instance PostScript names for every face. Reads the name table only. */
+export function readFilePostScriptNames(filePath: string): string[] {
+  try {
+    const file = fs.readFileSync(filePath)
+    const names = new Set<string>()
+    for (const start of collectionFaceStarts(file)) {
+      let tables: SfntTable[]
+      try {
+        tables = parseSfntAt(file, start).tables
+      } catch {
+        continue
+      }
+      const nameTable = tables.find((table) => table.tag === 'name')
+      if (!nameTable) continue
+      const records = readNameTable(nameTable.buffer)
+      const fallback = preferredName(records, 6)
+      if (fallback) names.add(fallback)
+      const fvar = tables.find((table) => table.tag === 'fvar')
+      if (fvar) {
+        for (const nameID of fvarInstancePostScriptNameIds(fvar.buffer)) {
+          const text = preferredName(records, nameID)
+          if (text) names.add(text)
+        }
+      }
+    }
+    return [...names]
+  } catch {
+    return []
+  }
+}
+
 export function readAcceptablePostScriptNames(filePath: string, faceIndex = 0): string[] {
   try {
     const file = fs.readFileSync(filePath)

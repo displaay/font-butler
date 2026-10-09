@@ -54,7 +54,7 @@ if (stamped.build?.extraMetadata?.fontButlerTestFeed === true) {
     ? ` extraMetadata.version is ${stamped.build.extraMetadata.version}.`
     : ''
   console.log(
-    `TEST BUILD. The packaged package.json will have fontButlerTestFeed: true.${versionNote} Marked builds are never uploaded.`,
+    `TEST BUILD. Bundle id ${stamped.build.appId}, product ${stamped.build.productName}. The packaged package.json will have fontButlerTestFeed: true.${versionNote} Marked builds are never uploaded.`,
   )
 }
 const configDir = mkdtempSync(path.join(tmpdir(), 'font-butler-mac-'))

@@ -24,7 +24,7 @@ import {
 } from './install.ts'
 import { identityMutexMessage, occupiedDestinations, occupyingSiblingsForIncoming, occupiesDestination } from './identity.ts'
 import { extendMutationJournal, recordMutationDestination, withMutationJournal } from './journal.ts'
-import { isKeptInstall } from './caches.ts'
+import { assignActivationWarning, isKeptInstall } from './caches.ts'
 import { ensureFontActivation, getFontNative } from './native.ts'
 import { isMacUserFontFile } from './user-fonts.ts'
 import { applyParsedFont, parseFontFile, readFileStat } from './parse.ts'
@@ -164,18 +164,24 @@ export async function installEntry(
     ) {
       const stagedFingerprint = tryFingerprintFile(staged.stagedPath)
       if (stagedFingerprint && stagedFingerprint === entry.installedFingerprint) {
+        let warning: string | undefined
         try {
           await ensureFontActivation(getFontNative(), entry.installedPath, true)
         } catch (error) {
           if (!isKeptInstall(error)) throw error
-          host.recordInstallWarning(error instanceof Error ? error.message : String(error), entry.id)
+          warning = error instanceof Error ? error.message : String(error)
+          host.recordInstallWarning(warning, entry.id)
         }
+        const previousWarning = entry.activationWarning
+        assignActivationWarning(entry, warning)
         if (isExternalSource(entry)) {
           const sourceStat = readFileStat(entry.sourcePath)
           entry.sourceMtimeMs = sourceStat.mtimeMs
           entry.sourceSize = sourceStat.size
           entry.sourceFingerprint = stagedFingerprint
           entry.sourcePresent = true
+        }
+        if (isExternalSource(entry) || entry.activationWarning !== previousWarning) {
           applyEntryFacts(entry)
           touchEntry(entry)
           saveCatalog(host.paths, catalog)
@@ -265,6 +271,7 @@ export async function installEntry(
       if (!entry) {
         throw new Error('Font is not in the library.')
       }
+      assignActivationWarning(entry, warning)
       if (retainedFingerprint) {
         entry.previousRevisionId = retainedFingerprint
       }
@@ -393,6 +400,7 @@ async function installRenamedCopy(
           native: getFontNative(),
         })
         if (warning) host.recordInstallWarning(warning, draft.id)
+        assignActivationWarning(draft, warning)
         bindEntryToInstalledFile(draft, dest)
         applyParsedFont(draft, parsed)
       }
@@ -609,17 +617,20 @@ export async function activateEntry(
       return entry
     }
     if (entry.installedPath && fs.existsSync(entry.installedPath) && host.isLiveDestPath(entry.installedPath)) {
+      let warning: string | undefined
       try {
         await ensureFontActivation(getFontNative(), entry.installedPath, true)
       } catch (error) {
         if (!isKeptInstall(error)) throw error
-        host.recordInstallWarning(error instanceof Error ? error.message : String(error), entry.id)
+        warning = error instanceof Error ? error.message : String(error)
+        host.recordInstallWarning(warning, entry.id)
       }
       catalog = loadCatalog(host.paths)
       entry = findById(catalog, id)
       if (!entry) {
         throw new Error('Font is not in the library.')
       }
+      assignActivationWarning(entry, warning)
       if (options.owner === 'manual') {
         addManualOwner(entry)
       }

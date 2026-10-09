@@ -175,6 +175,30 @@ export function InstanceInstallBadge({ state }: { state: InstanceInstallState })
   )
 }
 
+export function DuplicateCopyBadges({
+  entries,
+}: {
+  entries: Array<{ activationWarning?: string }>
+}) {
+  const messages = [
+    ...new Set(
+      entries
+        .map((entry) => entry.activationWarning)
+        .filter((message): message is string => Boolean(message)),
+    ),
+  ]
+  if (messages.length === 0) return null
+  return (
+    <>
+      {messages.map((message) => (
+        <Badge key={message} tone="warn" title={message}>
+          Two copies
+        </Badge>
+      ))}
+    </>
+  )
+}
+
 export function StateBadges({
   entry,
   destinations,

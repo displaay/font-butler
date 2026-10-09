@@ -418,6 +418,33 @@ test('pinned project activation restores and activates a parked member', async (
   })
 })
 
+test('a duplicate-copy warning stays on the catalog entry', async () => {
+  await withService(async (service, paths) => {
+    const entry = await importFont(service, paths, 'source/Regular.ttf')
+    await service.install(entry.id)
+    const message =
+      'Both copies of Audit-Regular are installed. The other file is /Library/Fonts/Audit-Regular.ttf.'
+    setFontNative(
+      noopFontNative({
+        async ensureActivation() {
+          throw new InstalledFontKept(message)
+        },
+      }),
+    )
+    const again = await service.reinstall(entry.id)
+    assert.equal(again.activationWarning, message)
+    assert.doesNotMatch(again.activationWarning ?? '', /served/)
+    assert.equal(service.listCatalog().find((item) => item.id === entry.id)?.activationWarning, message)
+    const operation = service.listActivity().find((item) => item.action === 'reinstall')
+    assert.match(operation?.items[0]?.reason ?? '', /Both copies of Audit-Regular are installed/)
+    assert.match(operation?.items[0]?.reason ?? '', /\/Library\/Fonts\/Audit-Regular\.ttf/)
+    setFontNative(noopFontNative())
+    const clean = await service.reinstall(entry.id)
+    assert.equal(clean.activationWarning, undefined)
+    assert.equal(service.listCatalog().find((item) => item.id === entry.id)?.activationWarning, undefined)
+  })
+})
+
 test('an unchanged reinstall records a kept activation warning', async () => {
   await withService(async (service, paths) => {
     const entry = await importFont(service, paths, 'source/Regular.ttf')

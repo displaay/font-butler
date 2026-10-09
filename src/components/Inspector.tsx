@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { ArrowLeftRight, CircleMinus, FolderOpen, Link2, ListX, Loader2, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
 import { CatalogBatchButtons, SystemBatchButtons } from '@/components/BatchActions'
-import { SourceBadge, RetailBadge, StateBadges, FormatBadges, AdobeLogo, TrialBadge } from '@/components/Badges'
+import { DuplicateCopyBadges, SourceBadge, RetailBadge, StateBadges, FormatBadges, AdobeLogo, TrialBadge } from '@/components/Badges'
 import { Badge } from '@/components/ui/badge'
 import { systemFontFamily } from '@/components/FontFaceStyles'
 import { GlyphGrid } from '@/components/GlyphGrid'
@@ -273,6 +273,7 @@ export function Inspector({
       <div className="mt-2 flex flex-wrap gap-1.5">
         <FormatBadges formats={uniqueEntryFormats(group.entries)} occupying={mixedFormats} />
         <StateBadges entry={familyBadgeEntry(group)} destinations={familyCopyDestinations(group.entries)} />
+        <DuplicateCopyBadges entries={group.entries} />
         {mixedWarning ? (
           <Badge
             tone="accent"

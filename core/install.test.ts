@@ -162,11 +162,13 @@ test('a duplicate PostScript name keeps the new bytes on a registered path', asy
       native: noopFontNative(),
       activate: async () => {
         throw new InstalledFontKept(
-          'Family is already served from /Library/Fonts/Family.ttf. The installed file was kept.',
+          'Both copies of Family are installed. The other file is /Library/Fonts/Family.ttf.',
         )
       },
     })
-    assert.match(warning ?? '', /already served/)
+    assert.match(warning ?? '', /Both copies of Family are installed/)
+    assert.match(warning ?? '', /\/Library\/Fonts\/Family\.ttf/)
+    assert.doesNotMatch(warning ?? '', /served/)
     assert.equal(fs.readFileSync(dest, 'utf8'), 'new-bytes')
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
@@ -192,11 +194,13 @@ test('a duplicate PostScript name keeps the new bytes in user Fonts', async () =
       native: noopFontNative(),
       activate: async () => {
         throw new InstalledFontKept(
-          'Family is already served from /Library/Fonts/Other.ttf. The installed file was kept.',
+          'Both copies of Family are installed. The other file is /Library/Fonts/Other.ttf.',
         )
       },
     })
-    assert.match(warning ?? '', /already served/)
+    assert.match(warning ?? '', /Both copies of Family are installed/)
+    assert.match(warning ?? '', /\/Library\/Fonts\/Other\.ttf/)
+    assert.doesNotMatch(warning ?? '', /served/)
     assert.equal(fs.readFileSync(dest, 'utf8'), 'new-bytes')
   } finally {
     if (previousFonts === undefined) delete process.env.FONT_BUTLER_USER_FONTS_DIR

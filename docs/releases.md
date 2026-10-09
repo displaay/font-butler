@@ -57,11 +57,11 @@ Build a marked 0.3.10 (the version already in `package.json`). Do not commit a v
 FONT_BUTLER_TEST_FEED_BUILD=1 npm run release:mac
 ```
 
-Copy that app aside before the next pack, because the next command replaces `release/`. Keep the bundle name `Font Buttler.app`.
+Copy that app aside before the next pack, because the next command replaces `release/`. A test build is `Font Buttler Test.app` with bundle id `app.fontbutler.desktop.test`, so its TCC permissions stay separate from the real app.
 
 ```bash
 mkdir -p "/Applications/Font Buttler Test"
-cp -R "release/mac-arm64/Font Buttler.app" "/Applications/Font Buttler Test/"
+cp -R "release/mac-arm64/Font Buttler Test.app" "/Applications/Font Buttler Test/"
 ```
 
 Build a marked higher version without editing `package.json`. The pack script writes electron-builder `extraMetadata.version` from `FONT_BUTLER_TEST_VERSION`.
@@ -79,18 +79,18 @@ python3 -m http.server 8765 --bind 127.0.0.1
 
 A marked build isolates itself before `app.requestSingleInstanceLock()` and before the app is ready, including after the swap relaunches it with no environment. `userData` becomes `~/Library/Application Support/Font Buttler Test`. When `FONT_BUTLER_DATA` is unset, the library, settings, and API token go in `~/Library/Application Support/Font Buttler Test/data`. Only the packaged `fontButlerTestFeed` marker does this. No environment variable can turn it on, and an unmarked build leaves `userData` and `FONT_BUTLER_DATA` alone. Settings → General → App updates shows `TEST BUILD` and that data folder on the version line. Confirm the path before clicking **Update**.
 
-The real Font Buttler uses the same bundle id and may be running. A marked build's swap relaunches with `open -n`, on both the success path and the restore path, so macOS opens this bundle instead of bringing the other app forward. An unmarked build still uses plain `open`.
+The real Font Buttler uses bundle id `app.fontbutler.desktop` and may be running. A marked build uses `app.fontbutler.desktop.test` and the product name `Font Buttler Test`. Its swap relaunches with `open -n`, on both the success path and the restore path, so macOS opens this bundle instead of bringing the other app forward. An unmarked build still uses plain `open`.
 
-The feed variable has to reach the first process. LaunchServices does not keep the shell environment, so `FONT_BUTLER_UPDATE_FEED_URL=... open "Font Buttler.app"` does not pass it. Run the binary directly:
+The feed variable has to reach the first process. LaunchServices does not keep the shell environment, so `FONT_BUTLER_UPDATE_FEED_URL=... open "Font Buttler Test.app"` does not pass it. Run the binary directly:
 
 ```bash
-FONT_BUTLER_UPDATE_FEED_URL=http://127.0.0.1:8765/ "/Applications/Font Buttler Test/Font Buttler.app/Contents/MacOS/Font Buttler"
+FONT_BUTLER_UPDATE_FEED_URL=http://127.0.0.1:8765/ "/Applications/Font Buttler Test/Font Buttler Test.app/Contents/MacOS/Font Buttler Test"
 ```
 
 Or pass it with `open --env`:
 
 ```bash
-open --env FONT_BUTLER_UPDATE_FEED_URL=http://127.0.0.1:8765/ "/Applications/Font Buttler Test/Font Buttler.app"
+open --env FONT_BUTLER_UPDATE_FEED_URL=http://127.0.0.1:8765/ "/Applications/Font Buttler Test/Font Buttler Test.app"
 ```
 
 Click **Update**. The app installs the zip in place only when the bundle version inside the zip equals `0.9.0`. The relaunched app stays on the test data folder. `open -n` does not pass the feed URL. Launch the binary the same way to point it at the feed again.

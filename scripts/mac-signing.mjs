@@ -14,6 +14,9 @@ export const NOTARY_KEYCHAIN_PROFILE = 'font-butler-notary'
 export const ADHOC_ENTITLEMENTS = 'build/entitlements.mac.adhoc.plist'
 export const TEST_FEED_BUILD_ENV = 'FONT_BUTLER_TEST_FEED_BUILD'
 export const TEST_FEED_VERSION_ENV = 'FONT_BUTLER_TEST_VERSION'
+export const PRODUCTION_APP_ID = 'app.fontbutler.desktop'
+export const TEST_FEED_APP_ID = 'app.fontbutler.desktop.test'
+export const TEST_FEED_PRODUCT_NAME = 'Font Buttler Test'
 
 const NOTARY_ENV_KEYS = [
   'APPLE_ID',
@@ -115,8 +118,9 @@ export function testFeedBuildRequested(env) {
 /**
  * Stamp `fontButlerTestFeed` into the packaged package.json via electron-builder
  * `extraMetadata`. `FONT_BUTLER_TEST_VERSION` sets `extraMetadata.version` so a
- * higher test build does not require a committed version bump. Both apply only
- * when `FONT_BUTLER_TEST_FEED_BUILD=1`.
+ * higher test build does not require a committed version bump. A test build also
+ * gets its own bundle id and product name so TCC permissions stay off the real app.
+ * All of this applies only when `FONT_BUTLER_TEST_FEED_BUILD=1`.
  */
 export function applyTestFeedMetadata(build, env) {
   if (!testFeedBuildRequested(env)) return { build, error: null }
@@ -132,7 +136,15 @@ export function applyTestFeedMetadata(build, env) {
     }
     extraMetadata.version = version
   }
-  return { build: { ...build, extraMetadata }, error: null }
+  return {
+    build: {
+      ...build,
+      appId: TEST_FEED_APP_ID,
+      productName: TEST_FEED_PRODUCT_NAME,
+      extraMetadata,
+    },
+    error: null,
+  }
 }
 
 /** Full electron-builder config. Booleans stay booleans: `-c.dmg.sign=true` is the string "true", and dmg signing checks `=== true`. */
