@@ -4,11 +4,18 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import {
+  closeAllWatchers,
   expandImportPaths,
   inboxChangeShouldImport,
+  inboxInFlightForTest,
+  inboxRejectionForTest,
   inferExpandedFolderDrops,
   inspectDropPaths,
   listFontFilesInTree,
+  queueInboxPathForTest,
+  recordInboxImportResult,
+  runInboxImportBatch,
+  syncInboxWatcher,
 } from './watch.ts'
 
 function makeTree(): string {
@@ -160,12 +167,102 @@ test('inferExpandedFolderDrops ignores extra woff files from a folder drop', () 
 
 test('a rejected watch file is not a settled seen entry', () => {
   const failed = { size: 32, mtimeMs: 10 }
-  assert.equal(inboxChangeShouldImport(undefined, failed, false), false)
-  assert.equal(inboxChangeShouldImport(undefined, undefined, true), true)
-  assert.equal(inboxChangeShouldImport(failed, { size: 32, mtimeMs: 10 }, false), true)
-  assert.equal(inboxChangeShouldImport(failed, { size: 900, mtimeMs: 10 }, false), true)
-  assert.equal(inboxChangeShouldImport(failed, { size: 32, mtimeMs: 80 }, false), true)
-  assert.equal(inboxChangeShouldImport(failed, undefined, false), true)
+  assert.equal(inboxChangeShouldImport(undefined, undefined, undefined, false), false)
+  assert.equal(inboxChangeShouldImport(undefined, undefined, undefined, true), true)
+  assert.equal(inboxChangeShouldImport(failed, undefined, undefined, false), true)
+  assert.equal(inboxChangeShouldImport(failed, 'same', 'same', false), true)
+  assert.equal(inboxChangeShouldImport(undefined, 'next', 'previous', false), true)
+  assert.equal(inboxChangeShouldImport(undefined, 'same', 'same', false), false)
+})
+
+test('recording a missing watch file does not store a negative stamp', () => {
+  const missing = path.join(os.tmpdir(), `font-butler-gone-${process.pid}-${Date.now()}.ttf`)
+  recordInboxImportResult([missing], [missing])
+  assert.equal(inboxRejectionForTest(missing), undefined)
+})
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs: number, label: string): Promise<void> {
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    if (predicate()) return
+    await delay(20)
+  }
+  assert.fail(label)
+}
+
+test('a resync during a flush still imports paths queued for the new session', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-resync-'))
+  const first = path.join(root, 'A.ttf')
+  const second = path.join(root, 'B.ttf')
+  fs.writeFileSync(first, Buffer.from('aaaa'))
+  fs.writeFileSync(second, Buffer.from('bbbb'))
+  let releaseFirst!: () => void
+  const gate = new Promise<void>((resolve) => {
+    releaseFirst = resolve
+  })
+  const firstBatches: string[][] = []
+  const secondBatches: string[][] = []
+  try {
+    await syncInboxWatcher([root], async (files) => {
+      firstBatches.push(files.map((file) => path.resolve(file)))
+      await gate
+      return { failedPaths: files }
+    })
+    queueInboxPathForTest(first)
+    await waitFor(() => firstBatches.length > 0, 3000, 'first flush did not start')
+    await syncInboxWatcher([root], async (files) => {
+      secondBatches.push(files.map((file) => path.resolve(file)))
+      return { failedPaths: files }
+    })
+    queueInboxPathForTest(second)
+    assert.equal(secondBatches.length, 0)
+    releaseFirst()
+    await waitFor(
+      () => secondBatches.some((batch) => batch.includes(path.resolve(second))),
+      3000,
+      'resync during flush stranded the new session',
+    )
+    const rejection = inboxRejectionForTest(first)
+    assert.ok(rejection)
+    assert.ok(rejection.size >= 0)
+  } finally {
+    releaseFirst()
+    await closeAllWatchers()
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a path stays in flight until the startup import finishes', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-inflight-'))
+  const font = path.join(root, 'Startup.ttf')
+  fs.writeFileSync(font, Buffer.from('partial'))
+  const seen: string[][] = []
+  try {
+    await syncInboxWatcher([root], async (files) => {
+      seen.push(files.map((file) => path.resolve(file)))
+      return { failedPaths: files }
+    })
+    let during = false
+    await runInboxImportBatch([font], async () => {
+      during = inboxInFlightForTest(font)
+      queueInboxPathForTest(font)
+      return { failedPaths: [font] }
+    })
+    assert.equal(during, true)
+    await waitFor(
+      () => seen.some((batch) => batch.includes(path.resolve(font))),
+      3000,
+      'change during startup import was dropped',
+    )
+    assert.equal(inboxInFlightForTest(font), false)
+  } finally {
+    await closeAllWatchers()
+    fs.rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('inferExpandedFolderDrops ignores a partial file selection', () => {

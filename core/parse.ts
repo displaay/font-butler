@@ -329,6 +329,95 @@ export function readFileStat(filePath: string): { mtimeMs: number; size: number 
   return { mtimeMs: stat.mtimeMs, size: stat.size }
 }
 
+const SFNT_TRUE = 0x00010000
+const SFNT_OTTO = 0x4f54544f
+const SFNT_TRUE_TAG = 0x74727565
+const SFNT_TYP1 = 0x74797031
+const SFNT_TTCF = 0x74746366
+const SFNT_HEAD = 0x68656164
+
+function isSfntFlavor(scaler: number): boolean {
+  return (
+    scaler === SFNT_TRUE ||
+    scaler === SFNT_OTTO ||
+    scaler === SFNT_TRUE_TAG ||
+    scaler === SFNT_TYP1
+  )
+}
+
+function readExact(fd: number, size: number, position: number): Buffer | undefined {
+  if (size < 0 || position < 0) return undefined
+  const buffer = Buffer.alloc(size)
+  const read = fs.readSync(fd, buffer, 0, size, position)
+  return read === size ? buffer : undefined
+}
+
+/** True when every sfnt table sits inside the file and `head` is not still zero-filled. */
+function sfntDirectoryFits(fd: number, fileSize: number, offset: number): boolean {
+  if (offset < 0 || fileSize - offset < 12) return false
+  const header = readExact(fd, 12, offset)
+  if (!header) return false
+  const scaler = header.readUInt32BE(0)
+  if (!isSfntFlavor(scaler)) return false
+  const numTables = header.readUInt16BE(4)
+  const directoryBytes = numTables * 16
+  if (numTables === 0 || fileSize - offset < 12 + directoryBytes) return false
+  const directory = readExact(fd, directoryBytes, offset + 12)
+  if (!directory) return false
+  for (let index = 0; index < numTables; index += 1) {
+    const base = index * 16
+    const tag = directory.readUInt32BE(base)
+    const tableOffset = directory.readUInt32BE(base + 8)
+    const length = directory.readUInt32BE(base + 12)
+    if (length === 0) continue
+    if (tableOffset > fileSize || length > fileSize - tableOffset) return false
+    // A pre-sized copy can publish the final size while `head` is still zeros.
+    if (tag === SFNT_HEAD && length >= 16) {
+      const magic = readExact(fd, 4, tableOffset + 12)
+      if (!magic || magic.readUInt32BE(0) === 0) return false
+    }
+  }
+  return true
+}
+
+function collectionTablesFit(fd: number, fileSize: number): boolean {
+  const header = readExact(fd, 12, 0)
+  if (!header) return false
+  const numFonts = header.readUInt32BE(8)
+  const offsetBytes = numFonts * 4
+  if (numFonts === 0 || numFonts > 1024 || fileSize < 12 + offsetBytes) return false
+  const offsets = readExact(fd, offsetBytes, 12)
+  if (!offsets) return false
+  for (let index = 0; index < numFonts; index += 1) {
+    if (!sfntDirectoryFits(fd, fileSize, offsets.readUInt32BE(index * 4))) return false
+  }
+  return true
+}
+
+/**
+ * True when this file is not an sfnt, or every table offset and length fits in
+ * the bytes on disk. A zero-filled `head` (pre-allocated SMB-style copy) is incomplete.
+ * Web fonts are not sfnt containers and return true so the normal parser decides.
+ */
+export function sfntTablesFit(filePath: string): boolean {
+  let fd: number | undefined
+  try {
+    const stat = fs.statSync(filePath)
+    if (!stat.isFile() || stat.size < 12) return false
+    fd = fs.openSync(filePath, 'r')
+    const header = readExact(fd, 12, 0)
+    if (!header) return false
+    const scaler = header.readUInt32BE(0)
+    if (scaler === SFNT_TTCF) return collectionTablesFit(fd, stat.size)
+    if (!isSfntFlavor(scaler)) return true
+    return sfntDirectoryFits(fd, stat.size, 0)
+  } catch {
+    return false
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd)
+  }
+}
+
 export function existingFontPath(
   entry: {
     id?: string

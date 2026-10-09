@@ -3,7 +3,13 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { glyphNameForCodePoint, parseFontFile, previewUsesInstalledBytes, resolveFamilyNames } from './parse.ts'
+import {
+  glyphNameForCodePoint,
+  parseFontFile,
+  previewUsesInstalledBytes,
+  resolveFamilyNames,
+  sfntTablesFit,
+} from './parse.ts'
 import { loadCatalog, saveCatalog } from './catalog.ts'
 import { writeTestCollection, writeTestFont, withService } from './test-util.ts'
 
@@ -296,4 +302,42 @@ test('uninstalled source cmap change updates the preview sample', async () => {
     assert.equal(previewUsesInstalledBytes(entry), false)
     assert.equal(entry.previewSample, 'א')
   })
+})
+
+test('sfntTablesFit rejects tables past the end of the file and a zero-filled head', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-sfnt-'))
+  try {
+    const font = path.join(root, 'Fit.ttf')
+    writeTestFont(font, 'Fit', 'Fit-Regular')
+    const bytes = fs.readFileSync(font)
+    assert.equal(sfntTablesFit(font), true)
+
+    const truncated = path.join(root, 'Truncated.ttf')
+    fs.writeFileSync(truncated, bytes.subarray(0, 32))
+    assert.equal(sfntTablesFit(truncated), false)
+
+    const overrun = Buffer.from(bytes)
+    overrun.writeUInt32BE(bytes.length + 64, 12 + 12)
+    const overrunPath = path.join(root, 'Overrun.ttf')
+    fs.writeFileSync(overrunPath, overrun)
+    assert.equal(sfntTablesFit(overrunPath), false)
+
+    const numTables = bytes.readUInt16BE(4)
+    const blankHead = Buffer.from(bytes)
+    let zeroedHead = false
+    for (let index = 0; index < numTables; index += 1) {
+      const base = 12 + index * 16
+      if (blankHead.subarray(base, base + 4).toString('ascii') !== 'head') continue
+      const offset = blankHead.readUInt32BE(base + 8)
+      const length = blankHead.readUInt32BE(base + 12)
+      blankHead.fill(0, offset, offset + length)
+      zeroedHead = true
+    }
+    assert.equal(zeroedHead, true)
+    const blankHeadPath = path.join(root, 'BlankHead.ttf')
+    fs.writeFileSync(blankHeadPath, blankHead)
+    assert.equal(sfntTablesFit(blankHeadPath), false)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
 })

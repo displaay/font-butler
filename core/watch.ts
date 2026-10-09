@@ -14,6 +14,7 @@ import {
 } from './catalog.ts'
 import { emitEvent } from './events.ts'
 import { countInstallableFormats, isWebFontFile } from './formats.ts'
+import { forgetFontAnalysis } from './font-analysis.ts'
 import { tryFingerprintFile } from './fingerprint.ts'
 import { isFontFile, isPreviewableFontFile, readFileStat } from './parse.ts'
 import { applyEntryFacts } from './state.ts'
@@ -35,6 +36,9 @@ let inboxFlushing = false
 let inboxFlushAgain = false
 const inboxInFlight = new Set<string>()
 const inboxRejected = new Map<string, { size: number; mtimeMs: number }>()
+const inboxImportedFingerprint = new Map<string, string>()
+let scheduleActiveInboxFlush: (() => void) | null = null
+let inboxWork: Promise<void> = Promise.resolve()
 
 /** How long a watched font must stop growing before it is parsed. */
 export const INBOX_WRITE_STABILITY_MS = 2000
@@ -578,23 +582,40 @@ function inboxFileStamp(filePath: string): InboxFileStamp {
 }
 
 /**
- * A failed watch-folder read is not a settled file. The next change imports
- * again when size or mtime moved, and when they did not: periodic reconcile
- * can skip hashing on a matching stamp only after a successful fingerprint
- * exists. Watcher events force that fingerprint, and a rejected file never
- * stored one.
+ * Import a change when a previous attempt failed, while an import of this path
+ * is still running, or when the bytes no longer match the last successful import.
+ * chokidar's awaitWriteFinish only waits for a stable size, so a pre-sized copy
+ * can succeed on incomplete bytes and then change without a new size.
  */
 export function inboxChangeShouldImport(
   rejection: InboxFileStamp | undefined,
-  next: InboxFileStamp | undefined,
+  nextFingerprint: string | undefined,
+  previousFingerprint: string | undefined,
   inFlight: boolean,
 ): boolean {
   if (inFlight) return true
-  if (!rejection) return false
-  // A failed read did not store a fingerprint, so a matching stamp is not
-  // already seen. A different size or mtime is a later write and also retries.
-  if (!next || next.size !== rejection.size || next.mtimeMs !== rejection.mtimeMs) return true
-  return next.size === rejection.size && next.mtimeMs === rejection.mtimeMs
+  if (rejection) return true
+  return Boolean(
+    previousFingerprint && nextFingerprint && previousFingerprint !== nextFingerprint,
+  )
+}
+
+function rememberInboxRejection(filePath: string): void {
+  const stamp = inboxFileStamp(filePath)
+  if (stamp.size < 0) {
+    inboxRejected.delete(filePath)
+    return
+  }
+  inboxRejected.set(filePath, stamp)
+}
+
+function enqueueInboxWork(task: () => Promise<void>): Promise<void> {
+  const run = inboxWork.then(task, task)
+  inboxWork = run.then(
+    () => undefined,
+    () => undefined,
+  )
+  return run
 }
 
 export function recordInboxImportResult(
@@ -606,13 +627,56 @@ export function recordInboxImportResult(
   for (const filePath of filePaths) {
     const resolved = path.resolve(filePath)
     seen.add(resolved)
-    if (failed.has(resolved)) inboxRejected.set(resolved, inboxFileStamp(resolved))
-    else inboxRejected.delete(resolved)
+    if (failed.has(resolved)) {
+      rememberInboxRejection(resolved)
+    } else {
+      inboxRejected.delete(resolved)
+      const fingerprint = tryFingerprintFile(resolved)
+      if (fingerprint) inboxImportedFingerprint.set(resolved, fingerprint)
+      else inboxImportedFingerprint.delete(resolved)
+    }
   }
   for (const filePath of failed) {
     if (seen.has(filePath)) continue
-    inboxRejected.set(filePath, inboxFileStamp(filePath))
+    rememberInboxRejection(filePath)
   }
+}
+
+/**
+ * Run a watch-folder import on the same queue as watcher flushes, and keep the
+ * paths in flight so a change that arrives mid-import is queued instead of dropped.
+ */
+export function runInboxImportBatch(
+  filePaths: readonly string[],
+  task: () => Promise<InboxWatchBatchResult | void>,
+): Promise<void> {
+  const batch = [...new Set(filePaths.map((filePath) => path.resolve(filePath)))]
+  for (const filePath of batch) inboxInFlight.add(filePath)
+  return enqueueInboxWork(async () => {
+    let failed: readonly string[] = []
+    try {
+      const result = await task()
+      if (result) failed = result.failedPaths ?? []
+    } catch {
+      failed = batch
+    } finally {
+      for (const filePath of batch) inboxInFlight.delete(filePath)
+    }
+    recordInboxImportResult(batch, failed)
+  }).finally(() => {
+    if (inboxPending.length > 0) scheduleActiveInboxFlush?.()
+  })
+}
+
+/** Test hook: path is inside a startup or watcher import. */
+export function inboxInFlightForTest(filePath: string): boolean {
+  return inboxInFlight.has(path.resolve(filePath))
+}
+
+/** Test hook: queue a path as if the watcher had emitted it. */
+export function queueInboxPathForTest(filePath: string): void {
+  inboxPending.push(path.resolve(filePath))
+  scheduleActiveInboxFlush?.()
 }
 
 /** Test hook: stamp recorded when a watch-folder import failed. */
@@ -656,7 +720,10 @@ export async function syncInboxWatcher(
   if (existing.length === 0) {
     inboxRejected.clear()
     inboxInFlight.clear()
+    inboxImportedFingerprint.clear()
+    inboxPending = []
     inboxFlushAgain = false
+    scheduleActiveInboxFlush = null
     return
   }
 
@@ -672,36 +739,39 @@ export async function syncInboxWatcher(
       void runFlush()
     }, INBOX_BATCH_MS)
   }
+  scheduleActiveInboxFlush = scheduleFlush
 
-  const runFlush = async () => {
+  const runFlush = () => {
     if (session !== inboxSession || inboxFlushing) {
       if (session === inboxSession && inboxFlushing) inboxFlushAgain = true
       return
     }
     inboxFlushing = true
-    try {
-      do {
-        inboxFlushAgain = false
-        if (session !== inboxSession) return
-        const batch = [...new Set(inboxPending)]
-        inboxPending = []
-        if (batch.length === 0) continue
-        for (const filePath of batch) inboxInFlight.add(filePath)
-        let failed: readonly string[] = []
-        try {
-          const result = await Promise.resolve(onBatch(batch))
-          if (result) failed = result.failedPaths ?? []
-        } catch {
-          failed = batch
-        } finally {
-          for (const filePath of batch) inboxInFlight.delete(filePath)
-        }
-        if (session !== inboxSession) return
-        recordInboxImportResult(batch, failed)
-      } while (session === inboxSession && (inboxFlushAgain || inboxPending.length > 0))
-    } finally {
-      inboxFlushing = false
-    }
+    void enqueueInboxWork(async () => {
+      try {
+        do {
+          inboxFlushAgain = false
+          if (session !== inboxSession) return
+          const batch = [...new Set(inboxPending)]
+          inboxPending = []
+          if (batch.length === 0) continue
+          for (const filePath of batch) inboxInFlight.add(filePath)
+          let failed: readonly string[] = []
+          try {
+            const result = await Promise.resolve(onBatch(batch))
+            if (result) failed = result.failedPaths ?? []
+          } catch {
+            failed = batch
+          } finally {
+            for (const filePath of batch) inboxInFlight.delete(filePath)
+          }
+          recordInboxImportResult(batch, failed)
+        } while (session === inboxSession && (inboxFlushAgain || inboxPending.length > 0))
+      } finally {
+        inboxFlushing = false
+        if (inboxPending.length > 0) scheduleActiveInboxFlush?.()
+      }
+    })
   }
 
   const queueImport = (filePath: string, event: 'add' | 'change') => {
@@ -710,15 +780,17 @@ export async function syncInboxWatcher(
     if (event === 'change') {
       const rejection = inboxRejected.get(resolved)
       const inFlight = inboxInFlight.has(resolved)
-      let next: InboxFileStamp | undefined
-      if (rejection) {
-        try {
-          next = readFileStat(resolved)
-        } catch {
-          next = undefined
-        }
+      const previousFingerprint = inboxImportedFingerprint.get(resolved)
+      const nextFingerprint =
+        !rejection && !inFlight && previousFingerprint
+          ? tryFingerprintFile(resolved)
+          : undefined
+      if (!inboxChangeShouldImport(rejection, nextFingerprint, previousFingerprint, inFlight)) {
+        return
       }
-      if (!inboxChangeShouldImport(rejection, next, inFlight)) return
+      if (previousFingerprint && nextFingerprint && previousFingerprint !== nextFingerprint) {
+        forgetFontAnalysis(resolved)
+      }
     }
     inboxPending.push(resolved)
     scheduleFlush()
@@ -738,7 +810,9 @@ export async function syncInboxWatcher(
     queueImport(filePath, 'change')
   })
   inboxWatcher.on('unlink', (filePath) => {
-    inboxRejected.delete(path.resolve(filePath))
+    const resolved = path.resolve(filePath)
+    inboxRejected.delete(resolved)
+    inboxImportedFingerprint.delete(resolved)
     if (paths) enqueueSourceStatusRefresh(paths, filePath)
   })
   if (inboxPending.length) scheduleFlush()

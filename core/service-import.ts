@@ -21,7 +21,13 @@ import {
 } from './font-analysis.ts'
 import { tryFingerprintFile } from './fingerprint.ts'
 import { folderForPath, isExcluded, mostSpecificOwner } from './folders.ts'
-import { applyParsedFont, isFontFile, isPreviewableFontFile, readFileStat } from './parse.ts'
+import {
+  applyParsedFont,
+  isFontFile,
+  isPreviewableFontFile,
+  readFileStat,
+  sfntTablesFit,
+} from './parse.ts'
 import { classifyImportFile, isInactiveRetailListing, isWatchIdentityDuplicate } from './planner.ts'
 import type { AppPaths } from './paths.ts'
 import { applyEntryFacts } from './state.ts'
@@ -85,7 +91,12 @@ export function importOneUnlocked(
       existing.status = 'installed'
     }
     applyParsedFont(existing, parsed)
-    if (fingerprint) existing.sourceFingerprint = existing.sourceFingerprint ?? fingerprint
+    if (fingerprint) {
+      // Same path is an update of this file, including a partial copy that already
+      // landed. A different byte stream must replace the stored fingerprint.
+      if (samePath) existing.sourceFingerprint = fingerprint
+      else existing.sourceFingerprint = existing.sourceFingerprint ?? fingerprint
+    }
     if (!inUserFonts || isExternalSource(existing)) {
       existing.sourceMtimeMs = stat.mtimeMs
       existing.sourceSize = stat.size
@@ -154,10 +165,14 @@ export type InboxImportResult = {
 }
 
 function importErrorPath(error: string, candidates: readonly string[]): string | undefined {
-  for (const filePath of candidates) {
-    const resolved = path.resolve(filePath)
-    if (error === resolved || error.startsWith(`${resolved}:`)) return resolved
+  const resolved = [...new Set(candidates.map((filePath) => path.resolve(filePath)))]
+  for (const filePath of resolved) {
+    if (error === filePath || error.startsWith(`${filePath}:`)) return filePath
   }
+  const mentioned = resolved.filter((filePath) => error.includes(filePath))
+  if (mentioned.length === 1) return mentioned[0]
+  // A bare reason ("Not a font file.") still belongs to the only file in the batch.
+  if (resolved.length === 1) return resolved[0]
   return undefined
 }
 
@@ -178,6 +193,10 @@ export async function importInboxFiles(
   let notified = 0
   for (const filePath of allowed) {
     const resolved = path.resolve(filePath)
+    if (isFontFile(resolved) && !sfntTablesFit(resolved)) {
+      unreadable.add(resolved)
+      continue
+    }
     let analysis
     let parseFailed = false
     try {
@@ -287,10 +306,14 @@ export async function importInboxFiles(
       entryId: first.id,
     })
   }
-  if (result.errors.length) {
+  const lingering = result.errors.filter((error) => {
+    const match = importErrorPath(error, auto)
+    return !match || !failed.has(match)
+  })
+  if (lingering.length) {
     emitNotice({
       kind: 'error',
-      message: result.errors.join('\n'),
+      message: lingering.join('\n'),
     })
   }
   return { failedPaths: [...failed] }

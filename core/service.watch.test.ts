@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
+import { fingerprintFile } from './fingerprint.ts'
 import type { AppPaths } from './paths.ts'
 import { FontButlerService } from './service.ts'
 import { canAutomateUpdates, effectiveUpdatePolicy } from './state.ts'
@@ -486,6 +487,22 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function entriesForSource(service: FontButlerService, filePath: string): CatalogEntry[] {
+  const resolved = path.resolve(filePath)
+  return service.listCatalog().filter((entry) => path.resolve(entry.sourcePath) === resolved)
+}
+
+function finishedWatchEntry(service: FontButlerService, filePath: string, family: string): boolean {
+  const entries = entriesForSource(service, filePath)
+  const entry = entries[0]
+  return (
+    entries.length === 1 &&
+    entry?.status === 'installed' &&
+    entry.faces[0]?.familyName === family &&
+    entry.sourceFingerprint === fingerprintFile(filePath)
+  )
+}
+
 async function waitFor(predicate: () => boolean, timeoutMs: number, label: string): Promise<void> {
   const start = Date.now()
   while (Date.now() - start < timeoutMs) {
@@ -533,13 +550,11 @@ test('a font copied slowly into a watch folder appears after the write settles',
     )
     await copying
     await waitFor(
-      () => service.listCatalog().some((entry) => entry.faces[0]?.familyName === 'SlowDrop'),
+      () => finishedWatchEntry(service, font, 'SlowDrop'),
       INBOX_WRITE_STABILITY_MS + 8000,
       'slow watch-folder copy never landed in the library',
     )
-    const entry = service.listCatalog().find((item) => item.faces[0]?.familyName === 'SlowDrop')
-    assert.ok(entry)
-    assert.equal(entry.status, 'installed')
+    assert.equal(entriesForSource(service, font).length, 1)
     assert.equal(inboxRejectionForTest(font), undefined)
   } finally {
     service.dispose()
@@ -575,15 +590,135 @@ test('a truncated watch-folder font is imported after a later change', async () 
 
     fs.writeFileSync(font, bytes)
     await waitFor(
-      () => service.listCatalog().some((entry) => entry.faces[0]?.familyName === 'Recovered'),
+      () => finishedWatchEntry(service, font, 'Recovered'),
       INBOX_WRITE_STABILITY_MS + 8000,
       'completed watch file did not recover after the change',
     )
-    const entry = service.listCatalog().find((item) => item.faces[0]?.familyName === 'Recovered')
+    const [entry] = entriesForSource(service, font)
     assert.ok(entry)
-    assert.equal(entry.status, 'installed')
     assert.equal(entry.sourceSize, bytes.length)
+    assert.equal(entry.sourceFingerprint, fingerprintFile(font))
     assert.equal(inboxRejectionForTest(font), undefined)
+  } finally {
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('a zero-filled pre-sized watch file lands once when the bytes are filled in', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  const staged = path.join(paths.dataRoot, 'staged-presize.ttf')
+  fs.mkdirSync(inbox, { recursive: true })
+  writeTestFont(staged, 'PreSized', 'PreSized-Regular')
+  const bytes = fs.readFileSync(staged)
+  const font = path.join(inbox, 'PreSized.ttf')
+  fs.writeFileSync(font, Buffer.alloc(bytes.length))
+  const service = new FontButlerService(paths)
+  try {
+    await service.updateSettings({ onboardingCompleted: true })
+    const configured = await service.configureFolder({ root: inbox, installNew: true })
+    await service.startWatching(configured.folder.id)
+    await waitFor(
+      () => inboxRejectionForTest(font)?.size === bytes.length,
+      INBOX_WRITE_STABILITY_MS + 8000,
+      'zero-filled watch file was not rejected',
+    )
+    assert.equal(entriesForSource(service, font).length, 0)
+
+    fs.writeFileSync(font, bytes)
+    await waitFor(
+      () => finishedWatchEntry(service, font, 'PreSized'),
+      INBOX_WRITE_STABILITY_MS + 8000,
+      'filled-in pre-sized font did not land once',
+    )
+    assert.equal(entriesForSource(service, font).length, 1)
+    assert.equal(entriesForSource(service, font)[0]?.sourceFingerprint, fingerprintFile(font))
+  } finally {
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('replacing a watched font updates the same library entry', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  fs.mkdirSync(inbox, { recursive: true })
+  const font = path.join(inbox, 'Replaced.ttf')
+  const service = new FontButlerService(paths)
+  try {
+    await service.updateSettings({ onboardingCompleted: true })
+    const configured = await service.configureFolder({ root: inbox, installNew: true })
+    await service.startWatching(configured.folder.id)
+
+    const stagedFirst = path.join(paths.dataRoot, 'staged-first.ttf')
+    writeTestFont(stagedFirst, 'FirstCut', 'FirstCut-Regular')
+    const firstBytes = fs.readFileSync(stagedFirst)
+    const width = Math.max(firstBytes.length, 4096)
+    const paddedFirst = Buffer.alloc(width)
+    firstBytes.copy(paddedFirst)
+    fs.writeFileSync(font, paddedFirst)
+    await waitFor(
+      () => finishedWatchEntry(service, font, 'FirstCut'),
+      INBOX_WRITE_STABILITY_MS + 8000,
+      'first pre-sized font was not imported',
+    )
+    const [original] = entriesForSource(service, font)
+    assert.ok(original)
+
+    writeTestFont(path.join(paths.dataRoot, 'staged-second.ttf'), 'FinalCut', 'FinalCut-Regular')
+    const secondBytes = fs.readFileSync(path.join(paths.dataRoot, 'staged-second.ttf'))
+    const paddedSecond = Buffer.alloc(width)
+    secondBytes.copy(paddedSecond)
+    fs.writeFileSync(font, paddedSecond)
+    await waitFor(
+      () => finishedWatchEntry(service, font, 'FinalCut'),
+      INBOX_WRITE_STABILITY_MS + 8000,
+      'replaced watch font did not update the original entry',
+    )
+    const entries = entriesForSource(service, font)
+    assert.equal(entries.length, 1)
+    assert.equal(entries[0]?.id, original.id)
+    assert.equal(entries[0]?.sourceFingerprint, fingerprintFile(font))
+    assert.equal(service.listCatalog().filter((entry) => entry.faces[0]?.familyName === 'FirstCut').length, 0)
+  } finally {
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('a font still copying at startup lands once with the final fingerprint', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  const staged = path.join(paths.dataRoot, 'staged-startup.ttf')
+  fs.mkdirSync(inbox, { recursive: true })
+  writeTestFont(staged, 'Startup', 'Startup-Regular')
+  const bytes = fs.readFileSync(staged)
+  const font = path.join(inbox, 'Startup.ttf')
+  fs.writeFileSync(font, bytes.subarray(0, 32))
+  const service = new FontButlerService(paths)
+  try {
+    await service.updateSettings({ onboardingCompleted: true })
+    const configured = await service.configureFolder({ root: inbox, installNew: true })
+    await service.startWatching(configured.folder.id)
+    await waitFor(
+      () => inboxRejectionForTest(font)?.size === 32,
+      8000,
+      'startup import did not reject the partial font',
+    )
+    assert.equal(entriesForSource(service, font).length, 0)
+
+    fs.writeFileSync(font, bytes)
+    await waitFor(
+      () => finishedWatchEntry(service, font, 'Startup'),
+      INBOX_WRITE_STABILITY_MS + 8000,
+      'startup copy did not finish as a single library entry',
+    )
+    assert.equal(entriesForSource(service, font).length, 1)
+    assert.equal(entriesForSource(service, font)[0]?.sourceFingerprint, fingerprintFile(font))
   } finally {
     service.dispose()
     await closeAllWatchers()

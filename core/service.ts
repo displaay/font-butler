@@ -263,7 +263,7 @@ import {
   listFontFilesInTree,
   listInboxFontFiles,
   reconcileWatchedSources,
-  recordInboxImportResult,
+  runInboxImportBatch,
   setSourceStatusListener,
   syncInboxWatcher,
   syncUserFontsWatcher,
@@ -4065,8 +4065,7 @@ export class FontButlerService {
         ),
       ].filter((filePath) => !known.has(filePath))
       if (discovered.length) {
-        const outcome = await this.importInboxFiles(discovered)
-        recordInboxImportResult(discovered, outcome.failedPaths)
+        await runInboxImportBatch(discovered, () => this.importInboxFiles(discovered))
       }
     }
   }
