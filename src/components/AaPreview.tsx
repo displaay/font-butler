@@ -98,10 +98,32 @@ function positionedAncestor(node: HTMLElement): HTMLElement | null {
   return node.parentElement
 }
 
+function cardButtonForRetry(retry: HTMLElement): HTMLButtonElement | null {
+  const parent = retry.parentElement
+  if (!parent) return null
+  const buttons = parent.querySelectorAll(':scope > button')
+  for (let index = 0; index < buttons.length; index += 1) {
+    const button = buttons[index]
+    if (button && button !== retry && !button.hasAttribute('data-preview-retry')) {
+      return button as HTMLButtonElement
+    }
+  }
+  return null
+}
+
 function PreviewRetryButton({ slot }: { slot: RetrySlot }) {
   const buttonRef = useRef<HTMLButtonElement>(null)
   const fromKey = useRef(false)
+  const focused = useRef(false)
   const [box, setBox] = useState<{ top: number; left: number; width: number; height: number } | null>(null)
+
+  useLayoutEffect(() => {
+    const button = buttonRef.current
+    return () => {
+      if (!focused.current || !button) return
+      cardButtonForRetry(button)?.focus()
+    }
+  }, [])
 
   useLayoutEffect(() => {
     function place() {
@@ -152,8 +174,20 @@ function PreviewRetryButton({ slot }: { slot: RetrySlot }) {
       data-preview-retry=""
       className={cn(retryControlClass(slot.compact), 'absolute z-10', box ? undefined : 'invisible')}
       style={box ?? undefined}
+      draggable
+      onDragStart={(event) => {
+        event.preventDefault()
+        event.stopPropagation()
+      }}
+      onFocus={() => {
+        focused.current = true
+      }}
+      onBlur={() => {
+        if (buttonRef.current?.isConnected) focused.current = false
+      }}
       onKeyDown={(event) => {
         if (event.key !== 'Enter' && event.key !== ' ') return
+        if (document.activeElement === buttonRef.current) focused.current = true
         fromKey.current = true
         activate(event)
         queueMicrotask(() => {

@@ -201,6 +201,12 @@ async function activateRetry(retry: HTMLButtonElement, kind: 'Enter' | ' ' | 'cl
   })
 }
 
+function siblingCardButton(retry: HTMLElement): HTMLButtonElement {
+  const card = retry.parentElement?.querySelector(':scope > button:not([data-preview-retry])')
+  assert.equal(card?.tagName, 'BUTTON')
+  return card as HTMLButtonElement
+}
+
 function libraryProps(group: FamilyGroup, layout: 'grid' | 'list', onSelect: () => void) {
   const noop = () => {}
   return {
@@ -265,22 +271,28 @@ async function mount(node: ReturnType<typeof createElement>) {
 
 test('failed library, system, and instance cards keep Retry outside the card button', async () => {
   setPreviewLoadTimeoutForTests(20)
-  const entry = catalogEntry('retry-cards', [fontFace('Regular', 400), fontFace('Bold', 700)])
-  const group = familyGroup(entry)
+  const gridEntry = catalogEntry('retry-lib-grid', [fontFace('Regular', 400), fontFace('Bold', 700)])
+  const listEntry = catalogEntry('retry-lib-list', [fontFace('Regular', 400), fontFace('Bold', 700)])
+  const instanceEntry = catalogEntry('retry-instance', [fontFace('Regular', 400)])
   const sysA = '/tmp/system-retry-regular.otf'
   const sysB = '/tmp/system-retry-bold.otf'
   const system = systemGroup([systemFace(sysA, 'Regular', 400), systemFace(sysB, 'Bold', 700)])
   installHungFonts([
-    catalogFontFamily(entry.id),
+    catalogFontFamily(gridEntry.id),
+    catalogFontFamily(listEntry.id),
+    catalogFontFamily(instanceEntry.id),
     systemFontFamily(sysA),
     systemFontFamily(sysB),
   ])
 
   let selects = 0
+  let drags = 0
+  const gridProps = libraryProps(familyGroup(gridEntry), 'grid', () => { selects += 1 })
+  gridProps.onFontDragStart = () => { drags += 1 }
   const { host, unmount } = await mount(
     createElement('div', null,
-      createElement(LibraryCard, libraryProps(group, 'grid', () => { selects += 1 })),
-      createElement(LibraryCard, libraryProps(group, 'list', () => { selects += 1 })),
+      createElement(LibraryCard, gridProps),
+      createElement(LibraryCard, libraryProps(familyGroup(listEntry), 'list', () => { selects += 1 })),
       createElement(SystemCard, {
         group: system,
         layout: 'grid',
@@ -312,7 +324,7 @@ test('failed library, system, and instance cards keep Retry outside the card but
           {
             key: 'retry-instance',
             label: 'Regular',
-            catalogEntryId: entry.id,
+            catalogEntryId: instanceEntry.id,
             weight: 400,
             italic: false,
             previewSample: 'Hamburgefonstiv',
@@ -322,7 +334,7 @@ test('failed library, system, and instance cards keep Retry outside the card but
         selectedEntryId: null,
         onSelectEntry: () => { selects += 1 },
         instanceActions: {
-          entries: [entry],
+          entries: [instanceEntry],
           busy: false,
           onInstall: () => {},
           onActivate: () => {},
@@ -366,28 +378,32 @@ test('failed library, system, and instance cards keep Retry outside the card but
     assertNoRetryInHiddenLayers(host)
     assert.equal(host.textContent?.includes('Hamburgefonstiv'), false)
 
-    const before = loads
-    const retry = retries[0] as HTMLButtonElement
-    await activateRetry(retry, 'Enter')
-    assert.equal(selects, 0)
-    assert.ok(loads > before)
-    await waitUntilFailed()
+    const libraryRetry = retries[0] as HTMLButtonElement
+    assert.equal(libraryRetry.getAttribute('draggable'), 'true')
+    await act(async () => {
+      libraryRetry.dispatchEvent(new view.DragEvent('dragstart', { bubbles: true, cancelable: true }))
+    })
+    assert.equal(drags, 0, 'dragstart on Retry does not reach startFontDrag')
 
-    const afterEnter = [...host.querySelectorAll('[data-preview-retry]')]
-    const spaceTarget = afterEnter[0] as HTMLButtonElement
-    assert.ok(spaceTarget)
-    const beforeSpace = loads
-    await activateRetry(spaceTarget, ' ')
-    assert.equal(selects, 0)
-    assert.ok(loads > beforeSpace)
-    await waitUntilFailed()
-
-    const clickTarget = host.querySelector('[data-preview-retry]') as HTMLButtonElement
-    assert.ok(clickTarget)
-    const beforeClick = loads
-    await activateRetry(clickTarget, 'click')
-    assert.equal(selects, 0)
-    assert.ok(loads > beforeClick)
+    const kinds = ['Enter', ' ', 'click', 'Enter', ' '] as const
+    assert.equal(retries.length, kinds.length)
+    for (const [index, retry] of retries.entries()) {
+      const button = retry as HTMLButtonElement
+      const card = siblingCardButton(button)
+      const kind = kinds[index] ?? 'Enter'
+      if (kind !== 'click') {
+        await act(async () => {
+          button.focus()
+        })
+        assert.equal(document.activeElement, button)
+      }
+      const before = loads
+      await activateRetry(button, kind)
+      assert.equal(selects, 0)
+      assert.ok(loads > before, `Retry ${index} (${kind}) retries the preview`)
+      assert.equal(button.isConnected, false)
+      if (kind !== 'click') assert.equal(document.activeElement, card)
+    }
 
     const cardButton = [...host.querySelectorAll('button')].find(
       (button) => !button.hasAttribute('data-preview-retry') && (button.textContent ?? '').includes('Retry Family'),
