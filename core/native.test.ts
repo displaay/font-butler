@@ -265,6 +265,55 @@ test('a broken lookup returns fail: and is not kept as not visible yet', () => {
   }
 })
 
+test('a nil NSFont is a miss, and a nil file URL is a miss', () => {
+  const body = FONT_LOOKUP_SCRIPT.replace(/^ObjC\.import\([^\n]*\)\n/gm, '')
+  const ObjC = {
+    unwrap: (value: unknown) => value,
+    castRefToObject: (value: unknown) => value,
+  }
+  function bridge(value: unknown) {
+    return value
+  }
+  function runWith(nsFont: unknown): { ok?: boolean; reason?: string; raw: string } {
+    const dollar = Object.assign(bridge, {
+      CTFontCreateWithName: () => ({}),
+      CTFontCopyPostScriptName: () => 'Missing-Regular',
+      CTFontCopyFamilyName: () => 'Missing',
+      CTFontCopyName: () => 'Version 1.000',
+      kCTFontVersionNameKey: 5,
+      NSFont: { fontWithNameSize: () => nsFont },
+      CTFontManagerCopyAvailableFontFamilyNames: () => null,
+    })
+    const run = new Function('ObjC', '$', `${body}; return run`)(ObjC, dollar) as (argv: string[]) => string
+    const raw = run(['Missing-Regular'])
+    assert.equal(raw.startsWith('fail:'), false, raw)
+    return { ...JSON.parse(raw), raw }
+  }
+  const nilFont = {
+    isNil: () => true,
+    get fontDescriptor(): never {
+      throw new Error("undefined is not an object (evaluating 'nsFont.fontDescriptor.objectForKey')")
+    },
+  }
+  const missingFont = runWith(nilFont)
+  assert.equal(missingFont.ok, false)
+  assert.match(missingFont.reason ?? '', /NSFont could not open Missing-Regular/)
+  const nilUrl = {
+    isNil: () => false,
+    fontDescriptor: {
+      objectForKey: () => ({
+        isNil: () => true,
+        get path(): never {
+          throw new Error('nil url path')
+        },
+      }),
+    },
+  }
+  const missingUrl = runWith(nilUrl)
+  assert.equal(missingUrl.ok, false)
+  assert.match(missingUrl.reason ?? '', /no file URL/)
+})
+
 test('unnamed collection faces keep the original face index', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-face-index-'))
   const filePath = path.join(root, 'Family.ttc')

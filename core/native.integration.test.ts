@@ -142,6 +142,17 @@ test('a ~/Library/Fonts update is visible in a fresh process without logout', as
   }
 })
 
+test('lookupActivatedFont reports a nonexistent name as a miss', async (t) => {
+  if (process.platform !== 'darwin' || process.env.FONT_BUTLER_NATIVE !== '1') {
+    t.skip('requires macOS and FONT_BUTLER_NATIVE=1')
+    return
+  }
+  const name = `FontButlerMissing${crypto.randomBytes(4).toString('hex')}-Regular`
+  const lookup = await lookupActivatedFont(name)
+  assert.equal(lookup.ok, false, JSON.stringify(lookup))
+  assert.equal(lookup.error?.startsWith('fail:'), false, lookup.error)
+})
+
 test('lookupActivatedFont resolves Menlo-Regular to the system Menlo collection', async (t) => {
   if (process.platform !== 'darwin' || process.env.FONT_BUTLER_NATIVE !== '1') {
     t.skip('requires macOS and FONT_BUTLER_NATIVE=1')

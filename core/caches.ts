@@ -716,9 +716,9 @@ function lookupFont(psName) {
   const version = objcString($.CTFontCopyName(font, $.kCTFontVersionNameKey))
   const found = { postscript: actual, family: family, version: version }
   const nsFont = $.NSFont.fontWithNameSize($(psName), 12)
-  if (!nsFont) return miss('NSFont could not open ' + psName, found)
+  if (!nsFont || nsFont.isNil()) return miss('NSFont could not open ' + psName, found)
   const url = nsFont.fontDescriptor.objectForKey('NSCTFontFileURLAttribute')
-  if (!url || url.path == null) return miss('NSFont has no file URL for ' + psName, found)
+  if (!url || url.isNil() || url.path == null) return miss('NSFont has no file URL for ' + psName, found)
   const filePath = String(ObjC.unwrap(url.path) || '')
   if (!filePath) return miss('NSFont file URL for ' + psName + ' was empty', found)
   let listed = false
