@@ -1049,7 +1049,18 @@ async function offerLogoutAfterFontCacheClear() {
     ? await dialog.showMessageBox(parent, options)
     : await dialog.showMessageBox(options)
   if (choice.response !== 0) return
-  await postApi('/api/session/logout', {})
+  const result = await postApi('/api/session/logout', {})
+  if (!result || result.requested === false) {
+    const denied = {
+      type: 'warning',
+      title: 'Log out',
+      message: (result && result.message) || 'Use Apple menu > Log Out',
+      buttons: ['OK'],
+      defaultId: 0,
+    }
+    if (parent) await dialog.showMessageBox(parent, denied)
+    else await dialog.showMessageBox(denied)
+  }
 }
 
 async function clearCacheFromMenu(kind) {

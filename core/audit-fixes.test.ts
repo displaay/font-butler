@@ -224,7 +224,7 @@ test('relink records a source path separately from revision retention', async ()
   })
 })
 
-test('failed activation restores a parked font without a stray live copy', async () => {
+test('a failed activate keeps a live file installed instead of showing it deactivated', async () => {
   await withService(async (service, paths) => {
     const entry = await importFont(service, paths, 'source/Regular.ttf')
     await service.install(entry.id)
@@ -232,9 +232,12 @@ test('failed activation restores a parked font without a stray live copy', async
     setFontNative(noopFontNative({
       ensureActivation: async () => ({ ok: false, native: true, error: 'Injected activation failure' }),
     }))
-    await assert.rejects(service.activate(entry.id), /Injected activation failure/)
-    assert.equal(fs.existsSync(parked.installedPath!), false)
-    assert.equal(fs.existsSync(parked.disabledPath!), true)
+    const activated = await service.activate(entry.id)
+    assert.equal(activated.status, 'installed')
+    assert.equal(fs.existsSync(parked.installedPath!), true)
+    assert.equal(fs.existsSync(parked.disabledPath!), false)
+    const operation = service.listActivity().find((item) => item.action === 'activate')
+    assert.match(operation?.items[0]?.reason ?? '', /Injected activation failure/)
   })
 })
 

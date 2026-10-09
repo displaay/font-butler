@@ -135,7 +135,7 @@ export type SystemFace = {
 }
 
 export type Notice = {
-  kind: 'installed' | 'reinstalled' | 'error' | 'info'
+  kind: 'installed' | 'reinstalled' | 'error' | 'info' | 'warning'
   message: string
   entryId?: string
   operationId?: string

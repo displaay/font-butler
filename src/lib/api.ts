@@ -339,7 +339,8 @@ export const api = {
   forgetMissingSources: () => json<{ removed: number }>(post('/api/forget', { allMissing: true })),
   clearFontCaches: () =>
     json<{ mac: boolean; cleared: boolean }>(post('/api/caches/font', { confirm: true })),
-  requestLogout: () => json<{ requested: boolean }>(post('/api/session/logout', {})),
+  requestLogout: () =>
+    json<{ requested: boolean; message?: string; error?: string }>(post('/api/session/logout', {})),
   uninstallSystem: (path: string) => json<{ ok: boolean }>(post('/api/system/uninstall', { path })),
   deactivateSystem: (path: string) =>
     json<{ ok: boolean }>(post('/api/system/deactivate', { path })),

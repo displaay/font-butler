@@ -96,25 +96,83 @@ function readCatalogFile(catalogPath: string): CatalogFile {
   return catalog
 }
 
+type CatalogLease = {
+  /** Resolves the gate the next queued task is waiting on. */
+  release: () => void
+  /** True while this task has given the queue up for a pause. */
+  paused: boolean
+}
+
 let catalogQueue: Promise<void> = Promise.resolve()
-const catalogLock = new AsyncLocalStorage<boolean>()
+const catalogLock = new AsyncLocalStorage<CatalogLease>()
 let catalogGeneration = 0
 
 export function currentCatalogGeneration(): number {
   return catalogGeneration
 }
 
+function takeCatalogGate(): { gate: Promise<void>; release: () => void } {
+  let releaseGate!: () => void
+  let released = false
+  const gate = new Promise<void>((resolve) => {
+    releaseGate = () => {
+      if (released) return
+      released = true
+      resolve()
+    }
+  })
+  const prev = catalogQueue
+  catalogQueue = gate
+  return { gate: prev, release: releaseGate }
+}
+
 export function runCatalogTask<T>(task: () => Promise<T> | T): Promise<T> {
   if (catalogLock.getStore()) {
     return Promise.resolve().then(() => task())
   }
-  const run = async () => catalogLock.run(true, () => task())
-  const result = catalogQueue.then(run, run)
-  catalogQueue = result.then(
-    () => undefined,
-    () => undefined,
-  )
-  return result
+  const { gate: prev, release } = takeCatalogGate()
+  const lease: CatalogLease = { release, paused: false }
+  const run = () =>
+    catalogLock.run(lease, async () => {
+      try {
+        return await task()
+      } finally {
+        lease.release()
+      }
+    })
+  return prev.then(run, run)
+}
+
+/**
+ * Drop the catalog queue while `task` runs, then take it back before returning.
+ * Verification can wait on fontd without blocking installs. Nested catalog work
+ * inside `task` still runs inline, so that work must not write the catalog.
+ */
+export async function pauseCatalogTask<T>(task: () => Promise<T>): Promise<T> {
+  const lease = catalogLock.getStore()
+  if (!lease || lease.paused) return task()
+  lease.paused = true
+  const releaseCurrent = lease.release
+  lease.release = () => {}
+  releaseCurrent()
+  try {
+    return await task()
+  } finally {
+    const prev = catalogQueue
+    let releaseGate!: () => void
+    let released = false
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = () => {
+        if (released) return
+        released = true
+        resolve()
+      }
+    })
+    catalogQueue = gate
+    lease.release = releaseGate
+    await prev
+    lease.paused = false
+  }
 }
 
 export function loadCatalog(paths: AppPaths): CatalogFile {

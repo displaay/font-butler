@@ -12,8 +12,12 @@ import {
   MAC_LOGOUT_APPLESCRIPT,
   FONT_LOOKUP_SCRIPT,
   fontActivationStates,
+  fontManagerSucceeded,
+  LOGOUT_FALLBACK,
+  logoutResultFromExecError,
   REGISTRATION_SCOPES,
   registrationSucceeded,
+  versionsMatch,
 } from './caches.ts'
 import {
   ensureFontActivation,
@@ -44,6 +48,22 @@ test('the test adapter reports native failures without claiming success', async 
   } finally {
     setFontNative(previous)
   }
+})
+
+test('ensureFontActivation throws when registration reports fail:-50', async () => {
+  await assert.rejects(
+    () =>
+      ensureFontActivation(
+        noopFontNative({
+          async registerFont() {
+            return { ok: false, native: true, error: 'Could not register the font (fail:-50).' }
+          },
+        }),
+        '/tmp/Face.ttf',
+        true,
+      ),
+    /fail:-50/,
+  )
 })
 
 test('ensureFontActivation does not succeed when registration fails', async () => {
@@ -103,6 +123,26 @@ test('ensure fails on register failure and never falls back to process scope', (
     ],
   )
   assert.equal(MAC_LOGOUT_APPLESCRIPT, 'tell application "System Events" to log out')
+  assert.equal(fontManagerSucceeded('ok:105:3'), true)
+  assert.equal(fontManagerSucceeded('fail:105'), true)
+  assert.equal(fontManagerSucceeded('fail:-50'), false)
+  assert.equal(fontManagerSucceeded('fail:0'), false)
+  assert.match(FONT_ENABLE_SCRIPT, /ObjC\.castRefToObject\(err\)/)
+  assert.match(FONT_LOOKUP_SCRIPT, /ObjC\.castRefToObject/)
+  assert.match(FONT_LOOKUP_SCRIPT, /CTFontCopyPostScriptName/)
+  assert.match(FONT_LOOKUP_SCRIPT, /kCTFontURLAttribute/)
+  assert.equal(versionsMatch('1.000', '1.0'), false)
+  assert.equal(versionsMatch('11.000', '1.000'), false)
+  assert.equal(versionsMatch('Version 1.000', '1.000'), true)
+  assert.equal(versionsMatch('1.000', 'version 1.000'), true)
+  assert.equal(versionsMatch('', '1.000'), true)
+  const denied = logoutResultFromExecError({
+    message: 'osascript failed',
+    stderr: 'execution error: System Events got an error: osascript is not allowed to send keystrokes. (-1743)',
+  })
+  assert.equal(denied.requested, false)
+  assert.equal(denied.message, LOGOUT_FALLBACK)
+  assert.match(denied.error, /-1743/)
   for (const script of [FONT_ENABLE_SCRIPT, FONT_LOOKUP_SCRIPT]) {
     const file = path.join(os.tmpdir(), `font-butler-script-${process.pid}-${Math.random().toString(16).slice(2)}.js`)
     fs.writeFileSync(file, script)

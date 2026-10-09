@@ -24,6 +24,7 @@ import {
 } from './install.ts'
 import { identityMutexMessage, occupiedDestinations, occupyingSiblingsForIncoming, occupiesDestination } from './identity.ts'
 import { extendMutationJournal, recordMutationDestination, withMutationJournal } from './journal.ts'
+import { isKeptInstall } from './caches.ts'
 import { ensureFontActivation, getFontNative } from './native.ts'
 import { isMacUserFontFile } from './user-fonts.ts'
 import { applyParsedFont, parseFontFile, readFileStat } from './parse.ts'
@@ -69,6 +70,7 @@ export type ServiceLifecycleHost = {
   unparkManagedCopies(entry: CatalogEntry, dests?: DestinationId[]): Promise<void>
   isLiveDestPath(filePath: string): boolean
   recordDestinationFailure(destinationId: DestinationId, reason: string): void
+  recordInstallWarning(message: string, entryId?: string): void
 }
 
 export async function installEntry(
@@ -210,18 +212,49 @@ export async function installEntry(
         })
         retainedFingerprint = retained?.fingerprint
       }
-      await commitInstalledFile({
-        dest,
-        stagedPath: staged.stagedPath,
-        rollbackDir: path.join(host.paths.dataRoot, 'rollback'),
-        native: getFontNative(),
-      })
+      const rollbackDir = path.join(host.paths.dataRoot, 'rollback')
+      let parkedPrevious: string | undefined
+      let parkedFrom: string | undefined
+      if (previousInstalled && fs.existsSync(previousInstalled) && isMacUserFontFile(previousInstalled)) {
+        fs.mkdirSync(rollbackDir, { recursive: true })
+        parkedFrom = previousInstalled
+        parkedPrevious = path.join(
+          rollbackDir,
+          `previous-${newId()}${path.extname(previousInstalled) || '.ttf'}`,
+        )
+        fs.renameSync(previousInstalled, parkedPrevious)
+      }
+      let warning: string | undefined
+      try {
+        warning = await commitInstalledFile({
+          dest,
+          stagedPath: staged.stagedPath,
+          rollbackDir,
+          native: getFontNative(),
+        })
+        if (parkedPrevious && fs.existsSync(parkedPrevious)) {
+          fs.rmSync(parkedPrevious, { force: true })
+          parkedPrevious = undefined
+        }
+      } catch (error) {
+        if (
+          parkedPrevious &&
+          parkedFrom &&
+          fs.existsSync(parkedPrevious) &&
+          !fs.existsSync(parkedFrom)
+        ) {
+          fs.mkdirSync(path.dirname(parkedFrom), { recursive: true })
+          fs.renameSync(parkedPrevious, parkedFrom)
+        }
+        throw error
+      }
       if (previousInstalled && fs.existsSync(previousInstalled)) {
         if (!isMacUserFontFile(previousInstalled)) {
           await getFontNative().unregisterFont(previousInstalled)
         }
         fs.rmSync(previousInstalled, { force: true })
       }
+      if (warning) host.recordInstallWarning(warning, id)
       catalog = loadCatalog(host.paths)
       entry = findById(catalog, id)
       if (!entry) {
@@ -348,12 +381,13 @@ async function installRenamedCopy(
       if (installMacos) {
         const dest = destinationForInstall(host.paths, draft, temp, { reuseInstalled: false })
         recordMutationDestination(host.paths, draft.id, dest)
-        await commitInstalledFile({
+        const warning = await commitInstalledFile({
           dest,
           stagedPath: temp,
           rollbackDir: path.join(host.paths.dataRoot, 'rollback'),
           native: getFontNative(),
         })
+        if (warning) host.recordInstallWarning(warning, draft.id)
         bindEntryToInstalledFile(draft, dest)
         applyParsedFont(draft, parsed)
       }
@@ -570,7 +604,12 @@ export async function activateEntry(
       return entry
     }
     if (entry.installedPath && fs.existsSync(entry.installedPath) && host.isLiveDestPath(entry.installedPath)) {
-      await ensureFontActivation(getFontNative(), entry.installedPath, true)
+      try {
+        await ensureFontActivation(getFontNative(), entry.installedPath, true)
+      } catch (error) {
+        if (!isKeptInstall(error)) throw error
+        host.recordInstallWarning(error instanceof Error ? error.message : String(error), entry.id)
+      }
       catalog = loadCatalog(host.paths)
       entry = findById(catalog, id)
       if (!entry) {

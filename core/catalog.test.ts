@@ -12,7 +12,9 @@ import {
   isExternalSource,
   loadCatalog,
   occupantsAtPath,
+  pauseCatalogTask,
   resolveStatusWhenSourceMissing,
+  runCatalogTask,
   saveCatalog,
 } from './catalog.ts'
 import { tempPaths } from './test-util.ts'
@@ -290,4 +292,58 @@ test('buildPathOccupancyIndex matches occupantsAtPath for installed files', () =
   } finally {
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
+})
+
+test('pauseCatalogTask lets another catalog task run, then resumes before later writes', async () => {
+  const order: string[] = []
+  let releasePause!: () => void
+  const pauseGate = new Promise<void>((resolve) => {
+    releasePause = resolve
+  })
+  let markPaused!: () => void
+  const pausedGate = new Promise<void>((resolve) => {
+    markPaused = resolve
+  })
+  const first = runCatalogTask(async () => {
+    order.push('a-start')
+    await pauseCatalogTask(async () => {
+      order.push('a-paused')
+      markPaused()
+      await pauseGate
+      order.push('a-resume-work')
+    })
+    order.push('a-after')
+  })
+  await pausedGate
+  const second = runCatalogTask(async () => {
+    order.push('b')
+  })
+  await second
+  assert.deepEqual(order, ['a-start', 'a-paused', 'b'])
+  releasePause()
+  await first
+  assert.deepEqual(order, ['a-start', 'a-paused', 'b', 'a-resume-work', 'a-after'])
+})
+
+test('a catalog task waits while another task still holds the queue', async () => {
+  const order: string[] = []
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const first = runCatalogTask(async () => {
+    order.push('a')
+    await gate
+    order.push('a-end')
+  })
+  await new Promise((resolve) => setImmediate(resolve))
+  const second = runCatalogTask(async () => {
+    order.push('b')
+  })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.deepEqual(order, ['a'])
+  release()
+  await first
+  await second
+  assert.deepEqual(order, ['a', 'a-end', 'b'])
 })

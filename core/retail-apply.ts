@@ -3,6 +3,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { yieldEventLoop } from './event-loop.ts'
 import { commitInstalledFile } from './install.ts'
+import { logMain } from './main-log.ts'
+import { emitNotice } from './service-helpers.ts'
 import { getFontNative, type FontNative } from './native.ts'
 import { resolveRetailInstallPath } from './retail-sync.ts'
 import {
@@ -135,12 +137,16 @@ async function writeOne(options: ApplyRetailSyncOptions, item: RetailDriftItem):
       if (target.parked) {
         writeParkedFile(target.dest, stagedPath)
       } else {
-        await commitInstalledFile({
+        const warning = await commitInstalledFile({
           dest: target.dest,
           stagedPath,
           rollbackDir: options.rollbackDir,
           native: options.native ?? getFontNative(),
         })
+        if (warning) {
+          logMain('verify', `kept ${target.dest} ${warning}`)
+          emitNotice({ kind: 'warning', message: warning })
+        }
       }
       return target
     }

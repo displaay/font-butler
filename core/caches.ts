@@ -4,10 +4,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { assertSafeShellPath } from './auth.ts'
+import { pauseCatalogTask } from './catalog.ts'
 import { logMain } from './main-log.ts'
 import { parseFontFile } from './parse.ts'
 import { getPaths, isMac } from './paths.ts'
-import { readFontName } from './rename.ts'
+import { readAcceptablePostScriptNames, readFontName } from './rename.ts'
 import type { AdobeFontCacheInfo, OfficeFontCacheInfo } from './types.ts'
 import { isMacUserFontFile } from './user-fonts.ts'
 
@@ -33,6 +34,32 @@ export const ATSUTIL_CLEAR_COMMANDS: readonly (readonly string[])[] = [
 
 /** AppleScript that asks macOS to log out. System Events still shows its own confirm. */
 export const MAC_LOGOUT_APPLESCRIPT = 'tell application "System Events" to log out'
+
+/** Shown when Font Buttler cannot send the logout Apple event (for example -1743). */
+export const LOGOUT_FALLBACK = 'Use Apple menu > Log Out'
+
+export const FONT_NOT_VISIBLE_WARNING = 'Not visible to other apps yet'
+
+const VERIFY_BUDGET_MS = 10_000
+const VERIFY_INTERVAL_MS = 400
+
+/** A failed fresh-process check that must keep the new file instead of rolling it back. */
+export class InstalledFontKept extends Error {
+  readonly keepFile = true
+  constructor(message: string) {
+    super(message)
+    this.name = 'InstalledFontKept'
+  }
+}
+
+export function isKeptInstall(error: unknown): boolean {
+  return (
+    error instanceof InstalledFontKept ||
+    (typeof error === 'object' &&
+      error !== null &&
+      (error as { keepFile?: boolean }).keepFile === true)
+  )
+}
 
 export function atsutilCommands(options: { confirm?: boolean } = {}): string[][] {
   if (options.confirm !== true) return []
@@ -242,13 +269,36 @@ export async function clearUserFontCache(
   return { mac: true, cleared: true }
 }
 
-export async function requestMacLogout(): Promise<{ requested: boolean }> {
-  if (!isMac()) return { requested: false }
+export function logoutResultFromExecError(error: unknown): {
+  requested: false
+  message: string
+  error: string
+} {
+  const err = error as { message?: string; stderr?: string | Buffer; stdout?: string | Buffer }
+  const detail =
+    [err?.stderr, err?.stdout, err?.message]
+      .map((part) => (Buffer.isBuffer(part) ? part.toString('utf8') : part))
+      .filter((part) => typeof part === 'string' && part.trim())
+      .join('\n') || String(error)
+  logMain('install', `logout failed ${detail}`)
+  return { requested: false, message: LOGOUT_FALLBACK, error: detail }
+}
+
+export async function requestMacLogout(): Promise<{
+  requested: boolean
+  message?: string
+  error?: string
+}> {
+  if (!isMac()) return { requested: false, message: LOGOUT_FALLBACK }
   if (process.env.FONT_BUTLER_TEST === '1' && process.env.FONT_BUTLER_NATIVE !== '1') {
-    return { requested: false }
+    return { requested: false, message: LOGOUT_FALLBACK }
   }
-  await runQuiet('osascript', ['-e', MAC_LOGOUT_APPLESCRIPT])
-  return { requested: true }
+  try {
+    await execFileAsync('osascript', ['-e', MAC_LOGOUT_APPLESCRIPT], { timeout: 15_000 })
+    return { requested: true }
+  } catch (error) {
+    return logoutResultFromExecError(error)
+  }
 }
 
 export async function clearOfficeFontCache(): Promise<{ mac: boolean; cleared: boolean }> {
@@ -400,7 +450,9 @@ function registerAtScopes(filePath, register) {
     try {
       const err = error[0]
       if (err) {
-        const raw = err.code
+        let nsError = err
+        try { nsError = ObjC.castRefToObject(err) } catch (castError) { nsError = err }
+        const raw = nsError.code
         code = Number(raw && raw.js ? ObjC.unwrap(raw) : raw)
         if (!isFinite(code)) code = 0
       }
@@ -468,9 +520,12 @@ function run(argv) {
 }
 `
 
-function fontManagerSucceeded(stdout: string): boolean {
+export function fontManagerSucceeded(stdout: string): boolean {
   const text = stdout.trim()
-  return text === 'ok' || text === 'skip' || text.startsWith('ok:')
+  if (text === 'ok' || text === 'skip' || text.startsWith('ok:')) return true
+  const fail = /^fail:(-?\d+)/.exec(text)
+  if (fail && registrationSucceeded([{ ok: false, code: Number(fail[1]) }])) return true
+  return false
 }
 
 function fontManagerError(mode: string, detail: string): string {
@@ -620,22 +675,32 @@ export type ActivatedFontLookup = {
 
 export const FONT_LOOKUP_SCRIPT = `ObjC.import('CoreText')
 ObjC.import('Foundation')
+function objcString(value) {
+  if (value == null) return ''
+  try { return String(ObjC.unwrap(ObjC.castRefToObject(value)) || '') }
+  catch (error) {
+    try { return String(ObjC.unwrap(value) || '') } catch (fallback) { return '' }
+  }
+}
 function run(argv) {
   const psName = String(argv[0] || '')
   const font = $.CTFontCreateWithName(psName, 12, null)
   if (!font) return JSON.stringify({ ok: false, reason: 'missing' })
-  const actual = String(ObjC.unwrap($.CTFontCopyPostScriptName(font)) || '')
-  const family = String(ObjC.unwrap($.CTFontCopyFamilyName(font)) || '')
+  const actual = objcString($.CTFontCopyPostScriptName(font))
+  const family = objcString($.CTFontCopyFamilyName(font))
   let version = ''
   try {
-    version = String(ObjC.unwrap($.CTFontCopyName(font, $.kCTFontVersionNameKey)) || '')
+    version = objcString($.CTFontCopyName(font, $.kCTFontVersionNameKey))
   } catch (error) {
     version = ''
   }
   let filePath = ''
   try {
-    const url = $.CTFontCopyAttribute(font, $.kCTFontURLAttribute)
-    if (url) filePath = String(ObjC.unwrap(url.path) || '')
+    const urlRef = $.CTFontCopyAttribute(font, $.kCTFontURLAttribute)
+    if (urlRef) {
+      const url = ObjC.castRefToObject(urlRef)
+      filePath = String(ObjC.unwrap(url.path) || '')
+    }
   } catch (error) {
     filePath = ''
   }
@@ -691,11 +756,14 @@ export function nativeFontVerificationEnabled(): boolean {
   return true
 }
 
-function versionsMatch(reported: string, expected: string): boolean {
-  const actual = reported.trim()
-  const wanted = expected.trim()
+export function versionsMatch(reported: string, expected: string): boolean {
+  const normalize = (value: string) => value.trim().replace(/\s+/g, ' ')
+  const actual = normalize(reported)
+  const wanted = normalize(expected)
   if (!actual || !wanted) return true
-  return actual === wanted || actual.includes(wanted) || wanted.includes(actual)
+  if (actual.toLowerCase() === wanted.toLowerCase()) return true
+  const strip = (value: string) => value.replace(/^version\s+/i, '').trim()
+  return strip(actual).toLowerCase() === strip(wanted).toLowerCase()
 }
 
 export async function lookupActivatedFont(postscriptName: string): Promise<ActivatedFontLookup> {
@@ -776,46 +844,75 @@ export async function awaitActivatedFont(
   return last
 }
 
+function keptVerificationError(filePath: string, message: string, keep: boolean): Error {
+  const userFont = isMacUserFontFile(filePath)
+  if (!(keep || userFont)) return new Error(message)
+  const anotherCopy = /already served/.test(message)
+  const text =
+    userFont && !anotherCopy && !/not visible to other apps yet/i.test(message)
+      ? `${message} The font is ${FONT_NOT_VISIBLE_WARNING.toLowerCase()}.`
+      : message
+  return new InstalledFontKept(text)
+}
+
 export async function verifyInstalledFont(filePath: string): Promise<void> {
   if (!nativeFontVerificationEnabled()) {
     logMain('verify', `skip ${filePath}`)
     return
   }
+  await pauseCatalogTask(() => verifyInstalledFontNow(filePath))
+}
+
+async function verifyInstalledFontNow(filePath: string): Promise<void> {
   const parsed = parseFontFile(filePath)
   const faces = parsed.faces.filter((face) => face.postscriptName.trim())
   if (faces.length === 0) {
     const message = 'Could not read a PostScript name from the installed font.'
     logMain('verify', `fail ${filePath} ${message}`)
-    throw new Error(message)
+    throw keptVerificationError(filePath, message, false)
   }
-  const expectedVersion = readFontName(filePath, 5)
+  const checks = faces.map((face, index) => {
+    const ps = face.postscriptName.trim()
+    return {
+      ps,
+      acceptable: new Set([ps, ...readAcceptablePostScriptNames(filePath, index)]),
+      version: readFontName(filePath, 5, index),
+    }
+  })
+  const userFont = isMacUserFontFile(filePath)
+  const deadline = Date.now() + VERIFY_BUDGET_MS
   let lastError = 'Core Text did not activate the installed font.'
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  let lastKeep = userFont
+  while (true) {
     let failed = ''
-    for (const face of faces) {
-      const ps = face.postscriptName.trim()
-      const lookup = await lookupActivatedFont(ps)
+    let keep = userFont
+    for (const check of checks) {
+      const lookup = await lookupActivatedFont(check.ps)
       logMain(
         'verify',
-        `${ps} -> ps=${lookup.postscript || '?'} path=${lookup.path || '?'} version=${lookup.version || '?'} listed=${lookup.listed} file=${filePath}`,
+        `${check.ps} -> ps=${lookup.postscript || '?'} path=${lookup.path || '?'} version=${lookup.version || '?'} listed=${lookup.listed} file=${filePath}`,
       )
       if (!lookup.ok) {
-        failed = lookup.error || `Core Text did not resolve ${ps}.`
+        failed = lookup.error || `Core Text did not resolve ${check.ps}.`
+        keep = userFont
         break
       }
-      if (lookup.postscript !== ps) {
+      if (!check.acceptable.has(lookup.postscript)) {
         const fallback = /helvetica/i.test(lookup.postscript) || /helvetica/i.test(lookup.path)
         failed = fallback
-          ? `Core Text resolved ${ps} to a fallback font (${lookup.postscript || lookup.path}).`
-          : `Core Text resolved ${ps} to ${lookup.postscript || 'another font'} instead of the installed file.`
+          ? `Core Text resolved ${check.ps} to a fallback font (${lookup.postscript || lookup.path}).`
+          : `Core Text resolved ${check.ps} to ${lookup.postscript || 'another font'} instead of the installed file.`
+        keep = userFont
         break
       }
       if (!fontPathsMatch(lookup.path, filePath)) {
-        failed = `Core Text resolved ${ps} to ${lookup.path || 'another file'} instead of ${filePath}.`
+        failed = `${check.ps} is already served from ${lookup.path || 'another file'}. The installed file was kept.`
+        keep = true
         break
       }
-      if (expectedVersion && lookup.version && !versionsMatch(lookup.version, expectedVersion)) {
-        failed = `Core Text is serving ${lookup.version} for ${ps}, not ${expectedVersion}.`
+      if (check.version && lookup.version && !versionsMatch(lookup.version, check.version)) {
+        failed = `Core Text is serving ${lookup.version} for ${check.ps}, not ${check.version}.`
+        keep = userFont
         break
       }
     }
@@ -824,8 +921,11 @@ export async function verifyInstalledFont(filePath: string): Promise<void> {
       return
     }
     lastError = failed
-    if (attempt + 1 < 20) await waitForFont(400)
+    lastKeep = keep
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) break
+    await waitForFont(Math.min(VERIFY_INTERVAL_MS, remaining))
   }
   logMain('verify', `fail ${filePath} ${lastError}`)
-  throw new Error(lastError)
+  throw keptVerificationError(filePath, lastError, lastKeep)
 }

@@ -600,8 +600,9 @@ function AppShell() {
         if (seenWatchFailures.has(key)) return
         seenWatchFailures.add(key)
       }
-      if (notice.kind === 'error' || !busyRef.current) {
-        toast[notice.kind === 'error' ? 'error' : 'success'](notice.message, {
+      if (notice.kind === 'error' || notice.kind === 'warning' || !busyRef.current) {
+        const level = notice.kind === 'error' ? 'error' : notice.kind === 'warning' ? 'warning' : 'success'
+        toast[level](notice.message, {
           action: notice.operationId
             ? {
                 label: 'Activity',

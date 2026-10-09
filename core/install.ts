@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { isKeptInstall } from './caches.ts'
 import { sourceFileExists } from './catalog.ts'
 import { yieldEventLoop } from './event-loop.ts'
 import { normalizeFormat } from './formats.ts'
@@ -50,8 +51,11 @@ export async function commitInstalledFile(options: {
   stagedPath: string
   rollbackDir: string
   native: FontNative
-}): Promise<void> {
+  activate?: (dest: string, native: FontNative) => Promise<void>
+}): Promise<string | undefined> {
   const { dest, stagedPath, rollbackDir, native } = options
+  const activate =
+    options.activate ?? ((filePath, fontNative) => ensureFontActivation(fontNative, filePath, true))
   await yieldEventLoop()
   fs.mkdirSync(path.dirname(dest), { recursive: true })
   fs.mkdirSync(rollbackDir, { recursive: true })
@@ -77,13 +81,20 @@ export async function commitInstalledFile(options: {
       await fs.promises.copyFile(stagedPath, dest)
       logMain('install', `copy ${dest}`)
     }
-    await ensureFontActivation(native, dest, true)
+    await activate(dest, native)
     if (rollback) {
       fs.rmSync(rollback, { force: true })
       rollback = undefined
     }
+    return undefined
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
+    if (isKeptInstall(error)) {
+      // The new bytes stay. A visibility miss in ~/Library/Fonts, or another
+      // active copy of the same PostScript name, is a warning rather than a rollback.
+      logMain('install', `kept ${dest} ${message}`)
+      return message
+    }
     logMain('install', `fail ${dest} ${message}`)
     if (rollback && fs.existsSync(rollback)) {
       if (userFont) {

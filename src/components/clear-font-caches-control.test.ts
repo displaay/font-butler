@@ -177,6 +177,39 @@ test('Clear font caches runs only after confirmation and logout is optional', as
   assert.deepEqual(calls, ['clear', 'clear', 'logout'])
 
   await act(async () => {
+    root.render(
+      createElement(ClearFontCachesControl, {
+        onClear: async () => {
+          calls.push('clear')
+        },
+        onLogOut: async () => {
+          calls.push('logout-denied')
+          return { requested: false, message: 'Use Apple menu > Log Out' }
+        },
+      }),
+    )
+  })
+  const openDenied = buttonNamed(document.body, 'Clear font caches')
+  assert.ok(openDenied)
+  await act(async () => {
+    openDenied.click()
+  })
+  const confirmDenied = document.body.querySelector('[role="dialog"]')
+  assert.ok(confirmDenied)
+  const confirmDeniedButton = buttonNamed(confirmDenied, 'Clear font caches')
+  assert.ok(confirmDeniedButton)
+  await act(async () => {
+    confirmDeniedButton.click()
+  })
+  const logoutDenied = buttonNamed(document.body, 'Log out now')
+  assert.ok(logoutDenied)
+  await act(async () => {
+    logoutDenied.click()
+  })
+  assert.match(document.body.textContent ?? '', /Use Apple menu > Log Out/)
+  assert.ok(buttonNamed(document.body, 'Later'))
+
+  await act(async () => {
     root.unmount()
   })
   host.remove()

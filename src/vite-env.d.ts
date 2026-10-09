@@ -38,7 +38,7 @@ declare global {
       onWatchNotices?: (
         callback: (
           notices: Array<{
-            kind: 'installed' | 'reinstalled' | 'error' | 'info'
+            kind: 'installed' | 'reinstalled' | 'error' | 'info' | 'warning'
             message: string
             entryId?: string
             operationId?: string

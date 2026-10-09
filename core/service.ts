@@ -356,6 +356,7 @@ export class FontButlerService {
   private autoReinstallPending = new Set<string>()
   private rememberedDecisions = new Map<string, ImportPlanChoice>()
   private destinationFailures: Array<{ destinationId: DestinationId; reason: string }> = []
+  private installWarnings: string[] = []
   private replacedConflicts: OperationItem[] = []
   private testInstallPaths = new Map<string, string>()
   private stopTestInstallWatch: (() => Promise<void>) | null = null
@@ -400,6 +401,17 @@ export class FontButlerService {
     const failures = this.destinationFailures
     this.destinationFailures = []
     return failures
+  }
+
+  private recordInstallWarning(message: string, entryId?: string): void {
+    this.installWarnings.push(message)
+    emitNotice({ kind: 'warning', message, entryId })
+  }
+
+  private takeInstallWarning(): string | undefined {
+    const message = this.installWarnings.join('\n')
+    this.installWarnings = []
+    return message || undefined
   }
 
   private withPartialDestinationResult(
@@ -955,9 +967,11 @@ export class FontButlerService {
       )
       const previousRevision = installAs ? undefined : this.previousRevisionBeforeChange(before)
       this.destinationFailures = []
+      this.installWarnings = []
       this.replacedConflicts = []
       const entry = await this.installEntry(id, familyName, options)
       const destinationFailures = this.takeDestinationFailures()
+      const installWarning = this.takeInstallWarning()
       const replacedConflicts = this.takeReplacedConflicts()
       const catalog = loadCatalog(this.paths)
       const latest = findById(catalog, entry.id)
@@ -966,7 +980,7 @@ export class FontButlerService {
         touchEntry(latest)
         saveCatalog(this.paths, catalog)
       }
-      const item = this.operationItem(entry, 'succeeded')
+      const item = this.operationItem(entry, 'succeeded', installWarning)
       item.previousRevision = previousRevision
       this.commitManualOperation(
         options?.replace ? 'install-update' : 'install',
@@ -1016,9 +1030,11 @@ export class FontButlerService {
         try {
           const previousRevision = this.previousRevisionBeforeChange(entry)
           this.destinationFailures = []
+          this.installWarnings = []
           this.replacedConflicts = []
           const installed = await this.installEntry(entry.id, familyName, options)
           const destinationFailures = this.takeDestinationFailures()
+          const installWarning = this.takeInstallWarning()
           const replacedConflicts = this.takeReplacedConflicts()
           const catalog = loadCatalog(this.paths)
           const latest = findById(catalog, installed.id)
@@ -1029,7 +1045,7 @@ export class FontButlerService {
           }
           const completed = latest ?? installed
           entries.push(completed)
-          const item = this.operationItem(completed, 'succeeded')
+          const item = this.operationItem(completed, 'succeeded', installWarning)
           item.previousRevision = previousRevision
           items.push(...this.withDestinationFailures(completed, item, destinationFailures), ...replacedConflicts)
           for (const failure of destinationFailures) errors.push(failure.reason)
@@ -1200,11 +1216,13 @@ export class FontButlerService {
         ? occupyingSiblings(loadCatalog(this.paths).entries, current, this.paths)[0]?.id
         : undefined
       this.destinationFailures = []
+      this.installWarnings = []
       const entry = options?.switch
         ? await this.switchToEntry(id)
         : await this.activateEntry(id, { ...options, owner: 'manual' })
       const destinationFailures = this.takeDestinationFailures()
-      const item = this.operationItem(entry, 'succeeded')
+      const installWarning = this.takeInstallWarning()
+      const item = this.operationItem(entry, 'succeeded', installWarning)
       if (options?.switch) item.relatedEntryId = relatedId
       this.commitManualOperation(
         options?.switch ? 'switch' : 'activate',
@@ -1234,10 +1252,11 @@ export class FontButlerService {
           const relatedId = current
             ? occupyingSiblings(loadCatalog(this.paths).entries, current, this.paths)[0]?.id
             : undefined
+          this.installWarnings = []
           const next = options?.switch
             ? await this.switchToEntry(id)
             : await this.activateEntry(id, { ...options, owner: 'manual' })
-          const item = this.operationItem(next, 'succeeded')
+          const item = this.operationItem(next, 'succeeded', this.takeInstallWarning())
           if (options?.switch) item.relatedEntryId = relatedId
           entries.push(next)
           items.push(item)
@@ -1281,11 +1300,13 @@ export class FontButlerService {
     return runCatalogTask(async () => {
       const before = findById(loadCatalog(this.paths), id)?.installedFingerprint
       this.destinationFailures = []
+      this.installWarnings = []
       const entry = await this.reinstallEntry(id, options)
       const destinationFailures = this.takeDestinationFailures()
+      const installWarning = this.takeInstallWarning()
       this.commitManualOperation(
         'reinstall',
-        this.withDestinationFailures(entry, this.operationItem(entry, 'succeeded'), destinationFailures),
+        this.withDestinationFailures(entry, this.operationItem(entry, 'succeeded', installWarning), destinationFailures),
         displayFamily(entry),
         before !== entry.installedFingerprint,
       )
@@ -1301,7 +1322,9 @@ export class FontButlerService {
     familyName?: string,
   ): Promise<BakeFeaturesResult> {
     return runCatalogTask(async () => {
+      this.installWarnings = []
       const result = await bakeFeaturesFn(this.asLifecycleHost(), id, features, mode, familyName)
+      const installWarning = this.takeInstallWarning()
       if (mode === 'new-copy') {
         const catalog = loadCatalog(this.paths)
         const latest = findById(catalog, result.entry.id)
@@ -1314,7 +1337,7 @@ export class FontButlerService {
       }
       this.commitManualOperation(
         mode === 'new-copy' ? 'install' : 'reinstall',
-        [this.operationItem(result.entry, 'succeeded')],
+        [this.operationItem(result.entry, 'succeeded', installWarning)],
         displayFamily(result.entry),
       )
       await syncWatchers(this.paths)
@@ -1355,9 +1378,10 @@ export class FontButlerService {
         }
         try {
           beforeRevisions.set(id, entry.installedFingerprint)
+          this.installWarnings = []
           const updated = await this.reinstallEntry(id, options)
           entries.push(updated)
-          items.push(this.operationItem(updated, 'succeeded'))
+          items.push(this.operationItem(updated, 'succeeded', this.takeInstallWarning()))
         } catch (error) {
           const reason = error instanceof Error ? error.message : String(error)
           errors.push(reason)
@@ -1455,7 +1479,7 @@ export class FontButlerService {
     return result
   }
 
-  async requestLogout(): Promise<{ requested: boolean }> {
+  async requestLogout(): Promise<{ requested: boolean; message?: string; error?: string }> {
     return requestMacLogout()
   }
 
@@ -2224,6 +2248,7 @@ export class FontButlerService {
 
   async restoreRevision(id: string, fingerprint?: string): Promise<CatalogEntry> {
     return runCatalogTask(async () => {
+      this.installWarnings = []
       let catalog = loadCatalog(this.paths)
       let entry = findById(catalog, id)
       if (!entry) throw new Error('Font is not in the library.')
@@ -2273,12 +2298,13 @@ export class FontButlerService {
                 if (fs.existsSync(tempDest)) fs.rmSync(tempDest, { force: true })
               }
             } else {
-              await commitInstalledFile({
+              const warning = await commitInstalledFile({
                 dest,
                 stagedPath: staging,
                 rollbackDir: path.join(this.paths.dataRoot, 'rollback'),
                 native: getFontNative(),
               })
+              if (warning) this.recordInstallWarning(warning, entry!.id)
             }
           }
           if (adobe) {
@@ -2353,6 +2379,7 @@ export class FontButlerService {
           entryId: entry.id,
           label: displayEntry(entry),
           outcome: 'succeeded',
+          reason: this.takeInstallWarning(),
           previousRevision: previousFingerprint,
           expectedRevision: target,
           expectedStatus: entry.status,
@@ -3201,6 +3228,9 @@ export class FontButlerService {
       recordDestinationFailure: (destinationId, reason) => {
         this.destinationFailures.push({ destinationId, reason })
       },
+      recordInstallWarning: (message, entryId) => {
+        this.recordInstallWarning(message, entryId)
+      },
     }
   }
 
@@ -3412,7 +3442,17 @@ export class FontButlerService {
         if (restoreToComputer && dest !== entry.disabledPath && fs.existsSync(dest)) {
           fs.renameSync(dest, entry.disabledPath)
         }
-        throw error
+        const stillLive =
+          fs.existsSync(dest) && !isUnderAnyRoot(dest, [this.paths.disabledDir])
+        if (!stillLive) throw error
+        const message = error instanceof Error ? error.message : String(error)
+        const warning =
+          isMacUserFontFile(dest) &&
+          !/not visible to other apps yet/i.test(message) &&
+          !/already served/i.test(message)
+            ? `${message} The font is not visible to other apps yet.`
+            : message
+        this.recordInstallWarning(warning, entry.id)
       }
       entry.installedPath = dest
       entry.disabledPath = undefined

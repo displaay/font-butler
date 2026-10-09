@@ -135,14 +135,17 @@ test('electron-builder 26 accepts the mac signing config and the notarized DMG s
   ])
 })
 
-test('Developer ID entitlements are allow-jit only', () => {
+test('Developer ID entitlements allow JIT and Apple Events', () => {
   const entitlements = readRepo('build/entitlements.mac.plist')
   const adhoc = readRepo('build/entitlements.mac.adhoc.plist')
   assert.match(entitlements, /com\.apple\.security\.cs\.allow-jit/)
+  assert.match(entitlements, /com\.apple\.security\.automation\.apple-events/)
   assert.doesNotMatch(entitlements, /allow-unsigned-executable-memory/)
   assert.doesNotMatch(entitlements, /disable-library-validation/)
   assert.doesNotMatch(entitlements, /get-task-allow/)
+  assert.match(readRepo('package.json'), /NSAppleEventsUsageDescription/)
   assert.match(adhoc, /com\.apple\.security\.cs\.allow-jit/)
+  assert.match(adhoc, /com\.apple\.security\.automation\.apple-events/)
   assert.match(adhoc, /com\.apple\.security\.cs\.disable-library-validation/)
   assert.doesNotMatch(adhoc, /allow-unsigned-executable-memory/)
   assert.doesNotMatch(adhoc, /get-task-allow/)
