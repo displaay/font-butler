@@ -304,7 +304,6 @@ app.post('/api/settings', async (c) => {
     clearOfficeFontCache?: boolean
     clearAdobeFontCache?: boolean
     autoReinstallOnUpdate?: boolean
-    skipCacheClearOnReinstall?: boolean
     nativeNotifications?: boolean
     onboardingCompleted?: boolean
     revisionBudgetBytes?: number
@@ -722,12 +721,38 @@ app.post('/api/system/deactivate', async (c) => {
 })
 
 app.post('/api/caches/font', async (c) => {
+  let body: { confirm?: boolean } = {}
   try {
-    const result = await service.clearUserFontCache()
+    body = await c.req.json<{ confirm?: boolean }>()
+  } catch {
+    body = {}
+  }
+  if (body.confirm !== true) {
+    return c.json(
+      {
+        error:
+          'Clearing font caches needs confirmation. User fonts will not activate again until you log out.',
+      },
+      400,
+    )
+  }
+  try {
+    const result = await service.clearUserFontCache({ confirm: true })
     return c.json(result)
   } catch (error) {
     return c.json(
       { error: error instanceof Error ? error.message : 'Could not remove font cache' },
+      400,
+    )
+  }
+})
+
+app.post('/api/session/logout', async (c) => {
+  try {
+    return c.json(await service.requestLogout())
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : 'Could not log out' },
       400,
     )
   }

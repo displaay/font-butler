@@ -1015,7 +1015,48 @@ async function runFinderInstall(action, filePaths) {
   showMainWindow()
 }
 
+const FONT_CACHE_CLEAR_WARNING = "User fonts won't activate again until you log out."
+
+async function confirmFontCacheClear() {
+  const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined
+  const options = {
+    type: 'warning',
+    title: 'Clear font caches',
+    message: 'Clear font caches?',
+    detail: `This removes the macOS user font cache. ${FONT_CACHE_CLEAR_WARNING}`,
+    buttons: ['Clear font caches', 'Cancel'],
+    defaultId: 1,
+    cancelId: 1,
+  }
+  const choice = parent
+    ? await dialog.showMessageBox(parent, options)
+    : await dialog.showMessageBox(options)
+  return choice.response === 0
+}
+
+async function offerLogoutAfterFontCacheClear() {
+  const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined
+  const options = {
+    type: 'info',
+    title: 'Font caches cleared',
+    message: FONT_CACHE_CLEAR_WARNING,
+    detail: 'Log out when you are ready for user fonts to activate again. macOS will ask you to confirm.',
+    buttons: ['Log out now', 'Later'],
+    defaultId: 1,
+    cancelId: 1,
+  }
+  const choice = parent
+    ? await dialog.showMessageBox(parent, options)
+    : await dialog.showMessageBox(options)
+  if (choice.response !== 0) return
+  await postApi('/api/session/logout', {})
+}
+
 async function clearCacheFromMenu(kind) {
+  if (kind === 'font') {
+    const confirmed = await confirmFontCacheClear()
+    if (!confirmed) return
+  }
   const pathByKind = {
     font: '/api/caches/font',
     office: '/api/caches/office',
@@ -1035,7 +1076,7 @@ async function clearCacheFromMenu(kind) {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({}),
+      body: JSON.stringify(kind === 'font' ? { confirm: true } : {}),
     })
     const rawBody = await response.text()
     let data
@@ -1053,6 +1094,9 @@ async function clearCacheFromMenu(kind) {
     }
     if (!response.ok) {
       throw new Error(data.error || 'Could not clear cache')
+    }
+    if (kind === 'font') {
+      await offerLogoutAfterFontCacheClear()
     }
   } catch (error) {
     dialog.showErrorBox(

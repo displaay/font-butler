@@ -19,7 +19,7 @@ import {
 } from './catalog.ts'
 import { getOrCreateApiToken } from './auth.ts'
 import { readFontPreviewBytes } from './font-bytes.ts'
-import { locateAdobeFontCache, locateOfficeFontCache } from './caches.ts'
+import { locateAdobeFontCache, locateOfficeFontCache, requestMacLogout } from './caches.ts'
 import {
   adobeInvestigation,
   copyAt,
@@ -75,7 +75,9 @@ import {
   uniqueSiblingPath,
 } from './install.ts'
 import { yieldEventLoop } from './event-loop.ts'
+import { logMain } from './main-log.ts'
 import { ensureFontActivation, getFontNative } from './native.ts'
+import { isMacUserFontFile, replaceFontFileAtomically } from './user-fonts.ts'
 import {
   analysisFromPlanItem,
   analyzeFontFile,
@@ -582,7 +584,6 @@ export class FontButlerService {
     clearOfficeFontCache?: boolean
     clearAdobeFontCache?: boolean
     autoReinstallOnUpdate?: boolean
-    skipCacheClearOnReinstall?: boolean
     nativeNotifications?: boolean
     onboardingCompleted?: boolean
     revisionBudgetBytes?: number
@@ -629,9 +630,6 @@ export class FontButlerService {
     }
     if (typeof patch.autoReinstallOnUpdate === 'boolean') {
       next.autoReinstallOnUpdate = patch.autoReinstallOnUpdate
-    }
-    if (typeof patch.skipCacheClearOnReinstall === 'boolean') {
-      next.skipCacheClearOnReinstall = patch.skipCacheClearOnReinstall
     }
     if (typeof patch.nativeNotifications === 'boolean') {
       next.nativeNotifications = patch.nativeNotifications
@@ -1331,21 +1329,6 @@ export class FontButlerService {
       const beforeRevisions = new Map<string, string | undefined>()
       const errors: string[] = []
       const items: OperationItem[] = []
-      const candidates = ids
-        .map((id) => findById(loadCatalog(this.paths), id))
-        .filter((entry): entry is CatalogEntry =>
-          Boolean(entry) && (eligibleForReinstall(entry) || entry.status === 'installed'),
-        )
-      const needsCacheClear = candidates.some((entry) => {
-        if (this.activeProjectPin(entry.id)) return false
-        if (entry.status === 'outdated') return true
-        if (entry.status !== 'installed' || !isExternalSource(entry)) return false
-        const sourceFingerprint = tryFingerprintFile(entry.sourcePath)
-        return Boolean(sourceFingerprint && sourceFingerprint !== entry.installedFingerprint)
-      })
-      if (needsCacheClear) {
-        await this.clearCachesAfterInstall()
-      }
       const progress = this.familyProgress('reinstall', ids)
       progress.start()
       for (const id of ids) {
@@ -1372,7 +1355,7 @@ export class FontButlerService {
         }
         try {
           beforeRevisions.set(id, entry.installedFingerprint)
-          const updated = await this.reinstallEntry(id, { ...options, skipCacheClear: true })
+          const updated = await this.reinstallEntry(id, options)
           entries.push(updated)
           items.push(this.operationItem(updated, 'succeeded'))
         } catch (error) {
@@ -1453,15 +1436,27 @@ export class FontButlerService {
     })
   }
 
-  async clearUserFontCache(): Promise<{ mac: boolean; cleared: boolean }> {
-    const result = await getFontNative().clearUserFontCache()
+  async clearUserFontCache(options: { confirm?: boolean } = {}): Promise<{
+    mac: boolean
+    cleared: boolean
+  }> {
+    if (options.confirm !== true) {
+      throw new Error(
+        'Clearing font caches needs confirmation. User fonts will not activate again until you log out.',
+      )
+    }
+    const result = await getFontNative().clearUserFontCache({ confirm: true })
     emitNotice({
       kind: 'info',
       message: result.mac
-        ? 'Removed the user font cache.'
+        ? 'Removed the user font cache. User fonts will not activate again until you log out.'
         : 'Font cache clearing is available on macOS.',
     })
     return result
+  }
+
+  async requestLogout(): Promise<{ requested: boolean }> {
+    return requestMacLogout()
   }
 
   async clearOfficeFontCache(): Promise<{ mac: boolean; cleared: boolean }> {
@@ -1540,7 +1535,9 @@ export class FontButlerService {
         throw new Error('Protected system fonts cannot be removed.')
       }
       await yieldEventLoop()
-      await getFontNative().unregisterFont(resolved)
+      if (!isMacUserFontFile(resolved)) {
+        await getFontNative().unregisterFont(resolved)
+      }
       await fs.promises.rm(resolved, { force: true })
       emitEvent({ type: 'system', faces: scanSystemFonts(this.paths) })
     })
@@ -1574,7 +1571,9 @@ export class FontButlerService {
         throw new Error('Protected system fonts cannot be deactivated.')
       }
       await yieldEventLoop()
-      await getFontNative().unregisterFont(resolved)
+      if (!isMacUserFontFile(resolved)) {
+        await getFontNative().unregisterFont(resolved)
+      }
       fs.mkdirSync(this.paths.disabledDir, { recursive: true })
       const dest = uniquePathFromOriginal(this.paths.disabledDir, resolved)
       fs.renameSync(resolved, dest)
@@ -2618,12 +2617,6 @@ export class FontButlerService {
     }
     const caches: RepairItemResult[] = []
     if (options.caches) {
-      const ats = await getFontNative().clearUserFontCache()
-      caches.push({
-        target: 'ATS',
-        kind: 'ats',
-        outcome: ats.mac ? (ats.cleared ? 'succeeded' : 'not-found') : 'unavailable',
-      })
       const office = await getFontNative().clearOfficeFontCache()
       caches.push({
         target: 'Office',
@@ -3175,11 +3168,15 @@ export class FontButlerService {
       const dest = snapshot.entry.installedPath
       if (dest) {
         fs.mkdirSync(path.dirname(dest), { recursive: true })
-        fs.copyFileSync(snapshot.file, dest)
-        try {
-          await ensureFontActivation(getFontNative(), dest, true)
-        } catch {
-          // Restoring the previous format is best-effort.
+        if (isMacUserFontFile(dest)) {
+          await replaceFontFileAtomically(snapshot.file, dest)
+        } else {
+          fs.copyFileSync(snapshot.file, dest)
+          try {
+            await ensureFontActivation(getFontNative(), dest, true)
+          } catch {
+            // Restoring the previous format is best-effort.
+          }
         }
       }
       const catalog = loadCatalog(this.paths)
@@ -3200,7 +3197,6 @@ export class FontButlerService {
       restoreConflictSnapshots: (snapshots) => this.restoreConflictSnapshots(snapshots),
       parkManagedCopies: (entry) => this.parkManagedCopies(entry),
       unparkManagedCopies: (entry, dests) => this.unparkManagedCopies(entry, dests),
-      clearCachesAfterInstall: () => this.clearCachesAfterInstall(),
       isLiveDestPath: (filePath) => this.isLiveDestPath(filePath),
       recordDestinationFailure: (destinationId, reason) => {
         this.destinationFailures.push({ destinationId, reason })
@@ -3340,8 +3336,12 @@ export class FontButlerService {
         ? path.resolve(entry.installedPath)
         : undefined
     if (macosLive) {
-      await ensureFontActivation(getFontNative(), macosLive, false)
-      await getFontNative().unregisterFont(macosLive)
+      if (isMacUserFontFile(macosLive)) {
+        logMain('install', `deactivate by move ${macosLive}`)
+      } else {
+        await ensureFontActivation(getFontNative(), macosLive, false)
+        await getFontNative().unregisterFont(macosLive)
+      }
       const vault = uniquePathFromOriginal(this.paths.disabledDir, macosLive)
       if (path.resolve(macosLive) !== vault) {
         fs.mkdirSync(path.dirname(vault), { recursive: true })
@@ -3479,7 +3479,7 @@ export class FontButlerService {
         saveCatalog(this.paths, catalog)
         parkedIds.push(latest.id)
       }
-      await this.clearCachesAfterInstall()
+      await this.clearOfficeAndAdobeCaches()
       catalog = loadCatalog(this.paths)
       entry = findById(catalog, id)
       if (!entry) {
@@ -3569,7 +3569,7 @@ export class FontButlerService {
 
   private async reinstallEntry(
     id: string,
-    options?: InstallOptions & { skipCacheClear?: boolean },
+    options?: InstallOptions,
   ): Promise<CatalogEntry> {
     return reinstallEntryFn(this.asLifecycleHost(), id, options)
   }
@@ -3651,9 +3651,6 @@ export class FontButlerService {
           await this.activateEntry(entry.id)
         }
         continue
-      }
-      if (entry.status === 'outdated') {
-        await this.clearCachesAfterInstall()
       }
       await this.installEntry(entry.id, entry.customFamilyName)
     }
@@ -3995,18 +3992,16 @@ export class FontButlerService {
     }
   }
 
-  private async clearCachesAfterInstall(): Promise<void> {
+  /** Office and Adobe only. Reinstall never calls this, and it never runs atsutil. */
+  private async clearOfficeAndAdobeCaches(): Promise<void> {
     try {
       const settings = loadSettings(this.paths)
-      if (settings.skipCacheClearOnReinstall) {
-        return
-      }
       await getFontNative().clearFontCaches({
         office: settings.clearOfficeFontCache,
         adobe: settings.clearAdobeFontCache,
       })
     } catch {
-      // Cache clearing is best-effort; a locked cache should not fail the install.
+      // Cache clearing is best-effort; a locked cache should not fail the switch.
     }
   }
 
@@ -4325,6 +4320,7 @@ export class FontButlerService {
     for (const entry of catalog.entries) {
       if (entry.previewOnly || entry.status !== 'installed') continue
       if (!entry.installedPath || !fs.existsSync(entry.installedPath)) continue
+      if (isMacUserFontFile(entry.installedPath)) continue
       if (!isUnderAnyRoot(entry.installedPath, roots)) continue
       const managed =
         Boolean(entry.retailRelativePath) ||

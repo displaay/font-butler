@@ -8,6 +8,7 @@ import { copiesOf } from './destinations.ts'
 import { tryFingerprintFile } from './fingerprint.ts'
 import { uniquePathFromOriginal } from './install.ts'
 import { ensureFontActivation, getFontNative, type FontNative } from './native.ts'
+import { isMacUserFontFile, replaceFontFileAtomically } from './user-fonts.ts'
 import { createOperation, finishOperation, upsertOperation } from './operations.ts'
 import { journalDir, journalPath, type AppPaths } from './paths.ts'
 import { displayEntry } from './service-helpers.ts'
@@ -349,8 +350,16 @@ async function restoreSnapshotFile(
 ): Promise<void> {
   if (!fs.existsSync(file.snapshotPath)) return
   fs.mkdirSync(path.dirname(file.originalPath), { recursive: true })
-  fs.copyFileSync(file.snapshotPath, file.originalPath)
-  if (file.role === 'macos-live' && isMacosLivePath(file.originalPath, paths)) {
+  if (isMacUserFontFile(file.originalPath)) {
+    await replaceFontFileAtomically(file.snapshotPath, file.originalPath)
+  } else {
+    fs.copyFileSync(file.snapshotPath, file.originalPath)
+  }
+  if (
+    file.role === 'macos-live' &&
+    isMacosLivePath(file.originalPath, paths) &&
+    !isMacUserFontFile(file.originalPath)
+  ) {
     try {
       await ensureFontActivation(native, file.originalPath, true)
     } catch {
@@ -361,10 +370,12 @@ async function restoreSnapshotFile(
 
 async function removeLivePath(native: FontNative, filePath: string): Promise<void> {
   if (!fs.existsSync(filePath)) return
-  try {
-    await native.unregisterFont(filePath)
-  } catch {
-    // Removing an incomplete dest must not fail the rest of reconcile.
+  if (!isMacUserFontFile(filePath)) {
+    try {
+      await native.unregisterFont(filePath)
+    } catch {
+      // Removing an incomplete dest must not fail the rest of reconcile.
+    }
   }
   fs.rmSync(filePath, { force: true })
 }

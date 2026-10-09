@@ -337,6 +337,9 @@ export const api = {
       post('/api/forget', { ids, deleteFiles: options?.deleteFiles }),
     ),
   forgetMissingSources: () => json<{ removed: number }>(post('/api/forget', { allMissing: true })),
+  clearFontCaches: () =>
+    json<{ mac: boolean; cleared: boolean }>(post('/api/caches/font', { confirm: true })),
+  requestLogout: () => json<{ requested: boolean }>(post('/api/session/logout', {})),
   uninstallSystem: (path: string) => json<{ ok: boolean }>(post('/api/system/uninstall', { path })),
   deactivateSystem: (path: string) =>
     json<{ ok: boolean }>(post('/api/system/deactivate', { path })),
@@ -362,7 +365,6 @@ export const api = {
     clearOfficeFontCache?: boolean
     clearAdobeFontCache?: boolean
     autoReinstallOnUpdate?: boolean
-    skipCacheClearOnReinstall?: boolean
     nativeNotifications?: boolean
     onboardingCompleted?: boolean
     folders?: WatchFolder[]

@@ -49,7 +49,7 @@ export function serializeFontNative(native: FontNative): FontNative {
       ? (filePath, enabled) => runFontFileTask(() => native.ensureActivation!(filePath, enabled))
       : undefined,
     fontActivationStates: (filePaths) => runFontFileTask(() => native.fontActivationStates(filePaths)),
-    clearUserFontCache: () => runFontFileTask(() => native.clearUserFontCache()),
+    clearUserFontCache: (options) => runFontFileTask(() => native.clearUserFontCache(options)),
     clearOfficeFontCache: () => runFontFileTask(() => native.clearOfficeFontCache()),
     clearAdobeFontCache: () => runFontFileTask(() => native.clearAdobeFontCache()),
     clearFontCaches: (options) => runFontFileTask(() => native.clearFontCaches(options)),

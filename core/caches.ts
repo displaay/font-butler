@@ -4,8 +4,40 @@ import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { assertSafeShellPath } from './auth.ts'
+import { logMain } from './main-log.ts'
+import { parseFontFile } from './parse.ts'
 import { getPaths, isMac } from './paths.ts'
+import { readFontName } from './rename.ts'
 import type { AdobeFontCacheInfo, OfficeFontCacheInfo } from './types.ts'
+import { isMacUserFontFile } from './user-fonts.ts'
+
+/** Session, then persistent user. Process scope (1) dies with this process and is never used. */
+export const REGISTRATION_SCOPES = [3, 2] as const
+/** kCTFontManagerErrorAlreadyRegistered */
+export const ALREADY_REGISTERED_CODE = 105
+
+export function registrationSucceeded(attempts: Array<{ ok: boolean; code: number }>): boolean {
+  return attempts.some((attempt) => attempt.ok || attempt.code === ALREADY_REGISTERED_CODE)
+}
+
+/**
+ * `atsutil` arguments for a confirmed manual font-cache clear.
+ * These delete the user font registry and stop fontd, so user fonts do not
+ * activate again until logout. No other caller may receive them.
+ */
+export const ATSUTIL_CLEAR_COMMANDS: readonly (readonly string[])[] = [
+  ['databases', '-removeUser'],
+  ['server', '-shutdown'],
+  ['server', '-ping'],
+]
+
+/** AppleScript that asks macOS to log out. System Events still shows its own confirm. */
+export const MAC_LOGOUT_APPLESCRIPT = 'tell application "System Events" to log out'
+
+export function atsutilCommands(options: { confirm?: boolean } = {}): string[][] {
+  if (options.confirm !== true) return []
+  return ATSUTIL_CLEAR_COMMANDS.map((args) => [...args])
+}
 
 export function locateOfficeFontCache(home = os.homedir()): OfficeFontCacheInfo {
   const groupContainers = path.join(home, 'Library/Group Containers')
@@ -187,20 +219,36 @@ export function allowRealCacheMutation(): boolean {
   return process.env.FONT_BUTLER_NATIVE_CACHES === '1'
 }
 
-export async function clearUserFontCache(): Promise<{ mac: boolean; cleared: boolean }> {
+export async function clearUserFontCache(
+  options: { confirm?: boolean } = {},
+): Promise<{ mac: boolean; cleared: boolean }> {
+  if (options.confirm !== true) {
+    return { mac: isMac(), cleared: false }
+  }
   if (!isMac()) {
     return { mac: false, cleared: false }
   }
   const paths = getPaths()
+  const commands = atsutilCommands({ confirm: true })
+  logMain('install', `atsutil ${commands.map((args) => args.join(' ')).join('; ')}`)
   if (allowRealCacheMutation()) {
-    await runQuiet('atsutil', ['databases', '-removeUser'])
-    await runQuiet('atsutil', ['server', '-shutdown'])
-    await runQuiet('atsutil', ['server', '-ping'])
+    for (const args of commands) {
+      await runQuiet('atsutil', args)
+    }
   }
   if (fs.existsSync(paths.atsCacheDir)) {
     emptyDir(paths.atsCacheDir)
   }
   return { mac: true, cleared: true }
+}
+
+export async function requestMacLogout(): Promise<{ requested: boolean }> {
+  if (!isMac()) return { requested: false }
+  if (process.env.FONT_BUTLER_TEST === '1' && process.env.FONT_BUTLER_NATIVE !== '1') {
+    return { requested: false }
+  }
+  await runQuiet('osascript', ['-e', MAC_LOGOUT_APPLESCRIPT])
+  return { requested: true }
 }
 
 export async function clearOfficeFontCache(): Promise<{ mac: boolean; cleared: boolean }> {
@@ -241,14 +289,13 @@ export async function clearAdobeFontCache(home = os.homedir()): Promise<{
 export async function clearFontCaches(
   options: { office?: boolean; adobe?: boolean } = {},
 ): Promise<{ mac: boolean; office: boolean; adobe: boolean }> {
-  const font = await clearUserFontCache()
   const office =
     options.office === false ? { cleared: false } : await clearOfficeFontCache()
   const adobe = options.adobe === false ? { cleared: false } : await clearAdobeFontCache()
-  return { mac: font.mac, office: office.cleared, adobe: adobe.cleared }
+  return { mac: false, office: office.cleared, adobe: adobe.cleared }
 }
 
-const FONT_ENABLE_SCRIPT = `ObjC.import('CoreText')
+export const FONT_ENABLE_SCRIPT = `ObjC.import('CoreText')
 ObjC.import('Foundation')
 function descriptorsFor(filePath) {
   const url = $.NSURL.fileURLWithPath(filePath)
@@ -323,15 +370,48 @@ function isEnabled(filePath, available) {
   }
   return false
 }
-function registerUrl(filePath, register) {
+function isMacUserLibraryFontPath(filePath) {
+  const s = String(filePath)
+  if (s.indexOf('/System/Library/Fonts/') >= 0) return false
+  return /\\/Users\\/[^\\/]+\\/Library\\/Fonts\\//.test(s)
+}
+function registerAtScopes(filePath, register) {
+  if (isMacUserLibraryFontPath(filePath)) return 'skip'
   const url = $.NSURL.fileURLWithPath(filePath)
   const fn = register ? $.CTFontManagerRegisterFontsForURL : $.CTFontManagerUnregisterFontsForURL
-  // macOS user-visible registration is kCTFontManagerScopeSession (3). Scope 2 is persistent and
-  // often returns paramErr (-50) for ~/Library/Fonts paths. Scope 1 is process-only, which made
-  // Figma and other apps miss fonts while fc-list still saw the files on disk.
-  if (Boolean(ObjC.unwrap(fn(url, 3, null)))) return true
-  if (Boolean(ObjC.unwrap(fn(url, 2, null)))) return true
-  return Boolean(ObjC.unwrap(fn(url, 1, null)))
+  const scopes = ${JSON.stringify([...REGISTRATION_SCOPES])}
+  const alreadyRegistered = ${ALREADY_REGISTERED_CODE}
+  let lastCode = 0
+  for (let i = 0; i < scopes.length; i++) {
+    const scope = scopes[i]
+    const error = Ref()
+    let ok = false
+    let code = 0
+    try {
+      const result = fn(url, scope, error)
+      if (result === true || result === 1) ok = true
+      else if (result === false || result === 0 || result == null) ok = false
+      else {
+        try { ok = Boolean(ObjC.unwrap(result)) } catch (unwrapError) { ok = Boolean(result) }
+      }
+    } catch (callError) {
+      ok = false
+    }
+    try {
+      const err = error[0]
+      if (err) {
+        const raw = err.code
+        code = Number(raw && raw.js ? ObjC.unwrap(raw) : raw)
+        if (!isFinite(code)) code = 0
+      }
+    } catch (readError) {
+      code = 0
+    }
+    if (ok) return 'ok:0:' + scope
+    if (register && code === alreadyRegistered) return 'ok:' + alreadyRegistered + ':' + scope
+    lastCode = code
+  }
+  return 'fail:' + lastCode
 }
 function run(argv) {
   const mode = argv[0]
@@ -361,7 +441,13 @@ function run(argv) {
   if (mode === 'ensure') {
     const filePath = argv[1]
     const enabled = argv[2] === '1'
-    if (enabled) registerUrl(filePath, true)
+    if (isMacUserLibraryFontPath(filePath)) return 'skip'
+    if (enabled) {
+      const registered = registerAtScopes(filePath, true)
+      if (String(registered).indexOf('fail') === 0) return registered
+    } else {
+      registerAtScopes(filePath, false)
+    }
     const descs = descriptorsFor(filePath)
     if (!descs || Number(descs.count) === 0) return 'fail'
     $.CTFontManagerEnableFontDescriptors(descs, enabled)
@@ -373,14 +459,30 @@ function run(argv) {
     return on === enabled ? 'ok' : 'fail'
   }
   if (mode === 'register') {
-    return registerUrl(argv[1], true) ? 'ok' : 'fail'
+    return registerAtScopes(argv[1], true)
   }
   if (mode === 'unregister') {
-    return registerUrl(argv[1], false) ? 'ok' : 'fail'
+    return registerAtScopes(argv[1], false)
   }
   return '{}'
 }
 `
+
+function fontManagerSucceeded(stdout: string): boolean {
+  const text = stdout.trim()
+  return text === 'ok' || text === 'skip' || text.startsWith('ok:')
+}
+
+function fontManagerError(mode: string, detail: string): string {
+  if (detail.startsWith('fail')) {
+    if (mode === 'register') return `Could not register the font (${detail}).`
+    if (mode === 'unregister') return `Could not unregister the font (${detail}).`
+    return `Could not change font activation (${detail}).`
+  }
+  if (mode === 'register') return 'Could not register the font.'
+  if (mode === 'unregister') return 'Could not unregister the font.'
+  return 'Could not change font activation.'
+}
 
 async function runFontManager(mode: string, filePath: string, extra: string[] = []): Promise<FontEnableResult> {
   const safePath = assertSafeShellPath(filePath)
@@ -390,32 +492,16 @@ async function runFontManager(mode: string, filePath: string, extra: string[] = 
       ['-l', 'JavaScript', '-e', FONT_ENABLE_SCRIPT, mode, safePath, ...extra],
       { timeout: 10_000 },
     )
-    if (stdout.trim() !== 'ok') {
-      return {
-        ok: false,
-        native: true,
-        error:
-          mode === 'register'
-            ? 'Could not register the font.'
-            : mode === 'unregister'
-              ? 'Could not unregister the font.'
-              : 'Could not change font activation.',
-      }
+    const detail = stdout.trim()
+    logMain('register', `${mode} ${safePath} ${detail}`)
+    if (!fontManagerSucceeded(detail)) {
+      return { ok: false, native: true, error: fontManagerError(mode, detail) }
     }
     return { ok: true, native: true }
   } catch (error) {
-    return {
-      ok: false,
-      native: true,
-      error:
-        error instanceof Error
-          ? error.message
-          : mode === 'register'
-            ? 'Could not register the font.'
-            : mode === 'unregister'
-              ? 'Could not unregister the font.'
-              : 'Could not change font activation.',
-    }
+    const message = error instanceof Error ? error.message : fontManagerError(mode, '')
+    logMain('register', `${mode} ${safePath} error ${message}`)
+    return { ok: false, native: true, error: message }
   }
 }
 
@@ -423,11 +509,19 @@ export async function registerFont(filePath: string): Promise<FontEnableResult> 
   if (!isMac() || !filePath) {
     return { ok: true, native: false }
   }
+  if (isMacUserFontFile(filePath)) {
+    logMain('register', `skip register ${filePath}`)
+    return { ok: true, native: false }
+  }
   return runFontManager('register', filePath)
 }
 
 export async function unregisterFont(filePath: string): Promise<FontEnableResult> {
   if (!isMac() || !filePath) {
+    return { ok: true, native: false }
+  }
+  if (isMacUserFontFile(filePath)) {
+    logMain('register', `skip unregister ${filePath}`)
     return { ok: true, native: false }
   }
   return runFontManager('unregister', filePath)
@@ -512,4 +606,226 @@ export async function fontActivationStates(filePaths: string[]): Promise<Activat
     }
   }
   return { ok: true, native: true, states }
+}
+
+export type ActivatedFontLookup = {
+  ok: boolean
+  postscript: string
+  family: string
+  version: string
+  path: string
+  listed: boolean
+  error?: string
+}
+
+export const FONT_LOOKUP_SCRIPT = `ObjC.import('CoreText')
+ObjC.import('Foundation')
+function run(argv) {
+  const psName = String(argv[0] || '')
+  const font = $.CTFontCreateWithName(psName, 12, null)
+  if (!font) return JSON.stringify({ ok: false, reason: 'missing' })
+  const actual = String(ObjC.unwrap($.CTFontCopyPostScriptName(font)) || '')
+  const family = String(ObjC.unwrap($.CTFontCopyFamilyName(font)) || '')
+  let version = ''
+  try {
+    version = String(ObjC.unwrap($.CTFontCopyName(font, $.kCTFontVersionNameKey)) || '')
+  } catch (error) {
+    version = ''
+  }
+  let filePath = ''
+  try {
+    const url = $.CTFontCopyAttribute(font, $.kCTFontURLAttribute)
+    if (url) filePath = String(ObjC.unwrap(url.path) || '')
+  } catch (error) {
+    filePath = ''
+  }
+  let listed = false
+  try {
+    const families = $.CTFontManagerCopyAvailableFontFamilyNames()
+    const arr = families ? ObjC.castRefToObject(families) : null
+    if (arr) {
+      const n = Number(arr.count)
+      for (let i = 0; i < n; i++) {
+        if (String(ObjC.unwrap(arr.objectAtIndex(i))) === family) {
+          listed = true
+          break
+        }
+      }
+    }
+  } catch (error) {
+    listed = false
+  }
+  return JSON.stringify({
+    ok: true,
+    postscript: actual,
+    family: family,
+    version: version,
+    path: filePath,
+    listed: listed
+  })
+}
+`
+
+export function fontPathsMatch(left: string, right: string): boolean {
+  const normalize = (value: string) => {
+    if (!value) return ''
+    let resolved = path.resolve(value)
+    try {
+      resolved = fs.realpathSync(resolved)
+    } catch {
+      // Keep the path we were given when the file is already gone.
+    }
+    if (resolved.startsWith('/private/var/') || resolved.startsWith('/private/tmp/')) {
+      return resolved.slice('/private'.length)
+    }
+    return resolved
+  }
+  const a = normalize(left)
+  const b = normalize(right)
+  return Boolean(a) && a === b
+}
+
+export function nativeFontVerificationEnabled(): boolean {
+  if (!isMac()) return false
+  if (process.env.FONT_BUTLER_TEST === '1' && process.env.FONT_BUTLER_NATIVE !== '1') return false
+  return true
+}
+
+function versionsMatch(reported: string, expected: string): boolean {
+  const actual = reported.trim()
+  const wanted = expected.trim()
+  if (!actual || !wanted) return true
+  return actual === wanted || actual.includes(wanted) || wanted.includes(actual)
+}
+
+export async function lookupActivatedFont(postscriptName: string): Promise<ActivatedFontLookup> {
+  const empty: ActivatedFontLookup = {
+    ok: false,
+    postscript: '',
+    family: '',
+    version: '',
+    path: '',
+    listed: false,
+  }
+  if (!postscriptName.trim()) {
+    return { ...empty, error: 'The font has no PostScript name.' }
+  }
+  try {
+    const { stdout } = await execFileAsync(
+      'osascript',
+      ['-l', 'JavaScript', '-e', FONT_LOOKUP_SCRIPT, postscriptName],
+      { timeout: 20_000 },
+    )
+    const parsed = JSON.parse(stdout.trim() || '{}') as Partial<ActivatedFontLookup> & { reason?: string }
+    return {
+      ok: Boolean(parsed.ok),
+      postscript: String(parsed.postscript || ''),
+      family: String(parsed.family || ''),
+      version: String(parsed.version || ''),
+      path: String(parsed.path || ''),
+      listed: Boolean(parsed.listed),
+      error: parsed.ok ? undefined : parsed.reason || 'Could not look up the font.',
+    }
+  } catch (error) {
+    return {
+      ...empty,
+      error: error instanceof Error ? error.message : 'Could not look up the font.',
+    }
+  }
+}
+
+function waitForFont(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
+}
+
+/**
+ * Ask a fresh process which file Core Text serves for this PostScript name.
+ * Retries so fontd can notice a renamed file in ~/Library/Fonts.
+ */
+export async function awaitActivatedFont(
+  postscriptName: string,
+  filePath: string,
+  options: { version?: string; attempts?: number } = {},
+): Promise<ActivatedFontLookup> {
+  const attempts = options.attempts ?? 20
+  let last: ActivatedFontLookup = {
+    ok: false,
+    postscript: '',
+    family: '',
+    version: '',
+    path: '',
+    listed: false,
+    error: 'Could not look up the font.',
+  }
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    last = await lookupActivatedFont(postscriptName)
+    const versionOk = !options.version || versionsMatch(last.version, options.version)
+    if (
+      last.ok &&
+      last.postscript === postscriptName &&
+      last.listed &&
+      fontPathsMatch(last.path, filePath) &&
+      versionOk
+    ) {
+      return last
+    }
+    if (attempt + 1 < attempts) await waitForFont(400)
+  }
+  return last
+}
+
+export async function verifyInstalledFont(filePath: string): Promise<void> {
+  if (!nativeFontVerificationEnabled()) {
+    logMain('verify', `skip ${filePath}`)
+    return
+  }
+  const parsed = parseFontFile(filePath)
+  const faces = parsed.faces.filter((face) => face.postscriptName.trim())
+  if (faces.length === 0) {
+    const message = 'Could not read a PostScript name from the installed font.'
+    logMain('verify', `fail ${filePath} ${message}`)
+    throw new Error(message)
+  }
+  const expectedVersion = readFontName(filePath, 5)
+  let lastError = 'Core Text did not activate the installed font.'
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    let failed = ''
+    for (const face of faces) {
+      const ps = face.postscriptName.trim()
+      const lookup = await lookupActivatedFont(ps)
+      logMain(
+        'verify',
+        `${ps} -> ps=${lookup.postscript || '?'} path=${lookup.path || '?'} version=${lookup.version || '?'} listed=${lookup.listed} file=${filePath}`,
+      )
+      if (!lookup.ok) {
+        failed = lookup.error || `Core Text did not resolve ${ps}.`
+        break
+      }
+      if (lookup.postscript !== ps) {
+        const fallback = /helvetica/i.test(lookup.postscript) || /helvetica/i.test(lookup.path)
+        failed = fallback
+          ? `Core Text resolved ${ps} to a fallback font (${lookup.postscript || lookup.path}).`
+          : `Core Text resolved ${ps} to ${lookup.postscript || 'another font'} instead of the installed file.`
+        break
+      }
+      if (!fontPathsMatch(lookup.path, filePath)) {
+        failed = `Core Text resolved ${ps} to ${lookup.path || 'another file'} instead of ${filePath}.`
+        break
+      }
+      if (expectedVersion && lookup.version && !versionsMatch(lookup.version, expectedVersion)) {
+        failed = `Core Text is serving ${lookup.version} for ${ps}, not ${expectedVersion}.`
+        break
+      }
+    }
+    if (!failed) {
+      logMain('verify', `ok ${filePath}`)
+      return
+    }
+    lastError = failed
+    if (attempt + 1 < 20) await waitForFont(400)
+  }
+  logMain('verify', `fail ${filePath} ${lastError}`)
+  throw new Error(lastError)
 }

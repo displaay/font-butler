@@ -25,6 +25,7 @@ import {
 import { identityMutexMessage, occupiedDestinations, occupyingSiblingsForIncoming, occupiesDestination } from './identity.ts'
 import { extendMutationJournal, recordMutationDestination, withMutationJournal } from './journal.ts'
 import { ensureFontActivation, getFontNative } from './native.ts'
+import { isMacUserFontFile } from './user-fonts.ts'
 import { applyParsedFont, parseFontFile, readFileStat } from './parse.ts'
 import type { AppPaths } from './paths.ts'
 import { addManualOwner, removeManualOwner } from './projects.ts'
@@ -66,7 +67,6 @@ export type ServiceLifecycleHost = {
   restoreConflictSnapshots(snapshots: Array<{ entry: CatalogEntry; file: string }>): Promise<void>
   parkManagedCopies(entry: CatalogEntry): Promise<void>
   unparkManagedCopies(entry: CatalogEntry, dests?: DestinationId[]): Promise<void>
-  clearCachesAfterInstall(): Promise<void>
   isLiveDestPath(filePath: string): boolean
   recordDestinationFailure(destinationId: DestinationId, reason: string): void
 }
@@ -217,7 +217,9 @@ export async function installEntry(
         native: getFontNative(),
       })
       if (previousInstalled && fs.existsSync(previousInstalled)) {
-        await getFontNative().unregisterFont(previousInstalled)
+        if (!isMacUserFontFile(previousInstalled)) {
+          await getFontNative().unregisterFont(previousInstalled)
+        }
         fs.rmSync(previousInstalled, { force: true })
       }
       catalog = loadCatalog(host.paths)
@@ -611,7 +613,7 @@ export async function activateEntry(
 export async function reinstallEntry(
   host: ServiceLifecycleHost,
   id: string,
-  options?: InstallOptions & { skipCacheClear?: boolean },
+  options?: InstallOptions,
 ): Promise<CatalogEntry> {
   const catalog = loadCatalog(host.paths)
   const entry = findById(catalog, id)
@@ -620,9 +622,6 @@ export async function reinstallEntry(
   }
   if (entry.status === 'deactivated') {
     return activateEntry(host, id, { owner: 'manual' })
-  }
-  if (!options?.skipCacheClear) {
-    await host.clearCachesAfterInstall()
   }
   const updated = await installEntry(host, id, entry.customFamilyName, options)
   emitNotice({
@@ -711,7 +710,6 @@ export async function bakeFeatures(
     }
     let updated: CatalogEntry
     await withMutationJournal(host.paths, { kind: 'replace', entries: [entry] }, async () => {
-      await host.clearCachesAfterInstall()
       updated = await installEntry(host, id, entry.customFamilyName, { sourcePathOverride: bakedPath })
       if (hadTrackedSource && path.resolve(trackedSource) !== path.resolve(bakedPath)) {
         recordMutationDestination(host.paths, id, trackedSource)

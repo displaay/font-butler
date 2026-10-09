@@ -4,9 +4,11 @@ import path from 'node:path'
 import { sourceFileExists } from './catalog.ts'
 import { yieldEventLoop } from './event-loop.ts'
 import { normalizeFormat } from './formats.ts'
+import { logMain } from './main-log.ts'
+import { ensureFontActivation, type FontNative } from './native.ts'
 import { parseFontFile, readFileStat, type ParsedFont } from './parse.ts'
 import type { CatalogEntry } from './types.ts'
-import { ensureFontActivation, type FontNative } from './native.ts'
+import { isMacUserFontFile, replaceFontFileAtomically } from './user-fonts.ts'
 
 export type StagedFont = {
   stagedPath: string
@@ -55,37 +57,54 @@ export async function commitInstalledFile(options: {
   fs.mkdirSync(rollbackDir, { recursive: true })
   let rollback: string | undefined
   const replacing = fs.existsSync(dest)
+  const userFont = isMacUserFontFile(dest)
   if (replacing) {
     rollback = path.join(rollbackDir, `${crypto.randomUUID()}${path.extname(dest) || '.ttf'}`)
     await fs.promises.copyFile(dest, rollback)
-    // Drop the old Core Text registration before overwriting bytes at the same path.
-    // In-place copies leave running apps (Figma, etc.) serving stale outlines on later updates.
-    await native.unregisterFont(dest).catch(() => {
-      // Best-effort; a failed unregister should not block installing the new bytes.
-    })
+    // ~/Library/Fonts is activated by location. Unregistering it, then copying over the
+    // same inode, leaves fontd serving the previous outlines.
+    if (!userFont) {
+      await native.unregisterFont(dest).catch(() => {
+        // Best-effort; a failed unregister should not block installing the new bytes.
+      })
+    }
   }
   try {
-    await fs.promises.copyFile(stagedPath, dest)
+    if (userFont) {
+      await replaceFontFileAtomically(stagedPath, dest)
+      logMain('install', `user-font ${replacing ? 'update' : 'install'} ${dest} ino=${fs.statSync(dest).ino}`)
+    } else {
+      await fs.promises.copyFile(stagedPath, dest)
+      logMain('install', `copy ${dest}`)
+    }
     await ensureFontActivation(native, dest, true)
     if (rollback) {
       fs.rmSync(rollback, { force: true })
       rollback = undefined
     }
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    logMain('install', `fail ${dest} ${message}`)
     if (rollback && fs.existsSync(rollback)) {
-      await fs.promises.copyFile(rollback, dest)
-      try {
-        await ensureFontActivation(native, dest, true).catch(() => {
+      if (userFont) {
+        await replaceFontFileAtomically(rollback, dest)
+      } else {
+        await fs.promises.copyFile(rollback, dest)
+        try {
+          await ensureFontActivation(native, dest, true).catch(() => {
+            // Restoring the previous bytes is best-effort after a failed activation.
+          })
+        } catch {
           // Restoring the previous bytes is best-effort after a failed activation.
-        })
-      } catch {
-        // Restoring the previous bytes is best-effort after a failed activation.
+        }
       }
     } else if (fs.existsSync(dest) && path.resolve(dest) !== path.resolve(stagedPath)) {
-      try {
-        await native.unregisterFont(dest)
-      } catch {
-        // The new copy should not stay behind after a failed first install.
+      if (!userFont) {
+        try {
+          await native.unregisterFont(dest)
+        } catch {
+          // The new copy should not stay behind after a failed first install.
+        }
       }
       fs.rmSync(dest, { force: true })
     }

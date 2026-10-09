@@ -1,9 +1,20 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { fontActivationStates } from './caches.ts'
+import {
+  ALREADY_REGISTERED_CODE,
+  ATSUTIL_CLEAR_COMMANDS,
+  atsutilCommands,
+  FONT_ENABLE_SCRIPT,
+  MAC_LOGOUT_APPLESCRIPT,
+  FONT_LOOKUP_SCRIPT,
+  fontActivationStates,
+  REGISTRATION_SCOPES,
+  registrationSucceeded,
+} from './caches.ts'
 import {
   ensureFontActivation,
   getFontNative,
@@ -69,6 +80,84 @@ test('fontActivationStates treats user-fonts domain files as enabled when render
     assert.equal(query.states[font], true)
   } finally {
     fs.rmSync(dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('ensure fails on register failure and never falls back to process scope', () => {
+  assert.deepEqual([...REGISTRATION_SCOPES], [3, 2])
+  assert.equal(ALREADY_REGISTERED_CODE, 105)
+  assert.equal(registrationSucceeded([{ ok: false, code: 105 }]), true)
+  assert.equal(registrationSucceeded([{ ok: false, code: -50 }, { ok: false, code: -50 }]), false)
+  assert.match(FONT_ENABLE_SCRIPT, /const scopes = \[3,2\]/)
+  assert.match(FONT_ENABLE_SCRIPT, /const alreadyRegistered = 105/)
+  assert.doesNotMatch(FONT_ENABLE_SCRIPT, /fn\(url,\s*1/)
+  assert.deepEqual(atsutilCommands(), [])
+  assert.deepEqual(atsutilCommands({ confirm: false }), [])
+  assert.deepEqual(atsutilCommands({ confirm: true }), ATSUTIL_CLEAR_COMMANDS.map((args) => [...args]))
+  assert.deepEqual(
+    atsutilCommands({ confirm: true }),
+    [
+      ['databases', '-removeUser'],
+      ['server', '-shutdown'],
+      ['server', '-ping'],
+    ],
+  )
+  assert.equal(MAC_LOGOUT_APPLESCRIPT, 'tell application "System Events" to log out')
+  for (const script of [FONT_ENABLE_SCRIPT, FONT_LOOKUP_SCRIPT]) {
+    const file = path.join(os.tmpdir(), `font-butler-script-${process.pid}-${Math.random().toString(16).slice(2)}.js`)
+    fs.writeFileSync(file, script)
+    try {
+      const checked = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' })
+      assert.equal(checked.status, 0, checked.stderr)
+    } finally {
+      fs.rmSync(file, { force: true })
+    }
+  }
+})
+
+test('ensureFontActivation does not register a user-library font or fall back when registration would fail', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-ensure-user-'))
+  const fonts = path.join(root, 'Fonts')
+  const dest = path.join(fonts, 'Face.ttf')
+  const previous = process.env.FONT_BUTLER_USER_FONTS_DIR
+  process.env.FONT_BUTLER_USER_FONTS_DIR = fonts
+  fs.mkdirSync(fonts, { recursive: true })
+  fs.writeFileSync(dest, 'bytes')
+  const calls: string[] = []
+  try {
+    await ensureFontActivation(
+      noopFontNative({
+        async registerFont(filePath) {
+          calls.push(`register:${filePath}`)
+          return { ok: false, native: true, error: 'Core Text refused registration.' }
+        },
+        async unregisterFont(filePath) {
+          calls.push(`unregister:${filePath}`)
+          return { ok: true, native: true }
+        },
+        async ensureActivation(filePath) {
+          calls.push(`ensure:${filePath}`)
+          return { ok: false, native: true, error: 'scope 1' }
+        },
+      }),
+      dest,
+      true,
+    )
+    await ensureFontActivation(
+      noopFontNative({
+        async unregisterFont(filePath) {
+          calls.push(`unregister:${filePath}`)
+          return { ok: true, native: true }
+        },
+      }),
+      dest,
+      false,
+    )
+    assert.deepEqual(calls, [])
+  } finally {
+    if (previous === undefined) delete process.env.FONT_BUTLER_USER_FONTS_DIR
+    else process.env.FONT_BUTLER_USER_FONTS_DIR = previous
+    fs.rmSync(root, { recursive: true, force: true })
   }
 })
 

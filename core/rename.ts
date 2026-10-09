@@ -119,6 +119,26 @@ function parseSfnt(file: Buffer): { sfntVersion: number; tables: SfntTable[] } {
   return { sfntVersion, tables }
 }
 
+/** Name-table string (name ID 5 is the version). Empty when the font has no such record. */
+export function readFontName(filePath: string, nameID: number): string {
+  try {
+    const file = fs.readFileSync(filePath)
+    const { tables } = parseSfnt(file)
+    const nameTable = tables.find((table) => table.tag === 'name')
+    if (!nameTable) return ''
+    const records = readNameTable(nameTable.buffer).filter(
+      (record) => record.nameID === nameID && record.text.trim(),
+    )
+    const preferred =
+      records.find((record) => record.platformID === 3 && record.languageID === 0x409) ||
+      records.find((record) => record.platformID === 1 && record.languageID === 0) ||
+      records[0]
+    return preferred?.text.trim() ?? ''
+  } catch {
+    return ''
+  }
+}
+
 function packSfnt(sfntVersion: number, tables: SfntTable[]): Buffer {
   const numTables = tables.length
   const searchRange = 16 * 2 ** Math.floor(Math.log2(numTables))

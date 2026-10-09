@@ -9,9 +9,12 @@ import {
   setFontEnabled as realSetFontEnabled,
   ensureFontActivationNative as realEnsureFontActivation,
   unregisterFont as realUnregisterFont,
+  verifyInstalledFont,
   type ActivationQuery,
 } from './caches.ts'
 import { serializeFontNative } from './font-file-queue.ts'
+import { logMain } from './main-log.ts'
+import { isMacUserFontFile } from './user-fonts.ts'
 
 export type { ActivationQuery }
 
@@ -38,7 +41,7 @@ export type FontNative = {
   setFontEnabled(filePath: string, enabled: boolean): Promise<NativeEnableResult>
   ensureActivation?(filePath: string, enabled: boolean): Promise<NativeEnableResult>
   fontActivationStates(filePaths: string[]): Promise<ActivationQuery>
-  clearUserFontCache(): Promise<CacheClearResult>
+  clearUserFontCache(options?: { confirm?: boolean }): Promise<CacheClearResult>
   clearOfficeFontCache(): Promise<CacheClearResult>
   clearAdobeFontCache(): Promise<CacheClearResult>
   clearFontCaches(options?: { office?: boolean; adobe?: boolean }): Promise<FontCachesResult>
@@ -159,18 +162,36 @@ export async function ensureFontActivation(
   filePath: string,
   enabled: boolean,
 ): Promise<void> {
+  if (isMacUserFontFile(filePath)) {
+    logMain('register', `skip ${enabled ? 'register' : 'unregister'} ${filePath}`)
+    if (enabled) {
+      await verifyInstalledFont(filePath)
+    } else {
+      logMain('install', `deactivate by move only ${filePath}`)
+    }
+    return
+  }
   if (native.ensureActivation) {
     const ensured = await native.ensureActivation(filePath, enabled)
+    logMain(
+      'register',
+      `ensure ${filePath} enabled=${enabled ? 1 : 0} ok=${ensured.ok}${ensured.error ? ` ${ensured.error}` : ''}`,
+    )
     if (!ensured.ok) {
       throw new Error(
         ensured.error ||
           (enabled ? 'Could not activate the font.' : 'Could not deactivate the font.'),
       )
     }
+    if (enabled) await verifyInstalledFont(filePath)
     return
   }
   if (enabled) {
     const registered = await native.registerFont(filePath)
+    logMain(
+      'register',
+      `register ${filePath} ok=${registered.ok}${registered.error ? ` ${registered.error}` : ''}`,
+    )
     if (!registered.ok) {
       throw new Error(registered.error || 'Could not register the font.')
     }
@@ -182,5 +203,6 @@ export async function ensureFontActivation(
   if (!result.native) {
     return
   }
+  if (enabled) await verifyInstalledFont(filePath)
   await verifyFontActivation(native, filePath, enabled)
 }

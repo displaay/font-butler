@@ -346,7 +346,6 @@ export type AppSettings = {
   clearOfficeFontCache: boolean
   clearAdobeFontCache: boolean
   autoReinstallOnUpdate: boolean
-  skipCacheClearOnReinstall: boolean
   nativeNotifications: boolean
   onboardingCompleted: boolean
   revisionBudgetBytes?: number

@@ -114,7 +114,6 @@ const emptySettings = (): AppSettings => ({
   clearOfficeFontCache: true,
   clearAdobeFontCache: true,
   autoReinstallOnUpdate: false,
-  skipCacheClearOnReinstall: false,
   nativeNotifications: false,
   onboardingCompleted: false,
   revisionBudgetBytes: DEFAULT_REVISION_BUDGET_BYTES,
@@ -231,10 +230,6 @@ export function loadSettings(paths: AppPaths): AppSettings {
           ? parsed.clearAdobeFontCache
           : defaults.clearAdobeFontCache,
       autoReinstallOnUpdate,
-      skipCacheClearOnReinstall:
-        typeof parsed.skipCacheClearOnReinstall === 'boolean'
-          ? parsed.skipCacheClearOnReinstall
-          : defaults.skipCacheClearOnReinstall,
       nativeNotifications:
         typeof parsed.nativeNotifications === 'boolean'
           ? parsed.nativeNotifications
