@@ -43,3 +43,20 @@ test('a notice fired after the window closes is delivered on the next ready', ()
   assert.deepEqual(buffer.push(afterClose), [])
   assert.deepEqual(buffer.markReady(), [afterClose])
 })
+
+test('a notice handed off with no window is delivered on the next ready', () => {
+  const buffer = createWatchNoticeBuffer()
+  buffer.markReady()
+  const notice = {
+    kind: 'error',
+    source: 'watch',
+    message: 'Lost.ttf: Not a font file.',
+    operationId: 'op-lost',
+  }
+  const handedOff = buffer.push(notice)
+  assert.deepEqual(handedOff, [notice])
+  buffer.requeue(handedOff)
+  buffer.requeue(handedOff)
+  assert.deepEqual(buffer.push(notice), [])
+  assert.deepEqual(buffer.markReady(), [notice])
+})

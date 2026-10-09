@@ -449,6 +449,7 @@ function bootstrapFailureMessage(error) {
 }
 
 function destroyMainWindowForReplace() {
+  watchNoticeBuffer.markNotReady()
   if (!mainWindow || mainWindow.isDestroyed()) {
     mainWindow = null
     mainWindowKind = null
@@ -464,7 +465,10 @@ function destroyMainWindowForReplace() {
 function deliverWatchNotices(notices) {
   if (!notices?.length) return
   const win = mainWindow
-  if (!win || win.isDestroyed() || mainWindowKind !== 'main') return
+  if (!win || win.isDestroyed() || mainWindowKind !== 'main') {
+    watchNoticeBuffer.requeue(notices)
+    return
+  }
   win.webContents.send('watch-notices', notices)
 }
 
@@ -474,6 +478,10 @@ function flushWatchNotices() {
 }
 
 function attachMainWindowHandlers(win) {
+  win.webContents.on('did-start-navigation', (details) => {
+    if (!details.isMainFrame || details.isSameDocument) return
+    watchNoticeBuffer.markNotReady()
+  })
   win.webContents.on('did-finish-load', () => {
     if (win !== mainWindow || mainWindowKind !== 'main') return
     flushWatchNotices()
@@ -505,10 +513,11 @@ function attachMainWindowHandlers(win) {
 
 async function showLoadFailurePage(win, detail) {
   if (!win || win.isDestroyed()) return
+  watchNoticeBuffer.markNotReady()
+  mainWindowKind = BOOTSTRAP_ERROR_WINDOW_KIND
   const message = `${detail}\n\nTry Quit from the menu, or use Retry after the font service is running.`
   const html = bootstrapErrorPageHtml(message, { dark: nativeTheme.shouldUseDarkColors })
   await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
-  mainWindowKind = BOOTSTRAP_ERROR_WINDOW_KIND
 }
 
 function createBootstrapShellWindow(kind) {
@@ -726,6 +735,7 @@ async function openExternalUrl(url) {
 function createWindow() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     if (mainWindowKind !== 'main') {
+      watchNoticeBuffer.markNotReady()
       void mainWindow.loadURL(UI)
       mainWindowKind = 'main'
     }

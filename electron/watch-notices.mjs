@@ -32,5 +32,14 @@ export function createWatchNoticeBuffer() {
     markNotReady() {
       ready = false
     },
+    requeue(notices) {
+      for (const notice of notices ?? []) {
+        if (!isWatchFailureNotice(notice)) continue
+        const key = noticeKey(notice)
+        seen.add(key)
+        if (pending.some((item) => noticeKey(item) === key)) continue
+        pending.push(notice)
+      }
+    },
   }
 }
