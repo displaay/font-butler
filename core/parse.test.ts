@@ -3,7 +3,14 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { glyphNameForCodePoint, parseFontFile, previewUsesInstalledBytes, resolveFamilyNames } from './parse.ts'
+import {
+  glyphNameForCodePoint,
+  inspectSfntTables,
+  parseFontFile,
+  previewUsesInstalledBytes,
+  resolveFamilyNames,
+  sfntTablesFit,
+} from './parse.ts'
 import { loadCatalog, saveCatalog } from './catalog.ts'
 import { writeTestCollection, writeTestFont, withService } from './test-util.ts'
 
@@ -296,4 +303,76 @@ test('uninstalled source cmap change updates the preview sample', async () => {
     assert.equal(previewUsesInstalledBytes(entry), false)
     assert.equal(entry.previewSample, 'א')
   })
+})
+
+test('sfntTablesFit rejects tables past the end of the file and a zero-filled head', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-sfnt-'))
+  try {
+    const font = path.join(root, 'Fit.ttf')
+    writeTestFont(font, 'Fit', 'Fit-Regular')
+    const bytes = fs.readFileSync(font)
+    assert.equal(sfntTablesFit(font), true)
+
+    const truncated = path.join(root, 'Truncated.ttf')
+    fs.writeFileSync(truncated, bytes.subarray(0, 32))
+    assert.equal(sfntTablesFit(truncated), false)
+
+    const overrun = Buffer.from(bytes)
+    overrun.writeUInt32BE(bytes.length + 64, 12 + 12)
+    const overrunPath = path.join(root, 'Overrun.ttf')
+    fs.writeFileSync(overrunPath, overrun)
+    const overrunCheck = inspectSfntTables(overrunPath)
+    assert.equal(overrunCheck.ok, false)
+    if (!overrunCheck.ok) assert.match(overrunCheck.reason, /extends past the end/)
+
+    const numTables = bytes.readUInt16BE(4)
+    let lastIndex = 0
+    let lastEnd = -1
+    for (let index = 0; index < numTables; index += 1) {
+      const base = 12 + index * 16
+      const end = bytes.readUInt32BE(base + 8) + bytes.readUInt32BE(base + 12)
+      if (end > lastEnd) {
+        lastEnd = end
+        lastIndex = index
+      }
+    }
+    const slack = Buffer.from(bytes)
+    const offsetAt = 12 + lastIndex * 16 + 8
+    const lengthAt = offsetAt + 4
+    const tableOffset = bytes.readUInt32BE(offsetAt)
+    slack.writeUInt32BE(bytes.length + 3 - tableOffset, lengthAt)
+    const slackPath = path.join(root, 'Slack.ttf')
+    fs.writeFileSync(slackPath, slack)
+    const slackCheck = inspectSfntTables(slackPath)
+    assert.equal(slackCheck.ok, false)
+    if (!slackCheck.ok) assert.match(slackCheck.reason, /extends past the end/)
+    slack.writeUInt32BE(bytes.length + 4 - tableOffset, lengthAt)
+    fs.writeFileSync(slackPath, slack)
+    const slackOver = inspectSfntTables(slackPath)
+    assert.equal(slackOver.ok, false)
+    if (!slackOver.ok) assert.match(slackOver.reason, /extends past the end/)
+
+    const truncatedCheck = inspectSfntTables(truncated)
+    assert.equal(truncatedCheck.ok, false)
+    if (!truncatedCheck.ok) assert.match(truncatedCheck.reason, /table directory|sfnt header/)
+
+    const blankHead = Buffer.from(bytes)
+    let zeroedHead = false
+    for (let index = 0; index < numTables; index += 1) {
+      const base = 12 + index * 16
+      if (blankHead.subarray(base, base + 4).toString('ascii') !== 'head') continue
+      const offset = blankHead.readUInt32BE(base + 8)
+      const length = blankHead.readUInt32BE(base + 12)
+      blankHead.fill(0, offset, offset + length)
+      zeroedHead = true
+    }
+    assert.equal(zeroedHead, true)
+    const blankHeadPath = path.join(root, 'BlankHead.ttf')
+    fs.writeFileSync(blankHeadPath, blankHead)
+    const blankCheck = inspectSfntTables(blankHeadPath)
+    assert.equal(blankCheck.ok, false)
+    if (!blankCheck.ok) assert.match(blankCheck.reason, /head table is still zero-filled/)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
 })

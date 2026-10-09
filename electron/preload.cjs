@@ -1,5 +1,17 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron')
 
+const queuedWatchNotices = []
+const watchNoticeListeners = new Set()
+ipcRenderer.on('watch-notices', (_event, notices) => {
+  const list = Array.isArray(notices) ? notices : []
+  if (list.length === 0) return
+  if (watchNoticeListeners.size === 0) {
+    queuedWatchNotices.push(...list)
+    return
+  }
+  for (const listener of watchNoticeListeners) listener(list)
+})
+
 contextBridge.exposeInMainWorld('fontButlerDesktop', {
   platform: process.platform,
   getPathForFile: (file) => {
@@ -16,6 +28,15 @@ contextBridge.exposeInMainWorld('fontButlerDesktop', {
   quitApp: () => ipcRenderer.invoke('quit-app'),
   showDebugLogs: () => ipcRenderer.invoke('debug-console:show'),
   signalAppMounted: () => ipcRenderer.send('renderer-app-mounted'),
+  onWatchNotices: (callback) => {
+    const listener = (notices) => callback(notices)
+    watchNoticeListeners.add(listener)
+    if (queuedWatchNotices.length > 0) {
+      const pending = queuedWatchNotices.splice(0, queuedWatchNotices.length)
+      callback(pending)
+    }
+    return () => watchNoticeListeners.delete(listener)
+  },
   requestNotifications: () => ipcRenderer.invoke('request-notifications'),
   onOpenSettings: (callback) => {
     const listener = (_event, payload) => callback(payload)

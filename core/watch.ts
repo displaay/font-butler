@@ -1,4 +1,5 @@
 import chokidar, { type FSWatcher } from 'chokidar'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -13,7 +14,10 @@ import {
   saveCatalog,
 } from './catalog.ts'
 import { emitEvent } from './events.ts'
+import { createOperation, finishOperation, loadOperations, upsertOperation } from './operations.ts'
+import { emitNotice } from './service-helpers.ts'
 import { countInstallableFormats, isWebFontFile } from './formats.ts'
+import { forgetFontAnalysis } from './font-analysis.ts'
 import { tryFingerprintFile } from './fingerprint.ts'
 import { isFontFile, isPreviewableFontFile, readFileStat } from './parse.ts'
 import { applyEntryFacts } from './state.ts'
@@ -30,6 +34,33 @@ let destAppearPoll: ReturnType<typeof setInterval> | null = null
 let userFontsTimer: ReturnType<typeof setTimeout> | null = null
 let inboxTimer: ReturnType<typeof setTimeout> | null = null
 let inboxPending: string[] = []
+let inboxSession = 0
+let inboxFlushing = false
+let inboxFlushAgain = false
+const inboxInFlight = new Set<string>()
+const inboxRejected = new Map<string, InboxFileStamp>()
+const inboxImportedFingerprint = new Map<string, string>()
+const inboxSettleTimers = new Map<string, ReturnType<typeof setTimeout>>()
+/** Startup failures wait until the file stops changing, then import again. */
+const inboxStabilityTimers = new Map<string, ReturnType<typeof setTimeout>>()
+/** Roots from the latest resync. A settle timer may post only while its path is inside one. */
+let inboxWatchRoots: string[] = []
+let inboxPaths: AppPaths | undefined
+/** One catalog read shared by the change events of a batch. */
+let catalogFingerprintByPath: Map<string, string> | null = null
+let scheduleActiveInboxFlush: (() => void) | null = null
+let inboxWork: Promise<void> = Promise.resolve()
+/** Bumped when the inbox watcher stops so an in-flight flush does not record after close. */
+let inboxRecordEpoch = 0
+
+/** How long a watched font must stop growing before it is parsed. */
+export const INBOX_WRITE_STABILITY_MS = 2000
+export const INBOX_WRITE_POLL_MS = 100
+/** Report a corrupt file once it has failed this many times without a new stamp. */
+export const INBOX_CORRUPT_ATTEMPT_LIMIT = 3
+/** Report a corrupt file when it sits unchanged for this long after a failed read. */
+export const INBOX_CORRUPT_SETTLE_MS = 10_000
+const INBOX_BATCH_MS = 350
 let sourceStatusListener: ((entry: CatalogEntry) => void) | undefined
 let pendingSourceStatusPaths = new Set<string>()
 let sourceStatusBatchTimer: ReturnType<typeof setTimeout> | null = null
@@ -553,6 +584,368 @@ export function inspectDropPaths(inputPaths: string[]): DropInspect {
   }
 }
 
+export type InboxPathFailure = { path: string; message: string }
+export type InboxPathFingerprint = { path: string; fingerprint: string }
+
+export type InboxWatchBatchResult = {
+  failedPaths?: readonly string[]
+  failures?: readonly InboxPathFailure[]
+  fingerprints?: readonly InboxPathFingerprint[]
+}
+
+export type InboxFileStamp = {
+  size: number
+  mtimeMs: number
+  attempts: number
+  reason: string
+  reported: boolean
+  /** Bytes that failed. A later write with the same size and mtime is imported when this changes. */
+  fingerprint?: string
+  /** True while an unreported failure still belongs to startup discovery. */
+  startup?: boolean
+}
+
+function inboxFileStamp(filePath: string): { size: number; mtimeMs: number } {
+  try {
+    return readFileStat(filePath)
+  } catch {
+    return { size: -1, mtimeMs: -1 }
+  }
+}
+
+/**
+ * Import a change when a previous attempt failed, while an import of this path
+ * is still running, or when the bytes no longer match the last successful import.
+ * chokidar's awaitWriteFinish only waits for a stable size, so a pre-sized copy
+ * can succeed on incomplete bytes and then change without a new size.
+ */
+export function inboxChangeShouldImport(
+  rejection:
+    | { reported?: boolean; size: number; mtimeMs: number; fingerprint?: string }
+    | undefined,
+  nextFingerprint: string | undefined,
+  previousFingerprint: string | undefined,
+  inFlight: boolean,
+  nextStamp?: { size: number; mtimeMs: number },
+): boolean {
+  if (inFlight) return true
+  if (rejection) {
+    if (!rejection.reported) return true
+    if (!nextStamp || nextStamp.size !== rejection.size || nextStamp.mtimeMs !== rejection.mtimeMs) {
+      return true
+    }
+    return Boolean(
+      nextFingerprint && rejection.fingerprint && nextFingerprint !== rejection.fingerprint,
+    )
+  }
+  return Boolean(
+    previousFingerprint && nextFingerprint && previousFingerprint !== nextFingerprint,
+  )
+}
+
+function clearInboxStabilityTimer(filePath: string): void {
+  const timer = inboxStabilityTimers.get(filePath)
+  if (!timer) return
+  clearTimeout(timer)
+  inboxStabilityTimers.delete(filePath)
+}
+
+function clearInboxFailureTimer(filePath: string): void {
+  const timer = inboxSettleTimers.get(filePath)
+  if (timer) {
+    clearTimeout(timer)
+    inboxSettleTimers.delete(filePath)
+  }
+  clearInboxStabilityTimer(filePath)
+}
+
+/**
+ * A startup read can land mid-copy. Wait until the file stops changing, then
+ * queue another import instead of reporting that first failure.
+ */
+function scheduleStartupStabilityRetry(filePath: string): void {
+  clearInboxStabilityTimer(filePath)
+  const seen = inboxFileStamp(filePath)
+  const timer = setTimeout(() => {
+    inboxStabilityTimers.delete(filePath)
+    if (!pathIsWatched(filePath)) {
+      inboxRejected.delete(filePath)
+      clearInboxFailureTimer(filePath)
+      return
+    }
+    const rejection = inboxRejected.get(filePath)
+    if (!rejection || rejection.reported) return
+    const live = inboxFileStamp(filePath)
+    if (live.size < 0) {
+      inboxRejected.delete(filePath)
+      clearInboxFailureTimer(filePath)
+      return
+    }
+    if (live.size !== seen.size || live.mtimeMs !== seen.mtimeMs) {
+      scheduleStartupStabilityRetry(filePath)
+      return
+    }
+    inboxPending.push(filePath)
+    scheduleActiveInboxFlush?.()
+  }, INBOX_WRITE_STABILITY_MS)
+  timer.unref?.()
+  inboxStabilityTimers.set(filePath, timer)
+}
+
+function pathIsWatched(filePath: string): boolean {
+  return inboxWatchRoots.some((root) => isPathInside(filePath, root))
+}
+
+/** Drop failure state for files that are no longer inside a watched folder. */
+function dropUnwatchedInboxFailures(): void {
+  for (const filePath of [...inboxRejected.keys()]) {
+    if (pathIsWatched(filePath)) continue
+    inboxRejected.delete(filePath)
+    clearInboxFailureTimer(filePath)
+  }
+  for (const filePath of [...inboxSettleTimers.keys()]) {
+    if (pathIsWatched(filePath)) continue
+    clearInboxFailureTimer(filePath)
+  }
+  for (const filePath of [...inboxStabilityTimers.keys()]) {
+    if (pathIsWatched(filePath)) continue
+    clearInboxStabilityTimer(filePath)
+  }
+}
+
+function invalidateCatalogFingerprints(): void {
+  catalogFingerprintByPath = null
+}
+
+function recordWatchFailure(
+  filePath: string,
+  reason: string,
+  trigger: 'watch' | 'startup',
+): string | undefined {
+  if (!inboxPaths) return undefined
+  const operation = finishOperation(
+    createOperation({
+      trigger,
+      action: 'import',
+      familyName: path.basename(filePath),
+    }),
+    [
+      {
+        id: crypto.randomUUID(),
+        label: filePath,
+        outcome: 'failed',
+        reason,
+      },
+    ],
+  )
+  upsertOperation(inboxPaths, operation)
+  emitEvent({ type: 'operations', operations: loadOperations(inboxPaths) })
+  return operation.id
+}
+
+function reportInboxFailure(filePath: string, immediate: boolean): void {
+  const current = inboxRejected.get(filePath)
+  if (!current || current.reported) return
+  current.reported = true
+  clearInboxFailureTimer(filePath)
+  let operationId: string | undefined
+  try {
+    operationId = recordWatchFailure(filePath, current.reason, immediate ? 'startup' : 'watch')
+  } catch {
+    operationId = undefined
+  }
+  emitNotice({
+    kind: 'error',
+    message: `${path.basename(filePath)}: ${current.reason}`,
+    operationId,
+    source: 'watch',
+  })
+}
+
+function rememberInboxRejection(
+  filePath: string,
+  reason: string,
+  immediate: boolean,
+): void {
+  const stamp = inboxFileStamp(filePath)
+  if (stamp.size < 0) {
+    inboxRejected.delete(filePath)
+    clearInboxFailureTimer(filePath)
+    return
+  }
+  const previous = inboxRejected.get(filePath)
+  const sameStamp =
+    previous !== undefined && previous.size === stamp.size && previous.mtimeMs === stamp.mtimeMs
+  if (sameStamp && previous.reported) {
+    const fingerprint = tryFingerprintFile(filePath)
+    if (fingerprint && fingerprint !== previous.fingerprint) {
+      inboxRejected.set(filePath, { ...previous, fingerprint })
+    }
+    return
+  }
+  const attempts = sameStamp ? previous.attempts + 1 : 1
+  const fingerprint =
+    sameStamp && previous.fingerprint ? previous.fingerprint : tryFingerprintFile(filePath)
+  const fromStartup = immediate || (previous?.startup && !previous.reported)
+  inboxRejected.set(filePath, {
+    size: stamp.size,
+    mtimeMs: stamp.mtimeMs,
+    attempts,
+    reason,
+    reported: false,
+    fingerprint,
+    startup: fromStartup,
+  })
+  clearInboxFailureTimer(filePath)
+  if (attempts >= INBOX_CORRUPT_ATTEMPT_LIMIT) {
+    reportInboxFailure(filePath, fromStartup)
+    return
+  }
+  const timer = setTimeout(() => {
+    inboxSettleTimers.delete(filePath)
+    if (!pathIsWatched(filePath)) {
+      inboxRejected.delete(filePath)
+      clearInboxStabilityTimer(filePath)
+      return
+    }
+    const current = inboxRejected.get(filePath)
+    if (!current || current.reported) return
+    const live = inboxFileStamp(filePath)
+    if (live.size !== current.size || live.mtimeMs !== current.mtimeMs) return
+    reportInboxFailure(filePath, current.startup === true)
+  }, INBOX_CORRUPT_SETTLE_MS)
+  timer.unref?.()
+  inboxSettleTimers.set(filePath, timer)
+  if (immediate) scheduleStartupStabilityRetry(filePath)
+}
+
+function rememberedFingerprint(filePath: string, paths?: AppPaths): string | undefined {
+  const cached = inboxImportedFingerprint.get(filePath)
+  if (cached) return cached
+  if (!paths) return undefined
+  if (!catalogFingerprintByPath) {
+    catalogFingerprintByPath = new Map()
+    for (const entry of loadCatalog(paths).entries) {
+      if (!entry.sourcePath || !entry.sourceFingerprint) continue
+      const resolved = path.resolve(entry.sourcePath)
+      if (!catalogFingerprintByPath.has(resolved)) {
+        catalogFingerprintByPath.set(resolved, entry.sourceFingerprint)
+      }
+    }
+  }
+  return catalogFingerprintByPath.get(filePath)
+}
+
+function enqueueInboxWork(task: () => Promise<void>): Promise<void> {
+  const run = inboxWork.then(task, task)
+  inboxWork = run.then(
+    () => undefined,
+    () => undefined,
+  )
+  return run
+}
+
+export function recordInboxImportResult(
+  filePaths: readonly string[],
+  failedPaths: readonly string[] = [],
+  detail: {
+    failures?: readonly InboxPathFailure[]
+    fingerprints?: readonly InboxPathFingerprint[]
+    immediate?: boolean
+    recordEpoch?: number
+  } = {},
+): void {
+  if (detail.recordEpoch !== undefined && detail.recordEpoch !== inboxRecordEpoch) return
+  const failed = new Set(failedPaths.map((filePath) => path.resolve(filePath)))
+  const reasons = new Map<string, string>()
+  for (const failure of detail.failures ?? []) {
+    reasons.set(path.resolve(failure.path), failure.message)
+  }
+  const fingerprints = new Map<string, string>()
+  for (const item of detail.fingerprints ?? []) {
+    if (item.fingerprint) fingerprints.set(path.resolve(item.path), item.fingerprint)
+  }
+  const seen = new Set<string>()
+  invalidateCatalogFingerprints()
+  for (const filePath of filePaths) {
+    const resolved = path.resolve(filePath)
+    seen.add(resolved)
+    if (failed.has(resolved)) {
+      rememberInboxRejection(
+        resolved,
+        reasons.get(resolved) || 'Could not read that font.',
+        detail.immediate === true,
+      )
+    } else {
+      inboxRejected.delete(resolved)
+      clearInboxFailureTimer(resolved)
+      const fingerprint = fingerprints.get(resolved)
+      if (fingerprint) inboxImportedFingerprint.set(resolved, fingerprint)
+    }
+  }
+  for (const filePath of failed) {
+    if (seen.has(filePath)) continue
+    rememberInboxRejection(
+      filePath,
+      reasons.get(filePath) || 'Could not read that font.',
+      detail.immediate === true,
+    )
+  }
+}
+
+/**
+ * Run a watch-folder import on the same queue as watcher flushes, and keep the
+ * paths in flight so a change that arrives mid-import is queued instead of dropped.
+ */
+export function runInboxImportBatch(
+  filePaths: readonly string[],
+  task: () => Promise<InboxWatchBatchResult | void>,
+  options: { immediate?: boolean } = {},
+): Promise<void> {
+  const batch = [...new Set(filePaths.map((filePath) => path.resolve(filePath)))]
+  const recordEpoch = inboxRecordEpoch
+  for (const filePath of batch) inboxInFlight.add(filePath)
+  return enqueueInboxWork(async () => {
+    let failed: readonly string[] = []
+    let result: InboxWatchBatchResult | undefined
+    try {
+      const produced = await task()
+      if (produced) {
+        result = produced
+        failed = produced.failedPaths ?? []
+      }
+    } catch {
+      failed = batch
+    } finally {
+      for (const filePath of batch) inboxInFlight.delete(filePath)
+    }
+    recordInboxImportResult(batch, failed, {
+      failures: result?.failures,
+      fingerprints: result?.fingerprints,
+      immediate: options.immediate,
+      recordEpoch,
+    })
+  }).finally(() => {
+    if (inboxPending.length > 0) scheduleActiveInboxFlush?.()
+  })
+}
+
+/** Test hook: path is inside a startup or watcher import. */
+export function inboxInFlightForTest(filePath: string): boolean {
+  return inboxInFlight.has(path.resolve(filePath))
+}
+
+/** Test hook: queue a path as if the watcher had emitted it. */
+export function queueInboxPathForTest(filePath: string): void {
+  inboxPending.push(path.resolve(filePath))
+  scheduleActiveInboxFlush?.()
+}
+
+/** Test hook: stamp recorded when a watch-folder import failed. */
+export function inboxRejectionForTest(filePath: string): InboxFileStamp | undefined {
+  return inboxRejected.get(path.resolve(filePath))
+}
+
 function existingWatchFolders(folders: string[]): string[] {
   const existing: string[] = []
   for (const folder of folders) {
@@ -570,9 +963,15 @@ function existingWatchFolders(folders: string[]): string[] {
 
 export async function syncInboxWatcher(
   folders: string[],
-  onBatch: (filePaths: string[]) => void,
+  onBatch: (filePaths: string[]) => void | Promise<void | InboxWatchBatchResult>,
   paths?: AppPaths,
 ): Promise<void> {
+  const nextRoots = existingWatchFolders(folders)
+  if (nextRoots.length === 0) inboxRecordEpoch += 1
+  inboxPaths = paths
+  const session = ++inboxSession
+  inboxWatchRoots = nextRoots.map((folder) => path.resolve(folder))
+  dropUnwatchedInboxFailures()
   if (inboxTimer) {
     clearTimeout(inboxTimer)
     inboxTimer = null
@@ -582,41 +981,151 @@ export async function syncInboxWatcher(
     await inboxWatcher.close()
     inboxWatcher = null
   }
+  if (session !== inboxSession) return
   inboxPending = pending
   const existing = existingWatchFolders(folders)
+  inboxWatchRoots = existing.map((folder) => path.resolve(folder))
+  dropUnwatchedInboxFailures()
   if (existing.length === 0) {
+    inboxRejected.clear()
+    inboxInFlight.clear()
+    inboxImportedFingerprint.clear()
+    invalidateCatalogFingerprints()
+    inboxPaths = undefined
+    inboxPending = []
+    inboxFlushAgain = false
+    for (const timer of inboxSettleTimers.values()) clearTimeout(timer)
+    inboxSettleTimers.clear()
+    for (const timer of inboxStabilityTimers.values()) clearTimeout(timer)
+    inboxStabilityTimers.clear()
+    scheduleActiveInboxFlush = null
     return
   }
-  inboxWatcher = chokidar.watch(existing, {
-    ignoreInitial: true,
-    awaitWriteFinish: { stabilityThreshold: 400, pollInterval: 100 },
-    depth: FONT_TREE_MAX_DEPTH,
-  })
-  const queue = (filePath: string) => {
-    if (!isPreviewableFontFile(filePath)) {
+
+  const scheduleFlush = () => {
+    if (session !== inboxSession) return
+    if (inboxFlushing) {
+      inboxFlushAgain = true
       return
     }
-    inboxPending.push(path.resolve(filePath))
-    if (inboxTimer) {
-      clearTimeout(inboxTimer)
-    }
+    if (inboxTimer) clearTimeout(inboxTimer)
     inboxTimer = setTimeout(() => {
-      const batch = [...new Set(inboxPending)]
-      inboxPending = []
       inboxTimer = null
-      if (batch.length) {
-        onBatch(batch)
-      }
-    }, 350)
+      void runFlush()
+    }, INBOX_BATCH_MS)
   }
-  inboxWatcher.on('add', queue)
-  if (paths) {
-    const touchStatus = (filePath: string) => {
-      enqueueSourceStatusRefresh(paths, filePath)
+  scheduleActiveInboxFlush = scheduleFlush
+
+  const runFlush = () => {
+    if (session !== inboxSession || inboxFlushing) {
+      if (session === inboxSession && inboxFlushing) inboxFlushAgain = true
+      return
     }
-    inboxWatcher.on('change', touchStatus)
-    inboxWatcher.on('unlink', touchStatus)
+    inboxFlushing = true
+    const recordEpoch = inboxRecordEpoch
+    void enqueueInboxWork(async () => {
+      try {
+        do {
+          inboxFlushAgain = false
+          if (session !== inboxSession) return
+          const batch = [...new Set(inboxPending)]
+          inboxPending = []
+          if (batch.length === 0) continue
+          invalidateCatalogFingerprints()
+          for (const filePath of batch) {
+            forgetFontAnalysis(filePath)
+            inboxInFlight.add(filePath)
+          }
+          let failed: readonly string[] = []
+          let result: InboxWatchBatchResult | undefined
+          try {
+            const produced = await Promise.resolve(onBatch(batch))
+            if (produced) {
+              result = produced
+              failed = produced.failedPaths ?? []
+            }
+          } catch {
+            failed = batch
+          } finally {
+            for (const filePath of batch) inboxInFlight.delete(filePath)
+          }
+          recordInboxImportResult(batch, failed, {
+            failures: result?.failures,
+            fingerprints: result?.fingerprints,
+            recordEpoch,
+          })
+        } while (session === inboxSession && (inboxFlushAgain || inboxPending.length > 0))
+      } finally {
+        inboxFlushing = false
+        if (inboxPending.length > 0) scheduleActiveInboxFlush?.()
+      }
+    })
   }
+
+  const queueImport = (filePath: string, event: 'add' | 'change') => {
+    if (!isPreviewableFontFile(filePath)) return
+    const resolved = path.resolve(filePath)
+    if (event === 'change') {
+      const rejection = inboxRejected.get(resolved)
+      const inFlight = inboxInFlight.has(resolved)
+      if (inFlight) forgetFontAnalysis(resolved)
+      const previousFingerprint = inFlight ? undefined : rememberedFingerprint(resolved, paths)
+      let nextStamp: { size: number; mtimeMs: number } | undefined
+      let nextFingerprint: string | undefined
+      if (!inFlight && rejection?.reported) {
+        try {
+          nextStamp = readFileStat(resolved)
+        } catch {
+          nextStamp = undefined
+        }
+        if (
+          nextStamp &&
+          nextStamp.size === rejection.size &&
+          nextStamp.mtimeMs === rejection.mtimeMs &&
+          rejection.fingerprint
+        ) {
+          nextFingerprint = tryFingerprintFile(resolved)
+        }
+      } else if (!inFlight && !rejection && previousFingerprint) {
+        nextFingerprint = tryFingerprintFile(resolved)
+      }
+      if (
+        !inboxChangeShouldImport(rejection, nextFingerprint, previousFingerprint, inFlight, nextStamp)
+      ) {
+        return
+      }
+      const bytesChanged =
+        (previousFingerprint && nextFingerprint && previousFingerprint !== nextFingerprint) ||
+        (rejection?.fingerprint && nextFingerprint && rejection.fingerprint !== nextFingerprint)
+      if (bytesChanged) forgetFontAnalysis(resolved)
+      if (rejection) clearInboxFailureTimer(resolved)
+    }
+    inboxPending.push(resolved)
+    scheduleFlush()
+  }
+
+  inboxWatcher = chokidar.watch(existing, {
+    ignoreInitial: true,
+    awaitWriteFinish: {
+      stabilityThreshold: INBOX_WRITE_STABILITY_MS,
+      pollInterval: INBOX_WRITE_POLL_MS,
+    },
+    depth: FONT_TREE_MAX_DEPTH,
+  })
+  inboxWatcher.on('add', (filePath) => queueImport(filePath, 'add'))
+  inboxWatcher.on('change', (filePath) => {
+    if (paths) enqueueSourceStatusRefresh(paths, filePath)
+    queueImport(filePath, 'change')
+  })
+  inboxWatcher.on('unlink', (filePath) => {
+    const resolved = path.resolve(filePath)
+    inboxRejected.delete(resolved)
+    inboxImportedFingerprint.delete(resolved)
+    clearInboxFailureTimer(resolved)
+    if (paths) enqueueSourceStatusRefresh(paths, filePath)
+  })
+  if (inboxPending.length) scheduleFlush()
+  await waitForReady(inboxWatcher)
 }
 
 const USER_FONTS_WATCH_OPTIONS = {

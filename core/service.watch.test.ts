@@ -4,11 +4,20 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
+import { onEvent } from './events.ts'
+import { fingerprintFile } from './fingerprint.ts'
 import type { AppPaths } from './paths.ts'
 import { FontButlerService } from './service.ts'
 import { canAutomateUpdates, effectiveUpdatePolicy } from './state.ts'
 import type { CatalogEntry } from './types.ts'
-import { closeAllWatchers, enqueueSourceStatusRefresh, syncInboxWatcher } from './watch.ts'
+import {
+  INBOX_CORRUPT_SETTLE_MS,
+  INBOX_WRITE_STABILITY_MS,
+  closeAllWatchers,
+  enqueueSourceStatusRefresh,
+  inboxRejectionForTest,
+  syncInboxWatcher,
+} from './watch.ts'
 
 function tempPaths(): AppPaths {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-watch-settings-'))
@@ -470,6 +479,539 @@ test('folder auto-reinstall on still reinstalls when the global switch is off', 
     })
     assert.equal(after.status, 'installed')
   } finally {
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function entriesForSource(service: FontButlerService, filePath: string): CatalogEntry[] {
+  const resolved = path.resolve(filePath)
+  return service.listCatalog().filter((entry) => path.resolve(entry.sourcePath) === resolved)
+}
+
+function finishedWatchEntry(service: FontButlerService, filePath: string, family: string): boolean {
+  const entries = entriesForSource(service, filePath)
+  const entry = entries[0]
+  return (
+    entries.length === 1 &&
+    entry?.status === 'installed' &&
+    entry.faces[0]?.familyName === family &&
+    entry.sourceFingerprint === fingerprintFile(filePath)
+  )
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs: number, label: string): Promise<void> {
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    if (predicate()) return
+    await delay(40)
+  }
+  assert.fail(label)
+}
+
+async function writeBytesInChunks(dest: string, bytes: Buffer, parts: number, gapMs: number): Promise<void> {
+  const fd = fs.openSync(dest, 'w')
+  try {
+    const size = Math.max(1, Math.ceil(bytes.length / parts))
+    for (let offset = 0; offset < bytes.length; offset += size) {
+      const length = Math.min(size, bytes.length - offset)
+      fs.writeSync(fd, bytes, offset, length, offset)
+      fs.fsyncSync(fd)
+      if (offset + length < bytes.length) await delay(gapMs)
+    }
+  } finally {
+    fs.closeSync(fd)
+  }
+}
+
+test('a font copied slowly into a watch folder appears after the write settles', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  const staged = path.join(paths.dataRoot, 'staged-slow.ttf')
+  fs.mkdirSync(inbox, { recursive: true })
+  writeTestFont(staged, 'SlowDrop', 'SlowDrop-Regular')
+  const bytes = fs.readFileSync(staged)
+  const font = path.join(inbox, 'SlowDrop.ttf')
+  const service = new FontButlerService(paths)
+  try {
+    await service.updateSettings({ onboardingCompleted: true })
+    const configured = await service.configureFolder({ root: inbox, installNew: true })
+    await service.startWatching(configured.folder.id)
+    assert.equal(service.listCatalog().length, 0)
+
+    const copying = writeBytesInChunks(font, bytes, 4, 600)
+    await delay(700)
+    assert.equal(
+      service.listCatalog().some((entry) => entry.faces[0]?.familyName === 'SlowDrop'),
+      false,
+    )
+    await copying
+    await waitFor(
+      () => finishedWatchEntry(service, font, 'SlowDrop'),
+      INBOX_WRITE_STABILITY_MS + 8000,
+      'slow watch-folder copy never landed in the library',
+    )
+    assert.equal(entriesForSource(service, font).length, 1)
+    assert.equal(inboxRejectionForTest(font), undefined)
+  } finally {
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('a truncated watch-folder font is imported after a later change', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  const staged = path.join(paths.dataRoot, 'staged-recover.ttf')
+  fs.mkdirSync(inbox, { recursive: true })
+  writeTestFont(staged, 'Recovered', 'Recovered-Regular')
+  const bytes = fs.readFileSync(staged)
+  const font = path.join(inbox, 'Recovered.ttf')
+  const service = new FontButlerService(paths)
+  try {
+    await service.updateSettings({ onboardingCompleted: true })
+    const configured = await service.configureFolder({ root: inbox, installNew: true })
+    await service.startWatching(configured.folder.id)
+
+    fs.writeFileSync(font, bytes.subarray(0, 32))
+    await waitFor(
+      () => inboxRejectionForTest(font)?.size === 32,
+      INBOX_WRITE_STABILITY_MS + 8000,
+      'truncated watch file was not rejected',
+    )
+    assert.equal(
+      service.listCatalog().some((entry) => entry.faces[0]?.familyName === 'Recovered'),
+      false,
+    )
+
+    fs.writeFileSync(font, bytes)
+    await waitFor(
+      () => finishedWatchEntry(service, font, 'Recovered'),
+      INBOX_WRITE_STABILITY_MS + 8000,
+      'completed watch file did not recover after the change',
+    )
+    const [entry] = entriesForSource(service, font)
+    assert.ok(entry)
+    assert.equal(entry.sourceSize, bytes.length)
+    assert.equal(entry.sourceFingerprint, fingerprintFile(font))
+    assert.equal(inboxRejectionForTest(font), undefined)
+  } finally {
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('a zero-filled pre-sized watch file lands once when the bytes are filled in', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  const staged = path.join(paths.dataRoot, 'staged-presize.ttf')
+  fs.mkdirSync(inbox, { recursive: true })
+  writeTestFont(staged, 'PreSized', 'PreSized-Regular')
+  const bytes = fs.readFileSync(staged)
+  const font = path.join(inbox, 'PreSized.ttf')
+  fs.writeFileSync(font, Buffer.alloc(bytes.length))
+  const service = new FontButlerService(paths)
+  try {
+    await service.updateSettings({ onboardingCompleted: true })
+    const configured = await service.configureFolder({ root: inbox, installNew: true })
+    await service.startWatching(configured.folder.id)
+    await waitFor(
+      () => inboxRejectionForTest(font)?.size === bytes.length,
+      INBOX_WRITE_STABILITY_MS + 8000,
+      'zero-filled watch file was not rejected',
+    )
+    assert.equal(entriesForSource(service, font).length, 0)
+
+    fs.writeFileSync(font, bytes)
+    await waitFor(
+      () => finishedWatchEntry(service, font, 'PreSized'),
+      INBOX_WRITE_STABILITY_MS + 8000,
+      'filled-in pre-sized font did not land once',
+    )
+    assert.equal(entriesForSource(service, font).length, 1)
+    assert.equal(entriesForSource(service, font)[0]?.sourceFingerprint, fingerprintFile(font))
+  } finally {
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('replacing a watched font updates the same library entry', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  fs.mkdirSync(inbox, { recursive: true })
+  const font = path.join(inbox, 'Replaced.ttf')
+  const service = new FontButlerService(paths)
+  const errors: string[] = []
+  const stop = onEvent((event) => {
+    if (event.type === 'notice' && event.notice.kind === 'error') errors.push(event.notice.message)
+  })
+  try {
+    await service.updateSettings({ onboardingCompleted: true })
+    const configured = await service.configureFolder({ root: inbox, installNew: true })
+    await service.startWatching(configured.folder.id)
+
+    const stagedFirst = path.join(paths.dataRoot, 'staged-first.ttf')
+    writeTestFont(stagedFirst, 'FirstCut', 'FirstCut-Regular')
+    const firstBytes = fs.readFileSync(stagedFirst)
+    const width = Math.max(firstBytes.length, 4096)
+    const paddedFirst = Buffer.alloc(width)
+    firstBytes.copy(paddedFirst)
+    fs.writeFileSync(font, paddedFirst)
+    await waitFor(
+      () => finishedWatchEntry(service, font, 'FirstCut'),
+      INBOX_WRITE_STABILITY_MS + 8000,
+      'first pre-sized font was not imported',
+    )
+    const [original] = entriesForSource(service, font)
+    assert.ok(original)
+
+    writeTestFont(path.join(paths.dataRoot, 'staged-second.ttf'), 'FinalCut', 'FinalCut-Regular')
+    const secondBytes = fs.readFileSync(path.join(paths.dataRoot, 'staged-second.ttf'))
+    const paddedSecond = Buffer.alloc(width)
+    secondBytes.copy(paddedSecond)
+    fs.writeFileSync(font, paddedSecond)
+    await waitFor(
+      () => finishedWatchEntry(service, font, 'FinalCut'),
+      INBOX_WRITE_STABILITY_MS + 8000,
+      'replaced watch font did not update the original entry',
+    )
+    const entries = entriesForSource(service, font)
+    assert.equal(entries.length, 1)
+    assert.equal(entries[0]?.id, original.id)
+    assert.equal(entries[0]?.sourceFingerprint, fingerprintFile(font))
+    assert.equal(service.listCatalog().filter((entry) => entry.faces[0]?.familyName === 'FirstCut').length, 0)
+    assert.equal(errors.length, 0)
+  } finally {
+    stop()
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('a file still growing at startup imports with no failure notice', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  const staged = path.join(paths.dataRoot, 'staged-growing.ttf')
+  fs.mkdirSync(inbox, { recursive: true })
+  writeTestFont(staged, 'Growing', 'Growing-Regular')
+  const bytes = fs.readFileSync(staged)
+  const font = path.join(inbox, 'Growing.ttf')
+  fs.writeFileSync(font, bytes.subarray(0, 32))
+  const service = new FontButlerService(paths)
+  const errors: string[] = []
+  const stop = onEvent((event) => {
+    if (event.type === 'notice' && event.notice.kind === 'error') errors.push(event.notice.message)
+  })
+  try {
+    await service.updateSettings({ onboardingCompleted: true })
+    const configured = await service.configureFolder({ root: inbox, installNew: true })
+    await service.startWatching(configured.folder.id)
+    await waitFor(
+      () => inboxRejectionForTest(font)?.size === 32 && errors.length === 0,
+      8000,
+      'startup import did not see the partial font',
+    )
+    assert.equal(
+      service.listActivity().some((operation) =>
+        operation.items.some((item) => item.outcome === 'failed' && item.label === path.resolve(font)),
+      ),
+      false,
+    )
+    await writeBytesInChunks(font, bytes, 4, 350)
+    await waitFor(
+      () => finishedWatchEntry(service, font, 'Growing'),
+      INBOX_WRITE_STABILITY_MS * 2 + 8000,
+      'a font still growing at startup did not import',
+    )
+    assert.equal(entriesForSource(service, font).length, 1)
+    assert.equal(entriesForSource(service, font)[0]?.sourceFingerprint, fingerprintFile(font))
+    assert.equal(errors.length, 0)
+    assert.equal(
+      service.listActivity().some((operation) =>
+        operation.items.some((item) => item.outcome === 'failed' && item.label === path.resolve(font)),
+      ),
+      false,
+    )
+  } finally {
+    stop()
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('a font that stays truncated at startup is reported once', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  const staged = path.join(paths.dataRoot, 'staged-stuck.ttf')
+  fs.mkdirSync(inbox, { recursive: true })
+  writeTestFont(staged, 'Stuck', 'Stuck-Regular')
+  const bytes = fs.readFileSync(staged)
+  const font = path.join(inbox, 'Stuck.ttf')
+  fs.writeFileSync(font, bytes.subarray(0, 32))
+  const service = new FontButlerService(paths)
+  const errors: string[] = []
+  const stop = onEvent((event) => {
+    if (event.type === 'notice' && event.notice.kind === 'error') errors.push(event.notice.message)
+  })
+  try {
+    await service.updateSettings({ onboardingCompleted: true })
+    const configured = await service.configureFolder({ root: inbox, installNew: true })
+    await service.startWatching(configured.folder.id)
+    await waitFor(
+      () => inboxRejectionForTest(font)?.size === 32 && errors.length === 0,
+      8000,
+      'startup import did not see the truncated font',
+    )
+    await waitFor(
+      () => errors.length === 1,
+      INBOX_WRITE_STABILITY_MS + INBOX_CORRUPT_SETTLE_MS + 4000,
+      'truncated startup font was not reported',
+    )
+    assert.match(errors[0] ?? '', /^Stuck\.ttf:/)
+    const failures = service
+      .listActivity()
+      .filter((operation) => operation.items.some((item) => item.label === path.resolve(font)))
+    assert.equal(failures.length, 1)
+    assert.equal(failures[0]?.trigger, 'startup')
+    assert.equal(failures[0]?.action, 'import')
+    assert.equal(failures[0]?.items[0]?.outcome, 'failed')
+    assert.equal(failures[0]?.items[0]?.label, path.resolve(font))
+    await delay(500)
+    assert.equal(errors.length, 1)
+    assert.equal(entriesForSource(service, font).length, 0)
+  } finally {
+    stop()
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('a garbage font dropped into a watch folder is reported once it settles', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  fs.mkdirSync(inbox, { recursive: true })
+  const font = path.join(inbox, 'Garbage.otf')
+  const service = new FontButlerService(paths)
+  const errors: string[] = []
+  const stop = onEvent((event) => {
+    if (event.type === 'notice' && event.notice.kind === 'error') errors.push(event.notice.message)
+  })
+  try {
+    await service.updateSettings({ onboardingCompleted: true })
+    const configured = await service.configureFolder({ root: inbox, installNew: true })
+    await service.startWatching(configured.folder.id)
+    fs.writeFileSync(font, Buffer.from('this is not a font'))
+    await waitFor(
+      () => inboxRejectionForTest(font)?.size === fs.statSync(font).size,
+      INBOX_WRITE_STABILITY_MS + 8000,
+      'garbage watch file was not read',
+    )
+    assert.equal(errors.length, 0)
+    assert.equal(entriesForSource(service, font).length, 0)
+    await waitFor(
+      () => errors.length === 1,
+      INBOX_CORRUPT_SETTLE_MS + 3000,
+      'settled garbage font was not reported',
+    )
+    assert.match(errors[0] ?? '', /^Garbage\.otf:/)
+    assert.equal((errors[0] ?? '').includes(inbox), false)
+    const activity = service
+      .listActivity()
+      .find((operation) => operation.items.some((item) => item.label === path.resolve(font)))
+    assert.ok(activity)
+    assert.equal(activity.trigger, 'watch')
+    assert.equal(activity.action, 'import')
+    assert.equal(activity.familyName, 'Garbage.otf')
+    assert.equal(activity.items[0]?.label, path.resolve(font))
+    await delay(500)
+    assert.equal(errors.length, 1)
+    assert.equal(service.listCatalog().length, 0)
+  } finally {
+    stop()
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('a truncated sfnt dropped into a watch folder reports the table error once', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  const staged = path.join(paths.dataRoot, 'staged-live-trunc.ttf')
+  fs.mkdirSync(inbox, { recursive: true })
+  writeTestFont(staged, 'CutOff', 'CutOff-Regular')
+  const bytes = fs.readFileSync(staged)
+  const font = path.join(inbox, 'CutOff.ttf')
+  const service = new FontButlerService(paths)
+  const errors: string[] = []
+  const stop = onEvent((event) => {
+    if (event.type === 'notice' && event.notice.kind === 'error') errors.push(event.notice.message)
+  })
+  try {
+    await service.updateSettings({ onboardingCompleted: true })
+    const configured = await service.configureFolder({ root: inbox, installNew: true })
+    await service.startWatching(configured.folder.id)
+    fs.writeFileSync(font, bytes.subarray(0, 32))
+    await waitFor(
+      () => inboxRejectionForTest(font)?.size === 32,
+      INBOX_WRITE_STABILITY_MS + 8000,
+      'truncated watch file was not read',
+    )
+    assert.equal(errors.length, 0)
+    await waitFor(
+      () => errors.length === 1,
+      INBOX_CORRUPT_SETTLE_MS + 3000,
+      'settled truncated font was not reported',
+    )
+    assert.match(errors[0] ?? '', /table directory|past the end|sfnt header/)
+    await delay(500)
+    assert.equal(errors.length, 1)
+    assert.equal(entriesForSource(service, font).length, 0)
+  } finally {
+    stop()
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('a corrupt watch file imports once it is replaced with a real font', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  fs.mkdirSync(inbox, { recursive: true })
+  const font = path.join(inbox, 'Repaired.ttf')
+  const service = new FontButlerService(paths)
+  const errors: string[] = []
+  const stop = onEvent((event) => {
+    if (event.type === 'notice' && event.notice.kind === 'error') errors.push(event.notice.message)
+  })
+  try {
+    await service.updateSettings({ onboardingCompleted: true })
+    const configured = await service.configureFolder({ root: inbox, installNew: true })
+    await service.startWatching(configured.folder.id)
+    fs.writeFileSync(font, Buffer.from('still-not-a-font'))
+    await waitFor(
+      () => errors.length === 1,
+      INBOX_WRITE_STABILITY_MS + INBOX_CORRUPT_SETTLE_MS + 8000,
+      'corrupt watch file was not reported',
+    )
+    assert.equal(entriesForSource(service, font).length, 0)
+    writeTestFont(font, 'Repaired', 'Repaired-Regular')
+    await waitFor(
+      () => finishedWatchEntry(service, font, 'Repaired'),
+      INBOX_WRITE_STABILITY_MS + 8000,
+      'repaired watch font did not import',
+    )
+    assert.equal(entriesForSource(service, font).length, 1)
+    assert.equal(entriesForSource(service, font)[0]?.sourceFingerprint, fingerprintFile(font))
+    assert.equal(inboxRejectionForTest(font), undefined)
+    await delay(500)
+    assert.equal(errors.length, 1)
+  } finally {
+    stop()
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('a reported corrupt font imports when a valid font keeps the same size and mtime', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  const staged = path.join(paths.dataRoot, 'staged-swap.ttf')
+  fs.mkdirSync(inbox, { recursive: true })
+  writeTestFont(staged, 'Swapped', 'Swapped-Regular')
+  const good = fs.readFileSync(staged)
+  const font = path.join(inbox, 'Swapped.ttf')
+  const service = new FontButlerService(paths)
+  const errors: string[] = []
+  const stop = onEvent((event) => {
+    if (event.type === 'notice' && event.notice.kind === 'error') errors.push(event.notice.message)
+  })
+  try {
+    await service.updateSettings({ onboardingCompleted: true })
+    const configured = await service.configureFolder({ root: inbox, installNew: true })
+    await service.startWatching(configured.folder.id)
+    fs.writeFileSync(font, Buffer.alloc(good.length, 0x61))
+    const preserved = new Date(Math.floor(Date.now() / 1000) * 1000)
+    fs.utimesSync(font, preserved, preserved)
+    await waitFor(
+      () => errors.length === 1 && inboxRejectionForTest(font)?.reported === true,
+      INBOX_WRITE_STABILITY_MS + INBOX_CORRUPT_SETTLE_MS + 8000,
+      'corrupt watch file was not reported',
+    )
+    const rejection = inboxRejectionForTest(font)
+    assert.ok(rejection?.fingerprint)
+    assert.notEqual(rejection.fingerprint, fingerprintFile(staged))
+    fs.writeFileSync(font, good)
+    fs.utimesSync(font, preserved, preserved)
+    const swapped = fs.statSync(font)
+    assert.equal(swapped.size, rejection.size)
+    assert.equal(swapped.mtimeMs, rejection.mtimeMs)
+    await waitFor(
+      () => finishedWatchEntry(service, font, 'Swapped'),
+      INBOX_WRITE_STABILITY_MS + 8000,
+      'same-size replacement was not imported',
+    )
+    assert.equal(entriesForSource(service, font).length, 1)
+    assert.equal(entriesForSource(service, font)[0]?.sourceFingerprint, fingerprintFile(font))
+    assert.equal(inboxRejectionForTest(font), undefined)
+    await delay(500)
+    assert.equal(errors.length, 1)
+  } finally {
+    stop()
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('removing a watch folder within 10s of a corrupt drop does not report it', async () => {
+  const paths = tempPaths()
+  const dropped = path.join(paths.dataRoot, 'dropped')
+  const kept = path.join(paths.dataRoot, 'kept')
+  fs.mkdirSync(dropped, { recursive: true })
+  fs.mkdirSync(kept, { recursive: true })
+  const font = path.join(dropped, 'Gone.otf')
+  const service = new FontButlerService(paths)
+  const errors: string[] = []
+  const stop = onEvent((event) => {
+    if (event.type === 'notice' && event.notice.kind === 'error') errors.push(event.notice.message)
+  })
+  try {
+    await service.updateSettings({
+      onboardingCompleted: true,
+      watchFolders: [dropped, kept],
+    })
+    fs.writeFileSync(font, Buffer.from('this is not a font'))
+    await waitFor(
+      () => inboxRejectionForTest(font)?.size === fs.statSync(font).size && errors.length === 0,
+      INBOX_WRITE_STABILITY_MS + 8000,
+      'corrupt drop was not recorded',
+    )
+    await service.updateSettings({ watchFolders: [kept] })
+    assert.equal(inboxRejectionForTest(font), undefined)
+    await delay(INBOX_CORRUPT_SETTLE_MS + 1500)
+    assert.equal(errors.length, 0)
+    assert.equal(inboxRejectionForTest(font), undefined)
+    const activity = service
+      .listActivity()
+      .find((operation) => operation.items.some((item) => item.label === path.resolve(font)))
+    assert.equal(activity, undefined)
+  } finally {
+    stop()
     service.dispose()
     await closeAllWatchers()
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })

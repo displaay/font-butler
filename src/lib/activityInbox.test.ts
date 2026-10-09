@@ -29,6 +29,10 @@ test('activityRowLabel uses past tense with the family first', () => {
   assert.equal(activityRowLabel({ action: 'deactivate', familyName: 'Fenul' }), 'Fenul deactivated')
   assert.equal(activityRowLabel({ action: 'apply-plan', familyName: 'News' }), 'News imported')
   assert.equal(activityRowLabel({ action: 'apply-plan' }), 'Imported')
+  assert.equal(
+    activityRowLabel({ action: 'import', familyName: 'Garbage.otf' }),
+    'Garbage.otf could not be imported',
+  )
 })
 
 test('entryActivityLabel names the style and format', () => {

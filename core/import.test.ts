@@ -3,7 +3,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
+import { fingerprintFile } from './fingerprint.ts'
 import { FontButlerService } from './service.ts'
+import { withService, writeTestFont } from './test-util.ts'
 import { closeAllWatchers } from './watch.ts'
 import type { AppPaths } from './paths.ts'
 
@@ -84,4 +86,32 @@ test('importPaths reports invalid web fonts without blocking other files', async
     await closeAllWatchers()
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
+})
+
+test('opening the installed copy does not replace sourceFingerprint', async () => {
+  await withService(async (service, paths) => {
+    await service.init()
+    const source = path.join(paths.dataRoot, 'SourceFace.ttf')
+    writeTestFont(source, 'SourceFace', 'SourceFace-Regular', { version: 'Version 1.000' })
+    const imported = await service.importPaths([source])
+    const installed = await service.install(imported.entries[0]!.id)
+    const sourceFingerprint = fingerprintFile(source)
+    assert.equal(installed.sourceFingerprint, sourceFingerprint)
+    assert.ok(installed.installedPath)
+    assert.notEqual(path.resolve(installed.installedPath), path.resolve(source))
+
+    writeTestFont(installed.installedPath, 'InstalledFace', 'InstalledFace-Regular', {
+      version: 'Version 9.000',
+    })
+    const installedHash = fingerprintFile(installed.installedPath)
+    assert.notEqual(installedHash, sourceFingerprint)
+
+    const again = await service.importPaths([installed.installedPath])
+    assert.deepEqual(again.errors, [])
+    const entry = service.listCatalog().find((item) => item.id === installed.id)
+    assert.ok(entry)
+    assert.equal(entry.sourceFingerprint, sourceFingerprint)
+    assert.notEqual(entry.sourceFingerprint, installedHash)
+    assert.equal(service.listCatalog().length, 1)
+  })
 })

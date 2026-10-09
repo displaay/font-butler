@@ -151,7 +151,7 @@ import {
 } from '@/lib/libraryWindow'
 import { allUpdateGroups, visibleUpdateGroups } from '@/lib/updateInventory'
 import { operationMatchesQuery, tabWithSearchHits } from '@/lib/search'
-import type { AppSettings, AppUpdateStatus, CatalogEntry, DestinationCapability, DuplicateWarning, FamilyGroup, FontStatus, ImportPlan, ImportPlanItem, LibraryFilter, Operation, PreviewPreferences, ProjectSet, RetailCollisionAction, RetailFamilyCollision, RetailSyncStatus, SavedLibraryFilter, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
+import type { AppSettings, AppUpdateStatus, CatalogEntry, DestinationCapability, DuplicateWarning, FamilyGroup, FontStatus, ImportPlan, ImportPlanItem, LibraryFilter, Notice, Operation, PreviewPreferences, ProjectSet, RetailCollisionAction, RetailFamilyCollision, RetailSyncStatus, SavedLibraryFilter, SortMode, SystemFace, SystemFamilyGroup, ViewLayout } from '@/lib/types'
 import { testInstallToCatalog, type TestInstallFont } from '@/lib/testInstall'
 import { isRetailSyncingStatusMessage, retailFamilyNameOf, retailHasLiveUpdates, retailLibraryEntryVisible, retailListingOnMac, retailSyncInProgress, retailSyncIsOn, retailSyncingStatusMessage, retailUpdateCount } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -593,32 +593,44 @@ function AppShell() {
       if (!cancelled && !retailLoaded) void loadRetailStatus()
     }
     void boot()
-    const stop = subscribeEvents((event) => {
-      if (isNotice(event)) {
-        if (event.notice.kind === 'error' || !busyRef.current) {
-          toast[event.notice.kind === 'error' ? 'error' : 'success'](event.notice.message, {
-            action: event.notice.operationId
-              ? {
-                  label: 'Activity',
-                  onClick: () => {
-                    setHighlightOperation(event.notice.operationId ?? null)
-                    setTab('activity')
-                  },
-                }
-              : undefined,
-          })
-        }
-        if (event.notice.entryId) {
-          const match = entriesRef.current.find((entry) => entry.id === event.notice.entryId)
-          if (match) {
-            setSelectedFamily(familyNameOf(match))
-            if (match.previewOnly) {
-              setInspectorDensity(DEFAULT_INSPECTOR_DENSITY)
-              setInspectorPane('details')
-              setInspectSelection(true)
-            }
+    const seenWatchFailures = new Set<string>()
+    const presentNotice = (notice: Notice) => {
+      if (notice.kind === 'error' && notice.source === 'watch') {
+        const key = notice.operationId ?? notice.message
+        if (seenWatchFailures.has(key)) return
+        seenWatchFailures.add(key)
+      }
+      if (notice.kind === 'error' || !busyRef.current) {
+        toast[notice.kind === 'error' ? 'error' : 'success'](notice.message, {
+          action: notice.operationId
+            ? {
+                label: 'Activity',
+                onClick: () => {
+                  setHighlightOperation(notice.operationId ?? null)
+                  setTab('activity')
+                },
+              }
+            : undefined,
+        })
+      }
+      if (notice.entryId) {
+        const match = entriesRef.current.find((entry) => entry.id === notice.entryId)
+        if (match) {
+          setSelectedFamily(familyNameOf(match))
+          if (match.previewOnly) {
+            setInspectorDensity(DEFAULT_INSPECTOR_DENSITY)
+            setInspectorPane('details')
+            setInspectSelection(true)
           }
         }
+      }
+    }
+    const stopWatchNotices = window.fontButlerDesktop?.onWatchNotices?.((notices) => {
+      for (const notice of notices) presentNotice(notice)
+    })
+    const stop = subscribeEvents((event) => {
+      if (isNotice(event)) {
+        presentNotice(event.notice)
         return
       }
       if (isSettingsEvent(event)) {
@@ -693,6 +705,7 @@ function AppShell() {
     return () => {
       cancelled = true
       stop()
+      stopWatchNotices?.()
     }
   }, [])
 

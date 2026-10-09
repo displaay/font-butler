@@ -329,6 +329,144 @@ export function readFileStat(filePath: string): { mtimeMs: number; size: number 
   return { mtimeMs: stat.mtimeMs, size: stat.size }
 }
 
+const SFNT_TRUE = 0x00010000
+const SFNT_OTTO = 0x4f54544f
+const SFNT_TRUE_TAG = 0x74727565
+const SFNT_TYP1 = 0x74797031
+const SFNT_TTCF = 0x74746366
+const SFNT_HEAD = 0x68656164
+
+export type SfntTableCheck =
+  | { ok: true }
+  | { ok: false; reason: string }
+
+function sfntTagName(tag: number): string {
+  return String.fromCharCode((tag >>> 24) & 0xff, (tag >>> 16) & 0xff, (tag >>> 8) & 0xff, tag & 0xff)
+}
+
+function isSfntFlavor(scaler: number): boolean {
+  return (
+    scaler === SFNT_TRUE ||
+    scaler === SFNT_OTTO ||
+    scaler === SFNT_TRUE_TAG ||
+    scaler === SFNT_TYP1
+  )
+}
+
+function readExact(fd: number, size: number, position: number): Buffer | undefined {
+  if (size < 0 || position < 0) return undefined
+  const buffer = Buffer.alloc(size)
+  const read = fs.readSync(fd, buffer, 0, size, position)
+  return read === size ? buffer : undefined
+}
+
+type SfntTableSpan = { tag: number; offset: number; length: number; end: number }
+
+function rejectTables(fileSize: number, tables: SfntTableSpan[]): SfntTableCheck {
+  for (const table of tables) {
+    if (table.length === 0) continue
+    const name = sfntTagName(table.tag)
+    if (table.offset > fileSize) {
+      return { ok: false, reason: `The ${name} table starts past the end of the file.` }
+    }
+    if (table.end > fileSize) {
+      return { ok: false, reason: `The ${name} table extends past the end of the file.` }
+    }
+  }
+  return { ok: true }
+}
+
+/** True when every sfnt table sits inside the file and `head` is not still zero-filled. */
+function sfntDirectoryFits(fd: number, fileSize: number, offset: number): SfntTableCheck {
+  if (offset < 0 || fileSize - offset < 12) {
+    return { ok: false, reason: 'The font file is shorter than an sfnt header.' }
+  }
+  const header = readExact(fd, 12, offset)
+  if (!header) return { ok: false, reason: 'The font file is shorter than an sfnt header.' }
+  const scaler = header.readUInt32BE(0)
+  if (!isSfntFlavor(scaler)) {
+    return { ok: false, reason: 'The font file is not a complete sfnt.' }
+  }
+  const numTables = header.readUInt16BE(4)
+  const directoryBytes = numTables * 16
+  if (numTables === 0 || fileSize - offset < 12 + directoryBytes) {
+    return { ok: false, reason: "The font's table directory extends past the end of the file." }
+  }
+  const directory = readExact(fd, directoryBytes, offset + 12)
+  if (!directory) {
+    return { ok: false, reason: "The font's table directory extends past the end of the file." }
+  }
+  const tables: SfntTableSpan[] = []
+  for (let index = 0; index < numTables; index += 1) {
+    const base = index * 16
+    const tag = directory.readUInt32BE(base)
+    const tableOffset = directory.readUInt32BE(base + 8)
+    const length = directory.readUInt32BE(base + 12)
+    tables.push({ tag, offset: tableOffset, length, end: tableOffset + length })
+  }
+  const bounds = rejectTables(fileSize, tables)
+  if (!bounds.ok) return bounds
+  for (const table of tables) {
+    if (table.tag !== SFNT_HEAD || table.length < 16) continue
+    const magic = readExact(fd, 4, table.offset + 12)
+    if (!magic || magic.readUInt32BE(0) === 0) {
+      return { ok: false, reason: 'The head table is still zero-filled.' }
+    }
+  }
+  return { ok: true }
+}
+
+function collectionTablesFit(fd: number, fileSize: number): SfntTableCheck {
+  const header = readExact(fd, 12, 0)
+  if (!header) return { ok: false, reason: 'The font collection is shorter than its header.' }
+  const numFonts = header.readUInt32BE(8)
+  const offsetBytes = numFonts * 4
+  if (numFonts === 0 || numFonts > 1024 || fileSize < 12 + offsetBytes) {
+    return { ok: false, reason: 'The font collection directory extends past the end of the file.' }
+  }
+  const offsets = readExact(fd, offsetBytes, 12)
+  if (!offsets) {
+    return { ok: false, reason: 'The font collection directory extends past the end of the file.' }
+  }
+  for (let index = 0; index < numFonts; index += 1) {
+    const fit = sfntDirectoryFits(fd, fileSize, offsets.readUInt32BE(index * 4))
+    if (!fit.ok) return fit
+  }
+  return { ok: true }
+}
+
+/**
+ * Why an sfnt file cannot be imported yet, or `ok` when it is not an sfnt container.
+ * Web fonts are not sfnt containers and return ok so the normal parser decides.
+ * A table that extends past EOF is rejected. Chromium's OTS does the same, and a
+ * font we accepted with trailing slack spun forever in the preview.
+ */
+export function inspectSfntTables(filePath: string): SfntTableCheck {
+  let fd: number | undefined
+  try {
+    const stat = fs.statSync(filePath)
+    if (!stat.isFile() || stat.size < 12) {
+      return { ok: false, reason: 'The font file is shorter than an sfnt header.' }
+    }
+    fd = fs.openSync(filePath, 'r')
+    const header = readExact(fd, 12, 0)
+    if (!header) return { ok: false, reason: 'The font file is shorter than an sfnt header.' }
+    const scaler = header.readUInt32BE(0)
+    if (scaler === SFNT_TTCF) return collectionTablesFit(fd, stat.size)
+    if (!isSfntFlavor(scaler)) return { ok: true }
+    return sfntDirectoryFits(fd, stat.size, 0)
+  } catch {
+    return { ok: false, reason: 'Could not read the font file.' }
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd)
+  }
+}
+
+/** True when `inspectSfntTables` does not reject the file. */
+export function sfntTablesFit(filePath: string): boolean {
+  return inspectSfntTables(filePath).ok
+}
+
 export function existingFontPath(
   entry: {
     id?: string

@@ -45,6 +45,7 @@ import {
   suggestedFamilyName,
 } from './finder-install.mjs'
 import { deliverNativeNotice, electronNotificationPermission } from './notify.mjs'
+import { createWatchNoticeBuffer, isWatchFailureNotice } from './watch-notices.mjs'
 import {
   buildTrayMenuModel,
   menuBarUpdateBadge,
@@ -265,6 +266,7 @@ let clearAdobeFontCacheEnabled = true
 let nativeNotificationsEnabled = false
 let lastNoticeKey = ''
 let lastNoticeAt = 0
+const watchNoticeBuffer = createWatchNoticeBuffer()
 let isQuitting = false
 const queuedFiles = []
 const finderJobs = createFinderJobQueue((action, filePaths) => runFinderJob(action, filePaths))
@@ -279,11 +281,11 @@ let retailStatus = null
 let runPackagedBootstrap = null
 
 function startMainUiAfterBootstrap() {
+  void listenForApiEvents()
   createWindow()
   void loadCatalog()
   void loadActivity()
   void loadAppUpdate()
-  void listenForApiEvents()
   void loadRetailStatus()
 }
 
@@ -447,6 +449,7 @@ function bootstrapFailureMessage(error) {
 }
 
 function destroyMainWindowForReplace() {
+  watchNoticeBuffer.markNotReady()
   if (!mainWindow || mainWindow.isDestroyed()) {
     mainWindow = null
     mainWindowKind = null
@@ -459,7 +462,30 @@ function destroyMainWindowForReplace() {
   win.destroy()
 }
 
+function deliverWatchNotices(notices) {
+  if (!notices?.length) return
+  const win = mainWindow
+  if (!win || win.isDestroyed() || mainWindowKind !== 'main') {
+    watchNoticeBuffer.requeue(notices)
+    return
+  }
+  win.webContents.send('watch-notices', notices)
+}
+
+function flushWatchNotices() {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindowKind !== 'main') return
+  deliverWatchNotices(watchNoticeBuffer.markReady())
+}
+
 function attachMainWindowHandlers(win) {
+  win.webContents.on('did-start-navigation', (details) => {
+    if (!details.isMainFrame || details.isSameDocument) return
+    watchNoticeBuffer.markNotReady()
+  })
+  win.webContents.on('did-finish-load', () => {
+    if (win !== mainWindow || mainWindowKind !== 'main') return
+    flushWatchNotices()
+  })
   win.webContents.on('console-message', (_event, level, message, line, sourceId) => {
     if (level < 2) return
     const levelLabel = level === 2 ? 'warn' : 'error'
@@ -487,10 +513,11 @@ function attachMainWindowHandlers(win) {
 
 async function showLoadFailurePage(win, detail) {
   if (!win || win.isDestroyed()) return
+  watchNoticeBuffer.markNotReady()
+  mainWindowKind = BOOTSTRAP_ERROR_WINDOW_KIND
   const message = `${detail}\n\nTry Quit from the menu, or use Retry after the font service is running.`
   const html = bootstrapErrorPageHtml(message, { dark: nativeTheme.shouldUseDarkColors })
   await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
-  mainWindowKind = BOOTSTRAP_ERROR_WINDOW_KIND
 }
 
 function createBootstrapShellWindow(kind) {
@@ -708,6 +735,7 @@ async function openExternalUrl(url) {
 function createWindow() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     if (mainWindowKind !== 'main') {
+      watchNoticeBuffer.markNotReady()
       void mainWindow.loadURL(UI)
       mainWindowKind = 'main'
     }
@@ -747,6 +775,7 @@ function createWindow() {
   mainWindow.on('closed', () => {
     const closedWindow = mainWindow
     mainWindow = null
+    watchNoticeBuffer.markNotReady()
     hideDockIconIfNoAppWindowNeedsIt(closedWindow)
   })
 }
@@ -1472,6 +1501,9 @@ function handleApiEvent(event) {
   }
   if (event.type === 'notice' && event.notice) {
     maybeNotify(event.notice)
+    if (isWatchFailureNotice(event.notice)) {
+      deliverWatchNotices(watchNoticeBuffer.push(event.notice))
+    }
   }
   if (event.type === 'app-update' && event.update) {
     appUpdate = event.update
@@ -2061,6 +2093,10 @@ if (!gotLock) {
     showMainWindow()
   })
 }
+
+ipcMain.on('renderer-app-mounted', () => {
+  flushWatchNotices()
+})
 
 ipcMain.handle('quit-app', () => {
   isQuitting = true
