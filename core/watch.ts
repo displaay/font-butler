@@ -41,6 +41,10 @@ const inboxInFlight = new Set<string>()
 const inboxRejected = new Map<string, InboxFileStamp>()
 const inboxImportedFingerprint = new Map<string, string>()
 const inboxSettleTimers = new Map<string, ReturnType<typeof setTimeout>>()
+/** Startup failures wait until the file stops changing, then import again. */
+const inboxStabilityTimers = new Map<string, ReturnType<typeof setTimeout>>()
+/** Roots from the latest resync. A settle timer may post only while its path is inside one. */
+let inboxWatchRoots: string[] = []
 let inboxPaths: AppPaths | undefined
 /** One catalog read shared by the change events of a batch. */
 let catalogFingerprintByPath: Map<string, string> | null = null
@@ -637,11 +641,74 @@ export function inboxChangeShouldImport(
   )
 }
 
-function clearInboxFailureTimer(filePath: string): void {
-  const timer = inboxSettleTimers.get(filePath)
+function clearInboxStabilityTimer(filePath: string): void {
+  const timer = inboxStabilityTimers.get(filePath)
   if (!timer) return
   clearTimeout(timer)
-  inboxSettleTimers.delete(filePath)
+  inboxStabilityTimers.delete(filePath)
+}
+
+function clearInboxFailureTimer(filePath: string): void {
+  const timer = inboxSettleTimers.get(filePath)
+  if (timer) {
+    clearTimeout(timer)
+    inboxSettleTimers.delete(filePath)
+  }
+  clearInboxStabilityTimer(filePath)
+}
+
+/**
+ * A startup read can land mid-copy. Wait until the file stops changing, then
+ * queue another import instead of reporting that first failure.
+ */
+function scheduleStartupStabilityRetry(filePath: string): void {
+  clearInboxStabilityTimer(filePath)
+  const seen = inboxFileStamp(filePath)
+  const timer = setTimeout(() => {
+    inboxStabilityTimers.delete(filePath)
+    if (!pathIsWatched(filePath)) {
+      inboxRejected.delete(filePath)
+      clearInboxFailureTimer(filePath)
+      return
+    }
+    const rejection = inboxRejected.get(filePath)
+    if (!rejection || rejection.reported) return
+    const live = inboxFileStamp(filePath)
+    if (live.size < 0) {
+      inboxRejected.delete(filePath)
+      clearInboxFailureTimer(filePath)
+      return
+    }
+    if (live.size !== seen.size || live.mtimeMs !== seen.mtimeMs) {
+      scheduleStartupStabilityRetry(filePath)
+      return
+    }
+    inboxPending.push(filePath)
+    scheduleActiveInboxFlush?.()
+  }, INBOX_WRITE_STABILITY_MS)
+  timer.unref?.()
+  inboxStabilityTimers.set(filePath, timer)
+}
+
+function pathIsWatched(filePath: string): boolean {
+  return inboxWatchRoots.some((root) => isPathInside(filePath, root))
+}
+
+/** Drop failure state for files that are no longer inside a watched folder. */
+function dropUnwatchedInboxFailures(): void {
+  for (const filePath of [...inboxRejected.keys()]) {
+    if (pathIsWatched(filePath)) continue
+    inboxRejected.delete(filePath)
+    clearInboxFailureTimer(filePath)
+  }
+  for (const filePath of [...inboxSettleTimers.keys()]) {
+    if (pathIsWatched(filePath)) continue
+    clearInboxFailureTimer(filePath)
+  }
+  for (const filePath of [...inboxStabilityTimers.keys()]) {
+    if (pathIsWatched(filePath)) continue
+    clearInboxStabilityTimer(filePath)
+  }
 }
 
 function invalidateCatalogFingerprints(): void {
@@ -726,12 +793,17 @@ function rememberInboxRejection(
     fingerprint,
   })
   clearInboxFailureTimer(filePath)
-  if (immediate || attempts >= INBOX_CORRUPT_ATTEMPT_LIMIT) {
+  if (attempts >= INBOX_CORRUPT_ATTEMPT_LIMIT) {
     reportInboxFailure(filePath, immediate)
     return
   }
   const timer = setTimeout(() => {
     inboxSettleTimers.delete(filePath)
+    if (!pathIsWatched(filePath)) {
+      inboxRejected.delete(filePath)
+      clearInboxStabilityTimer(filePath)
+      return
+    }
     const current = inboxRejected.get(filePath)
     if (!current || current.reported) return
     const live = inboxFileStamp(filePath)
@@ -740,6 +812,7 @@ function rememberInboxRejection(
   }, INBOX_CORRUPT_SETTLE_MS)
   timer.unref?.()
   inboxSettleTimers.set(filePath, timer)
+  if (immediate) scheduleStartupStabilityRetry(filePath)
 }
 
 function rememberedFingerprint(filePath: string, paths?: AppPaths): string | undefined {
@@ -889,9 +962,12 @@ export async function syncInboxWatcher(
   onBatch: (filePaths: string[]) => void | Promise<void | InboxWatchBatchResult>,
   paths?: AppPaths,
 ): Promise<void> {
-  if (existingWatchFolders(folders).length === 0) inboxRecordEpoch += 1
+  const nextRoots = existingWatchFolders(folders)
+  if (nextRoots.length === 0) inboxRecordEpoch += 1
   inboxPaths = paths
   const session = ++inboxSession
+  inboxWatchRoots = nextRoots.map((folder) => path.resolve(folder))
+  dropUnwatchedInboxFailures()
   if (inboxTimer) {
     clearTimeout(inboxTimer)
     inboxTimer = null
@@ -904,6 +980,8 @@ export async function syncInboxWatcher(
   if (session !== inboxSession) return
   inboxPending = pending
   const existing = existingWatchFolders(folders)
+  inboxWatchRoots = existing.map((folder) => path.resolve(folder))
+  dropUnwatchedInboxFailures()
   if (existing.length === 0) {
     inboxRejected.clear()
     inboxInFlight.clear()
@@ -914,6 +992,8 @@ export async function syncInboxWatcher(
     inboxFlushAgain = false
     for (const timer of inboxSettleTimers.values()) clearTimeout(timer)
     inboxSettleTimers.clear()
+    for (const timer of inboxStabilityTimers.values()) clearTimeout(timer)
+    inboxStabilityTimers.clear()
     scheduleActiveInboxFlush = null
     return
   }

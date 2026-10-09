@@ -698,54 +698,52 @@ test('replacing a watched font updates the same library entry', async () => {
   }
 })
 
-test('a font still copying at startup lands once with the final fingerprint', async () => {
+test('a file still growing at startup imports with no failure notice', async () => {
   const paths = tempPaths()
   const inbox = path.join(paths.dataRoot, 'inbox')
-  const staged = path.join(paths.dataRoot, 'staged-startup.ttf')
+  const staged = path.join(paths.dataRoot, 'staged-growing.ttf')
   fs.mkdirSync(inbox, { recursive: true })
-  writeTestFont(staged, 'Startup', 'Startup-Regular')
+  writeTestFont(staged, 'Growing', 'Growing-Regular')
   const bytes = fs.readFileSync(staged)
-  const font = path.join(inbox, 'Startup.ttf')
+  const font = path.join(inbox, 'Growing.ttf')
   fs.writeFileSync(font, bytes.subarray(0, 32))
   const service = new FontButlerService(paths)
+  const errors: string[] = []
+  const stop = onEvent((event) => {
+    if (event.type === 'notice' && event.notice.kind === 'error') errors.push(event.notice.message)
+  })
   try {
     await service.updateSettings({ onboardingCompleted: true })
     const configured = await service.configureFolder({ root: inbox, installNew: true })
-    const errors: string[] = []
-    const stop = onEvent((event) => {
-      if (event.type === 'notice' && event.notice.kind === 'error') errors.push(event.notice.message)
-    })
-    try {
     await service.startWatching(configured.folder.id)
     await waitFor(
-      () => inboxRejectionForTest(font)?.size === 32 && errors.length === 1,
+      () => inboxRejectionForTest(font)?.size === 32 && errors.length === 0,
       8000,
-      'startup import did not report the partial font',
+      'startup import did not see the partial font',
     )
-    assert.match(errors[0] ?? '', /^Startup\.ttf:/)
-    assert.match(errors[0] ?? '', /table directory|past the end|sfnt header/)
-    assert.equal((errors[0] ?? '').includes(inbox), false)
-    const startupFailure = service
-      .listActivity()
-      .find((operation) => operation.items.some((item) => item.label === path.resolve(font)))
-    assert.ok(startupFailure)
-    assert.equal(startupFailure.trigger, 'startup')
-    assert.equal(startupFailure.items[0]?.label, path.resolve(font))
-    assert.equal(entriesForSource(service, font).length, 0)
-
-    fs.writeFileSync(font, bytes)
+    assert.equal(
+      service.listActivity().some((operation) =>
+        operation.items.some((item) => item.outcome === 'failed' && item.label === path.resolve(font)),
+      ),
+      false,
+    )
+    await writeBytesInChunks(font, bytes, 4, 350)
     await waitFor(
-      () => finishedWatchEntry(service, font, 'Startup'),
-      INBOX_WRITE_STABILITY_MS + 8000,
-      'startup copy did not finish as a single library entry',
+      () => finishedWatchEntry(service, font, 'Growing'),
+      INBOX_WRITE_STABILITY_MS * 2 + 8000,
+      'a font still growing at startup did not import',
     )
     assert.equal(entriesForSource(service, font).length, 1)
     assert.equal(entriesForSource(service, font)[0]?.sourceFingerprint, fingerprintFile(font))
-    assert.equal(errors.length, 1)
-    } finally {
-      stop()
-    }
+    assert.equal(errors.length, 0)
+    assert.equal(
+      service.listActivity().some((operation) =>
+        operation.items.some((item) => item.outcome === 'failed' && item.label === path.resolve(font)),
+      ),
+      false,
+    )
   } finally {
+    stop()
     service.dispose()
     await closeAllWatchers()
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
@@ -924,6 +922,46 @@ test('a reported corrupt font imports when a valid font keeps the same size and 
     assert.equal(inboxRejectionForTest(font), undefined)
     await delay(500)
     assert.equal(errors.length, 1)
+  } finally {
+    stop()
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('removing a watch folder within 10s of a corrupt drop does not report it', async () => {
+  const paths = tempPaths()
+  const dropped = path.join(paths.dataRoot, 'dropped')
+  const kept = path.join(paths.dataRoot, 'kept')
+  fs.mkdirSync(dropped, { recursive: true })
+  fs.mkdirSync(kept, { recursive: true })
+  const font = path.join(dropped, 'Gone.otf')
+  const service = new FontButlerService(paths)
+  const errors: string[] = []
+  const stop = onEvent((event) => {
+    if (event.type === 'notice' && event.notice.kind === 'error') errors.push(event.notice.message)
+  })
+  try {
+    await service.updateSettings({
+      onboardingCompleted: true,
+      watchFolders: [dropped, kept],
+    })
+    fs.writeFileSync(font, Buffer.from('this is not a font'))
+    await waitFor(
+      () => inboxRejectionForTest(font)?.size === fs.statSync(font).size && errors.length === 0,
+      INBOX_WRITE_STABILITY_MS + 8000,
+      'corrupt drop was not recorded',
+    )
+    await service.updateSettings({ watchFolders: [kept] })
+    assert.equal(inboxRejectionForTest(font), undefined)
+    await delay(INBOX_CORRUPT_SETTLE_MS + 1500)
+    assert.equal(errors.length, 0)
+    assert.equal(inboxRejectionForTest(font), undefined)
+    const activity = service
+      .listActivity()
+      .find((operation) => operation.items.some((item) => item.label === path.resolve(font)))
+    assert.equal(activity, undefined)
   } finally {
     stop()
     service.dispose()
