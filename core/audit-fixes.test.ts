@@ -353,9 +353,9 @@ test('uninstalling a parked font does not delete a reused live filename', async 
     const parked = await service.deactivate(importedA.id)
     const importedB = (await service.importPaths([sourceB])).entries[0]!
     const live = await service.install(importedB.id)
-    const preview = parseFontBuffer(service.fontBytesForEntry(parked.id).buffer)
+    const preview = parseFontBuffer((await service.fontBytesForEntry(parked.id)).buffer)
     assert.equal(preview.faces[0]?.postscriptName, 'ParkedA-Regular')
-    const revisionPreview = parseFontBuffer(service.fontBytesForRevision(parked.id).buffer)
+    const revisionPreview = parseFontBuffer((await service.fontBytesForRevision(parked.id)).buffer)
     assert.equal(revisionPreview.faces[0]?.postscriptName, 'ParkedA-Regular')
     await service.uninstall(parked.id)
     assert.equal(fs.existsSync(live.installedPath!), true)

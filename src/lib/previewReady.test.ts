@@ -276,7 +276,7 @@ test('an errored variable face does not leave a watch-folder preview loading for
 })
 
 test('a FontFace load that never settles does not leave the preview pending', async () => {
-  assert.ok(PREVIEW_LOAD_TIMEOUT_MS >= 3000 && PREVIEW_LOAD_TIMEOUT_MS <= 8000)
+  assert.equal(PREVIEW_LOAD_TIMEOUT_MS, 10000)
   setPreviewLoadTimeoutForTests(20)
   const faces = [{ family: 'fc-hang-watch', weight: 400, style: 'normal', status: 'loading' }]
   const restore = mockFonts({
@@ -374,7 +374,7 @@ test('a hung family times out without failing a neighbor, and retry reloads only
     assert.equal(isPreviewFontReady('fc-hang-family', 400), false)
     await new Promise((resolve) => setTimeout(resolve, 40))
     assert.equal(isPreviewFontFailed('fc-hang-family', 400), true)
-    assert.equal(isPreviewFontFailed('fc-hang-family', 700), true)
+    assert.equal(isPreviewFontFailed('fc-hang-family', 700), false)
     assert.equal(isPreviewFontReady('fc-neighbor', 400), true)
     assert.equal(isPreviewFontFailed('fc-neighbor', 400), false)
     const loadsBeforeRetry = loads
@@ -384,6 +384,78 @@ test('a hung family times out without failing a neighbor, and retry reloads only
     assert.equal(loads, loadsBeforeRetry + 1)
     assert.equal(isPreviewFontReady('fc-neighbor', 400), true)
     assert.equal(isPreviewFontFailed('fc-neighbor', 400), false)
+  } finally {
+    setPreviewLoadTimeoutForTests(PREVIEW_LOAD_TIMEOUT_MS)
+    restore()
+  }
+})
+
+test('a hanging weight times out on its own after a sibling weight loads', async () => {
+  setPreviewLoadTimeoutForTests(30)
+  let weight700Ready = false
+  const faces = [
+    { family: 'fc-pair', weight: 400, style: 'normal', status: 'loading' },
+    { family: 'fc-pair', weight: 700, style: 'normal', status: 'loading' },
+  ]
+  const restore = mockFonts({
+    check: (spec) => spec.includes(' 700 ') && weight700Ready,
+    faces,
+    load: (spec) => {
+      if (spec.includes(' 700 ')) {
+        return new Promise((resolve) => {
+          queueMicrotask(() => {
+            faces[1]!.status = 'loaded'
+            weight700Ready = true
+            resolve([])
+          })
+        })
+      }
+      return new Promise(() => {})
+    },
+  })
+  try {
+    assert.equal(isPreviewFontReady('fc-pair', 400), false)
+    assert.equal(isPreviewFontReady('fc-pair', 700), false)
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(isPreviewFontFailed('fc-pair', 700), false)
+    assert.equal(isPreviewFontReady('fc-pair', 700), true)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    assert.equal(isPreviewFontFailed('fc-pair', 400), true)
+    assert.equal(isPreviewFontFailed('fc-pair', 700), false)
+    assert.equal(isPreviewFontReady('fc-pair', 700), true)
+  } finally {
+    setPreviewLoadTimeoutForTests(PREVIEW_LOAD_TIMEOUT_MS)
+    restore()
+  }
+})
+
+test('a timed-out preview becomes ready when the face finishes loading', async () => {
+  setPreviewLoadTimeoutForTests(20)
+  let loaded = false
+  const faces = [{ family: 'fc-late', weight: 400, style: 'normal', status: 'loading' }]
+  const restore = mockFonts({
+    check: () => loaded,
+    faces,
+    load: () => new Promise(() => {}),
+  })
+  try {
+    let sawReady = false
+    const stop = subscribePreviewFonts(() => {
+      if (isPreviewFontReady('fc-late', 400) && !isPreviewFontFailed('fc-late', 400)) {
+        sawReady = true
+      }
+    })
+    assert.equal(isPreviewFontReady('fc-late', 400), false)
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    assert.equal(isPreviewFontFailed('fc-late', 400), true)
+    assert.equal(sawReady, false)
+    faces[0]!.status = 'loaded'
+    loaded = true
+    notifyPreviewCssMounted()
+    assert.equal(sawReady, true)
+    assert.equal(isPreviewFontFailed('fc-late', 400), false)
+    assert.equal(isPreviewFontReady('fc-late', 400), true)
+    stop()
   } finally {
     setPreviewLoadTimeoutForTests(PREVIEW_LOAD_TIMEOUT_MS)
     restore()

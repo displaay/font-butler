@@ -11,8 +11,8 @@ const GENERIC_FAMILIES = new Set([
   'fantasy',
 ])
 
-/** How long one family may sit in document.fonts.load() before that family is failed. */
-export const PREVIEW_LOAD_TIMEOUT_MS = 4000
+/** How long one preview load may sit in document.fonts.load() before that key is failed. */
+export const PREVIEW_LOAD_TIMEOUT_MS = 10000
 
 type PreviewFontsListener = () => void
 
@@ -23,9 +23,8 @@ const readyKeys = new Set<string>()
 // does not spin forever; isPreviewFontFailed tells the UI to show an error instead
 // of painting the unloaded family.
 const failedKeys = new Set<string>()
-const failedFamilies = new Set<string>()
 const retries = new Map<string, number>()
-const familyTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const keyTimers = new Map<string, ReturnType<typeof setTimeout>>()
 let faceNames: Set<string> | null = null
 let faceNamesSource: unknown
 let listening = false
@@ -123,57 +122,44 @@ function previewSpec(name: string, weight: number, italic: boolean): string {
   return `${italic ? 'italic' : 'normal'} ${weight} 24px "${name}"`
 }
 
-function clearFamilyTimer(name: string) {
-  const timer = familyTimers.get(name)
+function clearKeyTimer(key: string) {
+  const timer = keyTimers.get(key)
   if (timer == null) return
   clearTimeout(timer)
-  familyTimers.delete(name)
+  keyTimers.delete(key)
 }
 
-function inflightForFamily(name: string): boolean {
-  const prefix = familyPrefix(name)
-  for (const key of loadPromises.keys()) {
-    if (key.startsWith(prefix)) return true
-  }
-  return false
-}
-
-function rememberReady(key: string, name: string) {
+function rememberReady(key: string) {
   readyKeys.add(key)
   failedKeys.delete(key)
   retries.delete(key)
-  failedFamilies.delete(name)
-  clearFamilyTimer(name)
+  clearKeyTimer(key)
 }
 
-function rememberKeyFailure(key: string, name: string) {
+function rememberKeyFailure(key: string) {
   failedKeys.add(key)
   retries.delete(key)
-  if (!inflightForFamily(name)) clearFamilyTimer(name)
+  clearKeyTimer(key)
 }
 
-function failFamily(name: string) {
-  clearFamilyTimer(name)
-  if (failedFamilies.has(name)) return
-  failedFamilies.add(name)
-  const prefix = familyPrefix(name)
-  for (const key of readyKeys) {
-    if (key.startsWith(prefix)) readyKeys.delete(key)
-  }
-  for (const key of loadPromises.keys()) {
-    if (key.startsWith(prefix)) loadPromises.delete(key)
-  }
+function failLoadKey(key: string) {
+  clearKeyTimer(key)
+  loadPromises.delete(key)
+  if (readyKeys.has(key) || failedKeys.has(key)) return
+  failedKeys.add(key)
+  retries.delete(key)
   notifyPreviewFonts()
 }
 
-function armFamilyTimeout(name: string) {
-  if (familyTimers.has(name) || failedFamilies.has(name)) return
+function armKeyTimeout(key: string) {
+  clearKeyTimer(key)
   const timer = setTimeout(() => {
-    familyTimers.delete(name)
-    failFamily(name)
+    if (keyTimers.get(key) !== timer) return
+    keyTimers.delete(key)
+    failLoadKey(key)
   }, loadTimeoutMs)
   ;(timer as unknown as { unref?: () => void }).unref?.()
-  familyTimers.set(name, timer)
+  keyTimers.set(key, timer)
 }
 
 function faceIsLoaded(name: string, weight: number, italic: boolean): boolean {
@@ -188,9 +174,9 @@ function faceIsLoaded(name: string, weight: number, italic: boolean): boolean {
 }
 
 function requestPreviewLoad(spec: string, key: string, name: string, weight: number, italic: boolean): void {
-  if (loadPromises.has(key) || failedKeys.has(key) || failedFamilies.has(name)) return
+  if (loadPromises.has(key) || failedKeys.has(key)) return
   if (typeof document === 'undefined' || !document.fonts) return
-  armFamilyTimeout(name)
+  armKeyTimeout(key)
   const pending = document.fonts
     .load(spec)
     .then(
@@ -206,18 +192,13 @@ function requestPreviewLoad(spec: string, key: string, name: string, weight: num
 
 function settleLoad(spec: string, key: string, name: string, weight: number, italic: boolean) {
   loadPromises.delete(key)
-  if (failedFamilies.has(name)) {
-    if (faceIsLoaded(name, weight, italic)) rememberReady(key, name)
-    notifyPreviewFonts()
-    return
-  }
   if (previewFaceStatus(name, weight, italic) === 'error') {
-    rememberKeyFailure(key, name)
+    rememberKeyFailure(key)
     notifyPreviewFonts()
     return
   }
   if (faceIsLoaded(name, weight, italic)) {
-    rememberReady(key, name)
+    rememberReady(key)
     notifyPreviewFonts()
     return
   }
@@ -227,7 +208,7 @@ function settleLoad(spec: string, key: string, name: string, weight: number, ita
     requestPreviewLoad(spec, key, name, weight, italic)
     return
   }
-  rememberKeyFailure(key, name)
+  rememberKeyFailure(key)
   notifyPreviewFonts()
 }
 
@@ -238,7 +219,6 @@ export function setPreviewLoadTimeoutForTests(ms: number): void {
 export function isPreviewFontFailed(family: string, weight = 400, italic = false): boolean {
   if (isGenericPreviewFamily(family)) return false
   const name = normalizePreviewFamily(family)
-  if (failedFamilies.has(name)) return true
   return failedKeys.has(previewLoadKey(name, weight, italic))
 }
 
@@ -248,19 +228,20 @@ export function isPreviewFontReady(family: string, weight = 400, italic = false)
   const name = normalizePreviewFamily(family)
   const key = previewLoadKey(name, weight, italic)
   if (faceIsLoaded(name, weight, italic)) {
-    rememberReady(key, name)
+    rememberReady(key)
     return true
   }
   // True here means "stop waiting", including a failed face. Paint only when
-  // isPreviewFontFailed is false.
-  if (failedFamilies.has(name) || failedKeys.has(key)) return true
+  // isPreviewFontFailed is false. A timed-out key recovers here when the face
+  // finishes later and loadingdone notifies subscribers.
+  if (failedKeys.has(key)) return true
   if (readyKeys.has(key)) {
     if (hasMatchingPreviewFace(name)) return true
     readyKeys.delete(key)
   }
   if (loadPromises.has(key)) {
     if (previewFaceStatus(name, weight, italic) === 'error') {
-      rememberKeyFailure(key, name)
+      rememberKeyFailure(key)
       loadPromises.delete(key)
       return true
     }
@@ -279,8 +260,6 @@ export function invalidatePreviewReadyFamilies(families: readonly string[]): voi
   for (const family of families) {
     const name = normalizePreviewFamily(family)
     const prefix = familyPrefix(name)
-    failedFamilies.delete(name)
-    clearFamilyTimer(name)
     for (const key of readyKeys) {
       if (key.startsWith(prefix)) readyKeys.delete(key)
     }
@@ -292,6 +271,9 @@ export function invalidatePreviewReadyFamilies(families: readonly string[]): voi
     }
     for (const key of loadPromises.keys()) {
       if (key.startsWith(prefix)) loadPromises.delete(key)
+    }
+    for (const key of keyTimers.keys()) {
+      if (key.startsWith(prefix)) clearKeyTimer(key)
     }
   }
 }

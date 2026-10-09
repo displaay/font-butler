@@ -364,7 +364,7 @@ function GlyphCell({
           type="button"
           onClick={onOpen}
           aria-label={`Open ${name}`}
-            className={cn(
+          className={cn(
             'flex w-full min-w-0 items-center justify-center rounded-md border bg-muted/30 leading-none hover:bg-muted/60',
             !ready && 'text-transparent',
           )}

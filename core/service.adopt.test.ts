@@ -465,7 +465,7 @@ test('Adobe-only adopted paths are allowed for preview', async () => {
     assert.ok(bytes.buffer.length > 0)
     const [entry] = service.listCatalog()
     assert.ok(entry)
-    const fromEntry = service.fontBytesForEntry(entry.id)
+    const fromEntry = await service.fontBytesForEntry(entry.id)
     assert.equal(fromEntry.filename, 'AdobePreview.ttf')
   } finally {
     await closeAllWatchers()

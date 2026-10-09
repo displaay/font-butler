@@ -3,13 +3,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { test } from 'node:test'
 import { saveCatalog } from './catalog.ts'
-import { DATALESS_FONT_ERROR, readMaterializedFontBytes } from './font-bytes.ts'
+import { DATALESS_FONT_ERROR, readFontPreviewBytes } from './font-bytes.ts'
 import { withService } from './test-util.ts'
 import type { CatalogEntry } from './types.ts'
 
-function placeholderFile(file: string): void {
+function sparseFile(file: string, size: number): void {
   const fd = fs.openSync(file, 'w')
-  fs.ftruncateSync(fd, 1024 * 1024)
+  fs.ftruncateSync(fd, size)
   fs.closeSync(fd)
 }
 
@@ -29,33 +29,56 @@ function entryFor(file: string, id: string): CatalogEntry {
   }
 }
 
-test('/api/font-file rejects a dataless placeholder instead of reading it', async () => {
+test('a zero-block file that can be read is still previewed', async () => {
   await withService(async (service, paths) => {
-    const placeholder = path.join(paths.dataRoot, 'CloudFont.otf')
-    placeholderFile(placeholder)
-    const stat = fs.statSync(placeholder)
-    assert.equal(stat.size > 0, true)
-    assert.equal(stat.blocks, 0, 'this filesystem did not leave the placeholder dataless')
+    const file = path.join(paths.dataRoot, 'Inline.otf')
+    sparseFile(file, 64)
+    const stat = fs.statSync(file)
+    assert.equal(stat.size, 64)
+    assert.equal(stat.blocks, 0, 'this filesystem did not leave the file with zero blocks')
+    const bytes = await readFontPreviewBytes(file)
+    assert.equal(bytes.length, 64)
 
-    assert.throws(() => readMaterializedFontBytes(placeholder), new RegExp(DATALESS_FONT_ERROR))
+    const entry = entryFor(file, 'inline-font')
+    saveCatalog(paths, { version: 1, entries: [entry] })
+    const served = await service.fontBytesForRevision(entry.id, 'source')
+    assert.equal(served.buffer.length, 64)
+    assert.equal(served.filename, 'Inline.otf')
+  })
+})
 
+test('/api/font-file returns an error when the preview read fails', async () => {
+  await withService(async (service, paths) => {
     const real = path.join(paths.dataRoot, 'Real.otf')
     fs.writeFileSync(real, Buffer.from('otf-bytes'))
-    assert.equal(readMaterializedFontBytes(real).toString(), 'otf-bytes')
+    const entry = entryFor(real, 'real-font')
+    saveCatalog(paths, { version: 1, entries: [entry] })
 
+    const original = fs.promises.readFile
+    fs.promises.readFile = (async () => {
+      throw new Error('preview read failed')
+    }) as typeof fs.promises.readFile
+    try {
+      await assert.rejects(() => service.fontBytesForRevision(entry.id, 'source'), /preview read failed/)
+    } finally {
+      fs.promises.readFile = original
+    }
+
+    const placeholder = path.join(paths.dataRoot, 'Placeholder.otf')
+    sparseFile(placeholder, 1024)
+    assert.equal(fs.statSync(placeholder).blocks, 0)
     const cloud = entryFor(placeholder, 'cloud-font')
-    assert.throws(
-      () => service.fontBytesForEntry(cloud.id, cloud, [cloud]),
-      /cloud placeholder/,
-    )
-
     saveCatalog(paths, { version: 1, entries: [cloud] })
-    assert.throws(() => service.fontBytesForRevision(cloud.id, 'source'), /cloud placeholder/)
-
-    const materialized = entryFor(real, 'real-font')
-    saveCatalog(paths, { version: 1, entries: [materialized] })
-    const bytes = service.fontBytesForRevision(materialized.id, 'source')
-    assert.equal(bytes.buffer.toString(), 'otf-bytes')
-    assert.equal(bytes.filename, 'Real.otf')
+    fs.promises.readFile = (async () => {
+      throw new Error('EIO')
+    }) as typeof fs.promises.readFile
+    try {
+      await assert.rejects(
+        () => service.fontBytesForRevision(cloud.id, 'source'),
+        new RegExp(DATALESS_FONT_ERROR),
+      )
+    } finally {
+      fs.promises.readFile = original
+    }
   })
 })
