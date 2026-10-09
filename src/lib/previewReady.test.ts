@@ -10,15 +10,21 @@ import {
   subscribePreviewFonts,
 } from './previewReady.ts'
 
-type MockFace = { family: string; weight?: number; style?: string; status?: string }
+type MockFace = { family: string; weight?: number | string; style?: string; status?: string }
 
-function mockFonts(options: { check?: boolean; faces?: MockFace[]; onLoad?: () => void }): () => void {
+function mockFonts(options: {
+  check?: boolean
+  faces?: MockFace[]
+  onLoad?: () => void
+  /** Replaces the default load() that resolves empty. */
+  load?: () => Promise<unknown>
+}): () => void {
   const faces = options.faces ?? []
   const fonts = {
     check: () => Boolean(options.check),
-    load: async () => {
+    load: () => {
       options.onLoad?.()
-      return []
+      return options.load ? options.load() : Promise.resolve([])
     },
     addEventListener() {},
     removeEventListener() {},
@@ -240,6 +246,79 @@ test('previewFacesFailed only when every matching face errored', () => {
   assert.equal(previewFacesFailed(['error']), true)
   assert.equal(previewFacesFailed(['error', 'loaded']), false)
   assert.equal(previewFacesFailed(['loading']), false)
+})
+
+test('an errored variable face does not leave a watch-folder preview loading forever', async () => {
+  // @font-face for a variable font is `font-weight: 1 1000` (catalogFontFaceRules).
+  // The card waits on the numeric OS/2 weight. A failed file must still clear the spinner.
+  const faces = [{ family: 'fc-vf-watch', weight: '1 1000', style: 'normal', status: 'error' }]
+  const restore = mockFonts({ check: false, faces })
+  try {
+    assert.equal(isPreviewFontReady('fc-vf-watch', 400), false)
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(
+      isPreviewFontReady('fc-vf-watch', 400),
+      true,
+      'variable font-weight range in error must not spin forever',
+    )
+  } finally {
+    restore()
+  }
+})
+
+test('a FontFace load that never settles does not leave the preview pending', async () => {
+  const faces = [{ family: 'fc-hang-watch', weight: 400, style: 'normal', status: 'loading' }]
+  const restore = mockFonts({
+    check: false,
+    faces,
+    load: () => new Promise(() => {}),
+  })
+  try {
+    const pending = isPreviewFontReady('fc-hang-watch', 400)
+    assert.equal(pending, false)
+    let stop = () => {}
+    const cleared = await Promise.race([
+      new Promise<boolean>((resolve) => {
+        stop = subscribePreviewFonts(() => {
+          if (isPreviewFontReady('fc-hang-watch', 400)) {
+            stop()
+            resolve(true)
+          }
+        })
+      }),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 50)),
+    ])
+    stop()
+    assert.equal(cleared, true, 'a hung document.fonts.load() must time out into a visible error')
+  } finally {
+    restore()
+  }
+})
+
+test('remounting after an empty FontFace load must not keep the spinner latched', async () => {
+  let loads = 0
+  const faces = [{ family: 'fc-remount-watch', weight: 400, style: 'normal', status: 'unloaded' }]
+  const restore = mockFonts({
+    check: false,
+    faces,
+    onLoad: () => {
+      loads += 1
+    },
+  })
+  try {
+    const stop = subscribePreviewFonts(() => {})
+    assert.equal(isPreviewFontReady('fc-remount-watch', 400), false)
+    await new Promise((resolve) => setImmediate(resolve))
+    stop()
+    assert.equal(
+      isPreviewFontReady('fc-remount-watch', 400),
+      true,
+      'an empty load must not stay latched after the card remounts',
+    )
+    assert.ok(loads >= 1)
+  } finally {
+    restore()
+  }
 })
 
 test('one failed weight does not mark another weight as failed', async () => {
