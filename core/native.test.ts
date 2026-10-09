@@ -15,10 +15,12 @@ import {
   fontManagerSucceeded,
   InstalledFontKept,
   installedFontCheckError,
+  LOOKUP_ATTEMPT_MS,
   LOGOUT_CANCELLED,
   LOGOUT_FALLBACK,
   logoutResultFromExecError,
   parseActivatedFontLookup,
+  runInstalledFontVerification,
   verificationFaceChecks,
   REGISTRATION_SCOPES,
   registrationSucceeded,
@@ -219,7 +221,7 @@ test('ensureFontActivation does not register a user-library font or fall back wh
   }
 })
 
-test('a broken lookup returns fail: and is not kept as not visible yet', () => {
+test('a broken lookup returns fail:, and a user-font failure is kept', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-lookup-fail-'))
   const logFile = path.join(root, 'main.log')
   const fonts = path.join(root, 'Fonts')
@@ -244,11 +246,17 @@ test('a broken lookup returns fail: and is not kept as not visible yet', () => {
     const lookup = parseActivatedFontLookup('fail:Ref has no type', 'Face-Regular')
     assert.equal(lookup.ok, false)
     assert.equal(lookup.error, 'fail:Ref has no type')
-    assert.match(fs.readFileSync(logFile, 'utf8'), /\[verify\s+\] lookup Face-Regular fail:Ref has no type/)
-    const broken = installedFontCheckError(path.join(fonts, 'Face.ttf'), lookup.error!, true)
-    assert.equal(broken instanceof InstalledFontKept, false)
-    assert.equal(broken.message, 'fail:Ref has no type')
-    assert.doesNotMatch(broken.message, /not visible to other apps yet/)
+    const kept = installedFontCheckError(path.join(fonts, 'Face.ttf'), lookup.error!, true)
+    assert.equal(kept instanceof InstalledFontKept, true)
+    assert.match(kept.message, /fail:Ref has no type/)
+    assert.match(kept.message, /not visible to other apps yet/)
+    const registered = installedFontCheckError(path.join(root, 'registered', 'Face.ttf'), lookup.error!, true)
+    assert.equal(registered instanceof InstalledFontKept, false)
+    assert.equal(registered.message, 'fail:Ref has no type')
+    const log = fs.readFileSync(logFile, 'utf8')
+    assert.match(log, /\[verify\s+\] lookup Face-Regular fail:Ref has no type/)
+    assert.match(log, /\[verify\s+\] kept .*Fonts\/Face\.ttf fail:Ref has no type/)
+    assert.match(log, /\[verify\s+\] fail .*registered\/Face\.ttf fail:Ref has no type/)
     const visible = installedFontCheckError(
       path.join(fonts, 'Face.ttf'),
       'Core Text did not resolve Face-Regular.',
@@ -261,6 +269,145 @@ test('a broken lookup returns fail: and is not kept as not visible yet', () => {
     else process.env.FONT_BUTLER_LOG = previousLog
     if (previousFonts === undefined) delete process.env.FONT_BUTLER_USER_FONTS_DIR
     else process.env.FONT_BUTLER_USER_FONTS_DIR = previousFonts
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('verification caps each lookup and stops the batch after a timeout', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-lookup-budget-'))
+  const filePath = path.join(root, 'Family.ttc')
+  const fonts = path.join(root, 'Fonts')
+  const userFile = path.join(fonts, 'Family.ttc')
+  const previousFonts = process.env.FONT_BUTLER_USER_FONTS_DIR
+  try {
+    writeTestCollection(filePath, [
+      { family: 'First', psName: 'First-Regular', version: 'Version 1.000' },
+      { family: 'Second', psName: 'Second-Regular', version: 'Version 1.000' },
+    ])
+    const clock = 1_000_000
+    const timeouts: number[] = []
+    const names: string[] = []
+    await assert.rejects(
+      () =>
+        runInstalledFontVerification(filePath, {
+          now: () => clock,
+          lookup: async (postscriptName, options) => {
+            names.push(postscriptName)
+            timeouts.push(options.timeoutMs)
+            return {
+              ok: false,
+              postscript: '',
+              family: '',
+              version: '',
+              path: '',
+              listed: false,
+              error: 'fail:Font lookup timed out.',
+              timedOut: true,
+            }
+          },
+        }),
+      (error: unknown) => {
+        assert.equal(error instanceof InstalledFontKept, false)
+        assert.equal(error instanceof Error && error.message, 'fail:Font lookup timed out.')
+        return true
+      },
+    )
+    assert.deepEqual(names, ['First-Regular'])
+    assert.deepEqual(timeouts, [LOOKUP_ATTEMPT_MS])
+
+    const shortTimeouts: number[] = []
+    await assert.rejects(
+      () =>
+        runInstalledFontVerification(filePath, {
+          budgetMs: 1_500,
+          now: () => clock,
+          lookup: async (_postscriptName, options) => {
+            shortTimeouts.push(options.timeoutMs)
+            return {
+              ok: false,
+              postscript: '',
+              family: '',
+              version: '',
+              path: '',
+              listed: false,
+              error: 'fail:Font lookup timed out.',
+              timedOut: true,
+            }
+          },
+        }),
+      /fail:Font lookup timed out\./,
+    )
+    assert.deepEqual(shortTimeouts, [1_500])
+
+    fs.mkdirSync(fonts, { recursive: true })
+    fs.copyFileSync(filePath, userFile)
+    process.env.FONT_BUTLER_USER_FONTS_DIR = fonts
+    const userNames: string[] = []
+    await assert.rejects(
+      () =>
+        runInstalledFontVerification(userFile, {
+          now: () => clock,
+          lookup: async (postscriptName) => {
+            userNames.push(postscriptName)
+            return {
+              ok: false,
+              postscript: '',
+              family: '',
+              version: '',
+              path: '',
+              listed: false,
+              error: 'fail:Font lookup timed out.',
+              timedOut: true,
+            }
+          },
+        }),
+      (error: unknown) => {
+        assert.ok(error instanceof InstalledFontKept)
+        assert.match(error.message, /timed out/)
+        assert.match(error.message, /not visible to other apps yet/)
+        return true
+      },
+    )
+    assert.deepEqual(userNames, ['First-Regular'])
+  } finally {
+    if (previousFonts === undefined) delete process.env.FONT_BUTLER_USER_FONTS_DIR
+    else process.env.FONT_BUTLER_USER_FONTS_DIR = previousFonts
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('verification checks the deadline between faces', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-lookup-deadline-'))
+  const filePath = path.join(root, 'Family.ttc')
+  try {
+    writeTestCollection(filePath, [
+      { family: 'First', psName: 'First-Regular', version: 'Version 1.000' },
+      { family: 'Second', psName: 'Second-Regular', version: 'Version 1.000' },
+    ])
+    let clock = 1_000_000
+    const names: string[] = []
+    await assert.rejects(
+      () =>
+        runInstalledFontVerification(filePath, {
+          budgetMs: 10_000,
+          now: () => clock,
+          lookup: async (postscriptName) => {
+            names.push(postscriptName)
+            clock += 10_000
+            return {
+              ok: true,
+              postscript: postscriptName,
+              family: 'First',
+              version: 'Version 1.000',
+              path: filePath,
+              listed: true,
+            }
+          },
+        }),
+      /Core Text did not activate the installed font\./,
+    )
+    assert.deepEqual(names, ['First-Regular'])
+  } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
 })

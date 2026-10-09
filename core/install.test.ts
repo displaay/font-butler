@@ -173,6 +173,38 @@ test('a duplicate PostScript name keeps the new bytes on a registered path', asy
   }
 })
 
+test('a duplicate PostScript name keeps the new bytes in user Fonts', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-duplicate-user-'))
+  const fonts = path.join(root, 'Library', 'Fonts')
+  const dest = path.join(fonts, 'Family.ttf')
+  const stagedPath = path.join(root, 'staged.ttf')
+  const rollbackDir = path.join(root, 'rollback')
+  const previousFonts = process.env.FONT_BUTLER_USER_FONTS_DIR
+  process.env.FONT_BUTLER_USER_FONTS_DIR = fonts
+  fs.mkdirSync(fonts, { recursive: true })
+  fs.writeFileSync(dest, 'old-bytes')
+  fs.writeFileSync(stagedPath, 'new-bytes')
+  try {
+    const warning = await commitInstalledFile({
+      dest,
+      stagedPath,
+      rollbackDir,
+      native: noopFontNative(),
+      activate: async () => {
+        throw new InstalledFontKept(
+          'Family is already served from /Library/Fonts/Other.ttf. The installed file was kept.',
+        )
+      },
+    })
+    assert.match(warning ?? '', /already served/)
+    assert.equal(fs.readFileSync(dest, 'utf8'), 'new-bytes')
+  } finally {
+    if (previousFonts === undefined) delete process.env.FONT_BUTLER_USER_FONTS_DIR
+    else process.env.FONT_BUTLER_USER_FONTS_DIR = previousFonts
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('a failed check on a registered path rolls the previous bytes back', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-rollback-'))
   const dest = path.join(root, 'Family.ttf')

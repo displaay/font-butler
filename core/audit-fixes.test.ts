@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { test } from 'node:test'
+import { InstalledFontKept } from './caches.ts'
 import { loadCatalog, saveCatalog } from './catalog.ts'
 import { fingerprintFile } from './fingerprint.ts'
 import {
@@ -414,6 +415,32 @@ test('pinned project activation restores and activates a parked member', async (
     })
     assert.equal((await service.activateProject(project.id)).failed, 0)
     assert.equal(service.projectState(project.id), 'active')
+  })
+})
+
+test('an unchanged reinstall records a kept activation warning', async () => {
+  await withService(async (service, paths) => {
+    const entry = await importFont(service, paths, 'source/Regular.ttf')
+    const installed = await service.install(entry.id)
+    const calls: string[] = []
+    setFontNative(
+      noopFontNative({
+        async unregisterFont() {
+          calls.push('unregister')
+          return { ok: true, native: true }
+        },
+        async ensureActivation() {
+          calls.push('ensure')
+          throw new InstalledFontKept('Audit-Regular is not visible to other apps yet')
+        },
+      }),
+    )
+    const again = await service.reinstall(entry.id)
+    assert.equal(again.status, 'installed')
+    assert.equal(fs.existsSync(installed.installedPath!), true)
+    assert.deepEqual(calls, ['ensure'])
+    const operation = service.listActivity().find((item) => item.action === 'reinstall')
+    assert.match(operation?.items[0]?.reason ?? '', /not visible/)
   })
 })
 

@@ -44,6 +44,9 @@ export const FONT_NOT_VISIBLE_WARNING = 'Not visible to other apps yet'
 
 const VERIFY_BUDGET_MS = 10_000
 const VERIFY_INTERVAL_MS = 400
+/** One lookup must not outlive the verification budget while the catalog queue is held. */
+export const LOOKUP_ATTEMPT_MS = 3_000
+const LOOKUP_DIRECT_TIMEOUT_MS = 20_000
 
 /** A failed fresh-process check that must keep the new file instead of rolling it back. */
 export class InstalledFontKept extends Error {
@@ -676,6 +679,7 @@ export type ActivatedFontLookup = {
   path: string
   listed: boolean
   error?: string
+  timedOut?: boolean
 }
 
 export const FONT_LOOKUP_SCRIPT = `ObjC.import('CoreText')
@@ -830,15 +834,24 @@ export function parseActivatedFontLookup(stdout: string, postscriptName = ''): A
   }
 }
 
-export async function lookupActivatedFont(postscriptName: string): Promise<ActivatedFontLookup> {
+function execTimedOut(error: unknown): boolean {
+  const err = error as { killed?: boolean; code?: string; message?: string }
+  return err?.killed === true || err?.code === 'ETIMEDOUT' || /timed out/i.test(err?.message || '')
+}
+
+export async function lookupActivatedFont(
+  postscriptName: string,
+  options: { timeoutMs?: number } = {},
+): Promise<ActivatedFontLookup> {
   if (!postscriptName.trim()) {
     return { ...emptyLookup(), error: 'The font has no PostScript name.' }
   }
+  const timeout = options.timeoutMs ?? LOOKUP_DIRECT_TIMEOUT_MS
   try {
     const { stdout } = await execFileAsync(
       'osascript',
       ['-l', 'JavaScript', '-e', FONT_LOOKUP_SCRIPT, postscriptName],
-      { timeout: 20_000 },
+      { timeout },
     )
     return parseActivatedFontLookup(stdout, postscriptName)
   } catch (error) {
@@ -846,6 +859,11 @@ export async function lookupActivatedFont(postscriptName: string): Promise<Activ
     const stdout = Buffer.isBuffer(err?.stdout) ? err.stdout.toString('utf8') : err?.stdout
     if (typeof stdout === 'string' && stdout.trim().startsWith('fail:')) {
       return parseActivatedFontLookup(stdout, postscriptName)
+    }
+    if (execTimedOut(error)) {
+      const message = 'fail:Font lookup timed out.'
+      logMain('verify', `lookup ${postscriptName} ${message}`)
+      return { ...emptyLookup(), error: message, timedOut: true }
     }
     const detail =
       [err?.stderr, err?.stdout, err?.message]
@@ -901,7 +919,17 @@ export async function awaitActivatedFont(
 }
 
 export function installedFontCheckError(filePath: string, message: string, keep: boolean): Error {
-  if (message.startsWith('fail:')) return new Error(message)
+  if (message.startsWith('fail:')) {
+    if (isMacUserFontFile(filePath)) {
+      const text = /not visible to other apps yet/i.test(message)
+        ? message
+        : `${message} The font is ${FONT_NOT_VISIBLE_WARNING.toLowerCase()}.`
+      logMain('verify', `kept ${filePath} ${text}`)
+      return new InstalledFontKept(text)
+    }
+    logMain('verify', `fail ${filePath} ${message}`)
+    return new Error(message)
+  }
   return keptVerificationError(filePath, message, keep)
 }
 
@@ -938,6 +966,11 @@ export function verificationFaceChecks(
   })
 }
 
+type FontLookup = (
+  postscriptName: string,
+  options: { timeoutMs: number },
+) => Promise<ActivatedFontLookup>
+
 export async function verifyInstalledFont(filePath: string): Promise<void> {
   if (!nativeFontVerificationEnabled()) {
     logMain('verify', `skip ${filePath}`)
@@ -945,10 +978,19 @@ export async function verifyInstalledFont(filePath: string): Promise<void> {
   }
   // Stay on the catalog queue. The check is capped at VERIFY_BUDGET_MS, and
   // releasing the queue here lets another task save over this one.
-  await verifyInstalledFontNow(filePath)
+  await runInstalledFontVerification(filePath)
 }
 
-async function verifyInstalledFontNow(filePath: string): Promise<void> {
+export async function runInstalledFontVerification(
+  filePath: string,
+  options: {
+    lookup?: FontLookup
+    now?: () => number
+    budgetMs?: number
+  } = {},
+): Promise<void> {
+  const lookup = options.lookup ?? ((postscriptName, lookupOptions) => lookupActivatedFont(postscriptName, lookupOptions))
+  const now = options.now ?? Date.now
   const parsed = parseFontFile(filePath)
   const checks = verificationFaceChecks(filePath, parsed.faces)
   if (checks.length === 0) {
@@ -957,42 +999,52 @@ async function verifyInstalledFontNow(filePath: string): Promise<void> {
     throw installedFontCheckError(filePath, message, false)
   }
   const userFont = isMacUserFontFile(filePath)
-  const deadline = Date.now() + VERIFY_BUDGET_MS
+  const deadline = now() + (options.budgetMs ?? VERIFY_BUDGET_MS)
   let lastError = 'Core Text did not activate the installed font.'
   let lastKeep = userFont
   while (true) {
     let failed = ''
     let keep = userFont
+    let stop = false
     for (const check of checks) {
-      const lookup = await lookupActivatedFont(check.ps)
+      const remaining = deadline - now()
+      if (remaining <= 0) {
+        failed = lastError
+        stop = true
+        break
+      }
+      const timeoutMs = Math.min(LOOKUP_ATTEMPT_MS, remaining)
+      const result = await lookup(check.ps, { timeoutMs })
       logMain(
         'verify',
-        `${check.ps} -> ps=${lookup.postscript || '?'} path=${lookup.path || '?'} version=${lookup.version || '?'} listed=${lookup.listed} file=${filePath}`,
+        `${check.ps} -> ps=${result.postscript || '?'} path=${result.path || '?'} version=${result.version || '?'} listed=${result.listed} file=${filePath}`,
       )
-      if (!lookup.ok) {
-        failed = lookup.error || `Core Text did not resolve ${check.ps}.`
-        if (failed.startsWith('fail:')) {
-          logMain('verify', `fail ${filePath} ${failed}`)
-          throw installedFontCheckError(filePath, failed, false)
-        }
+      if (result.timedOut || result.error?.startsWith('fail:')) {
+        failed = result.error || 'fail:Font lookup timed out.'
+        keep = userFont
+        stop = true
+        break
+      }
+      if (!result.ok) {
+        failed = result.error || `Core Text did not resolve ${check.ps}.`
         keep = userFont
         break
       }
-      if (!check.acceptable.has(lookup.postscript)) {
-        const fallback = /helvetica/i.test(lookup.postscript) || /helvetica/i.test(lookup.path)
+      if (!check.acceptable.has(result.postscript)) {
+        const fallback = /helvetica/i.test(result.postscript) || /helvetica/i.test(result.path)
         failed = fallback
-          ? `Core Text resolved ${check.ps} to a fallback font (${lookup.postscript || lookup.path}).`
-          : `Core Text resolved ${check.ps} to ${lookup.postscript || 'another font'} instead of the installed file.`
+          ? `Core Text resolved ${check.ps} to a fallback font (${result.postscript || result.path}).`
+          : `Core Text resolved ${check.ps} to ${result.postscript || 'another font'} instead of the installed file.`
         keep = userFont
         break
       }
-      if (!fontPathsMatch(lookup.path, filePath)) {
-        failed = `${check.ps} is already served from ${lookup.path || 'another file'}. The installed file was kept.`
+      if (!fontPathsMatch(result.path, filePath)) {
+        failed = `${check.ps} is already served from ${result.path || 'another file'}. The installed file was kept.`
         keep = true
         break
       }
-      if (check.version && lookup.version && !versionsMatch(lookup.version, check.version)) {
-        failed = `Core Text is serving ${lookup.version} for ${check.ps}, not ${check.version}.`
+      if (check.version && result.version && !versionsMatch(result.version, check.version)) {
+        failed = `Core Text is serving ${result.version} for ${check.ps}, not ${check.version}.`
         keep = userFont
         break
       }
@@ -1003,9 +1055,10 @@ async function verifyInstalledFontNow(filePath: string): Promise<void> {
     }
     lastError = failed
     lastKeep = keep
-    const remaining = deadline - Date.now()
-    if (remaining <= 0) break
+    if (stop || now() >= deadline) break
+    const remaining = deadline - now()
     await waitForFont(Math.min(VERIFY_INTERVAL_MS, remaining))
+    if (now() >= deadline) break
   }
   logMain('verify', `fail ${filePath} ${lastError}`)
   throw installedFontCheckError(filePath, lastError, lastKeep)

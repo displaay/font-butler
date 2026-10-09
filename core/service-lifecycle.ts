@@ -164,7 +164,12 @@ export async function installEntry(
     ) {
       const stagedFingerprint = tryFingerprintFile(staged.stagedPath)
       if (stagedFingerprint && stagedFingerprint === entry.installedFingerprint) {
-        await ensureFontActivation(getFontNative(), entry.installedPath, true)
+        try {
+          await ensureFontActivation(getFontNative(), entry.installedPath, true)
+        } catch (error) {
+          if (!isKeptInstall(error)) throw error
+          host.recordInstallWarning(error instanceof Error ? error.message : String(error), entry.id)
+        }
         if (isExternalSource(entry)) {
           const sourceStat = readFileStat(entry.sourcePath)
           entry.sourceMtimeMs = sourceStat.mtimeMs
