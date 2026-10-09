@@ -1,5 +1,5 @@
 import type { MouseEvent, PointerEvent, ReactNode } from 'react'
-import { AaPreview } from '@/components/AaPreview'
+import { AaPreview, PreviewRetryBoundary } from '@/components/AaPreview'
 import { DestinationIcons, FormatBadge, InstanceInstallBadge, RetailBadge, SourceBadge, TrialBadge } from '@/components/Badges'
 import { InstanceMenuItems } from '@/components/BatchActions'
 import { DisplaayMark } from '@/components/DisplaayMark'
@@ -207,32 +207,34 @@ export function InstanceList({
           </button>
         )
         return (
-          <li key={row.key}>
-            {entry && instanceActions ? (
-              <InstanceRowMenu
-                entry={entry}
-                family={instanceActions.entries}
-                busy={instanceActions.busy}
-                onInstall={instanceActions.onInstall}
-                onActivate={instanceActions.onActivate}
-                onDeactivate={instanceActions.onDeactivate}
-                onUninstall={instanceActions.onUninstall}
-                onInstallToAdobe={instanceActions.onInstallToAdobe}
-                onUninstallFromAdobe={instanceActions.onUninstallFromAdobe}
-                adobeAvailable={instanceActions.adobeAvailable}
-                onFormatSwap={instanceActions.onFormatSwap}
-                onOpen={instanceActions.onOpen}
-                onTurnRetailSyncOff={instanceActions.onTurnRetailSyncOff}
-                onRevealInstalled={instanceActions.onRevealInstalled}
-                onRevealSource={instanceActions.onRevealSource}
-                retailSynced={row.retailSynced}
-                uninstallOnly={instanceActions.uninstallOnly}
-              >
-                {button}
-              </InstanceRowMenu>
-            ) : (
-              button
-            )}
+          <li key={row.key} className="relative">
+            <PreviewRetryBoundary>
+              {entry && instanceActions ? (
+                <InstanceRowMenu
+                  entry={entry}
+                  family={instanceActions.entries}
+                  busy={instanceActions.busy}
+                  onInstall={instanceActions.onInstall}
+                  onActivate={instanceActions.onActivate}
+                  onDeactivate={instanceActions.onDeactivate}
+                  onUninstall={instanceActions.onUninstall}
+                  onInstallToAdobe={instanceActions.onInstallToAdobe}
+                  onUninstallFromAdobe={instanceActions.onUninstallFromAdobe}
+                  adobeAvailable={instanceActions.adobeAvailable}
+                  onFormatSwap={instanceActions.onFormatSwap}
+                  onOpen={instanceActions.onOpen}
+                  onTurnRetailSyncOff={instanceActions.onTurnRetailSyncOff}
+                  onRevealInstalled={instanceActions.onRevealInstalled}
+                  onRevealSource={instanceActions.onRevealSource}
+                  retailSynced={row.retailSynced}
+                  uninstallOnly={instanceActions.uninstallOnly}
+                >
+                  {button}
+                </InstanceRowMenu>
+              ) : (
+                button
+              )}
+            </PreviewRetryBoundary>
           </li>
         )
       })}

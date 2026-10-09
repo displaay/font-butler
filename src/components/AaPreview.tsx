@@ -1,8 +1,11 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
+  useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -69,13 +72,160 @@ function previewBoxClass(size: 'sm' | 'md') {
     : 'size-11 overflow-hidden text-[24px] rounded-md'
 }
 
+function retryControlClass(compact: boolean) {
+  return cn(
+    'rounded-sm bg-background font-medium text-foreground shadow-[inset_0_0_0_1px_var(--border)]',
+    compact ? 'px-1 py-px text-[10px] leading-none' : 'px-1.5 py-0.5 text-xs',
+  )
+}
+
+type RetrySlot = {
+  id: string
+  compact: boolean
+  retry: () => void
+  getAnchor: () => HTMLElement | null
+}
+
+type PreviewRetryHost = {
+  register: (slot: RetrySlot) => () => void
+}
+
+const PreviewRetryContext = createContext<PreviewRetryHost | null>(null)
+
+function positionedAncestor(node: HTMLElement): HTMLElement | null {
+  const offset = node.offsetParent as HTMLElement | null
+  if (offset) return offset
+  return node.parentElement
+}
+
+function PreviewRetryButton({ slot }: { slot: RetrySlot }) {
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const fromKey = useRef(false)
+  const [box, setBox] = useState<{ top: number; left: number; width: number; height: number } | null>(null)
+
+  useLayoutEffect(() => {
+    function place() {
+      const anchor = slot.getAnchor()
+      const button = buttonRef.current
+      if (!anchor || !button) return
+      const parent = positionedAncestor(button)
+      if (!parent) return
+      const anchorRect = anchor.getBoundingClientRect()
+      const parentRect = parent.getBoundingClientRect()
+      const next = {
+        top: anchorRect.top - parentRect.top - parent.clientTop + parent.scrollTop,
+        left: anchorRect.left - parentRect.left - parent.clientLeft + parent.scrollLeft,
+        width: anchorRect.width,
+        height: anchorRect.height,
+      }
+      setBox((current) =>
+        current &&
+        current.top === next.top &&
+        current.left === next.left &&
+        current.width === next.width &&
+        current.height === next.height
+          ? current
+          : next,
+      )
+    }
+
+    place()
+    if (typeof ResizeObserver === 'undefined') return
+    const anchor = slot.getAnchor()
+    const parent = buttonRef.current ? positionedAncestor(buttonRef.current) : null
+    const observer = new ResizeObserver(place)
+    if (anchor) observer.observe(anchor)
+    if (parent) observer.observe(parent)
+    return () => observer.disconnect()
+  }, [slot])
+
+  function activate(event: { preventDefault(): void; stopPropagation(): void }) {
+    event.preventDefault()
+    event.stopPropagation()
+    slot.retry()
+  }
+
+  return (
+    <button
+      ref={buttonRef}
+      type="button"
+      data-preview-retry=""
+      className={cn(retryControlClass(slot.compact), 'absolute z-10', box ? undefined : 'invisible')}
+      style={box ?? undefined}
+      onKeyDown={(event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        fromKey.current = true
+        activate(event)
+        queueMicrotask(() => {
+          fromKey.current = false
+        })
+      }}
+      onClick={(event) => {
+        if (fromKey.current) {
+          fromKey.current = false
+          event.preventDefault()
+          event.stopPropagation()
+          return
+        }
+        activate(event)
+      }}
+      onPointerDown={(event) => event.stopPropagation()}
+      onMouseDown={(event) => event.stopPropagation()}
+    >
+      Retry
+    </button>
+  )
+}
+
+/** Lifts Retry out of a card `<button>` and paints it as the next sibling. */
+export function PreviewRetryBoundary({ children }: { children: ReactNode }) {
+  const [slot, setSlot] = useState<RetrySlot | null>(null)
+  const register = useCallback((next: RetrySlot) => {
+    setSlot(next)
+    return () => {
+      setSlot((current) => (current === next ? null : current))
+    }
+  }, [])
+  const host = useMemo(() => ({ register }), [register])
+
+  return (
+    <PreviewRetryContext.Provider value={host}>
+      {children}
+      {slot ? <PreviewRetryButton slot={slot} /> : null}
+    </PreviewRetryContext.Provider>
+  )
+}
+
 export function PreviewLoadError({
   onRetry,
   compact = false,
+  showRetry = true,
 }: {
   onRetry: () => void
   compact?: boolean
+  /** Hidden cycling layers omit Retry so it is not focusable inside aria-hidden. */
+  showRetry?: boolean
 }) {
+  const host = useContext(PreviewRetryContext)
+  const lift = Boolean(host) && showRetry
+  const anchorRef = useRef<HTMLSpanElement>(null)
+  const onRetryRef = useRef(onRetry)
+  const id = useId()
+
+  useLayoutEffect(() => {
+    onRetryRef.current = onRetry
+  })
+
+  useLayoutEffect(() => {
+    if (!lift || !host) return
+    return host.register({
+      id,
+      compact,
+      getAnchor: () => anchorRef.current,
+      retry: () => onRetryRef.current(),
+    })
+  }, [lift, host, id, compact])
+
   return (
     <span
       className={cn(
@@ -93,22 +243,31 @@ export function PreviewLoadError({
       >
         {compact ? 'Failed' : 'Preview failed'}
       </span>
-      <button
-        type="button"
-        className={cn(
-          'rounded-sm bg-background font-medium text-foreground shadow-[inset_0_0_0_1px_var(--border)]',
-          compact ? 'px-1 py-px text-[10px] leading-none' : 'px-1.5 py-0.5 text-xs',
-        )}
-        onPointerDown={(event) => event.stopPropagation()}
-        onMouseDown={(event) => event.stopPropagation()}
-        onClick={(event) => {
-          event.preventDefault()
-          event.stopPropagation()
-          onRetry()
-        }}
-      >
-        Retry
-      </button>
+      {showRetry && lift ? (
+        <span
+          ref={anchorRef}
+          data-preview-retry-spacer=""
+          aria-hidden="true"
+          className={cn(retryControlClass(compact), 'invisible')}
+        >
+          Retry
+        </span>
+      ) : null}
+      {showRetry && !lift ? (
+        <button
+          type="button"
+          className={retryControlClass(compact)}
+          onPointerDown={(event) => event.stopPropagation()}
+          onMouseDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            onRetry()
+          }}
+        >
+          Retry
+        </button>
+      ) : null}
     </span>
   )
 }
@@ -146,6 +305,7 @@ function AaGlyph({
   sample,
   fit = false,
   animateVariation = false,
+  showRetry = true,
 }: {
   family: string
   weight?: number
@@ -156,6 +316,7 @@ function AaGlyph({
   sample?: string
   fit?: boolean
   animateVariation?: boolean
+  showRetry?: boolean
 }) {
   const { ready, failed, retry } = usePreviewFontStatus(family, weight, italic, wait)
   const latinText = useContext(LatinPreviewContext)
@@ -207,7 +368,9 @@ function AaGlyph({
   }, [fit, ready, family, weight, italic, variation, text])
 
   if (failed) {
-    return <PreviewLoadError onRetry={retry} compact={pendingSize !== 'glyph'} />
+    return (
+      <PreviewLoadError onRetry={retry} compact={pendingSize !== 'glyph'} showRetry={showRetry} />
+    )
   }
   if (sample == null || !ready) {
     return <PreviewPending size={pendingSize} />
@@ -359,6 +522,7 @@ export function CyclingAaPreview({
                 wait={face.wait !== false}
                 sample={sample}
                 fit
+                showRetry={faceIndex === visibleIndex}
               />
               {cycling ? <PreviewLabel>{face.label}</PreviewLabel> : null}
             </div>

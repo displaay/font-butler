@@ -1,6 +1,6 @@
 import { memo, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { ChevronDown, FolderOpen } from 'lucide-react'
-import { AaPreview, CyclingAaPreview } from '@/components/AaPreview'
+import { AaPreview, CyclingAaPreview, PreviewRetryBoundary } from '@/components/AaPreview'
 import { NameWithFormatTags } from '@/components/Badges'
 import { SystemMenuItems } from '@/components/BatchActions'
 import { SystemCardActions } from '@/components/FontCardActions'
@@ -136,45 +136,49 @@ export const SystemCard = memo(function SystemCard({
           {...cardChrome}
         >
           {layout === 'grid' ? (
-            <button
-              type="button"
-              onClick={handleCardClick}
-              onContextMenu={skipClickAfterContextMenu}
-              onDoubleClick={onInspect}
-              className="flex w-full flex-col text-left"
-            >
-              <CyclingAaPreview
-                faces={previewFaces}
-                rest={{
-                  family: previewFamily,
-                  weight: face.weight,
-                  italic: face.italic,
-                  label: face.styleName,
-                }}
-                active={hovered}
-                size={previewSize}
-                sample={previewSample}
-              />
-              <div className={previewSize < 3.25 ? 'p-2' : 'p-3'}>{metadata}</div>
-            </button>
+            <PreviewRetryBoundary>
+              <button
+                type="button"
+                onClick={handleCardClick}
+                onContextMenu={skipClickAfterContextMenu}
+                onDoubleClick={onInspect}
+                className="flex w-full flex-col text-left"
+              >
+                <CyclingAaPreview
+                  faces={previewFaces}
+                  rest={{
+                    family: previewFamily,
+                    weight: face.weight,
+                    italic: face.italic,
+                    label: face.styleName,
+                  }}
+                  active={hovered}
+                  size={previewSize}
+                  sample={previewSample}
+                />
+                <div className={previewSize < 3.25 ? 'p-2' : 'p-3'}>{metadata}</div>
+              </button>
+            </PreviewRetryBoundary>
           ) : (
             <>
               <div className="flex items-stretch">
-                <button
-                  type="button"
-                  onClick={handleCardClick}
-                  onContextMenu={skipClickAfterContextMenu}
-                  onDoubleClick={onInspect}
-                  className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left"
-                >
-                  <AaPreview
-                    family={previewFamily}
-                    weight={face.weight}
-                    italic={face.italic}
-                    sample={previewSample}
-                  />
-                  <div className="min-w-0 flex-1">{metadata}</div>
-                </button>
+                <PreviewRetryBoundary>
+                  <button
+                    type="button"
+                    onClick={handleCardClick}
+                    onContextMenu={skipClickAfterContextMenu}
+                    onDoubleClick={onInspect}
+                    className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left"
+                  >
+                    <AaPreview
+                      family={previewFamily}
+                      weight={face.weight}
+                      italic={face.italic}
+                      sample={previewSample}
+                    />
+                    <div className="min-w-0 flex-1">{metadata}</div>
+                  </button>
+                </PreviewRetryBoundary>
                 {showInstances && (
                   <button
                     type="button"
