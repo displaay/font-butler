@@ -22,3 +22,24 @@ test('a notice emitted before ready is delivered after ready', () => {
   assert.deepEqual(buffer.push(later), [later])
   assert.deepEqual(buffer.push(notice), [])
 })
+
+test('a notice fired after the window closes is delivered on the next ready', () => {
+  const buffer = createWatchNoticeBuffer()
+  buffer.markReady()
+  const open = {
+    kind: 'error',
+    source: 'watch',
+    message: 'Open.ttf: Not a font file.',
+    operationId: 'op-open',
+  }
+  assert.deepEqual(buffer.push(open), [open])
+  buffer.markNotReady()
+  const afterClose = {
+    kind: 'error',
+    source: 'watch',
+    message: 'Closed.ttf: Not a font file.',
+    operationId: 'op-closed',
+  }
+  assert.deepEqual(buffer.push(afterClose), [])
+  assert.deepEqual(buffer.markReady(), [afterClose])
+})

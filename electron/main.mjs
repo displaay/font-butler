@@ -765,6 +765,7 @@ function createWindow() {
   mainWindow.on('closed', () => {
     const closedWindow = mainWindow
     mainWindow = null
+    watchNoticeBuffer.markNotReady()
     hideDockIconIfNoAppWindowNeedsIt(closedWindow)
   })
 }

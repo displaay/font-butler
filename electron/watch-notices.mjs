@@ -29,5 +29,8 @@ export function createWatchNoticeBuffer() {
       ready = true
       return pending.splice(0, pending.length)
     },
+    markNotReady() {
+      ready = false
+    },
   }
 }
