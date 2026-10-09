@@ -277,7 +277,7 @@ test('reinstall does not call atsutil and a manual clear runs only after confirm
     assert.deepEqual(calls, [])
     await assert.rejects(
       () => service.clearUserFontCache(),
-      /will not activate again until you log out/,
+      /Some apps may not see new or updated fonts until you log out/,
     )
     assert.deepEqual(calls, [])
     const cleared = await service.clearUserFontCache({ confirm: true })

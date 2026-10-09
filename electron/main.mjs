@@ -1015,7 +1015,7 @@ async function runFinderInstall(action, filePaths) {
   showMainWindow()
 }
 
-const FONT_CACHE_CLEAR_WARNING = "User fonts won't activate again until you log out."
+const FONT_CACHE_CLEAR_WARNING = 'Some apps may not see new or updated fonts until you log out.'
 
 async function confirmFontCacheClear() {
   const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined
@@ -1040,7 +1040,7 @@ async function offerLogoutAfterFontCacheClear() {
     type: 'info',
     title: 'Font caches cleared',
     message: FONT_CACHE_CLEAR_WARNING,
-    detail: 'Log out when you are ready for user fonts to activate again. macOS will ask you to confirm.',
+    detail: 'macOS will ask you to confirm.',
     buttons: ['Log out now', 'Later'],
     defaultId: 1,
     cancelId: 1,

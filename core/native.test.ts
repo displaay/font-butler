@@ -13,6 +13,7 @@ import {
   FONT_LOOKUP_SCRIPT,
   fontActivationStates,
   fontManagerSucceeded,
+  awaitMacLogoutRequest,
   InstalledFontKept,
   installedFontCheckError,
   LOOKUP_ATTEMPT_MS,
@@ -20,6 +21,7 @@ import {
   LOGOUT_FALLBACK,
   logoutResultFromExecError,
   parseActivatedFontLookup,
+  requestMacLogout,
   runInstalledFontVerification,
   verificationFaceChecks,
   REGISTRATION_SCOPES,
@@ -134,6 +136,10 @@ test('ensure fails on register failure and never falls back to process scope', (
   assert.equal(fontManagerSucceeded('fail:105'), true)
   assert.equal(fontManagerSucceeded('fail:-50'), false)
   assert.equal(fontManagerSucceeded('fail:0'), false)
+  assert.match(FONT_ENABLE_SCRIPT, /if \(!enabled\) return registerAtScopes\(filePath, false\)/)
+  assert.match(FONT_ENABLE_SCRIPT, /CTFontManagerEnableFontDescriptors\(descs, true\)/)
+  assert.doesNotMatch(FONT_ENABLE_SCRIPT, /CTFontManagerEnableFontDescriptors\(descs, enabled\)/)
+  assert.doesNotMatch(requestMacLogout.toString(), /timeout/)
   assert.match(FONT_ENABLE_SCRIPT, /ObjC\.castRefToObject\(err\)/)
   assert.match(FONT_LOOKUP_SCRIPT, /ObjC\.castRefToObject/)
   assert.match(FONT_LOOKUP_SCRIPT, /CTFontCopyPostScriptName/)
@@ -483,23 +489,87 @@ test('unnamed collection faces keep the original face index', () => {
   }
 })
 
-test('ensureFontActivation does not succeed when the registry still disagrees', async () => {
-  await assert.rejects(
-    () =>
-      ensureFontActivation(
-        noopFontNative({
-          async setFontEnabled() {
-            return { ok: true, native: true }
-          },
-          async fontActivationStates(filePaths) {
-            const states: Record<string, boolean> = {}
-            for (const filePath of filePaths) states[filePath] = true
-            return { ok: true, native: true, states }
+test('deactivating unregisters the file URL and does not disable by name', async () => {
+  const calls: string[] = []
+  await ensureFontActivation(
+    noopFontNative({
+      async unregisterFont(filePath) {
+        calls.push(`unregister:${filePath}`)
+        return { ok: true, native: true }
+      },
+      async setFontEnabled(filePath, enabled) {
+        calls.push(`set:${filePath}:${enabled ? 1 : 0}`)
+        return { ok: true, native: true }
+      },
+    }),
+    '/tmp/registered/Face.ttf',
+    false,
+  )
+  assert.deepEqual(calls, ['unregister:/tmp/registered/Face.ttf'])
+})
+
+test('logout reports an open confirm as accepted and keeps -128 and -1743', async () => {
+  const accepted = await awaitMacLogoutRequest((report) => {
+    setTimeout(() => {
+      report(logoutResultFromExecError({ stderr: 'User canceled. (-128)' }))
+    }, 40)
+  }, 10)
+  assert.equal(accepted.requested, true)
+  assert.equal(accepted.message, undefined)
+
+  const cancelled = await awaitMacLogoutRequest((report) => {
+    report(logoutResultFromExecError({ stderr: 'User canceled. (-128)' }))
+  }, 1_000)
+  assert.equal(cancelled.requested, false)
+  assert.equal(cancelled.message, LOGOUT_CANCELLED)
+
+  const denied = await awaitMacLogoutRequest((report) => {
+    report(logoutResultFromExecError({ stderr: 'osascript is not allowed to send keystrokes. (-1743)' }))
+  }, 1_000)
+  assert.equal(denied.requested, false)
+  assert.equal(denied.message, LOGOUT_FALLBACK)
+})
+
+test('a registered install warns when user Fonts already has that PostScript name', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-user-copy-'))
+  const fonts = path.join(root, 'Library', 'Fonts')
+  const installed = path.join(root, 'user-fonts', 'NewAzeret.ttf')
+  const previousFonts = process.env.FONT_BUTLER_USER_FONTS_DIR
+  process.env.FONT_BUTLER_USER_FONTS_DIR = fonts
+  try {
+    fs.mkdirSync(fonts, { recursive: true })
+    writeTestFont(path.join(fonts, 'NewAzeret-Regular.ttf'), 'NewAzeret', 'NewAzeret-Regular', {
+      version: 'Version 1.000',
+    })
+    writeTestFont(installed, 'NewAzeret', 'NewAzeret-Regular', { version: 'Version 2.000' })
+    const lookups: string[] = []
+    await assert.rejects(
+      () =>
+        runInstalledFontVerification(installed, {
+          now: () => 1_000_000,
+          lookup: async (postscriptName) => {
+            lookups.push(postscriptName)
+            return {
+              ok: true,
+              postscript: postscriptName,
+              family: 'NewAzeret',
+              version: 'Version 2.000',
+              path: installed,
+              listed: true,
+            }
           },
         }),
-        '/tmp/Face.ttf',
-        false,
-      ),
-    /did not deactivate/,
-  )
+      (error: unknown) => {
+        assert.ok(error instanceof InstalledFontKept)
+        assert.match(error.message, /already served/)
+        assert.match(error.message, /NewAzeret-Regular\.ttf/)
+        return true
+      },
+    )
+    assert.deepEqual(lookups, [])
+  } finally {
+    if (previousFonts === undefined) delete process.env.FONT_BUTLER_USER_FONTS_DIR
+    else process.env.FONT_BUTLER_USER_FONTS_DIR = previousFonts
+    fs.rmSync(root, { recursive: true, force: true })
+  }
 })

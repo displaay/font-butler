@@ -731,7 +731,7 @@ app.post('/api/caches/font', async (c) => {
     return c.json(
       {
         error:
-          'Clearing font caches needs confirmation. User fonts will not activate again until you log out.',
+          'Clearing font caches needs confirmation. Some apps may not see new or updated fonts until you log out.',
       },
       400,
     )

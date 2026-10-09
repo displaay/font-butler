@@ -123,7 +123,7 @@ test('Clear font caches runs only after confirmation and logout is optional', as
   assert.deepEqual(calls, [])
   const confirmDialog = document.body.querySelector('[role="dialog"]')
   assert.ok(confirmDialog)
-  assert.match(confirmDialog.textContent ?? '', /won't activate again until you log out/)
+  assert.match(confirmDialog.textContent ?? '', /Some apps may not see new or updated fonts until you log out/)
   const cancel = buttonNamed(confirmDialog, 'Cancel')
   assert.ok(cancel)
   await act(async () => {

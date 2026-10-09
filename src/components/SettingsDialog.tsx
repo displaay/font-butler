@@ -1198,7 +1198,7 @@ function CachesPane({
       <SettingsSection title="macOS">
         <SettingsRow
           label="Clear font caches"
-          description="Removes the macOS user font cache. User fonts will not activate again until you log out. Reinstall never does this."
+          description="Removes the macOS user font cache. Some apps may not see new or updated fonts until you log out. Reinstall never does this."
         >
           <ClearFontCachesControl
             disabled={busy}

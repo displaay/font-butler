@@ -8,7 +8,7 @@ import {
 } from '@/components/ui/dialog'
 
 export const FONT_CACHE_CLEAR_WARNING =
-  "User fonts won't activate again until you log out."
+  'Some apps may not see new or updated fonts until you log out.'
 
 type Phase = 'idle' | 'confirm' | 'clearing' | 'cleared'
 
@@ -94,7 +94,7 @@ export function ClearFontCachesControl({
           <DialogTitle>Font caches cleared</DialogTitle>
           <DialogDescription>
             {logoutFallback ??
-              `${FONT_CACHE_CLEAR_WARNING} Log out when you are ready for them to activate again. macOS will ask you to confirm.`}
+              `${FONT_CACHE_CLEAR_WARNING} macOS will ask you to confirm.`}
           </DialogDescription>
           <div className="mt-4 flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={() => setPhase('idle')}>

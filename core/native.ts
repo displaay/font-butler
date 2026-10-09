@@ -171,6 +171,17 @@ export async function ensureFontActivation(
     }
     return
   }
+  if (!enabled) {
+    const removed = await native.unregisterFont(filePath)
+    logMain(
+      'register',
+      `unregister ${filePath} ok=${removed.ok}${removed.error ? ` ${removed.error}` : ''}`,
+    )
+    if (!removed.ok) {
+      throw new Error(removed.error || 'Could not unregister the font.')
+    }
+    return
+  }
   if (native.ensureActivation) {
     const ensured = await native.ensureActivation(filePath, enabled)
     logMain(

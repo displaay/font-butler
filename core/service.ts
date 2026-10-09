@@ -1466,14 +1466,14 @@ export class FontButlerService {
   }> {
     if (options.confirm !== true) {
       throw new Error(
-        'Clearing font caches needs confirmation. User fonts will not activate again until you log out.',
+        'Clearing font caches needs confirmation. Some apps may not see new or updated fonts until you log out.',
       )
     }
     const result = await getFontNative().clearUserFontCache({ confirm: true })
     emitNotice({
       kind: 'info',
       message: result.mac
-        ? 'Removed the user font cache. User fonts will not activate again until you log out.'
+        ? 'Removed the user font cache. Some apps may not see new or updated fonts until you log out.'
         : 'Font cache clearing is available on macOS.',
     })
     return result
@@ -3370,7 +3370,6 @@ export class FontButlerService {
         logMain('install', `deactivate by move ${macosLive}`)
       } else {
         await ensureFontActivation(getFontNative(), macosLive, false)
-        await getFontNative().unregisterFont(macosLive)
       }
       const vault = uniquePathFromOriginal(this.paths.disabledDir, macosLive)
       if (path.resolve(macosLive) !== vault) {

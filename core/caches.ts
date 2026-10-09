@@ -9,7 +9,7 @@ import { parseFontFile } from './parse.ts'
 import { getPaths, isMac } from './paths.ts'
 import { readAcceptablePostScriptNames, readFontName } from './rename.ts'
 import type { AdobeFontCacheInfo, OfficeFontCacheInfo } from './types.ts'
-import { isMacUserFontFile } from './user-fonts.ts'
+import { isMacUserFontFile, macUserFontsRoot } from './user-fonts.ts'
 
 /** Session, then persistent user. Process scope (1) dies with this process and is never used. */
 export const REGISTRATION_SCOPES = [3, 2] as const
@@ -39,6 +39,11 @@ export const LOGOUT_FALLBACK = 'Use Apple menu > Log Out'
 
 /** Shown when the user dismisses the System Events logout confirm (-128). */
 export const LOGOUT_CANCELLED = 'Log out was cancelled.'
+/**
+ * How long to wait for an immediate Apple-event failure before treating an
+ * open logout confirm as accepted. The dialog itself has no timeout.
+ */
+export const LOGOUT_ACCEPT_MS = 1_000
 
 export const FONT_NOT_VISIBLE_WARNING = 'Not visible to other apps yet'
 
@@ -292,21 +297,52 @@ export function logoutResultFromExecError(error: unknown): {
   return { requested: false, message: LOGOUT_FALLBACK, error: detail }
 }
 
-export async function requestMacLogout(): Promise<{
+export type MacLogoutResult = {
   requested: boolean
   message?: string
   error?: string
-}> {
+}
+
+/**
+ * Start the logout Apple event without waiting for the confirm dialog.
+ * An immediate failure (-128, -1743) is reported. If the dialog is still
+ * open after the accept window, the request was accepted.
+ */
+export function awaitMacLogoutRequest(
+  start: (report: (result: MacLogoutResult) => void) => void,
+  acceptAfterMs = LOGOUT_ACCEPT_MS,
+): Promise<MacLogoutResult> {
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = (result: MacLogoutResult) => {
+      if (settled) {
+        if (result.requested === false) {
+          logMain('install', `logout settled after accept ${result.message || ''} ${result.error || ''}`.trim())
+        }
+        return
+      }
+      settled = true
+      clearTimeout(timer)
+      resolve(result)
+    }
+    const timer = setTimeout(() => finish({ requested: true }), acceptAfterMs)
+    if (typeof timer.unref === 'function') timer.unref()
+    start(finish)
+  })
+}
+
+export async function requestMacLogout(): Promise<MacLogoutResult> {
   if (!isMac()) return { requested: false, message: LOGOUT_FALLBACK }
   if (process.env.FONT_BUTLER_TEST === '1' && process.env.FONT_BUTLER_NATIVE !== '1') {
     return { requested: false, message: LOGOUT_FALLBACK }
   }
-  try {
-    await execFileAsync('osascript', ['-e', MAC_LOGOUT_APPLESCRIPT], { timeout: 15_000 })
-    return { requested: true }
-  } catch (error) {
-    return logoutResultFromExecError(error)
-  }
+  return awaitMacLogoutRequest((report) => {
+    const child = execFile('osascript', ['-e', MAC_LOGOUT_APPLESCRIPT], (error) => {
+      if (error) report(logoutResultFromExecError(error))
+      else report({ requested: true })
+    })
+    child.unref()
+  })
 }
 
 export async function clearOfficeFontCache(): Promise<{ mac: boolean; cleared: boolean }> {
@@ -502,15 +538,12 @@ function run(argv) {
     const filePath = argv[1]
     const enabled = argv[2] === '1'
     if (isMacUserLibraryFontPath(filePath)) return 'skip'
-    if (enabled) {
-      const registered = registerAtScopes(filePath, true)
-      if (String(registered).indexOf('fail') === 0) return registered
-    } else {
-      registerAtScopes(filePath, false)
-    }
+    if (!enabled) return registerAtScopes(filePath, false)
+    const registered = registerAtScopes(filePath, true)
+    if (String(registered).indexOf('fail') === 0) return registered
     const descs = descriptorsFor(filePath)
     if (!descs || Number(descs.count) === 0) return 'fail'
-    $.CTFontManagerEnableFontDescriptors(descs, enabled)
+    $.CTFontManagerEnableFontDescriptors(descs, true)
     if (isUserFontsDomainPath(filePath)) {
       if (!enabled) return 'ok'
       if (pathExists(filePath) && canRenderUserFont(filePath)) return 'ok'
@@ -966,6 +999,59 @@ export function verificationFaceChecks(
   })
 }
 
+const USER_FONT_COPY_EXTENSIONS = new Set(['.ttf', '.otf', '.ttc', '.otc'])
+
+function fontFileHasPostScript(filePath: string, wanted: Set<string>): boolean {
+  try {
+    const parsed = parseFontFile(filePath, { previewSample: false })
+    return parsed.faces.some((face, index) => {
+      if (face.postscriptName && wanted.has(face.postscriptName)) return true
+      return readAcceptablePostScriptNames(filePath, index).some((name) => wanted.has(name))
+    })
+  } catch {
+    return false
+  }
+}
+
+/** Another file under ~/Library/Fonts (or the test override) with one of these PostScript names. */
+export function findOtherUserFontCopy(installedPath: string, names: Iterable<string>): string | undefined {
+  const wanted = new Set([...names].map((name) => name.trim()).filter(Boolean))
+  const root = macUserFontsRoot()
+  if (wanted.size === 0 || !root || !fs.existsSync(root)) return undefined
+  const seen = new Set<string>()
+  const pending = [root]
+  while (pending.length > 0) {
+    const dir = pending.pop()
+    if (!dir) continue
+    let resolved = dir
+    try {
+      resolved = fs.realpathSync(dir)
+    } catch {
+      continue
+    }
+    if (seen.has(resolved)) continue
+    seen.add(resolved)
+    let entries: fs.Dirent[]
+    try {
+      entries = fs.readdirSync(resolved, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue
+      const full = path.join(resolved, entry.name)
+      if (entry.isDirectory()) {
+        pending.push(full)
+        continue
+      }
+      if (!USER_FONT_COPY_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) continue
+      if (fontPathsMatch(full, installedPath)) continue
+      if (fontFileHasPostScript(full, wanted)) return full
+    }
+  }
+  return undefined
+}
+
 type FontLookup = (
   postscriptName: string,
   options: { timeoutMs: number },
@@ -999,6 +1085,17 @@ export async function runInstalledFontVerification(
     throw installedFontCheckError(filePath, message, false)
   }
   const userFont = isMacUserFontFile(filePath)
+  const watched = new Set<string>()
+  for (const check of checks) {
+    watched.add(check.ps)
+    for (const name of check.acceptable) watched.add(name)
+  }
+  const otherCopy = findOtherUserFontCopy(filePath, watched)
+  if (otherCopy) {
+    const message = `${checks[0]?.ps ?? 'The font'} is already served from ${otherCopy}. The installed file was kept.`
+    logMain('verify', `kept ${filePath} ${message}`)
+    throw installedFontCheckError(filePath, message, true)
+  }
   const deadline = now() + (options.budgetMs ?? VERIFY_BUDGET_MS)
   let lastError = 'Core Text did not activate the installed font.'
   let lastKeep = userFont
