@@ -471,6 +471,90 @@ test('a write error during a pending drain wait rejects and the next start downl
   }
 })
 
+test('a stream that errors after a successful write rejects before the next write', async () => {
+  const version = '0.4.7'
+  const bytes = Buffer.from('already-closed-bytes')
+  const doc = yml(version, [
+    { name: macArm64ArchiveName(version, 'dmg'), sha512: sha512(bytes), size: bytes.length },
+    { name: macArm64ArchiveName(version, 'zip'), sha512: sha512(bytes), size: bytes.length },
+  ])
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'font-butler-drain-closed-'))
+  const originalCreate = nodeFs.createWriteStream
+  const failure = Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' })
+  let writes = 0
+  let releaseNext = null
+  const unhandled = []
+  const onException = (error) => {
+    unhandled.push(error)
+  }
+  const onRejection = (error) => {
+    unhandled.push(error)
+  }
+  nodeFs.createWriteStream = () => {
+    const out = new Writable({ write() {} })
+    out.write = () => {
+      writes += 1
+      if (writes === 1) {
+        process.nextTick(() => {
+          out.destroy(failure)
+          releaseNext?.()
+        })
+        return true
+      }
+      return false
+    }
+    return out
+  }
+  process.on('uncaughtException', onException)
+  process.on('unhandledRejection', onRejection)
+  const installer = createAppUpdateInstaller({
+    currentVersion: '0.0.0',
+    env: {},
+    probeRuntime: () => signedRuntime(),
+    makeTempDir: () => dir,
+    removeTemp: (target) => rmSync(target, { recursive: true, force: true }),
+    fetch: async (url) => {
+      if (url === GITHUB_LATEST_API) return httpResponse({ body: JSON.stringify(releaseJson(version)) })
+      if (String(url).endsWith('latest-mac.yml')) return httpResponse({ body: doc })
+      const stream = new Readable({
+        read() {
+          if (this.started) return
+          this.started = true
+          this.push(bytes.subarray(0, 8))
+          releaseNext = () => {
+            this.push(bytes.subarray(8))
+            this.push(null)
+          }
+        },
+      })
+      return {
+        ...httpResponse({ body: bytes, contentLength: bytes.length }),
+        stream,
+      }
+    },
+  })
+  try {
+    const result = await Promise.race([
+      installer.start(),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('drain wait hung')), 1000)
+      }),
+    ])
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(result.ok, false)
+    assert.equal(result.error, 'ENOSPC: no space left on device, write')
+    assert.equal(writes, 1)
+    assert.equal(installer.status().phase, 'error')
+    assert.equal(existsSync(dir), false)
+    assert.deepEqual(unhandled, [])
+  } finally {
+    process.off('uncaughtException', onException)
+    process.off('unhandledRejection', onRejection)
+    nodeFs.createWriteStream = originalCreate
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('an evil redirect is refused before the body is saved', async () => {
   const version = '0.4.1'
   const published = Buffer.from('dmg-bytes')

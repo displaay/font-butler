@@ -591,7 +591,11 @@ async function writeVerifiedBody(response, dest, expectedSize, onProgress) {
     else throw new Error('Update download had no body')
 
     for await (const chunk of source) {
-      if (streamError) throw streamError
+      // A write to a destroyed stream reports ERR_STREAM_DESTROYED only through
+      // its callback, which is lost when no callback is passed. Refuse first.
+      if (streamError || out.destroyed || out.errored || out.writableEnded) {
+        throw streamError ?? out.errored ?? new Error('The download write closed before it could drain.')
+      }
       const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
       received += buf.length
       if (received > expectedSize) throw new Error('The download was larger than the published size.')
@@ -624,6 +628,11 @@ async function writeVerifiedBody(response, dest, expectedSize, onProgress) {
 
   function waitForWriteDrain(stream) {
     return new Promise((resolve, reject) => {
+      const closedError = () => streamError ?? stream.errored ?? new Error('The download write closed before it could drain.')
+      if (streamError || stream.destroyed || stream.closed || stream.errored) {
+        reject(closedError())
+        return
+      }
       let settled = false
       const finish = (settle) => {
         if (settled) return
@@ -639,7 +648,7 @@ async function writeVerifiedBody(response, dest, expectedSize, onProgress) {
         finish(() => reject(streamError))
       }
       const onClose = () => {
-        finish(() => reject(streamError ?? new Error('The download write closed before it could drain.')))
+        finish(() => reject(closedError()))
       }
       stream.on('drain', onDrain)
       stream.on('error', onError)
