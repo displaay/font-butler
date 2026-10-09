@@ -218,6 +218,11 @@ test('API auth middleware rejects unauthenticated catalog reads', async () => {
     { headers: { host: '127.0.0.1:43182' } },
   )
   assert.equal(signedBytes.status, 200)
+  const retriedBytes = await app.request(
+    `/api/font-file/id?which=installed&exp=${signed.exp}&sig=${signed.sig}&r=1`,
+    { headers: { host: '127.0.0.1:43182' } },
+  )
+  assert.equal(retriedBytes.status, 200)
 })
 
 test('bootstrap token is only included in test or local-dev server env', () => {

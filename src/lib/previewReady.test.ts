@@ -9,9 +9,12 @@ import {
   notifyPreviewCssMounted,
   PREVIEW_LOAD_TIMEOUT_MS,
   previewFacesFailed,
+  previewRetryGeneration,
   retryPreviewFamily,
   setPreviewLoadTimeoutForTests,
   subscribePreviewFonts,
+  subscribePreviewRetries,
+  withRetryParam,
 } from './previewReady.ts'
 
 type MockFace = { family: string; weight?: number | string; style?: string; status?: string }
@@ -458,6 +461,34 @@ test('a timed-out preview becomes ready when the face finishes loading', async (
     stop()
   } finally {
     setPreviewLoadTimeoutForTests(PREVIEW_LOAD_TIMEOUT_MS)
+    restore()
+  }
+})
+
+test('withRetryParam appends r without reordering the signed query', () => {
+  const signed = '/api/font-file/abc?v=rev&which=source&exp=10&sig=ab'
+  assert.equal(withRetryParam(signed, 0), signed)
+  assert.equal(withRetryParam(signed, 1), `${signed}&r=1`)
+  assert.equal(withRetryParam(`${signed}&r=1`, 2), `${signed}&r=2`)
+})
+
+test('retry bumps the cache-busting generation before previews load again', () => {
+  const restore = mockFonts({ check: false, faces: [] })
+  try {
+    const order: string[] = []
+    const stopRetry = subscribePreviewRetries(() => {
+      order.push('css')
+    })
+    const stopFonts = subscribePreviewFonts(() => {
+      order.push('fonts')
+    })
+    assert.equal(previewRetryGeneration('fc-bust-order'), 0)
+    retryPreviewFamily('fc-bust-order')
+    assert.equal(previewRetryGeneration('fc-bust-order'), 1)
+    assert.deepEqual(order, ['css', 'fonts'])
+    stopRetry()
+    stopFonts()
+  } finally {
     restore()
   }
 })

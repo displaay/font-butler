@@ -15,8 +15,11 @@ const GENERIC_FAMILIES = new Set([
 export const PREVIEW_LOAD_TIMEOUT_MS = 10000
 
 type PreviewFontsListener = () => void
+type PreviewRetryListener = (family: string, generation: number) => void
 
 const listeners = new Set<PreviewFontsListener>()
+const retryListeners = new Set<PreviewRetryListener>()
+const retryGenerations = new Map<string, number>()
 const loadPromises = new Map<string, Promise<void>>()
 const readyKeys = new Set<string>()
 // Failed faces stop the spinner. isPreviewFontReady stays true for them so a card
@@ -278,9 +281,42 @@ export function invalidatePreviewReadyFamilies(families: readonly string[]): voi
   }
 }
 
-/** Drop one family's failure and ask mounted previews to load it again. */
+/**
+ * Append `&r=<generation>` without re-encoding the signed query.
+ * Generation 0 leaves the URL untouched. Chrome treats a failed @font-face URL
+ * as final, so a retry has to be a different URL or the face stays in `error`.
+ */
+export function withRetryParam(url: string, generation: number): string {
+  if (!Number.isFinite(generation) || generation <= 0) return url
+  const token = String(Math.trunc(generation))
+  if (/[?&]r=\d+/.test(url)) return url.replace(/([?&])r=\d+/g, `$1r=${token}`)
+  return `${url}${url.includes('?') ? '&' : '?'}r=${token}`
+}
+
+export function previewRetryGeneration(family: string): number {
+  return retryGenerations.get(normalizePreviewFamily(family)) ?? 0
+}
+
+export function subscribePreviewRetries(listener: PreviewRetryListener): () => void {
+  retryListeners.add(listener)
+  return () => {
+    retryListeners.delete(listener)
+  }
+}
+
+function notifyPreviewRetries(family: string, generation: number) {
+  for (const listener of retryListeners) listener(family, generation)
+}
+
+/** Drop one family's failure, bust its @font-face URL, and load it again. */
 export function retryPreviewFamily(family: string): void {
-  invalidatePreviewReadyFamilies([family])
+  const name = normalizePreviewFamily(family)
+  const generation = (retryGenerations.get(name) ?? 0) + 1
+  retryGenerations.set(name, generation)
+  invalidatePreviewReadyFamilies([name])
+  // Rewrite the CSS rule before any document.fonts.load(). A failed face stays
+  // in `error` until its src URL changes, and load() rejects without a refetch.
+  notifyPreviewRetries(name, generation)
   notifyPreviewFonts()
 }
 

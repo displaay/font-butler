@@ -11,7 +11,13 @@ import {
   type PreviewUrlCache,
   type PreviewWhich,
 } from '@/lib/preview'
-import { invalidatePreviewReadyFamilies, notifyPreviewCssMounted } from '@/lib/previewReady'
+import {
+  invalidatePreviewReadyFamilies,
+  notifyPreviewCssMounted,
+  previewRetryGeneration,
+  subscribePreviewRetries,
+  withRetryParam,
+} from '@/lib/previewReady'
 import type { CatalogEntry, SystemFace } from '@/lib/types'
 
 const REFRESH_MS = 15 * 60 * 1000
@@ -52,6 +58,10 @@ export function systemFontFamily(path: string): string {
   return hashPath(path)
 }
 
+function bustedPreviewUrl(url: string, family: string): string {
+  return withRetryParam(url, previewRetryGeneration(family))
+}
+
 async function catalogEntryCss(
   entry: CatalogEntry,
   secret: string,
@@ -59,15 +69,24 @@ async function catalogEntryCss(
   refresh: boolean,
 ): Promise<string> {
   const which = catalogPreviewWhich(entry)
-  const defaultUrl = await cachedSignedCatalogFontUrl(cache, entry, which, secret, { refresh })
-  const installedUrl = await cachedSignedCatalogFontUrl(cache, entry, 'installed', secret, { refresh })
+  const defaultFamily = cssFamily(entry.id)
+  const installedFamily = cssFamily(entry.id, 'installed')
+  const defaultSigned = await cachedSignedCatalogFontUrl(cache, entry, which, secret, { refresh })
+  const installedSigned = await cachedSignedCatalogFontUrl(cache, entry, 'installed', secret, { refresh })
+  let sourceSigned = ''
+  const sourceFamily = cssFamily(entry.id, 'source')
+  const includeSource = Boolean(
+    entry.sourcePath && entry.sourcePath !== entry.installedPath && entry.sourcePresent !== false,
+  )
+  if (includeSource) {
+    sourceSigned = await cachedSignedCatalogFontUrl(cache, entry, 'source', secret, { refresh })
+  }
   const faces = [
-    ...catalogFontFaceRules(cssFamily(entry.id), defaultUrl, entry.faces),
-    ...catalogFontFaceRules(cssFamily(entry.id, 'installed'), installedUrl, entry.faces),
+    ...catalogFontFaceRules(defaultFamily, bustedPreviewUrl(defaultSigned, defaultFamily), entry.faces),
+    ...catalogFontFaceRules(installedFamily, bustedPreviewUrl(installedSigned, installedFamily), entry.faces),
   ]
-  if (entry.sourcePath && entry.sourcePath !== entry.installedPath && entry.sourcePresent !== false) {
-    const sourceUrl = await cachedSignedCatalogFontUrl(cache, entry, 'source', secret, { refresh })
-    faces.push(...catalogFontFaceRules(cssFamily(entry.id, 'source'), sourceUrl, entry.faces))
+  if (includeSource) {
+    faces.push(...catalogFontFaceRules(sourceFamily, bustedPreviewUrl(sourceSigned, sourceFamily), entry.faces))
   }
   return faces.join('\n')
 }
@@ -80,9 +99,36 @@ async function systemPathCss(
 ): Promise<string> {
   const filePath = faces[0]?.path
   if (!filePath) return ''
-  const url = await cachedSignedSystemFontUrl(cache, filePath, secret, { refresh })
-  return catalogFontFaceRules(hashPath(filePath), url, faces).join('\n')
+  const family = hashPath(filePath)
+  const signed = await cachedSignedSystemFontUrl(cache, filePath, secret, { refresh })
+  return catalogFontFaceRules(family, bustedPreviewUrl(signed, family), faces).join('\n')
 }
+
+function rewriteStyleRule(rule: string, family: string, generation: number): string {
+  const needle = `font-family:"${family}"`
+  if (!rule.includes(needle)) return rule
+  return rule.replace(/src:url\("([^"]*)"\)/g, (_match, url: string) => {
+    return `src:url("${withRetryParam(url, generation)}")`
+  })
+}
+
+function rewriteMountedFamily(family: string, generation: number) {
+  const needle = `font-family:"${family}"`
+  const maps = [previewFaceSession.catalogStyles, previewFaceSession.systemStyles]
+  for (const map of maps) {
+    for (const style of map.values()) {
+      const css = style.textContent ?? ''
+      if (!css.includes(needle)) continue
+      const next = css
+        .split('\n')
+        .map((rule) => rewriteStyleRule(rule, family, generation))
+        .join('\n')
+      if (next !== css) style.textContent = next
+    }
+  }
+}
+
+subscribePreviewRetries(rewriteMountedFamily)
 
 function ensureStyle(
   map: Map<string, HTMLStyleElement>,

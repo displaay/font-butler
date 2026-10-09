@@ -66,4 +66,6 @@ test('font preview query tokens are bound to path and which', () => {
     false,
   )
   assert.equal(verifyFontPreviewQuery(secret, '/api/font-file/abc', {}, now), false)
+  const retried = { ...access, which: 'source', r: '1' }
+  assert.equal(verifyFontPreviewQuery(secret, '/api/font-file/abc', retried, now), true)
 })

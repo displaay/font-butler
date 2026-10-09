@@ -209,6 +209,7 @@ export const LibraryCard = memo(function LibraryCard({
       event.preventDefault()
       return
     }
+    event.stopPropagation()
     writeFontButlerEntries(event.dataTransfer, dragIds)
     applyFontDragImage(event.nativeEvent, projectFamilyNames)
     onFontDragStart()
@@ -353,8 +354,6 @@ export const LibraryCard = memo(function LibraryCard({
             <ContextMenuTrigger asChild>
               <button
                 type="button"
-                draggable={!uninstallOnly}
-                onDragStart={startFontDrag}
                 onClick={handleCardClick}
                 onContextMenu={skipClickAfterContextMenu}
                 onDoubleClick={onInspect}
@@ -386,8 +385,6 @@ export const LibraryCard = memo(function LibraryCard({
                 <PreviewRetryBoundary>
                   <button
                     type="button"
-                    draggable={!uninstallOnly}
-                    onDragStart={startFontDrag}
                     onClick={handleCardClick}
                     onContextMenu={skipClickAfterContextMenu}
                     onDoubleClick={onInspect}

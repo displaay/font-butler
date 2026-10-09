@@ -137,7 +137,9 @@ const { createRoot } = await import('react-dom/client')
 const { LibraryCard } = await import('./LibraryCard.tsx')
 const { SystemCard } = await import('./SystemCard.tsx')
 const { InstanceList } = await import('./InstanceList.tsx')
-const { catalogFontFamily, systemFontFamily } = await import('./FontFaceStyles.tsx')
+const { FontFaceStyles, catalogFontFamily, systemFontFamily } = await import('./FontFaceStyles.tsx')
+const { usePreviewFontStatus } = await import('../hooks/usePreviewFontReady.ts')
+const { verifyFontPreviewQuery } = await import('../../core/font-access.ts')
 const { TooltipProvider } = await import('./ui/tooltip.tsx')
 
 function assertNoNestedButtons(root: ParentNode) {
@@ -385,13 +387,31 @@ test('failed library, system, and instance cards keep Retry outside the card but
     })
     assert.equal(drags, 0, 'dragstart on Retry does not reach startFontDrag')
 
+    const cardBody = cards[0]?.querySelector('button:not([data-preview-retry])')
+    assert.ok(cardBody)
+    assert.equal(cardBody.getAttribute('draggable'), null)
+    await act(async () => {
+      const drag = new view.DragEvent('dragstart', { bubbles: true, cancelable: true })
+      Object.defineProperty(drag, 'dataTransfer', {
+        value: { setData() {}, effectAllowed: 'copy' },
+      })
+      cardBody.dispatchEvent(drag)
+    })
+    assert.equal(drags, 1, 'a drag from the card body starts one font drag')
+
     const kinds = ['Enter', ' ', 'click', 'Enter', ' '] as const
     assert.equal(retries.length, kinds.length)
     for (const [index, retry] of retries.entries()) {
       const button = retry as HTMLButtonElement
       const card = siblingCardButton(button)
       const kind = kinds[index] ?? 'Enter'
-      if (kind !== 'click') {
+      let outside: HTMLInputElement | null = null
+      if (kind === 'click') {
+        outside = document.createElement('input')
+        document.body.appendChild(outside)
+        outside.focus()
+        assert.equal(document.activeElement, outside)
+      } else {
         await act(async () => {
           button.focus()
         })
@@ -402,7 +422,16 @@ test('failed library, system, and instance cards keep Retry outside the card but
       assert.equal(selects, 0)
       assert.ok(loads > before, `Retry ${index} (${kind}) retries the preview`)
       assert.equal(button.isConnected, false)
-      if (kind !== 'click') assert.equal(document.activeElement, card)
+      if (kind === 'click' && outside) {
+        assert.equal(
+          document.activeElement,
+          outside,
+          'an unfocused Retry unmount leaves focus on the outside input',
+        )
+        outside.remove()
+      } else {
+        assert.equal(document.activeElement, card)
+      }
     }
 
     const cardButton = [...host.querySelectorAll('button')].find(
@@ -438,5 +467,146 @@ test('each failed card button is followed by its own Retry', async () => {
   } finally {
     await unmount()
     setPreviewLoadTimeoutForTests(PREVIEW_LOAD_TIMEOUT_MS)
+  }
+})
+
+type CssFace = { family: string; weight: string; style: string; status: string; url: string }
+
+function installFailOnceFonts() {
+  const statusByUrl = new Map<string, string>()
+  const requested: string[] = []
+
+  function facesFromCss(): CssFace[] {
+    const faces: CssFace[] = []
+    for (const style of document.querySelectorAll('style[data-font-butler-face], style[data-font-butler-system]')) {
+      for (const rule of (style.textContent ?? '').split('\n')) {
+        const family = rule.match(/font-family:"([^"]+)"/)?.[1]
+        const url = rule.match(/src:url\("([^"]*)"\)/)?.[1]
+        if (!family || !url) continue
+        faces.push({
+          family,
+          weight: rule.match(/font-weight:([^;]+)/)?.[1] ?? '400',
+          style: rule.match(/font-style:([^;]+)/)?.[1] ?? 'normal',
+          status: statusByUrl.get(url) ?? 'unloaded',
+          url,
+        })
+      }
+    }
+    return faces
+  }
+
+  function faceForSpec(spec: string): CssFace | undefined {
+    const family = spec.match(/"([^"]+)"/)?.[1] ?? ''
+    return facesFromCss().find((face) => face.family === family)
+  }
+
+  const fonts = {
+    check: (spec: string) => faceForSpec(spec)?.status === 'loaded',
+    load: (spec: string) => {
+      const face = faceForSpec(spec)
+      if (!face) return Promise.resolve([])
+      const status = statusByUrl.get(face.url) ?? 'unloaded'
+      if (status === 'unloaded') {
+        requested.push(face.url)
+        statusByUrl.set(face.url, /[?&]r=\d+/.test(face.url) ? 'loaded' : 'error')
+      }
+      const next = statusByUrl.get(face.url)
+      if (next === 'error') return Promise.reject(new Error('NetworkError'))
+      return Promise.resolve([face])
+    },
+    ready: Promise.resolve(),
+    addEventListener() {},
+    removeEventListener() {},
+    forEach(callback: (face: CssFace) => void) {
+      for (const face of facesFromCss()) callback(face)
+    },
+  }
+  Object.defineProperty(document, 'fonts', { configurable: true, value: fonts })
+  return requested
+}
+
+function FetchProbe({ family }: { family: string }) {
+  const status = usePreviewFontStatus(family)
+  const state = status.failed ? 'failed' : status.ready ? 'ready' : 'loading'
+  return createElement(
+    'div',
+    null,
+    createElement('span', { 'data-state': state }),
+    status.failed
+      ? createElement(
+          'button',
+          { type: 'button', 'data-fetch-retry': '', onClick: () => status.retry() },
+          'Retry',
+        )
+      : null,
+  )
+}
+
+function ruleUrl(css: string, family: string): string {
+  const needle = `font-family:"${family}"`
+  const rule = css.split('\n').find((line) => line.includes(needle))
+  assert.ok(rule, family)
+  const url = rule.match(/src:url\("([^"]*)"\)/)?.[1]
+  assert.ok(url, family)
+  return url
+}
+
+async function waitForState(host: ParentNode, state: string) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (host.querySelector('[data-state]')?.getAttribute('data-state') === state) return
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 15))
+    })
+  }
+  assert.equal(host.querySelector('[data-state]')?.getAttribute('data-state'), state)
+}
+
+test('a failed font-file fetch succeeds when Retry busts the @font-face URL', async () => {
+  const secret = 'retry-fetch-secret'
+  ;(window as unknown as { fontButlerDesktop?: { getApiToken: () => Promise<string> } }).fontButlerDesktop = {
+    getApiToken: async () => secret,
+  }
+  const entry = catalogEntry('retry-fetch', [fontFace('Regular', 400)])
+  const family = catalogFontFamily(entry.id)
+  const requested = installFailOnceFonts()
+  const { host, unmount } = await mount(
+    createElement(
+      'div',
+      null,
+      createElement(FontFaceStyles, { entries: [entry], catalog: [entry], systemFaces: [] }),
+      createElement(FetchProbe, { family }),
+    ),
+  )
+  try {
+    await waitForState(host, 'failed')
+    assert.equal(requested.length, 1, 'the first fetch is the only request while the face is in error')
+    assert.equal(/[?&]r=\d+/.test(requested[0] ?? ''), false)
+    const style = document.querySelector('style[data-font-butler-face]')
+    assert.ok(style?.textContent)
+    const failedUrl = ruleUrl(style.textContent, family)
+    assert.equal(failedUrl.includes('r='), false)
+
+    const retry = host.querySelector('[data-fetch-retry]')
+    assert.equal(retry?.tagName, 'BUTTON')
+    await act(async () => {
+      ;(retry as HTMLButtonElement).click()
+    })
+    await waitForState(host, 'ready')
+
+    assert.equal(requested.length, 2, 'Retry issues a second fetch')
+    assert.match(requested[1] ?? '', /[?&]r=1(?:&|$)/)
+    const busted = ruleUrl(style.textContent ?? '', family)
+    assert.match(busted, /[?&]r=1(?:&|$)/)
+    const installed = ruleUrl(style.textContent ?? '', catalogFontFamily(entry.id, 'installed'))
+    assert.equal(/[?&]r=\d+/.test(installed), false, 'only the retried family is busted')
+    const parsed = new URL(busted, 'http://127.0.0.1')
+    assert.equal(
+      verifyFontPreviewQuery(secret, parsed.pathname, Object.fromEntries(parsed.searchParams)),
+      true,
+      'the signature still validates with r on the query',
+    )
+    assert.equal(host.querySelector('[data-state]')?.getAttribute('data-state'), 'ready')
+  } finally {
+    await unmount()
   }
 })
