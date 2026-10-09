@@ -23,10 +23,13 @@ function mockFonts(options: {
   check?: boolean | ((spec: string) => boolean)
   faces?: MockFace[]
   onLoad?: () => void
+  /** Called only when a registered document.fonts listener actually runs. */
+  onFontEvent?: (type: string) => void
   /** Replaces the default load() that resolves empty. */
   load?: (spec: string) => Promise<unknown>
 }): () => void {
   const faces = options.faces ?? []
+  const fontListeners = new Map<string, Set<() => void>>()
   const fonts = {
     check: (spec: string) =>
       typeof options.check === 'function' ? options.check(spec) : Boolean(options.check),
@@ -34,7 +37,21 @@ function mockFonts(options: {
       options.onLoad?.()
       return options.load ? options.load(spec) : Promise.resolve([])
     },
-    addEventListener() {},
+    addEventListener(type: string, listener: () => void) {
+      const wrapped = () => {
+        options.onFontEvent?.(type)
+        listener()
+      }
+      const bucket = fontListeners.get(type) ?? new Set<() => void>()
+      bucket.add(wrapped)
+      fontListeners.set(type, bucket)
+    },
+    dispatchEvent(event: { type?: string } | string) {
+      const type = typeof event === 'string' ? event : event.type
+      if (!type) return false
+      for (const listener of fontListeners.get(type) ?? []) listener()
+      return true
+    },
     removeEventListener() {},
     forEach(callback: (face: MockFace) => void) {
       for (const face of faces) callback(face)
@@ -478,6 +495,61 @@ test('a timed-out preview becomes ready when the face finishes loading', async (
     assert.equal(sawReady, true)
     assert.equal(isPreviewFontFailed('fc-late', 400), false)
     assert.equal(isPreviewFontReady('fc-late', 400), true)
+    stop()
+  } finally {
+    setPreviewLoadTimeoutForTests(PREVIEW_LOAD_TIMEOUT_MS)
+    restore()
+  }
+})
+
+test('a timed-out key recovers when its load settles while another timed-out key still hangs', async () => {
+  setPreviewLoadTimeoutForTests(20)
+  let finishA: (() => void) | undefined
+  let aLoaded = false
+  const faces = [
+    { family: 'fc-late-a', weight: 400, style: 'normal', status: 'loading' },
+    { family: 'fc-hang-b', weight: 400, style: 'normal', status: 'loading' },
+  ]
+  let loadingdone = 0
+  const restore = mockFonts({
+    check: (spec) => spec.includes('fc-late-a') && aLoaded,
+    faces,
+    onFontEvent: (type) => {
+      if (type === 'loadingdone') loadingdone += 1
+    },
+    load: (spec) => {
+      if (spec.includes('fc-late-a')) {
+        return new Promise((resolve) => {
+          finishA = () => {
+            faces[0]!.status = 'loaded'
+            aLoaded = true
+            resolve([])
+          }
+        })
+      }
+      return new Promise(() => {})
+    },
+  })
+  try {
+    assert.equal(isPreviewFontReady('fc-late-a', 400), false)
+    assert.equal(isPreviewFontReady('fc-hang-b', 400), false)
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    assert.equal(isPreviewFontFailed('fc-late-a', 400), true)
+    assert.equal(isPreviewFontFailed('fc-hang-b', 400), true)
+    const stop = subscribePreviewFonts(() => {
+      isPreviewFontReady('fc-late-a', 400)
+    })
+    assert.ok(finishA)
+    finishA()
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(loadingdone, 0)
+    assert.equal(
+      isPreviewFontFailed('fc-late-a', 400),
+      false,
+      'a late success clears the timeout failure without loadingdone',
+    )
+    assert.equal(isPreviewFontReady('fc-late-a', 400), true)
+    assert.equal(isPreviewFontFailed('fc-hang-b', 400), true)
     stop()
   } finally {
     setPreviewLoadTimeoutForTests(PREVIEW_LOAD_TIMEOUT_MS)

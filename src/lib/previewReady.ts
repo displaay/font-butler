@@ -21,6 +21,10 @@ const listeners = new Set<PreviewFontsListener>()
 const retryListeners = new Set<PreviewRetryListener>()
 const retryGenerations = new Map<string, number>()
 const loadPromises = new Map<string, Promise<void>>()
+// Survives failLoadKey deleting loadPromises. A load that settles after its
+// timeout still has to notify, because loadingdone waits until every pending
+// document.fonts.load() finishes.
+const loadTokens = new Map<string, Promise<void>>()
 const readyKeys = new Set<string>()
 // Failed faces stop the spinner. isPreviewFontReady stays true for them so a card
 // does not spin forever; isPreviewFontFailed tells the UI to show an error instead
@@ -189,14 +193,24 @@ function requestPreviewLoad(spec: string, key: string, name: string, weight: num
       () => undefined,
     )
     .finally(() => {
-      if (loadPromises.get(key) !== pending) return
-      settleLoad(spec, key, name, weight, italic)
+      if (loadPromises.get(key) === pending) {
+        settleLoad(spec, key, name, weight, italic)
+        return
+      }
+      // Timeout already dropped the promise. Notify only for this attempt, and
+      // only when a newer load has not replaced it.
+      if (!loadPromises.has(key) && loadTokens.get(key) === pending) {
+        loadTokens.delete(key)
+        notifyPreviewFonts()
+      }
     })
   loadPromises.set(key, pending)
+  loadTokens.set(key, pending)
 }
 
 function settleLoad(spec: string, key: string, name: string, weight: number, italic: boolean) {
   loadPromises.delete(key)
+  loadTokens.delete(key)
   if (previewFaceStatus(name, weight, italic) === 'error') {
     rememberKeyFailure(key)
     notifyPreviewFonts()
@@ -238,7 +252,8 @@ export function isPreviewFontReady(family: string, weight = 400, italic = false)
   }
   // True here means "stop waiting", including a failed face. Paint only when
   // isPreviewFontFailed is false. A timed-out key recovers here when the face
-  // finishes later and loadingdone notifies subscribers.
+  // finishes later and subscribers are notified, either by loadingdone or by
+  // the original load() settling while another key is still pending.
   if (failedKeys.has(key)) return true
   if (readyKeys.has(key)) {
     if (hasMatchingPreviewFace(name)) return true
@@ -276,6 +291,9 @@ export function invalidatePreviewReadyFamilies(families: readonly string[]): voi
     }
     for (const key of loadPromises.keys()) {
       if (key.startsWith(prefix)) loadPromises.delete(key)
+    }
+    for (const key of loadTokens.keys()) {
+      if (key.startsWith(prefix)) loadTokens.delete(key)
     }
     for (const key of keyTimers.keys()) {
       if (key.startsWith(prefix)) clearKeyTimer(key)
