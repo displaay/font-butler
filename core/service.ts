@@ -361,11 +361,30 @@ function writeUploadExclusive(dir: string, filename: string, data: Buffer): stri
 }
 
 /** Late Don't Allow uses this notice for both the probe and a real logout. */
-export function emitLateLogoutFailure(result: { message?: string }): void {
+export function emitLateLogoutFailure(result: { message?: string; attemptId?: string }): void {
   emitNotice({
     kind: 'warning',
     source: 'logout',
     message: result.message || LOGOUT_FAILED_MESSAGE,
+    ...(result.attemptId ? { attemptId: result.attemptId } : {}),
+  })
+}
+
+export function emitLogoutWaitNotice(message: string, attemptId?: string): void {
+  emitNotice({
+    kind: 'info',
+    source: 'logout-waiting',
+    message,
+    ...(attemptId ? { attemptId } : {}),
+  })
+}
+
+export function emitLogoutProbeNotice(message: string, attemptId?: string): void {
+  emitNotice({
+    kind: 'info',
+    source: 'logout-probe',
+    message,
+    ...(attemptId ? { attemptId } : {}),
   })
 }
 
@@ -1517,19 +1536,11 @@ export class FontButlerService {
       (result) => {
         emitLateLogoutFailure(result)
       },
-      (message) => {
-        emitNotice({
-          kind: 'info',
-          source: 'logout-waiting',
-          message,
-        })
+      (message, attemptId) => {
+        emitLogoutWaitNotice(message, attemptId)
       },
-      (message) => {
-        emitNotice({
-          kind: 'info',
-          source: 'logout-probe',
-          message,
-        })
+      (message, attemptId) => {
+        emitLogoutProbeNotice(message, attemptId)
       },
     )
   }
@@ -1545,19 +1556,11 @@ export class FontButlerService {
       onLateFailure: (result) => {
         emitLateLogoutFailure(result)
       },
-      onStillWaiting: (message) => {
-        emitNotice({
-          kind: 'info',
-          source: 'logout-waiting',
-          message,
-        })
+      onStillWaiting: (message, attemptId) => {
+        emitLogoutWaitNotice(message, attemptId)
       },
-      onSimulated: (message) => {
-        emitNotice({
-          kind: 'info',
-          source: 'logout-probe',
-          message,
-        })
+      onSimulated: (message, attemptId) => {
+        emitLogoutProbeNotice(message, attemptId)
       },
     })
   }

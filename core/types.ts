@@ -177,6 +177,8 @@ export type Notice = {
   operationId?: string
   /** Watch-folder failures are buffered until the window can show them. Logout failures are a main-process dialog. */
   source?: 'watch' | 'logout' | 'logout-waiting' | 'logout-probe'
+  /** One logout or probe flight. A joined click reuses it. */
+  attemptId?: string
 }
 
 export type ViewLayout = 'list' | 'grid'

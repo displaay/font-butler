@@ -6,13 +6,15 @@ import { test } from 'node:test'
 import { setBuildIdentityCandidatesForTests } from '../core/build-identity.ts'
 import {
   logoutResultFromExecError,
+  requestLogoutProbe,
+  resetLogoutAttemptIdsForTests,
   resetLogoutProbe,
   resetSharedMacLogout,
   setMacLogoutExecForTests,
   shareMacLogout,
 } from '../core/caches.ts'
 import { onEvent } from '../core/events.ts'
-import { emitLateLogoutFailure, FontButlerService } from '../core/service.ts'
+import { emitLateLogoutFailure, emitLogoutWaitNotice, FontButlerService } from '../core/service.ts'
 import {
   LOGOUT_CANCELLED as SHARED_LOGOUT_CANCELLED,
   LOGOUT_FAILED_MESSAGE,
@@ -342,9 +344,9 @@ test('a hidden window shows one logout failure box for a late probe or release d
       },
     }
     let boxes = 0
-    const showBox = (parent, options) => {
+    const showBox = (parent, options, attemptId) => {
       boxes += 1
-      return showLogoutMessageBox(dialogApi, parent, options, hooks)
+      return showLogoutMessageBox(dialogApi, parent, options, { ...hooks, attemptId })
     }
     const stop = onEvent((event) => {
       if (!event || event.type !== 'notice') return
@@ -371,8 +373,16 @@ test('a hidden window shows one logout failure box for a late probe or release d
         1,
       )
       assert.equal(notices.includes('logout-probe'), false)
-      assert.equal(notices.includes('logout notice received source=logout'), true)
-      assert.equal(notices.includes('logout dialog shown unparented; window hidden'), true)
+      const received = notices.find((item) =>
+        String(item).startsWith('logout notice received source=logout attemptId='),
+      )
+      assert.equal(typeof received, 'string')
+      const attemptId = String(received).split('attemptId=')[1]
+      assert.match(attemptId, /^logout-/)
+      assert.equal(
+        notices.includes(`logout dialog shown unparented; window hidden attemptId=${attemptId}`),
+        true,
+      )
     } finally {
       stop()
       resetLogoutDialogSession()
@@ -558,4 +568,198 @@ test('logout cancel uses the shared cancelled message', () => {
   assert.match(main, /menuLogoutPathAfterCacheClear/)
   assert.match(main, /logoutProbeWouldStartDialogOptions/)
   assert.doesNotMatch(main, /title: LOGOUT_PROBE_WOULD_START_NOTICE/)
+})
+
+test('each logout attempt shows one failure box and logs its own attemptId', async () => {
+  resetLogoutDialogSession()
+  resetLogoutProbe()
+  resetLogoutAttemptIdsForTests()
+  const logFile = path.join(os.tmpdir(), `font-butler-logout-attempts-${process.pid}.log`)
+  const previousLog = process.env.FONT_BUTLER_LOG
+  process.env.FONT_BUTLER_LOG = logFile
+  fs.rmSync(logFile, { force: true })
+
+  const failureCalls = []
+  const waitingCalls = []
+  const notices = []
+  const win = {
+    isDestroyed: () => false,
+    isVisible: () => false,
+    isMinimized: () => false,
+  }
+  const dialogApi = {
+    showMessageBox() {},
+  }
+  const present = (notice) =>
+    presentLogoutNotice({
+      notice,
+      getWindow: () => win,
+      log(message) {
+        notices.push(message)
+      },
+      showMessageBox(parent, options, attemptId) {
+        failureCalls.push({ attemptId, title: options.title })
+        return showLogoutMessageBox(dialogApi, parent, options, {
+          showMainWindow() {},
+          getWindow: () => win,
+          attemptId,
+          log(message) {
+            notices.push(message)
+          },
+        })
+      },
+      showWaitingNotice(parent, options, attemptId) {
+        waitingCalls.push({ attemptId, title: options.title })
+        return showLogoutMessageBox(dialogApi, parent, options, {
+          showMainWindow() {},
+          getWindow: () => win,
+          attemptId,
+          log(message) {
+            notices.push(message)
+          },
+        })
+      },
+      notify: () => false,
+    })
+  const stop = onEvent((event) => {
+    if (!event || event.type !== 'notice') return
+    present(event.notice)
+  })
+  const denied = { stderr: 'osascript is not allowed to send keystrokes. (-1743)' }
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+  function hangingExec() {
+    let finish = () => {}
+    return {
+      exec(_file, _args, callback) {
+        finish = () => callback(denied)
+        return { unref() {} }
+      },
+      deny() {
+        finish()
+      },
+    }
+  }
+
+  try {
+    const firstExec = hangingExec()
+    let joinedLate = 0
+    const first = requestLogoutProbe(
+      { testBuild: true },
+      {
+        acceptAfterMs: 20,
+        stillWaitingAfterMs: 60_000,
+        exec: firstExec.exec,
+        onLateFailure: emitLateLogoutFailure,
+        onStillWaiting: emitLogoutWaitNotice,
+      },
+    )
+    const joined = requestLogoutProbe(
+      { testBuild: true },
+      {
+        onLateFailure() {
+          joinedLate += 1
+          throw new Error('joined click must not install a second failure handler')
+        },
+      },
+    )
+    assert.equal(joined, first)
+    await sleep(40)
+    const accepted = await first
+    assert.equal(accepted.requested, true)
+    const id1 = accepted.attemptId
+    assert.match(id1, /^logout-/)
+    firstExec.deny()
+    await sleep(30)
+    assert.equal(joinedLate, 0)
+    assert.equal(failureCalls.length, 1)
+    assert.equal(failureCalls[0].attemptId, id1)
+    assert.equal(waitingCalls.length, 0)
+
+    present({
+      kind: 'warning',
+      source: 'logout',
+      message: LOGOUT_FAILED_MESSAGE,
+      attemptId: id1,
+    })
+    assert.equal(failureCalls.length, 1)
+    assert.equal(
+      notices.includes(`logout dialog skipped; failure dialog already shown attemptId=${id1}`),
+      true,
+    )
+
+    const secondExec = hangingExec()
+    const second = requestLogoutProbe(
+      { testBuild: true },
+      {
+        acceptAfterMs: 15,
+        stillWaitingAfterMs: 25,
+        exec: secondExec.exec,
+        onLateFailure: emitLateLogoutFailure,
+        onStillWaiting: emitLogoutWaitNotice,
+      },
+    )
+    assert.notEqual(second, first)
+    await sleep(50)
+    const accepted2 = await second
+    assert.equal(accepted2.requested, true)
+    const id2 = accepted2.attemptId
+    assert.match(id2, /^logout-/)
+    assert.notEqual(id2, id1)
+    assert.equal(waitingCalls.length, 1)
+    assert.equal(waitingCalls[0].attemptId, id2)
+    assert.equal(waitingCalls[0].title, 'Still waiting for macOS')
+    secondExec.deny()
+    await sleep(30)
+    assert.equal(failureCalls.length, 2)
+    assert.equal(failureCalls[1].attemptId, id2)
+    assert.equal(failureCalls[0].title, "Logging out didn't happen")
+    assert.equal(failureCalls[1].title, "Logging out didn't happen")
+
+    const lines = fs.readFileSync(logFile, 'utf8').split('\n')
+    const has = (id, fragment) =>
+      lines.some((line) => line.includes(fragment) && line.includes(`attemptId=${id}`))
+    for (const id of [id1, id2]) {
+      assert.equal(
+        lines.some((line) => line.includes(`logout probe request attemptId=${id}`)),
+        true,
+        id,
+      )
+      assert.equal(has(id, 'logout result requested=true'), true, id)
+      assert.equal(has(id, 'logout failed'), true, id)
+      assert.equal(
+        lines.some(
+          (line) => line.includes('logout failed') && line.includes('-1743') && line.includes(`attemptId=${id}`),
+        ),
+        true,
+        id,
+      )
+      assert.equal(has(id, 'logout settled after accept'), true, id)
+      assert.equal(has(id, 'logout late failure notice emitted listeners='), true, id)
+      assert.equal(notices.includes(`logout notice received source=logout attemptId=${id}`), true, id)
+      assert.equal(
+        notices.includes(`logout dialog shown unparented; window hidden attemptId=${id}`),
+        true,
+        id,
+      )
+    }
+    assert.equal(has(id1, 'logout probe request joined'), true)
+    assert.equal(has(id2, 'logout still waiting'), true)
+    assert.equal(notices.includes(`logout notice received source=logout-waiting attemptId=${id2}`), true)
+    assert.equal(
+      notices.filter((item) => item === `logout dialog shown unparented; window hidden attemptId=${id2}`).length,
+      2,
+    )
+    assert.equal(
+      notices.some((item) => String(item).includes('logout dialog skipped') && String(item).includes(id2)),
+      false,
+    )
+  } finally {
+    stop()
+    resetLogoutProbe()
+    resetLogoutDialogSession()
+    resetLogoutAttemptIdsForTests()
+    if (previousLog === undefined) delete process.env.FONT_BUTLER_LOG
+    else process.env.FONT_BUTLER_LOG = previousLog
+    fs.rmSync(logFile, { force: true })
+  }
 })

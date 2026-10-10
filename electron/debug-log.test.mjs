@@ -7,6 +7,7 @@ import {
   createDebugLogFileWriter,
   createDebugLogStore,
   DEBUG_LOG_RING_MAX,
+  defaultLogFilePath,
   redactDebugLogLine,
 } from './debug-log.mjs'
 
@@ -33,6 +34,22 @@ test('redactDebugLogLine removes bearer and registered secrets', () => {
 
 test('default ring max is 2000', () => {
   assert.equal(DEBUG_LOG_RING_MAX, 2000)
+})
+
+test('a test-feed log name writes the electron log under Font Buttler Test', () => {
+  const home = '/Users/tester'
+  assert.equal(
+    defaultLogFilePath(home, 'darwin', { FONT_BUTLER_LOG_NAME: 'Font Buttler Test' }),
+    path.join(home, 'Library', 'Logs', 'Font Buttler Test', 'main.log'),
+  )
+  assert.equal(
+    defaultLogFilePath(home, 'darwin', {}),
+    path.join(home, 'Library', 'Logs', 'Font Buttler', 'main.log'),
+  )
+  assert.equal(
+    defaultLogFilePath(home, 'linux', { FONT_BUTLER_LOG_NAME: '  Font Buttler Test  ' }),
+    path.join(home, '.local', 'state', 'Font Buttler Test', 'logs', 'main.log'),
+  )
 })
 
 test('createDebugLogFileWriter tolerates mkdir failure', () => {

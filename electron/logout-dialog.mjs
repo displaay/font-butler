@@ -122,17 +122,22 @@ function logoutBoxHiddenReason(parent, hooks) {
  * `isVisible()` stays true, so an app-hidden, hidden, or minimized window
  * is shown and the box stays unparented. A sheet on that window never appears.
  */
+function attemptLogSuffix(attemptId) {
+  return ` attemptId=${typeof attemptId === 'string' ? attemptId : ''}`
+}
+
 export function showLogoutMessageBox(dialogApi, parent, options, hooks) {
   const reason = logoutBoxHiddenReason(parent, hooks)
   const log = (message) => hooks?.log?.(message)
+  const suffix = attemptLogSuffix(hooks?.attemptId)
   if (!reason) {
-    log('logout dialog shown parented')
+    log(`logout dialog shown parented${suffix}`)
     return dialogApi.showMessageBox(parent, options)
   }
   if (liveMessageBoxParent(parent) && typeof hooks?.showMainWindow === 'function') {
     hooks.showMainWindow()
   }
-  log(`logout dialog shown unparented; ${reason}`)
+  log(`logout dialog shown unparented; ${reason}${suffix}`)
   return dialogApi.showMessageBox(options)
 }
 
@@ -142,10 +147,30 @@ export function showLogoutMessageBox(dialogApi, parent, options, hooks) {
  * `getParent` is read at show time so a window opened or closed during logout
  * is the one the dialog attaches to.
  */
-let logoutFailureDialogShown = false
+/** One failure box per attempt. Oldest ids drop so a long session cannot grow without bound. */
+const LOGOUT_FAILURE_ATTEMPTS_MAX = 32
+const logoutFailureAttempts = []
 
 export function resetLogoutDialogSession() {
-  logoutFailureDialogShown = false
+  logoutFailureAttempts.length = 0
+}
+
+function logoutAttemptKey(notice) {
+  return notice && typeof notice.attemptId === 'string' ? notice.attemptId : ''
+}
+
+function logoutFailureShown(notice) {
+  return logoutFailureAttempts.includes(logoutAttemptKey(notice))
+}
+
+function rememberLogoutFailure(notice) {
+  const key = logoutAttemptKey(notice)
+  const index = logoutFailureAttempts.indexOf(key)
+  if (index !== -1) logoutFailureAttempts.splice(index, 1)
+  logoutFailureAttempts.push(key)
+  while (logoutFailureAttempts.length > LOGOUT_FAILURE_ATTEMPTS_MAX) {
+    logoutFailureAttempts.shift()
+  }
 }
 
 export function presentLogoutFailure({ showDialog, notify, message, getParent }) {
@@ -179,15 +204,16 @@ export function presentLogoutNotice({
     note('logout dialog skipped; notice missing')
     return
   }
-  note(`logout notice received source=${notice.source || 'none'}`)
+  const attempt = attemptLogSuffix(notice.attemptId)
+  note(`logout notice received source=${notice.source || 'none'}${attempt}`)
   const parent = liveMessageBoxParent(typeof getWindow === 'function' ? getWindow() : null)
   if (notice.source === 'logout-probe') {
-    showWaitingNotice(parent, logoutProbeWouldStartDialogOptions())
+    showWaitingNotice(parent, logoutProbeWouldStartDialogOptions(), notice.attemptId)
     return
   }
   if (notice.source === 'logout-waiting') {
-    if (logoutFailureDialogShown) {
-      note('logout dialog skipped; failure dialog already shown')
+    if (logoutFailureShown(notice)) {
+      note(`logout dialog skipped; failure dialog already shown${attempt}`)
       return
     }
     let shown = false
@@ -197,22 +223,22 @@ export function presentLogoutNotice({
       shown = false
     }
     if (shown) {
-      note('logout dialog skipped; notification delivered')
+      note(`logout dialog skipped; notification delivered${attempt}`)
       return
     }
-    showWaitingNotice(parent, logoutWaitingNoticeOptions(notice.message))
+    showWaitingNotice(parent, logoutWaitingNoticeOptions(notice.message), notice.attemptId)
     return
   }
   if (notice.source !== 'logout') {
-    note(`logout dialog skipped; source=${notice.source || 'none'}`)
+    note(`logout dialog skipped; source=${notice.source || 'none'}${attempt}`)
     return
   }
-  if (logoutFailureDialogShown) {
-    note('logout dialog skipped; failure dialog already shown')
+  if (logoutFailureShown(notice)) {
+    note(`logout dialog skipped; failure dialog already shown${attempt}`)
     return
   }
-  logoutFailureDialogShown = true
-  showMessageBox(parent, logoutFailedDialogOptions(notice.message))
+  rememberLogoutFailure(notice)
+  showMessageBox(parent, logoutFailedDialogOptions(notice.message), notice.attemptId)
   try {
     notify?.(notice)
   } catch {

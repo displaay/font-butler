@@ -747,7 +747,7 @@ test('logout request and result are written to main.log', async () => {
   const previous = process.env.FONT_BUTLER_LOG
   process.env.FONT_BUTLER_LOG = logFile
   try {
-    assert.match(requestMacLogout.toString(), /logout request/)
+    assert.match(shareMacLogout.toString(), /logout request/)
     const accepted = await awaitMacLogoutRequest((report) => {
       report({ requested: true })
     })

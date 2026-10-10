@@ -18,11 +18,10 @@ export function emitEvent(event: ServiceEvent): void {
   }
   if (event.type === 'notice' && event.notice.source === 'logout') {
     const listeners = bus.listenerCount('event')
+    const attemptId = event.notice.attemptId || ''
     logMain(
       'install',
-      listeners === 0
-        ? 'logout late failure notice emitted listeners=0'
-        : `logout late failure notice emitted listeners=${listeners}`,
+      `logout late failure notice emitted listeners=${listeners} attemptId=${attemptId}`,
     )
   }
   bus.emit('event', event)

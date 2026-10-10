@@ -1044,11 +1044,12 @@ async function confirmFontCacheClear() {
   return choice.response === 0
 }
 
-function logoutDialogHooks() {
+function logoutDialogHooks(attemptId) {
   return {
     showMainWindow,
     getWindow: () => mainWindow,
     isAppHidden: () => typeof app.isHidden === 'function' && app.isHidden(),
+    attemptId,
     log: (message) => logDebug('install', message),
   }
 }
@@ -1604,10 +1605,10 @@ function handleApiEvent(event) {
         notice: event.notice,
         getWindow: () => mainWindow,
         log: (message) => logDebug('install', message),
-        showMessageBox: (parent, options) =>
-          showLogoutMessageBox(dialog, parent, options, logoutDialogHooks()),
-        showWaitingNotice: (parent, options) =>
-          showLogoutMessageBox(dialog, parent, options, logoutDialogHooks()),
+        showMessageBox: (parent, options, attemptId) =>
+          showLogoutMessageBox(dialog, parent, options, logoutDialogHooks(attemptId)),
+        showWaitingNotice: (parent, options, attemptId) =>
+          showLogoutMessageBox(dialog, parent, options, logoutDialogHooks(attemptId)),
         notify(notice) {
           try {
             return maybeNotify(notice)
@@ -1984,6 +1985,11 @@ if (!gotLock) {
           // after a future filter, and the worker would then use the real library.
           ...(process.env.FONT_BUTLER_DATA
             ? { FONT_BUTLER_DATA: process.env.FONT_BUTLER_DATA }
+            : {}),
+          // Same reason as FONT_BUTLER_DATA: the worker must not write the
+          // real app's main.log when this process is Font Buttler Test.
+          ...(process.env.FONT_BUTLER_LOG_NAME
+            ? { FONT_BUTLER_LOG_NAME: process.env.FONT_BUTLER_LOG_NAME }
             : {}),
         },
       })

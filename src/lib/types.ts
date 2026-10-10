@@ -142,6 +142,8 @@ export type Notice = {
   entryId?: string
   operationId?: string
   source?: 'watch' | 'logout' | 'logout-waiting' | 'logout-probe'
+  /** One logout or probe flight. A joined click reuses it. */
+  attemptId?: string
 }
 
 export type DuplicateWarning = {

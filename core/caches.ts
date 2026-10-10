@@ -364,11 +364,17 @@ export async function clearUserFontCache(
   return { mac: true, cleared: true }
 }
 
-export function logoutResultFromExecError(error: unknown): {
+function logoutLog(message: string, attemptId?: string): void {
+  const suffix = attemptId ? ` attemptId=${attemptId}` : ''
+  logMain('install', `${message}${suffix}`)
+}
+
+export function logoutResultFromExecError(error: unknown, attemptId?: string): {
   requested: false
   cancelled?: boolean
   message: string
   error: string
+  attemptId?: string
 } {
   const err = error as { message?: string; stderr?: string | Buffer; stdout?: string | Buffer }
   const detail =
@@ -376,11 +382,12 @@ export function logoutResultFromExecError(error: unknown): {
       .map((part) => (Buffer.isBuffer(part) ? part.toString('utf8') : part))
       .filter((part) => typeof part === 'string' && part.trim())
       .join('\n') || String(error)
-  logMain('install', `logout failed ${detail}`)
+  logoutLog(`logout failed ${detail}`, attemptId)
+  const id = attemptId ? { attemptId } : {}
   if (/\(-128\)/.test(detail)) {
-    return { requested: false, cancelled: true, message: LOGOUT_CANCELLED, error: detail }
+    return { requested: false, cancelled: true, message: LOGOUT_CANCELLED, error: detail, ...id }
   }
-  return { requested: false, message: LOGOUT_FAILED_MESSAGE, error: detail }
+  return { requested: false, message: LOGOUT_FAILED_MESSAGE, error: detail, ...id }
 }
 
 export type MacLogoutResult = {
@@ -391,6 +398,8 @@ export type MacLogoutResult = {
   error?: string
   /** Allow on the test-build probe. Logout was not started. */
   probeAllowed?: boolean
+  /** Set when the flight starts. A second click that joins keeps this id. */
+  attemptId?: string
 }
 
 type LogoutExec = (
@@ -410,10 +419,14 @@ export function setMacLogoutExecForTests(exec: LogoutExec | null): void {
  * Start osascript with no kill timer. A long Automation prompt must stay alive
  * so a later Allow click can still log out.
  */
-export function startMacLogoutProcess(exec: LogoutExec, report: (result: MacLogoutResult) => void): void {
+export function startMacLogoutProcess(
+  exec: LogoutExec,
+  report: (result: MacLogoutResult) => void,
+  attemptId?: string,
+): void {
   const child = exec('osascript', ['-e', MAC_LOGOUT_APPLESCRIPT], (error) => {
-    if (error) report(logoutResultFromExecError(error))
-    else report({ requested: true })
+    if (error) report(logoutResultFromExecError(error, attemptId))
+    else report(attemptId ? { requested: true, attemptId } : { requested: true })
   })
   child?.unref?.()
 }
@@ -430,23 +443,31 @@ export function awaitMacLogoutRequest(
   onLateFailure?: (result: MacLogoutResult) => void,
   options?: {
     stillWaitingAfterMs?: number
-    onStillWaiting?: (message: string) => void
+    onStillWaiting?: (message: string, attemptId?: string) => void
     onLateSuccess?: (result: MacLogoutResult) => void
+    attemptId?: string
   },
 ): Promise<MacLogoutResult> {
   const stillWaitingAfterMs = options?.stillWaitingAfterMs ?? LOGOUT_STILL_WAITING_MS
   const onStillWaiting = options?.onStillWaiting
   const onLateSuccess = options?.onLateSuccess
+  const attemptId = options?.attemptId
+  const withAttempt = (result: MacLogoutResult): MacLogoutResult =>
+    attemptId && !result.attemptId ? { ...result, attemptId } : result
   return new Promise((resolve) => {
     let settled = false
     let execFinished = false
     let failureDelivered = false
-    const deliverExec = (result: MacLogoutResult) => {
+    const deliverExec = (incoming: MacLogoutResult) => {
       if (execFinished) return
       execFinished = true
       clearTimeout(waitTimer)
+      const result = withAttempt(incoming)
       if (settled) {
-        logMain('install', `logout settled after accept ${result.message || ''} ${result.error || ''}`.trim())
+        logoutLog(
+          `logout settled after accept ${result.message || ''} ${result.error || ''}`.trim(),
+          attemptId,
+        )
         if (result.requested === false && result.cancelled !== true && !failureDelivered) {
           failureDelivered = true
           onLateFailure?.(result)
@@ -457,22 +478,22 @@ export function awaitMacLogoutRequest(
       }
       settled = true
       clearTimeout(acceptTimer)
-      logMain(
-        'install',
+      logoutLog(
         `logout result requested=${result.requested}${result.cancelled ? ' cancelled' : ''}${result.message ? ` ${result.message}` : ''}${result.error ? ` ${result.error}` : ''}`.trim(),
+        attemptId,
       )
       resolve(result)
     }
     const acceptTimer = setTimeout(() => {
       if (settled) return
       settled = true
-      logMain('install', 'logout result requested=true')
-      resolve({ requested: true })
+      logoutLog('logout result requested=true', attemptId)
+      resolve(attemptId ? { requested: true, attemptId } : { requested: true })
     }, acceptAfterMs)
     const waitTimer = setTimeout(() => {
       if (execFinished) return
-      logMain('install', `logout still waiting ${LOGOUT_STILL_WAITING_MESSAGE}`)
-      onStillWaiting?.(LOGOUT_STILL_WAITING_MESSAGE)
+      logoutLog(`logout still waiting ${LOGOUT_STILL_WAITING_MESSAGE}`, attemptId)
+      onStillWaiting?.(LOGOUT_STILL_WAITING_MESSAGE, attemptId)
     }, stillWaitingAfterMs)
     if (typeof acceptTimer.unref === 'function') acceptTimer.unref()
     if (typeof waitTimer.unref === 'function') waitTimer.unref()
@@ -481,8 +502,20 @@ export function awaitMacLogoutRequest(
 }
 
 type LogoutFlight = {
+  attemptId: string
   accepted: Promise<MacLogoutResult>
   finished: Promise<void>
+}
+
+let logoutAttemptSerial = 0
+
+export function resetLogoutAttemptIdsForTests(): void {
+  logoutAttemptSerial = 0
+}
+
+function nextLogoutAttemptId(): string {
+  logoutAttemptSerial += 1
+  return `logout-${logoutAttemptSerial}`
 }
 
 let logoutFlight: LogoutFlight | null = null
@@ -496,12 +529,17 @@ export function resetSharedMacLogout(): void {
  * that process reports, including after the accept window has already resolved.
  */
 export function shareMacLogout(
-  start: (report: (result: MacLogoutResult) => void) => void,
+  start: (report: (result: MacLogoutResult) => void, attemptId: string) => void,
   onLateFailure?: (result: MacLogoutResult) => void,
-  onStillWaiting?: (message: string) => void,
+  onStillWaiting?: (message: string, attemptId?: string) => void,
   acceptAfterMs = LOGOUT_ACCEPT_MS,
 ): Promise<MacLogoutResult> {
-  if (logoutFlight) return logoutFlight.accepted
+  if (logoutFlight) {
+    logoutLog('logout request joined', logoutFlight.attemptId)
+    return logoutFlight.accepted
+  }
+  const attemptId = nextLogoutAttemptId()
+  logoutLog('logout request', attemptId)
   let markFinished = () => {}
   const finished = new Promise<void>((resolve) => {
     markFinished = resolve
@@ -511,13 +549,13 @@ export function shareMacLogout(
       start((result) => {
         report(result)
         markFinished()
-      })
+      }, attemptId)
     },
     acceptAfterMs,
     onLateFailure,
-    { onStillWaiting },
+    { onStillWaiting, attemptId },
   )
-  const flight: LogoutFlight = { accepted, finished }
+  const flight: LogoutFlight = { attemptId, accepted, finished }
   logoutFlight = flight
   void finished.finally(() => {
     if (logoutFlight === flight) logoutFlight = null
@@ -527,8 +565,8 @@ export function shareMacLogout(
 
 export async function requestMacLogout(
   onLateFailure?: (result: MacLogoutResult) => void,
-  onStillWaiting?: (message: string) => void,
-  onSimulated?: (message: string) => void,
+  onStillWaiting?: (message: string, attemptId?: string) => void,
+  onSimulated?: (message: string, attemptId?: string) => void,
 ): Promise<MacLogoutResult> {
   const identity = loadBuildIdentity()
   // Lowest logout gate. Every caller, including a future one, runs the probe.
@@ -544,9 +582,8 @@ export async function requestMacLogout(
   if (process.env.FONT_BUTLER_TEST === '1' && process.env.FONT_BUTLER_NATIVE !== '1') {
     return { requested: false, message: LOGOUT_FAILED_MESSAGE }
   }
-  logMain('install', 'logout request')
   return shareMacLogout(
-    (report) => startMacLogoutProcess(macLogoutExec, report),
+    (report, attemptId) => startMacLogoutProcess(macLogoutExec, report, attemptId),
     onLateFailure,
     onStillWaiting,
   )
@@ -557,8 +594,8 @@ export type LogoutProbeResult = MacLogoutResult & { ignored?: boolean }
 type LogoutProbeHooks = {
   exec?: LogoutExec
   onLateFailure?: (result: MacLogoutResult) => void
-  onStillWaiting?: (message: string) => void
-  onSimulated?: (message: string) => void
+  onStillWaiting?: (message: string, attemptId?: string) => void
+  onSimulated?: (message: string, attemptId?: string) => void
   acceptAfterMs?: number
   stillWaitingAfterMs?: number
 }
@@ -582,36 +619,41 @@ export function requestLogoutProbe(
   if (identity?.testBuild !== true) {
     return Promise.resolve({ requested: false, ignored: true })
   }
-  if (probeFlight) return probeFlight.accepted
+  if (probeFlight) {
+    logoutLog('logout probe request joined', probeFlight.attemptId)
+    return probeFlight.accepted
+  }
+  const attemptId = nextLogoutAttemptId()
   const exec = hooks.exec ?? macLogoutExec
   let noted = false
   const noteAllowed = () => {
     if (noted) return
     noted = true
-    hooks.onSimulated?.(LOGOUT_PROBE_WOULD_START_NOTICE)
+    hooks.onSimulated?.(LOGOUT_PROBE_WOULD_START_NOTICE, attemptId)
   }
   let markFinished = () => {}
   const finished = new Promise<void>((resolve) => {
     markFinished = resolve
   })
-  logMain('install', 'logout probe request')
+  logoutLog('logout probe request', attemptId)
   const accepted = awaitMacLogoutRequest(
     (report) => {
       try {
         const child = exec('osascript', ['-e', MAC_LOGOUT_PROBE_APPLESCRIPT], (error) => {
-          if (error) report(logoutResultFromExecError(error))
+          if (error) report(logoutResultFromExecError(error, attemptId))
           else {
             report({
               requested: true,
               probeAllowed: true,
               message: LOGOUT_PROBE_WOULD_START_NOTICE,
+              attemptId,
             })
           }
           markFinished()
         })
         child?.unref?.()
       } catch (error) {
-        report(logoutResultFromExecError(error))
+        report(logoutResultFromExecError(error, attemptId))
         markFinished()
       }
     },
@@ -620,12 +662,13 @@ export function requestLogoutProbe(
     {
       stillWaitingAfterMs: hooks.stillWaitingAfterMs ?? LOGOUT_STILL_WAITING_MS,
       onStillWaiting: hooks.onStillWaiting,
+      attemptId,
       onLateSuccess: (result) => {
         if (result.requested === true && result.probeAllowed === true) noteAllowed()
       },
     },
   )
-  const flight: LogoutFlight = { accepted, finished }
+  const flight: LogoutFlight = { attemptId, accepted, finished }
   probeFlight = flight
   void finished.finally(() => {
     if (probeFlight === flight) probeFlight = null
