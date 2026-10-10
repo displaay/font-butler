@@ -98,13 +98,11 @@ final class FontButtlerFinderSync: FIFinderSync {
     }
 }
 
+/// Log only. A notification from this extension would be a separate app
+/// permission. The helper sends the message to Font Buttler, which already
+/// has notification permission, or records it for the next launch.
 private func showFinderSyncError(_ message: String) {
-    DispatchQueue.main.async {
-        let alert = NSAlert()
-        alert.messageText = "Font Buttler"
-        alert.informativeText = message
-        alert.runModal()
-    }
+    NSLog("Finder Sync: %@", message)
 }
 
 private func isFontFile(_ url: URL) -> Bool {
@@ -225,10 +223,9 @@ func deliverFinderSyncHandoff(service: String, action: String, paths: [String], 
     }
     let attempt = sendFinderSyncHandoff(service: service, action: action, paths: paths, requestId: requestId, timeout: 9)
     if attempt.accepted { return }
-    if attempt.message == finderSyncMissingApp {
-        showFinderSyncError(finderSyncMissingApp)
+    if attempt.message.isEmpty {
+        showFinderSyncError(finderSyncAgentDisabled)
         return
     }
-    let message = attempt.message.isEmpty ? finderSyncAgentDisabled : attempt.message
-    showFinderSyncError(message)
+        showFinderSyncError(attempt.message)
 }

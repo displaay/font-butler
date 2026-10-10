@@ -10,6 +10,8 @@ export const FINDER_SYNC_AGENT_EXECUTABLE = 'FontButtlerFinderSyncAgent'
 export const FINDER_SYNC_AGENT_APP_NAME = 'FontButtlerFinderSyncAgent.app'
 export const FINDER_SYNC_SOCKET_NAME = 'fontbutler-finder-sync.sock'
 export const FINDER_SYNC_TEST_SOCKET_NAME = 'fontbutler-finder-sync-test.sock'
+/** Private directory under the per-user temp dir. Short so the socket path fits in sun_path. */
+export const FINDER_SYNC_SOCKET_DIR = 'fontbutler-fs'
 export const FINDER_SYNC_PRINCIPAL_CLASS = 'FontButtlerFinderSync'
 export const FINDER_SYNC_EXTENSION_POINT = 'com.apple.FinderSync'
 export const FINDER_SYNC_APPEX_NAME = 'Font Buttler Finder Sync.appex'
@@ -34,6 +36,10 @@ export const FINDER_SYNC_MISSING_APP =
 export const FINDER_SYNC_AGENT_DISABLED =
   'Turn on Font Buttler in Login Items. Until then, use Services (right-click > Services > Install).'
 export const FINDER_SYNC_REQUEST_TTL_MS = 2 * 60 * 1000
+export const FINDER_SYNC_REQUEST_CAP = 256
+export const FINDER_SYNC_PENDING_ERROR_FILE = 'finder-sync-pending-error.json'
+export const FINDER_SYNC_USER_DATA_DIR = 'Font Buttler'
+export const FINDER_SYNC_TEST_USER_DATA_DIR = 'Font Buttler Test'
 const FINDER_SYNC_ARCH_NAMES = ['ia32', 'x64', 'armv7l', 'arm64', 'universal']
 
 const MAX_PATH_LENGTH = 4096
@@ -118,6 +124,11 @@ export function finderSyncSocketName(testFeed) {
   return testFeed ? FINDER_SYNC_TEST_SOCKET_NAME : FINDER_SYNC_SOCKET_NAME
 }
 
+/** Directory name both the app and the helper append under the per-user temp dir. */
+export function finderSyncSocketDirectoryName() {
+  return FINDER_SYNC_SOCKET_DIR
+}
+
 /**
  * clang `-arch` slices for the helper and the receiver. A universal pack
  * builds both slices; `lipo` joins them. `arch` is an electron-builder Arch
@@ -156,28 +167,22 @@ export function prepareFinderSyncSocket(filePath, io) {
   return { ok: true, unlinked: true, reason: 'replaced' }
 }
 
-/** Absolute helper path launchd printed for this flavour's label, if any. */
-export function parseLaunchctlProgram(output, label) {
-  const text = String(output ?? '')
-  if (!label || !text.includes(label)) return ''
-  const match = text.match(/^\s*path\s*=\s*(\S.*?)\s*$/m)
-  return match ? match[1].trim() : ''
-}
-
-function absoluteProgram(filePath) {
+function absoluteBundlePath(filePath) {
   if (typeof filePath !== 'string' || !filePath.startsWith('/')) return ''
   return filePath.replace(/\/+$/, '')
 }
 
 /**
  * What this launch should do with this flavour's LaunchAgent only.
- * A test build never names the release label or plist. A different
- * BundleProgram means unregister, then register. Opt-out only unregisters.
+ * A test build never names the release label or plist. The recorded app
+ * bundle path is the one this app wrote after a successful register.
+ * A different bundle path means unregister, then register. Opt-out only
+ * unregisters. An enabled or approved agent at the same path stays as it is.
  */
 export function planFinderSyncAgentRegistration({
   testFeed = false,
-  currentProgram,
-  registeredProgram,
+  currentBundle,
+  recordedBundle,
   status,
   optedOut = false,
 } = {}) {
@@ -186,9 +191,9 @@ export function planFinderSyncAgentRegistration({
   const plan = { action: 'keep', label, plist, testFeed: Boolean(testFeed), reason: 'current' }
   if (optedOut) return { ...plan, action: 'unregister', reason: 'opt-out' }
   if (status === 'unsupported') return { ...plan, action: 'keep', reason: 'unsupported' }
-  const current = absoluteProgram(currentProgram)
-  const registered = absoluteProgram(registeredProgram)
-  if (registered && current && registered !== current) {
+  const current = absoluteBundlePath(currentBundle)
+  const recorded = absoluteBundlePath(recordedBundle)
+  if (recorded && current && recorded !== current) {
     return { ...plan, action: 'reregister', reason: 'moved' }
   }
   if (status === 'enabled' || status === 'requires-approval') {
@@ -198,32 +203,163 @@ export function planFinderSyncAgentRegistration({
 }
 
 export function readFinderSyncAgentRecord(text) {
-  if (!text) return { enabled: true, program: '' }
+  const empty = { enabled: true, appBundlePath: '', helperPath: '', version: '' }
+  if (!text) return empty
   try {
     const parsed = JSON.parse(text)
     return {
       enabled: parsed?.enabled !== false,
-      program: typeof parsed?.program === 'string' ? parsed.program : '',
+      appBundlePath: typeof parsed?.appBundlePath === 'string' ? parsed.appBundlePath : '',
+      helperPath: typeof parsed?.helperPath === 'string' ? parsed.helperPath : '',
+      version: typeof parsed?.version === 'string' ? parsed.version : '',
     }
   } catch {
-    return { enabled: true, program: '' }
+    return empty
   }
 }
 
 /**
- * Drop a repeated Finder Sync click. The same request id is kept for about
- * two minutes so a retry from the extension does not install twice.
+ * Apply one registration plan. `unregister` and `register` run only for
+ * that plan. A second call with the same bundle path and an enabled or
+ * approved status runs neither. The record is the one to persist after a
+ * successful register (enabled or requires-approval).
  */
-export function rememberFinderSyncRequest(seen, requestId, now = Date.now(), ttl = FINDER_SYNC_REQUEST_TTL_MS) {
-  if (!seen || typeof seen.set !== 'function') return false
+export function commitFinderSyncAgentRegistration({
+  testFeed = false,
+  currentBundle = '',
+  helperPath = '',
+  version = '',
+  record,
+  status,
+  optedOut = false,
+  unregister = () => {},
+  register = () => status,
+} = {}) {
+  const stored = readFinderSyncAgentRecord(JSON.stringify(record ?? {}))
+  const plan = planFinderSyncAgentRegistration({
+    testFeed,
+    currentBundle,
+    recordedBundle: stored.appBundlePath,
+    status,
+    optedOut,
+  })
+  if (plan.label !== finderSyncAgentLabel(testFeed) || plan.plist !== finderSyncAgentPlistName(testFeed)) {
+    return { plan, status: status || '', record: stored, saved: false, refused: true }
+  }
+  let resultStatus = status || ''
+  if (plan.action === 'unregister' || plan.action === 'reregister') unregister()
+  if (plan.action === 'register' || plan.action === 'reregister') {
+    const registered = register()
+    if (typeof registered === 'string' && registered) resultStatus = registered
+  }
+  const approved = resultStatus === 'enabled' || resultStatus === 'requires-approval'
+  const bundle = absoluteBundlePath(currentBundle)
+  if (!approved || !bundle || optedOut || plan.action === 'unregister') {
+    return { plan, status: resultStatus, record: stored, saved: false, refused: false }
+  }
+  const next = {
+    enabled: true,
+    appBundlePath: bundle,
+    helperPath: absoluteBundlePath(helperPath),
+    version: typeof version === 'string' ? version : '',
+  }
+  return { plan, status: resultStatus, record: next, saved: true, refused: false }
+}
+
+function finderSyncErrorText(message) {
+  return typeof message === 'string' ? message.trim() : ''
+}
+
+/**
+ * Pending Finder Sync errors the helper left because the app could not be
+ * reached. The same message is kept once.
+ */
+export function readFinderSyncPendingErrors(text) {
+  if (!text) return []
+  let parsed
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return []
+  }
+  const list = Array.isArray(parsed?.errors) ? parsed.errors : []
+  const seen = new Set()
+  const errors = []
+  for (const item of list) {
+    const message = finderSyncErrorText(item?.message)
+    if (!message || seen.has(message)) continue
+    seen.add(message)
+    errors.push({ message, at: typeof item?.at === 'number' ? item.at : 0 })
+  }
+  return errors
+}
+
+export function addFinderSyncPendingError(text, message, now = Date.now()) {
+  const errors = readFinderSyncPendingErrors(text)
+  const nextMessage = finderSyncErrorText(message)
+  if (!nextMessage || errors.some((item) => item.message === nextMessage)) {
+    return { errors, added: false, text: JSON.stringify({ errors }) }
+  }
+  const next = [...errors, { message: nextMessage, at: now }]
+  return { errors: next, added: true, text: JSON.stringify({ errors: next }) }
+}
+
+/**
+ * How the main app tells the user about one Finder Sync error. Notifications
+ * use the app's existing permission. Off or denied falls back to an in-app
+ * dialog. A message already shown is not shown again.
+ */
+export function routeFinderSyncError({
+  message,
+  notificationsEnabled = false,
+  permission = 'denied',
+  alreadyShown,
+} = {}) {
+  const text = finderSyncErrorText(message)
+  if (!text) return { shown: false, channel: 'none', message: '' }
+  if (alreadyShown?.has?.(text)) return { shown: false, channel: 'duplicate', message: text }
+  const notify = notificationsEnabled === true && permission === 'granted'
+  return { shown: true, channel: notify ? 'notification' : 'dialog', message: text }
+}
+
+function pruneFinderSyncRequests(seen, now, ttl) {
   const cutoff = now - ttl
   for (const [id, seenAt] of seen) {
     if (seenAt < cutoff) seen.delete(id)
   }
+}
+
+/**
+ * True when this request id was already accepted. Does not record the id.
+ * An empty id is never a duplicate.
+ */
+export function finderSyncRequestSeen(seen, requestId, now = Date.now(), ttl = FINDER_SYNC_REQUEST_TTL_MS) {
+  if (!seen || typeof seen.delete !== 'function' || typeof seen.has !== 'function') return false
+  pruneFinderSyncRequests(seen, now, ttl)
   if (!requestId) return false
-  if (seen.has(requestId)) return true
+  return seen.has(requestId)
+}
+
+/**
+ * Record a request id after the install was queued. At most
+ * FINDER_SYNC_REQUEST_CAP ids are kept; the oldest timestamp is dropped.
+ */
+export function noteFinderSyncRequest(seen, requestId, now = Date.now(), cap = FINDER_SYNC_REQUEST_CAP) {
+  if (!seen || typeof seen.set !== 'function' || !requestId) return
+  if (seen.has(requestId)) seen.delete(requestId)
   seen.set(requestId, now)
-  return false
+  while (seen.size > cap) {
+    let oldestId = null
+    let oldestAt = Infinity
+    for (const [id, seenAt] of seen) {
+      if (seenAt < oldestAt) {
+        oldestAt = seenAt
+        oldestId = id
+      }
+    }
+    if (oldestId == null) break
+    seen.delete(oldestId)
+  }
 }
 
 function xmlEscape(value) {

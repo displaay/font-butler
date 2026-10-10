@@ -21,11 +21,11 @@ import {
   finderSyncAgentMachServiceKeys,
   finderSyncAgentPlistName,
   finderSyncAppGroup,
-  finderSyncClangArchArgs,
   finderSyncMachService,
 } from '../electron/finder-sync.mjs'
 import { DEVELOPER_ID_IDENTITY } from './mac-signing.mjs'
 import { finderSyncCodesignIdentity, plistString } from './build-finder-sync.mjs'
+import { compileMachOSlices, strayMachOFiles } from './macho-slices.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const sourcePath = path.join(repoRoot, 'macos/FinderSyncAgent/FinderSyncAgent.mm')
@@ -72,29 +72,13 @@ export function compileFinderSyncAgent({
   const src = path.join(repo, 'macos/FinderSyncAgent/FinderSyncAgent.mm')
   if (!nodeExistsSync(src)) return { ok: false, skipped: false, reason: `Missing ${src}` }
   if (!out) return { ok: false, skipped: false, reason: 'Missing agent output path' }
-  mkdirSync(path.dirname(out), { recursive: true })
-  const slices = finderSyncClangArchArgs(arch)
-  const commands = (slices.length ? slices : [[]]).map((archArgs, index) => {
-    const sliceOut = slices.length > 1 ? `${out}.slice${index}` : out
-    return { sliceOut, args: agentCompileArgs(src, sliceOut, archArgs) }
+  return compileMachOSlices({
+    out,
+    arch,
+    clang,
+    spawnSync,
+    argsFor: (sliceOut, archArgs) => agentCompileArgs(src, sliceOut, archArgs),
   })
-  for (const command of commands) {
-    const result = spawnSync(clang, command.args, { encoding: 'utf8' })
-    if (result.status !== 0) {
-      const detail = [result.stderr, result.stdout, result.error?.message].filter(Boolean).join('\n')
-      return { ok: false, skipped: false, reason: detail || `clang++ exited ${result.status}` }
-    }
-  }
-  if (commands.length > 1) {
-    const lipo = spawnSync('lipo', ['-create', ...commands.map((command) => command.sliceOut), '-output', out], {
-      encoding: 'utf8',
-    })
-    if (lipo.status !== 0) {
-      const detail = [lipo.stderr, lipo.stdout, lipo.error?.message].filter(Boolean).join('\n')
-      return { ok: false, skipped: false, reason: detail || 'lipo failed for the Finder Sync agent' }
-    }
-  }
-  return { ok: true, skipped: false, out }
 }
 
 /** Application group only. The helper does not get the app's allow-jit entitlement. */
@@ -135,6 +119,10 @@ export function installFinderSyncAgent({
   const executable = finderSyncAgentExecutablePath(appBundle)
   const compiled = compileFinderSyncAgent({ out: executable, arch, clang, spawnSync })
   if (!compiled.ok) return compiled
+  const stray = strayMachOFiles(finderSyncAgentAppPath(appBundle), { allow: [executable] })
+  if (stray.length) {
+    return { ok: false, skipped: false, reason: `Stray Mach-O in the Finder Sync agent: ${stray.join(', ')}` }
+  }
   const contents = path.join(finderSyncAgentAppPath(appBundle), 'Contents')
   mkdirSync(contents, { recursive: true })
   writeFileSync(path.join(contents, 'Info.plist'), finderSyncAgentInfoPlist({ testFeed, version }))

@@ -9,7 +9,9 @@
  * The positive client is signed with Developer ID and the appex identifier.
  * One negative client is ad-hoc signed with that identifier. Another is
  * Developer ID signed with a different identifier. Both must print
- * "rejected: <reason>" and must not print a success line.
+ * `rejected: connection invalidated` or `rejected: NSCocoaErrorDomain 4099`
+ * and must not print a success line. The app this script launches is killed
+ * before the script exits.
  * Off macOS this prints a skip line and exits 0.
  */
 import { spawn, spawnSync } from 'node:child_process'
@@ -19,13 +21,32 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readAppTestFeedMarker } from '../electron/app-update-install.mjs'
-import { finderSyncBundleId, finderSyncMachService, finderSyncSocketName } from '../electron/finder-sync.mjs'
+import {
+  finderSyncBundleId,
+  finderSyncMachService,
+  finderSyncSocketDirectoryName,
+  finderSyncSocketName,
+} from '../electron/finder-sync.mjs'
 import { DEVELOPER_ID_IDENTITY } from './mac-signing.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const clientSource = path.join(repoRoot, 'macos/FinderSyncAgent/FinderSyncPingClient.mm')
+const EXPECTED_REJECTION = /^(?:rejected: connection invalidated|rejected: NSCocoaErrorDomain 4099(?:\s|$))/
+let appPid = 0
+
+function stopLaunchedApp() {
+  if (!appPid) return
+  const pid = appPid
+  appPid = 0
+  try {
+    process.kill(pid, 'SIGTERM')
+  } catch {
+    // The spawned app may already have exited.
+  }
+}
 
 function fail(message) {
+  stopLaunchedApp()
   console.error(message)
   process.exit(1)
 }
@@ -57,9 +78,12 @@ function run(command, args, options = {}) {
 }
 
 function assertRejected(text, label) {
-  const reason = String(text ?? '').match(/rejected:\s*(\S.*)/)
-  if (!reason || reason[1].trim().length < 3) {
-    fail(`The ${label} client did not report a rejection reason.`)
+  const line = String(text ?? '')
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .find((item) => item.startsWith('rejected:'))
+  if (!line || !EXPECTED_REJECTION.test(line)) {
+    fail(`The ${label} client was not rejected with the expected reason.\n${text}`)
   }
   if (text.includes('ping ok') || text.includes('submit ok')) {
     fail(`The ${label} client was accepted.`)
@@ -181,12 +205,13 @@ function main() {
     assertRejected(wrongRunText, 'wrong-identifier')
 
     const appProcess = spawn(binary, [], { detached: true, stdio: 'ignore' })
+    appPid = appProcess.pid ?? 0
     appProcess.unref()
     const socketName = finderSyncSocketName(testFeed)
     const tempDir = run('getconf', ['DARWIN_USER_TEMP_DIR'])
     const socketDir = (tempDir.stdout ?? '').trim()
     if (!socketDir) fail('DARWIN_USER_TEMP_DIR was empty.')
-    const socketPath = path.join(socketDir, socketName)
+    const socketPath = path.join(socketDir, finderSyncSocketDirectoryName(), socketName)
     const deadline = Date.now() + 30000
     while (!existsSync(socketPath)) {
       if (Date.now() > deadline) fail(`The app did not open ${socketPath}.`)
@@ -203,6 +228,7 @@ function main() {
     rmSync(fontPath, { force: true })
     console.log('roundtrip: ok')
   } finally {
+    stopLaunchedApp()
     rmSync(temp, { recursive: true, force: true })
   }
 }

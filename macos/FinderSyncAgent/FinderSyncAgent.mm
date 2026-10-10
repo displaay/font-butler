@@ -28,12 +28,12 @@ static NSString *const kParentRequirement =
     @"anchor apple generic and certificate leaf[subject.OU] = \"A7WWML89LQ\" and identifier \"app.fontbutler.desktop\"";
 static NSString *const kReleaseSocketName = @"fontbutler-finder-sync.sock";
 static NSString *const kTestSocketName = @"fontbutler-finder-sync-test.sock";
+static NSString *const kSocketDirectory = @"fontbutler-fs";
 static const NSUInteger kFinderSyncMaxFiles = 500;
 static const uint32_t kMaxFrame = 2 * 1024 * 1024;
 
 static BOOL g_testFeed = NO;
 static BOOL g_launchedApp = NO;
-static BOOL g_launchFailed = NO;
 static NSString *const kMissingAppMessage =
     @"Font Buttler couldn't be found. Open it once from its new location.";
 
@@ -70,8 +70,9 @@ static BOOL GuestMeetsRequirement(audit_token_t token, NSString *requirementStri
 
 // sockaddr_un.sun_path holds 104 bytes. The team-prefixed group id plus
 // "~/Library/Group Containers" does not leave room for a real home directory,
-// so the forward socket lives in the per-user temporary directory. It is not
-// another app's container. Both ends check the peer with SecRequirement.
+// so the forward socket lives in a private directory under the per-user
+// temporary directory. It is not another app's container. Both ends check
+// the peer with SecRequirement. The directory name matches finder-sync.mjs.
 static BOOL SocketPath(char *out, size_t outSize) {
   if (!out || outSize < 8) return NO;
   char temp[PATH_MAX];
@@ -79,10 +80,114 @@ static BOOL SocketPath(char *out, size_t outSize) {
   if (wrote == 0 || wrote >= sizeof(temp)) return NO;
   NSString *name = g_testFeed ? kTestSocketName : kReleaseSocketName;
   const char *separator = temp[strlen(temp) - 1] == '/' ? "" : "/";
-  int formatted = snprintf(out, outSize, "%s%s%s", temp, separator, name.UTF8String);
+  int formatted = snprintf(out, outSize, "%s%s%s/%s", temp, separator, kSocketDirectory.UTF8String, name.UTF8String);
   if (formatted <= 0 || (size_t)formatted >= outSize) return NO;
   if ((size_t)formatted >= sizeof(((struct sockaddr_un *)0)->sun_path)) return NO;
   return YES;
+}
+
+static BOOL WriteAll(int fd, const void *bytes, size_t length);
+static BOOL ReadAll(int fd, void *bytes, size_t length);
+static BOOL PeerMeets(int fd, NSString *requirement);
+static void ConfigureSocket(int fd);
+
+static BOOL SendPayload(NSDictionary *payload) {
+  char socketPath[sizeof(((struct sockaddr_un *)0)->sun_path)];
+  if (!SocketPath(socketPath, sizeof(socketPath))) return NO;
+  int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+  if (fd < 0) return NO;
+  ConfigureSocket(fd);
+  struct sockaddr_un address;
+  memset(&address, 0, sizeof(address));
+  address.sun_family = AF_UNIX;
+  if (strlcpy(address.sun_path, socketPath, sizeof(address.sun_path)) >= sizeof(address.sun_path)) {
+    close(fd);
+    return NO;
+  }
+  if (connect(fd, (struct sockaddr *)&address, (socklen_t)sizeof(address)) != 0) {
+    close(fd);
+    return NO;
+  }
+  if (!PeerMeets(fd, kParentRequirement)) {
+    close(fd);
+    return NO;
+  }
+  NSData *json = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+  if (!json || json.length == 0 || json.length > kMaxFrame) {
+    close(fd);
+    return NO;
+  }
+  uint32_t length = CFSwapInt32HostToBig((uint32_t)json.length);
+  BOOL wrote = WriteAll(fd, &length, sizeof(length)) && WriteAll(fd, json.bytes, json.length);
+  uint32_t replyLength = 0;
+  BOOL readLength = wrote && ReadAll(fd, &replyLength, sizeof(replyLength));
+  replyLength = CFSwapInt32BigToHost(replyLength);
+  if (!readLength || replyLength == 0 || replyLength > kMaxFrame) {
+    close(fd);
+    return NO;
+  }
+  NSMutableData *replyData = [NSMutableData dataWithLength:replyLength];
+  if (!ReadAll(fd, replyData.mutableBytes, replyLength)) {
+    close(fd);
+    return NO;
+  }
+  close(fd);
+  id reply = [NSJSONSerialization JSONObjectWithData:replyData options:0 error:nil];
+  return [reply isKindOfClass:[NSDictionary class]] && [reply[@"ok"] boolValue];
+}
+
+// The helper is its own app. Posting a notification here would ask for a new
+// permission. The running app presents the error with its own permission.
+// A missing app gets one record in that app's data directory.
+static BOOL ForwardErrorToApp(NSString *message) {
+  if (message.length == 0) return NO;
+  return SendPayload(@{@"error" : message});
+}
+
+static void WritePendingFinderSyncError(NSString *message) {
+  if (message.length == 0 || message.length > 500) return;
+  NSString *folder = g_testFeed ? @"Font Buttler Test" : @"Font Buttler";
+  NSString *dir = [[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support"]
+      stringByAppendingPathComponent:folder];
+  const char *dirPath = dir.fileSystemRepresentation;
+  struct stat st;
+  if (lstat(dirPath, &st) != 0) {
+    if (mkdir(dirPath, 0700) != 0) return;
+    chmod(dirPath, 0700);
+  } else if (S_ISLNK(st.st_mode) || !S_ISDIR(st.st_mode)) {
+    return;
+  }
+  NSString *file = [dir stringByAppendingPathComponent:@"finder-sync-pending-error.json"];
+  const char *filePath = file.fileSystemRepresentation;
+  struct stat fileStat;
+  if (lstat(filePath, &fileStat) == 0 && !S_ISREG(fileStat.st_mode)) return;
+  NSMutableArray *errors = [NSMutableArray array];
+  NSData *existing = [NSData dataWithContentsOfFile:file];
+  if (existing) {
+    id parsed = [NSJSONSerialization JSONObjectWithData:existing options:0 error:nil];
+    NSArray *list = [parsed isKindOfClass:[NSDictionary class]] ? parsed[@"errors"] : nil;
+    if ([list isKindOfClass:[NSArray class]]) {
+      for (id item in list) {
+        if (![item isKindOfClass:[NSDictionary class]]) continue;
+        NSString *prior = [item[@"message"] isKindOfClass:[NSString class]] ? item[@"message"] : @"";
+        if (prior.length == 0) continue;
+        if ([prior isEqualToString:message]) return;
+        [errors addObject:item];
+      }
+    }
+  }
+  NSTimeInterval millis = floor(NSDate.date.timeIntervalSince1970 * 1000.0);
+  [errors addObject:@{@"message" : message, @"at" : @((long long)millis)}];
+  NSData *data = [NSJSONSerialization dataWithJSONObject:@{@"errors" : errors} options:0 error:nil];
+  if (!data) return;
+  [data writeToFile:file atomically:YES];
+  chmod(filePath, 0600);
+}
+
+static void ReportFinderSyncError(void (^reply)(NSString *), NSString *message) {
+  NSLog(@"Finder Sync: %@", message ?: @"");
+  if (message.length && !ForwardErrorToApp(message)) WritePendingFinderSyncError(message);
+  if (reply) reply(message);
 }
 
 static BOOL WriteAll(int fd, const void *bytes, size_t length) {
@@ -147,18 +252,15 @@ static NSURL *ContainingAppURL(void) {
   return [NSURL fileURLWithPath:apps[1]];
 }
 
-// One openApplication for this click. A missing or trashed bundle fails that
-// attempt and stops; later clicks do not loop. A failed open resets the flag.
+// One openApplication for this click. The failure string is written on the
+// main queue and read on the forward queue only after the semaphore. The
+// next submit resets g_launchedApp and may try once. There is no process-wide
+// failure flag shared across queues.
 static NSString *LaunchContainingAppOnce(void) {
-  if (g_launchFailed) return kMissingAppMessage;
   if (g_launchedApp) return nil;
   NSURL *appURL = ContainingAppURL();
   BOOL exists = appURL != nil && [[NSFileManager defaultManager] fileExistsAtPath:appURL.path];
-  if (!exists) {
-    g_launchFailed = YES;
-    g_launchedApp = NO;
-    return kMissingAppMessage;
-  }
+  if (!exists) return kMissingAppMessage;
   g_launchedApp = YES;
   __block NSString *failure = nil;
   dispatch_semaphore_t opened = dispatch_semaphore_create(0);
@@ -168,67 +270,25 @@ static NSString *LaunchContainingAppOnce(void) {
     [[NSWorkspace sharedWorkspace] openApplicationAtURL:appURL
                                           configuration:configuration
                                       completionHandler:^(NSRunningApplication *app, NSError *error) {
-                                        if (error || !app) {
-                                          g_launchFailed = YES;
-                                          g_launchedApp = NO;
-                                          failure = kMissingAppMessage;
-                                        }
+                                        if (error || !app) failure = kMissingAppMessage;
                                         dispatch_semaphore_signal(opened);
                                       }];
   });
-  dispatch_semaphore_wait(opened, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC));
-  return failure;
+  if (dispatch_semaphore_wait(opened, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC)) != 0) return nil;
+  if (failure.length) {
+    g_launchedApp = NO;
+    return failure;
+  }
+  return nil;
 }
 
 static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL overflow, NSString *requestId) {
-  char socketPath[sizeof(((struct sockaddr_un *)0)->sun_path)];
-  if (!SocketPath(socketPath, sizeof(socketPath))) return NO;
-  int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-  if (fd < 0) return NO;
-  ConfigureSocket(fd);
-  struct sockaddr_un address;
-  memset(&address, 0, sizeof(address));
-  address.sun_family = AF_UNIX;
-  if (strlcpy(address.sun_path, socketPath, sizeof(address.sun_path)) >= sizeof(address.sun_path)) {
-    close(fd);
-    return NO;
-  }
-  if (connect(fd, (struct sockaddr *)&address, (socklen_t)sizeof(address)) != 0) {
-    close(fd);
-    return NO;
-  }
-  if (!PeerMeets(fd, kParentRequirement)) {
-    close(fd);
-    return NO;
-  }
-  NSDictionary *payload = @{
+  return SendPayload(@{
     @"action" : action ?: @"",
     @"paths" : overflow ? @[] : (paths ?: @[]),
     @"overflow" : @(overflow),
     @"requestId" : requestId ?: @"",
-  };
-  NSData *json = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
-  if (!json || json.length == 0 || json.length > kMaxFrame) {
-    close(fd);
-    return NO;
-  }
-  uint32_t length = CFSwapInt32HostToBig((uint32_t)json.length);
-  BOOL wrote = WriteAll(fd, &length, sizeof(length)) && WriteAll(fd, json.bytes, json.length);
-  uint32_t replyLength = 0;
-  BOOL readLength = wrote && ReadAll(fd, &replyLength, sizeof(replyLength));
-  replyLength = CFSwapInt32BigToHost(replyLength);
-  if (!readLength || replyLength == 0 || replyLength > kMaxFrame) {
-    close(fd);
-    return NO;
-  }
-  NSMutableData *replyData = [NSMutableData dataWithLength:replyLength];
-  if (!ReadAll(fd, replyData.mutableBytes, replyLength)) {
-    close(fd);
-    return NO;
-  }
-  close(fd);
-  id reply = [NSJSONSerialization JSONObjectWithData:replyData options:0 error:nil];
-  return [reply isKindOfClass:[NSDictionary class]] && [reply[@"ok"] boolValue];
+  });
 }
 
 @protocol FontButtlerFinderSyncHandoff
@@ -294,11 +354,7 @@ static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL over
   dispatch_async(self.forwardQueue, ^{
     g_launchedApp = NO;
     if (!known) {
-      if (reply) reply(@"Unknown Finder Sync action.");
-      return;
-    }
-    if (g_launchFailed) {
-      if (reply) reply(kMissingAppMessage);
+      ReportFinderSyncError(reply, @"Unknown Finder Sync action.");
       return;
     }
     BOOL overflow = incoming.count > kFinderSyncMaxFiles;
@@ -312,10 +368,6 @@ static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL over
     NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:8.0];
     BOOL launched = NO;
     while (YES) {
-      if (g_launchFailed) {
-        if (reply) reply(kMissingAppMessage);
-        return;
-      }
       if (ForwardToApp(wire, accepted, overflow, request)) {
         g_launchedApp = NO;
         if (reply) reply(nil);
@@ -325,14 +377,14 @@ static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL over
         launched = YES;
         NSString *failure = LaunchContainingAppOnce();
         if (failure.length) {
-          if (reply) reply(failure);
+          ReportFinderSyncError(reply, failure);
           return;
         }
       }
       if ([deadline timeIntervalSinceNow] <= 0) break;
       usleep(50 * 1000);
     }
-    if (reply) reply(@"Font Buttler is not running.");
+    ReportFinderSyncError(reply, @"Font Buttler is not running.");
   });
 }
 
