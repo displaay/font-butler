@@ -12,7 +12,7 @@ import {
   Tray,
   utilityProcess,
 } from 'electron'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
@@ -24,6 +24,8 @@ import {
   createAppUpdateInstaller,
   detectAppUpdateRuntime,
   openedUpdateDmgRecordFile,
+  outermostAppBundle,
+  readAppTestFeedMarker,
 } from './app-update-install.mjs'
 import { createDocumentAppObserver } from './document-app-watch.mjs'
 import { createDocumentOpenWatch, documentWatchIpc } from './document-open-watch.mjs'
@@ -41,6 +43,7 @@ import {
   FINDER_INSTALL_AS,
   FINDER_LINK_TO,
   FINDER_PROTOCOL,
+  FINDER_TEST_PROTOCOL,
   formatFinderInstallIssues,
   groupIdsByFormat,
   idsEligibleForFinderInstall,
@@ -51,7 +54,9 @@ import {
 } from './finder-install.mjs'
 import {
   FINDER_SYNC_SETTINGS_URL,
+  finderSyncProtocol,
   formatFinderSyncRejections,
+  refreshFinderSyncRegistration,
   validateFinderSyncSelection,
 } from './finder-sync.mjs'
 import { deliverNativeNotice, electronNotificationPermission } from './notify.mjs'
@@ -1031,8 +1036,28 @@ function enqueueValidatedFinderInstall(action, filePaths) {
   enqueueFinderJob(action, checked.paths)
 }
 
+function runningTestFeed() {
+  return readAppTestFeedMarker(outermostAppBundle(process.execPath)) === true
+}
+
+function finderSyncUrlForThisApp(rawUrl) {
+  return typeof rawUrl === 'string' && rawUrl.startsWith(`${finderSyncProtocol(runningTestFeed())}:`)
+}
+
 function launchIsFinderSyncUrl(argv) {
-  return (argv ?? []).some((arg) => typeof arg === 'string' && arg.startsWith(`${FINDER_PROTOCOL}:`))
+  return (argv ?? []).some((arg) => finderSyncUrlForThisApp(arg))
+}
+
+function finderLaunchForThisApp(argv) {
+  const finder = parseFinderLaunch(argv)
+  if (!finder) return null
+  const urls = (argv ?? []).filter(
+    (arg) =>
+      typeof arg === 'string' &&
+      (arg.startsWith(`${FINDER_PROTOCOL}:`) || arg.startsWith(`${FINDER_TEST_PROTOCOL}:`)),
+  )
+  if (urls.length && !urls.every((url) => finderSyncUrlForThisApp(url))) return null
+  return finder
 }
 
 function enqueueFinderHandoff(parsed, { strict = false } = {}) {
@@ -2122,7 +2147,10 @@ if (!gotLock) {
 } else {
   registerNativeFinderServices()
   if (process.platform === 'darwin') {
-    app.setAsDefaultProtocolClient(FINDER_PROTOCOL)
+    const protocol = finderSyncProtocol(runningTestFeed())
+    const other = finderSyncProtocol(!runningTestFeed())
+    app.removeAsDefaultProtocolClient(other)
+    app.setAsDefaultProtocolClient(protocol)
   }
 
   app.on('second-instance', (_event, argv) => {
@@ -2130,7 +2158,7 @@ if (!gotLock) {
       void retryPackagedBootstrap()
       return
     }
-    const finder = parseFinderLaunch(argv)
+    const finder = finderLaunchForThisApp(argv)
     if (finder) {
       enqueueFinderHandoff(finder, { strict: launchIsFinderSyncUrl(argv) })
       showMainWindow()
@@ -2154,6 +2182,7 @@ if (!gotLock) {
 
   app.on('open-url', (event, url) => {
     event.preventDefault()
+    if (!finderSyncUrlForThisApp(url)) return
     const finder = parseFinderInstallUrl(url)
     if (finder) enqueueFinderHandoff(finder, { strict: true })
   })
@@ -2426,7 +2455,18 @@ if (!gotLock) {
         if (!isQuitting) void retailTick()
       }, RETAIL_TICK_MS)
     }
-    const finderLaunch = parseFinderLaunch(process.argv)
+    try {
+      refreshFinderSyncRegistration({
+        platform: process.platform,
+        packaged: app.isPackaged,
+        appPath: outermostAppBundle(process.execPath),
+        testFeed: runningTestFeed(),
+        spawnSync,
+      })
+    } catch (error) {
+      console.error('Finder Sync registration was not refreshed', error)
+    }
+    const finderLaunch = finderLaunchForThisApp(process.argv)
     const fromArgv = finderLaunch
       ? []
       : process.argv.filter((arg) =>

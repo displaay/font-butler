@@ -1,5 +1,5 @@
 import path from 'node:path'
-import { finderSyncBundleId } from '../electron/finder-sync.mjs'
+import { finderSyncBundleId, finderSyncMenuTitle, finderSyncProtocol } from '../electron/finder-sync.mjs'
 import { readAppTestFeedMarker } from '../electron/app-update-install.mjs'
 import { testFeedBuildRequested } from './mac-signing.mjs'
 import { finderSyncAppexPath, verifyFinderSyncAppex } from './build-finder-sync.mjs'
@@ -20,6 +20,9 @@ export async function afterSign(context) {
     appexPath: finderSyncAppexPath(appBundle),
     expectedBundleId: finderSyncBundleId(testFeed),
     requireDeveloperId: Boolean(identity && identity !== '-'),
+    expectedURLScheme: finderSyncProtocol(testFeed),
+    expectedInstallTitle: finderSyncMenuTitle('install', testFeed),
+    expectedInstallAsTitle: finderSyncMenuTitle('install-as', testFeed),
   })
   if (!verified.ok) {
     throw new Error(verified.failures.join('\n'))

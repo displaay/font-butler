@@ -8,6 +8,8 @@ import {
   FINDER_INSTALL,
   FINDER_INSTALL_AS,
   FINDER_LINK_TO,
+  FINDER_PROTOCOL,
+  FINDER_TEST_PROTOCOL,
   finderInstallUrl,
 } from './finder-install.mjs'
 import {
@@ -18,11 +20,18 @@ import {
   FINDER_SYNC_PRINCIPAL_CLASS,
   FINDER_SYNC_SETTINGS_URL,
   FINDER_SYNC_TEST_BUNDLE_ID,
+  finderSyncAppexBundlePath,
   finderSyncBundleId,
+  finderSyncMenuTitle,
+  finderSyncMonitorDirectories,
+  finderSyncProtocol,
   fontMagicKind,
   formatFinderSyncRejections,
   isSafeFinderSyncPath,
   parseFinderSyncChannel,
+  parsePluginkitFinderSync,
+  planFinderSyncRegistration,
+  refreshFinderSyncRegistration,
   validateFinderSyncSelection,
 } from './finder-sync.mjs'
 import { finderSyncReleaseFailures } from '../scripts/assert-notarized-mac-release.mjs'
@@ -91,6 +100,17 @@ test('parseFinderSyncChannel keeps install and install-as paths and drops other 
   })
   assert.equal(parseFinderSyncChannel(finderInstallUrl(FINDER_LINK_TO, ['/Fonts/A.woff'])), null)
   assert.equal(parseFinderSyncChannel('https://example.test/finder/install?p=/Fonts/A.otf'), null)
+  const testUrl = finderInstallUrl(FINDER_INSTALL, ['/Fonts/A.otf', '/Fonts/Family'], FINDER_TEST_PROTOCOL)
+  assert.equal(parseFinderSyncChannel(testUrl), null)
+  assert.deepEqual(parseFinderSyncChannel(testUrl, { testFeed: true }), {
+    action: FINDER_INSTALL,
+    paths: ['/Fonts/A.otf', '/Fonts/Family'],
+  })
+  assert.equal(parseFinderSyncChannel(install, { testFeed: true }), null)
+  assert.equal(finderSyncProtocol(false), FINDER_PROTOCOL)
+  assert.equal(finderSyncProtocol(true), FINDER_TEST_PROTOCOL)
+  assert.equal(finderSyncMenuTitle(FINDER_INSTALL, false), 'Install')
+  assert.equal(finderSyncMenuTitle(FINDER_INSTALL_AS, true), 'Install as… (Test)')
   assert.equal(parseFinderSyncChannel(''), null)
   const parsed = parseFinderSyncChannel(
     'font-butler://finder/install?p=%2FFonts%2FA.otf&p=%2FFonts%2FB.otf&extra=1',
@@ -119,7 +139,7 @@ test('validateFinderSyncSelection accepts regular font files and refuses escapes
       '/etc/passwd',
       '/Fonts/alias.otf',
       '/linked/E.otf',
-      '/Fonts/Folder.otf',
+      '/Fonts/Family',
       '/Fonts/notes.txt',
       '/missing.otf',
       '/Fonts/fake.otf',
@@ -133,30 +153,39 @@ test('validateFinderSyncSelection accepts regular font files and refuses escapes
         '/Fonts/D.woff2': { ...fontStat('file'), header: WOFF2 },
         '/Fonts/alias.otf': fontStat('symlink'),
         '/linked': fontStat('symlink'),
-        '/Fonts/Folder.otf': fontStat('dir'),
+        '/Fonts/Family': fontStat('dir'),
+        '/Fonts/notes.txt': { ...fontStat('file'), header: Buffer.from('NOTE') },
         '/Fonts/fake.otf': { ...fontStat('file'), header: Buffer.from('NOPE') },
       },
       { reads },
     ),
   )
 
-  assert.deepEqual(checked.paths, ['/Fonts/A.otf', '/Fonts/B.ttf', '/Fonts/C.ttc', '/Fonts/D.woff2'])
+  assert.deepEqual(checked.paths, [
+    '/Fonts/A.otf',
+    '/Fonts/B.ttf',
+    '/Fonts/C.ttc',
+    '/Fonts/D.woff2',
+    '/Fonts/Family',
+  ])
   for (const filePath of checked.paths) {
-    assert.ok(['/Fonts/A.otf', '/Fonts/B.ttf', '/Fonts/C.ttc', '/Fonts/D.woff2'].includes(filePath))
+    assert.ok(
+      ['/Fonts/A.otf', '/Fonts/B.ttf', '/Fonts/C.ttc', '/Fonts/D.woff2', '/Fonts/Family'].includes(filePath),
+    )
   }
-  assert.ok(checked.paths.length <= 4)
+  assert.ok(checked.paths.length <= 5)
   assert.equal(checked.paths.includes('/etc/passwd'), false)
   assert.equal(checked.paths.includes('/linked/E.otf'), false)
   assert.equal(reads.includes('/Fonts/alias.otf'), false)
   assert.equal(reads.includes('/linked/E.otf'), false)
-  assert.equal(reads.includes('/Fonts/Folder.otf'), false)
+  assert.equal(reads.includes('/Fonts/Family'), false)
   const reasons = Object.fromEntries(checked.rejected.map((item) => [item.path, item.reason]))
   assert.match(reasons['/Fonts/alias.otf'], /Symlink/)
   assert.match(reasons['/linked/E.otf'], /Symlink/)
-  assert.match(reasons['/Fonts/Folder.otf'], /regular file/)
+  assert.match(reasons['/Fonts/notes.txt'], /Not a font file/)
   assert.match(reasons['/Fonts/fake.otf'], /Not a font file/)
   assert.match(reasons['/missing.otf'], /File not found/)
-  assert.match(reasons['/etc/passwd'], /absolute font file/)
+  assert.match(reasons['/etc/passwd'], /File not found/)
   assert.match(formatFinderSyncRejections(checked.rejected), /\/Fonts\/alias\.otf: Symlink paths are not installed\./)
   assert.deepEqual(validateFinderSyncSelection([], ioFor({})), { paths: [], rejected: [] })
 
@@ -176,8 +205,18 @@ test('Finder Sync appex identity, plist, and swiftc command stay distinct for te
   assert.equal(finderSyncBundleId(false), FINDER_SYNC_BUNDLE_ID)
   assert.equal(finderSyncBundleId(true), FINDER_SYNC_TEST_BUNDLE_ID)
   assert.notEqual(FINDER_SYNC_BUNDLE_ID, FINDER_SYNC_TEST_BUNDLE_ID)
-  const plist = finderSyncInfoPlist({ bundleId: FINDER_SYNC_TEST_BUNDLE_ID, version: '0.9.0' })
+  const plist = finderSyncInfoPlist({
+    bundleId: FINDER_SYNC_TEST_BUNDLE_ID,
+    version: '0.9.0',
+    testFeed: true,
+  })
   assert.equal(plistString(plist, 'CFBundleIdentifier'), FINDER_SYNC_TEST_BUNDLE_ID)
+  assert.equal(plistString(plist, 'FontButtlerURLScheme'), FINDER_TEST_PROTOCOL)
+  assert.equal(plistString(plist, 'FontButtlerInstallTitle'), 'Install (Test)')
+  assert.equal(plistString(plist, 'FontButtlerInstallAsTitle'), 'Install as… (Test)')
+  const releasePlist = finderSyncInfoPlist({ bundleId: FINDER_SYNC_BUNDLE_ID, version: '0.3.10' })
+  assert.equal(plistString(releasePlist, 'FontButtlerURLScheme'), FINDER_PROTOCOL)
+  assert.equal(plistString(releasePlist, 'FontButtlerInstallTitle'), 'Install')
   assert.equal(plistString(plist, 'CFBundleExecutable'), FINDER_SYNC_EXECUTABLE)
   assert.equal(plistString(plist, 'NSExtensionPrincipalClass'), FINDER_SYNC_PRINCIPAL_CLASS)
   assert.equal(plistString(plist, 'NSExtensionPointIdentifier'), FINDER_SYNC_EXTENSION_POINT)
@@ -204,6 +243,79 @@ test('Finder Sync appex identity, plist, and swiftc command stay distinct for te
   const entitlements = readRepo('build/entitlements.finder-sync.plist')
   assert.deepEqual(entitlementKeysFromCodesign(entitlements), [FINDER_SYNC_ENTITLEMENT])
   assert.doesNotMatch(entitlements, /allow-jit|get-task-allow|disable-library-validation/)
+})
+
+test('Finder Sync monitors cloud roots and leaves a disabled or current extension alone', () => {
+  const home = '/Users/ada'
+  const directories = finderSyncMonitorDirectories({
+    home,
+    cloudChildren: ['Dropbox', '../Secret', 'OneDrive'],
+    exists: (directory) => directory !== `${home}/Library/Mobile Documents/com~apple~CloudDocs`,
+  })
+  assert.deepEqual(directories, [
+    '/',
+    home,
+    `${home}/Library/CloudStorage`,
+    `${home}/Library/Mobile Documents`,
+    `${home}/Library/CloudStorage/Dropbox`,
+    `${home}/Library/CloudStorage/OneDrive`,
+  ])
+  assert.equal(directories.some((directory) => directory.includes('..')), false)
+  assert.deepEqual(finderSyncMonitorDirectories({ home: 'relative' }), ['/'])
+
+  const bundleId = FINDER_SYNC_TEST_BUNDLE_ID
+  const current = finderSyncAppexBundlePath('/Applications/Font Buttler Test/Font Buttler.app')
+  const listed = (flag, pluginPath) =>
+    `${flag}    ${bundleId}(0.3.10)\n            Path = ${pluginPath}\n`
+  const disabled = parsePluginkitFinderSync(listed('-', current), bundleId)
+  assert.equal(planFinderSyncRegistration({ currentAppex: current, record: disabled }).reason, 'disabled')
+  const same = parsePluginkitFinderSync(listed('+', current), bundleId)
+  assert.equal(planFinderSyncRegistration({ currentAppex: current, record: same }).action, 'none')
+  const stalePath = finderSyncAppexBundlePath('/Applications/Font Buttler.app')
+  const moved = parsePluginkitFinderSync(listed('+', stalePath), bundleId)
+  assert.deepEqual(planFinderSyncRegistration({ currentAppex: current, record: moved }), {
+    action: 'reregister',
+    appex: current,
+    reason: 'moved',
+  })
+  assert.equal(
+    planFinderSyncRegistration({
+      currentAppex: current,
+      record: parsePluginkitFinderSync('', bundleId),
+    }).reason,
+    'not-registered',
+  )
+
+  const calls = []
+  const refreshed = refreshFinderSyncRegistration({
+    platform: 'darwin',
+    packaged: true,
+    appPath: '/Applications/Font Buttler Test/Font Buttler.app',
+    testFeed: true,
+    spawnSync(command, args) {
+      calls.push([command, args])
+      if (args.includes('-m')) {
+        return { status: 0, stdout: listed('+', stalePath), stderr: '' }
+      }
+      return { status: 0, stdout: '', stderr: '' }
+    },
+  })
+  assert.equal(refreshed.ok, true)
+  assert.equal(refreshed.reason, 'moved')
+  assert.deepEqual(calls[1][1], ['-a', current])
+  assert.equal(calls.some((call) => call[1].includes('-e')), false)
+  const leftDisabled = refreshFinderSyncRegistration({
+    platform: 'darwin',
+    packaged: true,
+    appPath: '/Applications/Font Buttler Test/Font Buttler.app',
+    testFeed: true,
+    spawnSync() {
+      return { status: 0, stdout: listed('-', stalePath), stderr: '' }
+    },
+  })
+  assert.equal(leftDisabled.action, 'none')
+  assert.equal(leftDisabled.reason, 'disabled')
+  assert.equal(refreshFinderSyncRegistration({ platform: 'linux', packaged: true }).reason, 'skipped')
 })
 
 test('appex signing is inside-out and the release check requires sandbox, team, and Developer ID', () => {
@@ -353,19 +465,34 @@ test('the release assert reads the appex bundle ID against the test-feed marker'
 test('Finder Sync sources only hand off font selections and the pack builds the appex', () => {
   const swift = readRepo('macos/FinderSync/FinderSync.swift')
   assert.match(swift, /fileURLWithPath: "\/"/)
+  assert.match(swift, /Library\/CloudStorage/)
+  assert.match(swift, /Library\/Mobile Documents/)
+  assert.match(swift, /com~apple~CloudDocs/)
   assert.match(swift, /contextualMenuForItems/)
   assert.match(swift, /selectedItemURLs/)
-  assert.match(swift, /allSatisfy\(isFontFile\)/)
+  assert.match(swift, /allSatisfy\(isInstallSelection\)/)
+  assert.match(swift, /hasDirectoryPath/)
   assert.match(swift, /"Install"/)
   assert.match(swift, /Install as…/)
+  assert.match(swift, /FontButtlerInstallTitle/)
+  assert.match(swift, /FontButtlerURLScheme/)
   assert.match(swift, /font-butler/)
   assert.match(swift, /withApplicationAt/)
-  assert.doesNotMatch(swift, /CTFontManager|FileManager|copyItem|NSAppleScript|\/api\/install/)
+  assert.match(swift, /parentAppURL/)
+  assert.doesNotMatch(swift, /\/Applications\/Font Buttler\.app/)
+  assert.doesNotMatch(swift, /CTFontManager|copyItem|removeItem|trashItem|NSAppleScript|\/api\/install/)
+  assert.match(swift, /FileManager\.default\.homeDirectoryForCurrentUser/)
+  assert.match(swift, /contentsOfDirectory/)
 
   const main = readRepo('electron/main.mjs')
   assert.match(main, /enqueueValidatedFinderInstall/)
   assert.match(main, /validateFinderSyncSelection/)
   assert.match(main, /O_NOFOLLOW/)
+  assert.match(main, /finderSyncProtocol/)
+  assert.match(main, /removeAsDefaultProtocolClient/)
+  assert.match(main, /refreshFinderSyncRegistration/)
+  assert.match(main, /finderLaunchForThisApp/)
+  assert.match(main, /enqueueFinderJob\(action, checked\.paths\)/)
   assert.match(main, /open-finder-extensions/)
   assert.match(main, /FINDER_SYNC_SETTINGS_URL/)
   assert.equal(

@@ -20,7 +20,7 @@ import {
   TEST_FEED_PRODUCT_NAME,
   TEST_FEED_VERSION_ENV,
 } from './mac-signing.mjs'
-import { finderSyncBundleId } from '../electron/finder-sync.mjs'
+import { finderSyncBundleId, finderSyncMenuTitle, finderSyncProtocol } from '../electron/finder-sync.mjs'
 import {
   entitlementKeysFromCodesign,
   finderSyncAppexFailures,
@@ -241,7 +241,8 @@ function staplerStatus(target) {
 }
 
 export function finderSyncReleaseFailures(appPath, { readFile = readFileSync, exists = existsSync, runCommand = run } = {}) {
-  const expectedBundleId = finderSyncBundleId(readAppTestFeedMarker(appPath) === true)
+  const testFeed = readAppTestFeedMarker(appPath) === true
+  const expectedBundleId = finderSyncBundleId(testFeed)
   const appex = finderSyncAppexPath(appPath)
   if (!appex || !exists(appex)) {
     return finderSyncAppexFailures({ present: false, expectedBundleId, requireDeveloperId: true })
@@ -265,6 +266,12 @@ export function finderSyncReleaseFailures(appPath, { readFile = readFileSync, ex
     codesignVerifyStatus: verify.status,
     entitlementKeys: entitlementKeysFromCodesign(entitlements.output),
     requireDeveloperId: true,
+    urlScheme: plistString(plist, 'FontButtlerURLScheme'),
+    expectedURLScheme: finderSyncProtocol(testFeed),
+    installTitle: plistString(plist, 'FontButtlerInstallTitle'),
+    expectedInstallTitle: finderSyncMenuTitle('install', testFeed),
+    installAsTitle: plistString(plist, 'FontButtlerInstallAsTitle'),
+    expectedInstallAsTitle: finderSyncMenuTitle('install-as', testFeed),
   })
 }
 
