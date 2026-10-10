@@ -38,6 +38,8 @@ export function compileFinderSyncReceiverAddon({
       'Cocoa',
       '-framework',
       'Security',
+      '-framework',
+      'ServiceManagement',
       '-o',
       out,
       src,

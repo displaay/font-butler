@@ -926,6 +926,20 @@ function registerNativeFinderServices() {
   }
 }
 
+function reportFinderSyncAgentStatus() {
+  let line = 'finder-sync-agent-status {"status":"unavailable","error":"Finder Sync receiver is not loaded."}\n'
+  try {
+    const addon = require('./finder-sync-receiver.node')
+    const status = addon.agentStatus()
+    line = `finder-sync-agent-status ${status}\n`
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    line = `finder-sync-agent-status ${JSON.stringify({ status: 'unavailable', error: message })}\n`
+  }
+  fs.writeSync(1, line)
+  app.exit(line.includes('"status":"enabled"') ? 0 : 1)
+}
+
 function registerFinderSyncReceiver() {
   if (process.platform !== 'darwin') return false
   try {
@@ -1883,6 +1897,11 @@ function buildAppMenu() {
   ])
 }
 
+if (process.argv.includes('--finder-sync-agent-status')) {
+  app.whenReady().then(() => {
+    reportFinderSyncAgentStatus()
+  })
+} else {
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
@@ -2199,6 +2218,7 @@ if (!gotLock) {
   app.on('activate', () => {
     showMainWindow()
   })
+}
 }
 
 ipcMain.on('renderer-app-mounted', () => {

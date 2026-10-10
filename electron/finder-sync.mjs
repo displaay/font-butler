@@ -3,6 +3,13 @@ import { FINDER_INSTALL_AS, isClaimedFontPath } from './finder-install.mjs'
 
 export const FINDER_SYNC_BUNDLE_ID = 'app.fontbutler.desktop.FinderSync'
 export const FINDER_SYNC_TEST_BUNDLE_ID = 'app.fontbutler.desktop.FinderSync.Test'
+export const FINDER_SYNC_PARENT_BUNDLE_ID = 'app.fontbutler.desktop'
+export const FINDER_SYNC_AGENT_BUNDLE_ID = 'app.fontbutler.desktop.FinderSyncAgent'
+export const FINDER_SYNC_AGENT_TEST_BUNDLE_ID = 'app.fontbutler.desktop.FinderSyncAgent.Test'
+export const FINDER_SYNC_AGENT_EXECUTABLE = 'FontButtlerFinderSyncAgent'
+export const FINDER_SYNC_AGENT_APP_NAME = 'FontButtlerFinderSyncAgent.app'
+export const FINDER_SYNC_SOCKET_NAME = 'fontbutler-finder-sync.sock'
+export const FINDER_SYNC_TEST_SOCKET_NAME = 'fontbutler-finder-sync-test.sock'
 export const FINDER_SYNC_PRINCIPAL_CLASS = 'FontButtlerFinderSync'
 export const FINDER_SYNC_EXTENSION_POINT = 'com.apple.FinderSync'
 export const FINDER_SYNC_APPEX_NAME = 'Font Buttler Finder Sync.appex'
@@ -59,6 +66,125 @@ export function finderSyncMachService(testFeed) {
 export function finderSyncCodeSigningRequirement(testFeed) {
   const identifier = finderSyncBundleId(Boolean(testFeed))
   return `anchor apple generic and certificate leaf[subject.OU] = "${FINDER_SYNC_TEAM_ID}" and identifier "${identifier}"`
+}
+
+export function finderSyncAgentBundleId(testFeed) {
+  return testFeed ? FINDER_SYNC_AGENT_TEST_BUNDLE_ID : FINDER_SYNC_AGENT_BUNDLE_ID
+}
+
+/** LaunchAgent label. One label per flavour, and it is the helper's bundle id. */
+export function finderSyncAgentLabel(testFeed) {
+  return finderSyncAgentBundleId(testFeed)
+}
+
+export function finderSyncAgentPlistName(testFeed) {
+  return `${finderSyncAgentLabel(testFeed)}.plist`
+}
+
+/**
+ * Path of the helper executable relative to the .app root. `BundleProgram`
+ * is this path. The helper is a nested app so codesign takes the identifier
+ * from its Info.plist when it re-signs the bundle.
+ */
+export function finderSyncAgentBundleProgram() {
+  return `Contents/Helpers/${FINDER_SYNC_AGENT_APP_NAME}/Contents/MacOS/${FINDER_SYNC_AGENT_EXECUTABLE}`
+}
+
+/**
+ * The main app checks the socket peer against this. It is the helper, not
+ * the appex. One identifier per flavour.
+ */
+export function finderSyncAgentCodeSigningRequirement(testFeed) {
+  const identifier = finderSyncAgentBundleId(Boolean(testFeed))
+  return `anchor apple generic and certificate leaf[subject.OU] = "${FINDER_SYNC_TEAM_ID}" and identifier "${identifier}"`
+}
+
+/**
+ * The helper checks the app side of the socket against the parent bundle id.
+ * Both flavours use that id. The socket file name separates them.
+ */
+export function finderSyncParentCodeSigningRequirement() {
+  return `anchor apple generic and certificate leaf[subject.OU] = "${FINDER_SYNC_TEAM_ID}" and identifier "${FINDER_SYNC_PARENT_BUNDLE_ID}"`
+}
+
+export function finderSyncSocketName(testFeed) {
+  return testFeed ? FINDER_SYNC_TEST_SOCKET_NAME : FINDER_SYNC_SOCKET_NAME
+}
+
+function xmlEscape(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+}
+
+/**
+ * SMAppService agent plist. Launchd vends one Mach service, the app-group
+ * name. RunAtLoad stays false so launchd starts the helper on lookup.
+ */
+export function finderSyncAgentLaunchAgentPlist(testFeed) {
+  const label = finderSyncAgentLabel(testFeed)
+  const service = finderSyncMachService(testFeed)
+  const program = finderSyncAgentBundleProgram()
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>${xmlEscape(label)}</string>
+    <key>BundleProgram</key>
+    <string>${xmlEscape(program)}</string>
+    <key>AssociatedBundleIdentifiers</key>
+    <array>
+      <string>${FINDER_SYNC_PARENT_BUNDLE_ID}</string>
+    </array>
+    <key>MachServices</key>
+    <dict>
+      <key>${xmlEscape(service)}</key>
+      <true/>
+    </dict>
+    <key>RunAtLoad</key>
+    <false/>
+  </dict>
+</plist>
+`
+}
+
+export function finderSyncAgentInfoPlist({ testFeed = false, version = '1.0' } = {}) {
+  const bundleId = finderSyncAgentBundleId(testFeed)
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>${FINDER_SYNC_AGENT_EXECUTABLE}</string>
+    <key>CFBundleIdentifier</key>
+    <string>${xmlEscape(bundleId)}</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>Font Buttler Finder Sync Agent</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>${xmlEscape(version)}</string>
+    <key>CFBundleVersion</key>
+    <string>${xmlEscape(version)}</string>
+    <key>LSBackgroundOnly</key>
+    <true/>
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+  </dict>
+</plist>
+`
+}
+
+export function finderSyncAgentMachServiceKeys(plist) {
+  const body = String(plist ?? '').match(/<key>MachServices<\/key>\s*<dict>([\s\S]*?)<\/dict>/)
+  if (!body) return []
+  return [...body[1].matchAll(/<key>([^<]+)<\/key>/g)].map((match) => match[1])
 }
 
 export function finderSyncWireAction(action) {

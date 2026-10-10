@@ -20,6 +20,7 @@ import {
   finderSyncAppexPath,
   plistString,
 } from './build-finder-sync.mjs'
+import { finderSyncAgentReleaseFailures } from './build-finder-sync-agent.mjs'
 
 const require = createRequire(import.meta.url)
 const yaml = require('js-yaml')
@@ -584,7 +585,7 @@ export async function assertNotarizedMacRelease(
       const inside = findAppBundles(mounted.mount).find((bundle) => path.basename(bundle) === 'Font Buttler.app')
       dmgAppStatus = inside ? staplerStatus(inside) : 1
       if (!inside) failures.push('The DMG does not contain Font Buttler.app.')
-      else failures.push(...prefixFailures('DMG', finderSyncReleaseFailures(inside)))
+      else failures.push(...prefixFailures('DMG', [...finderSyncReleaseFailures(inside), ...finderSyncAgentReleaseFailures(inside)]))
       for (const failure of testFeedArchiveFailures({ appPaths: inside ? [inside] : [] })) {
         if (!testFeedFailures.includes(failure)) testFeedFailures.push(failure)
       }
@@ -603,7 +604,7 @@ export async function assertNotarizedMacRelease(
       const inside = findAppBundles(zipDir).find((bundle) => path.basename(bundle) === 'Font Buttler.app')
       zipAppStatus = inside ? staplerStatus(inside) : 1
       if (!inside) failures.push('The update zip does not contain Font Buttler.app.')
-      else failures.push(...prefixFailures('Update zip', finderSyncReleaseFailures(inside)))
+      else failures.push(...prefixFailures('Update zip', [...finderSyncReleaseFailures(inside), ...finderSyncAgentReleaseFailures(inside)]))
       for (const failure of testFeedArchiveFailures({ appPaths: inside ? [inside] : [] })) {
         if (!testFeedFailures.includes(failure)) testFeedFailures.push(failure)
       }
@@ -614,7 +615,7 @@ export async function assertNotarizedMacRelease(
 
   failures.push(
     ...testFeedFailures,
-    ...prefixFailures('App', finderSyncReleaseFailures(app)),
+    ...prefixFailures('App', [...finderSyncReleaseFailures(app), ...finderSyncAgentReleaseFailures(app)]),
     ...evidenceForApp(app, {
       staplerDmgStatus: staplerStatus(dmg),
       staplerDmgAppStatus: dmgAppStatus,

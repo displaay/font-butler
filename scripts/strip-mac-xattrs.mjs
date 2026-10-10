@@ -23,6 +23,16 @@ export async function afterPack(context) {
     if (!receiver.ok && !receiver.skipped) {
       throw new Error(receiver.reason || 'Finder Sync receiver was not compiled.')
     }
+    const { installFinderSyncAgent } = await import('./build-finder-sync-agent.mjs')
+    const { testFeedBuildRequested } = await import('./mac-signing.mjs')
+    const agent = installFinderSyncAgent({
+      appBundle,
+      testFeed: testFeedBuildRequested(process.env),
+      version: context.packager.appInfo?.version || '1.0',
+    })
+    if (!agent.ok && !agent.skipped) {
+      throw new Error(agent.reason || 'Finder Sync agent was not compiled.')
+    }
     const { compileSessionFontsAddon } = await import('./build-session-fonts.mjs')
     const sessionOut = path.join(appBundle, 'Contents/Resources/app.asar.unpacked/electron/session-fonts.node')
     const session = compileSessionFontsAddon({ out: sessionOut })

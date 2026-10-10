@@ -26,5 +26,12 @@ export async function afterSign(context) {
   if (!verified.ok) {
     throw new Error(verified.failures.join('\n'))
   }
+  const { verifyFinderSyncAgent } = await import('./build-finder-sync-agent.mjs')
+  const agent = verifyFinderSyncAgent({
+    appBundle,
+    testFeed,
+    requireDeveloperId: Boolean(identity && identity !== '-'),
+  })
+  if (!agent.ok) throw new Error(agent.failures.join('\n'))
   console.log(`Finder Sync appex is present and signed (${finderSyncBundleId(testFeed)}).`)
 }
