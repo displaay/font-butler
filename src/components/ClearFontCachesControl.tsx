@@ -41,29 +41,34 @@ export function ClearFontCachesControl({
   disabled,
   onClear,
   onLogOut,
+  onProbe,
 }: {
   disabled?: boolean
   onClear: () => Promise<unknown>
   onLogOut: () => Promise<unknown>
+  onProbe?: () => Promise<unknown>
 }) {
   const [phase, setPhase] = useState<Phase>('idle')
   const [error, setError] = useState<string | null>(null)
   const [logoutFallback, setLogoutFallback] = useState<string | null>(null)
+  const [probe, setProbe] = useState(false)
 
   async function confirmClear() {
     setPhase('clearing')
     setError(null)
     try {
       const result = await onClear()
-      if (
-        result &&
-        typeof result === 'object' &&
-        'cleared' in result &&
-        (result as { cleared?: boolean }).cleared === false
-      ) {
+      const outcome =
+        result && typeof result === 'object'
+          ? (result as { cleared?: boolean; logoutProbe?: boolean })
+          : null
+      const offerProbe = outcome?.logoutProbe === true
+      if (outcome && 'cleared' in outcome && outcome.cleared === false && !offerProbe) {
+        setProbe(false)
         setPhase('idle')
         return
       }
+      setProbe(offerProbe)
       setPhase('cleared')
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not clear font caches.')
@@ -121,7 +126,10 @@ export function ClearFontCachesControl({
       <Dialog
         open={phase === 'cleared'}
         onOpenChange={(open) => {
-          if (!open) setPhase('idle')
+          if (!open) {
+            setProbe(false)
+            setPhase('idle')
+          }
         }}
       >
         <DialogContent>
@@ -131,17 +139,40 @@ export function ClearFontCachesControl({
               `${FONT_CACHE_CLEAR_WARNING} macOS will ask you to confirm.`}
           </DialogDescription>
           <div className="mt-4 flex justify-end gap-2">
-            <Button type="button" variant="outline" onClick={() => setPhase('idle')}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setProbe(false)
+                setPhase('idle')
+              }}
+            >
               Later
             </Button>
             <Button
               type="button"
               onClick={() => {
-                void onLogOut()
+                const request = probe ? onProbe : onLogOut
+                if (!request) {
+                  setProbe(false)
+                  setPhase('idle')
+                  return
+                }
+                void request()
                   .then((result) => {
                     const outcome = result as
-                      | { requested?: boolean; cancelled?: boolean; message?: string }
+                      | {
+                          requested?: boolean
+                          cancelled?: boolean
+                          ignored?: boolean
+                          message?: string
+                        }
                       | undefined
+                    if (outcome && outcome.ignored === true) {
+                      setProbe(false)
+                      setPhase('idle')
+                      return
+                    }
                     if (outcome && outcome.requested === false) {
                       if (outcome.cancelled === true) {
                         setLogoutFallback(outcome.message || LOGOUT_CANCELLED)
@@ -150,6 +181,7 @@ export function ClearFontCachesControl({
                       setPhase('logout-failed')
                       return
                     }
+                    setProbe(false)
                     setPhase('idle')
                   })
                   .catch(() => {

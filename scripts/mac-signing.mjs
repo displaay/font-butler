@@ -115,6 +115,24 @@ export function testFeedBuildRequested(env) {
   return String(env?.[TEST_FEED_BUILD_ENV] ?? '').trim() === '1'
 }
 
+/** Boolean true only for a test-feed pack. Other env vars leave it false. */
+export function buildIdentityDocument(env) {
+  return { testBuild: testFeedBuildRequested(env) }
+}
+
+/**
+ * Stamp the logout-probe gate into the packaged app as
+ * `Contents/Resources/build-identity.json`. The repo file stays `testBuild: false`.
+ */
+export function applyBuildIdentityResource(build, env, identityFile) {
+  const extraResources = Array.isArray(build?.extraResources) ? [...build.extraResources] : []
+  extraResources.push({ from: identityFile, to: 'build-identity.json' })
+  return {
+    build: { ...build, extraResources },
+    document: buildIdentityDocument(env),
+  }
+}
+
 /**
  * Stamp `fontButlerTestFeed` into the packaged package.json via electron-builder
  * `extraMetadata`. `FONT_BUTLER_TEST_VERSION` sets `extraMetadata.version` so a

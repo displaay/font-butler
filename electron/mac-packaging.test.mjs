@@ -11,6 +11,8 @@ import {
   TEST_FEED_MARKER_UNREADABLE,
   TEST_FEED_MARKER_PROBE_FAILURE,
   assertNotarizedMacRelease,
+  buildIdentityStampFailures,
+  releaseBuildIdentityFailures,
   releaseBundleIdentityFailures,
   macReleaseAssetNames,
   notarizationFailures,
@@ -41,6 +43,7 @@ import {
   TEST_FEED_BUILD_ENV,
   TEST_FEED_PRODUCT_NAME,
   TEST_FEED_VERSION_ENV,
+  applyBuildIdentityResource,
   applyNotaryEnv,
   applyTestFeedMetadata,
   developerIdInKeychainOutput,
@@ -953,7 +956,29 @@ test('a test-feed pack stamps extraMetadata and does not change a normal pack', 
   const bad = applyTestFeedMetadata(build, { [TEST_FEED_BUILD_ENV]: '1', [TEST_FEED_VERSION_ENV]: 'latest' })
   assert.match(bad.error, /FONT_BUTLER_TEST_VERSION/)
   assert.match(readRepo('scripts/mac-pack.mjs'), /applyTestFeedMetadata/)
+  assert.match(readRepo('scripts/mac-pack.mjs'), /applyBuildIdentityResource/)
   assert.equal(PRODUCTION_APP_ID, 'app.fontbutler.desktop')
+  const identity = applyBuildIdentityResource(build, {}, '/tmp/build-identity.json')
+  assert.deepEqual(identity.document, { testBuild: false })
+  assert.deepEqual(
+    applyBuildIdentityResource(build, { FONT_BUTLER_TEST: '1', FONT_BUTLER_DATA: '/tmp/isolated' }, '/tmp/id.json')
+      .document,
+    { testBuild: false },
+  )
+  assert.equal(identity.build.extraResources.at(-1).to, 'build-identity.json')
+  const markedIdentity = applyBuildIdentityResource(
+    marked.build,
+    { [TEST_FEED_BUILD_ENV]: '1', FONT_BUTLER_TEST: '1', FONT_BUTLER_DATA: '/tmp/isolated' },
+    '/tmp/build-identity.json',
+  )
+  assert.deepEqual(markedIdentity.document, { testBuild: true })
+  assert.deepEqual(buildIdentityStampFailures('{"testBuild":false}', { testBuildExpected: false }), [])
+  assert.equal(
+    buildIdentityStampFailures('{"testBuild":true}', { testBuildExpected: false }).length,
+    1,
+  )
+  assert.equal(buildIdentityStampFailures('{"testBuild":"true"}', { testBuildExpected: true }).length, 1)
+  assert.match(readRepo('docs/releases.md'), /tccutil reset AppleEvents app\.fontbutler\.desktop\.test/)
 })
 
 test('the release check rejects a test build that still uses the real bundle id', () => {
@@ -977,6 +1002,33 @@ test('the release check rejects a test build that still uses the real bundle id'
     writeFileSync(plist, xml(PRODUCTION_APP_ID, 'Font Buttler'))
     assert.deepEqual(releaseBundleIdentityFailures(app, { testFeed: false }), [])
     assert.match(readRepo('scripts/assert-notarized-mac-release.mjs'), /releaseBundleIdentityFailures/)
+    assert.match(readRepo('scripts/assert-notarized-mac-release.mjs'), /releaseBuildIdentityFailures/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('the release check rejects a logout probe identity that does not match the build', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-build-identity-'))
+  const app = path.join(root, 'Font Buttler.app')
+  const resources = path.join(app, 'Contents', 'Resources')
+  mkdirSync(resources, { recursive: true })
+  const src = path.join(root, 'pack', 'build')
+  mkdirSync(src, { recursive: true })
+  writeFileSync(path.join(src, 'build-identity.json'), '{"testBuild":false}\n')
+  const asar = await import('@electron/asar')
+  await asar.createPackage(path.join(root, 'pack'), path.join(resources, 'app.asar'))
+  try {
+    writeFileSync(path.join(resources, 'build-identity.json'), '{"testBuild":false}\n')
+    assert.deepEqual(releaseBuildIdentityFailures(app, { testFeed: false }), [])
+    const missingProbe = releaseBuildIdentityFailures(app, { testFeed: true })
+    assert.equal(missingProbe.length, 1)
+    assert.match(missingProbe[0], /testBuild to true/)
+    writeFileSync(path.join(resources, 'build-identity.json'), '{"testBuild":true}\n')
+    assert.deepEqual(releaseBuildIdentityFailures(app, { testFeed: true }), [])
+    const releaseEnabled = releaseBuildIdentityFailures(app, { testFeed: false })
+    assert.equal(releaseEnabled.length, 1)
+    assert.match(releaseEnabled[0], /testBuild false/)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

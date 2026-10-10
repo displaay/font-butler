@@ -50,8 +50,8 @@ import {
   logoutFailedDialogOptions,
   logoutMenuResultAction,
   presentLogoutFailure,
+  logoutOfferAfterCacheClear,
   presentLogoutNotice,
-  shouldOfferLogoutAfterCacheClear,
   showLogoutMessageBox,
 } from './logout-dialog.mjs'
 import { createWatchNoticeBuffer, isWatchFailureNotice } from './watch-notices.mjs'
@@ -1050,7 +1050,7 @@ function showAppMessageBox(options) {
   })
 }
 
-async function offerLogoutAfterFontCacheClear() {
+async function offerLogoutAfterFontCacheClear(pathname) {
   const choice = await showAppMessageBox({
     type: 'info',
     title: 'Font caches cleared',
@@ -1061,7 +1061,8 @@ async function offerLogoutAfterFontCacheClear() {
     cancelId: 1,
   })
   if (choice.response !== 0) return
-  const result = await postApi('/api/session/logout', {})
+  const result = await postApi(pathname, {})
+  if (result && result.ignored === true) return
   const action = logoutMenuResultAction(result)
   if (action === 'cancelled') {
     await showAppMessageBox({
@@ -1135,8 +1136,11 @@ async function clearCacheFromMenu(kind) {
     if (!response.ok) {
       throw new Error(data.error || 'Could not clear cache')
     }
-    if (kind === 'font' && shouldOfferLogoutAfterCacheClear(data)) {
-      await offerLogoutAfterFontCacheClear()
+    const offer = kind === 'font' ? logoutOfferAfterCacheClear(data) : 'none'
+    if (offer === 'probe') {
+      await offerLogoutAfterFontCacheClear('/api/session/logout-probe')
+    } else if (offer === 'logout') {
+      await offerLogoutAfterFontCacheClear('/api/session/logout')
     }
   } catch (error) {
     dialog.showErrorBox(
@@ -1585,7 +1589,11 @@ function handleApiEvent(event) {
     applyNativeNotificationSetting(event.settings.nativeNotifications)
   }
   if (event.type === 'notice' && event.notice) {
-    if (event.notice.source === 'logout' || event.notice.source === 'logout-waiting') {
+    if (
+      event.notice.source === 'logout' ||
+      event.notice.source === 'logout-waiting' ||
+      event.notice.source === 'logout-probe'
+    ) {
       presentLogoutNotice({
         notice: event.notice,
         getWindow: () => mainWindow,

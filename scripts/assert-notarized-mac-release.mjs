@@ -525,6 +525,82 @@ export function testFeedArchiveFailures({ zip, appPaths = [] } = {}) {
   return failures
 }
 
+/**
+ * `testBuildExpected` is true only for the packaged resources stamp of a test-feed build.
+ * The copy inside app.asar must stay false on every build.
+ */
+export function buildIdentityStampFailures(raw, { testBuildExpected = false } = {}) {
+  let parsed = null
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    parsed = null
+  }
+  const enabled = Boolean(parsed && typeof parsed === 'object' && parsed.testBuild === true)
+  if (testBuildExpected && !enabled) {
+    return [
+      'A test-feed build must set testBuild to true in Contents/Resources/build-identity.json so the logout probe can run.',
+    ]
+  }
+  if (!testBuildExpected && enabled) {
+    return [
+      'A release build must keep testBuild false in build-identity.json so the logout probe cannot run.',
+    ]
+  }
+  if (!parsed || typeof parsed !== 'object' || typeof parsed.testBuild !== 'boolean') {
+    return ['build-identity.json must be readable JSON with a boolean testBuild field.']
+  }
+  return []
+}
+
+function readAsarBuildIdentity(asarPath) {
+  try {
+    const asar = require('@electron/asar')
+    return asar.extractFile(asarPath, 'build/build-identity.json').toString('utf8')
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The resources file is the pack stamp. The asar copy is the committed default
+ * and must stay false, including on a test-feed build.
+ */
+export function releaseBuildIdentityFailures(appPath, { testFeed = false } = {}) {
+  if (!appPath || !existsSync(appPath)) return []
+  const resourcesIdentity = path.join(appPath, 'Contents', 'Resources', 'build-identity.json')
+  const asarPath = path.join(appPath, 'Contents', 'Resources', 'app.asar')
+  const hasResources = existsSync(resourcesIdentity)
+  const hasAsar = existsSync(asarPath)
+  if (!hasResources && !hasAsar) return []
+  const failures = []
+  if (testFeed && !hasResources) {
+    failures.push(
+      'A test-feed build must ship Contents/Resources/build-identity.json with testBuild true.',
+    )
+  }
+  if (hasResources) {
+    let raw = null
+    try {
+      raw = readFileSync(resourcesIdentity, 'utf8')
+    } catch {
+      raw = null
+    }
+    for (const failure of buildIdentityStampFailures(raw, { testBuildExpected: testFeed })) {
+      pushFailure(failures, failure)
+    }
+  }
+  if (hasAsar) {
+    const raw = readAsarBuildIdentity(asarPath)
+    const asarFailures =
+      raw == null
+        ? ['app.asar must include build/build-identity.json with testBuild false.']
+        : buildIdentityStampFailures(raw, { testBuildExpected: false })
+    for (const failure of asarFailures) pushFailure(failures, failure)
+  }
+  return failures
+}
+
 export async function assertNotarizedMacRelease(
   root = repoRoot,
   version = readPackVersion(root),
@@ -542,6 +618,7 @@ export async function assertNotarizedMacRelease(
     ...testFeedArchiveFailures({ zip: files.zip, appPaths: [files.app] }),
     ...packagedElectronMarkerFailures(files.app, { spawnImpl, env }),
     ...releaseBundleIdentityFailures(files.app, { testFeed }),
+    ...releaseBuildIdentityFailures(files.app, { testFeed }),
   ]) {
     pushFailure(testFeedFailures, message)
   }

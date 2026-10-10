@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import {
   LOGOUT_CANCELLED as SHARED_LOGOUT_CANCELLED,
   LOGOUT_FAILED_MESSAGE,
+  LOGOUT_PROBE_SIMULATED_NOTICE as SHARED_LOGOUT_PROBE_SIMULATED_NOTICE,
   LOGOUT_STILL_WAITING_MESSAGE,
 } from '../shared/logout.ts'
 import {
@@ -12,6 +13,8 @@ import {
   logoutFailedDialogOptions,
   logoutMenuResultAction,
   logoutWaitingNoticeOptions,
+  LOGOUT_PROBE_SIMULATED_NOTICE,
+  logoutOfferAfterCacheClear,
   presentLogoutFailure,
   presentLogoutNotice,
   resetLogoutDialogSession,
@@ -302,6 +305,39 @@ test('the main process shows the waiting box while a window is open', () => {
   assert.deepEqual(shown, ['parented'])
 })
 
+test('a test-build logout probe success shows the simulated notice', () => {
+  assert.equal(LOGOUT_PROBE_SIMULATED_NOTICE, SHARED_LOGOUT_PROBE_SIMULATED_NOTICE)
+  assert.equal(LOGOUT_PROBE_SIMULATED_NOTICE, 'Test build: logout simulated')
+  const shown = []
+  const win = { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false }
+  presentLogoutNotice({
+    notice: { kind: 'info', source: 'logout-probe', message: LOGOUT_PROBE_SIMULATED_NOTICE },
+    getWindow: () => win,
+    showMessageBox() {
+      shown.push('failure')
+    },
+    showWaitingNotice(_parent, options) {
+      shown.push(options.message)
+    },
+    notify: () => false,
+  })
+  assert.deepEqual(shown, [LOGOUT_PROBE_SIMULATED_NOTICE])
+  resetLogoutDialogSession()
+  const afterFailure = []
+  presentLogoutNotice({
+    notice: failureNotice(),
+    getWindow: () => win,
+    showMessageBox() {
+      afterFailure.push('failure')
+    },
+    showWaitingNotice() {
+      afterFailure.push('waiting')
+    },
+    notify: () => false,
+  })
+  assert.deepEqual(afterFailure, ['failure'])
+})
+
 test('logout cancel uses the shared cancelled message', () => {
   assert.equal(LOGOUT_CANCELLED, SHARED_LOGOUT_CANCELLED)
   assert.equal(LOGOUT_CANCELLED, 'Log out was cancelled.')
@@ -312,4 +348,12 @@ test('logout cancel uses the shared cancelled message', () => {
   assert.equal(shouldOfferLogoutAfterCacheClear({ mac: true, cleared: false, simulated: true }), false)
   assert.equal(shouldOfferLogoutAfterCacheClear({ mac: false, cleared: false }), false)
   assert.equal(shouldOfferLogoutAfterCacheClear(null), false)
+  assert.equal(
+    logoutOfferAfterCacheClear({ mac: true, cleared: false, simulated: true, logoutProbe: true }),
+    'probe',
+  )
+  assert.equal(logoutOfferAfterCacheClear({ mac: true, cleared: false, simulated: true }), 'none')
+  assert.equal(logoutOfferAfterCacheClear({ mac: true, cleared: true }), 'logout')
+  assert.match(main, /\/api\/session\/logout-probe/)
+  assert.match(main, /logoutOfferAfterCacheClear/)
 })

@@ -81,6 +81,14 @@ A marked build isolates itself before `app.requestSingleInstanceLock()` and befo
 
 The real Font Buttler uses bundle id `app.fontbutler.desktop` and may be running. A marked build uses `app.fontbutler.desktop.test` and the product name `Font Buttler Test`. Its swap relaunches with `open -n`, on both the success path and the restore path, so macOS opens this bundle instead of bringing the other app forward. An unmarked build still uses plain `open`.
 
+A marked build can exercise the logout prompt without logging out. The repo file `build/build-identity.json` has `"testBuild": false`. The pack writes `Contents/Resources/build-identity.json` with `"testBuild": true` only when `FONT_BUTLER_TEST_FEED_BUILD=1`. The running app reads that file. No environment variable turns the probe on, and a release build keeps `"testBuild": false`. After **Clear font caches** on this isolated build, the same **Log out now** button sends `tell application "System Events" to get name` instead of a logout. macOS shows the Automation prompt. **Don't Allow** returns -1743 and opens the failure dialog. If the prompt is still open after 30 seconds, the still-waiting notice appears and the Apple event keeps running. **Allow** shows **Test build: logout simulated**.
+
+Reset that prompt before trying **Don't Allow** again:
+
+```bash
+tccutil reset AppleEvents app.fontbutler.desktop.test
+```
+
 The feed variable has to reach the first process. LaunchServices does not keep the shell environment, so `FONT_BUTLER_UPDATE_FEED_URL=... open "Font Buttler Test.app"` does not pass it. Run the binary directly:
 
 ```bash

@@ -293,6 +293,41 @@ test('Clear font caches runs only after confirmation and logout is optional', as
   assert.equal(calls.includes('logout-simulated'), false)
 
   await act(async () => {
+    root.render(
+      createElement(ClearFontCachesControl, {
+        onClear: async () => ({ mac: true, cleared: false, simulated: true, logoutProbe: true }),
+        onLogOut: async () => {
+          calls.push('logout-real')
+        },
+        onProbe: async () => {
+          calls.push('logout-probe')
+          return { requested: true, message: 'Test build: logout simulated' }
+        },
+      }),
+    )
+  })
+  const openProbe = buttonNamed(document.body, 'Clear font caches')
+  assert.ok(openProbe)
+  await act(async () => {
+    openProbe.click()
+  })
+  const confirmProbe = document.body.querySelector('[role="dialog"]')
+  assert.ok(confirmProbe)
+  const confirmProbeButton = buttonNamed(confirmProbe, 'Clear font caches')
+  assert.ok(confirmProbeButton)
+  await act(async () => {
+    confirmProbeButton.click()
+  })
+  const probeLogout = buttonNamed(document.body, 'Log out now')
+  assert.ok(probeLogout)
+  await act(async () => {
+    probeLogout.click()
+  })
+  assert.equal(calls.includes('logout-probe'), true)
+  assert.equal(calls.includes('logout-real'), false)
+  assert.equal(document.body.querySelector('[role="dialog"]'), null)
+
+  await act(async () => {
     root.unmount()
   })
   host.remove()

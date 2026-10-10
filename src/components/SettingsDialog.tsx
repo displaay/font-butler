@@ -1204,6 +1204,7 @@ function CachesPane({
             disabled={busy}
             onClear={() => api.clearFontCaches()}
             onLogOut={() => api.requestLogout()}
+            onProbe={() => api.requestLogoutProbe()}
           />
         </SettingsRow>
       </SettingsSection>

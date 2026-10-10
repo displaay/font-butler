@@ -16,6 +16,7 @@ import {
   LOGOUT_FAILED_MESSAGE,
   LOGOUT_FAILED_TITLE,
   LOGOUT_FALLBACK,
+  LOGOUT_PROBE_SIMULATED_NOTICE,
   LOGOUT_STILL_WAITING_MESSAGE,
 } from '../shared/logout.ts'
 
@@ -24,6 +25,7 @@ export {
   LOGOUT_FAILED_MESSAGE,
   LOGOUT_FAILED_TITLE,
   LOGOUT_FALLBACK,
+  LOGOUT_PROBE_SIMULATED_NOTICE,
   LOGOUT_STILL_WAITING_MESSAGE,
 }
 
@@ -51,6 +53,13 @@ export const ATSUTIL_CLEAR_COMMANDS: readonly (readonly string[])[] = [
 
 /** AppleScript that asks macOS to log out. System Events still shows its own confirm. */
 export const MAC_LOGOUT_APPLESCRIPT = 'tell application "System Events" to log out'
+
+/**
+ * Harmless System Events event for the test-build logout probe.
+ * It raises the same Automation prompt and returns -1743 on Don't Allow.
+ * It never logs the user out.
+ */
+export const MAC_LOGOUT_PROBE_APPLESCRIPT = 'tell application "System Events" to get name'
 
 /**
  * How long to wait for an immediate Apple-event failure before treating an
@@ -476,6 +485,81 @@ export async function requestMacLogout(
     onLateFailure,
     onStillWaiting,
   )
+}
+
+export type LogoutProbeResult = MacLogoutResult & { ignored?: boolean }
+
+type LogoutProbeHooks = {
+  exec?: LogoutExec
+  onLateFailure?: (result: MacLogoutResult) => void
+  onStillWaiting?: (message: string) => void
+  onSimulated?: (message: string) => void
+  acceptAfterMs?: number
+  stillWaitingAfterMs?: number
+}
+
+let probeFlight: LogoutFlight | null = null
+
+export function resetLogoutProbe(): void {
+  probeFlight = null
+}
+
+/**
+ * Test-build stand-in for logout. `testBuild: true` in build-identity.json is
+ * the only switch. The Apple event is `get name`, and its result goes through
+ * the same accept window, still-waiting notice, and late-failure path as
+ * requestMacLogout. A completed event shows the simulated notice.
+ */
+export function requestLogoutProbe(
+  identity: { testBuild?: boolean } | null | undefined,
+  hooks: LogoutProbeHooks = {},
+): Promise<LogoutProbeResult> {
+  if (identity?.testBuild !== true) {
+    return Promise.resolve({ requested: false, ignored: true })
+  }
+  if (probeFlight) return probeFlight.accepted
+  const exec = hooks.exec ?? execFile
+  let noted = false
+  const noteSimulated = () => {
+    if (noted) return
+    noted = true
+    hooks.onSimulated?.(LOGOUT_PROBE_SIMULATED_NOTICE)
+  }
+  let markFinished = () => {}
+  const finished = new Promise<void>((resolve) => {
+    markFinished = resolve
+  })
+  logMain('install', 'logout probe request')
+  const accepted = awaitMacLogoutRequest(
+    (report) => {
+      try {
+        const child = exec('osascript', ['-e', MAC_LOGOUT_PROBE_APPLESCRIPT], (error) => {
+          if (error) report(logoutResultFromExecError(error))
+          else {
+            noteSimulated()
+            report({ requested: true, message: LOGOUT_PROBE_SIMULATED_NOTICE })
+          }
+          markFinished()
+        })
+        child?.unref?.()
+      } catch (error) {
+        report(logoutResultFromExecError(error))
+        markFinished()
+      }
+    },
+    hooks.acceptAfterMs ?? LOGOUT_ACCEPT_MS,
+    hooks.onLateFailure,
+    {
+      stillWaitingAfterMs: hooks.stillWaitingAfterMs ?? LOGOUT_STILL_WAITING_MS,
+      onStillWaiting: hooks.onStillWaiting,
+    },
+  )
+  const flight: LogoutFlight = { accepted, finished }
+  probeFlight = flight
+  void finished.finally(() => {
+    if (probeFlight === flight) probeFlight = null
+  })
+  return accepted
 }
 
 export async function clearOfficeFontCache(): Promise<{ mac: boolean; cleared: boolean }> {

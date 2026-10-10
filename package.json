@@ -75,6 +75,7 @@
       "build/menubarTemplate@2x.png",
       "build/menubarNotificationTemplate.svg",
       "build/icons/**/*",
+      "build/build-identity.json",
       "package.json"
     ],
     "extraResources": [

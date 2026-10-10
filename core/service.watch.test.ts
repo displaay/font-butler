@@ -309,6 +309,7 @@ test('a simulated font-cache clear does not say the cache was removed', async ()
     const cleared = await service.clearUserFontCache({ confirm: true })
     assert.equal(cleared.cleared, false)
     assert.equal(cleared.simulated, true)
+    assert.equal(cleared.logoutProbe, undefined)
     assert.deepEqual(notices, ['Font caches were not cleared.'])
   } finally {
     stop()

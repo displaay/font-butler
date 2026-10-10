@@ -5,6 +5,7 @@ export const LOGOUT_FAILED_DETAIL =
 export const LOGOUT_STILL_WAITING_TITLE = 'Still waiting for macOS'
 export const LOGOUT_STILL_WAITING_MESSAGE =
   'Still waiting for macOS. If you allowed it, logout will continue. Otherwise use Apple menu > Log Out to finish rebuilding font caches.'
+export const LOGOUT_PROBE_SIMULATED_NOTICE = 'Test build: logout simulated'
 
 /** Cancel is a flag on the result. The message text is only what the dialog shows. */
 export function logoutMenuResultAction(result) {
@@ -30,6 +31,13 @@ export function visibleMessageBoxParent(win) {
 
 export function shouldOfferLogoutAfterCacheClear(result) {
   return Boolean(result && result.cleared === true && result.simulated !== true)
+}
+
+/** A stamped test build offers the probe from the same Log out now spot. */
+export function logoutOfferAfterCacheClear(result) {
+  if (result && result.logoutProbe === true) return 'probe'
+  if (shouldOfferLogoutAfterCacheClear(result)) return 'logout'
+  return 'none'
 }
 
 export function logoutFailedDialogOptions(message) {
@@ -119,6 +127,17 @@ export function presentLogoutNotice({
 }) {
   if (!notice || typeof notice !== 'object') return
   const parent = liveMessageBoxParent(typeof getWindow === 'function' ? getWindow() : null)
+  if (notice.source === 'logout-probe') {
+    showWaitingNotice(parent, {
+      type: 'info',
+      title: LOGOUT_PROBE_SIMULATED_NOTICE,
+      message: LOGOUT_PROBE_SIMULATED_NOTICE,
+      detail: LOGOUT_PROBE_SIMULATED_NOTICE,
+      buttons: ['OK'],
+      defaultId: 0,
+    })
+    return
+  }
   if (notice.source === 'logout-waiting') {
     if (logoutFailureDialogShown) return
     let shown = false

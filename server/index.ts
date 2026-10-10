@@ -758,6 +758,17 @@ app.post('/api/session/logout', async (c) => {
   }
 })
 
+app.post('/api/session/logout-probe', async (c) => {
+  try {
+    return c.json(await service.requestLogoutProbe())
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : 'Could not run the logout probe' },
+      400,
+    )
+  }
+})
+
 app.post('/api/caches/office', async (c) => {
   try {
     const result = await service.clearOfficeFontCache()

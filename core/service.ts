@@ -18,6 +18,7 @@ import {
   upsertEntry,
 } from './catalog.ts'
 import { getOrCreateApiToken } from './auth.ts'
+import { cacheClearLogoutProbe, loadBuildIdentity } from './build-identity.ts'
 import { readFontPreviewBytes } from './font-bytes.ts'
 import {
   assignActivationWarning,
@@ -25,6 +26,7 @@ import {
   locateAdobeFontCache,
   locateOfficeFontCache,
   LOGOUT_FAILED_MESSAGE,
+  requestLogoutProbe,
   requestMacLogout,
   withVerificationBatch,
 } from './caches.ts'
@@ -1472,6 +1474,7 @@ export class FontButlerService {
     mac: boolean
     cleared: boolean
     simulated?: boolean
+    logoutProbe?: boolean
   }> {
     if (options.confirm !== true) {
       throw new Error(
@@ -1488,6 +1491,9 @@ export class FontButlerService {
           ? 'Font caches were not cleared.'
           : 'Font cache clearing is available on macOS.',
     })
+    if (cacheClearLogoutProbe(result, loadBuildIdentity())) {
+      return { ...result, logoutProbe: true }
+    }
     return result
   }
 
@@ -1514,6 +1520,38 @@ export class FontButlerService {
         })
       },
     )
+  }
+
+  async requestLogoutProbe(): Promise<{
+    requested: boolean
+    cancelled?: boolean
+    ignored?: boolean
+    message?: string
+    error?: string
+  }> {
+    return requestLogoutProbe(loadBuildIdentity(), {
+      onLateFailure: (result) => {
+        emitNotice({
+          kind: 'warning',
+          source: 'logout',
+          message: result.message || LOGOUT_FAILED_MESSAGE,
+        })
+      },
+      onStillWaiting: (message) => {
+        emitNotice({
+          kind: 'info',
+          source: 'logout-waiting',
+          message,
+        })
+      },
+      onSimulated: (message) => {
+        emitNotice({
+          kind: 'info',
+          source: 'logout-probe',
+          message,
+        })
+      },
+    })
   }
 
   async clearOfficeFontCache(): Promise<{ mac: boolean; cleared: boolean }> {

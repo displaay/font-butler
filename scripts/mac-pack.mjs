@@ -7,6 +7,7 @@ import {
   applyNotaryEnv,
   developerIdInKeychainOutput,
   electronBuilderArgs,
+  applyBuildIdentityResource,
   applyTestFeedMetadata,
   packConfig,
   planMacPack,
@@ -59,7 +60,15 @@ if (stamped.build?.extraMetadata?.fontButlerTestFeed === true) {
 }
 const configDir = mkdtempSync(path.join(tmpdir(), 'font-butler-mac-'))
 const configPath = path.join(configDir, 'electron-builder.json')
-writeFileSync(configPath, JSON.stringify(packConfig(stamped.build, plan)))
+const identityFile = path.join(configDir, 'build-identity.json')
+const identified = applyBuildIdentityResource(stamped.build, process.env, identityFile)
+writeFileSync(identityFile, `${JSON.stringify(identified.document, null, 2)}\n`)
+if (identified.document.testBuild === true) {
+  console.log(
+    'TEST BUILD logout probe. Contents/Resources/build-identity.json will have testBuild true. This does not log out.',
+  )
+}
+writeFileSync(configPath, JSON.stringify(packConfig(identified.build, plan)))
 
 const cli = path.join(repoRoot, 'node_modules/electron-builder/cli.js')
 let status = 1
