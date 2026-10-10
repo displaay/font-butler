@@ -15,6 +15,7 @@ import {
   FINDER_LINK_TO_MESSAGE,
   FINDER_PROTOCOL,
   FINDER_SERVICE_PORT_NAME,
+  FINDER_TEST_PROTOCOL,
   FONT_SERVICE_UTIS,
   collectFinderFontPaths,
   createFinderJobQueue,
@@ -88,6 +89,16 @@ test('parseFinderLaunch reads install flags, URLs, and font paths', () => {
   assert.deepEqual(parseFinderLaunch(['Font Buttler', url]), {
     action: FINDER_INSTALL,
     paths: ['/Fonts/A.otf', '/Fonts/B.otc'],
+  })
+  const testUrl = finderInstallUrl(FINDER_INSTALL, ['/Fonts/A.otf', '/Fonts/Family'], FINDER_TEST_PROTOCOL)
+  assert.match(testUrl, new RegExp(`^${FINDER_TEST_PROTOCOL}://finder/install`))
+  assert.deepEqual(parseFinderInstallUrl(testUrl), {
+    action: FINDER_INSTALL,
+    paths: ['/Fonts/A.otf', '/Fonts/Family'],
+  })
+  assert.deepEqual(parseFinderLaunch(['Font Buttler Test', testUrl]), {
+    action: FINDER_INSTALL,
+    paths: ['/Fonts/A.otf', '/Fonts/Family'],
   })
   assert.deepEqual(
     parseFinderInstallUrl(
@@ -211,6 +222,19 @@ test('finderInstallIssues surfaces skipped WOFF, missing files, and import error
     'Some files could not be installed:\nWOFF files cannot be installed.',
   )
   assert.equal(formatFinderInstallIssues([]), '')
+})
+
+test('createFinderJobQueue holds a handoff until the app is ready to install', async () => {
+  const events = []
+  const queue = createFinderJobQueue(async (action, paths) => {
+    events.push(`${action}:${paths.join(',')}`)
+  })
+  const pending = queue.enqueue(FINDER_INSTALL, ['/Fonts/A.otf', '/Fonts/Family'])
+  await Promise.resolve()
+  assert.deepEqual(events, [])
+  await queue.start()
+  await pending
+  assert.deepEqual(events, ['install:/Fonts/A.otf,/Fonts/Family'])
 })
 
 test('createFinderJobQueue serializes overlapping jobs and drops duplicates', async () => {

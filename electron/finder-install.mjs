@@ -1,4 +1,6 @@
 export const FINDER_PROTOCOL = 'font-butler'
+export const FINDER_TEST_PROTOCOL = 'font-butler-test'
+const FINDER_PROTOCOLS = new Set([FINDER_PROTOCOL, FINDER_TEST_PROTOCOL])
 export const FINDER_INSTALL = 'install'
 export const FINDER_INSTALL_AS = 'install-as'
 export const FINDER_LINK_TO = 'link-to'
@@ -110,7 +112,8 @@ export function parseFinderInstallUrl(rawUrl) {
   } catch {
     return null
   }
-  if (parsed.protocol !== `${FINDER_PROTOCOL}:`) return null
+  const scheme = parsed.protocol.replace(/:$/, '')
+  if (!FINDER_PROTOCOLS.has(scheme)) return null
   const host = parsed.hostname.replace(/^\/+/, '')
   const parts = [host, ...parsed.pathname.split('/').filter(Boolean)].filter(Boolean)
   if (parts[0] !== 'finder') return null
@@ -131,11 +134,14 @@ export function parseFinderInstallUrl(rawUrl) {
   return { action, paths: uniquePaths(paths) }
 }
 
-export function finderInstallUrl(action, filePaths) {
+export function finderInstallUrl(action, filePaths, protocol = FINDER_PROTOCOL) {
   if (!isFinderAction(action)) {
     throw new Error('Unknown Finder install action')
   }
-  const url = new URL(`${FINDER_PROTOCOL}://finder/${action}`)
+  if (!FINDER_PROTOCOLS.has(protocol)) {
+    throw new Error('Unknown Finder install protocol')
+  }
+  const url = new URL(`${protocol}://finder/${action}`)
   for (const filePath of uniquePaths(filePaths)) {
     url.searchParams.append('p', filePath)
   }
@@ -182,7 +188,10 @@ export function parseFinderLaunch(argv) {
       action = FINDER_LINK_TO
       continue
     }
-    if (typeof arg === 'string' && arg.startsWith(`${FINDER_PROTOCOL}:`)) {
+    if (
+      typeof arg === 'string' &&
+      (arg.startsWith(`${FINDER_PROTOCOL}:`) || arg.startsWith(`${FINDER_TEST_PROTOCOL}:`))
+    ) {
       const fromUrl = parseFinderInstallUrl(arg)
       if (fromUrl) {
         action = fromUrl.action

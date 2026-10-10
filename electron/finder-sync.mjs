@@ -1,4 +1,12 @@
-import { isClaimedFontPath, isFinderInstallAction, parseFinderInstallUrl } from './finder-install.mjs'
+import path from 'node:path'
+import {
+  FINDER_INSTALL_AS,
+  FINDER_PROTOCOL,
+  FINDER_TEST_PROTOCOL,
+  isClaimedFontPath,
+  isFinderInstallAction,
+  parseFinderInstallUrl,
+} from './finder-install.mjs'
 
 export const FINDER_SYNC_BUNDLE_ID = 'app.fontbutler.desktop.FinderSync'
 export const FINDER_SYNC_TEST_BUNDLE_ID = 'app.fontbutler.desktop.FinderSync.Test'
@@ -10,6 +18,9 @@ export const FINDER_SYNC_ENTITLEMENT = 'com.apple.security.app-sandbox'
 export const FINDER_SYNC_SETTINGS_URL =
   'x-apple.systempreferences:com.apple.LoginItems-Settings.extension'
 export const FINDER_SYNC_MONITORED_ROOT = '/'
+export const FINDER_SYNC_CLOUD_STORAGE_DIR = 'Library/CloudStorage'
+export const FINDER_SYNC_MOBILE_DOCUMENTS_DIR = 'Library/Mobile Documents'
+export const FINDER_SYNC_ICLOUD_DRIVE_DIR = 'Library/Mobile Documents/com~apple~CloudDocs'
 
 const MAX_PATH_LENGTH = 4096
 
@@ -17,15 +28,146 @@ export function finderSyncBundleId(testFeed) {
   return testFeed ? FINDER_SYNC_TEST_BUNDLE_ID : FINDER_SYNC_BUNDLE_ID
 }
 
+export function finderSyncProtocol(testFeed) {
+  return testFeed ? FINDER_TEST_PROTOCOL : FINDER_PROTOCOL
+}
+
+export function finderSyncMenuTitle(action, testFeed) {
+  const base = action === FINDER_INSTALL_AS ? 'Install as…' : 'Install'
+  return testFeed ? `${base} (Test)` : base
+}
+
+export function finderSyncUrlTypes(testFeed) {
+  return [
+    {
+      CFBundleURLName: testFeed ? 'Font Buttler Test Finder Install' : 'Font Buttler Finder Install',
+      CFBundleURLSchemes: [finderSyncProtocol(testFeed)],
+    },
+  ]
+}
+
+export function finderSyncAppexBundlePath(appPath) {
+  return path.join(appPath, 'Contents', 'PlugIns', FINDER_SYNC_APPEX_NAME)
+}
+
 /**
  * Parse the URL the Finder Sync extension opens.
  * Install and Install as… only. Link to … stays on the Services channel.
+ * A test build accepts only font-butler-test, so it cannot take a release handoff.
  * The returned paths are the selection and nothing else.
  */
-export function parseFinderSyncChannel(rawUrl) {
+export function parseFinderSyncChannel(rawUrl, { testFeed = false } = {}) {
+  if (typeof rawUrl !== 'string' || !rawUrl.startsWith(`${finderSyncProtocol(testFeed)}:`)) return null
   const parsed = parseFinderInstallUrl(rawUrl)
   if (!parsed || !isFinderInstallAction(parsed.action)) return null
   return { action: parsed.action, paths: [...parsed.paths] }
+}
+
+/**
+ * Folders the extension should monitor.
+ * `/` covers local disks. File Provider domains (Dropbox, iCloud Drive) are
+ * not always treated as descendants of `/`, so the home directory, each
+ * `~/Library/CloudStorage` child, `~/Library/Mobile Documents`, and iCloud
+ * Drive are listed too. Missing paths are omitted. This does not walk fonts.
+ */
+export function finderSyncMonitorDirectories({ home, cloudChildren = [], exists } = {}) {
+  const homePath = typeof home === 'string' ? home.replace(/\/+$/, '') : ''
+  const homeParts = homePath.split('/').slice(1)
+  const safeHome =
+    homePath.startsWith('/') &&
+    homePath !== '/' &&
+    homeParts.length > 0 &&
+    !homeParts.some((part) => part === '' || part === '.' || part === '..')
+  const candidates = [FINDER_SYNC_MONITORED_ROOT]
+  if (safeHome) {
+    candidates.push(homePath)
+    candidates.push(`${homePath}/${FINDER_SYNC_CLOUD_STORAGE_DIR}`)
+    candidates.push(`${homePath}/${FINDER_SYNC_MOBILE_DOCUMENTS_DIR}`)
+    candidates.push(`${homePath}/${FINDER_SYNC_ICLOUD_DRIVE_DIR}`)
+    for (const child of cloudChildren) {
+      if (typeof child !== 'string') continue
+      const name = child.trim()
+      if (!name || name.includes('/') || name.includes('\0') || name === '.' || name === '..') continue
+      candidates.push(`${homePath}/${FINDER_SYNC_CLOUD_STORAGE_DIR}/${name}`)
+    }
+  }
+  const seen = new Set()
+  const directories = []
+  for (const directory of candidates) {
+    if (seen.has(directory)) continue
+    seen.add(directory)
+    if (typeof exists === 'function' && directory !== FINDER_SYNC_MONITORED_ROOT && !exists(directory)) continue
+    directories.push(directory)
+  }
+  return directories
+}
+
+/**
+ * Decide whether launch should point pluginkit at the appex inside this app.
+ * A disabled extension stays disabled. A matching path is left alone.
+ * An enabled extension whose path is some other copy is re-registered so a
+ * moved app does not keep a stale menu.
+ */
+export function parsePluginkitFinderSync(output, bundleId) {
+  const lines = String(output ?? '').split(/\r?\n/)
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index].match(/^([+\-!])\s+(\S+)/)
+    if (!match) continue
+    const identifier = match[2].split('(')[0]
+    if (identifier !== bundleId) continue
+    let pluginPath = ''
+    for (let next = index + 1; next < lines.length; next += 1) {
+      if (/^[+\-!]/.test(lines[next])) break
+      const pathMatch = lines[next].match(/^\s*Path\s*=\s*(.+)$/)
+      if (pathMatch) pluginPath = pathMatch[1].trim()
+    }
+    return { matched: true, flag: match[1], enabled: match[1] === '+', path: pluginPath }
+  }
+  return { matched: false, flag: '', enabled: false, path: '' }
+}
+
+export function planFinderSyncRegistration({ currentAppex, record } = {}) {
+  if (!currentAppex) return { action: 'none', reason: 'missing-appex' }
+  if (!record?.matched) return { action: 'none', reason: 'not-registered' }
+  if (record.flag === '-') return { action: 'none', reason: 'disabled' }
+  if (!record.path || record.path === currentAppex) return { action: 'none', reason: 'current' }
+  if (record.flag === '+' || record.flag === '!') {
+    return { action: 'reregister', appex: currentAppex, reason: 'moved' }
+  }
+  return { action: 'none', reason: 'disabled' }
+}
+
+export function refreshFinderSyncRegistration({
+  platform = process.platform,
+  packaged = false,
+  appPath,
+  testFeed = false,
+  spawnSync,
+} = {}) {
+  if (platform !== 'darwin' || packaged !== true || !appPath || typeof spawnSync !== 'function') {
+    return { action: 'none', reason: 'skipped' }
+  }
+  const bundleId = finderSyncBundleId(testFeed)
+  const appex = finderSyncAppexBundlePath(appPath)
+  let output = ''
+  try {
+    const listed = spawnSync('pluginkit', ['-m', '-A', '-v', '-i', bundleId], { encoding: 'utf8' })
+    output = `${listed?.stdout ?? ''}\n${listed?.stderr ?? ''}`
+  } catch {
+    return { action: 'none', reason: 'pluginkit-failed' }
+  }
+  const plan = planFinderSyncRegistration({
+    currentAppex: appex,
+    record: parsePluginkitFinderSync(output, bundleId),
+  })
+  if (plan.action !== 'reregister') return plan
+  try {
+    const added = spawnSync('pluginkit', ['-a', plan.appex], { encoding: 'utf8' })
+    if ((added?.status ?? 1) !== 0) return { ...plan, ok: false, reason: 'reregister-failed' }
+  } catch {
+    return { ...plan, ok: false, reason: 'reregister-failed' }
+  }
+  return { ...plan, ok: true }
 }
 
 export function isSafeFinderSyncPath(filePath) {
@@ -80,7 +222,9 @@ function inspectFontFile(filePath, io) {
     if (stat?.isSymbolicLink?.()) return 'Symlink paths are not installed.'
     last = stat
   }
+  if (last?.isDirectory?.()) return null
   if (!last?.isFile?.()) return 'Not a regular file.'
+  if (!isClaimedFontPath(filePath)) return 'Not a font file.'
   let header
   try {
     header = io.readPrefix(filePath, 4)
@@ -94,8 +238,9 @@ function inspectFontFile(filePath, io) {
 
 /**
  * Re-check a Finder Sync selection before the existing install flow.
- * Accepts only regular font files from that selection. Symlinks are refused
- * so a link cannot escape to a different file. Directories are not walked.
+ * Font files must be regular files with font magic. Folders are accepted as
+ * folders and are not walked here; the Services install path imports them.
+ * Symlinks are refused so a link cannot escape to a different file.
  */
 export function validateFinderSyncSelection(filePaths, io) {
   const selection = []
@@ -107,7 +252,7 @@ export function validateFinderSyncSelection(filePaths, io) {
     const filePath = raw.trim()
     if (!filePath || seen.has(filePath)) continue
     seen.add(filePath)
-    if (!isSafeFinderSyncPath(filePath) || !isClaimedFontPath(filePath)) {
+    if (!isSafeFinderSyncPath(filePath)) {
       rejected.push({ path: filePath, reason: 'Not an absolute font file.' })
       continue
     }

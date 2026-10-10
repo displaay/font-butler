@@ -3,12 +3,14 @@ import { existsSync as nodeExistsSync, mkdirSync, readFileSync as nodeReadFileSy
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  FINDER_SYNC_APPEX_NAME,
   FINDER_SYNC_ENTITLEMENT,
   FINDER_SYNC_EXECUTABLE,
   FINDER_SYNC_EXTENSION_POINT,
   FINDER_SYNC_PRINCIPAL_CLASS,
+  finderSyncAppexBundlePath,
   finderSyncBundleId,
+  finderSyncMenuTitle,
+  finderSyncProtocol,
 } from '../electron/finder-sync.mjs'
 import { DEVELOPER_ID_TEAM } from '../electron/app-update-install.mjs'
 import { DEVELOPER_ID_IDENTITY, testFeedBuildRequested } from './mac-signing.mjs'
@@ -20,7 +22,7 @@ const entitlementsPath = path.join(repoRoot, 'build/entitlements.finder-sync.pli
 export const FINDER_SYNC_ENTITLEMENTS = 'build/entitlements.finder-sync.plist'
 
 export function finderSyncAppexPath(appBundle) {
-  return path.join(appBundle, 'Contents', 'PlugIns', FINDER_SYNC_APPEX_NAME)
+  return finderSyncAppexBundlePath(appBundle)
 }
 
 export function macosSwiftTarget(arch) {
@@ -46,7 +48,15 @@ function xmlEscape(value) {
     .replaceAll('>', '&gt;')
 }
 
-export function finderSyncInfoPlist({ bundleId, version, executable = FINDER_SYNC_EXECUTABLE }) {
+export function finderSyncInfoPlist({
+  bundleId,
+  version,
+  executable = FINDER_SYNC_EXECUTABLE,
+  testFeed = false,
+}) {
+  const installTitle = finderSyncMenuTitle('install', testFeed)
+  const installAsTitle = finderSyncMenuTitle('install-as', testFeed)
+  const scheme = finderSyncProtocol(testFeed)
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -75,6 +85,12 @@ export function finderSyncInfoPlist({ bundleId, version, executable = FINDER_SYN
     <string>${xmlEscape(version)}</string>
     <key>LSMinimumSystemVersion</key>
     <string>11.0</string>
+    <key>FontButtlerURLScheme</key>
+    <string>${xmlEscape(scheme)}</string>
+    <key>FontButtlerInstallTitle</key>
+    <string>${xmlEscape(installTitle)}</string>
+    <key>FontButtlerInstallAsTitle</key>
+    <string>${xmlEscape(installAsTitle)}</string>
     <key>NSExtension</key>
     <dict>
       <key>NSExtensionPointIdentifier</key>
@@ -152,7 +168,8 @@ export function prepareFinderSyncAppex({
   if (!nodeExistsSync(source)) {
     return { ok: false, skipped: false, reason: `Missing ${source}` }
   }
-  const bundleId = finderSyncBundleId(testFeedBuildRequested(env))
+  const testFeed = testFeedBuildRequested(env)
+  const bundleId = finderSyncBundleId(testFeed)
   const shortVersion = version || readPackageVersion(repo)
   const appexPath = finderSyncAppexPath(appBundle)
   const contents = path.join(appexPath, 'Contents')
@@ -161,7 +178,7 @@ export function prepareFinderSyncAppex({
   mkdirSync(macosDir, { recursive: true })
   writeFileSync(
     path.join(contents, 'Info.plist'),
-    finderSyncInfoPlist({ bundleId, version: shortVersion }),
+    finderSyncInfoPlist({ bundleId, version: shortVersion, testFeed }),
   )
 
   const sdk = spawnSync('xcrun', ['--sdk', 'macosx', '--show-sdk-path'], { encoding: 'utf8' })
@@ -251,6 +268,12 @@ export function finderSyncAppexFailures({
   entitlementKeys = [],
   requireDeveloperId = false,
   teamId = DEVELOPER_ID_TEAM,
+  urlScheme = '',
+  expectedURLScheme = '',
+  installTitle = '',
+  expectedInstallTitle = '',
+  installAsTitle = '',
+  expectedInstallAsTitle = '',
 } = {}) {
   const failures = []
   if (!present) {
@@ -275,6 +298,19 @@ export function finderSyncAppexFailures({
   if (keys.length !== 1 || keys[0] !== FINDER_SYNC_ENTITLEMENT) {
     failures.push('The Finder Sync appex entitlements must be app sandbox only.')
   }
+  if (expectedURLScheme && urlScheme !== expectedURLScheme) {
+    failures.push(
+      `The Finder Sync appex URL scheme is ${urlScheme || 'missing'}, expected ${expectedURLScheme}.`,
+    )
+  }
+  if (expectedInstallTitle && installTitle !== expectedInstallTitle) {
+    failures.push(`The Finder Sync menu title is ${installTitle || 'missing'}, expected ${expectedInstallTitle}.`)
+  }
+  if (expectedInstallAsTitle && installAsTitle !== expectedInstallAsTitle) {
+    failures.push(
+      `The Finder Sync Install as title is ${installAsTitle || 'missing'}, expected ${expectedInstallAsTitle}.`,
+    )
+  }
   if (requireDeveloperId) {
     if (/Signature=adhoc/i.test(codesignDisplay)) failures.push('The Finder Sync appex is ad-hoc signed.')
     if (!codesignDisplay.includes(`Authority=Developer ID Application: ${DEVELOPER_ID_IDENTITY}`)) {
@@ -292,6 +328,9 @@ export function verifyFinderSyncAppex({
   appexPath,
   expectedBundleId,
   requireDeveloperId = false,
+  expectedURLScheme = '',
+  expectedInstallTitle = '',
+  expectedInstallAsTitle = '',
   spawnSync = nodeSpawnSync,
   readFileSync = nodeReadFileSync,
   existsSync = nodeExistsSync,
@@ -300,6 +339,9 @@ export function verifyFinderSyncAppex({
   let bundleId = ''
   let principalClass = ''
   let extensionPoint = ''
+  let urlScheme = ''
+  let installTitle = ''
+  let installAsTitle = ''
   let codesignDisplay = ''
   let codesignVerifyStatus = 1
   let entitlementKeys = []
@@ -309,6 +351,9 @@ export function verifyFinderSyncAppex({
       bundleId = plistString(plist, 'CFBundleIdentifier')
       principalClass = plistString(plist, 'NSExtensionPrincipalClass')
       extensionPoint = plistString(plist, 'NSExtensionPointIdentifier')
+      urlScheme = plistString(plist, 'FontButtlerURLScheme')
+      installTitle = plistString(plist, 'FontButtlerInstallTitle')
+      installAsTitle = plistString(plist, 'FontButtlerInstallAsTitle')
     } catch {
       bundleId = ''
     }
@@ -329,6 +374,12 @@ export function verifyFinderSyncAppex({
     codesignDisplay,
     entitlementKeys,
     requireDeveloperId,
+    urlScheme,
+    expectedURLScheme,
+    installTitle,
+    expectedInstallTitle,
+    installAsTitle,
+    expectedInstallAsTitle,
   })
   return { ok: failures.length === 0, failures }
 }
