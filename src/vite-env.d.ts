@@ -22,6 +22,7 @@ declare global {
       ) => () => void
       onDocumentWatchNote?: (callback: (payload?: { path?: string; message?: string }) => void) => () => void
       openExternal?: (url: string) => Promise<boolean>
+      openFinderExtensions?: () => Promise<boolean>
       installAppUpdate?: () => Promise<{
         ok: boolean
         ignored?: boolean
