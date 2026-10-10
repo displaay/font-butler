@@ -38,19 +38,14 @@ import {
   finderInstallIssues,
   FINDER_INSTALL_AS,
   FINDER_LINK_TO,
-  FINDER_PROTOCOL,
-  FINDER_TEST_PROTOCOL,
   formatFinderInstallIssues,
   groupIdsByFormat,
   idsEligibleForFinderInstall,
-  isFinderInstallAction,
-  parseFinderInstallUrl,
-  parseFinderLaunch,
   suggestedFamilyName,
 } from './finder-install.mjs'
 import {
   FINDER_SYNC_SETTINGS_URL,
-  finderSyncProtocol,
+  acceptFinderSyncHandoff,
   formatFinderSyncRejections,
   refreshFinderSyncRegistration,
   validateFinderSyncSelection,
@@ -849,6 +844,16 @@ function enqueueFinderJob(action, filePaths) {
   return finderJobs.enqueue(action, filePaths)
 }
 
+const finderSyncClaimedPaths = new Set()
+
+function claimFinderSyncPaths(filePaths) {
+  for (const filePath of filePaths ?? []) finderSyncClaimedPaths.add(filePath)
+}
+
+function finderSyncClaimsPath(filePath) {
+  return finderSyncClaimedPaths.has(filePath)
+}
+
 function finderSyncIo() {
   return {
     lstatSync: (filePath) => fs.lstatSync(filePath),
@@ -886,35 +891,6 @@ function runningTestFeed() {
   return readAppTestFeedMarker(outermostAppBundle(process.execPath)) === true
 }
 
-function finderSyncUrlForThisApp(rawUrl) {
-  return typeof rawUrl === 'string' && rawUrl.startsWith(`${finderSyncProtocol(runningTestFeed())}:`)
-}
-
-function launchIsFinderSyncUrl(argv) {
-  return (argv ?? []).some((arg) => finderSyncUrlForThisApp(arg))
-}
-
-function finderLaunchForThisApp(argv) {
-  const finder = parseFinderLaunch(argv)
-  if (!finder) return null
-  const urls = (argv ?? []).filter(
-    (arg) =>
-      typeof arg === 'string' &&
-      (arg.startsWith(`${FINDER_PROTOCOL}:`) || arg.startsWith(`${FINDER_TEST_PROTOCOL}:`)),
-  )
-  if (urls.length && !urls.every((url) => finderSyncUrlForThisApp(url))) return null
-  return finder
-}
-
-function enqueueFinderHandoff(parsed, { strict = false } = {}) {
-  if (!parsed) return
-  if (strict && isFinderInstallAction(parsed.action)) {
-    enqueueValidatedFinderInstall(parsed.action, parsed.paths)
-    return
-  }
-  enqueueFinderJob(parsed.action, parsed.paths)
-}
-
 function registerNativeFinderServices() {
   if (process.platform !== 'darwin') return false
   try {
@@ -926,6 +902,28 @@ function registerNativeFinderServices() {
   } catch (error) {
     if (error && error.code !== 'MODULE_NOT_FOUND') {
       console.error('Finder services provider is not loaded', error)
+    }
+    return false
+  }
+}
+
+function registerFinderSyncReceiver() {
+  if (process.platform !== 'darwin') return false
+  try {
+    const addon = require('./finder-sync-receiver.node')
+    addon.register((payload) => {
+      const decision = acceptFinderSyncHandoff(payload, { testFeed: runningTestFeed() })
+      if (!decision.ok) {
+        console.error('Finder Sync handoff refused', decision.reason)
+        return
+      }
+      claimFinderSyncPaths(decision.paths)
+      enqueueValidatedFinderInstall(decision.action, decision.paths)
+    })
+    return true
+  } catch (error) {
+    if (error && error.code !== 'MODULE_NOT_FOUND') {
+      console.error('Finder Sync receiver is not loaded', error)
     }
     return false
   }
@@ -1858,23 +1856,16 @@ const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
 } else {
+  app.on('will-finish-launching', () => {
+    registerNativeFinderServices()
+    registerFinderSyncReceiver()
+  })
   registerNativeFinderServices()
-  if (process.platform === 'darwin') {
-    const protocol = finderSyncProtocol(runningTestFeed())
-    const other = finderSyncProtocol(!runningTestFeed())
-    app.removeAsDefaultProtocolClient(other)
-    app.setAsDefaultProtocolClient(protocol)
-  }
+  registerFinderSyncReceiver()
 
   app.on('second-instance', (_event, argv) => {
     if (app.isPackaged && !apiBootstrapReady && lastBootstrapError) {
       void retryPackagedBootstrap()
-      return
-    }
-    const finder = finderLaunchForThisApp(argv)
-    if (finder) {
-      enqueueFinderHandoff(finder, { strict: launchIsFinderSyncUrl(argv) })
-      showMainWindow()
       return
     }
     const extra = argv.filter((arg) => /\.(ttf|otf|ttc|otc|woff2?)$/i.test(arg))
@@ -1888,16 +1879,15 @@ if (!gotLock) {
     event.preventDefault()
     if (app.isReady()) {
       void openFont(filePath)
-    } else {
-      queuedFiles.push(filePath)
+      return
     }
+    if (finderSyncClaimsPath(filePath)) return
+    queuedFiles.push(filePath)
   })
 
-  app.on('open-url', (event, url) => {
+  // A font-butler URL is not an install. Any page could open one.
+  app.on('open-url', (event) => {
     event.preventDefault()
-    if (!finderSyncUrlForThisApp(url)) return
-    const finder = parseFinderInstallUrl(url)
-    if (finder) enqueueFinderHandoff(finder, { strict: true })
   })
 
   app.on('before-quit', () => {
@@ -2133,6 +2123,7 @@ if (!gotLock) {
       mainWindow?.setBackgroundColor(windowBackgroundColor())
     })
     registerNativeFinderServices()
+    registerFinderSyncReceiver()
     const bootstrapOk = await bootstrapApi()
     ensureTray()
     if (bootstrapOk) {
@@ -2155,17 +2146,13 @@ if (!gotLock) {
     } catch (error) {
       console.error('Finder Sync registration was not refreshed', error)
     }
-    const finderLaunch = finderLaunchForThisApp(process.argv)
-    const fromArgv = finderLaunch
-      ? []
-      : process.argv.filter((arg) =>
-          /\.(ttf|otf|ttc|otc|woff2?)$/i.test(arg),
-        )
+    const fromArgv = process.argv.filter((arg) => /\.(ttf|otf|ttc|otc|woff2?)$/i.test(arg))
     for (const filePath of [...queuedFiles, ...fromArgv]) {
+      if (finderSyncClaimsPath(filePath)) continue
       await openFont(filePath)
     }
     queuedFiles.length = 0
-    if (finderLaunch) enqueueFinderHandoff(finderLaunch, { strict: launchIsFinderSyncUrl(process.argv) })
+    finderSyncClaimedPaths.clear()
     await finderJobs.start()
   })
 

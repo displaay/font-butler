@@ -915,6 +915,7 @@ test('publish requires the remote tag commit to equal HEAD and a clean tree', as
     'electron/server.bundle.mjs',
     'electron/font-analysis-worker.mjs',
     'electron/finder-services.node',
+    'electron/finder-sync-receiver.node',
     'electron/session-fonts.node',
     'electron/favicon-16.png',
     'electron/app-icons/classic.png',
@@ -942,7 +943,7 @@ test('a test-feed pack stamps extraMetadata and does not change a normal pack', 
   const stray = applyTestFeedMetadata(build, { [TEST_FEED_VERSION_ENV]: '0.9.0' })
   assert.equal(stray.build.extraMetadata, undefined)
   assert.deepEqual(build.mac.extendInfo.CFBundleURLTypes[0].CFBundleURLSchemes, ['font-butler'])
-  assert.deepEqual(marked.build.mac.extendInfo.CFBundleURLTypes[0].CFBundleURLSchemes, ['font-butler-test'])
+  assert.deepEqual(marked.build.mac.extendInfo.CFBundleURLTypes[0].CFBundleURLSchemes, ['font-butler'])
   assert.deepEqual(build.mac.extendInfo.CFBundleURLTypes[0].CFBundleURLSchemes, ['font-butler'])
   assert.deepEqual(marked.build.mac.extendInfo.NSServices, build.mac.extendInfo.NSServices)
   const bad = applyTestFeedMetadata(build, { [TEST_FEED_BUILD_ENV]: '1', [TEST_FEED_VERSION_ENV]: 'latest' })

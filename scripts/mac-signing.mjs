@@ -9,8 +9,6 @@
  * staples the dmg. This module does not store passwords, Apple ID emails, or API keys.
  */
 
-import { finderSyncUrlTypes } from '../electron/finder-sync.mjs'
-
 export const DEVELOPER_ID_IDENTITY = 'DANIEL QUISEK (A7WWML89LQ)'
 export const NOTARY_KEYCHAIN_PROFILE = 'font-butler-notary'
 export const ADHOC_ENTITLEMENTS = 'build/entitlements.mac.adhoc.plist'
@@ -120,14 +118,6 @@ export function testFeedBuildRequested(env) {
  * higher test build does not require a committed version bump. Both apply only
  * when `FONT_BUTLER_TEST_FEED_BUILD=1`.
  */
-function withFinderSyncScheme(build) {
-  const mac = { ...(build.mac ?? {}) }
-  const extendInfo = { ...(mac.extendInfo ?? {}) }
-  extendInfo.CFBundleURLTypes = finderSyncUrlTypes(true)
-  mac.extendInfo = extendInfo
-  return { ...build, mac }
-}
-
 export function applyTestFeedMetadata(build, env) {
   if (!testFeedBuildRequested(env)) return { build, error: null }
   const extraMetadata = { ...(build?.extraMetadata ?? {}), fontButlerTestFeed: true }
@@ -142,7 +132,7 @@ export function applyTestFeedMetadata(build, env) {
     }
     extraMetadata.version = version
   }
-  return { build: withFinderSyncScheme({ ...build, extraMetadata }), error: null }
+  return { build: { ...build, extraMetadata }, error: null }
 }
 
 /** Full electron-builder config. Booleans stay booleans: `-c.dmg.sign=true` is the string "true", and dmg signing checks `=== true`. */

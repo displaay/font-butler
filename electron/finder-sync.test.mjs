@@ -4,36 +4,35 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { DEVELOPER_ID_TEAM } from './app-update-install.mjs'
+import { FINDER_INSTALL, FINDER_INSTALL_AS, FINDER_LINK_TO } from './finder-install.mjs'
 import {
-  FINDER_INSTALL,
-  FINDER_INSTALL_AS,
-  FINDER_LINK_TO,
-  FINDER_PROTOCOL,
-  FINDER_TEST_PROTOCOL,
-  finderInstallUrl,
-} from './finder-install.mjs'
-import {
+  FINDER_SYNC_ACTION_KEYWORD,
   FINDER_SYNC_BUNDLE_ID,
   FINDER_SYNC_ENTITLEMENT,
+  FINDER_SYNC_EVENT_CLASS,
+  FINDER_SYNC_EVENT_ID,
   FINDER_SYNC_EXECUTABLE,
   FINDER_SYNC_EXTENSION_POINT,
   FINDER_SYNC_PRINCIPAL_CLASS,
+  FINDER_SYNC_SENDER_AUDIT_TOKEN,
   FINDER_SYNC_SETTINGS_URL,
+  FINDER_SYNC_TEAM_ID,
   FINDER_SYNC_TEST_BUNDLE_ID,
+  acceptFinderSyncHandoff,
   finderSyncAppexBundlePath,
   finderSyncBundleId,
   finderSyncMenuTitle,
   finderSyncMonitorDirectories,
-  finderSyncProtocol,
+  finderSyncSenderAccepted,
   fontMagicKind,
   formatFinderSyncRejections,
   isSafeFinderSyncPath,
-  parseFinderSyncChannel,
   parsePluginkitFinderSync,
   planFinderSyncRegistration,
   refreshFinderSyncRegistration,
   validateFinderSyncSelection,
 } from './finder-sync.mjs'
+import { compileFinderSyncReceiverAddon } from '../scripts/build-finder-sync-receiver.mjs'
 import { finderSyncReleaseFailures } from '../scripts/assert-notarized-mac-release.mjs'
 import {
   entitlementKeysFromCodesign,
@@ -87,35 +86,81 @@ const TTF = Buffer.from([0x00, 0x01, 0x00, 0x00])
 const TTC = Buffer.from('ttcf')
 const WOFF2 = Buffer.from('wOF2')
 
-test('parseFinderSyncChannel keeps install and install-as paths and drops other actions', () => {
-  const install = finderInstallUrl(FINDER_INSTALL, ['/Fonts/A.otf', '/Fonts/B.ttf'])
-  assert.deepEqual(parseFinderSyncChannel(install), {
+function signedSender(bundleId, extra = {}) {
+  return {
+    valid: true,
+    adhoc: false,
+    teamId: FINDER_SYNC_TEAM_ID,
+    bundleId,
+    ...extra,
+  }
+}
+
+test('Finder Sync install accepts only a signed appex from this build', () => {
+  assert.equal(FINDER_SYNC_TEAM_ID, DEVELOPER_ID_TEAM)
+  assert.equal(finderSyncMenuTitle(FINDER_INSTALL, false), 'Install')
+  assert.equal(finderSyncMenuTitle(FINDER_INSTALL_AS, true), 'Install as… (Test)')
+  const release = {
+    action: FINDER_INSTALL,
+    paths: ['/Fonts/A.otf', '/Fonts/A.otf', ' /Fonts/B.ttf '],
+    sender: signedSender(FINDER_SYNC_BUNDLE_ID),
+  }
+  assert.deepEqual(acceptFinderSyncHandoff(release), {
+    ok: true,
     action: FINDER_INSTALL,
     paths: ['/Fonts/A.otf', '/Fonts/B.ttf'],
   })
-  const installAs = finderInstallUrl(FINDER_INSTALL_AS, ['/Fonts/Display.otf'])
-  assert.deepEqual(parseFinderSyncChannel(installAs), {
+  assert.equal(finderSyncSenderAccepted(release.sender, { testFeed: false }), true)
+  assert.equal(acceptFinderSyncHandoff(release, { testFeed: true }).ok, false)
+  assert.equal(acceptFinderSyncHandoff(release, { testFeed: true }).reason, 'sender')
+
+  const testBuild = {
+    action: FINDER_INSTALL_AS,
+    paths: ['/Fonts/Display.otf'],
+    sender: signedSender(FINDER_SYNC_TEST_BUNDLE_ID),
+  }
+  assert.equal(acceptFinderSyncHandoff(testBuild).reason, 'sender')
+  assert.deepEqual(acceptFinderSyncHandoff(testBuild, { testFeed: true }), {
+    ok: true,
     action: FINDER_INSTALL_AS,
     paths: ['/Fonts/Display.otf'],
   })
-  assert.equal(parseFinderSyncChannel(finderInstallUrl(FINDER_LINK_TO, ['/Fonts/A.woff'])), null)
-  assert.equal(parseFinderSyncChannel('https://example.test/finder/install?p=/Fonts/A.otf'), null)
-  const testUrl = finderInstallUrl(FINDER_INSTALL, ['/Fonts/A.otf', '/Fonts/Family'], FINDER_TEST_PROTOCOL)
-  assert.equal(parseFinderSyncChannel(testUrl), null)
-  assert.deepEqual(parseFinderSyncChannel(testUrl, { testFeed: true }), {
-    action: FINDER_INSTALL,
-    paths: ['/Fonts/A.otf', '/Fonts/Family'],
-  })
-  assert.equal(parseFinderSyncChannel(install, { testFeed: true }), null)
-  assert.equal(finderSyncProtocol(false), FINDER_PROTOCOL)
-  assert.equal(finderSyncProtocol(true), FINDER_TEST_PROTOCOL)
-  assert.equal(finderSyncMenuTitle(FINDER_INSTALL, false), 'Install')
-  assert.equal(finderSyncMenuTitle(FINDER_INSTALL_AS, true), 'Install as… (Test)')
-  assert.equal(parseFinderSyncChannel(''), null)
-  const parsed = parseFinderSyncChannel(
-    'font-butler://finder/install?p=%2FFonts%2FA.otf&p=%2FFonts%2FB.otf&extra=1',
+
+  assert.equal(
+    acceptFinderSyncHandoff({ ...release, sender: signedSender(FINDER_SYNC_BUNDLE_ID, { teamId: 'OTHERTEAM1' }) }).reason,
+    'sender',
   )
-  assert.deepEqual(parsed, { action: FINDER_INSTALL, paths: ['/Fonts/A.otf', '/Fonts/B.otf'] })
+  assert.equal(
+    acceptFinderSyncHandoff({ ...release, sender: signedSender(FINDER_SYNC_BUNDLE_ID, { adhoc: true }) }).reason,
+    'sender',
+  )
+  assert.equal(
+    acceptFinderSyncHandoff({ ...release, sender: signedSender(FINDER_SYNC_BUNDLE_ID, { valid: false }) }).reason,
+    'sender',
+  )
+  assert.equal(acceptFinderSyncHandoff({ ...release, sender: signedSender('app.fontbutler.desktop') }).reason, 'sender')
+  assert.equal(acceptFinderSyncHandoff({ ...release, sender: null }).reason, 'sender')
+  assert.equal(acceptFinderSyncHandoff({ ...release, sender: { valid: 'true', teamId: FINDER_SYNC_TEAM_ID, bundleId: FINDER_SYNC_BUNDLE_ID } }).reason, 'sender')
+  assert.equal(acceptFinderSyncHandoff({ ...release, action: FINDER_LINK_TO }).reason, 'action')
+  assert.equal(acceptFinderSyncHandoff({ ...release, paths: [] }).reason, 'paths')
+  assert.equal(acceptFinderSyncHandoff('font-butler://finder/install?p=/Fonts/A.otf').reason, 'action')
+  assert.equal(
+    acceptFinderSyncHandoff({
+      action: FINDER_INSTALL,
+      paths: ['/Fonts/A.otf'],
+      url: 'font-butler://finder/install?p=/Fonts/A.otf',
+    }).reason,
+    'sender',
+  )
+  assert.equal(
+    acceptFinderSyncHandoff({
+      action: FINDER_INSTALL,
+      paths: ['/Fonts/A.otf'],
+      url: 'font-butler-test://finder/install?p=/Fonts/A.otf',
+      sender: signedSender(FINDER_SYNC_BUNDLE_ID),
+    }).ok,
+    true,
+  )
 })
 
 test('validateFinderSyncSelection accepts regular font files and refuses escapes', () => {
@@ -211,11 +256,12 @@ test('Finder Sync appex identity, plist, and swiftc command stay distinct for te
     testFeed: true,
   })
   assert.equal(plistString(plist, 'CFBundleIdentifier'), FINDER_SYNC_TEST_BUNDLE_ID)
-  assert.equal(plistString(plist, 'FontButtlerURLScheme'), FINDER_TEST_PROTOCOL)
+  assert.equal(plistString(plist, 'FontButtlerURLScheme'), '')
+  assert.doesNotMatch(plist, /FontButtlerURLScheme|font-butler/)
   assert.equal(plistString(plist, 'FontButtlerInstallTitle'), 'Install (Test)')
   assert.equal(plistString(plist, 'FontButtlerInstallAsTitle'), 'Install as… (Test)')
   const releasePlist = finderSyncInfoPlist({ bundleId: FINDER_SYNC_BUNDLE_ID, version: '0.3.10' })
-  assert.equal(plistString(releasePlist, 'FontButtlerURLScheme'), FINDER_PROTOCOL)
+  assert.equal(plistString(releasePlist, 'FontButtlerURLScheme'), '')
   assert.equal(plistString(releasePlist, 'FontButtlerInstallTitle'), 'Install')
   assert.equal(plistString(plist, 'CFBundleExecutable'), FINDER_SYNC_EXECUTABLE)
   assert.equal(plistString(plist, 'NSExtensionPrincipalClass'), FINDER_SYNC_PRINCIPAL_CLASS)
@@ -245,23 +291,14 @@ test('Finder Sync appex identity, plist, and swiftc command stay distinct for te
   assert.doesNotMatch(entitlements, /allow-jit|get-task-allow|disable-library-validation/)
 })
 
-test('Finder Sync monitors cloud roots and leaves a disabled or current extension alone', () => {
-  const home = '/Users/ada'
-  const directories = finderSyncMonitorDirectories({
-    home,
-    cloudChildren: ['Dropbox', '../Secret', 'OneDrive'],
-    exists: (directory) => directory !== `${home}/Library/Mobile Documents/com~apple~CloudDocs`,
-  })
-  assert.deepEqual(directories, [
-    '/',
-    home,
-    `${home}/Library/CloudStorage`,
-    `${home}/Library/Mobile Documents`,
-    `${home}/Library/CloudStorage/Dropbox`,
-    `${home}/Library/CloudStorage/OneDrive`,
-  ])
-  assert.equal(directories.some((directory) => directory.includes('..')), false)
-  assert.deepEqual(finderSyncMonitorDirectories({ home: 'relative' }), ['/'])
+test('Finder Sync monitors / and leaves a disabled or current extension alone', () => {
+  assert.deepEqual(
+    finderSyncMonitorDirectories({
+      home: '/Users/ada',
+      cloudChildren: ['Dropbox', 'OneDrive'],
+    }),
+    ['/'],
+  )
 
   const bundleId = FINDER_SYNC_TEST_BUNDLE_ID
   const current = finderSyncAppexBundlePath('/Applications/Font Buttler Test/Font Buttler.app')
@@ -390,6 +427,19 @@ test('appex signing is inside-out and the release check requires sandbox, team, 
   })
   assert.ok(adHoc.some((failure) => /ad-hoc/.test(failure)))
   assert.ok(adHoc.some((failure) => /team ID/.test(failure)))
+  const scheme = finderSyncAppexFailures({
+    present: true,
+    bundleId: FINDER_SYNC_BUNDLE_ID,
+    expectedBundleId: FINDER_SYNC_BUNDLE_ID,
+    principalClass: FINDER_SYNC_PRINCIPAL_CLASS,
+    extensionPoint: FINDER_SYNC_EXTENSION_POINT,
+    codesignVerifyStatus: 0,
+    codesignDisplay: display,
+    entitlementKeys: [FINDER_SYNC_ENTITLEMENT],
+    requireDeveloperId: true,
+    urlScheme: 'font-butler',
+  })
+  assert.ok(scheme.some((failure) => /URL scheme/.test(failure)))
   const loose = finderSyncAppexFailures({
     present: true,
     bundleId: FINDER_SYNC_BUNDLE_ID,
@@ -464,10 +514,8 @@ test('the release assert reads the appex bundle ID against the test-feed marker'
 
 test('Finder Sync sources only hand off font selections and the pack builds the appex', () => {
   const swift = readRepo('macos/FinderSync/FinderSync.swift')
+  const receiver = readRepo('electron/finder-sync-receiver.mm')
   assert.match(swift, /fileURLWithPath: "\/"/)
-  assert.match(swift, /Library\/CloudStorage/)
-  assert.match(swift, /Library\/Mobile Documents/)
-  assert.match(swift, /com~apple~CloudDocs/)
   assert.match(swift, /contextualMenuForItems/)
   assert.match(swift, /selectedItemURLs/)
   assert.match(swift, /allSatisfy\(isInstallSelection\)/)
@@ -475,23 +523,39 @@ test('Finder Sync sources only hand off font selections and the pack builds the 
   assert.match(swift, /"Install"/)
   assert.match(swift, /Install as…/)
   assert.match(swift, /FontButtlerInstallTitle/)
-  assert.match(swift, /FontButtlerURLScheme/)
-  assert.match(swift, /font-butler/)
   assert.match(swift, /withApplicationAt/)
   assert.match(swift, /parentAppURL/)
+  assert.match(swift, /appleEvent/)
+  assert.match(swift, /NSWorkspace\.shared\.open\(urls, withApplicationAt: appURL/)
+  for (const value of [FINDER_SYNC_EVENT_CLASS, FINDER_SYNC_EVENT_ID, FINDER_SYNC_ACTION_KEYWORD]) {
+    const hex = value.toString(16)
+    assert.match(swift, new RegExp(hex, 'i'))
+    assert.match(receiver, new RegExp(hex, 'i'))
+  }
+  assert.match(receiver, new RegExp(FINDER_SYNC_SENDER_AUDIT_TOKEN.toString(16), 'i'))
+  assert.match(receiver, /SecCodeCopyGuestWithAttributes/)
+  assert.match(receiver, /kSecGuestAttributeAudit/)
+  assert.match(receiver, /SecCodeCheckValidity/)
+  assert.match(receiver, /kSecCodeInfoTeamIdentifier/)
+  assert.match(receiver, /kSecCodeInfoIdentifier/)
+  assert.match(receiver, /kSecCodeSignatureAdhoc/)
+  assert.match(receiver, new RegExp(FINDER_SYNC_TEAM_ID))
+  assert.match(receiver, new RegExp(FINDER_SYNC_BUNDLE_ID.replaceAll('.', '\\.')))
+  assert.match(receiver, new RegExp(FINDER_SYNC_TEST_BUNDLE_ID.replaceAll('.', '\\.')))
+  assert.doesNotMatch(receiver, /kSecGuestAttributePid|getpid/)
   assert.doesNotMatch(swift, /\/Applications\/Font Buttler\.app/)
+  assert.doesNotMatch(swift, /font-butler|FontButtlerURLScheme|URLComponents|FileManager|CloudStorage|Mobile Documents|NSXPCListener|xpc_connection/)
   assert.doesNotMatch(swift, /CTFontManager|copyItem|removeItem|trashItem|NSAppleScript|\/api\/install/)
-  assert.match(swift, /FileManager\.default\.homeDirectoryForCurrentUser/)
-  assert.match(swift, /contentsOfDirectory/)
 
   const main = readRepo('electron/main.mjs')
   assert.match(main, /enqueueValidatedFinderInstall/)
   assert.match(main, /validateFinderSyncSelection/)
   assert.match(main, /O_NOFOLLOW/)
-  assert.match(main, /finderSyncProtocol/)
-  assert.match(main, /removeAsDefaultProtocolClient/)
+  assert.match(main, /acceptFinderSyncHandoff/)
+  assert.match(main, /finder-sync-receiver\.node/)
+  assert.match(main, /will-finish-launching/)
+  assert.doesNotMatch(main, /setAsDefaultProtocolClient|removeAsDefaultProtocolClient|parseFinderLaunch|parseFinderInstallUrl|enqueueFinderHandoff/)
   assert.match(main, /refreshFinderSyncRegistration/)
-  assert.match(main, /finderLaunchForThisApp/)
   assert.match(main, /enqueueFinderJob\(action, checked\.paths\)/)
   assert.match(main, /open-finder-extensions/)
   assert.match(main, /FINDER_SYNC_SETTINGS_URL/)
@@ -499,7 +563,7 @@ test('Finder Sync sources only hand off font selections and the pack builds the 
     FINDER_SYNC_SETTINGS_URL,
     'x-apple.systempreferences:com.apple.LoginItems-Settings.extension',
   )
-  assert.match(main, /enqueueFinderHandoff\(finder, \{ strict: true \}\)/)
+  assert.match(main, /app\.on\('open-url', \(event\) => \{\s*event\.preventDefault\(\)\s*\}\)/)
   assert.match(main, /addon\.register\(\(action, filePaths\) => \{\s*enqueueFinderJob\(action, filePaths\)/s)
   assert.match(main, /runFinderInstall/)
   const preload = readRepo('electron/preload.cjs')
@@ -517,6 +581,14 @@ test('Finder Sync sources only hand off font selections and the pack builds the 
   assert.match(pack, /prepareFinderSyncAppex/)
   assert.match(pack, /signFinderSyncAppex/)
   assert.match(pack, /verifyFinderSyncAppex/)
+  assert.match(pack, /compileFinderSyncReceiverAddon/)
+  const receiverBuild = compileFinderSyncReceiverAddon()
+  if (process.platform === 'darwin') {
+    assert.equal(receiverBuild.skipped, false)
+  } else {
+    assert.equal(receiverBuild.ok, false)
+    assert.equal(receiverBuild.skipped, true)
+  }
   const verifyHook = readRepo('scripts/verify-finder-sync-appex.mjs')
   assert.match(verifyHook, /export async function afterSign/)
   assert.match(verifyHook, /requireDeveloperId/)

@@ -10,7 +10,6 @@ import {
   finderSyncAppexBundlePath,
   finderSyncBundleId,
   finderSyncMenuTitle,
-  finderSyncProtocol,
 } from '../electron/finder-sync.mjs'
 import { DEVELOPER_ID_TEAM } from '../electron/app-update-install.mjs'
 import { DEVELOPER_ID_IDENTITY, testFeedBuildRequested } from './mac-signing.mjs'
@@ -56,7 +55,6 @@ export function finderSyncInfoPlist({
 }) {
   const installTitle = finderSyncMenuTitle('install', testFeed)
   const installAsTitle = finderSyncMenuTitle('install-as', testFeed)
-  const scheme = finderSyncProtocol(testFeed)
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -85,8 +83,6 @@ export function finderSyncInfoPlist({
     <string>${xmlEscape(version)}</string>
     <key>LSMinimumSystemVersion</key>
     <string>11.0</string>
-    <key>FontButtlerURLScheme</key>
-    <string>${xmlEscape(scheme)}</string>
     <key>FontButtlerInstallTitle</key>
     <string>${xmlEscape(installTitle)}</string>
     <key>FontButtlerInstallAsTitle</key>
@@ -269,7 +265,6 @@ export function finderSyncAppexFailures({
   requireDeveloperId = false,
   teamId = DEVELOPER_ID_TEAM,
   urlScheme = '',
-  expectedURLScheme = '',
   installTitle = '',
   expectedInstallTitle = '',
   installAsTitle = '',
@@ -298,10 +293,8 @@ export function finderSyncAppexFailures({
   if (keys.length !== 1 || keys[0] !== FINDER_SYNC_ENTITLEMENT) {
     failures.push('The Finder Sync appex entitlements must be app sandbox only.')
   }
-  if (expectedURLScheme && urlScheme !== expectedURLScheme) {
-    failures.push(
-      `The Finder Sync appex URL scheme is ${urlScheme || 'missing'}, expected ${expectedURLScheme}.`,
-    )
+  if (urlScheme) {
+    failures.push('The Finder Sync appex must not declare a URL scheme.')
   }
   if (expectedInstallTitle && installTitle !== expectedInstallTitle) {
     failures.push(`The Finder Sync menu title is ${installTitle || 'missing'}, expected ${expectedInstallTitle}.`)
@@ -328,7 +321,6 @@ export function verifyFinderSyncAppex({
   appexPath,
   expectedBundleId,
   requireDeveloperId = false,
-  expectedURLScheme = '',
   expectedInstallTitle = '',
   expectedInstallAsTitle = '',
   spawnSync = nodeSpawnSync,
@@ -375,7 +367,6 @@ export function verifyFinderSyncAppex({
     entitlementKeys,
     requireDeveloperId,
     urlScheme,
-    expectedURLScheme,
     installTitle,
     expectedInstallTitle,
     installAsTitle,

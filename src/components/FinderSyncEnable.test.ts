@@ -16,6 +16,9 @@ test('Finder enable copy tells you where to turn the menu on', () => {
   assert.match(FINDER_SYNC_ENABLE_DESCRIPTION, /folder of fonts/)
   assert.match(FINDER_SYNC_ENABLE_DESCRIPTION, /Login Items & Extensions/)
   assert.match(FINDER_SYNC_ENABLE_DESCRIPTION, /extension is off/)
+  assert.match(FINDER_SYNC_ENABLE_DESCRIPTION, /Dropbox/)
+  assert.match(FINDER_SYNC_ENABLE_DESCRIPTION, /iCloud/)
+  assert.match(FINDER_SYNC_ENABLE_DESCRIPTION, /right-click > Services > Install/)
   assert.match(FINDER_SYNC_ENABLE_DESCRIPTION, /Services/)
   assert.equal(FINDER_SYNC_SETTINGS_BUTTON, 'Open Login Items & Extensions')
 

@@ -13,7 +13,7 @@ import {
 } from '../electron/app-update-install.mjs'
 import { sha512Base64 } from './mac-dmg-staple.mjs'
 import { DEVELOPER_ID_IDENTITY, TEST_FEED_BUILD_ENV, TEST_FEED_VERSION_ENV } from './mac-signing.mjs'
-import { finderSyncBundleId, finderSyncMenuTitle, finderSyncProtocol } from '../electron/finder-sync.mjs'
+import { finderSyncBundleId, finderSyncMenuTitle } from '../electron/finder-sync.mjs'
 import {
   entitlementKeysFromCodesign,
   finderSyncAppexFailures,
@@ -240,7 +240,6 @@ export function finderSyncReleaseFailures(appPath, { readFile = readFileSync, ex
     entitlementKeys: entitlementKeysFromCodesign(entitlements.output),
     requireDeveloperId: true,
     urlScheme: plistString(plist, 'FontButtlerURLScheme'),
-    expectedURLScheme: finderSyncProtocol(testFeed),
     installTitle: plistString(plist, 'FontButtlerInstallTitle'),
     expectedInstallTitle: finderSyncMenuTitle('install', testFeed),
     installAsTitle: plistString(plist, 'FontButtlerInstallAsTitle'),
