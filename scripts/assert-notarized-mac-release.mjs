@@ -13,6 +13,13 @@ import {
 } from '../electron/app-update-install.mjs'
 import { sha512Base64 } from './mac-dmg-staple.mjs'
 import { DEVELOPER_ID_IDENTITY, TEST_FEED_BUILD_ENV, TEST_FEED_VERSION_ENV } from './mac-signing.mjs'
+import { finderSyncBundleId } from '../electron/finder-sync.mjs'
+import {
+  entitlementKeysFromCodesign,
+  finderSyncAppexFailures,
+  finderSyncAppexPath,
+  plistString,
+} from './build-finder-sync.mjs'
 
 const require = createRequire(import.meta.url)
 const yaml = require('js-yaml')
@@ -204,6 +211,38 @@ function attachDmg(dmg) {
 
 function staplerStatus(target) {
   return run('xcrun', ['stapler', 'validate', target]).status
+}
+
+export function finderSyncReleaseFailures(appPath, { readFile = readFileSync, exists = existsSync, runCommand = run } = {}) {
+  const expectedBundleId = finderSyncBundleId(readAppTestFeedMarker(appPath) === true)
+  const appex = finderSyncAppexPath(appPath)
+  if (!appex || !exists(appex)) {
+    return finderSyncAppexFailures({ present: false, expectedBundleId, requireDeveloperId: true })
+  }
+  let plist = ''
+  try {
+    plist = readFile(path.join(appex, 'Contents', 'Info.plist'), 'utf8')
+  } catch {
+    plist = ''
+  }
+  const display = runCommand('codesign', ['-dv', '--verbose=4', appex])
+  const verify = runCommand('codesign', ['--verify', '--strict', '--verbose=2', appex])
+  const entitlements = runCommand('codesign', ['-d', '--entitlements', ':-', appex])
+  return finderSyncAppexFailures({
+    present: true,
+    bundleId: plistString(plist, 'CFBundleIdentifier'),
+    expectedBundleId,
+    principalClass: plistString(plist, 'NSExtensionPrincipalClass'),
+    extensionPoint: plistString(plist, 'NSExtensionPointIdentifier'),
+    codesignDisplay: display.output,
+    codesignVerifyStatus: verify.status,
+    entitlementKeys: entitlementKeysFromCodesign(entitlements.output),
+    requireDeveloperId: true,
+  })
+}
+
+function prefixFailures(where, failures) {
+  return failures.map((failure) => `${where}: ${failure}`)
 }
 
 function evidenceForApp(app, extra) {
@@ -515,6 +554,7 @@ export async function assertNotarizedMacRelease(
       const inside = findAppBundles(mounted.mount).find((bundle) => path.basename(bundle) === 'Font Buttler.app')
       dmgAppStatus = inside ? staplerStatus(inside) : 1
       if (!inside) failures.push('The DMG does not contain Font Buttler.app.')
+      else failures.push(...prefixFailures('DMG', finderSyncReleaseFailures(inside)))
       for (const failure of testFeedArchiveFailures({ appPaths: inside ? [inside] : [] })) {
         if (!testFeedFailures.includes(failure)) testFeedFailures.push(failure)
       }
@@ -533,6 +573,7 @@ export async function assertNotarizedMacRelease(
       const inside = findAppBundles(zipDir).find((bundle) => path.basename(bundle) === 'Font Buttler.app')
       zipAppStatus = inside ? staplerStatus(inside) : 1
       if (!inside) failures.push('The update zip does not contain Font Buttler.app.')
+      else failures.push(...prefixFailures('Update zip', finderSyncReleaseFailures(inside)))
       for (const failure of testFeedArchiveFailures({ appPaths: inside ? [inside] : [] })) {
         if (!testFeedFailures.includes(failure)) testFeedFailures.push(failure)
       }
@@ -543,6 +584,7 @@ export async function assertNotarizedMacRelease(
 
   failures.push(
     ...testFeedFailures,
+    ...prefixFailures('App', finderSyncReleaseFailures(app)),
     ...evidenceForApp(app, {
       staplerDmgStatus: staplerStatus(dmg),
       staplerDmgAppStatus: dmgAppStatus,

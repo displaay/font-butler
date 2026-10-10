@@ -40,10 +40,16 @@ import {
   formatFinderInstallIssues,
   groupIdsByFormat,
   idsEligibleForFinderInstall,
+  isFinderInstallAction,
   parseFinderInstallUrl,
   parseFinderLaunch,
   suggestedFamilyName,
 } from './finder-install.mjs'
+import {
+  FINDER_SYNC_SETTINGS_URL,
+  formatFinderSyncRejections,
+  validateFinderSyncSelection,
+} from './finder-sync.mjs'
 import { deliverNativeNotice, electronNotificationPermission } from './notify.mjs'
 import { createWatchNoticeBuffer, isWatchFailureNotice } from './watch-notices.mjs'
 import {
@@ -836,6 +842,52 @@ async function openFont(filePath) {
 
 function enqueueFinderJob(action, filePaths) {
   return finderJobs.enqueue(action, filePaths)
+}
+
+function finderSyncIo() {
+  return {
+    lstatSync: (filePath) => fs.lstatSync(filePath),
+    readPrefix(filePath, length) {
+      const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0)
+      const fd = fs.openSync(filePath, flags)
+      try {
+        const buffer = Buffer.alloc(length)
+        const bytes = fs.readSync(fd, buffer, 0, length, 0)
+        return buffer.subarray(0, bytes)
+      } finally {
+        fs.closeSync(fd)
+      }
+    },
+  }
+}
+
+function enqueueValidatedFinderInstall(action, filePaths) {
+  const checked = validateFinderSyncSelection(filePaths, finderSyncIo())
+  if (checked.paths.length === 0) {
+    dialog.showErrorBox(
+      finderInstallTitle(action),
+      formatFinderSyncRejections(checked.rejected) || 'No installable font files in that selection.',
+    )
+    showMainWindow()
+    return
+  }
+  if (checked.rejected.length) {
+    dialog.showErrorBox(finderInstallTitle(action), formatFinderSyncRejections(checked.rejected))
+  }
+  enqueueFinderJob(action, checked.paths)
+}
+
+function launchIsFinderSyncUrl(argv) {
+  return (argv ?? []).some((arg) => typeof arg === 'string' && arg.startsWith(`${FINDER_PROTOCOL}:`))
+}
+
+function enqueueFinderHandoff(parsed, { strict = false } = {}) {
+  if (!parsed) return
+  if (strict && isFinderInstallAction(parsed.action)) {
+    enqueueValidatedFinderInstall(parsed.action, parsed.paths)
+    return
+  }
+  enqueueFinderJob(parsed.action, parsed.paths)
 }
 
 function registerNativeFinderServices() {
@@ -1793,7 +1845,7 @@ if (!gotLock) {
     }
     const finder = parseFinderLaunch(argv)
     if (finder) {
-      enqueueFinderJob(finder.action, finder.paths)
+      enqueueFinderHandoff(finder, { strict: launchIsFinderSyncUrl(argv) })
       showMainWindow()
       return
     }
@@ -1816,7 +1868,7 @@ if (!gotLock) {
   app.on('open-url', (event, url) => {
     event.preventDefault()
     const finder = parseFinderInstallUrl(url)
-    if (finder) enqueueFinderJob(finder.action, finder.paths)
+    if (finder) enqueueFinderHandoff(finder, { strict: true })
   })
 
   app.on('before-quit', () => {
@@ -2073,7 +2125,7 @@ if (!gotLock) {
       await openFont(filePath)
     }
     queuedFiles.length = 0
-    if (finderLaunch) enqueueFinderJob(finderLaunch.action, finderLaunch.paths)
+    if (finderLaunch) enqueueFinderHandoff(finderLaunch, { strict: launchIsFinderSyncUrl(process.argv) })
     await finderJobs.start()
   })
 
@@ -2142,6 +2194,12 @@ ipcMain.handle('get-api-token', async () => {
 ipcMain.handle('open-external', async (_event, url) => {
   if (typeof url !== 'string') return false
   return openExternalUrl(url)
+})
+
+ipcMain.handle('open-finder-extensions', async () => {
+  if (process.platform !== 'darwin') return false
+  await shell.openExternal(FINDER_SYNC_SETTINGS_URL)
+  return true
 })
 
 ipcMain.handle('install-app-update', () => appUpdateInstaller().start())

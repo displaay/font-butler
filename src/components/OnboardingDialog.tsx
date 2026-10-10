@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { X } from 'lucide-react'
+import { FinderSyncEnableNote } from '@/components/FinderSyncEnable'
 import { FolderSetupDialog } from '@/components/FolderSetupDialog'
 import { RetailPane } from '@/components/RetailPane'
 import { SettingsRow, SettingsSection } from '@/components/SettingsRow'
@@ -332,21 +333,26 @@ export function OnboardingDialog({
 
           <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {step === 'welcome' && isDesktop && (
-              <Label className="flex cursor-pointer items-start gap-2 font-normal text-foreground">
-                <input
-                  type="checkbox"
-                  checked={openAtLogin}
-                  disabled={locked}
-                  onChange={(event) => setOpenAtLogin(event.target.checked)}
-                  className="mt-0.5 size-3.5 rounded border border-input accent-primary"
-                />
-                <span>
-                  <span className="block text-sm">Open at login</span>
-                  <span className="block text-sm text-muted-foreground">
-                    Start Font Buttler when you turn on this computer.
+              <div className="space-y-4">
+                <Label className="flex cursor-pointer items-start gap-2 font-normal text-foreground">
+                  <input
+                    type="checkbox"
+                    checked={openAtLogin}
+                    disabled={locked}
+                    onChange={(event) => setOpenAtLogin(event.target.checked)}
+                    className="mt-0.5 size-3.5 rounded border border-input accent-primary"
+                  />
+                  <span>
+                    <span className="block text-sm">Open at login</span>
+                    <span className="block text-sm text-muted-foreground">
+                      Start Font Buttler when you turn on this computer.
+                    </span>
                   </span>
-                </span>
-              </Label>
+                </Label>
+                <div className="border-t pt-4">
+                  <FinderSyncEnableNote disabled={locked} />
+                </div>
+              </div>
             )}
 
             {step === 'folders' && (
@@ -476,6 +482,8 @@ export function OnboardingDialog({
                 })}
               </div>
             )}
+
+            {step === 'done' && isDesktop && <FinderSyncEnableNote disabled={locked} />}
 
             {step === 'icon' && (
               <div role="radiogroup" aria-label="App icon" className="flex items-end gap-2">

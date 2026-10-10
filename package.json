@@ -90,6 +90,7 @@
       }
     ],
     "afterPack": "./scripts/strip-mac-xattrs.mjs",
+    "afterSign": "./scripts/verify-finder-sync-appex.mjs",
     "afterAllArtifactBuild": "./scripts/strip-mac-xattrs.mjs",
     "directories": {
       "output": "release"

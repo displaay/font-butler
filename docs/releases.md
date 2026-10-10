@@ -51,6 +51,8 @@ A real in-place install needs two notarized Developer ID builds: the one you are
 
 Marked builds are never uploaded. `npm run publish:mac` and the release assert refuse to upload when `FONT_BUTLER_TEST_FEED_BUILD` is set, and when the DMG or zip contains the marker. `npm run release:mac` still signs and notarizes, then the assert exits because of the marker. The files in `release/` are the test build. Do not upload them.
 
+A marked pack also gives the Finder Sync extension its own bundle ID, `app.fontbutler.desktop.FinderSync.Test`. Release builds use `app.fontbutler.desktop.FinderSync`. The two extensions can be enabled separately. The assert expects the ID that matches the marker.
+
 Build a marked 0.3.10 (the version already in `package.json`). Do not commit a version change.
 
 ```bash
@@ -163,7 +165,11 @@ The profile name is `font-butler-notary`. If it lives in a keychain other than t
    codesign --verify --verbose=2 "$APP/Contents/Frameworks/Font Buttler Helper (Renderer).app"
    codesign --verify --verbose=2 "$APP/Contents/Resources/app.asar.unpacked/electron/finder-services.node"
    codesign --verify --verbose=2 "$APP/Contents/Resources/python/bin/python3"
+   codesign --verify --strict --verbose=2 "$APP/Contents/PlugIns/Font Buttler Finder Sync.appex"
+   codesign -d --entitlements :- "$APP/Contents/PlugIns/Font Buttler Finder Sync.appex"
    ```
+
+   The appex entitlements are `com.apple.security.app-sandbox` only. `codesign -dv` on it shows team `A7WWML89LQ` and the same Developer ID authority as the app. A test-feed pack (`FONT_BUTLER_TEST_FEED_BUILD=1`) uses bundle ID `app.fontbutler.desktop.FinderSync.Test` instead of `app.fontbutler.desktop.FinderSync`.
 
 6. Upload a draft from the release Mac. This checks the staple for `Font-Buttler-<version>-arm64` only. A raw `gh release upload` is not the upload path. Another version’s `.dmg` or `.zip` left in `release/` stops the command. If `v<version>` is already a published GitHub Release, the command stops and does not replace its files.
 
@@ -234,7 +240,9 @@ The Developer ID plist has one key: `com.apple.security.cs.allow-jit`. That is w
 
 `disable-library-validation` is not in the release plist. A Developer ID build re-signs the whole bundle with one team, so library validation should accept Electron’s frameworks, the unpacked `.node` addons, and the bundled Python Mach-O files. The ad-hoc plist does set it, because an ad-hoc signature has no team and hardened runtime would otherwise refuse those libraries. That file is used only when `npm run dist` has no Developer ID certificate and no notary profile.
 
-The publish check rejects `get-task-allow` and `disable-library-validation`. Any new entitlement, `disable-library-validation` included, has to change `scripts/assert-notarized-mac-release.mjs` and its tests in the same pull request. Do not add a key to the plist and leave the check as it is.
+The publish check rejects `get-task-allow` and `disable-library-validation` on the app. Any new entitlement on the app, `disable-library-validation` included, has to change `scripts/assert-notarized-mac-release.mjs` and its tests in the same pull request. Do not add a key to the app plist and leave the check as it is.
+
+The Finder Sync appex is the exception. It is a separate sandboxed bundle with `build/entitlements.finder-sync.plist` (`com.apple.security.app-sandbox` only). It does not inherit `allow-jit`. The same assert checks that appex for Developer ID, team `A7WWML89LQ`, a strict `codesign --verify`, and that sandbox key alone.
 
 ### What gets signed
 
@@ -242,6 +250,7 @@ The publish check rejects `get-task-allow` and `disable-library-validation`. Any
 
 - Electron frameworks and Helper apps. The packaged API is `utilityProcess.fork` in `electron/main.mjs`, so it runs in the signed Utility helper under the hardened runtime. The font parse worker from the analysis work is a `worker_threads` Worker inside that process (`electron/font-analysis-worker.mjs`). It is JavaScript, not its own Mach-O, and it starts only if that helper is signed and has `allow-jit`.
 - `finder-services.node` and `session-fonts.node`, compiled in the `afterPack` hook, which runs before signing, and unpacked via `asarUnpack: "**/*.node"`.
+- `Font Buttler Finder Sync.appex` under `Contents/PlugIns`. `afterPack` compiles it with Xcode `swiftc` (`xcrun --sdk macosx swiftc`, entry `_NSExtensionMain`) on the macOS build machine, strips xattrs, then signs the Mach-O and the `.appex` with the sandbox entitlements. electron-builder's signer skips `Contents/PlugIns` (that skip is in its own ignore list, not `mac.signIgnore`), so this signature is what the parent app seals. Notarization submits the app with the appex inside. `afterSign` checks the appex is still present and signed before the zip and DMG are built. The publish assert checks it again in the app, the DMG, and the update zip.
 - The bundled CPython under `Contents/Resources/python` (`extraResources`). Scripts are not Mach-O and are not signed; `python3` and its `.so` / `.dylib` files are.
 
 Do **not** set `CSC_IDENTITY_AUTO_DISCOVERY=false`. That skips signing and leaves Electron’s linker-signed binaries inside an unsigned bundle. Gatekeeper then reports the download as damaged until `xattr -cr`. Both pack scripts set `COPYFILE_DISABLE=1`, and the after-pack hook strips copyable xattrs before signing so resource forks are not sealed into the bundle. The after-artifact hook strips xattrs on the zip, then notarizes the DMG. It does not strip the DMG, it does not strip anything after the staple, and it does not write `latest-mac.yml`.

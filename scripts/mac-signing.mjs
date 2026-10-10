@@ -198,6 +198,9 @@ export function releaseConfigErrors(pkg) {
   if (pkg?.scripts?.['release:mac']?.includes('CSC_IDENTITY_AUTO_DISCOVERY=false')) {
     errors.push('release:mac must not set CSC_IDENTITY_AUTO_DISCOVERY=false')
   }
+  if (pkg?.build?.afterSign !== './scripts/verify-finder-sync-appex.mjs') {
+    errors.push('afterSign must verify the Finder Sync appex')
+  }
   for (const name of ['dist', 'release:mac']) {
     if (!pkg?.scripts?.[name]?.includes('--publish') && !pkg?.scripts?.[name]?.includes('mac-pack.mjs')) {
       errors.push(`${name} must pack through scripts/mac-pack.mjs`)

@@ -1,0 +1,343 @@
+import { spawnSync as nodeSpawnSync } from 'node:child_process'
+import { existsSync as nodeExistsSync, mkdirSync, readFileSync as nodeReadFileSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import {
+  FINDER_SYNC_APPEX_NAME,
+  FINDER_SYNC_ENTITLEMENT,
+  FINDER_SYNC_EXECUTABLE,
+  FINDER_SYNC_EXTENSION_POINT,
+  FINDER_SYNC_PRINCIPAL_CLASS,
+  finderSyncBundleId,
+} from '../electron/finder-sync.mjs'
+import { DEVELOPER_ID_TEAM } from '../electron/app-update-install.mjs'
+import { DEVELOPER_ID_IDENTITY, testFeedBuildRequested } from './mac-signing.mjs'
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const sourcePath = path.join(repoRoot, 'macos/FinderSync/FinderSync.swift')
+const entitlementsPath = path.join(repoRoot, 'build/entitlements.finder-sync.plist')
+
+export const FINDER_SYNC_ENTITLEMENTS = 'build/entitlements.finder-sync.plist'
+
+export function finderSyncAppexPath(appBundle) {
+  return path.join(appBundle, 'Contents', 'PlugIns', FINDER_SYNC_APPEX_NAME)
+}
+
+export function macosSwiftTarget(arch) {
+  const name = typeof arch === 'number' ? ['ia32', 'x64', 'armv7l', 'arm64', 'universal'][arch] : arch
+  if (name === 'universal') return null
+  if (name === 'x64' || name === 'x86_64' || name === 'ia32') return 'x86_64-apple-macosx11.0'
+  return 'arm64-apple-macosx11.0'
+}
+
+export function finderSyncCodesignIdentity(identity) {
+  if (identity == null || identity === '') return null
+  const value = String(identity).trim()
+  if (!value) return null
+  if (value === '-') return '-'
+  if (value.includes('Developer ID Application:')) return value
+  return `Developer ID Application: ${value}`
+}
+
+function xmlEscape(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+}
+
+export function finderSyncInfoPlist({ bundleId, version, executable = FINDER_SYNC_EXECUTABLE }) {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleDisplayName</key>
+    <string>Font Buttler</string>
+    <key>CFBundleExecutable</key>
+    <string>${xmlEscape(executable)}</string>
+    <key>CFBundleIdentifier</key>
+    <string>${xmlEscape(bundleId)}</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>Font Buttler Finder Sync</string>
+    <key>CFBundlePackageType</key>
+    <string>XPC!</string>
+    <key>CFBundleShortVersionString</key>
+    <string>${xmlEscape(version)}</string>
+    <key>CFBundleSupportedPlatforms</key>
+    <array>
+      <string>MacOSX</string>
+    </array>
+    <key>CFBundleVersion</key>
+    <string>${xmlEscape(version)}</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+    <key>NSExtension</key>
+    <dict>
+      <key>NSExtensionPointIdentifier</key>
+      <string>${FINDER_SYNC_EXTENSION_POINT}</string>
+      <key>NSExtensionPrincipalClass</key>
+      <string>${FINDER_SYNC_PRINCIPAL_CLASS}</string>
+    </dict>
+  </dict>
+</plist>
+`
+}
+
+export function plistString(xml, key) {
+  const match = String(xml ?? '').match(new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`))
+  return match?.[1] ?? ''
+}
+
+export function entitlementKeysFromCodesign(output) {
+  const keys = []
+  const re = /<key>([^<]+)<\/key>/g
+  for (const match of String(output ?? '').matchAll(re)) keys.push(match[1])
+  return keys
+}
+
+export function finderSyncCompileArgs({ sdk, target, source, output }) {
+  return [
+    '-sdk',
+    sdk,
+    '-target',
+    target,
+    '-O',
+    '-framework',
+    'Cocoa',
+    '-framework',
+    'FinderSync',
+    '-application-extension',
+    '-module-name',
+    'FontButtlerFinderSyncModule',
+    '-Xlinker',
+    '-e',
+    '-Xlinker',
+    '_NSExtensionMain',
+    source,
+    '-o',
+    output,
+  ]
+}
+
+function readPackageVersion(root) {
+  return JSON.parse(nodeReadFileSync(path.join(root, 'package.json'), 'utf8')).version
+}
+
+/**
+ * Compile the appex into the packed app. electron-builder skips Contents/PlugIns
+ * when it signs, so the appex is signed afterwards, inside-out, before the
+ * parent app seal. Off macOS this is skipped.
+ */
+export function prepareFinderSyncAppex({
+  appBundle,
+  arch = process.arch,
+  env = process.env,
+  version,
+  repo = repoRoot,
+  spawnSync = nodeSpawnSync,
+  platform = process.platform,
+} = {}) {
+  if (platform !== 'darwin') {
+    return { ok: false, skipped: true, reason: 'Finder Sync appex builds only on macOS, with Xcode swiftc.' }
+  }
+  const target = macosSwiftTarget(arch)
+  if (!target) {
+    return { ok: false, skipped: false, reason: 'Finder Sync appex does not build a universal binary.' }
+  }
+  const source = path.join(repo, 'macos/FinderSync/FinderSync.swift')
+  if (!nodeExistsSync(source)) {
+    return { ok: false, skipped: false, reason: `Missing ${source}` }
+  }
+  const bundleId = finderSyncBundleId(testFeedBuildRequested(env))
+  const shortVersion = version || readPackageVersion(repo)
+  const appexPath = finderSyncAppexPath(appBundle)
+  const contents = path.join(appexPath, 'Contents')
+  const macosDir = path.join(contents, 'MacOS')
+  const executable = path.join(macosDir, FINDER_SYNC_EXECUTABLE)
+  mkdirSync(macosDir, { recursive: true })
+  writeFileSync(
+    path.join(contents, 'Info.plist'),
+    finderSyncInfoPlist({ bundleId, version: shortVersion }),
+  )
+
+  const sdk = spawnSync('xcrun', ['--sdk', 'macosx', '--show-sdk-path'], { encoding: 'utf8' })
+  const sdkPath = String(sdk.stdout ?? '').trim()
+  if ((sdk.status ?? 1) !== 0 || !sdkPath) {
+    return {
+      ok: false,
+      skipped: false,
+      reason:
+        'xcrun could not find the macOS SDK. Install Xcode or the Command Line Tools on the macOS build machine.',
+    }
+  }
+  const compiled = spawnSync(
+    'xcrun',
+    ['--sdk', 'macosx', 'swiftc', ...finderSyncCompileArgs({ sdk: sdkPath, target, source, output: executable })],
+    { encoding: 'utf8' },
+  )
+  if ((compiled.status ?? 1) !== 0) {
+    const detail = [compiled.stderr, compiled.stdout, compiled.error?.message].filter(Boolean).join('\n')
+    return {
+      ok: false,
+      skipped: false,
+      reason:
+        detail ||
+        'swiftc failed. The Finder Sync appex is compiled with Xcode swiftc on the macOS build machine.',
+    }
+  }
+  return { ok: true, skipped: false, appexPath, bundleId, executable }
+}
+
+export function finderSyncSignArgs({ identity, entitlements, bundleId, target, keychain }) {
+  const args = ['--force', '--sign', identity, '--entitlements', entitlements, '--options', 'runtime']
+  if (bundleId) args.push('--identifier', bundleId)
+  if (identity !== '-') args.push('--timestamp')
+  if (keychain) args.push('--keychain', keychain)
+  args.push(target)
+  return args
+}
+
+/**
+ * Sign the Mach-O, then the .appex bundle. The parent app is signed later by
+ * electron-builder, which does not re-sign Contents/PlugIns.
+ */
+export function signFinderSyncAppex({
+  appexPath,
+  identity,
+  bundleId,
+  entitlements = entitlementsPath,
+  keychain,
+  spawnSync = nodeSpawnSync,
+} = {}) {
+  const signIdentity = finderSyncCodesignIdentity(identity)
+  if (!signIdentity) return { ok: false, reason: 'No signing identity for the Finder Sync appex.' }
+  const executable = path.join(appexPath, 'Contents', 'MacOS', FINDER_SYNC_EXECUTABLE)
+  const targets = [
+    { target: executable, bundleId },
+    { target: appexPath, bundleId: null },
+  ]
+  for (const item of targets) {
+    const result = spawnSync(
+      'codesign',
+      finderSyncSignArgs({
+        identity: signIdentity,
+        entitlements,
+        bundleId: item.bundleId,
+        target: item.target,
+        keychain,
+      }),
+      { encoding: 'utf8' },
+    )
+    if ((result?.status ?? 1) !== 0) {
+      const detail = [result?.stderr, result?.stdout, result?.error?.message].filter(Boolean).join('\n')
+      return { ok: false, reason: detail || `codesign failed for ${item.target}` }
+    }
+  }
+  return { ok: true, identity: signIdentity }
+}
+
+export function finderSyncAppexFailures({
+  present = false,
+  bundleId = '',
+  expectedBundleId = '',
+  principalClass = '',
+  extensionPoint = '',
+  codesignVerifyStatus = 1,
+  codesignDisplay = '',
+  entitlementKeys = [],
+  requireDeveloperId = false,
+  teamId = DEVELOPER_ID_TEAM,
+} = {}) {
+  const failures = []
+  if (!present) {
+    failures.push('The Finder Sync appex is missing from Contents/PlugIns.')
+    return failures
+  }
+  if (!expectedBundleId || bundleId !== expectedBundleId) {
+    failures.push(
+      `The Finder Sync appex bundle ID is ${bundleId || 'missing'}, expected ${expectedBundleId || 'a Font Buttler Finder Sync ID'}.`,
+    )
+  }
+  if (principalClass !== FINDER_SYNC_PRINCIPAL_CLASS) {
+    failures.push(`The Finder Sync appex principal class is not ${FINDER_SYNC_PRINCIPAL_CLASS}.`)
+  }
+  if (extensionPoint !== FINDER_SYNC_EXTENSION_POINT) {
+    failures.push('The Finder Sync appex is not a Finder Sync extension.')
+  }
+  if (codesignVerifyStatus !== 0) {
+    failures.push('codesign --verify --strict failed on the Finder Sync appex.')
+  }
+  const keys = entitlementKeys ?? []
+  if (keys.length !== 1 || keys[0] !== FINDER_SYNC_ENTITLEMENT) {
+    failures.push('The Finder Sync appex entitlements must be app sandbox only.')
+  }
+  if (requireDeveloperId) {
+    if (/Signature=adhoc/i.test(codesignDisplay)) failures.push('The Finder Sync appex is ad-hoc signed.')
+    if (!codesignDisplay.includes(`Authority=Developer ID Application: ${DEVELOPER_ID_IDENTITY}`)) {
+      failures.push(
+        `The Finder Sync appex is not signed with Developer ID identity "${DEVELOPER_ID_IDENTITY}".`,
+      )
+    }
+    const team = codesignDisplay.match(/TeamIdentifier=([^\s]+)/)?.[1] ?? ''
+    if (team !== teamId) failures.push(`The Finder Sync appex team ID is not ${teamId}.`)
+  }
+  return failures
+}
+
+export function verifyFinderSyncAppex({
+  appexPath,
+  expectedBundleId,
+  requireDeveloperId = false,
+  spawnSync = nodeSpawnSync,
+  readFileSync = nodeReadFileSync,
+  existsSync = nodeExistsSync,
+} = {}) {
+  const present = Boolean(appexPath && existsSync(appexPath))
+  let bundleId = ''
+  let principalClass = ''
+  let extensionPoint = ''
+  let codesignDisplay = ''
+  let codesignVerifyStatus = 1
+  let entitlementKeys = []
+  if (present) {
+    try {
+      const plist = readFileSync(path.join(appexPath, 'Contents', 'Info.plist'), 'utf8')
+      bundleId = plistString(plist, 'CFBundleIdentifier')
+      principalClass = plistString(plist, 'NSExtensionPrincipalClass')
+      extensionPoint = plistString(plist, 'NSExtensionPointIdentifier')
+    } catch {
+      bundleId = ''
+    }
+    const display = spawnSync('codesign', ['-dv', '--verbose=4', appexPath], { encoding: 'utf8' })
+    codesignDisplay = `${display?.stdout ?? ''}\n${display?.stderr ?? ''}`
+    const verify = spawnSync('codesign', ['--verify', '--strict', '--verbose=2', appexPath], { encoding: 'utf8' })
+    codesignVerifyStatus = verify?.status ?? 1
+    const entitlements = spawnSync('codesign', ['-d', '--entitlements', ':-', appexPath], { encoding: 'utf8' })
+    entitlementKeys = entitlementKeysFromCodesign(`${entitlements?.stdout ?? ''}\n${entitlements?.stderr ?? ''}`)
+  }
+  const failures = finderSyncAppexFailures({
+    present,
+    bundleId,
+    expectedBundleId,
+    principalClass,
+    extensionPoint,
+    codesignVerifyStatus,
+    codesignDisplay,
+    entitlementKeys,
+    requireDeveloperId,
+  })
+  return { ok: failures.length === 0, failures }
+}
+
+const invokedDirectly = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+if (invokedDirectly) {
+  console.log(
+    'The Finder Sync appex is compiled into the app during the macOS pack (afterPack), using Xcode swiftc on that Mac.',
+  )
+  if (process.platform !== 'darwin') process.exit(0)
+  console.log(`Source: ${sourcePath}`)
+}

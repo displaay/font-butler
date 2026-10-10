@@ -26,7 +26,7 @@ Drop a font file into Font Buttler and it remembers the original path. When that
 - Groups families, counts instances, and marks variable fonts with a **VF** badge
 - Right-click a card → **Show in Finder**
 - If Font Buttler is the default app for a font, double-clicking the file adds it to the library and installs it immediately
-- Right-click a font file in Finder → **Install**, **Install as…**, or **Link to …** (Services). **Install as…** asks for a destination and family name, then uses the same install path as the app. **Link to …** opens Font Buttler so you can pick an existing catalog family and attach this file as its tracked source.
+- Right-click a font file in Finder → **Install** or **Install as…** (Finder menu). **Install as…** asks for a destination and family name, then uses the same install path as the app. Enable the menu once in **System Settings → General → Login Items & Extensions**. **Link to …** stays under Services and opens Font Buttler so you can pick an existing catalog family and attach this file as its tracked source.
 
 ## Run on your Mac
 
@@ -37,7 +37,7 @@ npm run electron
 
 To replace Font Book as the double-click handler: select a `.otf` or `.ttf` in Finder, **Get Info → Open with → Font Buttler → Change All**.
 
-Finder **Install**, **Install as…**, and **Link to …** are macOS Services. They appear on `.otf`, `.ttf`, `.ttc`, `.otc`, and other font UTIs the app already claims. Run the packaged app once so Launch Services can pick them up. If the items are missing, enable them in **System Settings → Keyboard → Keyboard Shortcuts → Services**. Selecting several font files at once installs each file through the same `/api/import` then `/api/install` path the library uses. **Link to …** pairs each selected file to at most one style in the family you pick (`inspectRelink` + `applyRelink`). Extra files that don’t match stay in the queue until you dismiss; a file already linked to that style is skipped.
+Finder **Install** and **Install as…** are a Finder Sync menu on font files (`.otf`, `.ttf`, `.ttc`, `.otc`, `.woff`, `.woff2`). The extension only sends the selected paths to Font Buttler. The app installs them through the same `/api/import` then `/api/install` path the library uses. Turn the menu on once in **System Settings → General → Login Items & Extensions** (first launch and Settings both have a button that opens that pane). The same **Install**, **Install as…**, and **Link to …** actions remain macOS Services for `.otf`, `.ttf`, `.ttc`, `.otc`, and other font UTIs the app already claims. Run the packaged app once so Launch Services can pick the Services up. If those items are missing, enable them in **System Settings → Keyboard → Keyboard Shortcuts → Services**. **Link to …** pairs each selected file to at most one style in the family you pick (`inspectRelink` + `applyRelink`). Extra files that don’t match stay in the queue until you dismiss; a file already linked to that style is skipped.
 
 Font Buttler installs copies into `~/Library/Fonts`, the same user font folder Font Book uses. Fonts already there show up on the Fonts tab on launch. Catalog data lives in `~/Library/Application Support/Font Buttler/`.
 
