@@ -57,10 +57,10 @@ export const MAC_LOGOUT_APPLESCRIPT = 'tell application "System Events" to log o
 
 /**
  * Harmless System Events event for the test-build logout probe.
- * It raises the same Automation prompt and returns -1743 on Don't Allow.
- * It never logs the user out.
+ * `count processes` is a real Apple event, so macOS shows the Automation prompt.
+ * It returns -1743 on Don't Allow. It never logs the user out.
  */
-export const MAC_LOGOUT_PROBE_APPLESCRIPT = 'tell application "System Events" to get name'
+export const MAC_LOGOUT_PROBE_APPLESCRIPT = 'tell application "System Events" to count processes'
 
 /**
  * How long to wait for an immediate Apple-event failure before treating an
@@ -571,7 +571,7 @@ export function resetLogoutProbe(): void {
 
 /**
  * Test-build stand-in for logout. `testBuild: true` in build-identity.json is
- * the only switch. The Apple event is `get name`, and its result goes through
+ * the only switch. The Apple event is `count processes`, and its result goes through
  * the same accept window, still-waiting notice, and late-failure path as
  * requestMacLogout. Allow shows that logout would start, without starting it.
  */

@@ -75,13 +75,21 @@ test('Allow on the logout probe says logout would start and does not log out', a
       },
     },
   )
-  assert.deepEqual(scripts, ['tell application "System Events" to get name'])
+  assert.deepEqual(scripts, ['tell application "System Events" to count processes'])
   assert.equal(scripts.some((script) => script.includes('log out')), false)
   assert.equal(result.probeAllowed, true)
   assert.equal(result.message, 'Test build: logout would start now')
   assert.equal(result.requested, true)
   assert.equal(scripts.includes(MAC_LOGOUT_APPLESCRIPT), false)
   resetLogoutProbe()
+})
+
+test('the logout probe script sends count processes', () => {
+  const script = MAC_LOGOUT_PROBE_APPLESCRIPT
+  assert.match(script, /count processes/)
+  const command = script.replace(/^tell application "System Events" to\s+/, '')
+  assert.equal(command, 'count processes')
+  assert.doesNotMatch(command, /\b(?:get\s+)?(?:name|id|version|running|frontmost)\b/)
 })
 
 test('requestMacLogout itself runs the probe on a test build', async () => {
