@@ -12,5 +12,8 @@ export const LOGOUT_STILL_WAITING_TITLE = 'Still waiting for macOS'
 export const LOGOUT_STILL_WAITING_MESSAGE =
   'Still waiting for macOS. If you allowed it, logout will continue. Otherwise use Apple menu > Log Out to finish rebuilding font caches.'
 
-/** Shown when the test-build Apple event is allowed. No logout was sent. */
-export const LOGOUT_PROBE_SIMULATED_NOTICE = 'Test build: logout simulated'
+/**
+ * Shown when the test-build Apple event is allowed.
+ * Logout was not started, and the app does not quit.
+ */
+export const LOGOUT_PROBE_WOULD_START_NOTICE = 'Test build: logout would start now'

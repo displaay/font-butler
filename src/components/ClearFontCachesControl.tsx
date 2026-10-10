@@ -1,5 +1,10 @@
 import { useState } from 'react'
-import { LOGOUT_CANCELLED, LOGOUT_FAILED_MESSAGE, LOGOUT_FAILED_TITLE } from '../../shared/logout.ts'
+import {
+  LOGOUT_CANCELLED,
+  LOGOUT_FAILED_MESSAGE,
+  LOGOUT_FAILED_TITLE,
+  LOGOUT_PROBE_WOULD_START_NOTICE,
+} from '../../shared/logout.ts'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -13,7 +18,7 @@ export const FONT_CACHE_CLEAR_WARNING =
 
 export { LOGOUT_FAILED_TITLE, LOGOUT_FAILED_MESSAGE }
 
-type Phase = 'idle' | 'confirm' | 'clearing' | 'cleared' | 'logout-failed'
+type Phase = 'idle' | 'confirm' | 'clearing' | 'cleared' | 'logout-failed' | 'probe-allowed'
 
 export function LogoutFailedDialog({
   open,
@@ -127,8 +132,11 @@ export function ClearFontCachesControl({
         open={phase === 'cleared'}
         onOpenChange={(open) => {
           if (!open) {
-            setProbe(false)
-            setPhase('idle')
+            setPhase((current) => {
+              if (current !== 'cleared') return current
+              setProbe(false)
+              return 'idle'
+            })
           }
         }}
       >
@@ -165,6 +173,7 @@ export function ClearFontCachesControl({
                           requested?: boolean
                           cancelled?: boolean
                           ignored?: boolean
+                          probeAllowed?: boolean
                           message?: string
                         }
                       | undefined
@@ -173,12 +182,23 @@ export function ClearFontCachesControl({
                       setPhase('idle')
                       return
                     }
+                    if (
+                      probe &&
+                      (outcome?.probeAllowed === true ||
+                        outcome?.message === LOGOUT_PROBE_WOULD_START_NOTICE)
+                    ) {
+                      setPhase('probe-allowed')
+                      return
+                    }
                     if (outcome && outcome.requested === false) {
                       if (outcome.cancelled === true) {
                         setLogoutFallback(outcome.message || LOGOUT_CANCELLED)
                         return
                       }
                       setPhase('logout-failed')
+                      return
+                    }
+                    if (probe && outcome?.requested === true) {
                       return
                     }
                     setProbe(false)
@@ -190,6 +210,31 @@ export function ClearFontCachesControl({
               }}
             >
               Log out now
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={phase === 'probe-allowed'}
+        onOpenChange={(open) => {
+          if (!open) {
+            setProbe(false)
+            setPhase('idle')
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogTitle>{LOGOUT_PROBE_WOULD_START_NOTICE}</DialogTitle>
+          <DialogDescription>{LOGOUT_PROBE_WOULD_START_NOTICE}</DialogDescription>
+          <div className="mt-4 flex justify-end">
+            <Button
+              type="button"
+              onClick={() => {
+                setProbe(false)
+                setPhase('idle')
+              }}
+            >
+              OK
             </Button>
           </div>
         </DialogContent>

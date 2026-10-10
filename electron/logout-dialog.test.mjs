@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import {
   LOGOUT_CANCELLED as SHARED_LOGOUT_CANCELLED,
   LOGOUT_FAILED_MESSAGE,
-  LOGOUT_PROBE_SIMULATED_NOTICE as SHARED_LOGOUT_PROBE_SIMULATED_NOTICE,
+  LOGOUT_PROBE_WOULD_START_NOTICE as SHARED_LOGOUT_PROBE_WOULD_START_NOTICE,
   LOGOUT_STILL_WAITING_MESSAGE,
 } from '../shared/logout.ts'
 import {
@@ -13,8 +13,9 @@ import {
   logoutFailedDialogOptions,
   logoutMenuResultAction,
   logoutWaitingNoticeOptions,
-  LOGOUT_PROBE_SIMULATED_NOTICE,
+  LOGOUT_PROBE_WOULD_START_NOTICE,
   logoutOfferAfterCacheClear,
+  logoutRequestFollowUp,
   presentLogoutFailure,
   presentLogoutNotice,
   resetLogoutDialogSession,
@@ -305,13 +306,21 @@ test('the main process shows the waiting box while a window is open', () => {
   assert.deepEqual(shown, ['parented'])
 })
 
-test('a test-build logout probe success shows the simulated notice', () => {
-  assert.equal(LOGOUT_PROBE_SIMULATED_NOTICE, SHARED_LOGOUT_PROBE_SIMULATED_NOTICE)
-  assert.equal(LOGOUT_PROBE_SIMULATED_NOTICE, 'Test build: logout simulated')
+test('a test-build Allow shows that logout would start and is not a logout success', () => {
+  assert.equal(LOGOUT_PROBE_WOULD_START_NOTICE, SHARED_LOGOUT_PROBE_WOULD_START_NOTICE)
+  assert.equal(LOGOUT_PROBE_WOULD_START_NOTICE, 'Test build: logout would start now')
+  const allowed = {
+    requested: true,
+    probeAllowed: true,
+    message: LOGOUT_PROBE_WOULD_START_NOTICE,
+  }
+  assert.equal(logoutRequestFollowUp(allowed), 'probe-allowed')
+  assert.equal(logoutMenuResultAction(allowed), 'accepted')
+  assert.equal(logoutRequestFollowUp({ requested: true }), 'accepted')
   const shown = []
   const win = { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false }
   presentLogoutNotice({
-    notice: { kind: 'info', source: 'logout-probe', message: LOGOUT_PROBE_SIMULATED_NOTICE },
+    notice: { kind: 'info', source: 'logout-probe', message: LOGOUT_PROBE_WOULD_START_NOTICE },
     getWindow: () => win,
     showMessageBox() {
       shown.push('failure')
@@ -321,7 +330,8 @@ test('a test-build logout probe success shows the simulated notice', () => {
     },
     notify: () => false,
   })
-  assert.deepEqual(shown, [LOGOUT_PROBE_SIMULATED_NOTICE])
+  assert.deepEqual(shown, [LOGOUT_PROBE_WOULD_START_NOTICE])
+  assert.equal(shown.includes("Logging out didn't happen"), false)
   resetLogoutDialogSession()
   const afterFailure = []
   presentLogoutNotice({

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   LOGOUT_FAILED_MESSAGE,
-  LOGOUT_PROBE_SIMULATED_NOTICE,
+  LOGOUT_PROBE_WOULD_START_NOTICE,
   LOGOUT_STILL_WAITING_MESSAGE,
   MAC_LOGOUT_APPLESCRIPT,
   MAC_LOGOUT_PROBE_APPLESCRIPT,
@@ -46,6 +46,29 @@ test('the logout probe is ignored when testBuild is false', async () => {
   }
 })
 
+test('Allow on the logout probe says logout would start and does not log out', async () => {
+  resetLogoutProbe()
+  const scripts: string[] = []
+  const result = await requestLogoutProbe(
+    { testBuild: true },
+    {
+      exec(_file, args, callback) {
+        scripts.push(String(args[1]))
+        callback(null)
+        return { unref() {} }
+      },
+    },
+  )
+  assert.deepEqual(scripts, ['tell application "System Events" to get name'])
+  assert.equal(scripts.some((script) => script.includes('log out')), false)
+  assert.equal(result.probeAllowed, true)
+  assert.equal(result.message, 'Test build: logout would start now')
+  assert.equal(result.requested, true)
+  assert.doesNotMatch(requestLogoutProbe.toString(), /app\.quit/)
+  assert.doesNotMatch(requestLogoutProbe.toString(), /MAC_LOGOUT_APPLESCRIPT/)
+  resetLogoutProbe()
+})
+
 test('the logout probe never calls the real logout script', async () => {
   resetLogoutProbe()
   const scripts: string[] = []
@@ -71,9 +94,11 @@ test('the logout probe never calls the real logout script', async () => {
   assert.doesNotMatch(requestLogoutProbe.toString(), /to log out/)
   assert.match(requestLogoutProbe.toString(), /awaitMacLogoutRequest/)
   assert.equal(result.requested, true)
-  assert.equal(result.message, LOGOUT_PROBE_SIMULATED_NOTICE)
-  assert.deepEqual(simulated, [LOGOUT_PROBE_SIMULATED_NOTICE])
-  assert.equal(LOGOUT_PROBE_SIMULATED_NOTICE, 'Test build: logout simulated')
+  assert.equal(result.probeAllowed, true)
+  assert.equal(result.message, LOGOUT_PROBE_WOULD_START_NOTICE)
+  assert.deepEqual(simulated, [])
+  assert.equal(LOGOUT_PROBE_WOULD_START_NOTICE, 'Test build: logout would start now')
+  assert.doesNotMatch(requestLogoutProbe.toString(), /app\.quit|process\.exit/)
   const realCalls: string[] = []
   startMacLogoutProcess((_file, args) => {
     realCalls.push(String(args[1]))
@@ -133,7 +158,8 @@ test('a logout probe denial and a late success use the real logout result handli
   assert.deepEqual(failures, [])
   finish(null)
   await new Promise((resolve) => setTimeout(resolve, 10))
-  assert.deepEqual(simulated, [LOGOUT_PROBE_SIMULATED_NOTICE])
+  assert.deepEqual(simulated, [LOGOUT_PROBE_WOULD_START_NOTICE])
+  assert.equal(simulated.includes('Test build: logout simulated'), false)
   assert.deepEqual(failures, [])
 
   waiting.length = 0

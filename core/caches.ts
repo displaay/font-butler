@@ -16,7 +16,7 @@ import {
   LOGOUT_FAILED_MESSAGE,
   LOGOUT_FAILED_TITLE,
   LOGOUT_FALLBACK,
-  LOGOUT_PROBE_SIMULATED_NOTICE,
+  LOGOUT_PROBE_WOULD_START_NOTICE,
   LOGOUT_STILL_WAITING_MESSAGE,
 } from '../shared/logout.ts'
 
@@ -25,7 +25,7 @@ export {
   LOGOUT_FAILED_MESSAGE,
   LOGOUT_FAILED_TITLE,
   LOGOUT_FALLBACK,
-  LOGOUT_PROBE_SIMULATED_NOTICE,
+  LOGOUT_PROBE_WOULD_START_NOTICE,
   LOGOUT_STILL_WAITING_MESSAGE,
 }
 
@@ -348,6 +348,8 @@ export type MacLogoutResult = {
   cancelled?: boolean
   message?: string
   error?: string
+  /** Allow on the test-build probe. Logout was not started. */
+  probeAllowed?: boolean
 }
 
 type LogoutExec = (
@@ -381,10 +383,12 @@ export function awaitMacLogoutRequest(
   options?: {
     stillWaitingAfterMs?: number
     onStillWaiting?: (message: string) => void
+    onLateSuccess?: (result: MacLogoutResult) => void
   },
 ): Promise<MacLogoutResult> {
   const stillWaitingAfterMs = options?.stillWaitingAfterMs ?? LOGOUT_STILL_WAITING_MS
   const onStillWaiting = options?.onStillWaiting
+  const onLateSuccess = options?.onLateSuccess
   return new Promise((resolve) => {
     let settled = false
     let execFinished = false
@@ -398,6 +402,8 @@ export function awaitMacLogoutRequest(
         if (result.requested === false && result.cancelled !== true && !failureDelivered) {
           failureDelivered = true
           onLateFailure?.(result)
+        } else if (result.requested === true) {
+          onLateSuccess?.(result)
         }
         return
       }
@@ -508,7 +514,7 @@ export function resetLogoutProbe(): void {
  * Test-build stand-in for logout. `testBuild: true` in build-identity.json is
  * the only switch. The Apple event is `get name`, and its result goes through
  * the same accept window, still-waiting notice, and late-failure path as
- * requestMacLogout. A completed event shows the simulated notice.
+ * requestMacLogout. Allow shows that logout would start, without starting it.
  */
 export function requestLogoutProbe(
   identity: { testBuild?: boolean } | null | undefined,
@@ -520,10 +526,10 @@ export function requestLogoutProbe(
   if (probeFlight) return probeFlight.accepted
   const exec = hooks.exec ?? execFile
   let noted = false
-  const noteSimulated = () => {
+  const noteAllowed = () => {
     if (noted) return
     noted = true
-    hooks.onSimulated?.(LOGOUT_PROBE_SIMULATED_NOTICE)
+    hooks.onSimulated?.(LOGOUT_PROBE_WOULD_START_NOTICE)
   }
   let markFinished = () => {}
   const finished = new Promise<void>((resolve) => {
@@ -536,8 +542,11 @@ export function requestLogoutProbe(
         const child = exec('osascript', ['-e', MAC_LOGOUT_PROBE_APPLESCRIPT], (error) => {
           if (error) report(logoutResultFromExecError(error))
           else {
-            noteSimulated()
-            report({ requested: true, message: LOGOUT_PROBE_SIMULATED_NOTICE })
+            report({
+              requested: true,
+              probeAllowed: true,
+              message: LOGOUT_PROBE_WOULD_START_NOTICE,
+            })
           }
           markFinished()
         })
@@ -552,6 +561,7 @@ export function requestLogoutProbe(
     {
       stillWaitingAfterMs: hooks.stillWaitingAfterMs ?? LOGOUT_STILL_WAITING_MS,
       onStillWaiting: hooks.onStillWaiting,
+      onLateSuccess: () => noteAllowed(),
     },
   )
   const flight: LogoutFlight = { accepted, finished }

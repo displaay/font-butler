@@ -5,13 +5,29 @@ export const LOGOUT_FAILED_DETAIL =
 export const LOGOUT_STILL_WAITING_TITLE = 'Still waiting for macOS'
 export const LOGOUT_STILL_WAITING_MESSAGE =
   'Still waiting for macOS. If you allowed it, logout will continue. Otherwise use Apple menu > Log Out to finish rebuilding font caches.'
-export const LOGOUT_PROBE_SIMULATED_NOTICE = 'Test build: logout simulated'
+export const LOGOUT_PROBE_WOULD_START_NOTICE = 'Test build: logout would start now'
 
 /** Cancel is a flag on the result. The message text is only what the dialog shows. */
 export function logoutMenuResultAction(result) {
   if (result && result.cancelled === true) return 'cancelled'
   if (!result || result.requested === false) return 'failed'
   return 'accepted'
+}
+
+/**
+ * Probe Allow is not a logout success. The app stays open and shows that
+ * logout would start. A real accepted logout stays `accepted`.
+ */
+export function logoutRequestFollowUp(result) {
+  if (result && result.ignored === true) return 'ignore'
+  if (
+    result &&
+    result.requested === true &&
+    (result.probeAllowed === true || result.message === LOGOUT_PROBE_WOULD_START_NOTICE)
+  ) {
+    return 'probe-allowed'
+  }
+  return logoutMenuResultAction(result)
 }
 
 export function liveMessageBoxParent(win) {
@@ -130,9 +146,9 @@ export function presentLogoutNotice({
   if (notice.source === 'logout-probe') {
     showWaitingNotice(parent, {
       type: 'info',
-      title: LOGOUT_PROBE_SIMULATED_NOTICE,
-      message: LOGOUT_PROBE_SIMULATED_NOTICE,
-      detail: LOGOUT_PROBE_SIMULATED_NOTICE,
+      title: LOGOUT_PROBE_WOULD_START_NOTICE,
+      message: LOGOUT_PROBE_WOULD_START_NOTICE,
+      detail: LOGOUT_PROBE_WOULD_START_NOTICE,
       buttons: ['OK'],
       defaultId: 0,
     })

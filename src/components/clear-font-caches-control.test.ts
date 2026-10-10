@@ -301,7 +301,11 @@ test('Clear font caches runs only after confirmation and logout is optional', as
         },
         onProbe: async () => {
           calls.push('logout-probe')
-          return { requested: true, message: 'Test build: logout simulated' }
+          return {
+            requested: true,
+            probeAllowed: true,
+            message: 'Test build: logout would start now',
+          }
         },
       }),
     )
@@ -325,7 +329,11 @@ test('Clear font caches runs only after confirmation and logout is optional', as
   })
   assert.equal(calls.includes('logout-probe'), true)
   assert.equal(calls.includes('logout-real'), false)
-  assert.equal(document.body.querySelector('[role="dialog"]'), null)
+  const allowed = document.body.querySelector('[role="dialog"]')
+  assert.ok(allowed)
+  assert.match(allowed.textContent ?? '', /Test build: logout would start now/)
+  assert.equal(allowed.textContent?.includes("Logging out didn't happen"), false)
+  assert.equal(buttonNamed(allowed, 'Log out now'), undefined)
 
   await act(async () => {
     root.unmount()

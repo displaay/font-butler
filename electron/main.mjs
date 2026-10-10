@@ -47,8 +47,9 @@ import {
 import { deliverNativeNotice, electronNotificationPermission } from './notify.mjs'
 import {
   LOGOUT_CANCELLED,
+  LOGOUT_PROBE_WOULD_START_NOTICE,
   logoutFailedDialogOptions,
-  logoutMenuResultAction,
+  logoutRequestFollowUp,
   presentLogoutFailure,
   logoutOfferAfterCacheClear,
   presentLogoutNotice,
@@ -1062,8 +1063,19 @@ async function offerLogoutAfterFontCacheClear(pathname) {
   })
   if (choice.response !== 0) return
   const result = await postApi(pathname, {})
-  if (result && result.ignored === true) return
-  const action = logoutMenuResultAction(result)
+  const action = logoutRequestFollowUp(result)
+  if (action === 'ignore') return
+  if (action === 'probe-allowed') {
+    await showAppMessageBox({
+      type: 'info',
+      title: LOGOUT_PROBE_WOULD_START_NOTICE,
+      message: LOGOUT_PROBE_WOULD_START_NOTICE,
+      detail: LOGOUT_PROBE_WOULD_START_NOTICE,
+      buttons: ['OK'],
+      defaultId: 0,
+    })
+    return
+  }
   if (action === 'cancelled') {
     await showAppMessageBox({
       type: 'info',
