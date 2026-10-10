@@ -55,7 +55,7 @@ import {
   formatFinderSyncRejections,
   noteFinderSyncRequest,
   readFinderSyncAgentRecord,
-  readFinderSyncPendingErrors,
+  readFinderSyncPendingErrorFile,
   routeFinderSyncError,
   refreshFinderSyncRegistration,
   revalidateFinderSyncHandles,
@@ -937,17 +937,19 @@ function registerNativeFinderServices() {
 }
 
 const finderSyncRequests = new Map()
-const finderSyncErrorsShown = new Set()
+const finderSyncErrorsShown = new Map()
 
-function presentFinderSyncUserError(message) {
+function presentFinderSyncUserError(code) {
+  const now = Date.now()
   const route = routeFinderSyncError({
-    message,
+    code,
     notificationsEnabled: nativeNotificationsEnabled,
     permission: electronNotificationPermission(Notification),
     alreadyShown: finderSyncErrorsShown,
+    now,
   })
   if (!route.shown) return
-  finderSyncErrorsShown.add(route.message)
+  finderSyncErrorsShown.set(route.code, now)
   if (route.channel === 'notification') {
     const notice = new Notification({ title: 'Font Buttler', body: route.message })
     notice.on('click', () => showMainWindow())
@@ -959,19 +961,15 @@ function presentFinderSyncUserError(message) {
 
 function consumeFinderSyncPendingErrors() {
   const file = path.join(app.getPath('userData'), FINDER_SYNC_PENDING_ERROR_FILE)
-  let text = ''
-  try {
-    text = fs.readFileSync(file, 'utf8')
-  } catch {
-    return
+  const read = readFinderSyncPendingErrorFile(file)
+  if (read.discard) {
+    try {
+      fs.unlinkSync(file)
+    } catch {
+      // A later launch can read the file again after the short show window.
+    }
   }
-  try {
-    fs.unlinkSync(file)
-  } catch {
-    // The record is still shown once. A later launch may see it again only if
-    // the unlink failed and the message was not already shown this process.
-  }
-  for (const item of readFinderSyncPendingErrors(text)) presentFinderSyncUserError(item.message)
+  for (const item of read.errors) presentFinderSyncUserError(item.code)
 }
 
 function finderSyncAgentRecordFile() {

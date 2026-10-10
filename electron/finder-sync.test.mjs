@@ -6,6 +6,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import { DEVELOPER_ID_TEAM } from './app-update-install.mjs'
+import { TEST_FEED_USER_DATA_DIR } from './test-feed-data.mjs'
 import { FINDER_INSTALL, FINDER_INSTALL_AS, FINDER_LINK_TO } from './finder-install.mjs'
 import {
   FINDER_SYNC_APP_GROUP_ENTITLEMENT,
@@ -22,8 +23,17 @@ import {
   FINDER_SYNC_TEAM_ID,
   FINDER_SYNC_TEST_BUNDLE_ID,
   FINDER_SYNC_AGENT_DISABLED,
+  FINDER_SYNC_ERROR_LOGIN_ITEMS,
+  FINDER_SYNC_ERROR_MISSING_APP,
+  FINDER_SYNC_ERROR_NOT_RUNNING,
+  FINDER_SYNC_ERROR_SHOWN_TTL_MS,
+  FINDER_SYNC_ERROR_UNKNOWN_ACTION,
   FINDER_SYNC_MISSING_APP,
   FINDER_SYNC_PENDING_ERROR_FILE,
+  FINDER_SYNC_PENDING_ERROR_MAX_BYTES,
+  FINDER_SYNC_PENDING_ERROR_MAX_ENTRIES,
+  FINDER_SYNC_TEST_USER_DATA_DIR,
+  FINDER_SYNC_USER_DATA_DIR,
   FINDER_SYNC_REQUEST_CAP,
   FINDER_SYNC_SOCKET_DIR,
   FINDER_SYNC_TOO_LARGE,
@@ -61,6 +71,7 @@ import {
   planFinderSyncRegistration,
   prepareFinderSyncSocket,
   readFinderSyncAgentRecord,
+  readFinderSyncPendingErrorFile,
   readFinderSyncPendingErrors,
   routeFinderSyncError,
   refreshFinderSyncRegistration,
@@ -604,7 +615,24 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.doesNotMatch(agent, /UNUserNotificationCenter/)
   assert.match(agent, /NSLog\(@"Finder Sync:/)
   assert.match(agent, /finder-sync-pending-error\.json/)
-  assert.match(agent, /g_testFeed \? @"Font Buttler Test" : @"Font Buttler"/)
+  assert.equal(FINDER_SYNC_TEST_USER_DATA_DIR, TEST_FEED_USER_DATA_DIR)
+  assert.equal(FINDER_SYNC_USER_DATA_DIR, 'Font Buttler')
+  assert.match(
+    agent,
+    new RegExp(`g_testFeed \\? @"${FINDER_SYNC_TEST_USER_DATA_DIR}" : @"${FINDER_SYNC_USER_DATA_DIR}"`),
+  )
+  assert.match(agent, /O_RDONLY \| O_NOFOLLOW/)
+  assert.match(agent, /fstat\(fd, &st\)/)
+  assert.match(agent, /kPendingErrorMaxBytes = 8192/)
+  assert.match(agent, /kPendingErrorMaxEntries = 5/)
+  assert.match(agent, /O_CREAT \| O_EXCL \| O_NOFOLLOW \| O_WRONLY, 0600/)
+  assert.match(agent, /fchmod\(fd, 0600\)/)
+  assert.doesNotMatch(agent, /chmod\(filePath, 0600\)/)
+  assert.doesNotMatch(agent, /writeToFile:file atomically/)
+  assert.match(agent, /@"missing-app"/)
+  assert.match(agent, /@"not-running"/)
+  assert.match(agent, /@"login-items"/)
+  assert.match(agent, /@"unknown-action"/)
   assert.doesNotMatch(readRepo('scripts/build-finder-sync-agent.mjs'), /UserNotifications/)
   assert.doesNotMatch(readRepo('scripts/build-finder-sync.mjs'), /UserNotifications/)
   assert.ok(agent.includes(FINDER_SYNC_MISSING_APP))
@@ -672,6 +700,8 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(main, /routeFinderSyncError/)
   assert.match(main, /presentFinderSyncUserError/)
   assert.match(main, /consumeFinderSyncPendingErrors\(\)/)
+  assert.match(main, /readFinderSyncPendingErrorFile/)
+  assert.match(main, /finderSyncErrorsShown = new Map\(\)/)
   assert.match(main, /FINDER_SYNC_PENDING_ERROR_FILE/)
   assert.match(main, /dialog\.showErrorBox\('Font Buttler', route\.message\)/)
   assert.doesNotMatch(main, /UNUserNotificationCenter/)
@@ -681,7 +711,7 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.ok(bootstrapAt >= 0 && consumeAt > bootstrapAt)
   assert.doesNotMatch(main, /launchctl/)
   assert.doesNotMatch(main, /parseLaunchctlProgram/)
-  assert.match(agent, /!ForwardErrorToApp\(message\)\) WritePendingFinderSyncError/)
+  assert.match(agent, /!ForwardErrorToApp\(code\)\) WritePendingFinderSyncError\(code\)/)
   assert.match(receiver, /json\[@"error"\]/)
   assert.ok(swift.includes(FINDER_SYNC_AGENT_DISABLED))
   const enableHandler = main.slice(main.indexOf("ipcMain.handle('set-finder-sync-agent-enabled'"))
@@ -1047,7 +1077,66 @@ test('a second launch from the same bundle path does not register again', () => 
 
   const legacy = readFinderSyncAgentRecord('{"enabled":true,"program":"/Applications/Font Buttler.app/old-helper"}')
   assert.equal(legacy.appBundlePath, '')
+  assert.equal(legacy.program, '/Applications/Font Buttler.app/old-helper')
   assert.equal(legacy.enabled, true)
+  calls.length = 0
+  const legacyMoved = commitFinderSyncAgentRegistration({
+    testFeed: false,
+    currentBundle: bundle,
+    helperPath: helper,
+    version: '0.3.12',
+    record: legacy,
+    status: 'enabled',
+    unregister() {
+      calls.push('unregister')
+    },
+    register() {
+      calls.push('register')
+      return 'enabled'
+    },
+  })
+  assert.deepEqual(calls, ['unregister', 'register'])
+  assert.equal(legacyMoved.plan.reason, 'legacy-program')
+  assert.equal(legacyMoved.saved, true)
+  assert.equal(legacyMoved.record.program, undefined)
+  calls.length = 0
+  const legacySame = commitFinderSyncAgentRegistration({
+    testFeed: false,
+    currentBundle: bundle,
+    helperPath: helper,
+    version: '0.3.12',
+    record: readFinderSyncAgentRecord(JSON.stringify({ enabled: true, program: helper })),
+    status: 'enabled',
+    unregister() {
+      calls.push('unregister')
+    },
+    register() {
+      calls.push('register')
+      return 'enabled'
+    },
+  })
+  assert.deepEqual(calls, [])
+  assert.equal(legacySame.plan.action, 'keep')
+  assert.equal(legacySame.plan.reason, 'legacy-program')
+  assert.equal(legacySame.saved, true)
+  assert.equal(legacySame.record.appBundlePath, bundle)
+  const legacyDone = commitFinderSyncAgentRegistration({
+    testFeed: false,
+    currentBundle: bundle,
+    helperPath: helper,
+    version: '0.3.12',
+    record: legacySame.record,
+    status: 'enabled',
+    unregister() {
+      calls.push('unregister')
+    },
+    register() {
+      calls.push('register')
+      return 'enabled'
+    },
+  })
+  assert.deepEqual(calls, [])
+  assert.equal(legacyDone.plan.reason, 'enabled')
 
   const seen = new Map()
   assert.equal(finderSyncRequestSeen(seen, 'click-1', 1_000), false)
@@ -1071,79 +1160,158 @@ test('a second launch from the same bundle path does not register again', () => 
 })
 
 test('Finder Sync errors use the app notification permission and a dialog when it is denied', () => {
-  const message = FINDER_SYNC_MISSING_APP
   const granted = routeFinderSyncError({
-    message,
+    code: FINDER_SYNC_ERROR_MISSING_APP,
     notificationsEnabled: true,
     permission: 'granted',
-    alreadyShown: new Set(),
+    alreadyShown: new Map(),
   })
   assert.equal(granted.shown, true)
   assert.equal(granted.channel, 'notification')
-  assert.equal(granted.message, message)
+  assert.equal(granted.message, FINDER_SYNC_MISSING_APP)
 
   const denied = routeFinderSyncError({
-    message,
+    code: FINDER_SYNC_ERROR_MISSING_APP,
     notificationsEnabled: true,
     permission: 'denied',
-    alreadyShown: new Set(),
+    alreadyShown: new Map(),
   })
   assert.equal(denied.shown, true)
   assert.equal(denied.channel, 'dialog')
-  assert.equal(denied.message, message)
+  assert.equal(denied.message, FINDER_SYNC_MISSING_APP)
 
   const off = routeFinderSyncError({
-    message: `  ${FINDER_SYNC_AGENT_DISABLED}  `,
+    code: FINDER_SYNC_ERROR_LOGIN_ITEMS,
     notificationsEnabled: false,
     permission: 'granted',
-    alreadyShown: new Set(),
+    alreadyShown: new Map(),
   })
   assert.equal(off.shown, true)
   assert.equal(off.channel, 'dialog')
   assert.equal(off.message, FINDER_SYNC_AGENT_DISABLED)
 
+  const shown = new Map([[FINDER_SYNC_ERROR_MISSING_APP, 5_000]])
   const duplicate = routeFinderSyncError({
-    message,
+    code: FINDER_SYNC_ERROR_MISSING_APP,
     notificationsEnabled: true,
     permission: 'granted',
-    alreadyShown: new Set([message]),
+    alreadyShown: shown,
+    now: 5_000 + FINDER_SYNC_ERROR_SHOWN_TTL_MS - 1,
   })
   assert.equal(duplicate.shown, false)
   assert.equal(duplicate.channel, 'duplicate')
 
-  const empty = routeFinderSyncError({
-    message: '   ',
+  const later = routeFinderSyncError({
+    code: FINDER_SYNC_ERROR_MISSING_APP,
+    notificationsEnabled: true,
+    permission: 'denied',
+    alreadyShown: shown,
+    now: 5_000 + FINDER_SYNC_ERROR_SHOWN_TTL_MS,
+  })
+  assert.equal(later.shown, true)
+  assert.equal(later.channel, 'dialog')
+  assert.equal(later.message, FINDER_SYNC_MISSING_APP)
+
+  const unknown = routeFinderSyncError({
+    code: 'owned by the file',
     notificationsEnabled: true,
     permission: 'granted',
+    alreadyShown: new Map(),
   })
-  assert.equal(empty.shown, false)
-  assert.equal(empty.channel, 'none')
+  assert.equal(unknown.shown, false)
+  assert.equal(unknown.channel, 'none')
 
   assert.equal(FINDER_SYNC_PENDING_ERROR_FILE, 'finder-sync-pending-error.json')
-  const first = addFinderSyncPendingError('', message, 1_000)
+  const first = addFinderSyncPendingError('', FINDER_SYNC_ERROR_MISSING_APP, 1_000)
   assert.equal(first.added, true)
-  const again = addFinderSyncPendingError(first.text, message, 2_000)
+  const again = addFinderSyncPendingError(first.text, FINDER_SYNC_ERROR_MISSING_APP, 2_000)
   assert.equal(again.added, false)
   assert.equal(again.text, first.text)
   const pending = readFinderSyncPendingErrors(again.text)
   assert.equal(pending.length, 1)
-  assert.equal(pending[0].message, message)
+  assert.equal(pending[0].code, FINDER_SYNC_ERROR_MISSING_APP)
+  assert.equal(pending[0].message, FINDER_SYNC_MISSING_APP)
   assert.equal(pending[0].at, 1_000)
-  const secondMessage = addFinderSyncPendingError(again.text, FINDER_SYNC_AGENT_DISABLED, 3_000)
-  assert.equal(secondMessage.added, true)
-  const both = readFinderSyncPendingErrors(secondMessage.text)
+  const secondCode = addFinderSyncPendingError(again.text, FINDER_SYNC_ERROR_LOGIN_ITEMS, 3_000)
+  assert.equal(secondCode.added, true)
   assert.deepEqual(
-    both.map((item) => item.message),
-    [message, FINDER_SYNC_AGENT_DISABLED],
+    readFinderSyncPendingErrors(secondCode.text).map((item) => item.code),
+    [FINDER_SYNC_ERROR_MISSING_APP, FINDER_SYNC_ERROR_LOGIN_ITEMS],
   )
-  const repeatedFile = JSON.stringify({
+  const injected = JSON.stringify({
     errors: [
-      { message, at: 1 },
-      { message, at: 2 },
-      { message: '  ', at: 3 },
+      { message: 'run this', at: 1 },
+      { code: 'not-a-code', at: 2 },
+      { code: FINDER_SYNC_ERROR_NOT_RUNNING, at: 3 },
     ],
   })
-  assert.equal(readFinderSyncPendingErrors(repeatedFile).length, 1)
+  const kept = readFinderSyncPendingErrors(injected)
+  assert.deepEqual(kept.map((item) => item.code), [FINDER_SYNC_ERROR_NOT_RUNNING])
+  assert.equal(kept[0].message, 'Font Buttler is not running.')
+  const repeated = {
+    errors: [],
+  }
+  for (let index = 0; index < FINDER_SYNC_PENDING_ERROR_MAX_ENTRIES + 3; index += 1) {
+    repeated.errors.push(
+      { code: FINDER_SYNC_ERROR_MISSING_APP, at: index },
+      { code: 'extra', at: index },
+      { code: FINDER_SYNC_ERROR_NOT_RUNNING, at: index },
+    )
+  }
+  const capped = readFinderSyncPendingErrors(JSON.stringify(repeated))
+  assert.ok(capped.length <= FINDER_SYNC_PENDING_ERROR_MAX_ENTRIES)
+  assert.deepEqual(capped.map((item) => item.code), [FINDER_SYNC_ERROR_MISSING_APP, FINDER_SYNC_ERROR_NOT_RUNNING])
+  assert.equal(readFinderSyncPendingErrors('x'.repeat(FINDER_SYNC_PENDING_ERROR_MAX_BYTES + 1)).length, 0)
+})
+
+test('a pending Finder Sync error file ignores a symlink, an oversize file, and an unknown code', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'font-butler-pending-'))
+  try {
+    const target = path.join(dir, 'target.json')
+    writeFileSync(target, JSON.stringify({ errors: [{ code: FINDER_SYNC_ERROR_MISSING_APP, at: 1 }] }))
+    const link = path.join(dir, FINDER_SYNC_PENDING_ERROR_FILE)
+    symlinkSync(target, link)
+    const linked = readFinderSyncPendingErrorFile(link)
+    assert.equal(linked.reason, 'symlink')
+    assert.equal(linked.discard, false)
+    assert.deepEqual(linked.errors, [])
+    assert.equal(lstatSync(link).isSymbolicLink(), true)
+    assert.match(readFileSync(target, 'utf8'), /missing-app/)
+
+    const huge = path.join(dir, 'huge.json')
+    writeFileSync(huge, 'x'.repeat(FINDER_SYNC_PENDING_ERROR_MAX_BYTES + 1))
+    const oversize = readFinderSyncPendingErrorFile(huge)
+    assert.equal(oversize.reason, 'oversize')
+    assert.equal(oversize.discard, true)
+    assert.deepEqual(oversize.errors, [])
+    assert.equal(lstatSync(huge).size, FINDER_SYNC_PENDING_ERROR_MAX_BYTES + 1)
+
+    const mixed = path.join(dir, 'mixed.json')
+    writeFileSync(
+      mixed,
+      JSON.stringify({
+        errors: [
+          { code: 'not-a-code', message: 'owned', at: 1 },
+          { message: FINDER_SYNC_MISSING_APP, at: 2 },
+          { code: FINDER_SYNC_ERROR_UNKNOWN_ACTION, at: 3 },
+        ],
+      }),
+    )
+    const unknown = readFinderSyncPendingErrorFile(mixed)
+    assert.equal(unknown.reason, 'ok')
+    assert.equal(unknown.discard, true)
+    assert.deepEqual(unknown.errors.map((item) => item.code), [FINDER_SYNC_ERROR_UNKNOWN_ACTION])
+    assert.equal(unknown.errors[0].message, 'Unknown Finder Sync action.')
+
+    const broken = path.join(dir, 'broken.json')
+    writeFileSync(broken, '{')
+    const malformed = readFinderSyncPendingErrorFile(broken)
+    assert.equal(malformed.reason, 'ok')
+    assert.equal(malformed.discard, true)
+    assert.deepEqual(malformed.errors, [])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('universal slices are compiled outside the bundle and stray Mach-O is reported', () => {
