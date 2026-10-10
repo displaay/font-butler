@@ -1519,6 +1519,13 @@ export class FontButlerService {
           message,
         })
       },
+      (message) => {
+        emitNotice({
+          kind: 'info',
+          source: 'logout-probe',
+          message,
+        })
+      },
     )
   }
 

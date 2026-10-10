@@ -30,20 +30,52 @@ export function isLogoutProbeEnabled(identity: { testBuild?: boolean } | null | 
 }
 
 /**
- * The simulated-clear dialog offers the probe only for a stamped test build.
- * A release file, and a simulated clear without that stamp, stay closed.
+ * A stamped test build offers the probe after a real clear and after a
+ * simulated clear. A clear that did not run stays closed, and so does a
+ * release file.
  */
 export function cacheClearLogoutProbe(
   result: { cleared?: boolean; simulated?: boolean },
   identity: { testBuild?: boolean } | null | undefined,
 ): boolean {
-  return result.simulated === true && result.cleared !== true && isLogoutProbeEnabled(identity)
+  if (!isLogoutProbeEnabled(identity)) return false
+  const simulated = result.simulated === true && result.cleared !== true
+  const cleared = result.cleared === true && result.simulated !== true
+  return simulated || cleared
+}
+
+/**
+ * Outermost `.app` that contains `start`. A nested helper stops at the
+ * application bundle, and the walk does not continue to the parent of that bundle.
+ */
+export function enclosingAppBundle(start: string): string | null {
+  let dir = start
+  let found: string | null = null
+  for (;;) {
+    if (path.basename(dir).endsWith('.app')) found = dir
+    const parent = path.dirname(dir)
+    if (parent === dir) return found
+    if (found) {
+      const higher = parent.split(path.sep).some((part) => part.endsWith('.app'))
+      if (!higher) return found
+    }
+    dir = parent
+  }
+}
+
+let prependedIdentityCandidates: readonly string[] = []
+
+/** Tests point this at a temp `build-identity.json`. Production leaves it empty. */
+export function setBuildIdentityCandidatesForTests(candidates: readonly string[] | null): void {
+  prependedIdentityCandidates = candidates ?? []
 }
 
 /**
  * Packaged apps read `Contents/Resources/build-identity.json` first.
- * A utility process may not publish `resourcesPath`, so the executable path
- * is walked up to that same Resources file. Dev and tests fall through to
+ * When `resourcesPath` is missing, the executable is resolved only inside its
+ * outermost `.app` bundle. A nested helper still sees that bundle's
+ * `Contents/Resources` file, and the walk does not continue outside the bundle.
+ * Dev and tests fall through to
  * `build/build-identity.json`. Environment variables are not consulted.
  */
 export function buildIdentityCandidates(
@@ -57,18 +89,14 @@ export function buildIdentityCandidates(
   const candidates: string[] = []
   if (typeof resources === 'string' && resources.length > 0) {
     candidates.push(path.join(resources, PACKAGED_BUILD_IDENTITY_FILE))
-  }
-  if (typeof execPath === 'string' && execPath.length > 0) {
-    let dir = path.dirname(execPath)
-    for (let i = 0; i < 6; i += 1) {
-      candidates.push(path.join(dir, 'Resources', PACKAGED_BUILD_IDENTITY_FILE))
-      const parent = path.dirname(dir)
-      if (parent === dir) break
-      dir = parent
+  } else if (typeof execPath === 'string' && execPath.length > 0) {
+    const bundle = enclosingAppBundle(path.dirname(execPath))
+    if (bundle) {
+      candidates.push(path.join(bundle, 'Contents', 'Resources', PACKAGED_BUILD_IDENTITY_FILE))
     }
   }
   candidates.push(path.join(root, 'build', PACKAGED_BUILD_IDENTITY_FILE))
-  return candidates
+  return [...prependedIdentityCandidates, ...candidates]
 }
 
 export function loadBuildIdentityFrom(

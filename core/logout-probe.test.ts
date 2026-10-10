@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { test } from 'node:test'
+import { Hono } from 'hono'
+import { menuLogoutPathAfterCacheClear } from '../electron/logout-dialog.mjs'
+import { mountSessionLogoutRoutes } from '../server/session-logout.ts'
+import { mountUserFontCacheRoute } from '../server/user-font-cache-route.ts'
+import { setBuildIdentityCandidatesForTests } from './build-identity.ts'
 import {
+  allowRealCacheMutation,
+  ATSUTIL_SKIPPED_LOG,
   LOGOUT_FAILED_MESSAGE,
   LOGOUT_PROBE_WOULD_START_NOTICE,
   LOGOUT_STILL_WAITING_MESSAGE,
@@ -9,8 +19,14 @@ import {
   requestLogoutProbe,
   requestMacLogout,
   resetLogoutProbe,
-  startMacLogoutProcess,
+  setCacheToolExecForTests,
+  setMacLogoutExecForTests,
+  setUserFontCacheHostMacForTests,
+  userFontCacheClearOutcome,
 } from './caches.ts'
+import { noopFontNative, realFontNative, setFontNative } from './native.ts'
+import { FontButlerService } from './service.ts'
+import type { AppPaths } from './paths.ts'
 
 const DENIED = { stderr: 'osascript is not allowed to send keystrokes. (-1743)' }
 
@@ -64,49 +80,85 @@ test('Allow on the logout probe says logout would start and does not log out', a
   assert.equal(result.probeAllowed, true)
   assert.equal(result.message, 'Test build: logout would start now')
   assert.equal(result.requested, true)
-  assert.doesNotMatch(requestLogoutProbe.toString(), /app\.quit/)
-  assert.doesNotMatch(requestLogoutProbe.toString(), /MAC_LOGOUT_APPLESCRIPT/)
+  assert.equal(scripts.includes(MAC_LOGOUT_APPLESCRIPT), false)
   resetLogoutProbe()
 })
 
-test('the logout probe never calls the real logout script', async () => {
-  resetLogoutProbe()
+test('requestMacLogout itself runs the probe on a test build', async () => {
+  const identityDir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-logout-fn-'))
+  const identityFile = path.join(identityDir, 'build-identity.json')
+  fs.writeFileSync(identityFile, '{"testBuild":true}\n')
+  setBuildIdentityCandidatesForTests([identityFile])
   const scripts: string[] = []
-  const simulated: string[] = []
-  const result = await requestLogoutProbe(
-    { testBuild: true },
-    {
-      exec(_file, args, callback) {
-        scripts.push(String(args[1]))
-        callback(null)
-        return { unref() {} }
-      },
-      onSimulated(message) {
-        simulated.push(message)
-      },
-    },
-  )
-  assert.deepEqual(scripts, [MAC_LOGOUT_PROBE_APPLESCRIPT])
-  assert.equal(MAC_LOGOUT_PROBE_APPLESCRIPT, 'tell application "System Events" to get name')
-  assert.equal(scripts.includes(MAC_LOGOUT_APPLESCRIPT), false)
-  assert.equal(scripts.some((script) => script.includes('log out')), false)
-  assert.doesNotMatch(requestLogoutProbe.toString(), /MAC_LOGOUT_APPLESCRIPT/)
-  assert.doesNotMatch(requestLogoutProbe.toString(), /to log out/)
-  assert.match(requestLogoutProbe.toString(), /awaitMacLogoutRequest/)
-  assert.equal(result.requested, true)
-  assert.equal(result.probeAllowed, true)
-  assert.equal(result.message, LOGOUT_PROBE_WOULD_START_NOTICE)
-  assert.deepEqual(simulated, [])
-  assert.equal(LOGOUT_PROBE_WOULD_START_NOTICE, 'Test build: logout would start now')
-  assert.doesNotMatch(requestLogoutProbe.toString(), /app\.quit|process\.exit/)
-  const realCalls: string[] = []
-  startMacLogoutProcess((_file, args) => {
-    realCalls.push(String(args[1]))
+  setMacLogoutExecForTests((_file, args, callback) => {
+    scripts.push(String(args[1]))
+    callback(null)
     return { unref() {} }
-  }, () => {})
-  assert.deepEqual(realCalls, [MAC_LOGOUT_APPLESCRIPT])
-  assert.doesNotMatch(requestMacLogout.toString(), /MAC_LOGOUT_PROBE_APPLESCRIPT/)
+  })
   resetLogoutProbe()
+  try {
+    const result = await requestMacLogout()
+    assert.equal(result.probeAllowed, true)
+    assert.equal(result.message, LOGOUT_PROBE_WOULD_START_NOTICE)
+    assert.deepEqual(scripts, [MAC_LOGOUT_PROBE_APPLESCRIPT])
+    assert.equal(scripts.includes(MAC_LOGOUT_APPLESCRIPT), false)
+  } finally {
+    setMacLogoutExecForTests(null)
+    resetLogoutProbe()
+    setBuildIdentityCandidatesForTests(null)
+    fs.rmSync(identityDir, { recursive: true, force: true })
+  }
+})
+
+test('a test build hitting /api/session/logout after a real clear runs the probe', async () => {
+  const observed = await withRealClearTestBuild(async ({ app, cleared }) => {
+    assert.equal(cleared.cleared, true)
+    assert.equal(cleared.simulated, undefined)
+    assert.equal(cleared.logoutProbe, true)
+    return postLogout(app, '/api/session/logout')
+  })
+  assert.equal(observed.probeAllowed, true)
+  assert.equal(observed.message, LOGOUT_PROBE_WOULD_START_NOTICE)
+  assert.deepEqual(observed.calls, [{ file: 'osascript', script: MAC_LOGOUT_PROBE_APPLESCRIPT }])
+  assert.equal(observed.calls.some((call) => call.script === MAC_LOGOUT_APPLESCRIPT), false)
+  assert.equal(observed.calls.some((call) => call.script.includes('log out')), false)
+})
+
+test('the menu path after a real clear in a test build runs the probe', async () => {
+  const observed = await withRealClearTestBuild(async ({ app, cleared }) => {
+    const menuPath = menuLogoutPathAfterCacheClear(cleared)
+    assert.equal(menuPath, '/api/session/logout-probe')
+    return postLogout(app, menuPath)
+  })
+  assert.equal(observed.probeAllowed, true)
+  assert.equal(observed.message, 'Test build: logout would start now')
+  assert.deepEqual(observed.calls, [{ file: 'osascript', script: MAC_LOGOUT_PROBE_APPLESCRIPT }])
+  assert.equal(observed.calls.some((call) => call.script === MAC_LOGOUT_APPLESCRIPT), false)
+})
+
+test('a test build clear never runs atsutil through the API', async () => {
+  const observed = await withSimulatedTestBuildClear(async (app) => postFontCacheClear(app))
+  assert.equal(observed.mac, true)
+  assert.equal(observed.cleared, false)
+  assert.equal(observed.simulated, true)
+  assert.equal(observed.logoutProbe, true)
+  assert.deepEqual(observed.calls, [])
+  assert.match(observed.log, new RegExp(ATSUTIL_SKIPPED_LOG))
+})
+
+test('the menu path clear on a test build never runs atsutil', async () => {
+  const observed = await withSimulatedTestBuildClear(async (app) => {
+    const cleared = await postFontCacheClear(app)
+    assert.equal(menuLogoutPathAfterCacheClear(cleared), '/api/session/logout-probe')
+    return cleared
+  })
+  assert.equal(observed.cleared, false)
+  assert.equal(observed.simulated, true)
+  assert.deepEqual(observed.calls, [])
+  assert.equal(
+    observed.calls.some((call) => call.file === 'atsutil' || call.args.includes('-removeUser')),
+    false,
+  )
 })
 
 test('a logout probe denial and a late success use the real logout result handling', async () => {
@@ -197,6 +249,172 @@ test('a logout probe denial and a late success use the real logout result handli
   assert.deepEqual(simulated, [])
   resetLogoutProbe()
 })
+
+type ExecCall = { file: string; script: string }
+
+function tempPaths(): AppPaths {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-logout-real-'))
+  return {
+    dataRoot,
+    catalogPath: path.join(dataRoot, 'catalog.json'),
+    settingsPath: path.join(dataRoot, 'settings.json'),
+    apiTokenPath: path.join(dataRoot, 'token'),
+    installDir: path.join(dataRoot, 'install'),
+    disabledDir: path.join(dataRoot, 'disabled'),
+    sourcesDir: path.join(dataRoot, 'sources'),
+    uploadsDir: path.join(dataRoot, 'uploads'),
+    systemCachePath: path.join(dataRoot, 'system.json'),
+    seedDir: path.join(dataRoot, 'seed'),
+    userFontsDir: path.join(dataRoot, 'user-fonts'),
+    computerFontsDir: path.join(dataRoot, 'computer-fonts'),
+    systemFontsDir: path.join(dataRoot, 'system-fonts'),
+    supplementalFontsDir: path.join(dataRoot, 'supplemental'),
+    officeFontCacheDir: path.join(dataRoot, 'office-cache'),
+    atsCacheDir: path.join(dataRoot, 'ats-cache'),
+    adobeFontsDir: path.join(dataRoot, 'adobe-fonts'),
+  }
+}
+
+async function postLogout(app: Hono, pathname: string): Promise<{
+  probeAllowed?: boolean
+  message?: string
+  calls: ExecCall[]
+}> {
+  const calls: ExecCall[] = []
+  setMacLogoutExecForTests((file, args, callback) => {
+    calls.push({ file: String(file), script: String(args[1]) })
+    callback(null)
+    return { unref() {} }
+  })
+  resetLogoutProbe()
+  const response = await app.request(pathname, { method: 'POST' })
+  const body = (await response.json()) as { probeAllowed?: boolean; message?: string }
+  assert.equal(response.status, 200)
+  return { ...body, calls }
+}
+
+async function withRealClearTestBuild<T>(
+  run: (input: {
+    app: Hono
+    cleared: { mac: boolean; cleared: boolean; simulated?: boolean; logoutProbe?: boolean }
+  }) => Promise<T>,
+): Promise<T> {
+  const real = userFontCacheClearOutcome({ mac: true, confirmed: true, allowMutation: true })
+  assert.equal(real.cleared, true)
+  assert.equal(real.runAtsutil, true)
+  assert.equal(real.simulated, undefined)
+  const identityDir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-identity-'))
+  const identityFile = path.join(identityDir, 'build-identity.json')
+  fs.writeFileSync(identityFile, '{"testBuild":true}\n')
+  setBuildIdentityCandidatesForTests([identityFile])
+  const paths = tempPaths()
+  setFontNative(
+    noopFontNative({
+      async clearUserFontCache() {
+        return { mac: real.mac, cleared: real.cleared }
+      },
+    }),
+  )
+  const service = new FontButlerService(paths)
+  const app = new Hono()
+  mountSessionLogoutRoutes(app, service)
+  resetLogoutProbe()
+  try {
+    const cleared = await service.clearUserFontCache({ confirm: true })
+    return await run({ app, cleared })
+  } finally {
+    setMacLogoutExecForTests(null)
+    resetLogoutProbe()
+    setBuildIdentityCandidatesForTests(null)
+    setFontNative(null)
+    service.dispose()
+    fs.rmSync(identityDir, { recursive: true, force: true })
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+}
+
+type ToolCall = { file: string; args: string[] }
+
+async function postFontCacheClear(app: Hono): Promise<{
+  mac: boolean
+  cleared: boolean
+  simulated?: boolean
+  logoutProbe?: boolean
+}> {
+  const response = await app.request('/api/caches/font', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirm: true }),
+  })
+  const body = (await response.json()) as {
+    mac: boolean
+    cleared: boolean
+    simulated?: boolean
+    logoutProbe?: boolean
+  }
+  assert.equal(response.status, 200)
+  return body
+}
+
+async function withSimulatedTestBuildClear<T extends object>(
+  run: (app: Hono) => Promise<T>,
+): Promise<T & { calls: ToolCall[]; log: string }> {
+  const previous = {
+    data: process.env.FONT_BUTLER_DATA,
+    legacy: process.env.FONTCASE_DATA,
+    caches: process.env.FONT_BUTLER_NATIVE_CACHES,
+    log: process.env.FONT_BUTLER_LOG,
+  }
+  delete process.env.FONT_BUTLER_DATA
+  delete process.env.FONTCASE_DATA
+  delete process.env.FONT_BUTLER_NATIVE_CACHES
+  const logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-clear-log-'))
+  const logPath = path.join(logDir, 'main.log')
+  process.env.FONT_BUTLER_LOG = logPath
+  assert.equal(allowRealCacheMutation(), true)
+  const identityDir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-identity-'))
+  const identityFile = path.join(identityDir, 'build-identity.json')
+  fs.writeFileSync(identityFile, '{"testBuild":true}\n')
+  setBuildIdentityCandidatesForTests([identityFile])
+  assert.equal(allowRealCacheMutation(), false)
+  process.env.FONT_BUTLER_NATIVE_CACHES = '1'
+  assert.equal(allowRealCacheMutation(), false)
+  delete process.env.FONT_BUTLER_NATIVE_CACHES
+  setUserFontCacheHostMacForTests(true)
+  const calls: ToolCall[] = []
+  setCacheToolExecForTests((file, args, _options, callback) => {
+    calls.push({ file: String(file), args: [...args] })
+    callback(null)
+    return {}
+  })
+  setFontNative(realFontNative())
+  const paths = tempPaths()
+  const service = new FontButlerService(paths)
+  const app = new Hono()
+  mountUserFontCacheRoute(app, service)
+  try {
+    const result = await run(app)
+    const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : ''
+    return { ...result, calls, log }
+  } finally {
+    setCacheToolExecForTests(null)
+    setUserFontCacheHostMacForTests(null)
+    setBuildIdentityCandidatesForTests(null)
+    setFontNative(null)
+    service.dispose()
+    if (previous.data === undefined) delete process.env.FONT_BUTLER_DATA
+    else process.env.FONT_BUTLER_DATA = previous.data
+    if (previous.legacy === undefined) delete process.env.FONTCASE_DATA
+    else process.env.FONTCASE_DATA = previous.legacy
+    if (previous.caches === undefined) delete process.env.FONT_BUTLER_NATIVE_CACHES
+    else process.env.FONT_BUTLER_NATIVE_CACHES = previous.caches
+    if (previous.log === undefined) delete process.env.FONT_BUTLER_LOG
+    else process.env.FONT_BUTLER_LOG = previous.log
+    fs.rmSync(identityDir, { recursive: true, force: true })
+    fs.rmSync(logDir, { recursive: true, force: true })
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+}
 
 function restore(previous: {
   feed: string | undefined

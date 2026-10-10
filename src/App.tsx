@@ -29,6 +29,7 @@ import { RetailCollisionDialog } from '@/components/RetailCollisionDialog'
 import { LatinPreviewProvider } from '@/components/AaPreview'
 import { SettingsDialog } from '@/components/SettingsDialog'
 import { logoutNoticeAction } from '@/lib/logout-notice'
+import { publishLogoutProbeResult } from '@/lib/logout-probe-result'
 import { Sidebar, type Tab } from '@/components/Sidebar'
 import { SystemCard } from '@/components/SystemCard'
 import {
@@ -596,6 +597,7 @@ function AppShell() {
     void boot()
     const seenWatchFailures = new Set<string>()
     const presentNotice = (notice: Notice) => {
+      if (notice.source === 'logout-probe') publishLogoutProbeResult(notice)
       if (logoutNoticeAction(notice.source) === 'ignore') return
       if (notice.kind === 'error' && notice.source === 'watch') {
         const key = notice.operationId ?? notice.message

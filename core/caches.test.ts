@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
+import { setBuildIdentityCandidatesForTests } from './build-identity.ts'
 import {
   allowRealCacheMutation,
   applyAdobeFontCacheClear,
@@ -134,6 +135,15 @@ test('isolated FONT_BUTLER_DATA skips real cache mutation unless explicitly opte
       userFontCacheClearOutcome({ mac: true, confirmed: true, allowMutation: true }),
       { mac: true, cleared: true, runAtsutil: true },
     )
+    assert.deepEqual(
+      userFontCacheClearOutcome({
+        mac: true,
+        confirmed: true,
+        allowMutation: true,
+        testBuild: true,
+      }),
+      { mac: true, cleared: false, simulated: true, runAtsutil: false },
+    )
     assert.equal(
       userFontCacheClearOutcome({ mac: true, confirmed: false, allowMutation: true }).cleared,
       false,
@@ -145,6 +155,37 @@ test('isolated FONT_BUTLER_DATA skips real cache mutation unless explicitly opte
     else process.env.FONT_BUTLER_DATA = previousData
     if (previousCaches === undefined) delete process.env.FONT_BUTLER_NATIVE_CACHES
     else process.env.FONT_BUTLER_NATIVE_CACHES = previousCaches
+  }
+})
+
+test('allowRealCacheMutation refuses a stamped test build with no data root', () => {
+  const previousData = process.env.FONT_BUTLER_DATA
+  const previousLegacy = process.env.FONTCASE_DATA
+  const previousCaches = process.env.FONT_BUTLER_NATIVE_CACHES
+  const identityDir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-mutation-identity-'))
+  const identityFile = path.join(identityDir, 'build-identity.json')
+  fs.writeFileSync(identityFile, '{"testBuild":true}\n')
+  try {
+    delete process.env.FONT_BUTLER_DATA
+    delete process.env.FONTCASE_DATA
+    delete process.env.FONT_BUTLER_NATIVE_CACHES
+    setBuildIdentityCandidatesForTests(null)
+    assert.equal(allowRealCacheMutation(), true)
+    setBuildIdentityCandidatesForTests([identityFile])
+    assert.equal(allowRealCacheMutation(), false)
+    process.env.FONT_BUTLER_NATIVE_CACHES = '1'
+    assert.equal(allowRealCacheMutation(), false)
+    process.env.FONT_BUTLER_DATA = identityDir
+    assert.equal(allowRealCacheMutation(), false)
+  } finally {
+    setBuildIdentityCandidatesForTests(null)
+    if (previousData === undefined) delete process.env.FONT_BUTLER_DATA
+    else process.env.FONT_BUTLER_DATA = previousData
+    if (previousLegacy === undefined) delete process.env.FONTCASE_DATA
+    else process.env.FONTCASE_DATA = previousLegacy
+    if (previousCaches === undefined) delete process.env.FONT_BUTLER_NATIVE_CACHES
+    else process.env.FONT_BUTLER_NATIVE_CACHES = previousCaches
+    fs.rmSync(identityDir, { recursive: true, force: true })
   }
 })
 

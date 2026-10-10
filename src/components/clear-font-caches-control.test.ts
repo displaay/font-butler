@@ -292,12 +292,14 @@ test('Clear font caches runs only after confirmation and logout is optional', as
   assert.equal(buttonNamed(document.body, 'Log out now'), undefined)
   assert.equal(calls.includes('logout-simulated'), false)
 
+  const { publishLogoutProbeResult } = await import('../lib/logout-probe-result.ts')
   await act(async () => {
     root.render(
       createElement(ClearFontCachesControl, {
-        onClear: async () => ({ mac: true, cleared: false, simulated: true, logoutProbe: true }),
+        onClear: async () => ({ mac: true, cleared: true, logoutProbe: true }),
         onLogOut: async () => {
           calls.push('logout-real')
+          return { requested: true }
         },
         onProbe: async () => {
           calls.push('logout-probe')
@@ -332,8 +334,54 @@ test('Clear font caches runs only after confirmation and logout is optional', as
   const allowed = document.body.querySelector('[role="dialog"]')
   assert.ok(allowed)
   assert.match(allowed.textContent ?? '', /Test build: logout would start now/)
+  assert.match(allowed.textContent ?? '', /Font Buttler did not log out, and it did not quit/)
   assert.equal(allowed.textContent?.includes("Logging out didn't happen"), false)
   assert.equal(buttonNamed(allowed, 'Log out now'), undefined)
+
+  calls.length = 0
+  await act(async () => {
+    root.render(
+      createElement(ClearFontCachesControl, {
+        onClear: async () => ({ mac: true, cleared: true, logoutProbe: true }),
+        onLogOut: async () => {
+          calls.push('logout-real-late')
+          return { requested: true }
+        },
+        onProbe: async () => {
+          calls.push('logout-probe-late')
+          return { requested: true }
+        },
+      }),
+    )
+  })
+  const openLate = buttonNamed(document.body, 'Clear font caches')
+  assert.ok(openLate)
+  await act(async () => {
+    openLate.click()
+  })
+  const confirmLate = document.body.querySelector('[role="dialog"]')
+  assert.ok(confirmLate)
+  const confirmLateButton = buttonNamed(confirmLate, 'Clear font caches')
+  assert.ok(confirmLateButton)
+  await act(async () => {
+    confirmLateButton.click()
+  })
+  const lateLogout = buttonNamed(document.body, 'Log out now')
+  assert.ok(lateLogout)
+  await act(async () => {
+    lateLogout.click()
+  })
+  assert.equal(calls.includes('logout-probe-late'), true)
+  assert.equal(calls.includes('logout-real-late'), false)
+  assert.ok(buttonNamed(document.body, 'Log out now'))
+  await act(async () => {
+    publishLogoutProbeResult({ message: 'Test build: logout would start now' })
+  })
+  const lateAllowed = document.body.querySelector('[role="dialog"]')
+  assert.ok(lateAllowed)
+  assert.match(lateAllowed.textContent ?? '', /Test build: logout would start now/)
+  assert.equal(buttonNamed(lateAllowed, 'Log out now'), undefined)
+  assert.ok(buttonNamed(lateAllowed, 'OK'))
 
   await act(async () => {
     root.unmount()

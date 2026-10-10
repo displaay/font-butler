@@ -13,6 +13,7 @@ import {
   assertNotarizedMacRelease,
   buildIdentityStampFailures,
   releaseBuildIdentityFailures,
+  unpackedReleaseAppFailures,
   releaseBundleIdentityFailures,
   macReleaseAssetNames,
   notarizationFailures,
@@ -1029,6 +1030,17 @@ test('the release check rejects a logout probe identity that does not match the 
     const releaseEnabled = releaseBuildIdentityFailures(app, { testFeed: false })
     assert.equal(releaseEnabled.length, 1)
     assert.match(releaseEnabled[0], /testBuild false/)
+    const bare = path.join(root, 'Font Buttler Bare.app')
+    mkdirSync(path.join(bare, 'Contents', 'MacOS'), { recursive: true })
+    const missingIdentity = releaseBuildIdentityFailures(bare, { testFeed: false })
+    assert.equal(missingIdentity.length, 1)
+    assert.match(missingIdentity[0], /A release must include build-identity\.json/)
+    const unpacked = unpackedReleaseAppFailures(bare, { testFeed: false })
+    assert.ok(unpacked.some((failure) => /build-identity\.json/.test(failure)))
+    const source = readRepo('scripts/assert-notarized-mac-release.mjs')
+    const zipAt = source.indexOf("mkdtempSync(path.join(tmpdir(), 'font-butler-zip-'))")
+    assert.ok(zipAt > 0)
+    assert.match(source.slice(zipAt, zipAt + 900), /unpackedReleaseAppFailures/)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

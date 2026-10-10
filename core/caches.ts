@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { assertSafeShellPath } from './auth.ts'
+import { loadBuildIdentity } from './build-identity.ts'
 import { logMain } from './main-log.ts'
 import { parseFontFile } from './parse.ts'
 import { getPaths, isMac } from './paths.ts'
@@ -256,9 +257,30 @@ export function applyAdobeFontCacheClear(home: string): boolean {
 
 const execFileAsync = promisify(execFile)
 
+type CacheToolExec = (
+  file: string,
+  args: readonly string[],
+  options: { timeout?: number },
+  callback: (error: Error | null) => void,
+) => unknown
+
+let cacheToolExec: CacheToolExec = (file, args, options, callback) => {
+  execFile(file, [...args], options, callback)
+}
+
+/** Tests replace the process spawn used for atsutil. Production uses `execFile`. */
+export function setCacheToolExecForTests(exec: CacheToolExec | null): void {
+  cacheToolExec = exec ?? ((file, args, options, callback) => execFile(file, [...args], options, callback))
+}
+
 async function runQuiet(command: string, args: string[]): Promise<void> {
   try {
-    await execFileAsync(command, args, { timeout: 15_000 })
+    await new Promise<void>((resolve, reject) => {
+      cacheToolExec(command, args, { timeout: 15_000 }, (error) => {
+        if (error) reject(error)
+        else resolve()
+      })
+    })
   } catch {
     // Cache tools are best-effort; missing binaries should not fail install.
   }
@@ -278,9 +300,18 @@ function emptyDir(dir: string): void {
   }
 }
 
+function cacheDataIsIsolated(): boolean {
+  return Boolean(process.env.FONT_BUTLER_DATA ?? process.env.FONTCASE_DATA)
+}
+
+/**
+ * Live cache tools stay off for a stamped test build.
+ * `FONT_BUTLER_NATIVE_CACHES=1` cannot turn them back on, and a missing
+ * `FONT_BUTLER_DATA` cannot either. Callers still pass their own testBuild flag.
+ */
 export function allowRealCacheMutation(): boolean {
-  const isolated = Boolean(process.env.FONT_BUTLER_DATA ?? process.env.FONTCASE_DATA)
-  if (!isolated) return true
+  if (loadBuildIdentity().testBuild === true) return false
+  if (!cacheDataIsIsolated()) return true
   return process.env.FONT_BUTLER_NATIVE_CACHES === '1'
 }
 
@@ -290,22 +321,32 @@ export function userFontCacheClearOutcome(input: {
   mac: boolean
   confirmed: boolean
   allowMutation: boolean
+  testBuild?: boolean
 }): { mac: boolean; cleared: boolean; simulated?: boolean; runAtsutil: boolean } {
   if (!input.confirmed) return { mac: input.mac, cleared: false, runAtsutil: false }
   if (!input.mac) return { mac: false, cleared: false, runAtsutil: false }
-  if (!input.allowMutation) {
+  // Caller-level defense. allowRealCacheMutation() also refuses a stamped test build.
+  if (input.testBuild === true || !input.allowMutation) {
     return { mac: true, cleared: false, simulated: true, runAtsutil: false }
   }
   return { mac: true, cleared: true, runAtsutil: true }
+}
+
+let userFontCacheHostMac: boolean | null = null
+
+/** Tests pretend the host is macOS so a missing testBuild guard would call atsutil. */
+export function setUserFontCacheHostMacForTests(mac: boolean | null): void {
+  userFontCacheHostMac = mac
 }
 
 export async function clearUserFontCache(
   options: { confirm?: boolean } = {},
 ): Promise<{ mac: boolean; cleared: boolean; simulated?: boolean }> {
   const outcome = userFontCacheClearOutcome({
-    mac: isMac(),
+    mac: userFontCacheHostMac ?? isMac(),
     confirmed: options.confirm === true,
     allowMutation: allowRealCacheMutation(),
+    testBuild: loadBuildIdentity().testBuild === true,
   })
   if (!outcome.runAtsutil) {
     if (outcome.simulated) logMain('install', ATSUTIL_SKIPPED_LOG)
@@ -357,6 +398,13 @@ type LogoutExec = (
   args: readonly string[],
   callback: (error: unknown) => void,
 ) => { unref?: () => void }
+
+let macLogoutExec: LogoutExec = execFile
+
+/** Tests replace osascript. Production uses `execFile`. */
+export function setMacLogoutExecForTests(exec: LogoutExec | null): void {
+  macLogoutExec = exec ?? execFile
+}
 
 /**
  * Start osascript with no kill timer. A long Automation prompt must stay alive
@@ -480,14 +528,25 @@ export function shareMacLogout(
 export async function requestMacLogout(
   onLateFailure?: (result: MacLogoutResult) => void,
   onStillWaiting?: (message: string) => void,
+  onSimulated?: (message: string) => void,
 ): Promise<MacLogoutResult> {
+  const identity = loadBuildIdentity()
+  // Lowest logout gate. Every caller, including a future one, runs the probe.
+  if (identity.testBuild === true) {
+    return requestLogoutProbe(identity, {
+      exec: macLogoutExec,
+      onLateFailure,
+      onStillWaiting,
+      onSimulated,
+    })
+  }
   if (!isMac()) return { requested: false, message: LOGOUT_FAILED_MESSAGE }
   if (process.env.FONT_BUTLER_TEST === '1' && process.env.FONT_BUTLER_NATIVE !== '1') {
     return { requested: false, message: LOGOUT_FAILED_MESSAGE }
   }
   logMain('install', 'logout request')
   return shareMacLogout(
-    (report) => startMacLogoutProcess(execFile, report),
+    (report) => startMacLogoutProcess(macLogoutExec, report),
     onLateFailure,
     onStillWaiting,
   )
@@ -524,7 +583,7 @@ export function requestLogoutProbe(
     return Promise.resolve({ requested: false, ignored: true })
   }
   if (probeFlight) return probeFlight.accepted
-  const exec = hooks.exec ?? execFile
+  const exec = hooks.exec ?? macLogoutExec
   let noted = false
   const noteAllowed = () => {
     if (noted) return
@@ -577,6 +636,8 @@ export async function clearOfficeFontCache(): Promise<{ mac: boolean; cleared: b
     return { mac: false, cleared: false }
   }
   if (!allowRealCacheMutation()) {
+    // The fallback path is the live Office Group Container unless data is isolated.
+    if (!cacheDataIsIsolated()) return { mac: true, cleared: false }
     const fallback = getPaths().officeFontCacheDir
     if (fs.existsSync(fallback)) {
       emptyDir(fallback)

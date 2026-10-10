@@ -47,11 +47,11 @@ import {
 import { deliverNativeNotice, electronNotificationPermission } from './notify.mjs'
 import {
   LOGOUT_CANCELLED,
-  LOGOUT_PROBE_WOULD_START_NOTICE,
   logoutFailedDialogOptions,
+  logoutProbeWouldStartDialogOptions,
   logoutRequestFollowUp,
+  menuLogoutPathAfterCacheClear,
   presentLogoutFailure,
-  logoutOfferAfterCacheClear,
   presentLogoutNotice,
   showLogoutMessageBox,
 } from './logout-dialog.mjs'
@@ -1066,14 +1066,7 @@ async function offerLogoutAfterFontCacheClear(pathname) {
   const action = logoutRequestFollowUp(result)
   if (action === 'ignore') return
   if (action === 'probe-allowed') {
-    await showAppMessageBox({
-      type: 'info',
-      title: LOGOUT_PROBE_WOULD_START_NOTICE,
-      message: LOGOUT_PROBE_WOULD_START_NOTICE,
-      detail: LOGOUT_PROBE_WOULD_START_NOTICE,
-      buttons: ['OK'],
-      defaultId: 0,
-    })
+    await showAppMessageBox(logoutProbeWouldStartDialogOptions())
     return
   }
   if (action === 'cancelled') {
@@ -1148,11 +1141,9 @@ async function clearCacheFromMenu(kind) {
     if (!response.ok) {
       throw new Error(data.error || 'Could not clear cache')
     }
-    const offer = kind === 'font' ? logoutOfferAfterCacheClear(data) : 'none'
-    if (offer === 'probe') {
-      await offerLogoutAfterFontCacheClear('/api/session/logout-probe')
-    } else if (offer === 'logout') {
-      await offerLogoutAfterFontCacheClear('/api/session/logout')
+    const logoutPath = kind === 'font' ? menuLogoutPathAfterCacheClear(data) : null
+    if (logoutPath) {
+      await offerLogoutAfterFontCacheClear(logoutPath)
     }
   } catch (error) {
     dialog.showErrorBox(

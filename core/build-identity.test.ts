@@ -31,7 +31,9 @@ test('only boolean testBuild true enables the logout probe', () => {
   assert.equal(cacheClearLogoutProbe({ simulated: true, cleared: false }, { testBuild: true }), true)
   assert.equal(cacheClearLogoutProbe({ simulated: true, cleared: false }, { testBuild: false }), false)
   assert.equal(cacheClearLogoutProbe({ simulated: true, cleared: true }, { testBuild: true }), false)
-  assert.equal(cacheClearLogoutProbe({ cleared: true }, { testBuild: true }), false)
+  assert.equal(cacheClearLogoutProbe({ cleared: true }, { testBuild: true }), true)
+  assert.equal(cacheClearLogoutProbe({ cleared: true }, { testBuild: false }), false)
+  assert.equal(cacheClearLogoutProbe({ cleared: false }, { testBuild: true }), false)
 })
 
 test('the committed build identity stays false and env vars do not enable the probe', () => {
@@ -73,11 +75,20 @@ test('the committed build identity stays false and env vars do not enable the pr
       'MacOS',
       'Font Buttler Test Helper',
     )
+    const outside = path.join(path.dirname(appRoot), 'Resources', 'build-identity.json')
+    const inside = path.join(appRoot, 'Contents', 'Resources', 'build-identity.json')
     const candidates = buildIdentityCandidates(projectRoot, { execPath: helper })
-    assert.equal(
-      candidates.includes(path.join(appRoot, 'Contents', 'Resources', 'build-identity.json')),
-      true,
-    )
+    assert.equal(candidates.includes(inside), true)
+    assert.equal(candidates.includes(outside), false)
+    const mainExec = path.join(appRoot, 'Contents', 'MacOS', 'Font Buttler Test')
+    const mainCandidates = buildIdentityCandidates(projectRoot, { execPath: mainExec })
+    assert.equal(mainCandidates.includes(inside), true)
+    assert.equal(mainCandidates.includes(outside), false)
+    const loose = buildIdentityCandidates(projectRoot, {
+      execPath: path.join(path.dirname(appRoot), 'node'),
+    })
+    assert.equal(loose.includes(inside), false)
+    assert.equal(loose.includes(outside), false)
   } finally {
     if (previous.feed === undefined) delete process.env.FONT_BUTLER_TEST_FEED_BUILD
     else process.env.FONT_BUTLER_TEST_FEED_BUILD = previous.feed

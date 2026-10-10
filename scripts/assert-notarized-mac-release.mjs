@@ -572,7 +572,13 @@ export function releaseBuildIdentityFailures(appPath, { testFeed = false } = {})
   const asarPath = path.join(appPath, 'Contents', 'Resources', 'app.asar')
   const hasResources = existsSync(resourcesIdentity)
   const hasAsar = existsSync(asarPath)
-  if (!hasResources && !hasAsar) return []
+  if (!hasResources && !hasAsar) {
+    return [
+      testFeed
+        ? 'A test-feed build must ship Contents/Resources/build-identity.json with testBuild true.'
+        : 'A release must include build-identity.json.',
+    ]
+  }
   const failures = []
   if (testFeed && !hasResources) {
     failures.push(
@@ -597,6 +603,19 @@ export function releaseBuildIdentityFailures(appPath, { testFeed = false } = {})
         ? ['app.asar must include build/build-identity.json with testBuild false.']
         : buildIdentityStampFailures(raw, { testBuildExpected: false })
     for (const failure of asarFailures) pushFailure(failures, failure)
+  }
+  return failures
+}
+
+/** Checks an app unpacked from the update zip or the DMG, including a missing identity file. */
+export function unpackedReleaseAppFailures(appPath, { testFeed = false } = {}) {
+  if (!appPath) return []
+  const failures = []
+  for (const failure of testFeedArchiveFailures({ appPaths: [appPath] })) {
+    pushFailure(failures, failure)
+  }
+  for (const failure of releaseBuildIdentityFailures(appPath, { testFeed })) {
+    pushFailure(failures, failure)
   }
   return failures
 }
@@ -648,7 +667,7 @@ export async function assertNotarizedMacRelease(
       const inside = findAppBundles(mounted.mount).find((bundle) => path.basename(bundle) === 'Font Buttler.app')
       dmgAppStatus = inside ? staplerStatus(inside) : 1
       if (!inside) failures.push('The DMG does not contain Font Buttler.app.')
-      for (const failure of testFeedArchiveFailures({ appPaths: inside ? [inside] : [] })) {
+      for (const failure of unpackedReleaseAppFailures(inside, { testFeed })) {
         if (!testFeedFailures.includes(failure)) testFeedFailures.push(failure)
       }
     }
@@ -666,7 +685,7 @@ export async function assertNotarizedMacRelease(
       const inside = findAppBundles(zipDir).find((bundle) => path.basename(bundle) === 'Font Buttler.app')
       zipAppStatus = inside ? staplerStatus(inside) : 1
       if (!inside) failures.push('The update zip does not contain Font Buttler.app.')
-      for (const failure of testFeedArchiveFailures({ appPaths: inside ? [inside] : [] })) {
+      for (const failure of unpackedReleaseAppFailures(inside, { testFeed })) {
         if (!testFeedFailures.includes(failure)) testFeedFailures.push(failure)
       }
     }

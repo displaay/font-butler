@@ -5,7 +5,21 @@ export const LOGOUT_FAILED_DETAIL =
 export const LOGOUT_STILL_WAITING_TITLE = 'Still waiting for macOS'
 export const LOGOUT_STILL_WAITING_MESSAGE =
   'Still waiting for macOS. If you allowed it, logout will continue. Otherwise use Apple menu > Log Out to finish rebuilding font caches.'
+export const LOGOUT_PROBE_WOULD_START_TITLE = 'Test build'
 export const LOGOUT_PROBE_WOULD_START_NOTICE = 'Test build: logout would start now'
+export const LOGOUT_PROBE_WOULD_START_DETAIL =
+  'Font Buttler did not log out, and it did not quit.'
+
+export function logoutProbeWouldStartDialogOptions() {
+  return {
+    type: 'info',
+    title: LOGOUT_PROBE_WOULD_START_TITLE,
+    message: LOGOUT_PROBE_WOULD_START_NOTICE,
+    detail: LOGOUT_PROBE_WOULD_START_DETAIL,
+    buttons: ['OK'],
+    defaultId: 0,
+  }
+}
 
 /** Cancel is a flag on the result. The message text is only what the dialog shows. */
 export function logoutMenuResultAction(result) {
@@ -54,6 +68,14 @@ export function logoutOfferAfterCacheClear(result) {
   if (result && result.logoutProbe === true) return 'probe'
   if (shouldOfferLogoutAfterCacheClear(result)) return 'logout'
   return 'none'
+}
+
+/** Menu path after a font-cache clear. Test builds post the probe. */
+export function menuLogoutPathAfterCacheClear(result) {
+  const offer = logoutOfferAfterCacheClear(result)
+  if (offer === 'probe') return '/api/session/logout-probe'
+  if (offer === 'logout') return '/api/session/logout'
+  return null
 }
 
 export function logoutFailedDialogOptions(message) {
@@ -144,14 +166,7 @@ export function presentLogoutNotice({
   if (!notice || typeof notice !== 'object') return
   const parent = liveMessageBoxParent(typeof getWindow === 'function' ? getWindow() : null)
   if (notice.source === 'logout-probe') {
-    showWaitingNotice(parent, {
-      type: 'info',
-      title: LOGOUT_PROBE_WOULD_START_NOTICE,
-      message: LOGOUT_PROBE_WOULD_START_NOTICE,
-      detail: LOGOUT_PROBE_WOULD_START_NOTICE,
-      buttons: ['OK'],
-      defaultId: 0,
-    })
+    showWaitingNotice(parent, logoutProbeWouldStartDialogOptions())
     return
   }
   if (notice.source === 'logout-waiting') {

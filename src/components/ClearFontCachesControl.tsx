@@ -1,10 +1,13 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   LOGOUT_CANCELLED,
   LOGOUT_FAILED_MESSAGE,
   LOGOUT_FAILED_TITLE,
+  LOGOUT_PROBE_WOULD_START_DETAIL,
   LOGOUT_PROBE_WOULD_START_NOTICE,
+  LOGOUT_PROBE_WOULD_START_TITLE,
 } from '../../shared/logout.ts'
+import { subscribeLogoutProbeResult } from '@/lib/logout-probe-result'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -57,6 +60,13 @@ export function ClearFontCachesControl({
   const [error, setError] = useState<string | null>(null)
   const [logoutFallback, setLogoutFallback] = useState<string | null>(null)
   const [probe, setProbe] = useState(false)
+
+  useEffect(() => {
+    if (phase !== 'cleared' || !probe) return
+    return subscribeLogoutProbeResult(() => {
+      setPhase('probe-allowed')
+    })
+  }, [phase, probe])
 
   async function confirmClear() {
     setPhase('clearing')
@@ -199,6 +209,8 @@ export function ClearFontCachesControl({
                       return
                     }
                     if (probe && outcome?.requested === true) {
+                      // Allow can land after this accept-window result. The
+                      // probe notice moves the panel; Log out now stays until then.
                       return
                     }
                     setProbe(false)
@@ -224,8 +236,9 @@ export function ClearFontCachesControl({
         }}
       >
         <DialogContent>
-          <DialogTitle>{LOGOUT_PROBE_WOULD_START_NOTICE}</DialogTitle>
+          <DialogTitle>{LOGOUT_PROBE_WOULD_START_TITLE}</DialogTitle>
           <DialogDescription>{LOGOUT_PROBE_WOULD_START_NOTICE}</DialogDescription>
+          <p className="text-sm text-muted-foreground">{LOGOUT_PROBE_WOULD_START_DETAIL}</p>
           <div className="mt-4 flex justify-end">
             <Button
               type="button"

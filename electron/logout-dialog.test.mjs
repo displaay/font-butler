@@ -4,7 +4,9 @@ import fs from 'node:fs'
 import {
   LOGOUT_CANCELLED as SHARED_LOGOUT_CANCELLED,
   LOGOUT_FAILED_MESSAGE,
+  LOGOUT_PROBE_WOULD_START_DETAIL as SHARED_LOGOUT_PROBE_WOULD_START_DETAIL,
   LOGOUT_PROBE_WOULD_START_NOTICE as SHARED_LOGOUT_PROBE_WOULD_START_NOTICE,
+  LOGOUT_PROBE_WOULD_START_TITLE as SHARED_LOGOUT_PROBE_WOULD_START_TITLE,
   LOGOUT_STILL_WAITING_MESSAGE,
 } from '../shared/logout.ts'
 import {
@@ -13,9 +15,13 @@ import {
   logoutFailedDialogOptions,
   logoutMenuResultAction,
   logoutWaitingNoticeOptions,
+  LOGOUT_PROBE_WOULD_START_DETAIL,
   LOGOUT_PROBE_WOULD_START_NOTICE,
+  LOGOUT_PROBE_WOULD_START_TITLE,
   logoutOfferAfterCacheClear,
+  logoutProbeWouldStartDialogOptions,
   logoutRequestFollowUp,
+  menuLogoutPathAfterCacheClear,
   presentLogoutFailure,
   presentLogoutNotice,
   resetLogoutDialogSession,
@@ -308,7 +314,16 @@ test('the main process shows the waiting box while a window is open', () => {
 
 test('a test-build Allow shows that logout would start and is not a logout success', () => {
   assert.equal(LOGOUT_PROBE_WOULD_START_NOTICE, SHARED_LOGOUT_PROBE_WOULD_START_NOTICE)
+  assert.equal(LOGOUT_PROBE_WOULD_START_TITLE, SHARED_LOGOUT_PROBE_WOULD_START_TITLE)
+  assert.equal(LOGOUT_PROBE_WOULD_START_DETAIL, SHARED_LOGOUT_PROBE_WOULD_START_DETAIL)
   assert.equal(LOGOUT_PROBE_WOULD_START_NOTICE, 'Test build: logout would start now')
+  const probeBox = logoutProbeWouldStartDialogOptions()
+  assert.equal(probeBox.title, 'Test build')
+  assert.equal(probeBox.message, 'Test build: logout would start now')
+  assert.equal(probeBox.detail, 'Font Buttler did not log out, and it did not quit.')
+  assert.notEqual(probeBox.title, probeBox.message)
+  assert.notEqual(probeBox.detail, probeBox.message)
+  assert.notEqual(probeBox.title, probeBox.detail)
   const allowed = {
     requested: true,
     probeAllowed: true,
@@ -326,11 +341,16 @@ test('a test-build Allow shows that logout would start and is not a logout succe
       shown.push('failure')
     },
     showWaitingNotice(_parent, options) {
-      shown.push(options.message)
+      shown.push(options)
     },
     notify: () => false,
   })
-  assert.deepEqual(shown, [LOGOUT_PROBE_WOULD_START_NOTICE])
+  assert.equal(shown.length, 1)
+  assert.equal(shown[0].title, LOGOUT_PROBE_WOULD_START_TITLE)
+  assert.equal(shown[0].message, LOGOUT_PROBE_WOULD_START_NOTICE)
+  assert.equal(shown[0].detail, LOGOUT_PROBE_WOULD_START_DETAIL)
+  assert.notEqual(shown[0].title, shown[0].message)
+  assert.notEqual(shown[0].detail, shown[0].message)
   assert.equal(shown.includes("Logging out didn't happen"), false)
   resetLogoutDialogSession()
   const afterFailure = []
@@ -362,8 +382,19 @@ test('logout cancel uses the shared cancelled message', () => {
     logoutOfferAfterCacheClear({ mac: true, cleared: false, simulated: true, logoutProbe: true }),
     'probe',
   )
+  assert.equal(
+    logoutOfferAfterCacheClear({ mac: true, cleared: true, logoutProbe: true }),
+    'probe',
+  )
   assert.equal(logoutOfferAfterCacheClear({ mac: true, cleared: false, simulated: true }), 'none')
   assert.equal(logoutOfferAfterCacheClear({ mac: true, cleared: true }), 'logout')
-  assert.match(main, /\/api\/session\/logout-probe/)
-  assert.match(main, /logoutOfferAfterCacheClear/)
+  assert.equal(
+    menuLogoutPathAfterCacheClear({ mac: true, cleared: true, logoutProbe: true }),
+    '/api/session/logout-probe',
+  )
+  assert.equal(menuLogoutPathAfterCacheClear({ mac: true, cleared: true }), '/api/session/logout')
+  assert.equal(menuLogoutPathAfterCacheClear({ mac: true, cleared: false, simulated: true }), null)
+  assert.match(main, /menuLogoutPathAfterCacheClear/)
+  assert.match(main, /logoutProbeWouldStartDialogOptions/)
+  assert.doesNotMatch(main, /title: LOGOUT_PROBE_WOULD_START_NOTICE/)
 })
