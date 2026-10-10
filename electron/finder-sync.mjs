@@ -1,5 +1,7 @@
+import { closeSync, constants as fsConstants, fstatSync, openSync, readSync } from 'node:fs'
 import path from 'node:path'
 import { FINDER_INSTALL_AS, isClaimedFontPath } from './finder-install.mjs'
+import { TEST_FEED_USER_DATA_DIR } from './test-feed-data.mjs'
 
 export const FINDER_SYNC_BUNDLE_ID = 'app.fontbutler.desktop.FinderSync'
 export const FINDER_SYNC_TEST_BUNDLE_ID = 'app.fontbutler.desktop.FinderSync.Test'
@@ -38,8 +40,19 @@ export const FINDER_SYNC_AGENT_DISABLED =
 export const FINDER_SYNC_REQUEST_TTL_MS = 2 * 60 * 1000
 export const FINDER_SYNC_REQUEST_CAP = 256
 export const FINDER_SYNC_PENDING_ERROR_FILE = 'finder-sync-pending-error.json'
+export const FINDER_SYNC_PENDING_ERROR_MAX_BYTES = 8 * 1024
+export const FINDER_SYNC_PENDING_ERROR_MAX_ENTRIES = 5
+/** Suppress a repeat of the same Finder Sync error only for this long. */
+export const FINDER_SYNC_ERROR_SHOWN_TTL_MS = 30 * 1000
+export const FINDER_SYNC_NOT_RUNNING = 'Font Buttler is not running.'
+export const FINDER_SYNC_UNKNOWN_ACTION = 'Unknown Finder Sync action.'
+export const FINDER_SYNC_ERROR_MISSING_APP = 'missing-app'
+export const FINDER_SYNC_ERROR_NOT_RUNNING = 'not-running'
+export const FINDER_SYNC_ERROR_LOGIN_ITEMS = 'login-items'
+export const FINDER_SYNC_ERROR_UNKNOWN_ACTION = 'unknown-action'
+/** Release userData folder. The test feed uses TEST_FEED_USER_DATA_DIR. */
 export const FINDER_SYNC_USER_DATA_DIR = 'Font Buttler'
-export const FINDER_SYNC_TEST_USER_DATA_DIR = 'Font Buttler Test'
+export const FINDER_SYNC_TEST_USER_DATA_DIR = TEST_FEED_USER_DATA_DIR
 const FINDER_SYNC_ARCH_NAMES = ['ia32', 'x64', 'armv7l', 'arm64', 'universal']
 
 const MAX_PATH_LENGTH = 4096
@@ -183,6 +196,8 @@ export function planFinderSyncAgentRegistration({
   testFeed = false,
   currentBundle,
   recordedBundle,
+  recordedProgram,
+  currentHelper,
   status,
   optedOut = false,
 } = {}) {
@@ -193,8 +208,22 @@ export function planFinderSyncAgentRegistration({
   if (status === 'unsupported') return { ...plan, action: 'keep', reason: 'unsupported' }
   const current = absoluteBundlePath(currentBundle)
   const recorded = absoluteBundlePath(recordedBundle)
+  const helper = absoluteBundlePath(currentHelper)
+  const previousProgram = typeof recordedProgram === 'string' ? recordedProgram.trim() : ''
   if (recorded && current && recorded !== current) {
     return { ...plan, action: 'reregister', reason: 'moved' }
+  }
+  // An old file stored only `program`. Compare it once. Saving the new
+  // record drops `program`, so the next launch takes the path above.
+  if (!recorded && previousProgram) {
+    const previousHelper = absoluteBundlePath(previousProgram)
+    if (helper && previousHelper && previousHelper !== helper) {
+      return { ...plan, action: 'reregister', reason: 'legacy-program' }
+    }
+    if (status === 'enabled' || status === 'requires-approval') {
+      return { ...plan, action: 'keep', reason: 'legacy-program' }
+    }
+    return { ...plan, action: 'register', reason: 'legacy-program' }
   }
   if (status === 'enabled' || status === 'requires-approval') {
     return { ...plan, action: 'keep', reason: status }
@@ -203,7 +232,7 @@ export function planFinderSyncAgentRegistration({
 }
 
 export function readFinderSyncAgentRecord(text) {
-  const empty = { enabled: true, appBundlePath: '', helperPath: '', version: '' }
+  const empty = { enabled: true, appBundlePath: '', helperPath: '', version: '', program: '' }
   if (!text) return empty
   try {
     const parsed = JSON.parse(text)
@@ -212,6 +241,7 @@ export function readFinderSyncAgentRecord(text) {
       appBundlePath: typeof parsed?.appBundlePath === 'string' ? parsed.appBundlePath : '',
       helperPath: typeof parsed?.helperPath === 'string' ? parsed.helperPath : '',
       version: typeof parsed?.version === 'string' ? parsed.version : '',
+      program: typeof parsed?.program === 'string' ? parsed.program : '',
     }
   } catch {
     return empty
@@ -240,6 +270,8 @@ export function commitFinderSyncAgentRegistration({
     testFeed,
     currentBundle,
     recordedBundle: stored.appBundlePath,
+    recordedProgram: stored.program,
+    currentHelper: helperPath,
     status,
     optedOut,
   })
@@ -266,16 +298,29 @@ export function commitFinderSyncAgentRegistration({
   return { plan, status: resultStatus, record: next, saved: true, refused: false }
 }
 
-function finderSyncErrorText(message) {
-  return typeof message === 'string' ? message.trim() : ''
+const FINDER_SYNC_ERROR_MESSAGES = {
+  [FINDER_SYNC_ERROR_MISSING_APP]: FINDER_SYNC_MISSING_APP,
+  [FINDER_SYNC_ERROR_NOT_RUNNING]: FINDER_SYNC_NOT_RUNNING,
+  [FINDER_SYNC_ERROR_LOGIN_ITEMS]: FINDER_SYNC_AGENT_DISABLED,
+  [FINDER_SYNC_ERROR_UNKNOWN_ACTION]: FINDER_SYNC_UNKNOWN_ACTION,
+}
+
+/** Fixed copy for a known Finder Sync error code. Anything else is empty. */
+export function finderSyncErrorMessage(code) {
+  return Object.hasOwn(FINDER_SYNC_ERROR_MESSAGES, code) ? FINDER_SYNC_ERROR_MESSAGES[code] : ''
+}
+
+function pendingErrorByteLength(text) {
+  return Buffer.byteLength(typeof text === 'string' ? text : '', 'utf8')
 }
 
 /**
- * Pending Finder Sync errors the helper left because the app could not be
- * reached. The same message is kept once.
+ * Known codes from a pending-error record. Unknown codes, free-form
+ * messages, and a record over the size cap are ignored. At most
+ * FINDER_SYNC_PENDING_ERROR_MAX_ENTRIES codes are kept.
  */
 export function readFinderSyncPendingErrors(text) {
-  if (!text) return []
+  if (!text || pendingErrorByteLength(text) > FINDER_SYNC_PENDING_ERROR_MAX_BYTES) return []
   let parsed
   try {
     parsed = JSON.parse(text)
@@ -286,40 +331,100 @@ export function readFinderSyncPendingErrors(text) {
   const seen = new Set()
   const errors = []
   for (const item of list) {
-    const message = finderSyncErrorText(item?.message)
-    if (!message || seen.has(message)) continue
-    seen.add(message)
-    errors.push({ message, at: typeof item?.at === 'number' ? item.at : 0 })
+    if (errors.length >= FINDER_SYNC_PENDING_ERROR_MAX_ENTRIES) break
+    const code = typeof item?.code === 'string' ? item.code : ''
+    const message = finderSyncErrorMessage(code)
+    if (!message || seen.has(code)) continue
+    seen.add(code)
+    errors.push({ code, message, at: typeof item?.at === 'number' ? item.at : 0 })
   }
   return errors
 }
 
-export function addFinderSyncPendingError(text, message, now = Date.now()) {
-  const errors = readFinderSyncPendingErrors(text)
-  const nextMessage = finderSyncErrorText(message)
-  if (!nextMessage || errors.some((item) => item.message === nextMessage)) {
+export function addFinderSyncPendingError(text, code, now = Date.now()) {
+  const message = finderSyncErrorMessage(code)
+  const prior = pendingErrorByteLength(text) > FINDER_SYNC_PENDING_ERROR_MAX_BYTES ? '' : text
+  const errors = readFinderSyncPendingErrors(prior).map((item) => ({ code: item.code, at: item.at }))
+  if (!message || errors.some((item) => item.code === code)) {
     return { errors, added: false, text: JSON.stringify({ errors }) }
   }
-  const next = [...errors, { message: nextMessage, at: now }]
+  const next = [...errors, { code, at: now }]
+  if (next.length > FINDER_SYNC_PENDING_ERROR_MAX_ENTRIES) next.shift()
   return { errors: next, added: true, text: JSON.stringify({ errors: next }) }
 }
 
 /**
- * How the main app tells the user about one Finder Sync error. Notifications
- * use the app's existing permission. Off or denied falls back to an in-app
- * dialog. A message already shown is not shown again.
+ * Read the pending-error file without following a symlink. A regular file
+ * is returned for deletion even when its contents are ignored.
+ */
+export function readFinderSyncPendingErrorFile(filePath, io = { openSync, fstatSync, readSync, closeSync }) {
+  if (!filePath || typeof io?.openSync !== 'function' || typeof io?.fstatSync !== 'function' || typeof io?.readSync !== 'function' || typeof io?.closeSync !== 'function') {
+    return { errors: [], discard: false, reason: 'unavailable' }
+  }
+  let fd
+  try {
+    fd = io.openSync(filePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { errors: [], discard: false, reason: 'absent' }
+    if (error?.code === 'ELOOP' || error?.code === 'EMLINK' || error?.code === 'EPERM') {
+      return { errors: [], discard: false, reason: 'symlink' }
+    }
+    return { errors: [], discard: false, reason: 'unreadable' }
+  }
+  try {
+    const stat = io.fstatSync(fd)
+    if (typeof stat?.isFile !== 'function' || !stat.isFile()) {
+      return { errors: [], discard: false, reason: 'not-file' }
+    }
+    if (typeof stat.size !== 'number' || stat.size < 0 || stat.size > FINDER_SYNC_PENDING_ERROR_MAX_BYTES) {
+      return { errors: [], discard: true, reason: 'oversize' }
+    }
+    const buffer = Buffer.alloc(stat.size)
+    let got = 0
+    while (got < stat.size) {
+      const count = io.readSync(fd, buffer, got, stat.size - got, null)
+      if (count <= 0) break
+      got += count
+    }
+    return { errors: readFinderSyncPendingErrors(buffer.subarray(0, got).toString('utf8')), discard: true, reason: 'ok' }
+  } catch {
+    return { errors: [], discard: true, reason: 'unreadable' }
+  } finally {
+    try {
+      io.closeSync(fd)
+    } catch {
+      // The descriptor is already closed.
+    }
+  }
+}
+
+function pruneFinderSyncErrorsShown(alreadyShown, now, ttl) {
+  if (!alreadyShown || typeof alreadyShown.entries !== 'function' || typeof alreadyShown.delete !== 'function') return
+  for (const [code, seenAt] of alreadyShown) {
+    if (typeof seenAt !== 'number' || now - seenAt >= ttl) alreadyShown.delete(code)
+  }
+}
+
+/**
+ * How the main app tells the user about one Finder Sync error code.
+ * Notifications use the app's existing permission. Off or denied falls
+ * back to an in-app dialog. The same code is skipped until the short
+ * window expires. An unknown code is not shown.
  */
 export function routeFinderSyncError({
-  message,
+  code,
   notificationsEnabled = false,
   permission = 'denied',
   alreadyShown,
+  now = Date.now(),
+  ttl = FINDER_SYNC_ERROR_SHOWN_TTL_MS,
 } = {}) {
-  const text = finderSyncErrorText(message)
-  if (!text) return { shown: false, channel: 'none', message: '' }
-  if (alreadyShown?.has?.(text)) return { shown: false, channel: 'duplicate', message: text }
+  const message = finderSyncErrorMessage(code)
+  if (!message) return { shown: false, channel: 'none', message: '', code: '' }
+  pruneFinderSyncErrorsShown(alreadyShown, now, ttl)
+  if (alreadyShown?.has?.(code)) return { shown: false, channel: 'duplicate', message, code }
   const notify = notificationsEnabled === true && permission === 'granted'
-  return { shown: true, channel: notify ? 'notification' : 'dialog', message: text }
+  return { shown: true, channel: notify ? 'notification' : 'dialog', message, code }
 }
 
 function pruneFinderSyncRequests(seen, now, ttl) {

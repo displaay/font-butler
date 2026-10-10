@@ -227,5 +227,5 @@ func deliverFinderSyncHandoff(service: String, action: String, paths: [String], 
         showFinderSyncError(finderSyncAgentDisabled)
         return
     }
-        showFinderSyncError(attempt.message)
+    showFinderSyncError(attempt.message)
 }

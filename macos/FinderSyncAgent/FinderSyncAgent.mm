@@ -1,6 +1,7 @@
 #import <Cocoa/Cocoa.h>
 #import <Security/Security.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <mach-o/dyld.h>
 #include <signal.h>
 #include <stdio.h>
@@ -36,6 +37,13 @@ static BOOL g_testFeed = NO;
 static BOOL g_launchedApp = NO;
 static NSString *const kMissingAppMessage =
     @"Font Buttler couldn't be found. Open it once from its new location.";
+static const off_t kPendingErrorMaxBytes = 8192;
+static const NSUInteger kPendingErrorMaxEntries = 5;
+
+static BOOL FinderSyncErrorCodeIsKnown(NSString *code) {
+  return [code isEqualToString:@"missing-app"] || [code isEqualToString:@"not-running"] ||
+         [code isEqualToString:@"login-items"] || [code isEqualToString:@"unknown-action"];
+}
 
 static BOOL GuestMeetsRequirement(audit_token_t token, NSString *requirementString) {
   if (!requirementString.length) return NO;
@@ -137,15 +145,71 @@ static BOOL SendPayload(NSDictionary *payload) {
 }
 
 // The helper is its own app. Posting a notification here would ask for a new
-// permission. The running app presents the error with its own permission.
-// A missing app gets one record in that app's data directory.
-static BOOL ForwardErrorToApp(NSString *message) {
-  if (message.length == 0) return NO;
-  return SendPayload(@{@"error" : message});
+// permission. The running app presents a fixed message for a known code.
+// A missing app gets one code in that app's data directory.
+static BOOL ForwardErrorToApp(NSString *code) {
+  if (!FinderSyncErrorCodeIsKnown(code)) return NO;
+  return SendPayload(@{@"error" : code});
 }
 
-static void WritePendingFinderSyncError(NSString *message) {
-  if (message.length == 0 || message.length > 500) return;
+// O_NOFOLLOW plus fstat. A symlink, a non-regular file, or anything over
+// the cap is ignored. Only known codes are kept, and at most five.
+static NSArray *ReadPendingFinderSyncErrors(const char *filePath) {
+  int fd = open(filePath, O_RDONLY | O_NOFOLLOW);
+  if (fd < 0) return @[];
+  struct stat st;
+  if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size < 0 || st.st_size > kPendingErrorMaxBytes) {
+    close(fd);
+    return @[];
+  }
+  NSMutableData *data = [NSMutableData dataWithLength:(NSUInteger)st.st_size];
+  BOOL ok = st.st_size == 0 || ReadAll(fd, data.mutableBytes, (size_t)st.st_size);
+  close(fd);
+  if (!ok || data.length == 0) return @[];
+  id parsed = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+  NSArray *list = [parsed isKindOfClass:[NSDictionary class]] ? parsed[@"errors"] : nil;
+  if (![list isKindOfClass:[NSArray class]]) return @[];
+  NSMutableArray *errors = [NSMutableArray array];
+  NSMutableSet *seen = [NSMutableSet set];
+  for (id item in list) {
+    if (errors.count >= kPendingErrorMaxEntries) break;
+    if (![item isKindOfClass:[NSDictionary class]]) continue;
+    NSString *code = [item[@"code"] isKindOfClass:[NSString class]] ? item[@"code"] : @"";
+    if (!FinderSyncErrorCodeIsKnown(code) || [seen containsObject:code]) continue;
+    [seen addObject:code];
+    id at = item[@"at"];
+    [errors addObject:@{@"code" : code, @"at" : [at isKindOfClass:[NSNumber class]] ? at : @0}];
+  }
+  return errors;
+}
+
+// The temp file is created 0600, then renamed over the record. There is no
+// chmod after that rename.
+static BOOL WritePendingBytes(const char *filePath, NSData *data) {
+  if (!data || data.length == 0 || data.length > (NSUInteger)kPendingErrorMaxBytes) return NO;
+  char tempPath[PATH_MAX];
+  int formatted = snprintf(tempPath, sizeof(tempPath), "%s.tmp", filePath);
+  if (formatted <= 0 || (size_t)formatted >= sizeof(tempPath)) return NO;
+  unlink(tempPath);
+  int fd = open(tempPath, O_CREAT | O_EXCL | O_NOFOLLOW | O_WRONLY, 0600);
+  if (fd < 0) return NO;
+  if (fchmod(fd, 0600) != 0) {
+    close(fd);
+    unlink(tempPath);
+    return NO;
+  }
+  BOOL ok = WriteAll(fd, data.bytes, data.length);
+  if (ok && fsync(fd) != 0) ok = NO;
+  close(fd);
+  if (!ok || rename(tempPath, filePath) != 0) {
+    unlink(tempPath);
+    return NO;
+  }
+  return YES;
+}
+
+static void WritePendingFinderSyncError(NSString *code) {
+  if (!FinderSyncErrorCodeIsKnown(code)) return;
   NSString *folder = g_testFeed ? @"Font Buttler Test" : @"Font Buttler";
   NSString *dir = [[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support"]
       stringByAppendingPathComponent:folder];
@@ -159,35 +223,23 @@ static void WritePendingFinderSyncError(NSString *message) {
   }
   NSString *file = [dir stringByAppendingPathComponent:@"finder-sync-pending-error.json"];
   const char *filePath = file.fileSystemRepresentation;
-  struct stat fileStat;
-  if (lstat(filePath, &fileStat) == 0 && !S_ISREG(fileStat.st_mode)) return;
-  NSMutableArray *errors = [NSMutableArray array];
-  NSData *existing = [NSData dataWithContentsOfFile:file];
-  if (existing) {
-    id parsed = [NSJSONSerialization JSONObjectWithData:existing options:0 error:nil];
-    NSArray *list = [parsed isKindOfClass:[NSDictionary class]] ? parsed[@"errors"] : nil;
-    if ([list isKindOfClass:[NSArray class]]) {
-      for (id item in list) {
-        if (![item isKindOfClass:[NSDictionary class]]) continue;
-        NSString *prior = [item[@"message"] isKindOfClass:[NSString class]] ? item[@"message"] : @"";
-        if (prior.length == 0) continue;
-        if ([prior isEqualToString:message]) return;
-        [errors addObject:item];
-      }
-    }
+  if (lstat(filePath, &st) == 0 && !S_ISREG(st.st_mode)) return;
+  NSMutableArray *errors = [ReadPendingFinderSyncErrors(filePath) mutableCopy];
+  for (id item in errors) {
+    if ([item[@"code"] isEqualToString:code]) return;
   }
+  if (errors.count >= kPendingErrorMaxEntries) [errors removeObjectAtIndex:0];
   NSTimeInterval millis = floor(NSDate.date.timeIntervalSince1970 * 1000.0);
-  [errors addObject:@{@"message" : message, @"at" : @((long long)millis)}];
+  [errors addObject:@{@"code" : code, @"at" : @((long long)millis)}];
   NSData *data = [NSJSONSerialization dataWithJSONObject:@{@"errors" : errors} options:0 error:nil];
   if (!data) return;
-  [data writeToFile:file atomically:YES];
-  chmod(filePath, 0600);
+  WritePendingBytes(filePath, data);
 }
 
-static void ReportFinderSyncError(void (^reply)(NSString *), NSString *message) {
+static void ReportFinderSyncError(void (^reply)(NSString *), NSString *code, NSString *message) {
   NSLog(@"Finder Sync: %@", message ?: @"");
-  if (message.length && !ForwardErrorToApp(message)) WritePendingFinderSyncError(message);
-  if (reply) reply(message);
+  if (FinderSyncErrorCodeIsKnown(code) && !ForwardErrorToApp(code)) WritePendingFinderSyncError(code);
+  if (reply) reply(message ?: @"");
 }
 
 static BOOL WriteAll(int fd, const void *bytes, size_t length) {
@@ -354,7 +406,7 @@ static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL over
   dispatch_async(self.forwardQueue, ^{
     g_launchedApp = NO;
     if (!known) {
-      ReportFinderSyncError(reply, @"Unknown Finder Sync action.");
+      ReportFinderSyncError(reply, @"unknown-action", @"Unknown Finder Sync action.");
       return;
     }
     BOOL overflow = incoming.count > kFinderSyncMaxFiles;
@@ -377,14 +429,14 @@ static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL over
         launched = YES;
         NSString *failure = LaunchContainingAppOnce();
         if (failure.length) {
-          ReportFinderSyncError(reply, failure);
+          ReportFinderSyncError(reply, @"missing-app", failure);
           return;
         }
       }
       if ([deadline timeIntervalSinceNow] <= 0) break;
       usleep(50 * 1000);
     }
-    ReportFinderSyncError(reply, @"Font Buttler is not running.");
+    ReportFinderSyncError(reply, @"not-running", @"Font Buttler is not running.");
   });
 }
 
