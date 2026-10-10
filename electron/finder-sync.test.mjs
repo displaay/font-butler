@@ -15,12 +15,15 @@ import {
   FINDER_SYNC_MAX_FILES,
   FINDER_SYNC_PRINCIPAL_CLASS,
   FINDER_SYNC_SETTINGS_URL,
+  FINDER_SYNC_SHARED_ROOT,
+  FINDER_SYNC_SYSTEM_FONTS_ROOT,
   FINDER_SYNC_TEAM_ID,
   FINDER_SYNC_TEST_BUNDLE_ID,
   FINDER_SYNC_TOO_LARGE,
   FINDER_SYNC_TOO_MANY_FILES,
   FINDER_SYNC_CHANGED_BEFORE_INSTALL,
   finderSyncAppGroup,
+  finderSyncAppGroupIsTeamPrefixed,
   finderSyncAppexBundlePath,
   finderSyncBundleId,
   finderSyncCodeSigningRequirement,
@@ -110,7 +113,22 @@ test('Finder Sync handoff names one app group and one code-signing requirement p
   assert.equal(finderSyncAppGroup(true), finderSyncMachService(true))
   assert.equal(finderSyncAppGroup(false), `${FINDER_SYNC_TEAM_ID}.group.${FINDER_SYNC_BUNDLE_ID}`)
   assert.equal(finderSyncAppGroup(true), `${FINDER_SYNC_TEAM_ID}.group.${FINDER_SYNC_TEST_BUNDLE_ID}`)
+  assert.equal(finderSyncAppGroupIsTeamPrefixed(finderSyncAppGroup(false)), true)
+  assert.equal(finderSyncAppGroupIsTeamPrefixed(finderSyncAppGroup(true)), true)
+  assert.equal(finderSyncAppGroupIsTeamPrefixed(`group.${FINDER_SYNC_BUNDLE_ID}`), false)
   assert.notEqual(finderSyncAppGroup(false), finderSyncAppGroup(true))
+  const appEntitlements = readRepo('build/entitlements.mac.plist')
+  const appexEntitlements = readRepo('build/entitlements.finder-sync.plist')
+  const releaseGroup = finderSyncAppGroup(false)
+  assert.equal(entitlementTextListsGroup(appEntitlements, releaseGroup), true)
+  assert.equal(entitlementTextListsGroup(appexEntitlements, releaseGroup), true)
+  assert.equal(entitlementTextListsGroup(readRepo('build/entitlements.mac.adhoc.plist'), releaseGroup), true)
+  assert.equal(entitlementTextListsGroup(readRepo('build/entitlements.mac.test-feed.plist'), finderSyncAppGroup(true)), true)
+  assert.equal(entitlementTextListsGroup(readRepo('build/entitlements.mac.adhoc.test-feed.plist'), finderSyncAppGroup(true)), true)
+  for (const plist of [appEntitlements, appexEntitlements]) {
+    assert.doesNotMatch(plist, /<string>group\./)
+    assert.doesNotMatch(plist, /temporary-exception|Group Containers/)
+  }
   const releaseRequirement = finderSyncCodeSigningRequirement(false)
   const testRequirement = finderSyncCodeSigningRequirement(true)
   assert.equal(
@@ -264,10 +282,15 @@ test('Finder Sync appex identity, plist, and swiftc command stay distinct for te
   assert.equal(entitlementTextListsGroup(generated, finderSyncAppGroup(false)), false)
 })
 
-test('Finder Sync monitors home and /Volumes and leaves a disabled or current extension alone', () => {
-  assert.deepEqual(finderSyncMonitorDirectories('/Users/ada'), ['/Users/ada', '/Volumes'])
-  assert.deepEqual(finderSyncMonitorDirectories('/'), ['/Volumes'])
-  assert.deepEqual(finderSyncMonitorDirectories('relative'), ['/Volumes'])
+test('Finder Sync monitors home, /Users/Shared, and /Volumes', () => {
+  assert.equal(FINDER_SYNC_SHARED_ROOT, '/Users/Shared')
+  assert.equal(FINDER_SYNC_SYSTEM_FONTS_ROOT, '/Library/Fonts')
+  assert.deepEqual(finderSyncMonitorDirectories('/Users/ada'), ['/Users/ada', '/Users/Shared', '/Volumes'])
+  assert.deepEqual(finderSyncMonitorDirectories('/'), ['/Users/Shared', '/Volumes'])
+  assert.deepEqual(finderSyncMonitorDirectories('relative'), ['/Users/Shared', '/Volumes'])
+  assert.deepEqual(finderSyncMonitorDirectories('/Users/Shared'), ['/Users/Shared', '/Volumes'])
+  assert.equal(finderSyncMonitorDirectories('/Users/ada').includes('/Library/Fonts'), false)
+  assert.equal(finderSyncMonitorDirectories('/Library/Fonts').includes('/Library/Fonts'), false)
 
   const bundleId = FINDER_SYNC_TEST_BUNDLE_ID
   const current = finderSyncAppexBundlePath('/Applications/Font Buttler Test/Font Buttler.app')
@@ -491,7 +514,10 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   const nativeTest = readRepo('electron/finder-sync-xpc-test.mm')
   const validator = readRepo('electron/finder-sync.mjs')
   assert.match(swift, /fileURLWithPath: "\/Volumes"/)
+  assert.match(swift, /fileURLWithPath: "\/Users\/Shared"/)
   assert.match(swift, /homeDirectoryForCurrentUser/)
+  assert.doesNotMatch(swift, /fileURLWithPath: "\/Library\/Fonts"/)
+  assert.doesNotMatch(swift, /Group Containers/)
   assert.match(swift, /contextualMenuForItems/)
   assert.match(swift, /selectedItemURLs/)
   assert.match(swift, /allSatisfy\(isInstallSelection\)/)

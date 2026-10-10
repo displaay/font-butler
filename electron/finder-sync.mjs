@@ -12,7 +12,9 @@ export const FINDER_SYNC_APP_GROUP_ENTITLEMENT = 'com.apple.security.application
 export const FINDER_SYNC_TEAM_ID = 'A7WWML89LQ'
 export const FINDER_SYNC_SETTINGS_URL =
   'x-apple.systempreferences:com.apple.LoginItems-Settings.extension'
+export const FINDER_SYNC_SHARED_ROOT = '/Users/Shared'
 export const FINDER_SYNC_VOLUMES_ROOT = '/Volumes'
+export const FINDER_SYNC_SYSTEM_FONTS_ROOT = '/Library/Fonts'
 export const FINDER_SYNC_MAX_FILES = 500
 export const FINDER_SYNC_MAX_BYTES = 2 * 1024 * 1024 * 1024
 export const FINDER_SYNC_TOO_MANY_FILES = 'That selection has more than 500 files.'
@@ -31,9 +33,19 @@ export function finderSyncMenuTitle(action, testFeed) {
   return testFeed ? `${base} (Test)` : base
 }
 
-/** App-group id and Mach service. The test build has its own group. */
+/**
+ * App-group id and Mach service. The test build has its own group.
+ * The id is team-prefixed (`A7WWML89LQ.group.…`). macOS 15 asks to
+ * "access data from other apps" when the group is not in that form.
+ * The app entitlements and the appex entitlements list this exact string.
+ * It is Font Buttler's group, not another app's container.
+ */
 export function finderSyncAppGroup(testFeed) {
   return `${FINDER_SYNC_TEAM_ID}.group.${finderSyncBundleId(testFeed)}`
+}
+
+export function finderSyncAppGroupIsTeamPrefixed(group) {
+  return typeof group === 'string' && group.startsWith(`${FINDER_SYNC_TEAM_ID}.group.`) && group.length > `${FINDER_SYNC_TEAM_ID}.group.`.length
 }
 
 export function finderSyncMachService(testFeed) {
@@ -60,13 +72,18 @@ export function finderSyncAppexBundlePath(appPath) {
 }
 
 /**
- * Home and /Volumes. `/` is not monitored. File Provider folders are not added.
- * `home` is ignored when it is not a safe absolute path.
+ * Home, `/Users/Shared`, and `/Volumes`. `/` and `/Library/Fonts` are not
+ * monitored. File Provider folders are not added. `home` is ignored when it
+ * is not a safe absolute path.
  */
 export function finderSyncMonitorDirectories(home) {
   const directories = []
-  if (typeof home === 'string' && home !== '/' && isSafeFinderSyncPath(home)) directories.push(home)
-  directories.push(FINDER_SYNC_VOLUMES_ROOT)
+  if (typeof home === 'string' && home !== '/' && home !== FINDER_SYNC_SYSTEM_FONTS_ROOT && isSafeFinderSyncPath(home)) {
+    directories.push(home)
+  }
+  for (const root of [FINDER_SYNC_SHARED_ROOT, FINDER_SYNC_VOLUMES_ROOT]) {
+    if (!directories.includes(root)) directories.push(root)
+  }
   return directories
 }
 

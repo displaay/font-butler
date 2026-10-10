@@ -10,9 +10,10 @@ import FinderSync
 /// There is no URL scheme and no Apple event: any page could open a URL,
 /// and an open-document event is delivered as coming from Launch Services.
 ///
-/// Home and `/Volumes` are monitored. Dropbox and iCloud Drive are File
-/// Provider domains, and a Finder Sync menu often does not appear there.
-/// Services remain the way to install from those folders.
+/// Home, `/Users/Shared`, and `/Volumes` are monitored. `/Library/Fonts` is
+/// not: installing from a system font folder is not a use case. Dropbox and
+/// iCloud Drive are File Provider domains, and a Finder Sync menu often does
+/// not appear there. Services remain the way to install from those folders.
 private let fontExtensions: Set<String> = ["otf", "ttf", "ttc", "otc", "woff", "woff2"]
 
 @objc protocol FontButtlerFinderSyncHandoff {
@@ -26,8 +27,9 @@ final class FontButtlerFinderSync: FIFinderSync {
     override init() {
         super.init()
         let home = FileManager.default.homeDirectoryForCurrentUser
+        let shared = URL(fileURLWithPath: "/Users/Shared", isDirectory: true)
         let volumes = URL(fileURLWithPath: "/Volumes", isDirectory: true)
-        FIFinderSyncController.default().directoryURLs = [home, volumes]
+        FIFinderSyncController.default().directoryURLs = [home, shared, volumes]
     }
 
     override func menu(for menuKind: FIMenuKind) -> NSMenu? {
