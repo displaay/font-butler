@@ -9,8 +9,6 @@
  * staples the dmg. This module does not store passwords, Apple ID emails, or API keys.
  */
 
-import { finderSyncUrlTypes } from '../electron/finder-sync.mjs'
-
 export const DEVELOPER_ID_IDENTITY = 'DANIEL QUISEK (A7WWML89LQ)'
 export const NOTARY_KEYCHAIN_PROFILE = 'font-butler-notary'
 export const ADHOC_ENTITLEMENTS = 'build/entitlements.mac.adhoc.plist'
@@ -142,14 +140,6 @@ export function applyBuildIdentityResource(build, env, identityFile) {
  * gets its own bundle id and product name so TCC permissions stay off the real app.
  * All of this applies only when `FONT_BUTLER_TEST_FEED_BUILD=1`.
  */
-function withFinderSyncScheme(build) {
-  const mac = { ...(build.mac ?? {}) }
-  const extendInfo = { ...(mac.extendInfo ?? {}) }
-  extendInfo.CFBundleURLTypes = finderSyncUrlTypes(true)
-  mac.extendInfo = extendInfo
-  return { ...build, mac }
-}
-
 export function applyTestFeedMetadata(build, env) {
   if (!testFeedBuildRequested(env)) return { build, error: null }
   const extraMetadata = { ...(build?.extraMetadata ?? {}), fontButlerTestFeed: true }
@@ -165,12 +155,12 @@ export function applyTestFeedMetadata(build, env) {
     extraMetadata.version = version
   }
   return {
-    build: withFinderSyncScheme({
+    build: {
       ...build,
       appId: TEST_FEED_APP_ID,
       productName: TEST_FEED_PRODUCT_NAME,
       extraMetadata,
-    }),
+    },
     error: null,
   }
 }

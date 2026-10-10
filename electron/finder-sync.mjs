@@ -1,12 +1,5 @@
 import path from 'node:path'
-import {
-  FINDER_INSTALL_AS,
-  FINDER_PROTOCOL,
-  FINDER_TEST_PROTOCOL,
-  isClaimedFontPath,
-  isFinderInstallAction,
-  parseFinderInstallUrl,
-} from './finder-install.mjs'
+import { FINDER_INSTALL_AS, isClaimedFontPath, isFinderInstallAction } from './finder-install.mjs'
 
 export const FINDER_SYNC_BUNDLE_ID = 'app.fontbutler.desktop.FinderSync'
 export const FINDER_SYNC_TEST_BUNDLE_ID = 'app.fontbutler.desktop.FinderSync.Test'
@@ -15,12 +8,15 @@ export const FINDER_SYNC_EXTENSION_POINT = 'com.apple.FinderSync'
 export const FINDER_SYNC_APPEX_NAME = 'Font Buttler Finder Sync.appex'
 export const FINDER_SYNC_EXECUTABLE = 'FontButtlerFinderSync'
 export const FINDER_SYNC_ENTITLEMENT = 'com.apple.security.app-sandbox'
+export const FINDER_SYNC_TEAM_ID = 'A7WWML89LQ'
 export const FINDER_SYNC_SETTINGS_URL =
   'x-apple.systempreferences:com.apple.LoginItems-Settings.extension'
 export const FINDER_SYNC_MONITORED_ROOT = '/'
-export const FINDER_SYNC_CLOUD_STORAGE_DIR = 'Library/CloudStorage'
-export const FINDER_SYNC_MOBILE_DOCUMENTS_DIR = 'Library/Mobile Documents'
-export const FINDER_SYNC_ICLOUD_DRIVE_DIR = 'Library/Mobile Documents/com~apple~CloudDocs'
+// 'FBFS' / 'hand', action keyword 'FBAc', sender audit token attribute 'tokn'.
+export const FINDER_SYNC_EVENT_CLASS = 0x46424653
+export const FINDER_SYNC_EVENT_ID = 0x68616e64
+export const FINDER_SYNC_ACTION_KEYWORD = 0x46424163
+export const FINDER_SYNC_SENDER_AUDIT_TOKEN = 0x746f6b6e
 
 const MAX_PATH_LENGTH = 4096
 
@@ -28,22 +24,9 @@ export function finderSyncBundleId(testFeed) {
   return testFeed ? FINDER_SYNC_TEST_BUNDLE_ID : FINDER_SYNC_BUNDLE_ID
 }
 
-export function finderSyncProtocol(testFeed) {
-  return testFeed ? FINDER_TEST_PROTOCOL : FINDER_PROTOCOL
-}
-
 export function finderSyncMenuTitle(action, testFeed) {
   const base = action === FINDER_INSTALL_AS ? 'Install as…' : 'Install'
   return testFeed ? `${base} (Test)` : base
-}
-
-export function finderSyncUrlTypes(testFeed) {
-  return [
-    {
-      CFBundleURLName: testFeed ? 'Font Buttler Test Finder Install' : 'Font Buttler Finder Install',
-      CFBundleURLSchemes: [finderSyncProtocol(testFeed)],
-    },
-  ]
 }
 
 export function finderSyncAppexBundlePath(appPath) {
@@ -51,55 +34,40 @@ export function finderSyncAppexBundlePath(appPath) {
 }
 
 /**
- * Parse the URL the Finder Sync extension opens.
- * Install and Install as… only. Link to … stays on the Services channel.
- * A test build accepts only font-butler-test, so it cannot take a release handoff.
- * The returned paths are the selection and nothing else.
+ * The appex may hand off only when its signature is valid, it is not ad-hoc,
+ * the team is Font Buttler's, and the bundle ID is this build's appex.
+ * A release app refuses the test appex, and a test app refuses the release appex.
+ * A URL is not a sender.
  */
-export function parseFinderSyncChannel(rawUrl, { testFeed = false } = {}) {
-  if (typeof rawUrl !== 'string' || !rawUrl.startsWith(`${finderSyncProtocol(testFeed)}:`)) return null
-  const parsed = parseFinderInstallUrl(rawUrl)
-  if (!parsed || !isFinderInstallAction(parsed.action)) return null
-  return { action: parsed.action, paths: [...parsed.paths] }
+export function finderSyncSenderAccepted(sender, { testFeed = false } = {}) {
+  if (!sender || typeof sender !== 'object') return false
+  if (sender.valid !== true) return false
+  if (sender.adhoc === true) return false
+  if (sender.teamId !== FINDER_SYNC_TEAM_ID) return false
+  if (sender.bundleId !== finderSyncBundleId(testFeed)) return false
+  return true
 }
 
-/**
- * Folders the extension should monitor.
- * `/` covers local disks. File Provider domains (Dropbox, iCloud Drive) are
- * not always treated as descendants of `/`, so the home directory, each
- * `~/Library/CloudStorage` child, `~/Library/Mobile Documents`, and iCloud
- * Drive are listed too. Missing paths are omitted. This does not walk fonts.
- */
-export function finderSyncMonitorDirectories({ home, cloudChildren = [], exists } = {}) {
-  const homePath = typeof home === 'string' ? home.replace(/\/+$/, '') : ''
-  const homeParts = homePath.split('/').slice(1)
-  const safeHome =
-    homePath.startsWith('/') &&
-    homePath !== '/' &&
-    homeParts.length > 0 &&
-    !homeParts.some((part) => part === '' || part === '.' || part === '..')
-  const candidates = [FINDER_SYNC_MONITORED_ROOT]
-  if (safeHome) {
-    candidates.push(homePath)
-    candidates.push(`${homePath}/${FINDER_SYNC_CLOUD_STORAGE_DIR}`)
-    candidates.push(`${homePath}/${FINDER_SYNC_MOBILE_DOCUMENTS_DIR}`)
-    candidates.push(`${homePath}/${FINDER_SYNC_ICLOUD_DRIVE_DIR}`)
-    for (const child of cloudChildren) {
-      if (typeof child !== 'string') continue
-      const name = child.trim()
-      if (!name || name.includes('/') || name.includes('\0') || name === '.' || name === '..') continue
-      candidates.push(`${homePath}/${FINDER_SYNC_CLOUD_STORAGE_DIR}/${name}`)
-    }
-  }
+export function acceptFinderSyncHandoff(payload, options = {}) {
+  const action = payload?.action
+  const paths = []
   const seen = new Set()
-  const directories = []
-  for (const directory of candidates) {
-    if (seen.has(directory)) continue
-    seen.add(directory)
-    if (typeof exists === 'function' && directory !== FINDER_SYNC_MONITORED_ROOT && !exists(directory)) continue
-    directories.push(directory)
+  for (const raw of payload?.paths ?? []) {
+    if (typeof raw !== 'string') continue
+    const filePath = raw.trim()
+    if (!filePath || seen.has(filePath)) continue
+    seen.add(filePath)
+    paths.push(filePath)
   }
-  return directories
+  if (!isFinderInstallAction(action)) return { ok: false, reason: 'action' }
+  if (!finderSyncSenderAccepted(payload?.sender, options)) return { ok: false, reason: 'sender' }
+  if (paths.length === 0) return { ok: false, reason: 'paths' }
+  return { ok: true, action, paths }
+}
+
+/** Finder Sync watches the local root only. File Provider folders are not added. */
+export function finderSyncMonitorDirectories() {
+  return [FINDER_SYNC_MONITORED_ROOT]
 }
 
 /**

@@ -17,6 +17,12 @@ export async function afterPack(context) {
     if (!compiled.ok && !compiled.skipped) {
       console.warn('Finder services addon was not compiled:', compiled.reason)
     }
+    const { compileFinderSyncReceiverAddon } = await import('./build-finder-sync-receiver.mjs')
+    const receiverOut = path.join(appBundle, 'Contents/Resources/app.asar.unpacked/electron/finder-sync-receiver.node')
+    const receiver = compileFinderSyncReceiverAddon({ out: receiverOut })
+    if (!receiver.ok && !receiver.skipped) {
+      throw new Error(receiver.reason || 'Finder Sync receiver was not compiled.')
+    }
     const { compileSessionFontsAddon } = await import('./build-session-fonts.mjs')
     const sessionOut = path.join(appBundle, 'Contents/Resources/app.asar.unpacked/electron/session-fonts.node')
     const session = compileSessionFontsAddon({ out: sessionOut })

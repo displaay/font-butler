@@ -1,28 +1,30 @@
 import Cocoa
+import CoreServices
 import FinderSync
 
 /// Finder Sync extension for Font Buttler.
 ///
-/// This process never copies, activates, or installs a font. It only asks the
-/// containing app to open a font-butler URL that lists the files and folders
-/// the user selected. A test build uses font-butler-test and its own menu
-/// titles, and opens the .app that contains this appex, so it cannot hand
-/// the selection to the release app.
+/// This process never copies, activates, or installs a font. It asks
+/// NSWorkspace to open the selected file URLs in the .app that contains
+/// this appex, and attaches an Apple event that says Install or Install as….
+/// The main app installs only after it has checked that sender. There is no
+/// URL scheme: any page could open one.
 ///
-/// `/` is monitored, and so are the home directory plus the File Provider
-/// roots Finder does not always treat as descendants of `/`:
-/// `~/Library/CloudStorage` (and each child, such as Dropbox), `~/Library/Mobile Documents`,
-/// and `~/Library/Mobile Documents/com~apple~CloudDocs` (iCloud Drive).
-/// Whether Dropbox's own Finder Sync extension still hides this menu inside
-/// its folder can only be confirmed in Finder on a Mac.
+/// Only `/` is monitored. Dropbox and iCloud Drive are File Provider domains,
+/// and a Finder Sync menu often does not appear there. Services remain the
+/// way to install from those folders.
 private let fontExtensions: Set<String> = ["otf", "ttf", "ttc", "otc", "woff", "woff2"]
+
+private let finderSyncEventClass = AEEventClass(0x46424653) // 'FBFS'
+private let finderSyncEventID = AEEventID(0x68616e64) // 'hand'
+private let finderSyncActionKeyword = AEKeyword(0x46424163) // 'FBAc'
+private let finderSyncDirectObject = AEKeyword(0x2d2d2d2d) // keyDirectObject
 
 @objc(FontButtlerFinderSync)
 final class FontButtlerFinderSync: FIFinderSync {
     override init() {
         super.init()
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        FIFinderSyncController.default().directoryURLs = finderSyncDirectoryURLs(home: home)
+        FIFinderSyncController.default().directoryURLs = [URL(fileURLWithPath: "/", isDirectory: true)]
     }
 
     override func menu(for menuKind: FIMenuKind) -> NSMenu? {
@@ -60,30 +62,17 @@ final class FontButtlerFinderSync: FIFinderSync {
         handOff(action: "install-as")
     }
 
-    /// Pass the current Finder selection to the containing app.
+    /// Open the selection in the containing app.
     /// `withApplicationAt` launches that app when it is not running.
-    /// A missing or moved bundle must not crash this process, and the
-    /// fallback uses this build's URL scheme only.
+    /// A missing bundle does nothing. This process does not fall back to a URL.
     private func handOff(action: String) {
         let selected = FIFinderSyncController.default().selectedItemURLs() ?? []
-        let paths = selected.filter(isInstallSelection).map(\.path)
-        guard !paths.isEmpty else { return }
-        let scheme = (Bundle.main.object(forInfoDictionaryKey: "FontButtlerURLScheme") as? String) ?? "font-butler"
-        guard let url = finderSyncURL(scheme: scheme, action: action, paths: paths) else { return }
+        let urls = selected.filter { isInstallSelection($0) && $0.isFileURL }
+        guard !urls.isEmpty, let appURL = parentAppURL() else { return }
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
-        let openByScheme = {
-            NSWorkspace.shared.open(url, configuration: configuration) { _, _ in }
-        }
-        guard let appURL = parentAppURL() else {
-            openByScheme()
-            return
-        }
-        NSWorkspace.shared.open([url], withApplicationAt: appURL, configuration: configuration) { _, error in
-            if error != nil {
-                openByScheme()
-            }
-        }
+        configuration.appleEvent = finderSyncAppleEvent(action: action, urls: urls)
+        NSWorkspace.shared.open(urls, withApplicationAt: appURL, configuration: configuration) { _, _ in }
     }
 }
 
@@ -106,15 +95,24 @@ private func menuTitle(key: String, fallback: String) -> String {
     return trimmed.isEmpty ? fallback : trimmed
 }
 
-/// `font-butler://finder/install?p=/absolute/file.otf`
-/// A test build uses `font-butler-test` so Launch Services will not open the release app.
-func finderSyncURL(scheme: String, action: String, paths: [String]) -> URL? {
-    var components = URLComponents()
-    components.scheme = scheme
-    components.host = "finder"
-    components.path = "/" + action
-    components.queryItems = paths.map { URLQueryItem(name: "p", value: $0) }
-    return components.url
+/// Apple event 'FBFS' / 'hand'. 'FBAc' is "install" or "install-as".
+/// The direct object is the file list. The main app reads the sender audit token.
+func finderSyncAppleEvent(action: String, urls: [URL]) -> NSAppleEventDescriptor {
+    let event = NSAppleEventDescriptor(
+        eventClass: finderSyncEventClass,
+        eventID: finderSyncEventID,
+        targetDescriptor: nil,
+        returnID: AEReturnID(-1),
+        transactionID: AETransactionID(0)
+    )
+    event.setDescriptor(NSAppleEventDescriptor(string: action), forKeyword: finderSyncActionKeyword)
+    let list = NSAppleEventDescriptor.list()
+    for url in urls {
+        guard let item = NSAppleEventDescriptor(fileURL: url) else { continue }
+        list.insert(item, at: list.numberOfItems + 1)
+    }
+    event.setDescriptor(list, forKeyword: finderSyncDirectObject)
+    return event
 }
 
 /// The `.app` that contains this `.appex`, from the bundle URL of this process.
@@ -128,33 +126,4 @@ func parentAppURL(bundleURL: URL = Bundle.main.bundleURL) -> URL? {
         url = parent
     }
     return nil
-}
-
-/// `/`, the home directory, CloudStorage and its children, Mobile Documents, and iCloud Drive.
-/// Paths that are not there are skipped. Listing CloudStorage must not crash the extension.
-func finderSyncDirectoryURLs(home: URL, fileManager: FileManager = .default) -> Set<URL> {
-    let cloud = home.appendingPathComponent("Library/CloudStorage", isDirectory: true)
-    let mobile = home.appendingPathComponent("Library/Mobile Documents", isDirectory: true)
-    let icloud = mobile.appendingPathComponent("com~apple~CloudDocs", isDirectory: true)
-    var candidates = [
-        URL(fileURLWithPath: "/", isDirectory: true),
-        home,
-        cloud,
-        mobile,
-        icloud,
-    ]
-    if let children = try? fileManager.contentsOfDirectory(
-        at: cloud,
-        includingPropertiesForKeys: nil,
-        options: [.skipsHiddenFiles]
-    ) {
-        candidates.append(contentsOf: children)
-    }
-    var urls = Set<URL>()
-    for url in candidates {
-        if url.path == "/" || fileManager.fileExists(atPath: url.path) {
-            urls.insert(url)
-        }
-    }
-    return urls
 }
