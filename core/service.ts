@@ -360,6 +360,15 @@ function writeUploadExclusive(dir: string, filename: string, data: Buffer): stri
   throw new Error(`Could not save ${filename}`)
 }
 
+/** Late Don't Allow uses this notice for both the probe and a real logout. */
+export function emitLateLogoutFailure(result: { message?: string }): void {
+  emitNotice({
+    kind: 'warning',
+    source: 'logout',
+    message: result.message || LOGOUT_FAILED_MESSAGE,
+  })
+}
+
 export class FontButlerService {
   readonly paths: AppPaths
   private autoReinstallTimer: ReturnType<typeof setTimeout> | null = null
@@ -1506,11 +1515,7 @@ export class FontButlerService {
     // requestMacLogout keeps a single in-flight osascript, so a second click joins it.
     return requestMacLogout(
       (result) => {
-        emitNotice({
-          kind: 'warning',
-          source: 'logout',
-          message: result.message || LOGOUT_FAILED_MESSAGE,
-        })
+        emitLateLogoutFailure(result)
       },
       (message) => {
         emitNotice({
@@ -1538,11 +1543,7 @@ export class FontButlerService {
   }> {
     return requestLogoutProbe(loadBuildIdentity(), {
       onLateFailure: (result) => {
-        emitNotice({
-          kind: 'warning',
-          source: 'logout',
-          message: result.message || LOGOUT_FAILED_MESSAGE,
-        })
+        emitLateLogoutFailure(result)
       },
       onStillWaiting: (message) => {
         emitNotice({

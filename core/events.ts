@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import { logMain } from './main-log.ts'
 import type { Notice, ServiceEvent } from './types.ts'
 
 const bus = new EventEmitter()
@@ -14,6 +15,15 @@ export function emitEvent(event: ServiceEvent): void {
   ) {
     pendingWatchFailures.push(event.notice)
     if (pendingWatchFailures.length > 50) pendingWatchFailures.shift()
+  }
+  if (event.type === 'notice' && event.notice.source === 'logout') {
+    const listeners = bus.listenerCount('event')
+    logMain(
+      'install',
+      listeners === 0
+        ? 'logout late failure notice emitted listeners=0'
+        : `logout late failure notice emitted listeners=${listeners}`,
+    )
   }
   bus.emit('event', event)
 }

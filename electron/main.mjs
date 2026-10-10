@@ -1044,11 +1044,17 @@ async function confirmFontCacheClear() {
   return choice.response === 0
 }
 
-function showAppMessageBox(options) {
-  return showLogoutMessageBox(dialog, mainWindow, options, {
+function logoutDialogHooks() {
+  return {
     showMainWindow,
     getWindow: () => mainWindow,
-  })
+    isAppHidden: () => typeof app.isHidden === 'function' && app.isHidden(),
+    log: (message) => logDebug('install', message),
+  }
+}
+
+function showAppMessageBox(options) {
+  return showLogoutMessageBox(dialog, mainWindow, options, logoutDialogHooks())
 }
 
 async function offerLogoutAfterFontCacheClear(pathname) {
@@ -1084,10 +1090,7 @@ async function offerLogoutAfterFontCacheClear(pathname) {
       message: result && result.message,
       getParent: () => mainWindow,
       showDialog: (parent, options) =>
-        showLogoutMessageBox(dialog, parent, options, {
-          showMainWindow,
-          getWindow: () => mainWindow,
-        }),
+        showLogoutMessageBox(dialog, parent, options, logoutDialogHooks()),
       notify: () =>
         maybeNotify({
           kind: 'warning',
@@ -1600,16 +1603,11 @@ function handleApiEvent(event) {
       presentLogoutNotice({
         notice: event.notice,
         getWindow: () => mainWindow,
+        log: (message) => logDebug('install', message),
         showMessageBox: (parent, options) =>
-          showLogoutMessageBox(dialog, parent, options, {
-            showMainWindow,
-            getWindow: () => mainWindow,
-          }),
+          showLogoutMessageBox(dialog, parent, options, logoutDialogHooks()),
         showWaitingNotice: (parent, options) =>
-          showLogoutMessageBox(dialog, parent, options, {
-            showMainWindow,
-            getWindow: () => mainWindow,
-          }),
+          showLogoutMessageBox(dialog, parent, options, logoutDialogHooks()),
         notify(notice) {
           try {
             return maybeNotify(notice)

@@ -1,6 +1,18 @@
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
 import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { test } from 'node:test'
+import { setBuildIdentityCandidatesForTests } from '../core/build-identity.ts'
+import {
+  logoutResultFromExecError,
+  resetLogoutProbe,
+  resetSharedMacLogout,
+  setMacLogoutExecForTests,
+  shareMacLogout,
+} from '../core/caches.ts'
+import { onEvent } from '../core/events.ts'
+import { emitLateLogoutFailure, FontButlerService } from '../core/service.ts'
 import {
   LOGOUT_CANCELLED as SHARED_LOGOUT_CANCELLED,
   LOGOUT_FAILED_MESSAGE,
@@ -222,7 +234,7 @@ test('a wait notice is not a failure dialog, and a later -1743 opens the failure
   assert.equal(logoutWaitingNoticeOptions().detail, LOGOUT_STILL_WAITING_MESSAGE)
 })
 
-test('a hidden or minimized window is shown before the logout box is parented', () => {
+test('a hidden or minimized window is shown and the logout box stays unparented', () => {
   resetLogoutDialogSession()
   const options = logoutFailedDialogOptions(LOGOUT_FAILED_MESSAGE)
   const dialogApi = {
@@ -258,8 +270,8 @@ test('a hidden or minimized window is shown before the logout box is parented', 
     })
     assert.equal(revealed, 1, mode)
     assert.equal(dialogApi.calls.length, 1, mode)
-    assert.equal(dialogApi.calls[0][0], win, mode)
-    assert.equal(dialogApi.calls[0][1].title, "Logging out didn't happen")
+    assert.equal(dialogApi.calls[0].length, 1, mode)
+    assert.equal(dialogApi.calls[0][0].title, "Logging out didn't happen")
   }
 
   for (const mode of ['hidden', 'minimized']) {
@@ -283,6 +295,155 @@ test('a hidden or minimized window is shown before the logout box is parented', 
   showLogoutMessageBox(dialogApi, bare, options)
   assert.equal(dialogApi.calls[0][0], bare)
   assert.equal(visibleMessageBoxParent(bare), bare)
+
+  const cmdH = {
+    isDestroyed: () => false,
+    isVisible: () => true,
+    isMinimized: () => false,
+  }
+  dialogApi.calls = []
+  let revealed = 0
+  showLogoutMessageBox(dialogApi, cmdH, options, {
+    showMainWindow() {
+      revealed += 1
+    },
+    isAppHidden: () => true,
+  })
+  assert.equal(revealed, 1)
+  assert.equal(dialogApi.calls.length, 1)
+  assert.equal(dialogApi.calls[0].length, 1)
+  assert.equal(dialogApi.calls[0][0].title, "Logging out didn't happen")
+})
+
+test('a hidden window shows one logout failure box for a late probe or release denial', async () => {
+  const serviceSource = fs.readFileSync(new URL('../core/service.ts', import.meta.url), 'utf8')
+  assert.equal(serviceSource.split('emitLateLogoutFailure(result)').length - 1, 2)
+  const denied = { stderr: 'osascript is not allowed to send keystrokes. (-1743)' }
+
+  async function oneHiddenFailureBox(run) {
+    resetLogoutDialogSession()
+    const calls = []
+    const notices = []
+    const win = {
+      isDestroyed: () => false,
+      isVisible: () => false,
+      isMinimized: () => false,
+    }
+    const dialogApi = {
+      showMessageBox(...args) {
+        calls.push(args)
+      },
+    }
+    const hooks = {
+      showMainWindow() {},
+      getWindow: () => win,
+      log(message) {
+        notices.push(message)
+      },
+    }
+    let boxes = 0
+    const showBox = (parent, options) => {
+      boxes += 1
+      return showLogoutMessageBox(dialogApi, parent, options, hooks)
+    }
+    const stop = onEvent((event) => {
+      if (!event || event.type !== 'notice') return
+      notices.push(event.notice.source)
+      presentLogoutNotice({
+        notice: event.notice,
+        getWindow: () => win,
+        log(message) {
+          notices.push(message)
+        },
+        showMessageBox: showBox,
+        showWaitingNotice: showBox,
+        notify: () => false,
+      })
+    })
+    try {
+      await run()
+      assert.equal(boxes, 1)
+      assert.equal(calls.length, 1)
+      assert.equal(calls[0].length, 1)
+      assert.equal(calls[0][0].title, "Logging out didn't happen")
+      assert.equal(
+        notices.filter((item) => item === 'logout').length,
+        1,
+      )
+      assert.equal(notices.includes('logout-probe'), false)
+      assert.equal(notices.includes('logout notice received source=logout'), true)
+      assert.equal(notices.includes('logout dialog shown unparented; window hidden'), true)
+    } finally {
+      stop()
+      resetLogoutDialogSession()
+    }
+  }
+
+  const identityDir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-identity-'))
+  const identityFile = path.join(identityDir, 'build-identity.json')
+  fs.writeFileSync(identityFile, '{"testBuild":true}\n')
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-logout-hidden-'))
+  const paths = {
+    dataRoot,
+    catalogPath: path.join(dataRoot, 'catalog.json'),
+    settingsPath: path.join(dataRoot, 'settings.json'),
+    apiTokenPath: path.join(dataRoot, 'token'),
+    installDir: path.join(dataRoot, 'install'),
+    disabledDir: path.join(dataRoot, 'disabled'),
+    sourcesDir: path.join(dataRoot, 'sources'),
+    uploadsDir: path.join(dataRoot, 'uploads'),
+    systemCachePath: path.join(dataRoot, 'system.json'),
+    seedDir: path.join(dataRoot, 'seed'),
+    userFontsDir: path.join(dataRoot, 'user-fonts'),
+    computerFontsDir: path.join(dataRoot, 'computer-fonts'),
+    systemFontsDir: path.join(dataRoot, 'system-fonts'),
+    supplementalFontsDir: path.join(dataRoot, 'supplemental'),
+    officeFontCacheDir: path.join(dataRoot, 'office-cache'),
+    atsCacheDir: path.join(dataRoot, 'ats-cache'),
+    adobeFontsDir: path.join(dataRoot, 'adobe-fonts'),
+  }
+  setBuildIdentityCandidatesForTests([identityFile])
+  let finishProbe = () => {}
+  setMacLogoutExecForTests((_file, _args, callback) => {
+    finishProbe = () => callback(denied)
+    return { unref() {} }
+  })
+  resetLogoutProbe()
+  const service = new FontButlerService(paths)
+  try {
+    await oneHiddenFailureBox(async () => {
+      const acceptedPromise = service.requestLogoutProbe()
+      await new Promise((resolve) => setTimeout(resolve, 1100))
+      const accepted = await acceptedPromise
+      assert.equal(accepted.requested, true)
+      finishProbe()
+    })
+
+    await oneHiddenFailureBox(async () => {
+      resetSharedMacLogout()
+      let finishRelease = () => {}
+      const acceptedPromise = shareMacLogout(
+        (report) => {
+          finishRelease = () => report(logoutResultFromExecError(denied))
+        },
+        emitLateLogoutFailure,
+        undefined,
+        20,
+      )
+      await new Promise((resolve) => setTimeout(resolve, 40))
+      const accepted = await acceptedPromise
+      assert.equal(accepted.requested, true)
+      finishRelease()
+    })
+  } finally {
+    service.dispose()
+    setMacLogoutExecForTests(null)
+    setBuildIdentityCandidatesForTests(null)
+    resetLogoutProbe()
+    resetSharedMacLogout()
+    fs.rmSync(identityDir, { recursive: true, force: true })
+    fs.rmSync(dataRoot, { recursive: true, force: true })
+  }
 })
 
 test('the main process shows the waiting box while a window is open', () => {

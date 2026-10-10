@@ -620,7 +620,9 @@ export function requestLogoutProbe(
     {
       stillWaitingAfterMs: hooks.stillWaitingAfterMs ?? LOGOUT_STILL_WAITING_MS,
       onStillWaiting: hooks.onStillWaiting,
-      onLateSuccess: () => noteAllowed(),
+      onLateSuccess: (result) => {
+        if (result.requested === true && result.probeAllowed === true) noteAllowed()
+      },
     },
   )
   const flight: LogoutFlight = { accepted, finished }

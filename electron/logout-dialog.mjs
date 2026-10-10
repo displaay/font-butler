@@ -108,21 +108,31 @@ export function logoutWaitingNoticeOptions(message) {
   }
 }
 
+function logoutBoxHiddenReason(parent, hooks) {
+  const live = liveMessageBoxParent(parent)
+  if (!live) return 'no window'
+  if (typeof hooks?.isAppHidden === 'function' && hooks.isAppHidden() === true) return 'app hidden'
+  if (typeof live.isMinimized === 'function' && live.isMinimized() === true) return 'window minimized'
+  if (typeof live.isVisible === 'function' && live.isVisible() === false) return 'window hidden'
+  return null
+}
+
 /**
- * Parent only a window the user can see. A hidden (Cmd-H) or minimized window
- * is revealed first; if it is still not visible, the box is unparented so it
- * cannot become an invisible sheet. No window stays unparented.
+ * Parent only a window the user can see. Cmd-H hides the app while
+ * `isVisible()` stays true, so an app-hidden, hidden, or minimized window
+ * is shown and the box stays unparented. A sheet on that window never appears.
  */
 export function showLogoutMessageBox(dialogApi, parent, options, hooks) {
-  const visible = visibleMessageBoxParent(parent)
-  if (visible) return dialogApi.showMessageBox(visible, options)
+  const reason = logoutBoxHiddenReason(parent, hooks)
+  const log = (message) => hooks?.log?.(message)
+  if (!reason) {
+    log('logout dialog shown parented')
+    return dialogApi.showMessageBox(parent, options)
+  }
   if (liveMessageBoxParent(parent) && typeof hooks?.showMainWindow === 'function') {
     hooks.showMainWindow()
-    const revealed = visibleMessageBoxParent(
-      typeof hooks.getWindow === 'function' ? hooks.getWindow() : parent,
-    )
-    if (revealed) return dialogApi.showMessageBox(revealed, options)
   }
+  log(`logout dialog shown unparented; ${reason}`)
   return dialogApi.showMessageBox(options)
 }
 
@@ -162,27 +172,45 @@ export function presentLogoutNotice({
   showMessageBox,
   showWaitingNotice,
   notify,
+  log,
 }) {
-  if (!notice || typeof notice !== 'object') return
+  const note = (message) => log?.(message)
+  if (!notice || typeof notice !== 'object') {
+    note('logout dialog skipped; notice missing')
+    return
+  }
+  note(`logout notice received source=${notice.source || 'none'}`)
   const parent = liveMessageBoxParent(typeof getWindow === 'function' ? getWindow() : null)
   if (notice.source === 'logout-probe') {
     showWaitingNotice(parent, logoutProbeWouldStartDialogOptions())
     return
   }
   if (notice.source === 'logout-waiting') {
-    if (logoutFailureDialogShown) return
+    if (logoutFailureDialogShown) {
+      note('logout dialog skipped; failure dialog already shown')
+      return
+    }
     let shown = false
     try {
       shown = notify?.(notice) === true
     } catch {
       shown = false
     }
-    if (shown) return
+    if (shown) {
+      note('logout dialog skipped; notification delivered')
+      return
+    }
     showWaitingNotice(parent, logoutWaitingNoticeOptions(notice.message))
     return
   }
-  if (notice.source !== 'logout') return
-  if (logoutFailureDialogShown) return
+  if (notice.source !== 'logout') {
+    note(`logout dialog skipped; source=${notice.source || 'none'}`)
+    return
+  }
+  if (logoutFailureDialogShown) {
+    note('logout dialog skipped; failure dialog already shown')
+    return
+  }
   logoutFailureDialogShown = true
   showMessageBox(parent, logoutFailedDialogOptions(notice.message))
   try {
