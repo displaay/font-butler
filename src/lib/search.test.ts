@@ -86,4 +86,7 @@ test('operationMatchesQuery matches family, action, and item labels', () => {
   assert.equal(operationMatchesQuery(operation, 'install'), true)
   assert.equal(operationMatchesQuery(operation, 'zzz'), false)
   assert.equal(operationMatchesQuery(operation, ''), true)
+  assert.equal(operationMatchesQuery({ ...operation, trigger: 'watch' }, 'automatic'), true)
+  assert.equal(operationMatchesQuery({ ...operation, trigger: 'watch' }, 'watch'), true)
+  assert.equal(operationMatchesQuery({ ...operation, trigger: 'manual' }, 'automatic'), false)
 })

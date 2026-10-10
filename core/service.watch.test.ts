@@ -8,6 +8,7 @@ import { onEvent } from './events.ts'
 import { noopFontNative, setFontNative } from './native.ts'
 import { fingerprintFile } from './fingerprint.ts'
 import type { AppPaths } from './paths.ts'
+import { isBackgroundActivityTrigger } from './operations.ts'
 import { FontButlerService } from './service.ts'
 import { canAutomateUpdates, effectiveUpdatePolicy } from './state.ts'
 import type { CatalogEntry } from './types.ts'
@@ -209,6 +210,11 @@ test('turning on auto-reinstall installs fonts that already have source updates'
     assert.ok(after)
     assert.equal(after.status, 'installed')
     assert.notEqual(after.installedSnapshotMtimeMs, snapshot)
+    const operation = service.listActivity().find((item) => item.action === 'reinstall')
+    assert.ok(operation)
+    assert.equal(operation.trigger, 'watch')
+    assert.equal(operation.unread, true)
+    assert.equal(isBackgroundActivityTrigger(operation.trigger), true)
   } finally {
     service.dispose()
     await closeAllWatchers()
@@ -512,6 +518,7 @@ test('folder auto-reinstall on still reinstalls when the global switch is off', 
   const font = path.join(inbox, 'Follow.ttf')
   writeTestFont(font, 'Follow', 'Follow-Regular')
   const service = new FontButlerService(paths)
+  const logs = captureLogs()
   try {
     await service.updateSettings({
       autoReinstallOnUpdate: false,
@@ -533,12 +540,165 @@ test('folder auto-reinstall on still reinstalls when the global switch is off', 
       return !fs.readFileSync(entry.installedPath).equals(before)
     })
     assert.equal(after.status, 'installed')
+    const operation = service.listActivity().find((item) => item.action === 'reinstall')
+    assert.ok(operation)
+    assert.equal(operation.trigger, 'watch')
+    assert.notEqual(operation.trigger, 'manual')
+    assert.equal(operation.unread, true)
+    assert.equal(isBackgroundActivityTrigger(operation.trigger), true)
+    assert.ok(
+      logs.lines.some((line) => line === `auto-reinstall fired ids=${added.id} trigger=watch`),
+    )
+    assert.ok(logs.lines.some((line) => line === `reinstall id=${added.id} trigger=watch`))
   } finally {
+    logs.restore()
     service.dispose()
     await closeAllWatchers()
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
 })
+
+test('several watch-folder updates record one automatic reinstall', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  const firstFont = path.join(inbox, 'BatchA.ttf')
+  const secondFont = path.join(inbox, 'BatchB.ttf')
+  writeTestFont(firstFont, 'BatchA', 'BatchA-Regular')
+  writeTestFont(secondFont, 'BatchB', 'BatchB-Regular')
+  const service = new FontButlerService(paths)
+  const logs = captureLogs()
+  try {
+    await service.updateSettings({
+      autoReinstallOnUpdate: false,
+      onboardingCompleted: true,
+    })
+    const configured = await service.configureFolder({ root: inbox })
+    await service.startWatching(configured.folder.id)
+    const first = service.listCatalog().find((entry) => entry.faces[0]?.familyName === 'BatchA')
+    const second = service.listCatalog().find((entry) => entry.faces[0]?.familyName === 'BatchB')
+    assert.ok(first?.installedPath)
+    assert.ok(second?.installedPath)
+    const firstBytes = fs.readFileSync(first.installedPath)
+    const secondBytes = fs.readFileSync(second.installedPath)
+    writeTestFont(firstFont, 'BatchA', 'BatchA-Regular', { version: 'Version 2.000' })
+    writeTestFont(secondFont, 'BatchB', 'BatchB-Regular', { version: 'Version 2.000' })
+    enqueueSourceStatusRefresh(paths, firstFont)
+    enqueueSourceStatusRefresh(paths, secondFont)
+    await waitForEntry(service, first.id, (entry) => {
+      if (entry.status !== 'installed' || !entry.installedPath) return false
+      return !fs.readFileSync(entry.installedPath).equals(firstBytes)
+    })
+    await waitForEntry(service, second.id, (entry) => {
+      if (entry.status !== 'installed' || !entry.installedPath) return false
+      return !fs.readFileSync(entry.installedPath).equals(secondBytes)
+    })
+    const operations = service.listActivity().filter((item) => item.action === 'reinstall')
+    assert.equal(operations.length, 1)
+    assert.equal(operations[0]?.trigger, 'watch')
+    assert.equal(operations[0]?.unread, true)
+    assert.equal(isBackgroundActivityTrigger(operations[0]!.trigger), true)
+    assert.equal(operations[0]?.items.filter((item) => item.outcome === 'succeeded').length, 2)
+    const fired = logs.lines.find((line) => line.startsWith('auto-reinstall fired ids='))
+    assert.equal(fired, `auto-reinstall fired ids=${first.id},${second.id} trigger=watch`)
+    assert.ok(
+      logs.lines.some((line) => line === `reinstall ids=${first.id},${second.id} trigger=watch`),
+    )
+  } finally {
+    logs.restore()
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('a user-clicked reinstall still records trigger manual', async () => {
+  const paths = tempPaths()
+  const font = path.join(paths.dataRoot, 'Clicked.ttf')
+  writeTestFont(font, 'Clicked', 'Clicked-Regular')
+  const service = new FontButlerService(paths)
+  const logs = captureLogs()
+  try {
+    await service.init()
+    const imported = await service.importPaths([font])
+    const entry = imported.entries[0]
+    assert.ok(entry)
+    await service.install(entry.id)
+    await service.reinstall(entry.id)
+    const single = service.listActivity().find((item) => item.action === 'reinstall')
+    assert.ok(single)
+    assert.equal(single.trigger, 'manual')
+    assert.equal(single.unread, false)
+    assert.equal(isBackgroundActivityTrigger(single.trigger), false)
+    assert.ok(logs.lines.some((line) => line === `reinstall id=${entry.id} trigger=manual`))
+    await service.reinstallMany([entry.id])
+    const batch = service.listActivity().find((item) => item.action === 'reinstall' && item.id !== single.id)
+    assert.ok(batch)
+    assert.equal(batch.trigger, 'manual')
+    assert.equal(batch.unread, false)
+    assert.ok(logs.lines.some((line) => line === `reinstall ids=${entry.id} trigger=manual`))
+  } finally {
+    logs.restore()
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('startup reinstall of outdated fonts records trigger startup', async () => {
+  const paths = tempPaths()
+  const font = path.join(paths.dataRoot, 'BootUpdate.ttf')
+  writeTestFont(font, 'BootUpdate', 'BootUpdate-Regular')
+  const service = new FontButlerService(paths)
+  let restarted: FontButlerService | undefined
+  const logs = captureLogs()
+  try {
+    await service.init()
+    const imported = await service.importPaths([font])
+    const entry = imported.entries[0]
+    assert.ok(entry)
+    await service.install(entry.id)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    writeTestFont(font, 'BootUpdate', 'BootUpdate-Regular', { version: 'Version 2.000' })
+    service.dispose()
+    const settings = fs.existsSync(paths.settingsPath)
+      ? (JSON.parse(fs.readFileSync(paths.settingsPath, 'utf8')) as { version?: number })
+      : { version: 1 }
+    fs.writeFileSync(
+      paths.settingsPath,
+      JSON.stringify({ ...settings, version: 1, autoReinstallOnUpdate: true }),
+    )
+    restarted = new FontButlerService(paths)
+    await restarted.init()
+    const after = restarted.listCatalog().find((item) => item.id === entry.id)
+    assert.equal(after?.status, 'installed')
+    const operation = restarted.listActivity().find((item) => item.action === 'reinstall')
+    assert.ok(operation)
+    assert.equal(operation.trigger, 'startup')
+    assert.equal(operation.unread, true)
+    assert.equal(isBackgroundActivityTrigger(operation.trigger), true)
+    assert.ok(logs.lines.some((line) => line === `reinstall id=${entry.id} trigger=startup`))
+  } finally {
+    logs.restore()
+    service.dispose()
+    restarted?.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+function captureLogs(): { lines: string[]; restore: () => void } {
+  const lines: string[] = []
+  const original = console.log
+  console.log = (...args: unknown[]) => {
+    lines.push(args.map((arg) => String(arg)).join(' '))
+  }
+  return {
+    lines,
+    restore() {
+      console.log = original
+    },
+  }
+}
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))

@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import {
   activityItemLabel,
   activityRowLabel,
+  activityTriggerLabel,
   entryActivityLabel,
   mergeUnreadFlags,
   unreadActivityCount,
@@ -22,6 +23,13 @@ function op(
     familyName: extra.familyName,
   }
 }
+
+test('watch activity displays as automatic', () => {
+  assert.equal(activityTriggerLabel('watch'), 'automatic')
+  assert.equal(activityTriggerLabel('startup'), 'startup')
+  assert.equal(activityTriggerLabel('manual'), 'manual')
+  assert.equal(activityTriggerLabel('import'), 'import')
+})
 
 test('activityRowLabel uses past tense with the family first', () => {
   assert.equal(activityRowLabel({ action: 'install', familyName: 'Inter' }), 'Inter installed')

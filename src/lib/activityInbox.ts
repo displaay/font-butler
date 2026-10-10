@@ -97,6 +97,10 @@ export function isBackgroundActivityTrigger(trigger: string): boolean {
   return trigger === 'watch' || trigger === 'startup'
 }
 
+export function activityTriggerLabel(trigger: string): string {
+  return trigger === 'watch' ? 'automatic' : trigger
+}
+
 export function unreadOperationIdsToMark({
   previous,
   next,

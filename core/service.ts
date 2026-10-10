@@ -492,7 +492,7 @@ export class FontButlerService {
     await this.seedIfEmpty()
     await this.refreshSourceStatuses(true, { fingerprintOnly: true })
     await dropOrphanRetailListingsFn(this.paths)
-    await this.reinstallCurrentlyOutdated()
+    await this.reinstallCurrentlyOutdated('startup')
     await syncWatchers(this.paths)
     await reconcileWatchedSources(this.paths)
     await this.refreshUserFontsWatcher()
@@ -545,7 +545,7 @@ export class FontButlerService {
       const switched = await this.switchToEntry(id)
       const item = this.operationItem(switched, 'succeeded')
       item.relatedEntryId = sibling?.id
-      this.commitManualOperation('switch', [item], displayFamily(switched))
+      this.commitOperation('switch', [item], displayFamily(switched))
       emitCatalog(this.paths)
       emitDuplicates(this.paths)
       return switched
@@ -596,7 +596,7 @@ export class FontButlerService {
         entries.push(switched)
         const item = this.operationItem(switched, 'succeeded')
         item.relatedEntryId = occupying?.id
-        this.commitManualOperation('switch', [item], displayFamily(imported))
+        this.commitOperation('switch', [item], displayFamily(imported))
         removeDuplicateWarning(this.paths, id)
       } else if (choice === 'install-as') {
         const familyName = options.familyName?.trim()
@@ -754,7 +754,7 @@ export class FontButlerService {
     }
     if (next.autoReinstallOnUpdate && !current.autoReinstallOnUpdate) {
       await this.refreshSourceStatuses()
-      await this.reinstallCurrentlyOutdated()
+      await this.reinstallCurrentlyOutdated('watch')
     }
     if (patch.revisionBudgetBytes !== undefined) {
       this.revisionStorage()
@@ -1020,7 +1020,7 @@ export class FontButlerService {
       }
       const item = this.operationItem(entry, 'succeeded', installWarning)
       item.previousRevision = previousRevision
-      this.commitManualOperation(
+      this.commitOperation(
         options?.replace ? 'install-update' : 'install',
         [...this.withDestinationFailures(entry, item, destinationFailures), ...replacedConflicts],
         displayFamily(entry),
@@ -1094,7 +1094,7 @@ export class FontButlerService {
         }
         await progress.mark(entry.id)
       }
-      const operation = this.commitManualOperation(
+      const operation = this.commitOperation(
         options?.replace ? 'install-update' : 'install',
         items,
         entries[0] ? displayFamily(entries[0]) : undefined,
@@ -1132,7 +1132,7 @@ export class FontButlerService {
       const item = this.operationItem(entry, 'succeeded')
       item.previousRevision = previousRevision
       item.previousEntry = previousEntry
-      this.commitManualOperation(
+      this.commitOperation(
         'uninstall',
         [item],
         displayFamily(entry),
@@ -1176,7 +1176,7 @@ export class FontButlerService {
         }
         await progress.mark(id)
       }
-      const operation = this.commitManualOperation(
+      const operation = this.commitOperation(
         'uninstall',
         items,
         entries[0] ? displayFamily(entries[0]) : undefined,
@@ -1207,7 +1207,7 @@ export class FontButlerService {
   async deactivate(id: string): Promise<CatalogEntry> {
     return runCatalogTask(async () => {
       const entry = await this.deactivateEntry(id, { removeManualOwner: true })
-      this.commitManualOperation('deactivate', [this.operationItem(entry, 'succeeded')], displayFamily(entry))
+      this.commitOperation('deactivate', [this.operationItem(entry, 'succeeded')], displayFamily(entry))
       emitCatalog(this.paths)
       return entry
     })
@@ -1238,7 +1238,7 @@ export class FontButlerService {
         }
         await progress.mark(id)
       }
-      this.commitManualOperation('deactivate', items, entries[0] ? displayFamily(entries[0]) : undefined)
+      this.commitOperation('deactivate', items, entries[0] ? displayFamily(entries[0]) : undefined)
       emitCatalog(this.paths)
       if (entries.length === 0 && errors.length) {
         throw new Error(errors.join('\n'))
@@ -1262,7 +1262,7 @@ export class FontButlerService {
       const installWarning = this.takeInstallWarning()
       const item = this.operationItem(entry, 'succeeded', installWarning)
       if (options?.switch) item.relatedEntryId = relatedId
-      this.commitManualOperation(
+      this.commitOperation(
         options?.switch ? 'switch' : 'activate',
         this.withDestinationFailures(entry, item, destinationFailures),
         displayFamily(entry),
@@ -1309,7 +1309,7 @@ export class FontButlerService {
         }
         await progress.mark(id)
       }
-      const operation = this.commitManualOperation(
+      const operation = this.commitOperation(
         options?.switch ? 'switch' : 'activate',
         items,
         entries[0] ? displayFamily(entries[0]) : undefined,
@@ -1334,19 +1334,27 @@ export class FontButlerService {
     }))
   }
 
-  async reinstall(id: string, options?: InstallOptions): Promise<CatalogEntry> {
+  async reinstall(
+    id: string,
+    options?: InstallOptions & { trigger?: OperationTrigger },
+  ): Promise<CatalogEntry> {
+    const trigger = options?.trigger ?? 'manual'
+    const installOptions = reinstallInstallOptions(options)
     return runCatalogTask(async () => {
+      console.log(`reinstall id=${id} trigger=${trigger}`)
       const before = findById(loadCatalog(this.paths), id)?.installedFingerprint
       this.destinationFailures = []
       this.installWarnings = []
-      const entry = await this.reinstallEntry(id, options)
+      const entry = await this.reinstallEntry(id, installOptions)
       const destinationFailures = this.takeDestinationFailures()
       const installWarning = this.takeInstallWarning()
-      this.commitManualOperation(
+      this.commitOperation(
         'reinstall',
         this.withDestinationFailures(entry, this.operationItem(entry, 'succeeded', installWarning), destinationFailures),
         displayFamily(entry),
         before !== entry.installedFingerprint,
+        undefined,
+        trigger,
       )
       emitCatalog(this.paths)
       return this.withPartialDestinationResult(entry, destinationFailures)
@@ -1373,7 +1381,7 @@ export class FontButlerService {
           result.entry = latest
         }
       }
-      this.commitManualOperation(
+      this.commitOperation(
         mode === 'new-copy' ? 'install' : 'reinstall',
         [this.operationItem(result.entry, 'succeeded', installWarning)],
         displayFamily(result.entry),
@@ -1384,8 +1392,14 @@ export class FontButlerService {
     })
   }
 
-  async reinstallMany(ids: string[], options?: InstallOptions): Promise<CatalogEntry[]> {
+  async reinstallMany(
+    ids: string[],
+    options?: InstallOptions & { trigger?: OperationTrigger },
+  ): Promise<CatalogEntry[]> {
+    const trigger = options?.trigger ?? 'manual'
+    const installOptions = reinstallInstallOptions(options)
     return runCatalogTask(() => withVerificationBatch(async () => {
+      console.log(`reinstall ids=${ids.join(',')} trigger=${trigger}`)
       const entries: CatalogEntry[] = []
       const beforeRevisions = new Map<string, string | undefined>()
       const errors: string[] = []
@@ -1417,7 +1431,7 @@ export class FontButlerService {
         try {
           beforeRevisions.set(id, entry.installedFingerprint)
           this.installWarnings = []
-          const updated = await this.reinstallEntry(id, options)
+          const updated = await this.reinstallEntry(id, installOptions)
           entries.push(updated)
           items.push(this.operationItem(updated, 'succeeded', this.takeInstallWarning()))
         } catch (error) {
@@ -1437,11 +1451,13 @@ export class FontButlerService {
           entryId: first.id,
         })
       }
-      const operation = this.commitManualOperation(
+      const operation = this.commitOperation(
         'reinstall',
         items,
         first ? displayFamily(first) : undefined,
         entries.some((entry) => beforeRevisions.get(entry.id) !== entry.installedFingerprint),
+        undefined,
+        trigger,
       )
       if (entries.length === 0 && errors.length) {
         throw new Error(errors.join('\n'))
@@ -2019,7 +2035,7 @@ export class FontButlerService {
   async resumeFolder(folderId: string): Promise<WatchFolder> {
     const folder = await this.patchFolder(folderId, { paused: false, watching: true })
     await this.refreshInboxWatcher(this.watchingFolderRoots(), { importExisting: true })
-    await this.reinstallCurrentlyOutdated()
+    await this.reinstallCurrentlyOutdated('watch')
     return folder
   }
 
@@ -2745,7 +2761,7 @@ export class FontButlerService {
         outcome: adobe.mac ? (adobe.cleared ? 'succeeded' : 'not-found') : 'unavailable',
       })
     }
-    this.commitManualOperation(
+    this.commitOperation(
       'repair',
       [...fonts, ...caches].map((item) => ({
         id: crypto.randomUUID(),
@@ -3396,7 +3412,7 @@ export class FontButlerService {
       if (findById(catalog, entry.id)) {
         saveCatalog(this.paths, catalog)
       }
-      this.commitManualOperation(
+      this.commitOperation(
         'uninstall',
         [this.operationItem(entry, 'succeeded')],
         displayFamily(entry),
@@ -4083,11 +4099,12 @@ export class FontButlerService {
       this.autoReinstallTimer = null
       const ids = [...this.autoReinstallPending]
       this.autoReinstallPending.clear()
-      void this.reinstallOutdatedIds(ids)
+      console.log(`auto-reinstall fired ids=${ids.join(',')} trigger=watch`)
+      void this.reinstallOutdatedIds(ids, 'watch')
     }, 400)
   }
 
-  private async reinstallCurrentlyOutdated(): Promise<void> {
+  private async reinstallCurrentlyOutdated(trigger: OperationTrigger): Promise<void> {
     const settings = loadSettings(this.paths)
     const ids = loadCatalog(this.paths)
       .entries.filter((entry) => {
@@ -4099,19 +4116,19 @@ export class FontButlerService {
         )
       })
       .map((entry) => entry.id)
-    await this.reinstallOutdatedIds(ids)
+    await this.reinstallOutdatedIds(ids, trigger)
   }
 
-  private async reinstallOutdatedIds(ids: string[]): Promise<void> {
+  private async reinstallOutdatedIds(ids: string[], trigger: OperationTrigger): Promise<void> {
     const current = ids.filter((id) => findById(loadCatalog(this.paths), id)?.status === 'outdated')
     if (current.length === 0) {
       return
     }
     try {
       if (current.length === 1) {
-        await this.reinstall(current[0]!)
+        await this.reinstall(current[0]!, { trigger })
       } else {
-        await this.reinstallMany(current)
+        await this.reinstallMany(current, { trigger })
       }
     } catch (error) {
       emitNotice({
@@ -4816,12 +4833,13 @@ export class FontButlerService {
     )
   }
 
-  private commitManualOperation(
+  private commitOperation(
     action: string,
     items: OperationItem[],
     familyName?: string,
     undoable = true,
     familyNames?: Map<string, string>,
+    trigger: OperationTrigger = 'manual',
   ): Operation | undefined {
     if (items.length === 0) return undefined
     const catalog = loadCatalog(this.paths)
@@ -4840,7 +4858,7 @@ export class FontButlerService {
       })
     }
     const operation = finishOperation(
-      createOperation({ trigger: 'manual', action, familyName }),
+      createOperation({ trigger, action, familyName }),
       items,
     )
     if (!undoable) operation.undoable = false
@@ -4848,6 +4866,14 @@ export class FontButlerService {
     emitEvent({ type: 'operations', operations: loadOperations(this.paths) })
     return operation
   }
+}
+
+function reinstallInstallOptions(
+  options?: InstallOptions & { trigger?: OperationTrigger },
+): InstallOptions | undefined {
+  if (!options || options.trigger === undefined) return options
+  const { trigger: _trigger, ...rest } = options
+  return Object.keys(rest).length > 0 ? rest : undefined
 }
 
 function isProtectedSystem(filePath: string, paths: AppPaths): boolean {

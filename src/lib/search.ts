@@ -1,3 +1,4 @@
+import { activityTriggerLabel } from './activityInbox.ts'
 import { matchesQuery } from './group.ts'
 import type { Operation } from './types.ts'
 
@@ -29,6 +30,7 @@ export function operationMatchesQuery(operation: Operation, query: string): bool
     operation.familyName,
     operation.action,
     operation.trigger,
+    activityTriggerLabel(operation.trigger),
     operation.outcome,
     ...operation.items.map((item) => item.label),
   ]
