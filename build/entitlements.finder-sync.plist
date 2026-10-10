@@ -4,5 +4,9 @@
   <dict>
     <key>com.apple.security.app-sandbox</key>
     <true/>
+    <key>com.apple.security.application-groups</key>
+    <array>
+      <string>A7WWML89LQ.group.app.fontbutler.desktop.FinderSync</string>
+    </array>
   </dict>
 </plist>

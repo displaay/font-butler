@@ -1,30 +1,33 @@
 import Cocoa
-import CoreServices
 import FinderSync
 
 /// Finder Sync extension for Font Buttler.
 ///
-/// This process never copies, activates, or installs a font. It asks
-/// NSWorkspace to open the selected file URLs in the .app that contains
-/// this appex, and attaches an Apple event that says Install or Install as….
-/// The main app installs only after it has checked that sender. There is no
-/// URL scheme: any page could open one.
+/// This process never copies, activates, or installs a font. A click sends
+/// `{action, paths}` to the containing app over that build's app-group Mach
+/// service. If the app is not running, this launches it with
+/// `openApplication` and no file URLs, then retries the connection.
+/// There is no URL scheme and no Apple event: any page could open a URL,
+/// and an open-document event is delivered as coming from Launch Services.
 ///
-/// Only `/` is monitored. Dropbox and iCloud Drive are File Provider domains,
-/// and a Finder Sync menu often does not appear there. Services remain the
-/// way to install from those folders.
+/// Home and `/Volumes` are monitored. Dropbox and iCloud Drive are File
+/// Provider domains, and a Finder Sync menu often does not appear there.
+/// Services remain the way to install from those folders.
 private let fontExtensions: Set<String> = ["otf", "ttf", "ttc", "otc", "woff", "woff2"]
 
-private let finderSyncEventClass = AEEventClass(0x46424653) // 'FBFS'
-private let finderSyncEventID = AEEventID(0x68616e64) // 'hand'
-private let finderSyncActionKeyword = AEKeyword(0x46424163) // 'FBAc'
-private let finderSyncDirectObject = AEKeyword(0x2d2d2d2d) // keyDirectObject
+@objc protocol FontButtlerFinderSyncHandoff {
+    func submitAction(_ action: String, paths: [String], reply: @escaping (String?) -> Void)
+}
 
 @objc(FontButtlerFinderSync)
 final class FontButtlerFinderSync: FIFinderSync {
+    private let handoffQueue = DispatchQueue(label: "app.fontbutler.desktop.FinderSync.handoff")
+
     override init() {
         super.init()
-        FIFinderSyncController.default().directoryURLs = [URL(fileURLWithPath: "/", isDirectory: true)]
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let volumes = URL(fileURLWithPath: "/Volumes", isDirectory: true)
+        FIFinderSyncController.default().directoryURLs = [home, volumes]
     }
 
     override func menu(for menuKind: FIMenuKind) -> NSMenu? {
@@ -59,20 +62,20 @@ final class FontButtlerFinderSync: FIFinderSync {
     }
 
     @objc private func installSelectionAs(_ sender: Any?) {
-        handOff(action: "install-as")
+        handOff(action: "installAs")
     }
 
-    /// Open the selection in the containing app.
-    /// `withApplicationAt` launches that app when it is not running.
-    /// A missing bundle does nothing. This process does not fall back to a URL.
+    /// Send the selection to the containing app. A missing service name or
+    /// bundle does nothing. This process does not fall back to a URL.
     private func handOff(action: String) {
         let selected = FIFinderSyncController.default().selectedItemURLs() ?? []
-        let urls = selected.filter { isInstallSelection($0) && $0.isFileURL }
-        guard !urls.isEmpty, let appURL = parentAppURL() else { return }
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = true
-        configuration.appleEvent = finderSyncAppleEvent(action: action, urls: urls)
-        NSWorkspace.shared.open(urls, withApplicationAt: appURL, configuration: configuration) { _, _ in }
+        let paths = selected.filter { isInstallSelection($0) && $0.isFileURL }.map(\.path)
+        guard !paths.isEmpty, let appURL = parentAppURL() else { return }
+        let service = menuTitle(key: "FontButtlerMachService", fallback: "")
+        guard !service.isEmpty else { return }
+        handoffQueue.async {
+            deliverFinderSyncHandoff(service: service, appURL: appURL, action: action, paths: paths)
+        }
     }
 }
 
@@ -95,26 +98,6 @@ private func menuTitle(key: String, fallback: String) -> String {
     return trimmed.isEmpty ? fallback : trimmed
 }
 
-/// Apple event 'FBFS' / 'hand'. 'FBAc' is "install" or "install-as".
-/// The direct object is the file list. The main app reads the sender audit token.
-func finderSyncAppleEvent(action: String, urls: [URL]) -> NSAppleEventDescriptor {
-    let event = NSAppleEventDescriptor(
-        eventClass: finderSyncEventClass,
-        eventID: finderSyncEventID,
-        targetDescriptor: nil,
-        returnID: AEReturnID(-1),
-        transactionID: AETransactionID(0)
-    )
-    event.setDescriptor(NSAppleEventDescriptor(string: action), forKeyword: finderSyncActionKeyword)
-    let list = NSAppleEventDescriptor.list()
-    for url in urls {
-        guard let item = NSAppleEventDescriptor(fileURL: url) else { continue }
-        list.insert(item, at: list.numberOfItems + 1)
-    }
-    event.setDescriptor(list, forKeyword: finderSyncDirectObject)
-    return event
-}
-
 /// The `.app` that contains this `.appex`, from the bundle URL of this process.
 /// This is not a hardcoded `/Applications` path, so a moved app targets itself.
 func parentAppURL(bundleURL: URL = Bundle.main.bundleURL) -> URL? {
@@ -126,4 +109,72 @@ func parentAppURL(bundleURL: URL = Bundle.main.bundleURL) -> URL? {
         url = parent
     }
     return nil
+}
+
+private final class HandoffAttempt {
+    private let lock = NSLock()
+    private var finished = false
+    private(set) var accepted = false
+    let semaphore = DispatchSemaphore(value: 0)
+
+    func succeed() {
+        lock.lock()
+        let first = !finished
+        finished = true
+        accepted = true
+        lock.unlock()
+        if first { semaphore.signal() }
+    }
+
+    func fail() {
+        lock.lock()
+        let first = !finished
+        finished = true
+        lock.unlock()
+        if first { semaphore.signal() }
+    }
+}
+
+private func sendFinderSyncHandoff(service: String, action: String, paths: [String], timeout: TimeInterval) -> Bool {
+    let connection = NSXPCConnection(machServiceName: service, options: [])
+    connection.remoteObjectInterface = NSXPCInterface(with: FontButtlerFinderSyncHandoff.self)
+    let attempt = HandoffAttempt()
+    connection.interruptionHandler = { attempt.fail() }
+    connection.invalidationHandler = { attempt.fail() }
+    connection.resume()
+    let remote = connection.remoteObjectProxyWithErrorHandler { _ in
+        attempt.fail()
+    } as! FontButtlerFinderSyncHandoff
+    remote.submitAction(action, paths: paths) { _ in
+        attempt.succeed()
+    }
+    let slice = timeout > 0 ? timeout : 0.05
+    _ = attempt.semaphore.wait(timeout: .now() + slice)
+    connection.invalidate()
+    return attempt.accepted
+}
+
+/// Launch the containing app with no file URLs and no Apple event, then retry
+/// the Mach service until the handoff is accepted or about 10 seconds pass.
+func deliverFinderSyncHandoff(service: String, appURL: URL, action: String, paths: [String]) {
+    let deadline = Date().addingTimeInterval(10)
+    var delay: TimeInterval = 0.05
+    var launched = false
+    while Date() < deadline {
+        let remaining = deadline.timeIntervalSinceNow
+        if remaining <= 0 { return }
+        if sendFinderSyncHandoff(service: service, action: action, paths: paths, timeout: min(1.0, remaining)) {
+            return
+        }
+        if !launched {
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { _, _ in }
+            launched = true
+        }
+        let slice = min(delay, min(1.0, max(0, deadline.timeIntervalSinceNow)))
+        if slice <= 0 { return }
+        Thread.sleep(forTimeInterval: slice)
+        delay = min(delay * 2, 1)
+    }
 }

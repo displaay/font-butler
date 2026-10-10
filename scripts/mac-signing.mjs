@@ -12,6 +12,8 @@
 export const DEVELOPER_ID_IDENTITY = 'DANIEL QUISEK (A7WWML89LQ)'
 export const NOTARY_KEYCHAIN_PROFILE = 'font-butler-notary'
 export const ADHOC_ENTITLEMENTS = 'build/entitlements.mac.adhoc.plist'
+export const TEST_FEED_ENTITLEMENTS = 'build/entitlements.mac.test-feed.plist'
+export const TEST_FEED_ADHOC_ENTITLEMENTS = 'build/entitlements.mac.adhoc.test-feed.plist'
 export const TEST_FEED_BUILD_ENV = 'FONT_BUTLER_TEST_FEED_BUILD'
 export const TEST_FEED_VERSION_ENV = 'FONT_BUTLER_TEST_VERSION'
 export const PRODUCTION_APP_ID = 'app.fontbutler.desktop'
@@ -42,6 +44,7 @@ function missingIdentityError(release) {
  * @param {{ platform: string, release: boolean, env: NodeJS.ProcessEnv, developerIdPresent: boolean }} input
  */
 export function planMacPack({ platform, release, env, developerIdPresent }) {
+  const adhocEntitlements = testFeedBuildRequested(env) ? TEST_FEED_ADHOC_ENTITLEMENTS : ADHOC_ENTITLEMENTS
   const requestedProfile = (env.APPLE_KEYCHAIN_PROFILE || '').trim()
   const requestedKeychain = (env.APPLE_KEYCHAIN || '').trim()
   const notarize = release || Boolean(requestedProfile)
@@ -91,7 +94,7 @@ export function planMacPack({ platform, release, env, developerIdPresent }) {
       mode: 'ad-hoc',
       identity: '-',
       forceCodeSigning: false,
-      adhocEntitlements: ADHOC_ENTITLEMENTS,
+      adhocEntitlements,
       signDmg: false,
       keychainProfile: null,
       keychain: null,
@@ -154,12 +157,18 @@ export function applyTestFeedMetadata(build, env) {
     }
     extraMetadata.version = version
   }
+  const mac = {
+    ...(build?.mac ?? {}),
+    entitlements: TEST_FEED_ENTITLEMENTS,
+    entitlementsInherit: TEST_FEED_ENTITLEMENTS,
+  }
   return {
     build: {
       ...build,
       appId: TEST_FEED_APP_ID,
       productName: TEST_FEED_PRODUCT_NAME,
       extraMetadata,
+      mac,
     },
     error: null,
   }

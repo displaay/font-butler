@@ -1,14 +1,18 @@
 import { spawnSync as nodeSpawnSync } from 'node:child_process'
-import { existsSync as nodeExistsSync, mkdirSync, readFileSync as nodeReadFileSync, writeFileSync } from 'node:fs'
+import { existsSync as nodeExistsSync, mkdirSync, mkdtempSync, readFileSync as nodeReadFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  FINDER_SYNC_APP_GROUP_ENTITLEMENT,
   FINDER_SYNC_ENTITLEMENT,
   FINDER_SYNC_EXECUTABLE,
   FINDER_SYNC_EXTENSION_POINT,
   FINDER_SYNC_PRINCIPAL_CLASS,
+  finderSyncAppGroup,
   finderSyncAppexBundlePath,
   finderSyncBundleId,
+  finderSyncMachService,
   finderSyncMenuTitle,
 } from '../electron/finder-sync.mjs'
 import { DEVELOPER_ID_TEAM } from '../electron/app-update-install.mjs'
@@ -16,7 +20,6 @@ import { DEVELOPER_ID_IDENTITY, testFeedBuildRequested } from './mac-signing.mjs
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const sourcePath = path.join(repoRoot, 'macos/FinderSync/FinderSync.swift')
-const entitlementsPath = path.join(repoRoot, 'build/entitlements.finder-sync.plist')
 
 export const FINDER_SYNC_ENTITLEMENTS = 'build/entitlements.finder-sync.plist'
 
@@ -87,6 +90,8 @@ export function finderSyncInfoPlist({
     <string>${xmlEscape(installTitle)}</string>
     <key>FontButtlerInstallAsTitle</key>
     <string>${xmlEscape(installAsTitle)}</string>
+    <key>FontButtlerMachService</key>
+    <string>${xmlEscape(finderSyncMachService(testFeed))}</string>
     <key>NSExtension</key>
     <dict>
       <key>NSExtensionPointIdentifier</key>
@@ -202,7 +207,28 @@ export function prepareFinderSyncAppex({
         'swiftc failed. The Finder Sync appex is compiled with Xcode swiftc on the macOS build machine.',
     }
   }
-  return { ok: true, skipped: false, appexPath, bundleId, executable }
+  return { ok: true, skipped: false, appexPath, bundleId, executable, testFeed }
+}
+
+export function finderSyncEntitlementsPlist(testFeed) {
+  const group = finderSyncAppGroup(Boolean(testFeed))
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>${FINDER_SYNC_ENTITLEMENT}</key>
+    <true/>
+    <key>${FINDER_SYNC_APP_GROUP_ENTITLEMENT}</key>
+    <array>
+      <string>${xmlEscape(group)}</string>
+    </array>
+  </dict>
+</plist>
+`
+}
+
+export function entitlementTextListsGroup(text, group) {
+  return String(text ?? '').includes(`<string>${group}</string>`)
 }
 
 export function finderSyncSignArgs({ identity, entitlements, bundleId, target, keychain }) {
@@ -222,35 +248,47 @@ export function signFinderSyncAppex({
   appexPath,
   identity,
   bundleId,
-  entitlements = entitlementsPath,
+  entitlements,
+  testFeed = false,
   keychain,
   spawnSync = nodeSpawnSync,
 } = {}) {
   const signIdentity = finderSyncCodesignIdentity(identity)
   if (!signIdentity) return { ok: false, reason: 'No signing identity for the Finder Sync appex.' }
+  let entitlementsFile = entitlements
+  let temporary = null
+  if (!entitlementsFile) {
+    temporary = mkdtempSync(path.join(tmpdir(), 'font-butler-finder-sync-entitlements-'))
+    entitlementsFile = path.join(temporary, 'entitlements.plist')
+    writeFileSync(entitlementsFile, finderSyncEntitlementsPlist(testFeed))
+  }
   const executable = path.join(appexPath, 'Contents', 'MacOS', FINDER_SYNC_EXECUTABLE)
   const targets = [
     { target: executable, bundleId },
     { target: appexPath, bundleId: null },
   ]
-  for (const item of targets) {
-    const result = spawnSync(
-      'codesign',
-      finderSyncSignArgs({
-        identity: signIdentity,
-        entitlements,
-        bundleId: item.bundleId,
-        target: item.target,
-        keychain,
-      }),
-      { encoding: 'utf8' },
-    )
-    if ((result?.status ?? 1) !== 0) {
-      const detail = [result?.stderr, result?.stdout, result?.error?.message].filter(Boolean).join('\n')
-      return { ok: false, reason: detail || `codesign failed for ${item.target}` }
+  try {
+    for (const item of targets) {
+      const result = spawnSync(
+        'codesign',
+        finderSyncSignArgs({
+          identity: signIdentity,
+          entitlements: entitlementsFile,
+          bundleId: item.bundleId,
+          target: item.target,
+          keychain,
+        }),
+        { encoding: 'utf8' },
+      )
+      if ((result?.status ?? 1) !== 0) {
+        const detail = [result?.stderr, result?.stdout, result?.error?.message].filter(Boolean).join('\n')
+        return { ok: false, reason: detail || `codesign failed for ${item.target}` }
+      }
     }
+    return { ok: true, identity: signIdentity }
+  } finally {
+    if (temporary) rmSync(temporary, { recursive: true, force: true })
   }
-  return { ok: true, identity: signIdentity }
 }
 
 export function finderSyncAppexFailures({
@@ -269,6 +307,13 @@ export function finderSyncAppexFailures({
   expectedInstallTitle = '',
   installAsTitle = '',
   expectedInstallAsTitle = '',
+  expectedAppGroup = '',
+  entitlementText = '',
+  machService = '',
+  expectedMachService = '',
+  requireNotarized = false,
+  spctlStatus = 1,
+  spctlOutput = '',
 } = {}) {
   const failures = []
   if (!present) {
@@ -287,11 +332,29 @@ export function finderSyncAppexFailures({
     failures.push('The Finder Sync appex is not a Finder Sync extension.')
   }
   if (codesignVerifyStatus !== 0) {
-    failures.push('codesign --verify --strict failed on the Finder Sync appex.')
+    failures.push('codesign --verify --deep --strict failed on the Finder Sync appex.')
   }
   const keys = entitlementKeys ?? []
-  if (keys.length !== 1 || keys[0] !== FINDER_SYNC_ENTITLEMENT) {
-    failures.push('The Finder Sync appex entitlements must be app sandbox only.')
+  const allowed = new Set([FINDER_SYNC_ENTITLEMENT, FINDER_SYNC_APP_GROUP_ENTITLEMENT])
+  const groupKeys = keys.filter((key) => allowed.has(key))
+  if (keys.length !== 2 || groupKeys.length !== 2) {
+    failures.push('The Finder Sync appex entitlements must be the app sandbox and its application group.')
+  }
+  if (expectedAppGroup) {
+    const strings = [...String(entitlementText ?? '').matchAll(/<string>([^<]*)<\/string>/g)].map((match) => match[1])
+    if (strings.length !== 1 || strings[0] !== expectedAppGroup) {
+      failures.push(
+        `The Finder Sync appex application group is ${strings[0] || 'missing'}, expected ${expectedAppGroup}.`,
+      )
+    }
+  }
+  if (expectedMachService && machService !== expectedMachService) {
+    failures.push(
+      `The Finder Sync Mach service is ${machService || 'missing'}, expected ${expectedMachService}.`,
+    )
+  }
+  if (requireNotarized && (spctlStatus !== 0 || !/Notarized Developer ID/.test(spctlOutput ?? ''))) {
+    failures.push('spctl did not report Notarized Developer ID for the Finder Sync appex.')
   }
   if (urlScheme) {
     failures.push('The Finder Sync appex must not declare a URL scheme.')
@@ -337,6 +400,8 @@ export function verifyFinderSyncAppex({
   let codesignDisplay = ''
   let codesignVerifyStatus = 1
   let entitlementKeys = []
+  let entitlementText = ''
+  let machService = ''
   if (present) {
     try {
       const plist = readFileSync(path.join(appexPath, 'Contents', 'Info.plist'), 'utf8')
@@ -346,16 +411,26 @@ export function verifyFinderSyncAppex({
       urlScheme = plistString(plist, 'FontButtlerURLScheme')
       installTitle = plistString(plist, 'FontButtlerInstallTitle')
       installAsTitle = plistString(plist, 'FontButtlerInstallAsTitle')
+      machService = plistString(plist, 'FontButtlerMachService')
     } catch {
       bundleId = ''
     }
     const display = spawnSync('codesign', ['-dv', '--verbose=4', appexPath], { encoding: 'utf8' })
     codesignDisplay = `${display?.stdout ?? ''}\n${display?.stderr ?? ''}`
-    const verify = spawnSync('codesign', ['--verify', '--strict', '--verbose=2', appexPath], { encoding: 'utf8' })
+    const verify = spawnSync('codesign', ['--verify', '--deep', '--strict', '--verbose=2', appexPath], {
+      encoding: 'utf8',
+    })
     codesignVerifyStatus = verify?.status ?? 1
     const entitlements = spawnSync('codesign', ['-d', '--entitlements', ':-', appexPath], { encoding: 'utf8' })
-    entitlementKeys = entitlementKeysFromCodesign(`${entitlements?.stdout ?? ''}\n${entitlements?.stderr ?? ''}`)
+    entitlementText = `${entitlements?.stdout ?? ''}\n${entitlements?.stderr ?? ''}`
+    entitlementKeys = entitlementKeysFromCodesign(entitlementText)
   }
+  const expectedAppGroup =
+    expectedBundleId === finderSyncBundleId(true)
+      ? finderSyncAppGroup(true)
+      : expectedBundleId === finderSyncBundleId(false)
+        ? finderSyncAppGroup(false)
+        : ''
   const failures = finderSyncAppexFailures({
     present,
     bundleId,
@@ -365,12 +440,16 @@ export function verifyFinderSyncAppex({
     codesignVerifyStatus,
     codesignDisplay,
     entitlementKeys,
+    entitlementText,
     requireDeveloperId,
     urlScheme,
     installTitle,
     expectedInstallTitle,
     installAsTitle,
     expectedInstallAsTitle,
+    expectedAppGroup,
+    machService,
+    expectedMachService: expectedAppGroup ? finderSyncMachService(expectedBundleId === finderSyncBundleId(true)) : '',
   })
   return { ok: failures.length === 0, failures }
 }

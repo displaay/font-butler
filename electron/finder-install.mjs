@@ -367,10 +367,15 @@ export function createFinderJobQueue(runJob) {
           const job = queued.shift()
           activeKey = finderJobKey(job)
           try {
-            await runJob(job.action, job.paths)
+            await runJob(job.action, job.paths, job)
           } catch (error) {
             console.error('Finder job failed', error)
           } finally {
+            try {
+              job.close?.()
+            } catch {
+              // The file descriptors are best-effort.
+            }
             activeKey = null
           }
         }
@@ -382,10 +387,22 @@ export function createFinderJobQueue(runJob) {
   }
 
   return {
-    enqueue(action, filePaths) {
-      const job = { action, paths: Array.isArray(filePaths) ? filePaths : [] }
+    enqueue(action, filePaths, options = {}) {
+      const job = {
+        action,
+        paths: Array.isArray(filePaths) ? filePaths : [],
+        handles: options.handles,
+        close: options.close,
+      }
       const key = finderJobKey(job)
-      if (activeKey === key || queued.some((item) => finderJobKey(item) === key)) return chain
+      if (activeKey === key || queued.some((item) => finderJobKey(item) === key)) {
+        try {
+          job.close?.()
+        } catch {
+          // The duplicate's descriptors are best-effort.
+        }
+        return chain
+      }
       queued.push(job)
       return drain()
     },
