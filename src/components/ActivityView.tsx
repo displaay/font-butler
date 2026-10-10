@@ -3,7 +3,12 @@ import { toast } from 'sonner'
 import { CheckCheck, ListX, Undo2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
-import { activityItemLabel, activityRowLabel, unreadActivityCount } from '@/lib/activityInbox'
+import {
+  activityItemLabel,
+  activityRowLabel,
+  activityTriggerLabel,
+  unreadActivityCount,
+} from '@/lib/activityInbox'
 import { cn, formatRelativeTime } from '@/lib/utils'
 import type { CatalogEntry, Operation } from '@/lib/types'
 
@@ -90,7 +95,7 @@ export function ActivityView({
                       {formatRelativeTime(operation.startedAt)}
                       {operation.items.length > 1 ? ` · ${operation.items.length} files` : ''}
                       {' · '}
-                      {operation.trigger} · {operation.outcome}
+                      {activityTriggerLabel(operation.trigger)} · {operation.outcome}
                       {operation.undone ? ' · undone' : ''}
                     </div>
                   </button>
