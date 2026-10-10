@@ -51,7 +51,7 @@ A real in-place install needs two notarized Developer ID builds: the one you are
 
 Marked builds are never uploaded. `npm run publish:mac` and the release assert refuse to upload when `FONT_BUTLER_TEST_FEED_BUILD` is set, and when the DMG or zip contains the marker. `npm run release:mac` still signs and notarizes, then the assert exits because of the marker. The files in `release/` are the test build. Do not upload them.
 
-Build a marked 0.3.10 (the version already in `package.json`). Do not commit a version change.
+Build a marked 0.3.11 (the version already in `package.json`). Do not commit a version change.
 
 ```bash
 FONT_BUTLER_TEST_FEED_BUILD=1 npm run release:mac
@@ -208,9 +208,11 @@ This build is signed with Developer ID and notarized by Apple.
 
 If you are on Font Buttler 0.3.8 or earlier, download this version manually once and replace the app. Those builds were ad-hoc signed, and their Update badge does not install. After this signed version is the one you run, later releases install from the Update badge next to Settings.
 
-Font previews that time out show a Failed state with a Retry button, which refetches the font (#57).
+Reinstalling a font in ~/Library/Fonts no longer clears the macOS font cache, so Figma and other apps keep seeing your fonts after an automatic reinstall. The file is replaced in place for macOS to pick up, and a reinstall counts as done only after a fresh check finds the font (#61).
 
-Watch folders import fonts that are copied in slowly, report a font that stays corrupt once with a clear message (file name in the toast, full path in Activity), and no longer lose or replay startup warnings (#58).
+Clear font caches is now a manual action in Settings. It asks first, because user fonts will not activate until you log out, then offers Log out now or Later (#61).
+
+If Log out now fails, Font Buttler shows a dialog with the error instead of doing nothing (#61).
 ```
 
 Tag push still starts [`.github/workflows/release.yml`](../.github/workflows/release.yml). That job runs tests on Ubuntu and `npm run dist` on a macOS runner. The runner has no Developer ID certificate, so `npm run dist` ad-hoc signs and does not notarize. Before `softprops/action-gh-release`, `scripts/assert-notarized-mac-release.mjs` fails that job. GitHub Actions cannot publish an ad-hoc or un-notarized build. The signed files are uploaded as a draft by `npm run publish:mac` on the release Mac. A person publishes that draft only after checking the downloaded DMG.
