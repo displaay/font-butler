@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import { DEVELOPER_ID_TEAM } from './app-update-install.mjs'
 import { FINDER_INSTALL, FINDER_INSTALL_AS, FINDER_LINK_TO } from './finder-install.mjs'
@@ -22,6 +23,12 @@ import {
   FINDER_SYNC_TOO_LARGE,
   FINDER_SYNC_TOO_MANY_FILES,
   FINDER_SYNC_CHANGED_BEFORE_INSTALL,
+  finderSyncAgentBundleProgram,
+  finderSyncAgentCodeSigningRequirement,
+  finderSyncAgentLabel,
+  finderSyncAgentLaunchAgentPlist,
+  finderSyncAgentMachServiceKeys,
+  finderSyncAgentPlistName,
   finderSyncAppGroup,
   finderSyncAppGroupIsTeamPrefixed,
   finderSyncAppexBundlePath,
@@ -29,6 +36,8 @@ import {
   finderSyncCodeSigningRequirement,
   finderSyncMachService,
   finderSyncMenuTitle,
+  finderSyncParentCodeSigningRequirement,
+  finderSyncSocketName,
   finderSyncMonitorDirectories,
   finderSyncWireAction,
   fontMagicKind,
@@ -41,6 +50,8 @@ import {
   validateFinderSyncSelection,
 } from './finder-sync.mjs'
 import { compileFinderSyncReceiverAddon } from '../scripts/build-finder-sync-receiver.mjs'
+import { compileFinderSyncAgent, finderSyncAgentFailures } from '../scripts/build-finder-sync-agent.mjs'
+import { spawnSync } from 'node:child_process'
 import { finderSyncReleaseFailures } from '../scripts/assert-notarized-mac-release.mjs'
 import {
   entitlementKeysFromCodesign,
@@ -503,6 +514,7 @@ test('the release assert reads the appex bundle ID against the test-feed marker'
 
   const assertScript = readRepo('scripts/assert-notarized-mac-release.mjs')
   assert.match(assertScript, /finderSyncReleaseFailures/)
+  assert.match(assertScript, /finderSyncAgentReleaseFailures/)
   assert.match(assertScript, /prefixFailures\('DMG'/)
   assert.match(assertScript, /prefixFailures\('Update zip'/)
   assert.match(assertScript, /prefixFailures\('App'/)
@@ -511,6 +523,7 @@ test('the release assert reads the appex bundle ID against the test-feed marker'
 test('Finder Sync sources hand off over XPC and the pack builds the appex', () => {
   const swift = readRepo('macos/FinderSync/FinderSync.swift')
   const receiver = readRepo('electron/finder-sync-receiver.mm')
+  const agent = readRepo('macos/FinderSyncAgent/FinderSyncAgent.mm')
   const nativeTest = readRepo('electron/finder-sync-xpc-test.mm')
   const validator = readRepo('electron/finder-sync.mjs')
   assert.match(swift, /fileURLWithPath: "\/Volumes"/)
@@ -535,16 +548,36 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.doesNotMatch(swift, /fileURLWithPath: "\/"/)
   const releaseRequirement = finderSyncCodeSigningRequirement(false).replaceAll('"', '\\"')
   const testRequirement = finderSyncCodeSigningRequirement(true).replaceAll('"', '\\"')
-  assert.ok(receiver.includes(releaseRequirement))
-  assert.ok(receiver.includes(testRequirement))
-  assert.ok(receiver.includes(finderSyncMachService(false)))
-  assert.ok(receiver.includes(finderSyncMachService(true)))
-  assert.ok(nativeTest.includes(releaseRequirement))
-  assert.match(receiver, /setCodeSigningRequirement/)
+  const releaseAgentRequirement = finderSyncAgentCodeSigningRequirement(false).replaceAll('"', '\\"')
+  const testAgentRequirement = finderSyncAgentCodeSigningRequirement(true).replaceAll('"', '\\"')
+  assert.ok(agent.includes(releaseRequirement))
+  assert.ok(agent.includes(testRequirement))
+  assert.ok(agent.includes(finderSyncMachService(false)))
+  assert.ok(agent.includes(finderSyncMachService(true)))
+  assert.ok(agent.includes(finderSyncParentCodeSigningRequirement().replaceAll('"', '\\"')))
+  assert.ok(agent.includes(finderSyncSocketName(false)))
+  assert.ok(agent.includes(finderSyncSocketName(true)))
+  assert.match(agent, /initWithMachServiceName/)
+  assert.match(agent, /setCodeSigningRequirement/)
+  assert.match(agent, /pingWithReply/)
+  assert.match(agent, /SecRequirementCreateWithString/)
+  assert.match(agent, /kSecCSStrictValidate/)
+  assert.match(agent, /LOCAL_PEERTOKEN/)
+  assert.match(agent, /_CS_DARWIN_USER_TEMP_DIR/)
+  assert.doesNotMatch(agent, /strcmp|kSecCodeInfoTeamIdentifier|kSecGuestAttributePid|getpid/)
+  assert.ok(receiver.includes(releaseAgentRequirement))
+  assert.ok(receiver.includes(testAgentRequirement))
+  assert.ok(receiver.includes(finderSyncSocketName(false)))
+  assert.ok(receiver.includes(finderSyncSocketName(true)))
+  assert.match(receiver, /SMAppService/)
+  assert.match(receiver, /agentServiceWithPlistName/)
+  assert.match(receiver, /LOCAL_PEERTOKEN/)
   assert.match(receiver, /SecRequirementCreateWithString/)
   assert.match(receiver, /kSecCSStrictValidate/)
   assert.match(receiver, /SecCodeCopyGuestWithAttributes/)
   assert.match(receiver, /kSecGuestAttributeAudit/)
+  assert.doesNotMatch(receiver, /initWithMachServiceName|setCodeSigningRequirement/)
+  assert.ok(nativeTest.includes(releaseRequirement))
   assert.match(nativeTest, /SecCodeCopySelf/)
   assert.match(nativeTest, /kSecCSStrictValidate/)
   assert.match(nativeTest, /anonymousListener/)
@@ -563,6 +596,8 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(main, /O_NOFOLLOW/)
   assert.match(main, /finderSyncWireAction/)
   assert.match(main, /finder-sync-receiver\.node/)
+  assert.match(main, /--finder-sync-agent-status/)
+  assert.match(main, /agentStatus/)
   assert.match(main, /will-finish-launching/)
   assert.doesNotMatch(main, /acceptFinderSyncHandoff|claimFinderSyncPaths|setAsDefaultProtocolClient|removeAsDefaultProtocolClient|parseFinderLaunch|parseFinderInstallUrl|enqueueFinderHandoff/)
   assert.match(main, /refreshFinderSyncRegistration/)
@@ -592,12 +627,17 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(pack, /signFinderSyncAppex/)
   assert.match(pack, /verifyFinderSyncAppex/)
   assert.match(pack, /compileFinderSyncReceiverAddon/)
+  assert.match(pack, /installFinderSyncAgent/)
   const receiverBuild = compileFinderSyncReceiverAddon()
+  const agentBuild = compileFinderSyncAgent()
   if (process.platform === 'darwin') {
     assert.equal(receiverBuild.skipped, false)
+    assert.equal(agentBuild.skipped, false)
   } else {
     assert.equal(receiverBuild.ok, false)
     assert.equal(receiverBuild.skipped, true)
+    assert.equal(agentBuild.ok, false)
+    assert.equal(agentBuild.skipped, true)
   }
   const verifyHook = readRepo('scripts/verify-finder-sync-appex.mjs')
   assert.match(verifyHook, /export async function afterSign/)
@@ -608,6 +648,60 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   if (process.platform !== 'darwin') {
     assert.equal(prepared.ok, false)
     assert.match(prepared.reason, /macOS/)
+  }
+})
+
+test('Finder Sync LaunchAgent plist is per flavour and the roundtrip check skips off macOS', () => {
+  const releasePlist = finderSyncAgentLaunchAgentPlist(false)
+  const testPlist = finderSyncAgentLaunchAgentPlist(true)
+  assert.equal(finderSyncAgentMachServiceKeys(releasePlist).length, 1)
+  assert.deepEqual(finderSyncAgentMachServiceKeys(releasePlist), [finderSyncMachService(false)])
+  assert.deepEqual(finderSyncAgentMachServiceKeys(testPlist), [finderSyncMachService(true)])
+  assert.equal(finderSyncAgentLabel(false), 'app.fontbutler.desktop.FinderSyncAgent')
+  assert.equal(finderSyncAgentLabel(true), 'app.fontbutler.desktop.FinderSyncAgent.Test')
+  assert.doesNotMatch(releasePlist, /FinderSync\.Test/)
+  assert.match(releasePlist, /<key>RunAtLoad<\/key>\s*<false\/>/)
+  assert.doesNotMatch(releasePlist, /KeepAlive/)
+  assert.match(releasePlist, new RegExp(`<key>BundleProgram</key>\\s*<string>${finderSyncAgentBundleProgram()}</string>`))
+  assert.notEqual(finderSyncAgentPlistName(false), finderSyncAgentPlistName(true))
+  assert.notEqual(finderSyncSocketName(false), finderSyncSocketName(true))
+  const signed = finderSyncAgentFailures({
+    present: true,
+    plist: releasePlist,
+    infoPlist: `<key>CFBundleIdentifier</key><string>${finderSyncAgentLabel(false)}</string><key>LSBackgroundOnly</key><true/>`,
+    executablePresent: true,
+    programMatches: true,
+    testFeed: false,
+    codesignDisplay: `Identifier=${finderSyncAgentLabel(false)}\nAuthority=Developer ID Application: DANIEL QUISEK (A7WWML89LQ)\nTeamIdentifier=A7WWML89LQ`,
+    codesignVerifyStatus: 0,
+    entitlementText: `<string>${finderSyncAppGroup(false)}</string>`,
+    requireDeveloperId: true,
+  })
+  assert.deepEqual(signed, [])
+  const wrongFlavour = finderSyncAgentFailures({
+    present: true,
+    otherPresent: true,
+    plist: testPlist,
+    infoPlist: `<key>CFBundleIdentifier</key><string>${finderSyncAgentLabel(true)}</string><key>LSBackgroundOnly</key><true/>`,
+    executablePresent: true,
+    programMatches: true,
+    testFeed: false,
+    codesignDisplay: `Identifier=${finderSyncAgentLabel(false)}`,
+    codesignVerifyStatus: 0,
+    entitlementText: `<string>${finderSyncAppGroup(true)}</string>`,
+    requireDeveloperId: false,
+  })
+  assert.ok(wrongFlavour.some((failure) => /other Finder Sync LaunchAgent/.test(failure)))
+  const roundtrip = readRepo('scripts/finder-sync-roundtrip-check')
+  assert.match(roundtrip, /--finder-sync-agent-status/)
+  assert.match(roundtrip, /--sign', '-', '--identifier'/)
+  assert.match(roundtrip, /ping ok/)
+  assert.match(roundtrip, /ad-hoc/)
+  const scriptPath = fileURLToPath(new URL('../scripts/finder-sync-roundtrip-check', import.meta.url))
+  const ran = spawnSync(process.execPath, [scriptPath], { encoding: 'utf8' })
+  if (process.platform !== 'darwin') {
+    assert.equal(ran.status, 0)
+    assert.match(ran.stdout, /skipped/)
   }
 })
 

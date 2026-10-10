@@ -1,5 +1,6 @@
 #import <Cocoa/Cocoa.h>
 #import <Security/Security.h>
+#import <ServiceManagement/ServiceManagement.h>
 #include <mach-o/dyld.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -76,17 +77,44 @@ extern "C" void napi_module_register(napi_module *mod);
   static void fn(void) __attribute__((constructor)); \
   static void fn(void)
 
-// One requirement per flavour. The listener accepts that identifier only.
-static NSString *const kReleaseRequirement =
-    @"anchor apple generic and certificate leaf[subject.OU] = \"A7WWML89LQ\" and identifier \"app.fontbutler.desktop.FinderSync\"";
-static NSString *const kTestRequirement =
-    @"anchor apple generic and certificate leaf[subject.OU] = \"A7WWML89LQ\" and identifier \"app.fontbutler.desktop.FinderSync.Test\"";
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
+#include <unistd.h>
+
+#ifndef LOCAL_PEERTOKEN
+#define LOCAL_PEERTOKEN 0x006
+#endif
+
+// The socket peer must be this build's launchd helper, not the appex.
+// The helper is the process whose listener accepts the appex.
+static NSString *const kReleaseAgentRequirement =
+    @"anchor apple generic and certificate leaf[subject.OU] = \"A7WWML89LQ\" and identifier \"app.fontbutler.desktop.FinderSyncAgent\"";
+static NSString *const kTestAgentRequirement =
+    @"anchor apple generic and certificate leaf[subject.OU] = \"A7WWML89LQ\" and identifier \"app.fontbutler.desktop.FinderSyncAgent.Test\"";
+static NSString *const kReleaseAgentLabel = @"app.fontbutler.desktop.FinderSyncAgent";
+static NSString *const kTestAgentLabel = @"app.fontbutler.desktop.FinderSyncAgent.Test";
 static NSString *const kReleaseService = @"A7WWML89LQ.group.app.fontbutler.desktop.FinderSync";
 static NSString *const kTestService = @"A7WWML89LQ.group.app.fontbutler.desktop.FinderSync.Test";
+static NSString *const kReleaseSocketName = @"fontbutler-finder-sync.sock";
+static NSString *const kTestSocketName = @"fontbutler-finder-sync-test.sock";
 static const NSUInteger kFinderSyncMaxFiles = 500;
+static const uint32_t kMaxFrame = 2 * 1024 * 1024;
 
 static napi_threadsafe_function g_tsfn = nullptr;
 static NSMutableArray<NSDictionary *> *g_queued = nil;
+
+static NSLock *HandoffLock(void) {
+  static NSLock *lock;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    lock = [NSLock new];
+  });
+  return lock;
+}
 
 typedef struct {
   char *action;
@@ -218,12 +246,24 @@ static BOOL CurrentBuildIsTestFeed(void) {
   return JsonFlagIsTrue(json[@"fontButlerTestFeed"]);
 }
 
-static NSString *CurrentRequirement(void) {
-  return CurrentBuildIsTestFeed() ? kTestRequirement : kReleaseRequirement;
+static NSString *CurrentAgentRequirement(void) {
+  return CurrentBuildIsTestFeed() ? kTestAgentRequirement : kReleaseAgentRequirement;
+}
+
+static NSString *CurrentAgentLabel(void) {
+  return CurrentBuildIsTestFeed() ? kTestAgentLabel : kReleaseAgentLabel;
+}
+
+static NSString *CurrentAgentPlistName(void) {
+  return [CurrentAgentLabel() stringByAppendingString:@".plist"];
 }
 
 static NSString *CurrentServiceName(void) {
   return CurrentBuildIsTestFeed() ? kTestService : kReleaseService;
+}
+
+static NSString *CurrentSocketName(void) {
+  return CurrentBuildIsTestFeed() ? kTestSocketName : kReleaseSocketName;
 }
 
 static BOOL GuestMeetsRequirement(audit_token_t token, NSString *requirementString) {
@@ -257,78 +297,219 @@ static BOOL GuestMeetsRequirement(audit_token_t token, NSString *requirementStri
   return signatureStatus == errSecSuccess;
 }
 
-@protocol FontButtlerFinderSyncHandoff
-- (void)submitAction:(NSString *)action paths:(NSArray<NSString *> *)paths reply:(void (^)(NSString *error))reply;
-@end
-
-@interface FontButtlerFinderSyncListener : NSObject <NSXPCListenerDelegate, FontButtlerFinderSyncHandoff>
-@property(nonatomic, strong) NSXPCListener *listener;
-@property(nonatomic, copy) NSString *requirement;
-@end
-
 static void DispatchHandoff(NSString *action, NSArray<NSString *> *paths, bool overflow) {
-  if (g_tsfn) {
-    HandoffCall *call = HandoffCallCreate(action, paths, overflow);
-    if (call) napi_call_threadsafe_function(g_tsfn, call, napi_tsfn_blocking);
+  NSLock *lock = HandoffLock();
+  [lock lock];
+  napi_threadsafe_function tsfn = g_tsfn;
+  if (!tsfn) {
+    if (!g_queued) g_queued = [NSMutableArray array];
+    [g_queued addObject:@{
+      @"action" : action ?: @"",
+      @"paths" : overflow ? @[] : (paths ?: @[]),
+      @"overflow" : @(overflow),
+    }];
+    [lock unlock];
     return;
   }
-  if (!g_queued) g_queued = [NSMutableArray array];
-  [g_queued addObject:@{
-    @"action" : action ?: @"",
-    @"paths" : overflow ? @[] : (paths ?: @[]),
-    @"overflow" : @(overflow),
-  }];
+  [lock unlock];
+  HandoffCall *call = HandoffCallCreate(action, paths, overflow);
+  if (call) napi_call_threadsafe_function(tsfn, call, napi_tsfn_blocking);
 }
 
-@implementation FontButtlerFinderSyncListener
+static int g_listenFd = -1;
 
-- (void)start {
-  if (self.listener) return;
-  self.requirement = CurrentRequirement();
-  NSXPCListener *listener = [[NSXPCListener alloc] initWithMachServiceName:CurrentServiceName()];
-  listener.delegate = self;
-  self.listener = listener;
-  [listener resume];
-}
-
-- (BOOL)listener:(NSXPCListener *)listener shouldAcceptNewConnection:(NSXPCConnection *)connection {
-  (void)listener;
-  NSString *requirement = self.requirement.length ? self.requirement : CurrentRequirement();
-  if ([connection respondsToSelector:@selector(setCodeSigningRequirement:)]) {
-    [connection setCodeSigningRequirement:requirement];
+static BOOL WriteAll(int fd, const void *bytes, size_t length) {
+  const uint8_t *cursor = (const uint8_t *)bytes;
+  size_t sent = 0;
+  while (sent < length) {
+    ssize_t count = write(fd, cursor + sent, length - sent);
+    if (count < 0 && errno == EINTR) continue;
+    if (count <= 0) return NO;
+    sent += (size_t)count;
   }
-  if (!GuestMeetsRequirement(connection.auditToken, requirement)) return NO;
-  connection.exportedInterface = [NSXPCInterface interfaceWithProtocol:@protocol(FontButtlerFinderSyncHandoff)];
-  connection.exportedObject = self;
-  [connection resume];
   return YES;
 }
 
-- (void)submitAction:(NSString *)action paths:(NSArray<NSString *> *)paths reply:(void (^)(NSString *))reply {
-  NSString *wire = [action isKindOfClass:[NSString class]] ? action : @"";
-  BOOL known = [wire isEqualToString:@"install"] || [wire isEqualToString:@"installAs"];
-  if (!known) {
-    if (reply) reply(@"Unknown Finder Sync action.");
-    return;
+static BOOL ReadAll(int fd, void *bytes, size_t length) {
+  uint8_t *cursor = (uint8_t *)bytes;
+  size_t got = 0;
+  while (got < length) {
+    ssize_t count = read(fd, cursor + got, length - got);
+    if (count < 0 && errno == EINTR) continue;
+    if (count <= 0) return NO;
+    got += (size_t)count;
   }
-  NSArray<NSString *> *incoming = [paths isKindOfClass:[NSArray class]] ? paths : @[];
-  if (incoming.count > kFinderSyncMaxFiles) {
-    DispatchHandoff(wire, @[], true);
-    if (reply) reply(nil);
-    return;
-  }
-  DispatchHandoff(wire, incoming, false);
-  if (reply) reply(nil);
+  return YES;
 }
 
-@end
+static BOOL PeerIsAgent(int fd) {
+  audit_token_t token;
+  memset(&token, 0, sizeof(token));
+  socklen_t length = (socklen_t)sizeof(token);
+  if (getsockopt(fd, SOL_LOCAL, LOCAL_PEERTOKEN, &token, &length) != 0) return NO;
+  if (length != sizeof(token)) return NO;
+  return GuestMeetsRequirement(token, CurrentAgentRequirement());
+}
 
-static FontButtlerFinderSyncListener *g_service = nil;
+// The group-container path does not fit in sockaddr_un.sun_path (104 bytes)
+// once a real home directory is included. The socket is in the per-user
+// temporary directory, mode 0600, and the peer must be this build's agent.
+static BOOL SocketPath(char *out, size_t outSize) {
+  if (!out || outSize < 8) return NO;
+  char temp[PATH_MAX];
+  size_t wrote = confstr(_CS_DARWIN_USER_TEMP_DIR, temp, sizeof(temp));
+  if (wrote == 0 || wrote >= sizeof(temp)) return NO;
+  const char *separator = temp[strlen(temp) - 1] == '/' ? "" : "/";
+  int formatted = snprintf(out, outSize, "%s%s%s", temp, separator, CurrentSocketName().UTF8String);
+  if (formatted <= 0 || (size_t)formatted >= outSize) return NO;
+  if ((size_t)formatted >= sizeof(((struct sockaddr_un *)0)->sun_path)) return NO;
+  return YES;
+}
 
-static void StartListener(void) {
-  if (g_service) return;
-  g_service = [FontButtlerFinderSyncListener new];
-  [g_service start];
+static void ReplyOk(int fd, BOOL ok) {
+  NSDictionary *payload = @{@"ok" : @(ok)};
+  NSData *json = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+  if (!json || json.length == 0 || json.length > kMaxFrame) return;
+  uint32_t length = CFSwapInt32HostToBig((uint32_t)json.length);
+  WriteAll(fd, &length, sizeof(length));
+  WriteAll(fd, json.bytes, json.length);
+}
+
+static void HandleClient(int fd) {
+  int yes = 1;
+  setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &yes, sizeof(yes));
+  struct timeval budget;
+  budget.tv_sec = 2;
+  budget.tv_usec = 0;
+  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &budget, sizeof(budget));
+  if (!PeerIsAgent(fd)) {
+    close(fd);
+    return;
+  }
+  uint32_t length = 0;
+  if (!ReadAll(fd, &length, sizeof(length))) {
+    close(fd);
+    return;
+  }
+  length = CFSwapInt32BigToHost(length);
+  if (length == 0 || length > kMaxFrame) {
+    close(fd);
+    return;
+  }
+  NSMutableData *data = [NSMutableData dataWithLength:length];
+  if (!ReadAll(fd, data.mutableBytes, length)) {
+    close(fd);
+    return;
+  }
+  id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+  if (![json isKindOfClass:[NSDictionary class]]) {
+    ReplyOk(fd, NO);
+    close(fd);
+    return;
+  }
+  NSString *action = [json[@"action"] isKindOfClass:[NSString class]] ? json[@"action"] : @"";
+  BOOL known = [action isEqualToString:@"install"] || [action isEqualToString:@"installAs"];
+  if (!known) {
+    ReplyOk(fd, NO);
+    close(fd);
+    return;
+  }
+  BOOL overflow = [json[@"overflow"] boolValue];
+  NSArray *paths = [json[@"paths"] isKindOfClass:[NSArray class]] ? json[@"paths"] : @[];
+  if (!overflow && paths.count > kFinderSyncMaxFiles) overflow = YES;
+  NSMutableArray<NSString *> *accepted = [NSMutableArray array];
+  if (!overflow) {
+    for (id item in paths) {
+      if (![item isKindOfClass:[NSString class]]) continue;
+      [accepted addObject:item];
+    }
+  }
+  DispatchHandoff(action, overflow ? @[] : accepted, overflow);
+  ReplyOk(fd, YES);
+  close(fd);
+}
+
+static void AcceptLoop(void) {
+  int listenFd = g_listenFd;
+  while (listenFd >= 0) {
+    int client = accept(listenFd, NULL, NULL);
+    if (client < 0) {
+      if (errno == EINTR) continue;
+      if (g_listenFd < 0) return;
+      continue;
+    }
+    HandleClient(client);
+  }
+}
+
+static void StartSocket(void) {
+  if (g_listenFd >= 0) return;
+  signal(SIGPIPE, SIG_IGN);
+  char socketPath[sizeof(((struct sockaddr_un *)0)->sun_path)];
+  if (!SocketPath(socketPath, sizeof(socketPath))) return;
+  struct stat existing;
+  if (lstat(socketPath, &existing) == 0) {
+    if (S_ISLNK(existing.st_mode)) return;
+    if (!S_ISSOCK(existing.st_mode) || existing.st_uid != getuid()) return;
+    unlink(socketPath);
+  }
+  int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+  if (fd < 0) return;
+  struct sockaddr_un address;
+  memset(&address, 0, sizeof(address));
+  address.sun_family = AF_UNIX;
+  if (strlcpy(address.sun_path, socketPath, sizeof(address.sun_path)) >= sizeof(address.sun_path)) {
+    close(fd);
+    return;
+  }
+  if (bind(fd, (struct sockaddr *)&address, (socklen_t)sizeof(address)) != 0) {
+    close(fd);
+    return;
+  }
+  fchmod(fd, 0600);
+  chmod(socketPath, 0600);
+  if (listen(fd, 16) != 0) {
+    close(fd);
+    unlink(socketPath);
+    return;
+  }
+  int flags = fcntl(fd, F_GETFD);
+  if (flags >= 0) fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+  g_listenFd = fd;
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    AcceptLoop();
+  });
+}
+
+// macOS 13+ registers the LaunchAgent with launchd. Earlier systems have no
+// SMAppService, and this process does not listen on the Mach name itself.
+static NSString *RegisterAgent(void) {
+  NSString *statusName = @"unsupported";
+  NSString *errorText = @"Finder Sync handoff needs macOS 13 so launchd can vend the Mach service.";
+  if (@available(macOS 13.0, *)) {
+    errorText = @"";
+    SMAppService *service = [SMAppService agentServiceWithPlistName:CurrentAgentPlistName()];
+    NSError *error = nil;
+    if (service.status != SMAppServiceStatusEnabled) {
+      [service registerAndReturnError:&error];
+    }
+    SMAppServiceStatus status = service.status;
+    if (status == SMAppServiceStatusEnabled) statusName = @"enabled";
+    else if (status == SMAppServiceStatusRequiresApproval) statusName = @"requires-approval";
+    else if (status == SMAppServiceStatusNotFound) statusName = @"not-found";
+    else statusName = @"not-registered";
+    if (error.localizedDescription.length) errorText = error.localizedDescription;
+  }
+  NSDictionary *payload = @{
+    @"status" : statusName,
+    @"label" : CurrentAgentLabel(),
+    @"service" : CurrentServiceName(),
+    @"plist" : CurrentAgentPlistName(),
+    @"error" : errorText ?: @"",
+  };
+  NSData *data = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+  if (!data) return @"{\"status\":\"unavailable\"}";
+  return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"{\"status\":\"unavailable\"}";
 }
 
 static napi_value JsString(napi_env env, const char *text) {
@@ -375,7 +556,8 @@ static napi_value Register(napi_env env, napi_callback_info info) {
   napi_typeof(env, argv[0], &type);
   if (type != napi_function) return undefined;
 
-  StartListener();
+  StartSocket();
+  RegisterAgent();
 
   if (g_tsfn) {
     napi_release_threadsafe_function(g_tsfn, napi_tsfn_release);
@@ -384,11 +566,16 @@ static napi_value Register(napi_env env, napi_callback_info info) {
 
   napi_value resource_name;
   napi_create_string_utf8(env, "FontButlerFinderSyncReceiver", NAPI_AUTO_LENGTH, &resource_name);
-  napi_create_threadsafe_function(env, argv[0], nullptr, resource_name, 0, 1, nullptr, nullptr, nullptr, CallJs, &g_tsfn);
-  if (g_tsfn) napi_unref_threadsafe_function(env, g_tsfn);
+  napi_threadsafe_function created = nullptr;
+  napi_create_threadsafe_function(env, argv[0], nullptr, resource_name, 0, 1, nullptr, nullptr, nullptr, CallJs, &created);
+  if (created) napi_unref_threadsafe_function(env, created);
 
+  NSLock *lock = HandoffLock();
+  [lock lock];
+  g_tsfn = created;
   NSArray<NSDictionary *> *queued = g_queued;
   g_queued = nil;
+  [lock unlock];
   for (NSDictionary *item in queued) {
     HandoffCall *call = HandoffCallCreate(item[@"action"], item[@"paths"], [item[@"overflow"] boolValue]);
     if (call && g_tsfn) napi_call_threadsafe_function(g_tsfn, call, napi_tsfn_blocking);
@@ -397,11 +584,19 @@ static napi_value Register(napi_env env, napi_callback_info info) {
   return undefined;
 }
 
+static napi_value AgentStatus(napi_env env, napi_callback_info info) {
+  (void)info;
+  NSString *json = RegisterAgent();
+  return JsString(env, json.UTF8String);
+}
+
 static napi_value Init(napi_env env, napi_value exports) {
-  StartListener();
   napi_value registerFn;
   napi_create_function(env, "register", NAPI_AUTO_LENGTH, Register, nullptr, &registerFn);
   napi_set_named_property(env, exports, "register", registerFn);
+  napi_value statusFn;
+  napi_create_function(env, "agentStatus", NAPI_AUTO_LENGTH, AgentStatus, nullptr, &statusFn);
+  napi_set_named_property(env, exports, "agentStatus", statusFn);
   return exports;
 }
 

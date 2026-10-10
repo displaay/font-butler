@@ -4,9 +4,11 @@ import FinderSync
 /// Finder Sync extension for Font Buttler.
 ///
 /// This process never copies, activates, or installs a font. A click sends
-/// `{action, paths}` to the containing app over that build's app-group Mach
-/// service. If the app is not running, this launches it with
-/// `openApplication` and no file URLs, then retries the connection.
+/// `{action, paths}` to the launchd-vended Mach service for this build's
+/// app group. The listener is the signed helper in the containing app, not
+/// the Electron process. If that service is down, this launches the app
+/// with `openApplication` and no file URLs, then retries the connection so
+/// the app can register its LaunchAgent.
 /// There is no URL scheme and no Apple event: any page could open a URL,
 /// and an open-document event is delivered as coming from Launch Services.
 ///
@@ -147,8 +149,12 @@ private func sendFinderSyncHandoff(service: String, action: String, paths: [Stri
     let remote = connection.remoteObjectProxyWithErrorHandler { _ in
         attempt.fail()
     } as! FontButtlerFinderSyncHandoff
-    remote.submitAction(action, paths: paths) { _ in
-        attempt.succeed()
+    remote.submitAction(action, paths: paths) { error in
+        if error == nil {
+            attempt.succeed()
+        } else {
+            attempt.fail()
+        }
     }
     let slice = timeout > 0 ? timeout : 0.05
     _ = attempt.semaphore.wait(timeout: .now() + slice)
