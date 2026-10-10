@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import net from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -20,8 +21,10 @@ import {
   FINDER_SYNC_SYSTEM_FONTS_ROOT,
   FINDER_SYNC_TEAM_ID,
   FINDER_SYNC_TEST_BUNDLE_ID,
+  FINDER_SYNC_MISSING_APP,
   FINDER_SYNC_TOO_LARGE,
   FINDER_SYNC_TOO_MANY_FILES,
+  FINDER_SYNC_TREE_TOO_DEEP,
   FINDER_SYNC_CHANGED_BEFORE_INSTALL,
   finderSyncAgentBundleProgram,
   finderSyncAgentCodeSigningRequirement,
@@ -33,6 +36,7 @@ import {
   finderSyncAppGroupIsTeamPrefixed,
   finderSyncAppexBundlePath,
   finderSyncBundleId,
+  finderSyncClangArchArgs,
   finderSyncCodeSigningRequirement,
   finderSyncMachService,
   finderSyncMenuTitle,
@@ -43,14 +47,22 @@ import {
   fontMagicKind,
   formatFinderSyncRejections,
   isSafeFinderSyncPath,
+  parseLaunchctlProgram,
   parsePluginkitFinderSync,
+  planFinderSyncAgentRegistration,
   planFinderSyncRegistration,
+  prepareFinderSyncSocket,
+  rememberFinderSyncRequest,
   refreshFinderSyncRegistration,
   revalidateFinderSyncHandles,
   validateFinderSyncSelection,
 } from './finder-sync.mjs'
 import { compileFinderSyncReceiverAddon } from '../scripts/build-finder-sync-receiver.mjs'
-import { compileFinderSyncAgent, finderSyncAgentFailures } from '../scripts/build-finder-sync-agent.mjs'
+import {
+  compileFinderSyncAgent,
+  finderSyncAgentEntitlementsPlist,
+  finderSyncAgentFailures,
+} from '../scripts/build-finder-sync-agent.mjs'
 import { spawnSync } from 'node:child_process'
 import { finderSyncReleaseFailures } from '../scripts/assert-notarized-mac-release.mjs'
 import {
@@ -390,7 +402,7 @@ test('appex signing is inside-out and the release check requires sandbox, team, 
     false,
   )
 
-  const display = `Authority=Developer ID Application: ${DEVELOPER_ID_IDENTITY}\nTeamIdentifier=${DEVELOPER_ID_TEAM}`
+  const display = `Authority=Developer ID Application: ${DEVELOPER_ID_IDENTITY}\nTeamIdentifier=${DEVELOPER_ID_TEAM}\nflags=0x10000(runtime)`
   assert.deepEqual(
     finderSyncAppexFailures({
       present: true,
@@ -538,12 +550,18 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(swift, /"Install"/)
   assert.match(swift, /Install as…/)
   assert.match(swift, /FontButtlerInstallTitle/)
-  assert.match(swift, /openApplication/)
   assert.match(swift, /parentAppURL/)
   assert.match(swift, /NSXPCConnection/)
   assert.match(swift, /submitAction/)
+  assert.match(swift, /statusWithReply/)
+  assert.match(swift, /UUID\(\)\.uuidString/)
   assert.match(swift, /"installAs"/)
-  assert.match(swift, /addingTimeInterval\(10\)/)
+  assert.match(swift, /#available\(macOS 13\.0, \*\)/)
+  assert.match(swift, /finderSyncMissingApp/)
+  assert.match(swift, /finderSyncAgentDisabled/)
+  assert.match(swift, /NSAlert/)
+  assert.ok(swift.includes(FINDER_SYNC_MISSING_APP))
+  assert.doesNotMatch(swift, /addingTimeInterval\(10\)/)
   assert.doesNotMatch(swift, /appleEvent|withApplicationAt|AEEvent|NSAppleEventDescriptor/)
   assert.doesNotMatch(swift, /fileURLWithPath: "\/"/)
   const releaseRequirement = finderSyncCodeSigningRequirement(false).replaceAll('"', '\\"')
@@ -563,8 +581,13 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(agent, /SecRequirementCreateWithString/)
   assert.match(agent, /kSecCSStrictValidate/)
   assert.match(agent, /LOCAL_PEERTOKEN/)
+  assert.match(agent, /SecCodeCopyGuestWithAttributes/)
+  assert.match(agent, /kSecGuestAttributeAudit/)
   assert.match(agent, /_CS_DARWIN_USER_TEMP_DIR/)
-  assert.doesNotMatch(agent, /strcmp|kSecCodeInfoTeamIdentifier|kSecGuestAttributePid|getpid/)
+  assert.match(agent, /g_launchFailed/)
+  assert.ok(agent.includes(FINDER_SYNC_MISSING_APP))
+  assert.match(agent, /openApplicationAtURL/)
+  assert.doesNotMatch(agent, /strcmp|kSecCodeInfoTeamIdentifier|kSecGuestAttributePid|LOCAL_PEERPID|getpid/)
   assert.ok(receiver.includes(releaseAgentRequirement))
   assert.ok(receiver.includes(testAgentRequirement))
   assert.ok(receiver.includes(finderSyncSocketName(false)))
@@ -576,7 +599,17 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(receiver, /kSecCSStrictValidate/)
   assert.match(receiver, /SecCodeCopyGuestWithAttributes/)
   assert.match(receiver, /kSecGuestAttributeAudit/)
+  assert.match(receiver, /openSystemSettingsLoginItems/)
+  assert.match(receiver, /unregisterAndReturnError/)
+  assert.match(receiver, /registerAndReturnError/)
+  assert.match(receiver, /umask\(0077\)/)
+  assert.match(receiver, /TempDirIsUserPrivate/)
+  assert.match(receiver, /S_ISSOCK/)
+  assert.match(receiver, /st_uid != getuid/)
+  assert.match(receiver, /agentServiceWithPlistName:CurrentAgentPlistName\(\)/)
+  assert.doesNotMatch(receiver, /agentServiceWithPlistName:kRelease/)
   assert.doesNotMatch(receiver, /initWithMachServiceName|setCodeSigningRequirement/)
+  assert.doesNotMatch(receiver, /LOCAL_PEERPID|kSecGuestAttributePid/)
   assert.ok(nativeTest.includes(releaseRequirement))
   assert.match(nativeTest, /SecCodeCopySelf/)
   assert.match(nativeTest, /kSecCSStrictValidate/)
@@ -603,6 +636,13 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(main, /refreshFinderSyncRegistration/)
   assert.match(main, /handles: checked\.handles/)
   assert.match(main, /open-finder-extensions/)
+  assert.match(main, /open-finder-sync-login-items/)
+  assert.match(main, /openLoginItems/)
+  assert.match(main, /registerAgent/)
+  assert.match(main, /unregisterAgent/)
+  assert.match(main, /rememberFinderSyncRequest/)
+  assert.match(main, /planFinderSyncAgentRegistration/)
+  assert.match(main, /fromLaunchd \|\| record\.program/)
   assert.match(main, /FINDER_SYNC_SETTINGS_URL/)
   assert.equal(
     FINDER_SYNC_SETTINGS_URL,
@@ -672,7 +712,7 @@ test('Finder Sync LaunchAgent plist is per flavour and the roundtrip check skips
     executablePresent: true,
     programMatches: true,
     testFeed: false,
-    codesignDisplay: `Identifier=${finderSyncAgentLabel(false)}\nAuthority=Developer ID Application: DANIEL QUISEK (A7WWML89LQ)\nTeamIdentifier=A7WWML89LQ`,
+    codesignDisplay: `Identifier=${finderSyncAgentLabel(false)}\nAuthority=Developer ID Application: DANIEL QUISEK (A7WWML89LQ)\nTeamIdentifier=A7WWML89LQ\nflags=0x10000(runtime)`,
     codesignVerifyStatus: 0,
     entitlementText: `<string>${finderSyncAppGroup(false)}</string>`,
     requireDeveloperId: true,
@@ -696,7 +736,16 @@ test('Finder Sync LaunchAgent plist is per flavour and the roundtrip check skips
   assert.match(roundtrip, /--finder-sync-agent-status/)
   assert.match(roundtrip, /--sign', '-', '--identifier'/)
   assert.match(roundtrip, /ping ok/)
+  assert.match(roundtrip, /submit ok/)
+  assert.match(roundtrip, /FinderSync\.Wrong/)
+  assert.match(roundtrip, /rejected:/)
   assert.match(roundtrip, /ad-hoc/)
+  assert.doesNotMatch(finderSyncAgentEntitlementsPlist(false), /allow-jit/)
+  assert.match(finderSyncAgentEntitlementsPlist(false), new RegExp(`<string>${finderSyncAppGroup(false)}</string>`))
+  assert.doesNotMatch(finderSyncAgentEntitlementsPlist(true), new RegExp(`<string>${finderSyncAppGroup(false)}</string>`))
+  assert.deepEqual(finderSyncClangArchArgs(3), [['-arch', 'arm64']])
+  assert.deepEqual(finderSyncClangArchArgs('x64'), [['-arch', 'x86_64']])
+  assert.deepEqual(finderSyncClangArchArgs('universal'), [['-arch', 'arm64'], ['-arch', 'x86_64']])
   const scriptPath = fileURLToPath(new URL('../scripts/finder-sync-roundtrip-check', import.meta.url))
   const ran = spawnSync(process.execPath, [scriptPath], { encoding: 'utf8' })
   if (process.platform !== 'darwin') {
@@ -807,6 +856,155 @@ test('Finder Sync resolves /tmp and /var, caps the selection, and rechecks the o
   raced.close()
 })
 
+test('a stale socket is replaced only when this user owns it, then another bind works', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'font-butler-socket-'))
+  const servers = []
+  try {
+    const sock = path.join(dir, 'fontbutler-finder-sync.sock')
+    const server = net.createServer()
+    servers.push(server)
+    await new Promise((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(sock, resolve)
+    })
+    const replaced = prepareFinderSyncSocket(sock, {
+      lstatSync,
+      unlinkSync,
+      getuid: () => lstatSync(sock).uid,
+    })
+    assert.equal(replaced.ok, true)
+    assert.equal(replaced.unlinked, true)
+    assert.equal(replaced.reason, 'replaced')
+    assert.throws(() => lstatSync(sock))
+    const next = net.createServer()
+    servers.push(next)
+    await new Promise((resolve, reject) => {
+      next.once('error', reject)
+      next.listen(sock, resolve)
+    })
+
+    const file = path.join(dir, 'not-a-socket')
+    writeFileSync(file, 'keep')
+    const kept = prepareFinderSyncSocket(file, {
+      lstatSync,
+      unlinkSync,
+      getuid: () => lstatSync(file).uid,
+    })
+    assert.equal(kept.unlinked, false)
+    assert.equal(kept.reason, 'not-owned-socket')
+    assert.equal(readFileSync(file, 'utf8'), 'keep')
+
+    const link = path.join(dir, 'link.sock')
+    symlinkSync(file, link)
+    const linked = prepareFinderSyncSocket(link, {
+      lstatSync,
+      unlinkSync,
+      getuid: () => lstatSync(file).uid,
+    })
+    assert.equal(linked.reason, 'symlink')
+    assert.equal(linked.unlinked, false)
+    assert.equal(lstatSync(link).isSymbolicLink(), true)
+
+    let unlinked = false
+    const foreign = prepareFinderSyncSocket(sock, {
+      lstatSync: () => ({ isSymbolicLink: () => false, isSocket: () => true, uid: 1 }),
+      unlinkSync: () => {
+        unlinked = true
+      },
+      getuid: () => 2,
+    })
+    assert.equal(foreign.reason, 'not-owned-socket')
+    assert.equal(unlinked, false)
+  } finally {
+    for (const server of servers) server.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('agent registration stays on this flavour and repeats a click only once', () => {
+  const releaseProgram = '/Applications/Font Buttler.app/Contents/Helpers/FontButtlerFinderSyncAgent.app/Contents/MacOS/FontButtlerFinderSyncAgent'
+  const moved = planFinderSyncAgentRegistration({
+    testFeed: false,
+    currentProgram: '/Applications/Font Buttler Moved.app/Contents/Helpers/FontButtlerFinderSyncAgent.app/Contents/MacOS/FontButtlerFinderSyncAgent',
+    registeredProgram: releaseProgram,
+    status: 'enabled',
+  })
+  assert.equal(moved.action, 'reregister')
+  assert.equal(moved.label, finderSyncAgentLabel(false))
+  assert.equal(moved.plist, finderSyncAgentPlistName(false))
+  const same = planFinderSyncAgentRegistration({
+    testFeed: false,
+    currentProgram: releaseProgram,
+    registeredProgram: releaseProgram,
+    status: 'requires-approval',
+  })
+  assert.equal(same.action, 'keep')
+  assert.equal(same.reason, 'requires-approval')
+  const optedOut = planFinderSyncAgentRegistration({
+    testFeed: true,
+    currentProgram: '/Applications/Font Buttler Test.app/Contents/Helpers/FontButtlerFinderSyncAgent.app/Contents/MacOS/FontButtlerFinderSyncAgent',
+    registeredProgram: '',
+    status: 'enabled',
+    optedOut: true,
+  })
+  assert.equal(optedOut.action, 'unregister')
+  assert.equal(optedOut.label, finderSyncAgentLabel(true))
+  assert.equal(optedOut.plist, finderSyncAgentPlistName(true))
+  assert.notEqual(optedOut.label, finderSyncAgentLabel(false))
+  assert.notEqual(optedOut.plist, finderSyncAgentPlistName(false))
+  const printed = parseLaunchctlProgram(
+    `gui/501/${finderSyncAgentLabel(true)} = {\n\tpath = /tmp/Font Buttler Test.app/Contents/MacOS/FontButtlerFinderSyncAgent\n}`,
+    finderSyncAgentLabel(true),
+  )
+  assert.equal(printed, '/tmp/Font Buttler Test.app/Contents/MacOS/FontButtlerFinderSyncAgent')
+  assert.equal(parseLaunchctlProgram(printed, finderSyncAgentLabel(false)), '')
+  const seen = new Map()
+  assert.equal(rememberFinderSyncRequest(seen, 'click-1', 1_000), false)
+  assert.equal(rememberFinderSyncRequest(seen, 'click-1', 1_000 + 60_000), true)
+  assert.equal(rememberFinderSyncRequest(seen, 'click-1', 1_000 + 3 * 60_000), false)
+})
+
+test('a folder nested more than 10 levels is refused, and file names keep their spaces', () => {
+  const names = new Map([['/Fonts/Deep', []]])
+  let cursor = '/Fonts/Deep'
+  for (let level = 0; level < 12; level += 1) {
+    const child = `${cursor}/d${level}`
+    names.set(cursor, [`d${level}`])
+    names.set(child, [])
+    cursor = child
+  }
+  const deep = validateFinderSyncSelection(['/Fonts/Deep'], {
+    lstatSync(filePath) {
+      if (filePath === '/Fonts' || filePath === '/Fonts/Deep' || names.has(filePath)) return fontStat('dir')
+      const error = new Error('missing')
+      error.code = 'ENOENT'
+      throw error
+    },
+    readdirSync(filePath) {
+      return names.get(filePath) ?? []
+    },
+    openSync() {
+      return 7
+    },
+    closeSync() {},
+    fstatSync() {
+      return fontStat('dir')
+    },
+  })
+  assert.equal(deep.limitError, null)
+  assert.equal(deep.paths.length, 0)
+  assert.equal(deep.rejected[0]?.reason, FINDER_SYNC_TREE_TOO_DEEP)
+
+  const spaced = validateFinderSyncSelection(['/Fonts/A.otf '], {
+    lstatSync() {
+      const error = new Error('missing')
+      error.code = 'ENOENT'
+      throw error
+    },
+  })
+  assert.equal(spaced.rejected[0]?.path, '/Fonts/A.otf ')
+})
+
 test('the native XPC rejection probe runs on macOS and is skipped elsewhere', () => {
   const result = runFinderSyncXpcRejectionTest()
   if (process.platform === 'darwin') {
@@ -844,7 +1042,7 @@ test('the release assert checks the stapled appex with a deep verify and spctl',
         }
         return {
           status: 0,
-          output: `Authority=Developer ID Application: ${DEVELOPER_ID_IDENTITY}\nTeamIdentifier=${DEVELOPER_ID_TEAM}`,
+          output: `Authority=Developer ID Application: ${DEVELOPER_ID_IDENTITY}\nTeamIdentifier=${DEVELOPER_ID_TEAM}\nflags=0x10000(runtime)`,
         }
       },
     })
@@ -864,7 +1062,7 @@ test('the release assert checks the stapled appex with a deep verify and spctl',
         }
         return {
           status: 0,
-          output: `Authority=Developer ID Application: ${DEVELOPER_ID_IDENTITY}\nTeamIdentifier=${DEVELOPER_ID_TEAM}`,
+          output: `Authority=Developer ID Application: ${DEVELOPER_ID_IDENTITY}\nTeamIdentifier=${DEVELOPER_ID_TEAM}\nflags=0x10000(runtime)`,
         }
       },
     })

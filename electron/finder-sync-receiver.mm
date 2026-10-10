@@ -118,6 +118,7 @@ static NSLock *HandoffLock(void) {
 
 typedef struct {
   char *action;
+  char *requestId;
   char **paths;
   size_t count;
   bool overflow;
@@ -127,10 +128,11 @@ static char *DupCString(const char *value) {
   return strdup(value ? value : "");
 }
 
-static HandoffCall *HandoffCallCreate(NSString *action, NSArray<NSString *> *paths, bool overflow) {
+static HandoffCall *HandoffCallCreate(NSString *action, NSArray<NSString *> *paths, bool overflow, NSString *requestId) {
   HandoffCall *call = (HandoffCall *)calloc(1, sizeof(HandoffCall));
   if (!call) return nullptr;
   call->action = DupCString(action.UTF8String);
+  call->requestId = DupCString(requestId.UTF8String);
   call->overflow = overflow;
   call->count = overflow ? 0 : paths.count;
   if (call->count > kFinderSyncMaxFiles) call->count = kFinderSyncMaxFiles;
@@ -145,6 +147,7 @@ static HandoffCall *HandoffCallCreate(NSString *action, NSArray<NSString *> *pat
 static void HandoffCallDestroy(HandoffCall *call) {
   if (!call) return;
   free(call->action);
+  free(call->requestId);
   for (size_t i = 0; i < call->count; i += 1) free(call->paths[i]);
   free(call->paths);
   free(call);
@@ -297,7 +300,7 @@ static BOOL GuestMeetsRequirement(audit_token_t token, NSString *requirementStri
   return signatureStatus == errSecSuccess;
 }
 
-static void DispatchHandoff(NSString *action, NSArray<NSString *> *paths, bool overflow) {
+static void DispatchHandoff(NSString *action, NSArray<NSString *> *paths, bool overflow, NSString *requestId) {
   NSLock *lock = HandoffLock();
   [lock lock];
   napi_threadsafe_function tsfn = g_tsfn;
@@ -307,12 +310,13 @@ static void DispatchHandoff(NSString *action, NSArray<NSString *> *paths, bool o
       @"action" : action ?: @"",
       @"paths" : overflow ? @[] : (paths ?: @[]),
       @"overflow" : @(overflow),
+      @"requestId" : requestId ?: @"",
     }];
     [lock unlock];
     return;
   }
   [lock unlock];
-  HandoffCall *call = HandoffCallCreate(action, paths, overflow);
+  HandoffCall *call = HandoffCallCreate(action, paths, overflow, requestId);
   if (call) napi_call_threadsafe_function(tsfn, call, napi_tsfn_blocking);
 }
 
@@ -424,7 +428,8 @@ static void HandleClient(int fd) {
       [accepted addObject:item];
     }
   }
-  DispatchHandoff(action, overflow ? @[] : accepted, overflow);
+  NSString *requestId = [json[@"requestId"] isKindOfClass:[NSString class]] ? json[@"requestId"] : @"";
+  DispatchHandoff(action, overflow ? @[] : accepted, overflow, requestId);
   ReplyOk(fd, YES);
   close(fd);
 }
@@ -442,32 +447,58 @@ static void AcceptLoop(void) {
   }
 }
 
+// The per-user temporary directory must already be a 0700 directory owned
+// by this user. Mode on the socket is not how the peer is authenticated.
+static BOOL TempDirIsUserPrivate(const char *temp) {
+  if (!temp || !temp[0]) return NO;
+  struct stat st;
+  if (lstat(temp, &st) != 0) return NO;
+  if (S_ISLNK(st.st_mode) || !S_ISDIR(st.st_mode)) return NO;
+  if (st.st_uid != getuid()) return NO;
+  if ((st.st_mode & 0777) != 0700) return NO;
+  return YES;
+}
+
 static void StartSocket(void) {
   if (g_listenFd >= 0) return;
   signal(SIGPIPE, SIG_IGN);
+  char temp[PATH_MAX];
+  size_t wrote = confstr(_CS_DARWIN_USER_TEMP_DIR, temp, sizeof(temp));
+  if (wrote == 0 || wrote >= sizeof(temp)) return;
+  if (!TempDirIsUserPrivate(temp)) return;
   char socketPath[sizeof(((struct sockaddr_un *)0)->sun_path)];
   if (!SocketPath(socketPath, sizeof(socketPath))) return;
+  mode_t previousMask = umask(0077);
   struct stat existing;
   if (lstat(socketPath, &existing) == 0) {
-    if (S_ISLNK(existing.st_mode)) return;
-    if (!S_ISSOCK(existing.st_mode) || existing.st_uid != getuid()) return;
+    if (S_ISLNK(existing.st_mode) || !S_ISSOCK(existing.st_mode) || existing.st_uid != getuid()) {
+      umask(previousMask);
+      return;
+    }
     unlink(socketPath);
   }
   int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-  if (fd < 0) return;
+  if (fd < 0) {
+    umask(previousMask);
+    return;
+  }
+  fchmod(fd, 0600);
   struct sockaddr_un address;
   memset(&address, 0, sizeof(address));
   address.sun_family = AF_UNIX;
   if (strlcpy(address.sun_path, socketPath, sizeof(address.sun_path)) >= sizeof(address.sun_path)) {
     close(fd);
+    umask(previousMask);
     return;
   }
   if (bind(fd, (struct sockaddr *)&address, (socklen_t)sizeof(address)) != 0) {
     close(fd);
+    umask(previousMask);
     return;
   }
   fchmod(fd, 0600);
   chmod(socketPath, 0600);
+  umask(previousMask);
   if (listen(fd, 16) != 0) {
     close(fd);
     unlink(socketPath);
@@ -481,35 +512,80 @@ static void StartSocket(void) {
   });
 }
 
-// macOS 13+ registers the LaunchAgent with launchd. Earlier systems have no
-// SMAppService, and this process does not listen on the Mach name itself.
-static NSString *RegisterAgent(void) {
+static NSString *g_lastAgentError = nil;
+static BOOL g_didRegisterAgent = NO;
+
+static NSString *JsonString(NSDictionary *payload) {
+  NSData *data = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+  if (!data) return @"{\"status\":\"unavailable\"}";
+  return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"{\"status\":\"unavailable\"}";
+}
+
+// Reads this flavour's SMAppService status. It does not register or unregister.
+static NSString *AgentStatusJSON(void) {
   NSString *statusName = @"unsupported";
   NSString *errorText = @"Finder Sync handoff needs macOS 13 so launchd can vend the Mach service.";
   if (@available(macOS 13.0, *)) {
-    errorText = @"";
+    errorText = g_lastAgentError ?: @"";
     SMAppService *service = [SMAppService agentServiceWithPlistName:CurrentAgentPlistName()];
-    NSError *error = nil;
-    if (service.status != SMAppServiceStatusEnabled) {
-      [service registerAndReturnError:&error];
-    }
     SMAppServiceStatus status = service.status;
     if (status == SMAppServiceStatusEnabled) statusName = @"enabled";
     else if (status == SMAppServiceStatusRequiresApproval) statusName = @"requires-approval";
     else if (status == SMAppServiceStatusNotFound) statusName = @"not-found";
     else statusName = @"not-registered";
-    if (error.localizedDescription.length) errorText = error.localizedDescription;
   }
-  NSDictionary *payload = @{
+  return JsonString(@{
     @"status" : statusName,
     @"label" : CurrentAgentLabel(),
     @"service" : CurrentServiceName(),
     @"plist" : CurrentAgentPlistName(),
     @"error" : errorText ?: @"",
-  };
-  NSData *data = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
-  if (!data) return @"{\"status\":\"unavailable\"}";
-  return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"{\"status\":\"unavailable\"}";
+  });
+}
+
+// One registerAndReturnError per launch, for this flavour's plist only.
+static NSString *RegisterAgent(void) {
+  if (@available(macOS 13.0, *)) {
+    if (!g_didRegisterAgent) {
+      g_didRegisterAgent = YES;
+      SMAppService *service = [SMAppService agentServiceWithPlistName:CurrentAgentPlistName()];
+      NSError *error = nil;
+      if (service.status != SMAppServiceStatusEnabled) {
+        BOOL registered = [service registerAndReturnError:&error];
+        if (!registered) {
+          g_lastAgentError = error.localizedDescription.length ? error.localizedDescription
+                                                               : @"SMAppService registration failed.";
+        } else {
+          g_lastAgentError = nil;
+        }
+      }
+    }
+  }
+  return AgentStatusJSON();
+}
+
+static NSString *UnregisterAgent(void) {
+  g_didRegisterAgent = NO;
+  if (@available(macOS 13.0, *)) {
+    SMAppService *service = [SMAppService agentServiceWithPlistName:CurrentAgentPlistName()];
+    NSError *error = nil;
+    BOOL removed = [service unregisterAndReturnError:&error];
+    if (!removed && service.status != SMAppServiceStatusNotRegistered) {
+      g_lastAgentError = error.localizedDescription.length ? error.localizedDescription
+                                                           : @"SMAppService unregister failed.";
+    } else {
+      g_lastAgentError = nil;
+    }
+  }
+  return AgentStatusJSON();
+}
+
+static NSString *OpenLoginItems(void) {
+  if (@available(macOS 13.0, *)) {
+    [SMAppService openSystemSettingsLoginItems];
+    return @"{\"ok\":true}";
+  }
+  return @"{\"ok\":false,\"error\":\"Finder Sync login items need macOS 13.\"}";
 }
 
 static napi_value JsString(napi_env env, const char *text) {
@@ -528,6 +604,7 @@ static void CallJs(napi_env env, napi_value js_callback, void *context, void *da
   napi_value payload;
   napi_create_object(env, &payload);
   napi_set_named_property(env, payload, "action", JsString(env, call->action));
+  napi_set_named_property(env, payload, "requestId", JsString(env, call->requestId));
 
   napi_value paths;
   napi_create_array_with_length(env, call->count, &paths);
@@ -557,7 +634,6 @@ static napi_value Register(napi_env env, napi_callback_info info) {
   if (type != napi_function) return undefined;
 
   StartSocket();
-  RegisterAgent();
 
   if (g_tsfn) {
     napi_release_threadsafe_function(g_tsfn, napi_tsfn_release);
@@ -577,7 +653,7 @@ static napi_value Register(napi_env env, napi_callback_info info) {
   g_queued = nil;
   [lock unlock];
   for (NSDictionary *item in queued) {
-    HandoffCall *call = HandoffCallCreate(item[@"action"], item[@"paths"], [item[@"overflow"] boolValue]);
+    HandoffCall *call = HandoffCallCreate(item[@"action"], item[@"paths"], [item[@"overflow"] boolValue], item[@"requestId"]);
     if (call && g_tsfn) napi_call_threadsafe_function(g_tsfn, call, napi_tsfn_blocking);
     else HandoffCallDestroy(call);
   }
@@ -586,8 +662,22 @@ static napi_value Register(napi_env env, napi_callback_info info) {
 
 static napi_value AgentStatus(napi_env env, napi_callback_info info) {
   (void)info;
-  NSString *json = RegisterAgent();
-  return JsString(env, json.UTF8String);
+  return JsString(env, AgentStatusJSON().UTF8String);
+}
+
+static napi_value RegisterAgentExport(napi_env env, napi_callback_info info) {
+  (void)info;
+  return JsString(env, RegisterAgent().UTF8String);
+}
+
+static napi_value UnregisterAgentExport(napi_env env, napi_callback_info info) {
+  (void)info;
+  return JsString(env, UnregisterAgent().UTF8String);
+}
+
+static napi_value OpenLoginItemsExport(napi_env env, napi_callback_info info) {
+  (void)info;
+  return JsString(env, OpenLoginItems().UTF8String);
 }
 
 static napi_value Init(napi_env env, napi_value exports) {
@@ -597,6 +687,15 @@ static napi_value Init(napi_env env, napi_value exports) {
   napi_value statusFn;
   napi_create_function(env, "agentStatus", NAPI_AUTO_LENGTH, AgentStatus, nullptr, &statusFn);
   napi_set_named_property(env, exports, "agentStatus", statusFn);
+  napi_value registerAgentFn;
+  napi_create_function(env, "registerAgent", NAPI_AUTO_LENGTH, RegisterAgentExport, nullptr, &registerAgentFn);
+  napi_set_named_property(env, exports, "registerAgent", registerAgentFn);
+  napi_value unregisterAgentFn;
+  napi_create_function(env, "unregisterAgent", NAPI_AUTO_LENGTH, UnregisterAgentExport, nullptr, &unregisterAgentFn);
+  napi_set_named_property(env, exports, "unregisterAgent", unregisterAgentFn);
+  napi_value openLoginItemsFn;
+  napi_create_function(env, "openLoginItems", NAPI_AUTO_LENGTH, OpenLoginItemsExport, nullptr, &openLoginItemsFn);
+  napi_set_named_property(env, exports, "openLoginItems", openLoginItemsFn);
   return exports;
 }
 

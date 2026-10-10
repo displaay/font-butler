@@ -1,23 +1,25 @@
 #!/usr/bin/env node
 /**
  * After a signed macOS build, register the Finder Sync LaunchAgent from the
- * app, ping the launchd-vended Mach service, and confirm an ad-hoc client is
- * rejected.
+ * app, ping the launchd-vended Mach service, submit one font path through
+ * the helper socket, and confirm the negative clients are rejected.
  *
  *   scripts/finder-sync-roundtrip-check [/path/to/Font Buttler.app]
  *
- * The positive client is signed with Developer ID and the appex identifier,
- * which is the listener's code-signing requirement. The negative client is
- * ad-hoc signed with that same identifier and must not reach ping.
+ * The positive client is signed with Developer ID and the appex identifier.
+ * One negative client is ad-hoc signed with that identifier. Another is
+ * Developer ID signed with a different identifier. Both must print
+ * "rejected: <reason>" and must not print a success line.
  * Off macOS this prints a skip line and exits 0.
  */
-import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readAppTestFeedMarker } from '../electron/app-update-install.mjs'
-import { finderSyncBundleId, finderSyncMachService } from '../electron/finder-sync.mjs'
+import { finderSyncBundleId, finderSyncMachService, finderSyncSocketName } from '../electron/finder-sync.mjs'
 import { DEVELOPER_ID_IDENTITY } from './mac-signing.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -52,6 +54,16 @@ function developerId() {
 
 function run(command, args, options = {}) {
   return spawnSync(command, args, { encoding: 'utf8', ...options })
+}
+
+function assertRejected(text, label) {
+  const reason = String(text ?? '').match(/rejected:\s*(\S.*)/)
+  if (!reason || reason[1].trim().length < 3) {
+    fail(`The ${label} client did not report a rejection reason.`)
+  }
+  if (text.includes('ping ok') || text.includes('submit ok')) {
+    fail(`The ${label} client was accepted.`)
+  }
 }
 
 function main() {
@@ -133,6 +145,26 @@ function main() {
     const negativeText = `${negativeDisplay.stdout ?? ''}\n${negativeDisplay.stderr ?? ''}`
     if (!/Signature=adhoc/i.test(negativeText)) fail('The negative client is not ad-hoc signed.')
 
+    const wrongId = 'app.fontbutler.desktop.FinderSync.Wrong'
+    const wrong = path.join(temp, 'ping-wrong-identifier')
+    run('cp', [positive, wrong])
+    const wrongSigned = run('codesign', [
+      '--force',
+      '--sign',
+      identity,
+      '--identifier',
+      wrongId,
+      '--options',
+      'runtime',
+      wrong,
+    ])
+    if (wrongSigned.status !== 0) fail(wrongSigned.stderr || 'Could not sign the wrong-identifier client.')
+    const wrongDisplay = run('codesign', ['-dv', '--verbose=4', wrong])
+    const wrongText = `${wrongDisplay.stdout ?? ''}\n${wrongDisplay.stderr ?? ''}`
+    if (!new RegExp(`Identifier=${wrongId.replaceAll('.', '\\.')}(?:\\s|$)`).test(wrongText)) {
+      fail('The wrong-identifier client is not signed as a different identifier.')
+    }
+
     const ping = run(positive, [service], { timeout: 20000 })
     const pingText = `${ping.stdout ?? ''}\n${ping.stderr ?? ''}`
     console.log(`positive: ${pingText.trim() || `exit ${ping.status}`}`)
@@ -142,9 +174,33 @@ function main() {
     const rejected = run(negative, [service], { timeout: 20000 })
     const rejectedText = `${rejected.stdout ?? ''}\n${rejected.stderr ?? ''}`
     console.log(`negative: ${rejectedText.trim() || `exit ${rejected.status}`}`)
-    if (rejected.stdout?.includes('ping ok') || !rejectedText.includes('rejected')) {
-      fail('The ad-hoc client was not rejected.')
+    assertRejected(rejectedText, 'ad-hoc')
+    const wrongRun = run(wrong, [service], { timeout: 20000 })
+    const wrongRunText = `${wrongRun.stdout ?? ''}\n${wrongRun.stderr ?? ''}`
+    console.log(`wrong-identifier: ${wrongRunText.trim() || `exit ${wrongRun.status}`}`)
+    assertRejected(wrongRunText, 'wrong-identifier')
+
+    const appProcess = spawn(binary, [], { detached: true, stdio: 'ignore' })
+    appProcess.unref()
+    const socketName = finderSyncSocketName(testFeed)
+    const tempDir = run('getconf', ['DARWIN_USER_TEMP_DIR'])
+    const socketDir = (tempDir.stdout ?? '').trim()
+    if (!socketDir) fail('DARWIN_USER_TEMP_DIR was empty.')
+    const socketPath = path.join(socketDir, socketName)
+    const deadline = Date.now() + 30000
+    while (!existsSync(socketPath)) {
+      if (Date.now() > deadline) fail(`The app did not open ${socketPath}.`)
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250)
     }
+    const fontPath = path.join(temp, 'FontButlerRoundtripProbe.otf')
+    writeFileSync(fontPath, Buffer.from([0x4f, 0x54, 0x54, 0x4f, 0, 0, 0, 0]))
+    const submitted = run(positive, [service, 'submit', fontPath, randomUUID()], { timeout: 40000 })
+    const submittedText = `${submitted.stdout ?? ''}\n${submitted.stderr ?? ''}`
+    console.log(`submit: ${submittedText.trim() || `exit ${submitted.status}`}`)
+    if (submitted.status !== 0 || !submitted.stdout?.includes('submit ok')) {
+      fail('The Developer ID client did not deliver submitAction through the helper.')
+    }
+    rmSync(fontPath, { force: true })
     console.log('roundtrip: ok')
   } finally {
     rmSync(temp, { recursive: true, force: true })

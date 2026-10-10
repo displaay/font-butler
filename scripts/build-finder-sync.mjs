@@ -376,6 +376,9 @@ export function finderSyncAppexFailures({
     }
     const team = codesignDisplay.match(/TeamIdentifier=([^\s]+)/)?.[1] ?? ''
     if (team !== teamId) failures.push(`The Finder Sync appex team ID is not ${teamId}.`)
+    if (!/flags=0x[0-9a-fA-F]+\([^)\n]*\bruntime\b/.test(codesignDisplay)) {
+      failures.push('The Finder Sync appex is not signed with the hardened runtime.')
+    }
   }
   return failures
 }

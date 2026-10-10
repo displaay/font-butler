@@ -27,7 +27,14 @@ export const FINDER_SYNC_MAX_BYTES = 2 * 1024 * 1024 * 1024
 export const FINDER_SYNC_TOO_MANY_FILES = 'That selection has more than 500 files.'
 export const FINDER_SYNC_TOO_LARGE = 'That selection is larger than 2 GB.'
 export const FINDER_SYNC_CHANGED_BEFORE_INSTALL = 'The file changed before it could be installed.'
-const FINDER_SYNC_TREE_DEPTH = 10
+export const FINDER_SYNC_TREE_DEPTH = 10
+export const FINDER_SYNC_TREE_TOO_DEEP = 'That folder is nested more than 10 levels deep.'
+export const FINDER_SYNC_MISSING_APP =
+  "Font Buttler couldn't be found. Open it once from its new location."
+export const FINDER_SYNC_AGENT_DISABLED =
+  'Turn on Font Buttler in Login Items. Until then, use Services (right-click > Services > Install).'
+export const FINDER_SYNC_REQUEST_TTL_MS = 2 * 60 * 1000
+const FINDER_SYNC_ARCH_NAMES = ['ia32', 'x64', 'armv7l', 'arm64', 'universal']
 
 const MAX_PATH_LENGTH = 4096
 
@@ -109,6 +116,114 @@ export function finderSyncParentCodeSigningRequirement() {
 
 export function finderSyncSocketName(testFeed) {
   return testFeed ? FINDER_SYNC_TEST_SOCKET_NAME : FINDER_SYNC_SOCKET_NAME
+}
+
+/**
+ * clang `-arch` slices for the helper and the receiver. A universal pack
+ * builds both slices; `lipo` joins them. `arch` is an electron-builder Arch
+ * number or a name (`arm64`, `x64`, `universal`).
+ */
+export function finderSyncClangArchArgs(arch = process.arch) {
+  const name = typeof arch === 'number' ? FINDER_SYNC_ARCH_NAMES[arch] : arch
+  if (name === 'arm64') return [['-arch', 'arm64']]
+  if (name === 'x64' || name === 'x86_64') return [['-arch', 'x86_64']]
+  if (name === 'universal') return [['-arch', 'arm64'], ['-arch', 'x86_64']]
+  return []
+}
+
+/**
+ * A crash can leave the unix socket behind. Replace it only when the path
+ * is a socket owned by this user. A regular file, a symlink, or another
+ * user's socket stays in place and the bind is refused.
+ */
+export function prepareFinderSyncSocket(filePath, io) {
+  if (!filePath || typeof io?.lstatSync !== 'function' || typeof io?.unlinkSync !== 'function') {
+    return { ok: false, unlinked: false, reason: 'unavailable' }
+  }
+  const uid = typeof io.getuid === 'function' ? io.getuid() : null
+  let stat
+  try {
+    stat = io.lstatSync(filePath)
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { ok: true, unlinked: false, reason: 'absent' }
+    return { ok: false, unlinked: false, reason: 'stat-failed' }
+  }
+  if (stat?.isSymbolicLink?.()) return { ok: false, unlinked: false, reason: 'symlink' }
+  if (!stat?.isSocket?.() || uid == null || stat.uid !== uid) {
+    return { ok: false, unlinked: false, reason: 'not-owned-socket' }
+  }
+  io.unlinkSync(filePath)
+  return { ok: true, unlinked: true, reason: 'replaced' }
+}
+
+/** Absolute helper path launchd printed for this flavour's label, if any. */
+export function parseLaunchctlProgram(output, label) {
+  const text = String(output ?? '')
+  if (!label || !text.includes(label)) return ''
+  const match = text.match(/^\s*path\s*=\s*(\S.*?)\s*$/m)
+  return match ? match[1].trim() : ''
+}
+
+function absoluteProgram(filePath) {
+  if (typeof filePath !== 'string' || !filePath.startsWith('/')) return ''
+  return filePath.replace(/\/+$/, '')
+}
+
+/**
+ * What this launch should do with this flavour's LaunchAgent only.
+ * A test build never names the release label or plist. A different
+ * BundleProgram means unregister, then register. Opt-out only unregisters.
+ */
+export function planFinderSyncAgentRegistration({
+  testFeed = false,
+  currentProgram,
+  registeredProgram,
+  status,
+  optedOut = false,
+} = {}) {
+  const label = finderSyncAgentLabel(testFeed)
+  const plist = finderSyncAgentPlistName(testFeed)
+  const plan = { action: 'keep', label, plist, testFeed: Boolean(testFeed), reason: 'current' }
+  if (optedOut) return { ...plan, action: 'unregister', reason: 'opt-out' }
+  if (status === 'unsupported') return { ...plan, action: 'keep', reason: 'unsupported' }
+  const current = absoluteProgram(currentProgram)
+  const registered = absoluteProgram(registeredProgram)
+  if (registered && current && registered !== current) {
+    return { ...plan, action: 'reregister', reason: 'moved' }
+  }
+  if (status === 'enabled' || status === 'requires-approval') {
+    return { ...plan, action: 'keep', reason: status }
+  }
+  return { ...plan, action: 'register', reason: status || 'not-registered' }
+}
+
+export function readFinderSyncAgentRecord(text) {
+  if (!text) return { enabled: true, program: '' }
+  try {
+    const parsed = JSON.parse(text)
+    return {
+      enabled: parsed?.enabled !== false,
+      program: typeof parsed?.program === 'string' ? parsed.program : '',
+    }
+  } catch {
+    return { enabled: true, program: '' }
+  }
+}
+
+/**
+ * Drop a repeated Finder Sync click. The same request id is kept for about
+ * two minutes so a retry from the extension does not install twice.
+ */
+export function rememberFinderSyncRequest(seen, requestId, now = Date.now(), ttl = FINDER_SYNC_REQUEST_TTL_MS) {
+  if (!seen || typeof seen.set !== 'function') return false
+  const cutoff = now - ttl
+  for (const [id, seenAt] of seen) {
+    if (seenAt < cutoff) seen.delete(id)
+  }
+  if (!requestId) return false
+  if (seen.has(requestId)) return true
+  seen.set(requestId, now)
+  return false
 }
 
 function xmlEscape(value) {
@@ -493,7 +608,10 @@ function closeHandles(io, handles) {
  */
 function measureTree(dirPath, io, state, depth) {
   if (state.limit || state.error) return
-  if (depth > FINDER_SYNC_TREE_DEPTH) return
+  if (depth > FINDER_SYNC_TREE_DEPTH) {
+    state.error = FINDER_SYNC_TREE_TOO_DEEP
+    return
+  }
   if (typeof io.readdirSync !== 'function') return
   let names
   try {
@@ -548,7 +666,7 @@ export function validateFinderSyncSelection(filePaths, io) {
 
   for (const raw of filePaths ?? []) {
     if (typeof raw !== 'string') continue
-    const filePath = raw.trim()
+    const filePath = raw
     if (!filePath || seen.has(filePath)) continue
     seen.add(filePath)
     if (!isSafeFinderSyncPath(filePath)) {

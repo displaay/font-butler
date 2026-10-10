@@ -33,6 +33,9 @@ static const uint32_t kMaxFrame = 2 * 1024 * 1024;
 
 static BOOL g_testFeed = NO;
 static BOOL g_launchedApp = NO;
+static BOOL g_launchFailed = NO;
+static NSString *const kMissingAppMessage =
+    @"Font Buttler couldn't be found. Open it once from its new location.";
 
 static BOOL GuestMeetsRequirement(audit_token_t token, NSString *requirementString) {
   if (!requirementString.length) return NO;
@@ -144,24 +147,40 @@ static NSURL *ContainingAppURL(void) {
   return [NSURL fileURLWithPath:apps[1]];
 }
 
-static void LaunchContainingAppOnce(void) {
-  if (g_launchedApp) return;
+// One openApplication for this click. A missing or trashed bundle fails that
+// attempt and stops; later clicks do not loop. A failed open resets the flag.
+static NSString *LaunchContainingAppOnce(void) {
+  if (g_launchFailed) return kMissingAppMessage;
+  if (g_launchedApp) return nil;
   NSURL *appURL = ContainingAppURL();
-  if (!appURL) return;
+  BOOL exists = appURL != nil && [[NSFileManager defaultManager] fileExistsAtPath:appURL.path];
+  if (!exists) {
+    g_launchFailed = YES;
+    g_launchedApp = NO;
+    return kMissingAppMessage;
+  }
   g_launchedApp = YES;
+  __block NSString *failure = nil;
+  dispatch_semaphore_t opened = dispatch_semaphore_create(0);
   dispatch_async(dispatch_get_main_queue(), ^{
     NSWorkspaceOpenConfiguration *configuration = [NSWorkspaceOpenConfiguration configuration];
     configuration.activates = YES;
     [[NSWorkspace sharedWorkspace] openApplicationAtURL:appURL
                                           configuration:configuration
                                       completionHandler:^(NSRunningApplication *app, NSError *error) {
-                                        (void)app;
-                                        (void)error;
+                                        if (error || !app) {
+                                          g_launchFailed = YES;
+                                          g_launchedApp = NO;
+                                          failure = kMissingAppMessage;
+                                        }
+                                        dispatch_semaphore_signal(opened);
                                       }];
   });
+  dispatch_semaphore_wait(opened, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC));
+  return failure;
 }
 
-static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL overflow) {
+static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL overflow, NSString *requestId) {
   char socketPath[sizeof(((struct sockaddr_un *)0)->sun_path)];
   if (!SocketPath(socketPath, sizeof(socketPath))) return NO;
   int fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -186,6 +205,7 @@ static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL over
     @"action" : action ?: @"",
     @"paths" : overflow ? @[] : (paths ?: @[]),
     @"overflow" : @(overflow),
+    @"requestId" : requestId ?: @"",
   };
   NSData *json = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
   if (!json || json.length == 0 || json.length > kMaxFrame) {
@@ -213,7 +233,11 @@ static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL over
 
 @protocol FontButtlerFinderSyncHandoff
 - (void)pingWithReply:(void (^)(NSString *error))reply;
-- (void)submitAction:(NSString *)action paths:(NSArray<NSString *> *)paths reply:(void (^)(NSString *error))reply;
+- (void)statusWithReply:(void (^)(NSString *error))reply;
+- (void)submitAction:(NSString *)action
+               paths:(NSArray<NSString *> *)paths
+           requestId:(NSString *)requestId
+               reply:(void (^)(NSString *error))reply;
 @end
 
 @interface FontButtlerFinderSyncAgent : NSObject <NSXPCListenerDelegate, FontButtlerFinderSyncHandoff>
@@ -255,13 +279,26 @@ static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL over
   if (reply) reply(nil);
 }
 
-- (void)submitAction:(NSString *)action paths:(NSArray<NSString *> *)paths reply:(void (^)(NSString *))reply {
+- (void)statusWithReply:(void (^)(NSString *))reply {
+  if (reply) reply(nil);
+}
+
+- (void)submitAction:(NSString *)action
+               paths:(NSArray<NSString *> *)paths
+           requestId:(NSString *)requestId
+               reply:(void (^)(NSString *))reply {
   NSString *wire = [action isKindOfClass:[NSString class]] ? action : @"";
   BOOL known = [wire isEqualToString:@"install"] || [wire isEqualToString:@"installAs"];
   NSArray *incoming = [paths isKindOfClass:[NSArray class]] ? paths : @[];
+  NSString *request = [requestId isKindOfClass:[NSString class]] ? requestId : @"";
   dispatch_async(self.forwardQueue, ^{
+    g_launchedApp = NO;
     if (!known) {
       if (reply) reply(@"Unknown Finder Sync action.");
+      return;
+    }
+    if (g_launchFailed) {
+      if (reply) reply(kMissingAppMessage);
       return;
     }
     BOOL overflow = incoming.count > kFinderSyncMaxFiles;
@@ -272,13 +309,26 @@ static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL over
         [accepted addObject:item];
       }
     }
-    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:1.0];
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:8.0];
+    BOOL launched = NO;
     while (YES) {
-      if (ForwardToApp(wire, accepted, overflow)) {
+      if (g_launchFailed) {
+        if (reply) reply(kMissingAppMessage);
+        return;
+      }
+      if (ForwardToApp(wire, accepted, overflow, request)) {
+        g_launchedApp = NO;
         if (reply) reply(nil);
         return;
       }
-      LaunchContainingAppOnce();
+      if (!launched) {
+        launched = YES;
+        NSString *failure = LaunchContainingAppOnce();
+        if (failure.length) {
+          if (reply) reply(failure);
+          return;
+        }
+      }
       if ([deadline timeIntervalSinceNow] <= 0) break;
       usleep(50 * 1000);
     }

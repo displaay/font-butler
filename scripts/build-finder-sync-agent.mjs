@@ -21,10 +21,11 @@ import {
   finderSyncAgentMachServiceKeys,
   finderSyncAgentPlistName,
   finderSyncAppGroup,
+  finderSyncClangArchArgs,
   finderSyncMachService,
 } from '../electron/finder-sync.mjs'
 import { DEVELOPER_ID_IDENTITY } from './mac-signing.mjs'
-import { plistString } from './build-finder-sync.mjs'
+import { finderSyncCodesignIdentity, plistString } from './build-finder-sync.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const sourcePath = path.join(repoRoot, 'macos/FinderSyncAgent/FinderSyncAgent.mm')
@@ -41,9 +42,27 @@ export function finderSyncAgentPlistPath(appBundle, testFeed) {
   return path.join(appBundle, 'Contents', 'Library', 'LaunchAgents', finderSyncAgentPlistName(testFeed))
 }
 
+function agentCompileArgs(src, out, archArgs) {
+  return [
+    '-std=c++17',
+    '-ObjC++',
+    '-fobjc-arc',
+    '-mmacosx-version-min=11.0',
+    ...archArgs,
+    '-framework',
+    'Cocoa',
+    '-framework',
+    'Security',
+    '-o',
+    out,
+    src,
+  ]
+}
+
 export function compileFinderSyncAgent({
   repo = repoRoot,
   out,
+  arch = process.arch,
   clang = process.env.FONT_BUTLER_CLANG || 'clang++',
   spawnSync = nodeSpawnSync,
 } = {}) {
@@ -54,28 +73,44 @@ export function compileFinderSyncAgent({
   if (!nodeExistsSync(src)) return { ok: false, skipped: false, reason: `Missing ${src}` }
   if (!out) return { ok: false, skipped: false, reason: 'Missing agent output path' }
   mkdirSync(path.dirname(out), { recursive: true })
-  const result = spawnSync(
-    clang,
-    [
-      '-std=c++17',
-      '-ObjC++',
-      '-fobjc-arc',
-      '-mmacosx-version-min=11.0',
-      '-framework',
-      'Cocoa',
-      '-framework',
-      'Security',
-      '-o',
-      out,
-      src,
-    ],
-    { encoding: 'utf8' },
-  )
-  if (result.status !== 0) {
-    const detail = [result.stderr, result.stdout, result.error?.message].filter(Boolean).join('\n')
-    return { ok: false, skipped: false, reason: detail || `clang++ exited ${result.status}` }
+  const slices = finderSyncClangArchArgs(arch)
+  const commands = (slices.length ? slices : [[]]).map((archArgs, index) => {
+    const sliceOut = slices.length > 1 ? `${out}.slice${index}` : out
+    return { sliceOut, args: agentCompileArgs(src, sliceOut, archArgs) }
+  })
+  for (const command of commands) {
+    const result = spawnSync(clang, command.args, { encoding: 'utf8' })
+    if (result.status !== 0) {
+      const detail = [result.stderr, result.stdout, result.error?.message].filter(Boolean).join('\n')
+      return { ok: false, skipped: false, reason: detail || `clang++ exited ${result.status}` }
+    }
+  }
+  if (commands.length > 1) {
+    const lipo = spawnSync('lipo', ['-create', ...commands.map((command) => command.sliceOut), '-output', out], {
+      encoding: 'utf8',
+    })
+    if (lipo.status !== 0) {
+      const detail = [lipo.stderr, lipo.stdout, lipo.error?.message].filter(Boolean).join('\n')
+      return { ok: false, skipped: false, reason: detail || 'lipo failed for the Finder Sync agent' }
+    }
   }
   return { ok: true, skipped: false, out }
+}
+
+/** Application group only. The helper does not get the app's allow-jit entitlement. */
+export function finderSyncAgentEntitlementsPlist(testFeed) {
+  const group = finderSyncAppGroup(testFeed)
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>com.apple.security.application-groups</key>
+    <array>
+      <string>${group}</string>
+    </array>
+  </dict>
+</plist>
+`
 }
 
 /**
@@ -89,6 +124,7 @@ export function installFinderSyncAgent({
   appBundle,
   testFeed = false,
   version = '1.0',
+  arch,
   clang,
   spawnSync,
 } = {}) {
@@ -97,7 +133,7 @@ export function installFinderSyncAgent({
   }
   if (!appBundle) return { ok: false, skipped: false, reason: 'Missing app bundle' }
   const executable = finderSyncAgentExecutablePath(appBundle)
-  const compiled = compileFinderSyncAgent({ out: executable, clang, spawnSync })
+  const compiled = compileFinderSyncAgent({ out: executable, arch, clang, spawnSync })
   if (!compiled.ok) return compiled
   const contents = path.join(finderSyncAgentAppPath(appBundle), 'Contents')
   mkdirSync(contents, { recursive: true })
@@ -114,6 +150,41 @@ export function installFinderSyncAgent({
     plistPath,
     label: finderSyncAgentLabel(testFeed),
     service: finderSyncMachService(testFeed),
+  }
+}
+
+/**
+ * Sign the helper with the application group and the hardened runtime, and
+ * without allow-jit. electron-builder skips this nested app so it does not
+ * replace this signature with entitlementsInherit.
+ */
+export function signFinderSyncAgent({
+  appBundle,
+  identity,
+  testFeed = false,
+  keychain,
+  spawnSync = nodeSpawnSync,
+} = {}) {
+  const signIdentity = finderSyncCodesignIdentity(identity)
+  if (!signIdentity) return { ok: false, reason: 'No signing identity for the Finder Sync agent.' }
+  const helperApp = finderSyncAgentAppPath(appBundle)
+  if (!nodeExistsSync(helperApp)) return { ok: false, reason: 'The Finder Sync agent app is missing.' }
+  const temporary = mkdtempSync(path.join(tmpdir(), 'font-butler-finder-sync-agent-entitlements-'))
+  const entitlementsFile = path.join(temporary, 'entitlements.plist')
+  writeFileSync(entitlementsFile, finderSyncAgentEntitlementsPlist(testFeed))
+  const args = ['--force', '--sign', signIdentity, '--entitlements', entitlementsFile, '--options', 'runtime']
+  if (signIdentity !== '-') args.push('--timestamp')
+  if (keychain) args.push('--keychain', keychain)
+  args.push(helperApp)
+  try {
+    const result = spawnSync('codesign', args, { encoding: 'utf8' })
+    if ((result?.status ?? 1) !== 0) {
+      const detail = [result?.stderr, result?.stdout, result?.error?.message].filter(Boolean).join('\n')
+      return { ok: false, reason: detail || 'codesign failed for the Finder Sync agent' }
+    }
+    return { ok: true, identity: signIdentity }
+  } finally {
+    rmSync(temporary, { recursive: true, force: true })
   }
 }
 
@@ -169,6 +240,9 @@ export function finderSyncAgentFailures({
   if (!/<key>LSBackgroundOnly<\/key>\s*<true\/>/.test(infoPlist)) {
     failures.push('The Finder Sync agent must be a background-only helper.')
   }
+  if (/com\.apple\.security\.cs\.allow-jit/.test(entitlementText)) {
+    failures.push('The Finder Sync agent must not have allow-jit.')
+  }
   if (codesignVerifyStatus !== 0) {
     failures.push('codesign --verify --strict failed on the Finder Sync agent.')
   }
@@ -188,6 +262,9 @@ export function finderSyncAgentFailures({
     }
     const team = codesignDisplay.match(/TeamIdentifier=([^\s]+)/)?.[1] ?? ''
     if (team !== teamId) failures.push(`The Finder Sync agent team ID is not ${teamId}.`)
+    if (!/flags=0x[0-9a-fA-F]+\([^)\n]*\bruntime\b/.test(codesignDisplay)) {
+      failures.push('The Finder Sync agent is not signed with the hardened runtime.')
+    }
   }
   return failures
 }
