@@ -190,7 +190,11 @@ export function releaseConfigErrors(pkg) {
   if (mac?.entitlementsInherit !== 'build/entitlements.mac.plist') {
     errors.push('mac.entitlementsInherit must be build/entitlements.mac.plist')
   }
-  if (mac?.signIgnore != null) errors.push('mac.signIgnore must stay unset so every nested binary is signed')
+  const agentSignIgnore = 'FontButtlerFinderSyncAgent\\.app'
+  const signIgnore = Array.isArray(mac?.signIgnore) ? mac.signIgnore : mac?.signIgnore != null ? [mac.signIgnore] : []
+  if (signIgnore.length !== 1 || signIgnore[0] !== agentSignIgnore) {
+    errors.push('mac.signIgnore must only skip the Finder Sync agent, which afterPack signs without allow-jit')
+  }
   if (pkg?.build?.dmg?.sign === true) {
     errors.push('package.json must leave dmg.sign unset; only the notarized pack config sets it')
   }

@@ -67,7 +67,7 @@ test('mac release config signs with the Developer ID identity and notarizes via 
   assert.equal(parsed.build.mac.hardenedRuntime, true)
   assert.equal(parsed.build.mac.notarize, true)
   assert.equal(parsed.build.mac.type, undefined)
-  assert.equal(parsed.build.mac.signIgnore, undefined)
+  assert.deepEqual(parsed.build.mac.signIgnore, ['FontButtlerFinderSyncAgent\\.app'])
   assert.equal(parsed.build.mac.entitlements, 'build/entitlements.mac.plist')
   assert.equal(parsed.build.mac.entitlementsInherit, 'build/entitlements.mac.plist')
   assert.equal(parsed.build.dmg, undefined)

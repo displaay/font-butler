@@ -44,11 +44,18 @@ import {
   suggestedFamilyName,
 } from './finder-install.mjs'
 import {
+  FINDER_SYNC_AGENT_DISABLED,
   FINDER_SYNC_SETTINGS_URL,
   FINDER_SYNC_TOO_MANY_FILES,
+  finderSyncAgentBundleProgram,
+  finderSyncAgentLabel,
   finderSyncWireAction,
   formatFinderSyncRejections,
+  parseLaunchctlProgram,
+  planFinderSyncAgentRegistration,
+  readFinderSyncAgentRecord,
   refreshFinderSyncRegistration,
+  rememberFinderSyncRequest,
   revalidateFinderSyncHandles,
   validateFinderSyncSelection,
 } from './finder-sync.mjs'
@@ -926,10 +933,109 @@ function registerNativeFinderServices() {
   }
 }
 
+const finderSyncRequests = new Map()
+
+function finderSyncAgentRecordFile() {
+  return path.join(app.getPath('userData'), 'finder-sync-agent.json')
+}
+
+function loadFinderSyncAgentRecord() {
+  try {
+    return readFinderSyncAgentRecord(fs.readFileSync(finderSyncAgentRecordFile(), 'utf8'))
+  } catch {
+    return readFinderSyncAgentRecord('')
+  }
+}
+
+function saveFinderSyncAgentRecord(record) {
+  fs.mkdirSync(path.dirname(finderSyncAgentRecordFile()), { recursive: true })
+  fs.writeFileSync(
+    finderSyncAgentRecordFile(),
+    JSON.stringify({ enabled: record.enabled !== false, program: record.program || '' }),
+  )
+}
+
+function parseAgentJson(raw) {
+  try {
+    const parsed = JSON.parse(String(raw ?? ''))
+    return parsed && typeof parsed === 'object' ? parsed : { status: 'unavailable', error: 'Finder Sync agent status was not JSON.' }
+  } catch {
+    return { status: 'unavailable', error: 'Finder Sync agent status was not JSON.' }
+  }
+}
+
+function currentFinderSyncAgentProgram() {
+  const appPath = outermostAppBundle(process.execPath)
+  if (!appPath) return ''
+  return path.join(appPath, finderSyncAgentBundleProgram())
+}
+
+function registeredFinderSyncAgentProgram(label) {
+  if (process.platform !== 'darwin' || !label || typeof process.getuid !== 'function') return ''
+  const printed = spawnSync('launchctl', ['print', `gui/${process.getuid()}/${label}`], { encoding: 'utf8' })
+  return parseLaunchctlProgram(`${printed.stdout ?? ''}\n${printed.stderr ?? ''}`, label)
+}
+
+function loadFinderSyncReceiver() {
+  try {
+    return require('./finder-sync-receiver.node')
+  } catch (error) {
+    if (error && error.code !== 'MODULE_NOT_FOUND') {
+      console.error('Finder Sync receiver is not loaded', error)
+    }
+    return null
+  }
+}
+
+function applyFinderSyncAgentRegistration(addon, { surface = false } = {}) {
+  if (!addon) return { status: 'unavailable', error: 'Finder Sync receiver is not loaded.' }
+  const record = loadFinderSyncAgentRecord()
+  const testFeed = runningTestFeed()
+  const label = finderSyncAgentLabel(testFeed)
+  if (record.enabled === false) {
+    return parseAgentJson(addon.unregisterAgent())
+  }
+  const status = parseAgentJson(addon.agentStatus())
+  const fromLaunchd = registeredFinderSyncAgentProgram(label)
+  const plan = planFinderSyncAgentRegistration({
+    testFeed,
+    currentProgram: currentFinderSyncAgentProgram(),
+    registeredProgram: fromLaunchd || record.program,
+    status: status.status,
+    optedOut: false,
+  })
+  if (plan.label !== label || plan.plist !== `${label}.plist`) {
+    console.error('Finder Sync agent registration stayed on this build', plan.label)
+    return status
+  }
+  let result = status
+  if (plan.action === 'unregister' || plan.action === 'reregister') {
+    addon.unregisterAgent()
+  }
+  if (plan.action === 'register' || plan.action === 'reregister') {
+    result = parseAgentJson(addon.registerAgent())
+    if (result?.error) console.error('Finder Sync agent registration failed', result.error)
+  }
+  if (result?.status === 'enabled' || result?.status === 'requires-approval') {
+    saveFinderSyncAgentRecord({ enabled: true, program: currentFinderSyncAgentProgram() })
+  }
+  if (
+    surface &&
+    result?.error &&
+    result.status !== 'requires-approval' &&
+    result.status !== 'enabled' &&
+    result.status !== 'unsupported'
+  ) {
+    dialog.showErrorBox('Finder menu', `${result.error}\n\n${FINDER_SYNC_AGENT_DISABLED}`)
+  }
+  return result
+}
+
 function reportFinderSyncAgentStatus() {
   let line = 'finder-sync-agent-status {"status":"unavailable","error":"Finder Sync receiver is not loaded."}\n'
   try {
     const addon = require('./finder-sync-receiver.node')
+    applyFinderSyncAgentRegistration(addon, { surface: false })
     const status = addon.agentStatus()
     line = `finder-sync-agent-status ${status}\n`
   } catch (error) {
@@ -940,14 +1046,18 @@ function reportFinderSyncAgentStatus() {
   app.exit(line.includes('"status":"enabled"') ? 0 : 1)
 }
 
-function registerFinderSyncReceiver() {
+function registerFinderSyncReceiver({ surface = false } = {}) {
   if (process.platform !== 'darwin') return false
+  const addon = loadFinderSyncReceiver()
+  if (!addon) return false
   try {
-    const addon = require('./finder-sync-receiver.node')
     addon.register((payload) => {
+      const requestId = typeof payload?.requestId === 'string' ? payload.requestId : ''
+      if (rememberFinderSyncRequest(finderSyncRequests, requestId)) return
       const action = finderSyncWireAction(payload?.action)
       if (!action) {
         console.error('Finder Sync handoff refused', 'action')
+        dialog.showErrorBox('Install', 'Font Buttler could not read that Finder selection. Use Services (right-click > Services > Install).')
         return
       }
       if (payload?.overflow === 'files') {
@@ -957,11 +1067,10 @@ function registerFinderSyncReceiver() {
       }
       enqueueValidatedFinderInstall(action, Array.isArray(payload?.paths) ? payload.paths : [])
     })
+    applyFinderSyncAgentRegistration(addon, { surface })
     return true
   } catch (error) {
-    if (error && error.code !== 'MODULE_NOT_FOUND') {
-      console.error('Finder Sync receiver is not loaded', error)
-    }
+    console.error('Finder Sync receiver is not loaded', error)
     return false
   }
 }
@@ -2172,7 +2281,7 @@ if (!gotLock) {
       mainWindow?.setBackgroundColor(windowBackgroundColor())
     })
     registerNativeFinderServices()
-    registerFinderSyncReceiver()
+    registerFinderSyncReceiver({ surface: true })
     const bootstrapOk = await bootstrapApi()
     ensureTray()
     if (bootstrapOk) {
@@ -2274,6 +2383,48 @@ ipcMain.handle('open-external', async (_event, url) => {
 ipcMain.handle('open-finder-extensions', async () => {
   if (process.platform !== 'darwin') return false
   await shell.openExternal(FINDER_SYNC_SETTINGS_URL)
+  return true
+})
+
+ipcMain.handle('get-finder-sync-agent-status', () => {
+  if (process.platform !== 'darwin') return { status: 'unsupported', error: '', enabled: false }
+  const record = loadFinderSyncAgentRecord()
+  const addon = loadFinderSyncReceiver()
+  if (!addon) {
+    return { status: 'unavailable', error: 'Finder Sync receiver is not loaded.', enabled: record.enabled !== false }
+  }
+  const status = parseAgentJson(addon.agentStatus())
+  return { ...status, enabled: record.enabled !== false }
+})
+
+ipcMain.handle('set-finder-sync-agent-enabled', (_event, enabled) => {
+  if (process.platform !== 'darwin') return false
+  const next = enabled === true
+  const record = loadFinderSyncAgentRecord()
+  saveFinderSyncAgentRecord({ enabled: next, program: next ? record.program : '' })
+  const addon = loadFinderSyncReceiver()
+  if (!addon) return false
+  if (!next) {
+    const removed = parseAgentJson(addon.unregisterAgent())
+    if (removed?.error) console.error('Finder Sync agent unregister failed', removed.error)
+    return true
+  }
+  applyFinderSyncAgentRegistration(addon, { surface: true })
+  return true
+})
+
+ipcMain.handle('open-finder-sync-login-items', () => {
+  if (process.platform !== 'darwin') return false
+  const addon = loadFinderSyncReceiver()
+  if (!addon?.openLoginItems) {
+    dialog.showErrorBox('Finder menu', FINDER_SYNC_AGENT_DISABLED)
+    return false
+  }
+  const opened = parseAgentJson(addon.openLoginItems())
+  if (opened.ok !== true) {
+    dialog.showErrorBox('Finder menu', opened.error || FINDER_SYNC_AGENT_DISABLED)
+    return false
+  }
   return true
 })
 

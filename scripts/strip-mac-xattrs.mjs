@@ -19,7 +19,7 @@ export async function afterPack(context) {
     }
     const { compileFinderSyncReceiverAddon } = await import('./build-finder-sync-receiver.mjs')
     const receiverOut = path.join(appBundle, 'Contents/Resources/app.asar.unpacked/electron/finder-sync-receiver.node')
-    const receiver = compileFinderSyncReceiverAddon({ out: receiverOut })
+    const receiver = compileFinderSyncReceiverAddon({ out: receiverOut, arch: context.arch })
     if (!receiver.ok && !receiver.skipped) {
       throw new Error(receiver.reason || 'Finder Sync receiver was not compiled.')
     }
@@ -29,6 +29,7 @@ export async function afterPack(context) {
       appBundle,
       testFeed: testFeedBuildRequested(process.env),
       version: context.packager.appInfo?.version || '1.0',
+      arch: context.arch,
     })
     if (!agent.ok && !agent.skipped) {
       throw new Error(agent.reason || 'Finder Sync agent was not compiled.')
@@ -48,6 +49,18 @@ export async function afterPack(context) {
   // Strip resource forks before any signature is sealed. The appex is signed
   // after this, then electron-builder signs the parent app.
   stripMacXattrs(appBundle)
+  if (process.platform === 'darwin') {
+    const mac = context.packager.platformSpecificBuildOptions ?? context.packager.config?.mac ?? {}
+    const { testFeedBuildRequested } = await import('./mac-signing.mjs')
+    const { signFinderSyncAgent } = await import('./build-finder-sync-agent.mjs')
+    const agentSigned = signFinderSyncAgent({
+      appBundle,
+      identity: mac.identity,
+      testFeed: testFeedBuildRequested(process.env),
+      keychain: process.env.APPLE_KEYCHAIN || undefined,
+    })
+    if (!agentSigned.ok) throw new Error(agentSigned.reason || 'Finder Sync agent was not signed.')
+  }
   if (finderSync?.appexPath) {
     const mac = context.packager.platformSpecificBuildOptions ?? context.packager.config?.mac ?? {}
     const { signFinderSyncAppex, verifyFinderSyncAppex } = await import('./build-finder-sync.mjs')
