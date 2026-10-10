@@ -338,7 +338,9 @@ export const api = {
     ),
   forgetMissingSources: () => json<{ removed: number }>(post('/api/forget', { allMissing: true })),
   clearFontCaches: () =>
-    json<{ mac: boolean; cleared: boolean }>(post('/api/caches/font', { confirm: true })),
+    json<{ mac: boolean; cleared: boolean; simulated?: boolean }>(
+      post('/api/caches/font', { confirm: true }),
+    ),
   requestLogout: () =>
     json<{ requested: boolean; cancelled?: boolean; message?: string; error?: string }>(
       post('/api/session/logout', {}),

@@ -291,6 +291,33 @@ test('reinstall does not call atsutil and a manual clear runs only after confirm
   }
 })
 
+test('a simulated font-cache clear does not say the cache was removed', async () => {
+  const paths = tempPaths()
+  setFontNative(
+    noopFontNative({
+      async clearUserFontCache() {
+        return { mac: true, cleared: false, simulated: true }
+      },
+    }),
+  )
+  const notices: string[] = []
+  const stop = onEvent((event) => {
+    if (event.type === 'notice') notices.push(event.notice.message)
+  })
+  const service = new FontButlerService(paths)
+  try {
+    const cleared = await service.clearUserFontCache({ confirm: true })
+    assert.equal(cleared.cleared, false)
+    assert.equal(cleared.simulated, true)
+    assert.deepEqual(notices, ['Font caches were not cleared.'])
+  } finally {
+    stop()
+    setFontNative(null)
+    service.dispose()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
 test('watch folder add during onboarding does not import until setup is finished', async () => {
   const paths = tempPaths()
   const inbox = path.join(paths.dataRoot, 'inbox')

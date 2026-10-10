@@ -489,6 +489,7 @@ export async function uninstallEntry(
   }
   latest.disabledPath = undefined
   latest.installedPath = undefined
+  assignActivationWarning(latest, undefined)
   if (deleteSource && !latest.retailRelativePath) {
     await deleteSourceFile(sourcePath, host.paths)
     removeEntryById(latestCatalog, id)

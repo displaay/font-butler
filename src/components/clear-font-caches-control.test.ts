@@ -267,6 +267,32 @@ test('Clear font caches runs only after confirmation and logout is optional', as
   }
 
   await act(async () => {
+    root.render(
+      createElement(ClearFontCachesControl, {
+        onClear: async () => ({ mac: true, cleared: false, simulated: true }),
+        onLogOut: async () => {
+          calls.push('logout-simulated')
+        },
+      }),
+    )
+  })
+  const openSkipped = buttonNamed(document.body, 'Clear font caches')
+  assert.ok(openSkipped)
+  await act(async () => {
+    openSkipped.click()
+  })
+  const confirmSkipped = document.body.querySelector('[role="dialog"]')
+  assert.ok(confirmSkipped)
+  const confirmSkippedButton = buttonNamed(confirmSkipped, 'Clear font caches')
+  assert.ok(confirmSkippedButton)
+  await act(async () => {
+    confirmSkippedButton.click()
+  })
+  assert.equal(document.body.querySelector('[role="dialog"]'), null)
+  assert.equal(buttonNamed(document.body, 'Log out now'), undefined)
+  assert.equal(calls.includes('logout-simulated'), false)
+
+  await act(async () => {
     root.unmount()
   })
   host.remove()

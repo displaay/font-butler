@@ -180,6 +180,19 @@ test('the library card keeps a duplicate-copy badge in list and grid', async () 
   }
 })
 
+test('a deactivated card does not keep a stale two-copies badge', async () => {
+  const entry = catalogEntry(warning)
+  entry.status = 'deactivated'
+  const { host, unmount } = await mount(
+    createElement(LibraryCard, libraryProps(familyGroup(entry), 'list')),
+  )
+  try {
+    assert.equal(badge(host), undefined)
+  } finally {
+    await unmount()
+  }
+})
+
 test('a card without a duplicate warning has no two-copies badge', async () => {
   const { host, unmount } = await mount(
     createElement(LibraryCard, libraryProps(familyGroup(catalogEntry()), 'list')),

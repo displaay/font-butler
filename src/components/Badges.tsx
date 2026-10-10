@@ -178,11 +178,12 @@ export function InstanceInstallBadge({ state }: { state: InstanceInstallState })
 export function DuplicateCopyBadges({
   entries,
 }: {
-  entries: Array<{ activationWarning?: string }>
+  entries: Array<{ activationWarning?: string; status?: string }>
 }) {
   const messages = [
     ...new Set(
       entries
+        .filter((entry) => entry.status === 'installed' || entry.status === 'outdated')
         .map((entry) => entry.activationWarning)
         .filter((message): message is string => Boolean(message)),
     ),

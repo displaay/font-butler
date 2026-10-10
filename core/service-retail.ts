@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { readRetailToken, readRetailTokenStrict, writeRetailToken } from './auth.ts'
+import { assignActivationWarning } from './caches.ts'
 import { loadCatalog, occupantsAtPath, removeEntryById, runCatalogTask, saveCatalog, upsertEntry } from './catalog.ts'
 import { copyAt, upsertCopy } from './destinations.ts'
 import { emitEvent } from './events.ts'
@@ -949,7 +950,7 @@ function destNeedsFaceParse(
 
 async function catalogRetailWrites(
   paths: AppPaths,
-  written: Array<{ relativePath: string; dest: string; parked: boolean }>,
+  written: Array<{ relativePath: string; dest: string; parked: boolean; warning?: string }>,
   options: { parse?: 'always' | 'if-unconfirmed' } = {},
 ): Promise<void> {
   if (written.length === 0) return
@@ -1048,6 +1049,9 @@ async function catalogRetailWrites(
           verification: 'file-present',
         })
       }
+      if (item.parked || 'warning' in item) {
+        assignActivationWarning(entry, item.parked ? undefined : item.warning)
+      }
       upsertEntry(catalog, entry)
       touchEntry(entry)
       applyEntryFacts(entry)
@@ -1099,7 +1103,7 @@ function clearIncompleteMarker(paths: AppPaths): void {
 async function persistAutomaticManifest(
   paths: AppPaths,
   next: RetailLocalManifest,
-  written?: Array<{ relativePath: string; dest: string; parked: boolean }>,
+  written?: Array<{ relativePath: string; dest: string; parked: boolean; warning?: string }>,
 ): Promise<void> {
   saveRetailManifest(paths, stampAutomaticManifest(next))
   if (written?.length) await catalogRetailWrites(paths, written)

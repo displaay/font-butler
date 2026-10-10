@@ -1,3 +1,4 @@
+export const LOGOUT_CANCELLED = 'Log out was cancelled.'
 export const LOGOUT_FAILED_TITLE = "Logging out didn't happen"
 export const LOGOUT_FAILED_DETAIL =
   'Use Apple menu > Log Out to finish rebuilding font caches.'
@@ -16,6 +17,19 @@ export function liveMessageBoxParent(win) {
   if (!win) return null
   if (typeof win.isDestroyed === 'function' && win.isDestroyed()) return null
   return win
+}
+
+/** A hidden or minimized window would host the box as an invisible sheet. */
+export function visibleMessageBoxParent(win) {
+  const live = liveMessageBoxParent(win)
+  if (!live) return null
+  if (typeof live.isVisible === 'function' && live.isVisible() === false) return null
+  if (typeof live.isMinimized === 'function' && live.isMinimized() === true) return null
+  return live
+}
+
+export function shouldOfferLogoutAfterCacheClear(result) {
+  return Boolean(result && result.cleared === true && result.simulated !== true)
 }
 
 export function logoutFailedDialogOptions(message) {
@@ -49,12 +63,20 @@ export function logoutWaitingNoticeOptions(message) {
 }
 
 /**
- * Show a message box on the live window when one exists.
- * With no window, Electron still shows it, which is the menu-bar case.
+ * Parent only a window the user can see. A hidden (Cmd-H) or minimized window
+ * is revealed first; if it is still not visible, the box is unparented so it
+ * cannot become an invisible sheet. No window stays unparented.
  */
-export function showLogoutMessageBox(dialogApi, parent, options) {
-  const live = liveMessageBoxParent(parent)
-  if (live) return dialogApi.showMessageBox(live, options)
+export function showLogoutMessageBox(dialogApi, parent, options, hooks) {
+  const visible = visibleMessageBoxParent(parent)
+  if (visible) return dialogApi.showMessageBox(visible, options)
+  if (liveMessageBoxParent(parent) && typeof hooks?.showMainWindow === 'function') {
+    hooks.showMainWindow()
+    const revealed = visibleMessageBoxParent(
+      typeof hooks.getWindow === 'function' ? hooks.getWindow() : parent,
+    )
+    if (revealed) return dialogApi.showMessageBox(revealed, options)
+  }
   return dialogApi.showMessageBox(options)
 }
 
@@ -64,6 +86,12 @@ export function showLogoutMessageBox(dialogApi, parent, options) {
  * `getParent` is read at show time so a window opened or closed during logout
  * is the one the dialog attaches to.
  */
+let logoutFailureDialogShown = false
+
+export function resetLogoutDialogSession() {
+  logoutFailureDialogShown = false
+}
+
 export function presentLogoutFailure({ showDialog, notify, message, getParent }) {
   const parent = liveMessageBoxParent(typeof getParent === 'function' ? getParent() : null)
   const shown = showDialog(parent, logoutFailedDialogOptions(message))
@@ -78,21 +106,21 @@ export function presentLogoutFailure({ showDialog, notify, message, getParent })
 /**
  * Late logout results are owned by the main process.
  * A failure opens one message box even when no BrowserWindow exists.
- * Still waiting is a notice, never that failure dialog. A visible renderer
- * shows the notice itself; otherwise main does, and a dropped notification
- * falls back to an info box that does not say logout failed.
+ * Still waiting is a notice, never that failure dialog. Main owns that notice
+ * so a hidden renderer cannot drop it. A dropped notification falls back to
+ * an info box that does not say logout failed.
  */
 export function presentLogoutNotice({
   notice,
   getWindow,
-  rendererVisible,
   showMessageBox,
   showWaitingNotice,
   notify,
 }) {
   if (!notice || typeof notice !== 'object') return
+  const parent = liveMessageBoxParent(typeof getWindow === 'function' ? getWindow() : null)
   if (notice.source === 'logout-waiting') {
-    if (rendererVisible) return
+    if (logoutFailureDialogShown) return
     let shown = false
     try {
       shown = notify?.(notice) === true
@@ -100,12 +128,12 @@ export function presentLogoutNotice({
       shown = false
     }
     if (shown) return
-    const parent = liveMessageBoxParent(typeof getWindow === 'function' ? getWindow() : null)
     showWaitingNotice(parent, logoutWaitingNoticeOptions(notice.message))
     return
   }
   if (notice.source !== 'logout') return
-  const parent = liveMessageBoxParent(typeof getWindow === 'function' ? getWindow() : null)
+  if (logoutFailureDialogShown) return
+  logoutFailureDialogShown = true
   showMessageBox(parent, logoutFailedDialogOptions(notice.message))
   try {
     notify?.(notice)

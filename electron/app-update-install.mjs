@@ -41,6 +41,14 @@ import { rawFs } from './raw-fs.mjs'
 export const DEVELOPER_ID_TEAM = 'A7WWML89LQ'
 export const APP_UPDATE_FEED_ENV = 'FONT_BUTLER_UPDATE_FEED_URL'
 export const APP_PRODUCT_BUNDLE = 'Font Buttler.app'
+/** Test-feed builds rename the product so TCC stays off the real app. */
+export const TEST_FEED_APP_BUNDLE = 'Font Buttler Test.app'
+
+export function isFontButlerAppBundle(appPath) {
+  if (!appPath) return false
+  const name = path.basename(appPath)
+  return name === APP_PRODUCT_BUNDLE || name === TEST_FEED_APP_BUNDLE
+}
 export const GITHUB_OWNER = 'displaay'
 export const GITHUB_REPO = 'font-butler'
 export const GITHUB_LATEST_API = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`
@@ -360,7 +368,7 @@ export function sameSha512(actual, expected) {
 
 export function detectAppUpdateRuntime(execPath = process.execPath, spawnImpl = spawnSync) {
   const appPath = outermostAppBundle(execPath)
-  const product = Boolean(appPath && path.basename(appPath) === APP_PRODUCT_BUNDLE)
+  const product = isFontButlerAppBundle(appPath)
   if (!product || !appPath) {
     return {
       packaged: false,
@@ -711,9 +719,13 @@ function assertInside(parent, child) {
   }
 }
 
+const UPDATE_APP_BUNDLE_NAMES = [APP_PRODUCT_BUNDLE, TEST_FEED_APP_BUNDLE]
+
 export function findUpdateAppBundle(root) {
-  const direct = path.join(root, APP_PRODUCT_BUNDLE)
-  if (fs.existsSync(direct)) return direct
+  for (const name of UPDATE_APP_BUNDLE_NAMES) {
+    const direct = path.join(root, name)
+    if (fs.existsSync(direct)) return direct
+  }
   let entries = []
   try {
     entries = fs.readdirSync(root, { withFileTypes: true })
@@ -722,8 +734,10 @@ export function findUpdateAppBundle(root) {
   }
   for (const entry of entries) {
     if (!entry.isDirectory()) continue
-    const nested = path.join(root, entry.name, APP_PRODUCT_BUNDLE)
-    if (fs.existsSync(nested)) return nested
+    for (const name of UPDATE_APP_BUNDLE_NAMES) {
+      const nested = path.join(root, entry.name, name)
+      if (fs.existsSync(nested)) return nested
+    }
   }
   return null
 }
@@ -1091,7 +1105,9 @@ async function runInstall(deps, fetchImpl, tempDir) {
   if (deps.unzip) await deps.unzip(dest, unpackDir)
   else await unpackZipArchive(dest, unpackDir)
   const nextApp = findUpdateAppBundle(unpackDir)
-  if (!nextApp) throw new Error('The update zip does not contain Font Buttler.app.')
+  if (!nextApp) {
+    throw new Error('The update zip does not contain Font Buttler.app or Font Buttler Test.app.')
+  }
   assertInside(unpackDir, nextApp)
   const verified = deps.verifyDownloadedApp
     ? await deps.verifyDownloadedApp(nextApp)

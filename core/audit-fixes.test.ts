@@ -442,6 +442,46 @@ test('a duplicate-copy warning stays on the catalog entry', async () => {
     const clean = await service.reinstall(entry.id)
     assert.equal(clean.activationWarning, undefined)
     assert.equal(service.listCatalog().find((item) => item.id === entry.id)?.activationWarning, undefined)
+    const messageAgain =
+      'Both copies of Audit-Regular are installed. The other file is /Library/Fonts/Audit-Regular.ttf.'
+    setFontNative(
+      noopFontNative({
+        async ensureActivation() {
+          throw new InstalledFontKept(messageAgain)
+        },
+      }),
+    )
+    await service.reinstall(entry.id)
+    const parked = await service.deactivate(entry.id)
+    assert.equal(parked.status, 'deactivated')
+    assert.equal(parked.activationWarning, undefined)
+    assert.equal(service.listCatalog().find((item) => item.id === entry.id)?.activationWarning, undefined)
+  })
+})
+
+test('restoring an installed font saves and then clears a duplicate-copy warning', async () => {
+  await withService(async (service, paths) => {
+    const entry = await importFont(service, paths, 'source/Regular.ttf')
+    await service.install(entry.id)
+    writeTestFont(entry.sourcePath, 'Audit', 'Audit-Regular', { version: 'Version 2.000' })
+    await service.reinstall(entry.id)
+    const message =
+      'Both copies of Audit-Regular are installed. The other file is /Library/Fonts/Audit-Regular.ttf.'
+    setFontNative(
+      noopFontNative({
+        async ensureActivation() {
+          throw new InstalledFontKept(message)
+        },
+      }),
+    )
+    const restored = await service.restoreRevision(entry.id)
+    assert.equal(restored.status, 'outdated')
+    assert.equal(restored.activationWarning, message)
+    assert.equal(service.listCatalog().find((item) => item.id === entry.id)?.activationWarning, message)
+    setFontNative(noopFontNative())
+    const cleared = await service.restoreRevision(entry.id)
+    assert.equal(cleared.activationWarning, undefined)
+    assert.equal(service.listCatalog().find((item) => item.id === entry.id)?.activationWarning, undefined)
   })
 })
 

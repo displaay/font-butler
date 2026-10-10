@@ -26,8 +26,11 @@ import {
   logoutResultFromExecError,
   startMacLogoutProcess,
   parseActivatedFontLookup,
+  listUserFontFiles,
   requestMacLogout,
+  resetSharedMacLogout,
   resetUserFontCopyCache,
+  shareMacLogout,
   runInstalledFontVerification,
   userFontCopyReadCount,
   withVerificationBatch,
@@ -924,5 +927,81 @@ test('a wait followed by success shows no failure dialog, and a wait followed by
     if (previous === undefined) delete process.env.FONT_BUTLER_LOG
     else process.env.FONT_BUTLER_LOG = previous
     fs.rmSync(logFile, { force: true })
+  }
+})
+
+test('two logout requests share one osascript until that process reports', async () => {
+  resetSharedMacLogout()
+  try {
+    let starts = 0
+    let report: (result: { requested: boolean }) => void = () => {}
+    const late: string[] = []
+    const first = shareMacLogout(
+      (deliver) => {
+        starts += 1
+        report = deliver
+      },
+      (result) => late.push(result.error ?? ''),
+      undefined,
+      15,
+    )
+    const second = shareMacLogout(() => {
+      starts += 1
+    })
+    assert.equal(starts, 1)
+    assert.equal(first, second)
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    const duringWait = shareMacLogout(() => {
+      starts += 1
+    })
+    assert.equal(starts, 1)
+    assert.equal(duringWait, first)
+    assert.equal((await first).requested, true)
+    report(logoutResultFromExecError({ stderr: 'osascript is not allowed to send keystrokes. (-1743)' }))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(late.length, 1)
+    assert.match(late[0] ?? '', /-1743/)
+
+    let nextStarts = 0
+    const third = shareMacLogout((deliver) => {
+      nextStarts += 1
+      deliver({ requested: true })
+    })
+    assert.equal((await third).requested, true)
+    assert.equal(nextStarts, 1)
+  } finally {
+    resetSharedMacLogout()
+  }
+})
+
+test('listUserFontFiles stops before the next directory once the budget is spent', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-walk-budget-'))
+  const fonts = path.join(root, 'Fonts')
+  const nested = path.join(fonts, 'nested')
+  const realReaddir = fs.readdirSync
+  let nestedReads = 0
+  fs.readdirSync = ((dir: fs.PathLike, options?: unknown) => {
+    if (String(dir).includes(`${path.sep}nested`)) nestedReads += 1
+    return realReaddir(dir, options as { withFileTypes: true })
+  }) as typeof fs.readdirSync
+  try {
+    fs.mkdirSync(nested, { recursive: true })
+    fs.writeFileSync(path.join(fonts, '000-NewAzeret.ttf'), 'font')
+    fs.writeFileSync(path.join(nested, 'secret.ttf'), 'font')
+    let ticks = 0
+    const now = () => {
+      ticks += 1
+      return ticks === 1 ? 0 : 10_000
+    }
+    const files = listUserFontFiles(fonts, now, 1_000)
+    assert.deepEqual(
+      files.map((file) => path.basename(file)),
+      ['000-NewAzeret.ttf'],
+    )
+    assert.equal(nestedReads, 0)
+    assert.deepEqual(listUserFontFiles(fonts, () => 5_000, 1), [])
+  } finally {
+    fs.readdirSync = realReaddir
+    fs.rmSync(root, { recursive: true, force: true })
   }
 })

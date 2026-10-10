@@ -6,8 +6,13 @@ import { test } from 'node:test'
 import {
   allowRealCacheMutation,
   applyAdobeFontCacheClear,
+  ATSUTIL_SKIPPED_LOG,
+  clearUserFontCache,
   locateAdobeFontCache,
   locateOfficeFontCache,
+  LOGOUT_FAILED_MESSAGE,
+  requestMacLogout,
+  userFontCacheClearOutcome,
 } from './caches.ts'
 
 test('locateOfficeFontCache finds the standard Office Group Container cache', () => {
@@ -121,12 +126,34 @@ test('isolated FONT_BUTLER_DATA skips real cache mutation unless explicitly opte
     assert.equal(allowRealCacheMutation(), false)
     process.env.FONT_BUTLER_NATIVE_CACHES = '1'
     assert.equal(allowRealCacheMutation(), true)
+    assert.deepEqual(
+      userFontCacheClearOutcome({ mac: true, confirmed: true, allowMutation: false }),
+      { mac: true, cleared: false, simulated: true, runAtsutil: false },
+    )
+    assert.deepEqual(
+      userFontCacheClearOutcome({ mac: true, confirmed: true, allowMutation: true }),
+      { mac: true, cleared: true, runAtsutil: true },
+    )
+    assert.equal(
+      userFontCacheClearOutcome({ mac: true, confirmed: false, allowMutation: true }).cleared,
+      false,
+    )
+    assert.equal(ATSUTIL_SKIPPED_LOG, 'atsutil skipped; font caches were not cleared')
+    assert.match(clearUserFontCache.toString(), /ATSUTIL_SKIPPED_LOG/)
   } finally {
     if (previousData === undefined) delete process.env.FONT_BUTLER_DATA
     else process.env.FONT_BUTLER_DATA = previousData
     if (previousCaches === undefined) delete process.env.FONT_BUTLER_NATIVE_CACHES
     else process.env.FONT_BUTLER_NATIVE_CACHES = previousCaches
   }
+})
+
+test('logout stays a dry run when the native prompt is not available', async () => {
+  const dry = await requestMacLogout()
+  assert.equal(dry.requested, false)
+  assert.equal(dry.message, LOGOUT_FAILED_MESSAGE)
+  assert.match(requestMacLogout.toString(), /FONT_BUTLER_TEST/)
+  assert.doesNotMatch(requestMacLogout.toString(), /timeout/)
 })
 
 test('applyAdobeFontCacheClear removes font caches and leaves other Adobe data', () => {

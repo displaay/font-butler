@@ -596,12 +596,7 @@ function AppShell() {
     void boot()
     const seenWatchFailures = new Set<string>()
     const presentNotice = (notice: Notice) => {
-      const logoutAction = logoutNoticeAction(notice.source, document.visibilityState === 'visible')
-      if (logoutAction === 'ignore') return
-      if (logoutAction === 'waiting') {
-        toast.info(notice.message)
-        return
-      }
+      if (logoutNoticeAction(notice.source) === 'ignore') return
       if (notice.kind === 'error' && notice.source === 'watch') {
         const key = notice.operationId ?? notice.message
         if (seenWatchFailures.has(key)) return

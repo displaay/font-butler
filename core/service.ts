@@ -1471,6 +1471,7 @@ export class FontButlerService {
   async clearUserFontCache(options: { confirm?: boolean } = {}): Promise<{
     mac: boolean
     cleared: boolean
+    simulated?: boolean
   }> {
     if (options.confirm !== true) {
       throw new Error(
@@ -1478,11 +1479,14 @@ export class FontButlerService {
       )
     }
     const result = await getFontNative().clearUserFontCache({ confirm: true })
+    const cleared = result.cleared === true && result.simulated !== true
     emitNotice({
       kind: 'info',
-      message: result.mac
+      message: cleared
         ? 'Removed the user font cache. Some apps may not see new or updated fonts until you log out.'
-        : 'Font cache clearing is available on macOS.',
+        : result.mac
+          ? 'Font caches were not cleared.'
+          : 'Font cache clearing is available on macOS.',
     })
     return result
   }
@@ -1493,6 +1497,7 @@ export class FontButlerService {
     message?: string
     error?: string
   }> {
+    // requestMacLogout keeps a single in-flight osascript, so a second click joins it.
     return requestMacLogout(
       (result) => {
         emitNotice({
@@ -2309,6 +2314,8 @@ export class FontButlerService {
         parsed: parseFontBuffer(bytes, revisionFormat),
         stat: readFileStat(staging),
       }
+      let restoreWarning: string | undefined
+      let checkedActivation = false
       try {
         await withMutationJournal(this.paths, { kind: 'replace', entries: [entry] }, async () => {
           if (hasMacosDestination || !adobe) {
@@ -2332,6 +2339,8 @@ export class FontButlerService {
                 rollbackDir: path.join(this.paths.dataRoot, 'rollback'),
                 native: getFontNative(),
               })
+              restoreWarning = warning
+              checkedActivation = true
               if (warning) this.recordInstallWarning(warning, entry!.id)
             }
           }
@@ -2381,6 +2390,8 @@ export class FontButlerService {
             })
           }
           entry.status = wasDeactivated ? 'deactivated' : 'installed'
+          if (checkedActivation) assignActivationWarning(entry, restoreWarning)
+          else if (wasDeactivated) assignActivationWarning(entry, undefined)
           if (previousFingerprint && previousFingerprint !== target) {
             entry.previousRevisionId = previousFingerprint
           }
@@ -3437,6 +3448,7 @@ export class FontButlerService {
       })
     }
     entry.status = 'deactivated'
+    assignActivationWarning(entry, undefined)
     applyEntryFacts(entry)
   }
 

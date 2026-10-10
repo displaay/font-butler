@@ -28,6 +28,8 @@ export type NativeEnableResult = {
 export type CacheClearResult = {
   mac: boolean
   cleared: boolean
+  /** True when atsutil was skipped and the cache was left in place. */
+  simulated?: boolean
 }
 
 export type FontCachesResult = {

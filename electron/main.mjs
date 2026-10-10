@@ -46,10 +46,12 @@ import {
 } from './finder-install.mjs'
 import { deliverNativeNotice, electronNotificationPermission } from './notify.mjs'
 import {
+  LOGOUT_CANCELLED,
   logoutFailedDialogOptions,
   logoutMenuResultAction,
   presentLogoutFailure,
   presentLogoutNotice,
+  shouldOfferLogoutAfterCacheClear,
   showLogoutMessageBox,
 } from './logout-dialog.mjs'
 import { createWatchNoticeBuffer, isWatchFailureNotice } from './watch-notices.mjs'
@@ -1042,15 +1044,10 @@ async function confirmFontCacheClear() {
 }
 
 function showAppMessageBox(options) {
-  return showLogoutMessageBox(dialog, mainWindow, options)
-}
-
-function rendererCanPresentLogoutNotice() {
-  const win = mainWindow
-  if (!win || win.isDestroyed() || mainWindowKind !== 'main') return false
-  if (!win.isVisible() || win.isMinimized()) return false
-  if (win.webContents.isLoading()) return false
-  return true
+  return showLogoutMessageBox(dialog, mainWindow, options, {
+    showMainWindow,
+    getWindow: () => mainWindow,
+  })
 }
 
 async function offerLogoutAfterFontCacheClear() {
@@ -1070,7 +1067,7 @@ async function offerLogoutAfterFontCacheClear() {
     await showAppMessageBox({
       type: 'info',
       title: 'Log out',
-      message: result.message || 'Log out was cancelled.',
+      message: result.message || LOGOUT_CANCELLED,
       buttons: ['OK'],
       defaultId: 0,
     })
@@ -1080,7 +1077,11 @@ async function offerLogoutAfterFontCacheClear() {
     await presentLogoutFailure({
       message: result && result.message,
       getParent: () => mainWindow,
-      showDialog: (parent, options) => showLogoutMessageBox(dialog, parent, options),
+      showDialog: (parent, options) =>
+        showLogoutMessageBox(dialog, parent, options, {
+          showMainWindow,
+          getWindow: () => mainWindow,
+        }),
       notify: () =>
         maybeNotify({
           kind: 'warning',
@@ -1134,7 +1135,7 @@ async function clearCacheFromMenu(kind) {
     if (!response.ok) {
       throw new Error(data.error || 'Could not clear cache')
     }
-    if (kind === 'font') {
+    if (kind === 'font' && shouldOfferLogoutAfterCacheClear(data)) {
       await offerLogoutAfterFontCacheClear()
     }
   } catch (error) {
@@ -1588,9 +1589,16 @@ function handleApiEvent(event) {
       presentLogoutNotice({
         notice: event.notice,
         getWindow: () => mainWindow,
-        rendererVisible: rendererCanPresentLogoutNotice(),
-        showMessageBox: (parent, options) => showLogoutMessageBox(dialog, parent, options),
-        showWaitingNotice: (parent, options) => showLogoutMessageBox(dialog, parent, options),
+        showMessageBox: (parent, options) =>
+          showLogoutMessageBox(dialog, parent, options, {
+            showMainWindow,
+            getWindow: () => mainWindow,
+          }),
+        showWaitingNotice: (parent, options) =>
+          showLogoutMessageBox(dialog, parent, options, {
+            showMainWindow,
+            getWindow: () => mainWindow,
+          }),
         notify(notice) {
           try {
             return maybeNotify(notice)

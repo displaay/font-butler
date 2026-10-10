@@ -25,6 +25,14 @@ export type RetailDownload = (key: string, expectedSize: number, signal?: AbortS
 export type RetailInstallDest = {
   dest: string
   parked: boolean
+  warning?: string
+}
+
+export type RetailWrittenDest = {
+  relativePath: string
+  dest: string
+  parked: boolean
+  warning?: string
 }
 
 export type ApplyRetailSyncOptions = {
@@ -37,7 +45,7 @@ export type ApplyRetailSyncOptions = {
   /** Called after each batch so an interrupted sync does not re-download what already landed. */
   persist: (
     manifest: RetailLocalManifest,
-    writtenDests?: Array<{ relativePath: string; dest: string; parked: boolean }>,
+    writtenDests?: RetailWrittenDest[],
   ) => unknown | Promise<unknown>
   destFor?: (relativePath: string) => RetailInstallDest | null
   /** Serialize only the final destination resolution and commit, leaving downloads concurrent. */
@@ -56,7 +64,7 @@ export type RetailSyncResult = {
   failed: number
   errors: string[]
   manifest: RetailLocalManifest
-  writtenDests: Array<{ relativePath: string; dest: string; parked: boolean }>
+  writtenDests: RetailWrittenDest[]
 }
 
 /** Leftovers from an interrupted run. Removed on entry so they cannot accumulate. */
@@ -136,19 +144,19 @@ async function writeOne(options: ApplyRetailSyncOptions, item: RetailDriftItem):
       if (!target) throw new Error('refused an unsafe path.')
       if (target.parked) {
         writeParkedFile(target.dest, stagedPath)
-      } else {
-        const warning = await commitInstalledFile({
-          dest: target.dest,
-          stagedPath,
-          rollbackDir: options.rollbackDir,
-          native: options.native ?? getFontNative(),
-        })
-        if (warning) {
-          logMain('verify', `kept ${target.dest} ${warning}`)
-          emitNotice({ kind: 'warning', message: warning })
-        }
+        return target
       }
-      return target
+      const warning = await commitInstalledFile({
+        dest: target.dest,
+        stagedPath,
+        rollbackDir: options.rollbackDir,
+        native: options.native ?? getFontNative(),
+      })
+      if (warning) {
+        logMain('verify', `kept ${target.dest} ${warning}`)
+        emitNotice({ kind: 'warning', message: warning })
+      }
+      return warning ? { ...target, warning } : target
     }
     const target = options.withLock ? await options.withLock(commit) : await commit()
     return target
@@ -221,7 +229,7 @@ export async function applyRetailSync(options: ApplyRetailSyncOptions): Promise<
     }
     const batch = todo.slice(index, index + concurrency)
     const settled = await Promise.allSettled(batch.map((item) => writeOne(options, item)))
-    const batchWritten: Array<{ relativePath: string; dest: string; parked: boolean }> = []
+    const batchWritten: RetailWrittenDest[] = []
 
     for (let offset = 0; offset < settled.length; offset += 1) {
       const outcome = settled[offset]
@@ -251,10 +259,11 @@ export async function applyRetailSync(options: ApplyRetailSyncOptions): Promise<
         installedPath: installed.dest,
         parked: installed.parked,
       }
-      const written = {
+      const written: RetailWrittenDest = {
         relativePath: item.relativePath,
         dest: installed.dest,
         parked: installed.parked,
+        warning: installed.parked ? undefined : installed.warning,
       }
       result.writtenDests.push(written)
       batchWritten.push(written)

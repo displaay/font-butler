@@ -275,22 +275,38 @@ export function allowRealCacheMutation(): boolean {
   return process.env.FONT_BUTLER_NATIVE_CACHES === '1'
 }
 
+export const ATSUTIL_SKIPPED_LOG = 'atsutil skipped; font caches were not cleared'
+
+export function userFontCacheClearOutcome(input: {
+  mac: boolean
+  confirmed: boolean
+  allowMutation: boolean
+}): { mac: boolean; cleared: boolean; simulated?: boolean; runAtsutil: boolean } {
+  if (!input.confirmed) return { mac: input.mac, cleared: false, runAtsutil: false }
+  if (!input.mac) return { mac: false, cleared: false, runAtsutil: false }
+  if (!input.allowMutation) {
+    return { mac: true, cleared: false, simulated: true, runAtsutil: false }
+  }
+  return { mac: true, cleared: true, runAtsutil: true }
+}
+
 export async function clearUserFontCache(
   options: { confirm?: boolean } = {},
-): Promise<{ mac: boolean; cleared: boolean }> {
-  if (options.confirm !== true) {
-    return { mac: isMac(), cleared: false }
-  }
-  if (!isMac()) {
-    return { mac: false, cleared: false }
+): Promise<{ mac: boolean; cleared: boolean; simulated?: boolean }> {
+  const outcome = userFontCacheClearOutcome({
+    mac: isMac(),
+    confirmed: options.confirm === true,
+    allowMutation: allowRealCacheMutation(),
+  })
+  if (!outcome.runAtsutil) {
+    if (outcome.simulated) logMain('install', ATSUTIL_SKIPPED_LOG)
+    return { mac: outcome.mac, cleared: outcome.cleared, simulated: outcome.simulated }
   }
   const paths = getPaths()
   const commands = atsutilCommands({ confirm: true })
   logMain('install', `atsutil ${commands.map((args) => args.join(' ')).join('; ')}`)
-  if (allowRealCacheMutation()) {
-    for (const args of commands) {
-      await runQuiet('atsutil', args)
-    }
+  for (const args of commands) {
+    await runQuiet('atsutil', args)
   }
   if (fs.existsSync(paths.atsCacheDir)) {
     emptyDir(paths.atsCacheDir)
@@ -401,6 +417,51 @@ export function awaitMacLogoutRequest(
   })
 }
 
+type LogoutFlight = {
+  accepted: Promise<MacLogoutResult>
+  finished: Promise<void>
+}
+
+let logoutFlight: LogoutFlight | null = null
+
+export function resetSharedMacLogout(): void {
+  logoutFlight = null
+}
+
+/**
+ * One osascript at a time. A second request joins the in-flight promise until
+ * that process reports, including after the accept window has already resolved.
+ */
+export function shareMacLogout(
+  start: (report: (result: MacLogoutResult) => void) => void,
+  onLateFailure?: (result: MacLogoutResult) => void,
+  onStillWaiting?: (message: string) => void,
+  acceptAfterMs = LOGOUT_ACCEPT_MS,
+): Promise<MacLogoutResult> {
+  if (logoutFlight) return logoutFlight.accepted
+  let markFinished = () => {}
+  const finished = new Promise<void>((resolve) => {
+    markFinished = resolve
+  })
+  const accepted = awaitMacLogoutRequest(
+    (report) => {
+      start((result) => {
+        report(result)
+        markFinished()
+      })
+    },
+    acceptAfterMs,
+    onLateFailure,
+    { onStillWaiting },
+  )
+  const flight: LogoutFlight = { accepted, finished }
+  logoutFlight = flight
+  void finished.finally(() => {
+    if (logoutFlight === flight) logoutFlight = null
+  })
+  return accepted
+}
+
 export async function requestMacLogout(
   onLateFailure?: (result: MacLogoutResult) => void,
   onStillWaiting?: (message: string) => void,
@@ -410,12 +471,11 @@ export async function requestMacLogout(
     return { requested: false, message: LOGOUT_FAILED_MESSAGE }
   }
   logMain('install', 'logout request')
-  return awaitMacLogoutRequest((report) => {
-    startMacLogoutProcess(execFile, report)
-  }, LOGOUT_ACCEPT_MS, onLateFailure, {
-    stillWaitingAfterMs: LOGOUT_STILL_WAITING_MS,
+  return shareMacLogout(
+    (report) => startMacLogoutProcess(execFile, report),
+    onLateFailure,
     onStillWaiting,
-  })
+  )
 }
 
 export async function clearOfficeFontCache(): Promise<{ mac: boolean; cleared: boolean }> {
@@ -1144,11 +1204,21 @@ export function assignActivationWarning(
   else delete entry.activationWarning
 }
 
-function listUserFontFiles(root: string): string[] {
-  const files: string[] = []
+/**
+ * Walk font files under `root`. `now()` is checked before each directory, so a
+ * spent budget never opens the next folder. `visit` returning false stops the
+ * walk immediately, including directories that have not been opened yet.
+ */
+export function visitUserFontFiles(
+  root: string,
+  visit: (filePath: string) => boolean | void,
+  now: () => number = () => 0,
+  deadline = Number.POSITIVE_INFINITY,
+): void {
   const seen = new Set<string>()
   const pending = [root]
   while (pending.length > 0) {
+    if (now() >= deadline) return
     const dir = pending.pop()
     if (!dir) continue
     let resolved = dir
@@ -1165,6 +1235,8 @@ function listUserFontFiles(root: string): string[] {
     } catch {
       continue
     }
+    entries.sort((a, b) => a.name.localeCompare(b.name))
+    const subdirs: string[] = []
     for (const entry of entries) {
       if (entry.name.startsWith('.')) continue
       const full = path.join(resolved, entry.name)
@@ -1175,13 +1247,30 @@ function listUserFontFiles(root: string): string[] {
         continue
       }
       if (stat.isDirectory()) {
-        pending.push(full)
+        subdirs.push(full)
         continue
       }
       if (!USER_FONT_COPY_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) continue
-      files.push(full)
+      if (visit(full) === false) return
     }
+    for (const sub of subdirs) pending.push(sub)
   }
+}
+
+export function listUserFontFiles(
+  root: string,
+  now: () => number = () => 0,
+  deadline = Number.POSITIVE_INFINITY,
+): string[] {
+  const files: string[] = []
+  visitUserFontFiles(
+    root,
+    (full) => {
+      files.push(full)
+    },
+    now,
+    deadline,
+  )
   files.sort()
   return files
 }
@@ -1249,19 +1338,25 @@ export function findOtherUserFontCopy(
   }
   const byName = batch?.byName ?? new Map<string, string[]>()
   let match: string | undefined
-  for (const full of listUserFontFiles(root)) {
-    const psNames = cachedPostScriptNames(full, now, deadline)
-    if (psNames === 'budget') break
-    for (const name of psNames) {
-      const paths = byName.get(name)
-      if (paths) {
-        if (!paths.some((candidate) => fontPathsMatch(candidate, full))) paths.push(full)
-      } else {
-        byName.set(name, [full])
+  visitUserFontFiles(
+    root,
+    (full) => {
+      const psNames = cachedPostScriptNames(full, now, deadline)
+      if (psNames === 'budget') return false
+      for (const name of psNames) {
+        const paths = byName.get(name)
+        if (paths) {
+          if (!paths.some((candidate) => fontPathsMatch(candidate, full))) paths.push(full)
+        } else {
+          byName.set(name, [full])
+        }
+        if (!match && wanted.has(name) && !fontPathsMatch(full, installedPath)) match = full
       }
-      if (!match && wanted.has(name) && !fontPathsMatch(full, installedPath)) match = full
-    }
-  }
+      return true
+    },
+    now,
+    deadline,
+  )
   if (batch) batch.scanned = true
   return match ?? otherCopyFromMap(byName, wanted, installedPath)
 }

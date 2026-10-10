@@ -54,7 +54,16 @@ export function ClearFontCachesControl({
     setPhase('clearing')
     setError(null)
     try {
-      await onClear()
+      const result = await onClear()
+      if (
+        result &&
+        typeof result === 'object' &&
+        'cleared' in result &&
+        (result as { cleared?: boolean }).cleared === false
+      ) {
+        setPhase('idle')
+        return
+      }
       setPhase('cleared')
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not clear font caches.')
