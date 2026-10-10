@@ -206,8 +206,103 @@ test('Clear font caches runs only after confirmation and logout is optional', as
   await act(async () => {
     logoutDenied.click()
   })
-  assert.match(document.body.textContent ?? '', /Use Apple menu > Log Out/)
-  assert.ok(buttonNamed(document.body, 'Later'))
+  const failed = document.body.querySelector('[role="dialog"]')
+  assert.ok(failed)
+  assert.match(failed.textContent ?? '', /Logging out didn't happen/)
+  assert.match(failed.textContent ?? '', /Apple menu > Log Out/)
+  assert.match(failed.textContent ?? '', /rebuilding font caches/)
+  assert.ok(buttonNamed(failed, 'OK'))
+  assert.equal(buttonNamed(failed, 'Log out now'), undefined)
+
+  const failures = [
+    {
+      name: '-1743',
+      result: {
+        requested: false,
+        message: "Logging out didn't happen. Use Apple menu > Log Out to finish rebuilding font caches.",
+        error: 'osascript is not allowed to send keystrokes. (-1743)',
+      },
+    },
+    {
+      name: 'generic',
+      result: {
+        requested: false,
+        message: "Logging out didn't happen. Use Apple menu > Log Out to finish rebuilding font caches.",
+        error: 'osascript failed: System Events is not running',
+      },
+    },
+    {
+      name: 'timeout',
+      result: {
+        requested: false,
+        message: "Logging out didn't happen. Use Apple menu > Log Out to finish rebuilding font caches.",
+        error: 'spawn osascript ETIMEDOUT: timed out',
+      },
+    },
+  ]
+  const previousNotification = globalThis.Notification
+  class DeniedNotification {
+    static permission = 'denied'
+    static isSupported() {
+      return false
+    }
+    constructor() {
+      throw new Error('notifications unavailable')
+    }
+    show() {
+      throw new Error('notifications unavailable')
+    }
+  }
+  globalThis.Notification = DeniedNotification as unknown as typeof Notification
+  try {
+    for (const failure of failures) {
+      await act(async () => {
+        root.render(
+          createElement(ClearFontCachesControl, {
+            onClear: async () => {
+              calls.push(`clear-${failure.name}`)
+            },
+            onLogOut: async () => {
+              calls.push(`logout-${failure.name}`)
+              if (globalThis.Notification) {
+                try {
+                  new globalThis.Notification('Font Buttler')
+                } catch {
+                  // Permission is denied. The dialog still has to appear.
+                }
+              }
+              return failure.result
+            },
+          }),
+        )
+      })
+      const openFailure = buttonNamed(document.body, 'Clear font caches')
+      assert.ok(openFailure, failure.name)
+      await act(async () => {
+        openFailure.click()
+      })
+      const confirmFailure = document.body.querySelector('[role="dialog"]')
+      assert.ok(confirmFailure, failure.name)
+      const confirmFailureButton = buttonNamed(confirmFailure, 'Clear font caches')
+      assert.ok(confirmFailureButton, failure.name)
+      await act(async () => {
+        confirmFailureButton.click()
+      })
+      const logoutFailure = buttonNamed(document.body, 'Log out now')
+      assert.ok(logoutFailure, failure.name)
+      await act(async () => {
+        logoutFailure.click()
+      })
+      const dialog = document.body.querySelector('[role="dialog"]')
+      assert.ok(dialog, failure.name)
+      assert.match(dialog.textContent ?? '', /Logging out didn't happen/)
+      assert.match(dialog.textContent ?? '', /Apple menu > Log Out/)
+      assert.match(dialog.textContent ?? '', /rebuilding font caches/)
+      assert.equal(globalThis.Notification, DeniedNotification)
+    }
+  } finally {
+    globalThis.Notification = previousNotification
+  }
 
   await act(async () => {
     root.unmount()

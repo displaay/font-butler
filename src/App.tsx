@@ -28,6 +28,7 @@ import { ReplaceFormatDialog } from '@/components/ReplaceFormatDialog'
 import { RetailCollisionDialog } from '@/components/RetailCollisionDialog'
 import { LatinPreviewProvider } from '@/components/AaPreview'
 import { SettingsDialog } from '@/components/SettingsDialog'
+import { LogoutFailedDialog } from '@/components/ClearFontCachesControl'
 import { Sidebar, type Tab } from '@/components/Sidebar'
 import { SystemCard } from '@/components/SystemCard'
 import {
@@ -193,6 +194,7 @@ function AppShell() {
   const [renameEntry, setRenameEntry] = useState<CatalogEntry | null>(null)
   const [bakeRenameFeatures, setBakeRenameFeatures] = useState<string[] | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [logoutFailedOpen, setLogoutFailedOpen] = useState(false)
   const [settingsFocusAppUpdate, setSettingsFocusAppUpdate] = useState(false)
   const [settingsFocusWatchFolders, setSettingsFocusWatchFolders] = useState(false)
   const [appUpdate, setAppUpdate] = useState<AppUpdateStatus | null>(null)
@@ -595,6 +597,10 @@ function AppShell() {
     void boot()
     const seenWatchFailures = new Set<string>()
     const presentNotice = (notice: Notice) => {
+      if (notice.source === 'logout') {
+        setLogoutFailedOpen(true)
+        return
+      }
       if (notice.kind === 'error' && notice.source === 'watch') {
         const key = notice.operationId ?? notice.message
         if (seenWatchFailures.has(key)) return
@@ -3044,6 +3050,7 @@ function AppShell() {
             void refreshCatalog()
           }}
         />
+        <LogoutFailedDialog open={logoutFailedOpen} onClose={() => setLogoutFailedOpen(false)} />
         <SettingsDialog
           open={settingsOpen}
           onOpenChange={(open) => {

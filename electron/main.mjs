@@ -45,6 +45,7 @@ import {
   suggestedFamilyName,
 } from './finder-install.mjs'
 import { deliverNativeNotice, electronNotificationPermission } from './notify.mjs'
+import { logoutFailedDialogOptions, presentLogoutFailure } from './logout-dialog.mjs'
 import { createWatchNoticeBuffer, isWatchFailureNotice } from './watch-notices.mjs'
 import {
   buildTrayMenuModel,
@@ -1050,16 +1051,31 @@ async function offerLogoutAfterFontCacheClear() {
     : await dialog.showMessageBox(options)
   if (choice.response !== 0) return
   const result = await postApi('/api/session/logout', {})
-  if (!result || result.requested === false) {
-    const denied = {
-      type: 'warning',
+  if (result && result.message === 'Log out was cancelled.') {
+    const cancelled = {
+      type: 'info',
       title: 'Log out',
-      message: (result && result.message) || 'Use Apple menu > Log Out',
+      message: result.message,
       buttons: ['OK'],
       defaultId: 0,
     }
-    if (parent) await dialog.showMessageBox(parent, denied)
-    else await dialog.showMessageBox(denied)
+    if (parent) await dialog.showMessageBox(parent, cancelled)
+    else await dialog.showMessageBox(cancelled)
+    return
+  }
+  if (!result || result.requested === false) {
+    const showDialog = (options) =>
+      parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options)
+    await presentLogoutFailure({
+      message: result && result.message,
+      showDialog,
+      notify: () =>
+        maybeNotify({
+          kind: 'warning',
+          source: 'logout',
+          message: (result && result.message) || logoutFailedDialogOptions().detail,
+        }),
+    })
   }
 }
 
@@ -1555,7 +1571,12 @@ function handleApiEvent(event) {
     applyNativeNotificationSetting(event.settings.nativeNotifications)
   }
   if (event.type === 'notice' && event.notice) {
-    maybeNotify(event.notice)
+    try {
+      maybeNotify(event.notice)
+    } catch {
+      // A missing notification permission must not drop the in-app dialog.
+    }
+    if (event.notice.source === 'logout') showMainWindow()
     if (isWatchFailureNotice(event.notice)) {
       deliverWatchNotices(watchNoticeBuffer.push(event.notice))
     }

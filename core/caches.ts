@@ -40,6 +40,11 @@ export const MAC_LOGOUT_APPLESCRIPT = 'tell application "System Events" to log o
 /** Shown when Font Buttler cannot send the logout Apple event (for example -1743). */
 export const LOGOUT_FALLBACK = 'Use Apple menu > Log Out'
 
+/** In-app copy when logout did not happen. The raw osascript error stays in main.log. */
+export const LOGOUT_FAILED_TITLE = "Logging out didn't happen"
+export const LOGOUT_FAILED_MESSAGE =
+  "Logging out didn't happen. Use Apple menu > Log Out to finish rebuilding font caches."
+
 /** Shown when the user dismisses the System Events logout confirm (-128). */
 export const LOGOUT_CANCELLED = 'Log out was cancelled.'
 /**
@@ -297,7 +302,7 @@ export function logoutResultFromExecError(error: unknown): {
   if (/\(-128\)/.test(detail)) {
     return { requested: false, message: LOGOUT_CANCELLED, error: detail }
   }
-  return { requested: false, message: LOGOUT_FALLBACK, error: detail }
+  return { requested: false, message: LOGOUT_FAILED_MESSAGE, error: detail }
 }
 
 export type MacLogoutResult = {
@@ -314,6 +319,7 @@ export type MacLogoutResult = {
 export function awaitMacLogoutRequest(
   start: (report: (result: MacLogoutResult) => void) => void,
   acceptAfterMs = LOGOUT_ACCEPT_MS,
+  onLateFailure?: (result: MacLogoutResult) => void,
 ): Promise<MacLogoutResult> {
   return new Promise((resolve) => {
     let settled = false
@@ -321,6 +327,7 @@ export function awaitMacLogoutRequest(
       if (settled) {
         if (result.requested === false) {
           logMain('install', `logout settled after accept ${result.message || ''} ${result.error || ''}`.trim())
+          if (result.message !== LOGOUT_CANCELLED) onLateFailure?.(result)
         }
         return
       }
@@ -338,10 +345,12 @@ export function awaitMacLogoutRequest(
   })
 }
 
-export async function requestMacLogout(): Promise<MacLogoutResult> {
-  if (!isMac()) return { requested: false, message: LOGOUT_FALLBACK }
+export async function requestMacLogout(
+  onLateFailure?: (result: MacLogoutResult) => void,
+): Promise<MacLogoutResult> {
+  if (!isMac()) return { requested: false, message: LOGOUT_FAILED_MESSAGE }
   if (process.env.FONT_BUTLER_TEST === '1' && process.env.FONT_BUTLER_NATIVE !== '1') {
-    return { requested: false, message: LOGOUT_FALLBACK }
+    return { requested: false, message: LOGOUT_FAILED_MESSAGE }
   }
   logMain('install', 'logout request')
   return awaitMacLogoutRequest((report) => {
@@ -350,7 +359,7 @@ export async function requestMacLogout(): Promise<MacLogoutResult> {
       else report({ requested: true })
     })
     child.unref()
-  })
+  }, LOGOUT_ACCEPT_MS, onLateFailure)
 }
 
 export async function clearOfficeFontCache(): Promise<{ mac: boolean; cleared: boolean }> {

@@ -19,6 +19,7 @@ import {
   installedFontCheckError,
   LOOKUP_ATTEMPT_MS,
   LOGOUT_CANCELLED,
+  LOGOUT_FAILED_MESSAGE,
   LOGOUT_FALLBACK,
   logoutResultFromExecError,
   parseActivatedFontLookup,
@@ -168,7 +169,9 @@ test('ensure fails on register failure and never falls back to process scope', (
     stderr: 'execution error: System Events got an error: osascript is not allowed to send keystrokes. (-1743)',
   })
   assert.equal(denied.requested, false)
-  assert.equal(denied.message, LOGOUT_FALLBACK)
+  assert.equal(denied.message, LOGOUT_FAILED_MESSAGE)
+  assert.match(denied.message, /Logging out didn't happen/)
+  assert.match(denied.message, /Apple menu > Log Out/)
   assert.match(denied.error, /-1743/)
   const cancelled = logoutResultFromExecError({
     message: 'osascript failed',
@@ -536,7 +539,7 @@ test('logout reports an open confirm as accepted and keeps -128 and -1743', asyn
     report(logoutResultFromExecError({ stderr: 'osascript is not allowed to send keystrokes. (-1743)' }))
   }, 1_000)
   assert.equal(denied.requested, false)
-  assert.equal(denied.message, LOGOUT_FALLBACK)
+  assert.equal(denied.message, LOGOUT_FAILED_MESSAGE)
 })
 
 test('a registered install warns when user Fonts already has that PostScript name', async () => {
@@ -747,6 +750,62 @@ test('logout request and result are written to main.log', async () => {
     assert.match(text, /\[install\s+\] logout result requested=true/)
     assert.match(text, /\[install\s+\] logout result requested=false/)
     assert.match(text, /logout failed/)
+    assert.match(text, /-1743/)
+  } finally {
+    if (previous === undefined) delete process.env.FONT_BUTLER_LOG
+    else process.env.FONT_BUTLER_LOG = previous
+    fs.rmSync(logFile, { force: true })
+  }
+})
+
+test('a logout denial after the accept window still opens the failure path', async () => {
+  const logFile = path.join(os.tmpdir(), `font-butler-logout-late-${process.pid}.log`)
+  const previous = process.env.FONT_BUTLER_LOG
+  process.env.FONT_BUTLER_LOG = logFile
+  const cases = [
+    {
+      error: { stderr: 'osascript is not allowed to send keystrokes. (-1743)' },
+      match: /-1743/,
+    },
+    {
+      error: { message: 'osascript failed', stderr: 'Application is not running. (-600)' },
+      match: /-600/,
+    },
+    {
+      error: { code: 'ETIMEDOUT', message: 'spawn osascript ETIMEDOUT timed out' },
+      match: /timed out/,
+    },
+  ]
+  try {
+    for (const item of cases) {
+      const late: Array<{ message?: string; error?: string }> = []
+      const accepted = await awaitMacLogoutRequest(
+        (report) => {
+          setTimeout(() => report(logoutResultFromExecError(item.error)), 20)
+        },
+        5,
+        (result) => late.push(result),
+      )
+      assert.equal(accepted.requested, true)
+      await new Promise((resolve) => setTimeout(resolve, 40))
+      assert.equal(late.length, 1)
+      assert.equal(late[0]?.message, LOGOUT_FAILED_MESSAGE)
+      assert.match(late[0]?.error ?? '', item.match)
+    }
+    const ignored: unknown[] = []
+    await awaitMacLogoutRequest(
+      (report) => {
+        setTimeout(() => report(logoutResultFromExecError({ stderr: 'User canceled. (-128)' })), 20)
+      },
+      5,
+      (result) => ignored.push(result),
+    )
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    assert.deepEqual(ignored, [])
+    const text = fs.readFileSync(logFile, 'utf8')
+    assert.match(text, /logout failed[\s\S]*-1743/)
+    assert.match(text, /logout failed[\s\S]*-600/)
+    assert.match(text, /logout failed[\s\S]*timed out/)
   } finally {
     if (previous === undefined) delete process.env.FONT_BUTLER_LOG
     else process.env.FONT_BUTLER_LOG = previous

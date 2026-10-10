@@ -10,7 +10,33 @@ import {
 export const FONT_CACHE_CLEAR_WARNING =
   'Some apps may not see new or updated fonts until you log out.'
 
-type Phase = 'idle' | 'confirm' | 'clearing' | 'cleared'
+export const LOGOUT_FAILED_TITLE = "Logging out didn't happen"
+export const LOGOUT_FAILED_MESSAGE =
+  "Logging out didn't happen. Use Apple menu > Log Out to finish rebuilding font caches."
+
+type Phase = 'idle' | 'confirm' | 'clearing' | 'cleared' | 'logout-failed'
+
+export function LogoutFailedDialog({
+  open,
+  onClose,
+}: {
+  open: boolean
+  onClose: () => void
+}) {
+  return (
+    <Dialog open={open} onOpenChange={(next) => { if (!next) onClose() }}>
+      <DialogContent>
+        <DialogTitle>{LOGOUT_FAILED_TITLE}</DialogTitle>
+        <DialogDescription>{LOGOUT_FAILED_MESSAGE}</DialogDescription>
+        <div className="mt-4 flex justify-end">
+          <Button type="button" onClick={onClose}>
+            OK
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
 
 export function ClearFontCachesControl({
   disabled,
@@ -107,13 +133,17 @@ export function ClearFontCachesControl({
                   .then((result) => {
                     const outcome = result as { requested?: boolean; message?: string } | undefined
                     if (outcome && outcome.requested === false) {
-                      setLogoutFallback(outcome.message || 'Use Apple menu > Log Out')
+                      if (/cancelled/i.test(outcome.message ?? '')) {
+                        setLogoutFallback(outcome.message || 'Log out was cancelled.')
+                        return
+                      }
+                      setPhase('logout-failed')
                       return
                     }
                     setPhase('idle')
                   })
                   .catch(() => {
-                    setLogoutFallback('Use Apple menu > Log Out')
+                    setPhase('logout-failed')
                   })
               }}
             >
@@ -122,6 +152,7 @@ export function ClearFontCachesControl({
           </div>
         </DialogContent>
       </Dialog>
+      <LogoutFailedDialog open={phase === 'logout-failed'} onClose={() => setPhase('idle')} />
     </>
   )
 }

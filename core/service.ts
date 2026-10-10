@@ -24,6 +24,7 @@ import {
   isKeptInstall,
   locateAdobeFontCache,
   locateOfficeFontCache,
+  LOGOUT_FAILED_MESSAGE,
   requestMacLogout,
   withVerificationBatch,
 } from './caches.ts'
@@ -1487,7 +1488,13 @@ export class FontButlerService {
   }
 
   async requestLogout(): Promise<{ requested: boolean; message?: string; error?: string }> {
-    return requestMacLogout()
+    return requestMacLogout((result) => {
+      emitNotice({
+        kind: 'warning',
+        source: 'logout',
+        message: result.message || LOGOUT_FAILED_MESSAGE,
+      })
+    })
   }
 
   async clearOfficeFontCache(): Promise<{ mac: boolean; cleared: boolean }> {

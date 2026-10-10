@@ -141,7 +141,7 @@ export type Notice = {
   message: string
   entryId?: string
   operationId?: string
-  source?: 'watch'
+  source?: 'watch' | 'logout'
 }
 
 export type DuplicateWarning = {
