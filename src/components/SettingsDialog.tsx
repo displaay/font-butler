@@ -16,6 +16,7 @@ import {
   Type,
   X,
 } from 'lucide-react'
+import { FinderSyncEnableButton } from '@/components/FinderSyncEnable'
 import { FolderRelinkDialog } from '@/components/FolderRelinkDialog'
 import { FolderSetupDialog } from '@/components/FolderSetupDialog'
 import { AppUpdateCard } from '@/components/AppUpdateCard'
@@ -53,6 +54,7 @@ import type {
   ViewLayout,
 } from '@/lib/types'
 import { APP_ICON_OPTIONS, appIconPreviewSrc, parseAppIconStyle } from '@/lib/appIcon'
+import { FINDER_SYNC_ENABLE_DESCRIPTION, FINDER_SYNC_ENABLE_LABEL } from '@/lib/finderSync'
 import { cn } from '@/lib/utils'
 import { DESTINATIONS, GLOBAL_AUTO_REINSTALL_DESCRIPTION, WATCH_FOLDER_ACTIONS, adobeTestingFolderAvailable, destinationLabel, destinationNeedsAdobe, folderAvailabilityLabel } from '@/lib/folders'
 import { watchFolderName } from '@/lib/watchFolders'
@@ -686,6 +688,11 @@ function GeneralPane({
               onChange={(event) => void onSave({ openAtLogin: event.target.checked })}
               className={checkboxClass}
             />
+          </SettingsRow>
+        ) : null}
+        {isDesktop ? (
+          <SettingsRow label={FINDER_SYNC_ENABLE_LABEL} description={FINDER_SYNC_ENABLE_DESCRIPTION}>
+            <FinderSyncEnableButton disabled={busy || !settings} />
           </SettingsRow>
         ) : null}
         <SettingsRow

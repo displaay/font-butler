@@ -12,7 +12,7 @@ import {
   Tray,
   utilityProcess,
 } from 'electron'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
@@ -24,6 +24,8 @@ import {
   createAppUpdateInstaller,
   detectAppUpdateRuntime,
   openedUpdateDmgRecordFile,
+  outermostAppBundle,
+  readAppTestFeedMarker,
 } from './app-update-install.mjs'
 import { applyTestFeedDataIsolation } from './test-feed-data.mjs'
 import { macosDockIconPng } from './dock-icon.mjs'
@@ -36,14 +38,29 @@ import {
   finderInstallIssues,
   FINDER_INSTALL_AS,
   FINDER_LINK_TO,
-  FINDER_PROTOCOL,
   formatFinderInstallIssues,
   groupIdsByFormat,
   idsEligibleForFinderInstall,
-  parseFinderInstallUrl,
-  parseFinderLaunch,
   suggestedFamilyName,
 } from './finder-install.mjs'
+import {
+  FINDER_SYNC_AGENT_DISABLED,
+  FINDER_SYNC_PENDING_ERROR_FILE,
+  FINDER_SYNC_SETTINGS_URL,
+  FINDER_SYNC_TOO_MANY_FILES,
+  commitFinderSyncAgentRegistration,
+  finderSyncAgentBundleProgram,
+  finderSyncRequestSeen,
+  finderSyncWireAction,
+  formatFinderSyncRejections,
+  noteFinderSyncRequest,
+  readFinderSyncAgentRecord,
+  readFinderSyncPendingErrorFile,
+  routeFinderSyncError,
+  refreshFinderSyncRegistration,
+  revalidateFinderSyncHandles,
+  validateFinderSyncSelection,
+} from './finder-sync.mjs'
 import { deliverNativeNotice, electronNotificationPermission } from './notify.mjs'
 import { createWatchNoticeBuffer, isWatchFailureNotice } from './watch-notices.mjs'
 import {
@@ -834,8 +851,73 @@ async function openFont(filePath) {
   showMainWindow()
 }
 
-function enqueueFinderJob(action, filePaths) {
-  return finderJobs.enqueue(action, filePaths)
+function enqueueFinderJob(action, filePaths, options) {
+  return finderJobs.enqueue(action, filePaths, options)
+}
+
+function finderSyncIo() {
+  const flagsFor = (directory) => {
+    let flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0)
+    if (directory && fs.constants.O_DIRECTORY) flags |= fs.constants.O_DIRECTORY
+    return flags
+  }
+  return {
+    lstatSync: (filePath) => fs.lstatSync(filePath),
+    readlinkSync: (filePath) => fs.readlinkSync(filePath),
+    readdirSync: (filePath) => fs.readdirSync(filePath),
+    openSync(filePath, directory) {
+      return fs.openSync(filePath, flagsFor(Boolean(directory)))
+    },
+    closeSync(fd) {
+      fs.closeSync(fd)
+    },
+    fstatSync(fd) {
+      return fs.fstatSync(fd)
+    },
+    readAt(fd, length) {
+      const buffer = Buffer.alloc(length)
+      const bytes = fs.readSync(fd, buffer, 0, length, 0)
+      return buffer.subarray(0, bytes)
+    },
+    readPrefix(filePath, length) {
+      const fd = fs.openSync(filePath, flagsFor(false))
+      try {
+        const buffer = Buffer.alloc(length)
+        const bytes = fs.readSync(fd, buffer, 0, length, 0)
+        return buffer.subarray(0, bytes)
+      } finally {
+        fs.closeSync(fd)
+      }
+    },
+  }
+}
+
+function enqueueValidatedFinderInstall(action, filePaths) {
+  const checked = validateFinderSyncSelection(filePaths, finderSyncIo())
+  if (checked.limitError) {
+    checked.close?.()
+    dialog.showErrorBox(finderInstallTitle(action), checked.limitError)
+    showMainWindow()
+    return false
+  }
+  if (checked.paths.length === 0) {
+    checked.close?.()
+    dialog.showErrorBox(
+      finderInstallTitle(action),
+      formatFinderSyncRejections(checked.rejected) || 'No installable font files in that selection.',
+    )
+    showMainWindow()
+    return false
+  }
+  if (checked.rejected.length) {
+    dialog.showErrorBox(finderInstallTitle(action), formatFinderSyncRejections(checked.rejected))
+  }
+  enqueueFinderJob(action, checked.paths, { handles: checked.handles, close: checked.close })
+  return true
+}
+
+function runningTestFeed() {
+  return readAppTestFeedMarker(outermostAppBundle(process.execPath)) === true
 }
 
 function registerNativeFinderServices() {
@@ -850,6 +932,184 @@ function registerNativeFinderServices() {
     if (error && error.code !== 'MODULE_NOT_FOUND') {
       console.error('Finder services provider is not loaded', error)
     }
+    return false
+  }
+}
+
+const finderSyncRequests = new Map()
+const finderSyncErrorsShown = new Map()
+
+function presentFinderSyncUserError(code) {
+  const now = Date.now()
+  const route = routeFinderSyncError({
+    code,
+    notificationsEnabled: nativeNotificationsEnabled,
+    permission: electronNotificationPermission(Notification),
+    alreadyShown: finderSyncErrorsShown,
+    now,
+  })
+  if (!route.shown) return
+  finderSyncErrorsShown.set(route.code, now)
+  if (route.channel === 'notification') {
+    const notice = new Notification({ title: 'Font Buttler', body: route.message })
+    notice.on('click', () => showMainWindow())
+    notice.show()
+    return
+  }
+  dialog.showErrorBox('Font Buttler', route.message)
+}
+
+function consumeFinderSyncPendingErrors() {
+  const file = path.join(app.getPath('userData'), FINDER_SYNC_PENDING_ERROR_FILE)
+  const read = readFinderSyncPendingErrorFile(file)
+  if (read.discard) {
+    try {
+      fs.unlinkSync(file)
+    } catch {
+      // A later launch can read the file again after the short show window.
+    }
+  }
+  for (const item of read.errors) presentFinderSyncUserError(item.code)
+}
+
+function finderSyncAgentRecordFile() {
+  return path.join(app.getPath('userData'), 'finder-sync-agent.json')
+}
+
+function loadFinderSyncAgentRecord() {
+  try {
+    return readFinderSyncAgentRecord(fs.readFileSync(finderSyncAgentRecordFile(), 'utf8'))
+  } catch {
+    return readFinderSyncAgentRecord('')
+  }
+}
+
+function saveFinderSyncAgentRecord(record) {
+  fs.mkdirSync(path.dirname(finderSyncAgentRecordFile()), { recursive: true })
+  fs.writeFileSync(
+    finderSyncAgentRecordFile(),
+    JSON.stringify({
+      enabled: record.enabled !== false,
+      appBundlePath: record.appBundlePath || '',
+      helperPath: record.helperPath || '',
+      version: record.version || '',
+    }),
+  )
+}
+
+function parseAgentJson(raw) {
+  try {
+    const parsed = JSON.parse(String(raw ?? ''))
+    return parsed && typeof parsed === 'object' ? parsed : { status: 'unavailable', error: 'Finder Sync agent status was not JSON.' }
+  } catch {
+    return { status: 'unavailable', error: 'Finder Sync agent status was not JSON.' }
+  }
+}
+
+function currentFinderSyncBundle() {
+  return outermostAppBundle(process.execPath) || ''
+}
+
+function loadFinderSyncReceiver() {
+  try {
+    return require('./finder-sync-receiver.node')
+  } catch (error) {
+    if (error && error.code !== 'MODULE_NOT_FOUND') {
+      console.error('Finder Sync receiver is not loaded', error)
+    }
+    return null
+  }
+}
+
+function applyFinderSyncAgentRegistration(addon, { surface = false } = {}) {
+  if (!addon) return { status: 'unavailable', error: 'Finder Sync receiver is not loaded.' }
+  const record = loadFinderSyncAgentRecord()
+  const testFeed = runningTestFeed()
+  if (record.enabled === false) {
+    return parseAgentJson(addon.unregisterAgent())
+  }
+  const status = parseAgentJson(addon.agentStatus())
+  const currentBundle = currentFinderSyncBundle()
+  let result = status
+  const committed = commitFinderSyncAgentRegistration({
+    testFeed,
+    currentBundle,
+    helperPath: currentBundle ? path.join(currentBundle, finderSyncAgentBundleProgram()) : '',
+    version: app.getVersion(),
+    record,
+    status: status.status,
+    unregister() {
+      addon.unregisterAgent()
+    },
+    register() {
+      result = parseAgentJson(addon.registerAgent())
+      if (result?.error) console.error('Finder Sync agent registration failed', result.error)
+      return result?.status
+    },
+  })
+  if (committed.refused) {
+    console.error('Finder Sync agent registration stayed on this build', committed.plan.label)
+    return status
+  }
+  if (committed.saved) saveFinderSyncAgentRecord(committed.record)
+  if (
+    surface &&
+    result?.error &&
+    result.status !== 'requires-approval' &&
+    result.status !== 'enabled' &&
+    result.status !== 'unsupported'
+  ) {
+    dialog.showErrorBox('Finder menu', `${result.error}\n\n${FINDER_SYNC_AGENT_DISABLED}`)
+  }
+  return result
+}
+
+function reportFinderSyncAgentStatus() {
+  let line = 'finder-sync-agent-status {"status":"unavailable","error":"Finder Sync receiver is not loaded."}\n'
+  try {
+    const addon = require('./finder-sync-receiver.node')
+    applyFinderSyncAgentRegistration(addon, { surface: false })
+    const status = addon.agentStatus()
+    line = `finder-sync-agent-status ${status}\n`
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    line = `finder-sync-agent-status ${JSON.stringify({ status: 'unavailable', error: message })}\n`
+  }
+  fs.writeSync(1, line)
+  app.exit(line.includes('"status":"enabled"') ? 0 : 1)
+}
+
+function registerFinderSyncReceiver({ surface = false } = {}) {
+  if (process.platform !== 'darwin') return false
+  const addon = loadFinderSyncReceiver()
+  if (!addon) return false
+  try {
+    addon.register((payload) => {
+      const userError = typeof payload?.error === 'string' ? payload.error.trim() : ''
+      if (userError) {
+        presentFinderSyncUserError(userError)
+        return
+      }
+      const requestId = typeof payload?.requestId === 'string' ? payload.requestId : ''
+      if (finderSyncRequestSeen(finderSyncRequests, requestId)) return
+      const action = finderSyncWireAction(payload?.action)
+      if (!action) {
+        console.error('Finder Sync handoff refused', 'action')
+        dialog.showErrorBox('Install', 'Font Buttler could not read that Finder selection. Use Services (right-click > Services > Install).')
+        return
+      }
+      if (payload?.overflow === 'files') {
+        dialog.showErrorBox(finderInstallTitle(action), FINDER_SYNC_TOO_MANY_FILES)
+        showMainWindow()
+        return
+      }
+      const queued = enqueueValidatedFinderInstall(action, Array.isArray(payload?.paths) ? payload.paths : [])
+      if (queued) noteFinderSyncRequest(finderSyncRequests, requestId)
+    })
+    applyFinderSyncAgentRegistration(addon, { surface })
+    return true
+  } catch (error) {
+    console.error('Finder Sync receiver is not loaded', error)
     return false
   }
 }
@@ -902,7 +1162,15 @@ async function promptFinderInstallAs(entries) {
   return { familyName, destinationIds }
 }
 
-async function runFinderJob(action, filePaths) {
+async function runFinderJob(action, filePaths, job) {
+  if (action !== FINDER_LINK_TO && job?.handles?.length) {
+    const again = revalidateFinderSyncHandles(job.handles, finderSyncIo())
+    if (!again.ok) {
+      dialog.showErrorBox(finderInstallTitle(action), again.reason)
+      showMainWindow()
+      return
+    }
+  }
   if (action === FINDER_LINK_TO) {
     runFinderLinkTo(filePaths)
     return
@@ -1777,24 +2045,25 @@ function buildAppMenu() {
   ])
 }
 
+if (process.argv.includes('--finder-sync-agent-status')) {
+  app.whenReady().then(() => {
+    reportFinderSyncAgentStatus()
+  })
+} else {
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
 } else {
+  app.on('will-finish-launching', () => {
+    registerNativeFinderServices()
+    registerFinderSyncReceiver()
+  })
   registerNativeFinderServices()
-  if (process.platform === 'darwin') {
-    app.setAsDefaultProtocolClient(FINDER_PROTOCOL)
-  }
+  registerFinderSyncReceiver()
 
   app.on('second-instance', (_event, argv) => {
     if (app.isPackaged && !apiBootstrapReady && lastBootstrapError) {
       void retryPackagedBootstrap()
-      return
-    }
-    const finder = parseFinderLaunch(argv)
-    if (finder) {
-      enqueueFinderJob(finder.action, finder.paths)
-      showMainWindow()
       return
     }
     const extra = argv.filter((arg) => /\.(ttf|otf|ttc|otc|woff2?)$/i.test(arg))
@@ -1808,15 +2077,14 @@ if (!gotLock) {
     event.preventDefault()
     if (app.isReady()) {
       void openFont(filePath)
-    } else {
-      queuedFiles.push(filePath)
+      return
     }
+    queuedFiles.push(filePath)
   })
 
-  app.on('open-url', (event, url) => {
+  // A font-butler URL is not an install. Any page could open one.
+  app.on('open-url', (event) => {
     event.preventDefault()
-    const finder = parseFinderInstallUrl(url)
-    if (finder) enqueueFinderJob(finder.action, finder.paths)
   })
 
   app.on('before-quit', () => {
@@ -2052,7 +2320,9 @@ if (!gotLock) {
       mainWindow?.setBackgroundColor(windowBackgroundColor())
     })
     registerNativeFinderServices()
+    registerFinderSyncReceiver({ surface: true })
     const bootstrapOk = await bootstrapApi()
+    consumeFinderSyncPendingErrors()
     ensureTray()
     if (bootstrapOk) {
       startMainUiAfterBootstrap()
@@ -2063,17 +2333,22 @@ if (!gotLock) {
         if (!isQuitting) void retailTick()
       }, RETAIL_TICK_MS)
     }
-    const finderLaunch = parseFinderLaunch(process.argv)
-    const fromArgv = finderLaunch
-      ? []
-      : process.argv.filter((arg) =>
-          /\.(ttf|otf|ttc|otc|woff2?)$/i.test(arg),
-        )
+    try {
+      refreshFinderSyncRegistration({
+        platform: process.platform,
+        packaged: app.isPackaged,
+        appPath: outermostAppBundle(process.execPath),
+        testFeed: runningTestFeed(),
+        spawnSync,
+      })
+    } catch (error) {
+      console.error('Finder Sync registration was not refreshed', error)
+    }
+    const fromArgv = process.argv.filter((arg) => /\.(ttf|otf|ttc|otc|woff2?)$/i.test(arg))
     for (const filePath of [...queuedFiles, ...fromArgv]) {
       await openFont(filePath)
     }
     queuedFiles.length = 0
-    if (finderLaunch) enqueueFinderJob(finderLaunch.action, finderLaunch.paths)
     await finderJobs.start()
   })
 
@@ -2092,6 +2367,7 @@ if (!gotLock) {
   app.on('activate', () => {
     showMainWindow()
   })
+}
 }
 
 ipcMain.on('renderer-app-mounted', () => {
@@ -2142,6 +2418,60 @@ ipcMain.handle('get-api-token', async () => {
 ipcMain.handle('open-external', async (_event, url) => {
   if (typeof url !== 'string') return false
   return openExternalUrl(url)
+})
+
+ipcMain.handle('open-finder-extensions', async () => {
+  if (process.platform !== 'darwin') return false
+  await shell.openExternal(FINDER_SYNC_SETTINGS_URL)
+  return true
+})
+
+ipcMain.handle('get-finder-sync-agent-status', () => {
+  if (process.platform !== 'darwin') return { status: 'unsupported', error: '', enabled: false }
+  const record = loadFinderSyncAgentRecord()
+  const addon = loadFinderSyncReceiver()
+  if (!addon) {
+    return { status: 'unavailable', error: 'Finder Sync receiver is not loaded.', enabled: record.enabled !== false }
+  }
+  const status = parseAgentJson(addon.agentStatus())
+  return { ...status, enabled: record.enabled !== false }
+})
+
+ipcMain.handle('set-finder-sync-agent-enabled', (_event, enabled) => {
+  if (process.platform !== 'darwin') return false
+  const addon = loadFinderSyncReceiver()
+  if (!addon) return false
+  const next = enabled === true
+  const record = loadFinderSyncAgentRecord()
+  if (!next) {
+    saveFinderSyncAgentRecord({ enabled: false, appBundlePath: '', helperPath: '', version: '' })
+    const removed = parseAgentJson(addon.unregisterAgent())
+    if (removed?.error) console.error('Finder Sync agent unregister failed', removed.error)
+    return true
+  }
+  saveFinderSyncAgentRecord({
+    enabled: true,
+    appBundlePath: record.appBundlePath,
+    helperPath: record.helperPath,
+    version: record.version,
+  })
+  applyFinderSyncAgentRegistration(addon, { surface: true })
+  return true
+})
+
+ipcMain.handle('open-finder-sync-login-items', () => {
+  if (process.platform !== 'darwin') return false
+  const addon = loadFinderSyncReceiver()
+  if (!addon?.openLoginItems) {
+    dialog.showErrorBox('Finder menu', FINDER_SYNC_AGENT_DISABLED)
+    return false
+  }
+  const opened = parseAgentJson(addon.openLoginItems())
+  if (opened.ok !== true) {
+    dialog.showErrorBox('Finder menu', opened.error || FINDER_SYNC_AGENT_DISABLED)
+    return false
+  }
+  return true
 })
 
 ipcMain.handle('install-app-update', () => appUpdateInstaller().start())

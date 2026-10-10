@@ -12,6 +12,8 @@
 export const DEVELOPER_ID_IDENTITY = 'DANIEL QUISEK (A7WWML89LQ)'
 export const NOTARY_KEYCHAIN_PROFILE = 'font-butler-notary'
 export const ADHOC_ENTITLEMENTS = 'build/entitlements.mac.adhoc.plist'
+export const TEST_FEED_ENTITLEMENTS = 'build/entitlements.mac.test-feed.plist'
+export const TEST_FEED_ADHOC_ENTITLEMENTS = 'build/entitlements.mac.adhoc.test-feed.plist'
 export const TEST_FEED_BUILD_ENV = 'FONT_BUTLER_TEST_FEED_BUILD'
 export const TEST_FEED_VERSION_ENV = 'FONT_BUTLER_TEST_VERSION'
 
@@ -39,6 +41,7 @@ function missingIdentityError(release) {
  * @param {{ platform: string, release: boolean, env: NodeJS.ProcessEnv, developerIdPresent: boolean }} input
  */
 export function planMacPack({ platform, release, env, developerIdPresent }) {
+  const adhocEntitlements = testFeedBuildRequested(env) ? TEST_FEED_ADHOC_ENTITLEMENTS : ADHOC_ENTITLEMENTS
   const requestedProfile = (env.APPLE_KEYCHAIN_PROFILE || '').trim()
   const requestedKeychain = (env.APPLE_KEYCHAIN || '').trim()
   const notarize = release || Boolean(requestedProfile)
@@ -88,7 +91,7 @@ export function planMacPack({ platform, release, env, developerIdPresent }) {
       mode: 'ad-hoc',
       identity: '-',
       forceCodeSigning: false,
-      adhocEntitlements: ADHOC_ENTITLEMENTS,
+      adhocEntitlements,
       signDmg: false,
       keychainProfile: null,
       keychain: null,
@@ -132,7 +135,12 @@ export function applyTestFeedMetadata(build, env) {
     }
     extraMetadata.version = version
   }
-  return { build: { ...build, extraMetadata }, error: null }
+  const mac = {
+    ...(build?.mac ?? {}),
+    entitlements: TEST_FEED_ENTITLEMENTS,
+    entitlementsInherit: TEST_FEED_ENTITLEMENTS,
+  }
+  return { build: { ...build, extraMetadata, mac }, error: null }
 }
 
 /** Full electron-builder config. Booleans stay booleans: `-c.dmg.sign=true` is the string "true", and dmg signing checks `=== true`. */
@@ -182,7 +190,11 @@ export function releaseConfigErrors(pkg) {
   if (mac?.entitlementsInherit !== 'build/entitlements.mac.plist') {
     errors.push('mac.entitlementsInherit must be build/entitlements.mac.plist')
   }
-  if (mac?.signIgnore != null) errors.push('mac.signIgnore must stay unset so every nested binary is signed')
+  const agentSignIgnore = 'FontButtlerFinderSyncAgent\\.app'
+  const signIgnore = Array.isArray(mac?.signIgnore) ? mac.signIgnore : mac?.signIgnore != null ? [mac.signIgnore] : []
+  if (signIgnore.length !== 1 || signIgnore[0] !== agentSignIgnore) {
+    errors.push('mac.signIgnore must only skip the Finder Sync agent, which afterPack signs without allow-jit')
+  }
   if (pkg?.build?.dmg?.sign === true) {
     errors.push('package.json must leave dmg.sign unset; only the notarized pack config sets it')
   }
@@ -197,6 +209,9 @@ export function releaseConfigErrors(pkg) {
   }
   if (pkg?.scripts?.['release:mac']?.includes('CSC_IDENTITY_AUTO_DISCOVERY=false')) {
     errors.push('release:mac must not set CSC_IDENTITY_AUTO_DISCOVERY=false')
+  }
+  if (pkg?.build?.afterSign !== './scripts/verify-finder-sync-appex.mjs') {
+    errors.push('afterSign must verify the Finder Sync appex')
   }
   for (const name of ['dist', 'release:mac']) {
     if (!pkg?.scripts?.[name]?.includes('--publish') && !pkg?.scripts?.[name]?.includes('mac-pack.mjs')) {

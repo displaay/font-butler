@@ -13,6 +13,7 @@ dist-ssr
 electron/server.bundle.mjs
 electron/font-analysis-worker.mjs
 electron/finder-services.node
+electron/finder-sync-receiver.node
 electron/session-fonts.node
 electron/app-icons/
 electron/apple-touch-icon.png

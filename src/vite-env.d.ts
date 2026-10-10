@@ -13,6 +13,10 @@ declare global {
       requestNotifications: () => Promise<'granted' | 'denied' | 'default'>
       onOpenSettings: (callback: (payload?: { focus?: string }) => void) => () => void
       openExternal?: (url: string) => Promise<boolean>
+      openFinderExtensions?: () => Promise<boolean>
+      openFinderSyncLoginItems?: () => Promise<boolean>
+      getFinderSyncAgentStatus?: () => Promise<{ status?: string; error?: string; enabled?: boolean } | null>
+      setFinderSyncAgentEnabled?: (enabled: boolean) => Promise<boolean>
       installAppUpdate?: () => Promise<{
         ok: boolean
         ignored?: boolean

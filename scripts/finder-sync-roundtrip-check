@@ -1,0 +1,237 @@
+#!/usr/bin/env node
+/**
+ * After a signed macOS build, register the Finder Sync LaunchAgent from the
+ * app, ping the launchd-vended Mach service, submit one font path through
+ * the helper socket, and confirm the negative clients are rejected.
+ *
+ *   scripts/finder-sync-roundtrip-check [/path/to/Font Buttler.app]
+ *
+ * The positive client is signed with Developer ID and the appex identifier.
+ * One negative client is ad-hoc signed with that identifier. Another is
+ * Developer ID signed with a different identifier. Both must print
+ * `rejected: connection invalidated` or `rejected: NSCocoaErrorDomain 4099`
+ * and must not print a success line. The app this script launches is killed
+ * before the script exits.
+ * Off macOS this prints a skip line and exits 0.
+ */
+import { spawn, spawnSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { readAppTestFeedMarker } from '../electron/app-update-install.mjs'
+import {
+  finderSyncBundleId,
+  finderSyncMachService,
+  finderSyncSocketDirectoryName,
+  finderSyncSocketName,
+} from '../electron/finder-sync.mjs'
+import { DEVELOPER_ID_IDENTITY } from './mac-signing.mjs'
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const clientSource = path.join(repoRoot, 'macos/FinderSyncAgent/FinderSyncPingClient.mm')
+const EXPECTED_REJECTION = /^(?:rejected: connection invalidated|rejected: NSCocoaErrorDomain 4099(?:\s|$))/
+let appPid = 0
+
+function stopLaunchedApp() {
+  if (!appPid) return
+  const pid = appPid
+  appPid = 0
+  try {
+    process.kill(pid, 'SIGTERM')
+  } catch {
+    // The spawned app may already have exited.
+  }
+}
+
+function fail(message) {
+  stopLaunchedApp()
+  console.error(message)
+  process.exit(1)
+}
+
+function findApp(argument) {
+  if (argument) return path.resolve(argument)
+  const names = ['mac-arm64', 'mac', 'mac-x64']
+  for (const root of ['dist', 'release']) {
+    for (const name of names) {
+      const candidate = path.join(repoRoot, root, name, 'Font Buttler.app')
+      if (existsSync(candidate)) return candidate
+    }
+  }
+  return ''
+}
+
+function developerId() {
+  const listed = spawnSync('security', ['find-identity', '-v', '-p', 'codesigning'], { encoding: 'utf8' })
+  const identity = `Developer ID Application: ${DEVELOPER_ID_IDENTITY}`
+  const output = `${listed.stdout ?? ''}\n${listed.stderr ?? ''}`
+  if (!output.includes(identity)) {
+    fail(`No codesigning identity "${identity}" in the login keychain.`)
+  }
+  return identity
+}
+
+function run(command, args, options = {}) {
+  return spawnSync(command, args, { encoding: 'utf8', ...options })
+}
+
+function assertRejected(text, label) {
+  const line = String(text ?? '')
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .find((item) => item.startsWith('rejected:'))
+  if (!line || !EXPECTED_REJECTION.test(line)) {
+    fail(`The ${label} client was not rejected with the expected reason.\n${text}`)
+  }
+  if (text.includes('ping ok') || text.includes('submit ok')) {
+    fail(`The ${label} client was accepted.`)
+  }
+}
+
+function main() {
+  if (process.platform !== 'darwin') {
+    console.log('skipped: Finder Sync roundtrip runs on macOS after a signed build')
+    process.exit(0)
+  }
+  const app = findApp(process.argv[2])
+  if (!app) fail('Pass the path to a signed Font Buttler.app.')
+  const testFeed = readAppTestFeedMarker(app) === true
+  const service = finderSyncMachService(testFeed)
+  const appexId = finderSyncBundleId(testFeed)
+  const binary = path.join(app, 'Contents', 'MacOS', 'Font Buttler')
+  console.log(`app: ${app}`)
+  console.log(`flavour: ${testFeed ? 'test' : 'release'}`)
+  console.log(`service: ${service}`)
+  const status = run(binary, ['--finder-sync-agent-status'], { timeout: 60000 })
+  const output = `${status.stdout ?? ''}\n${status.stderr ?? ''}`
+  const line = output
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .find((item) => item.startsWith('finder-sync-agent-status '))
+  console.log(line || output.trim() || `finder-sync-agent-status unavailable (exit ${status.status})`)
+  if (!line) fail('The app did not print a Finder Sync agent status.')
+  let parsed
+  try {
+    parsed = JSON.parse(line.slice('finder-sync-agent-status '.length))
+  } catch {
+    fail('The agent status line was not JSON.')
+  }
+  if (parsed.status !== 'enabled') {
+    fail(
+      parsed.status === 'requires-approval'
+        ? 'Approve Font Buttler under System Settings → General → Login Items & Extensions, then run this again.'
+        : `Finder Sync agent status is ${parsed.status}${parsed.error ? `: ${parsed.error}` : ''}.`,
+    )
+  }
+
+  const identity = developerId()
+  const temp = mkdtempSync(path.join(tmpdir(), 'font-butler-finder-sync-'))
+  const positive = path.join(temp, 'ping-positive')
+  const negative = path.join(temp, 'ping-negative')
+  try {
+    const clang = process.env.FONT_BUTLER_CLANG || 'clang++'
+    const compiled = run(clang, [
+      '-std=c++17',
+      '-ObjC++',
+      '-fobjc-arc',
+      '-mmacosx-version-min=11.0',
+      '-framework',
+      'Cocoa',
+      '-o',
+      positive,
+      clientSource,
+    ])
+    if (compiled.status !== 0) {
+      fail(compiled.stderr || compiled.stdout || 'Could not compile the ping client.')
+    }
+    run('cp', [positive, negative])
+    const signed = run('codesign', [
+      '--force',
+      '--sign',
+      identity,
+      '--identifier',
+      appexId,
+      '--options',
+      'runtime',
+      positive,
+    ])
+    if (signed.status !== 0) fail(signed.stderr || 'Could not sign the positive ping client.')
+    const adhoc = run('codesign', ['--force', '--sign', '-', '--identifier', appexId, negative])
+    if (adhoc.status !== 0) fail(adhoc.stderr || 'Could not ad-hoc sign the negative ping client.')
+    const positiveDisplay = run('codesign', ['-dv', '--verbose=4', positive])
+    const positiveText = `${positiveDisplay.stdout ?? ''}\n${positiveDisplay.stderr ?? ''}`
+    if (!positiveText.includes(`Identifier=${appexId}`) || !positiveText.includes('Developer ID Application')) {
+      fail('The positive client is not Developer ID signed as the Finder Sync appex.')
+    }
+    const negativeDisplay = run('codesign', ['-dv', '--verbose=4', negative])
+    const negativeText = `${negativeDisplay.stdout ?? ''}\n${negativeDisplay.stderr ?? ''}`
+    if (!/Signature=adhoc/i.test(negativeText)) fail('The negative client is not ad-hoc signed.')
+
+    const wrongId = 'app.fontbutler.desktop.FinderSync.Wrong'
+    const wrong = path.join(temp, 'ping-wrong-identifier')
+    run('cp', [positive, wrong])
+    const wrongSigned = run('codesign', [
+      '--force',
+      '--sign',
+      identity,
+      '--identifier',
+      wrongId,
+      '--options',
+      'runtime',
+      wrong,
+    ])
+    if (wrongSigned.status !== 0) fail(wrongSigned.stderr || 'Could not sign the wrong-identifier client.')
+    const wrongDisplay = run('codesign', ['-dv', '--verbose=4', wrong])
+    const wrongText = `${wrongDisplay.stdout ?? ''}\n${wrongDisplay.stderr ?? ''}`
+    if (!new RegExp(`Identifier=${wrongId.replaceAll('.', '\\.')}(?:\\s|$)`).test(wrongText)) {
+      fail('The wrong-identifier client is not signed as a different identifier.')
+    }
+
+    const ping = run(positive, [service], { timeout: 20000 })
+    const pingText = `${ping.stdout ?? ''}\n${ping.stderr ?? ''}`
+    console.log(`positive: ${pingText.trim() || `exit ${ping.status}`}`)
+    if (ping.status !== 0 || !ping.stdout?.includes('ping ok')) {
+      fail('The Developer ID client did not receive a ping reply.')
+    }
+    const rejected = run(negative, [service], { timeout: 20000 })
+    const rejectedText = `${rejected.stdout ?? ''}\n${rejected.stderr ?? ''}`
+    console.log(`negative: ${rejectedText.trim() || `exit ${rejected.status}`}`)
+    assertRejected(rejectedText, 'ad-hoc')
+    const wrongRun = run(wrong, [service], { timeout: 20000 })
+    const wrongRunText = `${wrongRun.stdout ?? ''}\n${wrongRun.stderr ?? ''}`
+    console.log(`wrong-identifier: ${wrongRunText.trim() || `exit ${wrongRun.status}`}`)
+    assertRejected(wrongRunText, 'wrong-identifier')
+
+    const appProcess = spawn(binary, [], { detached: true, stdio: 'ignore' })
+    appPid = appProcess.pid ?? 0
+    appProcess.unref()
+    const socketName = finderSyncSocketName(testFeed)
+    const tempDir = run('getconf', ['DARWIN_USER_TEMP_DIR'])
+    const socketDir = (tempDir.stdout ?? '').trim()
+    if (!socketDir) fail('DARWIN_USER_TEMP_DIR was empty.')
+    const socketPath = path.join(socketDir, finderSyncSocketDirectoryName(), socketName)
+    const deadline = Date.now() + 30000
+    while (!existsSync(socketPath)) {
+      if (Date.now() > deadline) fail(`The app did not open ${socketPath}.`)
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250)
+    }
+    const fontPath = path.join(temp, 'FontButlerRoundtripProbe.otf')
+    writeFileSync(fontPath, Buffer.from([0x4f, 0x54, 0x54, 0x4f, 0, 0, 0, 0]))
+    const submitted = run(positive, [service, 'submit', fontPath, randomUUID()], { timeout: 40000 })
+    const submittedText = `${submitted.stdout ?? ''}\n${submitted.stderr ?? ''}`
+    console.log(`submit: ${submittedText.trim() || `exit ${submitted.status}`}`)
+    if (submitted.status !== 0 || !submitted.stdout?.includes('submit ok')) {
+      fail('The Developer ID client did not deliver submitAction through the helper.')
+    }
+    rmSync(fontPath, { force: true })
+    console.log('roundtrip: ok')
+  } finally {
+    stopLaunchedApp()
+    rmSync(temp, { recursive: true, force: true })
+  }
+}
+
+const invokedDirectly = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+if (invokedDirectly) main()
