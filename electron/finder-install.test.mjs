@@ -280,7 +280,7 @@ test('Electron main handles Finder services through the existing install APIs', 
   const relink = readRepo('src/components/RelinkDialog.tsx')
   const app = readRepo('src/App.tsx')
   const native = readRepo('electron/finder-services.mm')
-  assert.match(main, /acceptFinderSyncHandoff/)
+  assert.match(main, /finderSyncWireAction/)
   assert.match(main, /finder-sync-receiver\.node/)
   assert.match(main, /app\.on\('open-url'/)
   assert.doesNotMatch(main, /parseFinderLaunch|setAsDefaultProtocolClient/)

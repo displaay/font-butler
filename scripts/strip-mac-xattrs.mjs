@@ -45,6 +45,7 @@ export async function afterPack(context) {
       appexPath: finderSync.appexPath,
       identity: mac.identity,
       bundleId: finderSync.bundleId,
+      testFeed: finderSync.testFeed === true,
       keychain: process.env.APPLE_KEYCHAIN || undefined,
     })
     if (!signed.ok) throw new Error(signed.reason || 'Finder Sync appex was not signed.')

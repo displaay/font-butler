@@ -1,9 +1,9 @@
 #import <Cocoa/Cocoa.h>
-#import <CoreServices/CoreServices.h>
 #import <Security/Security.h>
-#include <bsm/libbsm.h>
+#include <mach-o/dyld.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -42,7 +42,6 @@ napi_status napi_get_cb_info(napi_env env, napi_callback_info cbinfo, size_t *ar
                              void **data);
 napi_status napi_typeof(napi_env env, napi_value value, napi_valuetype *result);
 napi_status napi_get_undefined(napi_env env, napi_value *result);
-napi_status napi_get_boolean(napi_env env, bool value, napi_value *result);
 napi_status napi_create_string_utf8(napi_env env, const char *str, size_t length, napi_value *result);
 napi_status napi_create_array_with_length(napi_env env, size_t length, napi_value *result);
 napi_status napi_set_element(napi_env env, napi_value object, uint32_t index, napi_value value);
@@ -77,49 +76,41 @@ extern "C" void napi_module_register(napi_module *mod);
   static void fn(void) __attribute__((constructor)); \
   static void fn(void)
 
-// 'FBFS' / 'hand', action keyword 'FBAc', sender audit token 'tokn'.
-static const AEEventClass kFinderSyncEventClass = 0x46424653;
-static const AEEventID kFinderSyncEventID = 0x68616e64;
-static const AEKeyword kFinderSyncActionKeyword = 0x46424163;
-static const AEKeyword kFinderSyncSenderAuditToken = 0x746f6b6e;
-static const char *kFinderSyncTeamID = "A7WWML89LQ";
-static const char *kFinderSyncBundleID = "app.fontbutler.desktop.FinderSync";
-static const char *kFinderSyncTestBundleID = "app.fontbutler.desktop.FinderSync.Test";
+// One requirement per flavour. The listener accepts that identifier only.
+static NSString *const kReleaseRequirement =
+    @"anchor apple generic and certificate leaf[subject.OU] = \"A7WWML89LQ\" and identifier \"app.fontbutler.desktop.FinderSync\"";
+static NSString *const kTestRequirement =
+    @"anchor apple generic and certificate leaf[subject.OU] = \"A7WWML89LQ\" and identifier \"app.fontbutler.desktop.FinderSync.Test\"";
+static NSString *const kReleaseService = @"A7WWML89LQ.group.app.fontbutler.desktop.FinderSync";
+static NSString *const kTestService = @"A7WWML89LQ.group.app.fontbutler.desktop.FinderSync.Test";
+static const NSUInteger kFinderSyncMaxFiles = 500;
 
 static napi_threadsafe_function g_tsfn = nullptr;
 static NSMutableArray<NSDictionary *> *g_queued = nil;
-static AEEventHandlerUPP g_previousOdoc = NULL;
-static SRefCon g_previousOdocRefcon = 0;
-static AEEventHandlerUPP g_odocUPP = NULL;
 
 typedef struct {
   char *action;
   char **paths;
   size_t count;
-  bool valid;
-  bool adhoc;
-  char *teamId;
-  char *bundleId;
+  bool overflow;
 } HandoffCall;
 
 static char *DupCString(const char *value) {
   return strdup(value ? value : "");
 }
 
-static HandoffCall *HandoffCallCreate(NSString *action, NSArray<NSString *> *paths, bool valid, bool adhoc,
-                                      NSString *teamId, NSString *bundleId) {
+static HandoffCall *HandoffCallCreate(NSString *action, NSArray<NSString *> *paths, bool overflow) {
   HandoffCall *call = (HandoffCall *)calloc(1, sizeof(HandoffCall));
   if (!call) return nullptr;
   call->action = DupCString(action.UTF8String);
-  call->count = paths.count;
+  call->overflow = overflow;
+  call->count = overflow ? 0 : paths.count;
+  if (call->count > kFinderSyncMaxFiles) call->count = kFinderSyncMaxFiles;
   call->paths = call->count ? (char **)calloc(call->count, sizeof(char *)) : nullptr;
   for (size_t i = 0; i < call->count; i += 1) {
-    call->paths[i] = DupCString(paths[i].UTF8String);
+    NSString *path = paths[i];
+    call->paths[i] = DupCString([path isKindOfClass:[NSString class]] ? path.UTF8String : "");
   }
-  call->valid = valid;
-  call->adhoc = adhoc;
-  call->teamId = DupCString(teamId.UTF8String);
-  call->bundleId = DupCString(bundleId.UTF8String);
   return call;
 }
 
@@ -128,38 +119,123 @@ static void HandoffCallDestroy(HandoffCall *call) {
   free(call->action);
   for (size_t i = 0; i < call->count; i += 1) free(call->paths[i]);
   free(call->paths);
-  free(call->teamId);
-  free(call->bundleId);
   free(call);
 }
 
-static void CopyCFString(CFTypeRef value, char *dest, size_t destLen) {
-  if (!dest || destLen == 0) return;
-  dest[0] = 0;
-  if (!value || CFGetTypeID(value) != CFStringGetTypeID()) return;
-  CFStringGetCString((CFStringRef)value, dest, (CFIndex)destLen, kCFStringEncodingUTF8);
+static BOOL JsonFlagIsTrue(id value) {
+  return value == (id)kCFBooleanTrue;
 }
 
-// Signature of the process that sent the event. The audit token is the sender.
-// A process id is not used: it can be recycled before this runs.
-static void VerifySender(const AppleEvent *event, bool *valid, bool *adhoc, char *teamId, size_t teamLen, char *bundleId,
-                         size_t bundleLen) {
-  if (valid) *valid = false;
-  if (adhoc) *adhoc = false;
-  if (teamId && teamLen) teamId[0] = 0;
-  if (bundleId && bundleLen) bundleId[0] = 0;
-  if (!event) return;
+static BOOL ReadJsonNumber(id value, uint64_t *out) {
+  if ([value isKindOfClass:[NSNumber class]]) {
+    if ([value doubleValue] < 0) return NO;
+    *out = [value unsignedLongLongValue];
+    return YES;
+  }
+  if ([value isKindOfClass:[NSString class]]) {
+    if ([value hasPrefix:@"-"]) return NO;
+    *out = strtoull(value.UTF8String, nullptr, 10);
+    return YES;
+  }
+  return NO;
+}
 
-  audit_token_t token;
-  memset(&token, 0, sizeof(token));
-  DescType actualType = typeWildCard;
-  Size actualSize = 0;
-  OSErr attrErr = AEGetAttributePtr(event, kFinderSyncSenderAuditToken, typeWildCard, &actualType, &token, sizeof(token),
-                                    &actualSize);
-  if (attrErr != noErr || actualSize != (Size)sizeof(token)) return;
+static NSData *ReadFileRange(NSString *path, uint64_t offset, uint64_t length) {
+  if (length > 32 * 1024 * 1024) return nil;
+  NSFileHandle *handle = [NSFileHandle fileHandleForReadingAtPath:path];
+  if (!handle) return nil;
+  NSData *data = nil;
+  @try {
+    [handle seekToFileOffset:offset];
+    data = [handle readDataOfLength:(NSUInteger)length];
+  } @catch (NSException *exception) {
+    data = nil;
+  }
+  [handle closeFile];
+  return data;
+}
 
+static NSData *ReadAsarPackageJson(NSString *asarPath) {
+  NSData *prefix = ReadFileRange(asarPath, 0, 16);
+  if (prefix.length < 8) return nil;
+  const uint8_t *bytes = (const uint8_t *)prefix.bytes;
+  uint32_t pickleSize = 0;
+  uint32_t headerSize = 0;
+  memcpy(&pickleSize, bytes, 4);
+  memcpy(&headerSize, bytes + 4, 4);
+  if (pickleSize != 4 || headerSize < 8) return nil;
+  NSData *headerBuf = ReadFileRange(asarPath, 8, headerSize);
+  if (headerBuf.length < headerSize) return nil;
+  const uint8_t *headerBytes = (const uint8_t *)headerBuf.bytes;
+  int32_t stringLength = 0;
+  memcpy(&stringLength, headerBytes + 4, 4);
+  if (stringLength < 2 || 8 + (uint32_t)stringLength > headerBuf.length) return nil;
+  NSData *jsonData = [headerBuf subdataWithRange:NSMakeRange(8, (NSUInteger)stringLength)];
+  id header = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:nil];
+  if (![header isKindOfClass:[NSDictionary class]]) return nil;
+  id files = header[@"files"];
+  if (![files isKindOfClass:[NSDictionary class]]) return nil;
+  id entry = files[@"package.json"];
+  if (![entry isKindOfClass:[NSDictionary class]] || entry[@"unpacked"]) return nil;
+  uint64_t offset = 0;
+  uint64_t size = 0;
+  if (!ReadJsonNumber(entry[@"offset"], &offset) || !ReadJsonNumber(entry[@"size"], &size)) return nil;
+  return ReadFileRange(asarPath, 8 + (uint64_t)headerSize + offset, size);
+}
+
+static NSString *OutermostAppBundle(void) {
+  char buffer[4096];
+  uint32_t size = sizeof(buffer);
+  if (_NSGetExecutablePath(buffer, &size) != 0) return nil;
+  char resolved[PATH_MAX];
+  if (!realpath(buffer, resolved)) return nil;
+  NSString *current = [NSString stringWithUTF8String:resolved];
+  for (int hop = 0; hop < 12; hop += 1) {
+    if ([current.pathExtension isEqualToString:@"app"]) return current;
+    NSString *parent = current.stringByDeletingLastPathComponent;
+    if (parent.length == 0 || [parent isEqualToString:current]) return nil;
+    current = parent;
+  }
+  return nil;
+}
+
+// Unreadable marker fails closed onto the release requirement, so a test appex
+// cannot connect when this build cannot prove it is the test feed.
+static BOOL CurrentBuildIsTestFeed(void) {
+  NSString *app = OutermostAppBundle();
+  if (!app.length) return NO;
+  NSString *loosePath = [app stringByAppendingPathComponent:@"Contents/Resources/app/package.json"];
+  NSData *loose = [NSData dataWithContentsOfFile:loosePath];
+  if (loose.length) {
+    id json = [NSJSONSerialization JSONObjectWithData:loose options:0 error:nil];
+    if ([json isKindOfClass:[NSDictionary class]] && JsonFlagIsTrue(json[@"fontButlerTestFeed"])) return YES;
+  }
+  NSString *asarPath = [app stringByAppendingPathComponent:@"Contents/Resources/app.asar"];
+  NSData *packed = ReadAsarPackageJson(asarPath);
+  if (!packed.length) return NO;
+  id json = [NSJSONSerialization JSONObjectWithData:packed options:0 error:nil];
+  if (![json isKindOfClass:[NSDictionary class]]) return NO;
+  return JsonFlagIsTrue(json[@"fontButlerTestFeed"]);
+}
+
+static NSString *CurrentRequirement(void) {
+  return CurrentBuildIsTestFeed() ? kTestRequirement : kReleaseRequirement;
+}
+
+static NSString *CurrentServiceName(void) {
+  return CurrentBuildIsTestFeed() ? kTestService : kReleaseService;
+}
+
+static BOOL GuestMeetsRequirement(audit_token_t token, NSString *requirementString) {
+  if (!requirementString.length) return NO;
+  SecRequirementRef requirement = NULL;
+  OSStatus created = SecRequirementCreateWithString((__bridge CFStringRef)requirementString, kSecCSDefaultFlags, &requirement);
+  if (created != errSecSuccess || !requirement) return NO;
   CFDataRef auditData = CFDataCreate(kCFAllocatorDefault, (const UInt8 *)&token, (CFIndex)sizeof(token));
-  if (!auditData) return;
+  if (!auditData) {
+    CFRelease(requirement);
+    return NO;
+  }
   const void *keys[] = {kSecGuestAttributeAudit};
   const void *values[] = {auditData};
   CFDictionaryRef attributes = CFDictionaryCreate(kCFAllocatorDefault, keys, values, 1, &kCFTypeDictionaryKeyCallBacks,
@@ -171,136 +247,88 @@ static void VerifySender(const AppleEvent *event, bool *valid, bool *adhoc, char
     CFRelease(attributes);
   }
   CFRelease(auditData);
-  if (copyStatus != errSecSuccess || !guest) return;
-
-  OSStatus signatureStatus = SecCodeCheckValidity(guest, kSecCSDefaultFlags, NULL);
-  if (valid) *valid = signatureStatus == errSecSuccess;
-
-  CFDictionaryRef info = NULL;
-  if (SecCodeCopySigningInformation(guest, kSecCSSigningInformation, &info) == errSecSuccess && info) {
-    CopyCFString(CFDictionaryGetValue(info, kSecCodeInfoTeamIdentifier), teamId, teamLen);
-    CopyCFString(CFDictionaryGetValue(info, kSecCodeInfoIdentifier), bundleId, bundleLen);
-    CFTypeRef flagsRef = CFDictionaryGetValue(info, kSecCodeInfoFlags);
-    if (flagsRef && CFGetTypeID(flagsRef) == CFNumberGetTypeID()) {
-      uint32_t flags = 0;
-      CFNumberGetValue((CFNumberRef)flagsRef, kCFNumberSInt32Type, &flags);
-      if ((flags & kSecCodeSignatureAdhoc) != 0 && adhoc) *adhoc = true;
-    }
-    CFRelease(info);
+  if (copyStatus != errSecSuccess || !guest) {
+    CFRelease(requirement);
+    return NO;
   }
-  if (adhoc && *adhoc && valid) *valid = false;
+  OSStatus signatureStatus = SecCodeCheckValidity(guest, kSecCSStrictValidate, requirement);
   CFRelease(guest);
+  CFRelease(requirement);
+  return signatureStatus == errSecSuccess;
 }
 
-static BOOL SenderIsFinderSyncAppex(bool valid, bool adhoc, const char *teamId, const char *bundleId) {
-  if (!valid || adhoc || !teamId || !bundleId) return NO;
-  if (strcmp(teamId, kFinderSyncTeamID) != 0) return NO;
-  if (strcmp(bundleId, kFinderSyncBundleID) == 0) return YES;
-  if (strcmp(bundleId, kFinderSyncTestBundleID) == 0) return YES;
-  return NO;
-}
+@protocol FontButtlerFinderSyncHandoff
+- (void)submitAction:(NSString *)action paths:(NSArray<NSString *> *)paths reply:(void (^)(NSString *error))reply;
+@end
 
-static NSString *PathFromDescriptor(NSAppleEventDescriptor *item) {
-  if (!item) return nil;
-  NSURL *url = item.fileURLValue;
-  if (url.isFileURL && url.path.length) return url.path;
-  NSString *text = item.stringValue;
-  if (text.length && [text hasPrefix:@"/"]) return text;
-  return nil;
-}
+@interface FontButtlerFinderSyncListener : NSObject <NSXPCListenerDelegate, FontButtlerFinderSyncHandoff>
+@property(nonatomic, strong) NSXPCListener *listener;
+@property(nonatomic, copy) NSString *requirement;
+@end
 
-static NSArray<NSString *> *PathsFromEvent(NSAppleEventDescriptor *event) {
-  NSMutableArray<NSString *> *paths = [NSMutableArray array];
-  NSAppleEventDescriptor *direct = [event paramDescriptorForKeyword:keyDirectObject];
-  if (!direct) return paths;
-  NSInteger count = direct.numberOfItems;
-  if (count > 0) {
-    for (NSInteger index = 1; index <= count; index += 1) {
-      NSString *path = PathFromDescriptor([direct descriptorAtIndex:index]);
-      if (path.length) [paths addObject:path];
-    }
-    return paths;
-  }
-  NSString *path = PathFromDescriptor(direct);
-  if (path.length) [paths addObject:path];
-  return paths;
-}
-
-static void DispatchHandoff(NSString *action, NSArray<NSString *> *paths, bool valid, bool adhoc, NSString *teamId,
-                            NSString *bundleId) {
+static void DispatchHandoff(NSString *action, NSArray<NSString *> *paths, bool overflow) {
   if (g_tsfn) {
-    HandoffCall *call = HandoffCallCreate(action, paths, valid, adhoc, teamId, bundleId);
+    HandoffCall *call = HandoffCallCreate(action, paths, overflow);
     if (call) napi_call_threadsafe_function(g_tsfn, call, napi_tsfn_blocking);
     return;
   }
   if (!g_queued) g_queued = [NSMutableArray array];
   [g_queued addObject:@{
     @"action" : action ?: @"",
-    @"paths" : paths ?: @[],
-    @"valid" : @(valid),
-    @"adhoc" : @(adhoc),
-    @"teamId" : teamId ?: @"",
-    @"bundleId" : bundleId ?: @"",
+    @"paths" : overflow ? @[] : (paths ?: @[]),
+    @"overflow" : @(overflow),
   }];
 }
 
-static void ReceiveFinderSyncEvent(const AppleEvent *event) {
-  bool valid = false;
-  bool adhoc = false;
-  char teamId[128];
-  char bundleId[256];
-  teamId[0] = 0;
-  bundleId[0] = 0;
-  VerifySender(event, &valid, &adhoc, teamId, sizeof(teamId), bundleId, sizeof(bundleId));
-  NSAppleEventDescriptor *desc = [[NSAppleEventDescriptor alloc] initWithAEDesc:event];
-  NSString *action = [desc paramDescriptorForKeyword:kFinderSyncActionKeyword].stringValue ?: @"";
-  NSArray<NSString *> *paths = PathsFromEvent(desc);
-  DispatchHandoff(action, paths, valid, adhoc, [NSString stringWithUTF8String:teamId],
-                  [NSString stringWithUTF8String:bundleId]);
+@implementation FontButtlerFinderSyncListener
+
+- (void)start {
+  if (self.listener) return;
+  self.requirement = CurrentRequirement();
+  NSXPCListener *listener = [[NSXPCListener alloc] initWithMachServiceName:CurrentServiceName()];
+  listener.delegate = self;
+  self.listener = listener;
+  [listener resume];
 }
 
-static OSErr HandleFinderSyncEvent(const AppleEvent *event, AppleEvent *reply, SRefCon refcon) {
-  (void)reply;
-  (void)refcon;
-  @autoreleasepool {
-    ReceiveFinderSyncEvent(event);
+- (BOOL)listener:(NSXPCListener *)listener shouldAcceptNewConnection:(NSXPCConnection *)connection {
+  (void)listener;
+  NSString *requirement = self.requirement.length ? self.requirement : CurrentRequirement();
+  if ([connection respondsToSelector:@selector(setCodeSigningRequirement:)]) {
+    [connection setCodeSigningRequirement:requirement];
   }
-  return noErr;
+  if (!GuestMeetsRequirement(connection.auditToken, requirement)) return NO;
+  connection.exportedInterface = [NSXPCInterface interfaceWithProtocol:@protocol(FontButtlerFinderSyncHandoff)];
+  connection.exportedObject = self;
+  [connection resume];
+  return YES;
 }
 
-// A file open from our appex is the same click as the handoff event.
-// Finder and everyone else still reach the previous open-documents handler.
-static OSErr HandleOpenDocuments(const AppleEvent *event, AppleEvent *reply, SRefCon refcon) {
-  (void)refcon;
-  bool valid = false;
-  bool adhoc = false;
-  char teamId[128];
-  char bundleId[256];
-  teamId[0] = 0;
-  bundleId[0] = 0;
-  @autoreleasepool {
-    VerifySender(event, &valid, &adhoc, teamId, sizeof(teamId), bundleId, sizeof(bundleId));
+- (void)submitAction:(NSString *)action paths:(NSArray<NSString *> *)paths reply:(void (^)(NSString *))reply {
+  NSString *wire = [action isKindOfClass:[NSString class]] ? action : @"";
+  BOOL known = [wire isEqualToString:@"install"] || [wire isEqualToString:@"installAs"];
+  if (!known) {
+    if (reply) reply(@"Unknown Finder Sync action.");
+    return;
   }
-  if (SenderIsFinderSyncAppex(valid, adhoc, teamId, bundleId)) return noErr;
-  if (g_previousOdoc) return g_previousOdoc(event, reply, g_previousOdocRefcon);
-  return errAEEventNotHandled;
+  NSArray<NSString *> *incoming = [paths isKindOfClass:[NSArray class]] ? paths : @[];
+  if (incoming.count > kFinderSyncMaxFiles) {
+    DispatchHandoff(wire, @[], true);
+    if (reply) reply(nil);
+    return;
+  }
+  DispatchHandoff(wire, incoming, false);
+  if (reply) reply(nil);
 }
 
-static void InstallHandlers(void) {
-  static AEEventHandlerUPP handoffUPP = NULL;
-  if (!handoffUPP) handoffUPP = NewAEEventHandlerUPP(HandleFinderSyncEvent);
-  AEInstallEventHandler(kFinderSyncEventClass, kFinderSyncEventID, handoffUPP, 0, false);
+@end
 
-  AEEventHandlerUPP current = NULL;
-  SRefCon currentRef = 0;
-  if (AEGetEventHandler(kCoreEventClass, kAEOpenDocuments, &current, &currentRef, false) == noErr) {
-    if (current && current != g_odocUPP) {
-      g_previousOdoc = current;
-      g_previousOdocRefcon = currentRef;
-    }
-  }
-  if (!g_odocUPP) g_odocUPP = NewAEEventHandlerUPP(HandleOpenDocuments);
-  AEInstallEventHandler(kCoreEventClass, kAEOpenDocuments, g_odocUPP, 0, false);
+static FontButtlerFinderSyncListener *g_service = nil;
+
+static void StartListener(void) {
+  if (g_service) return;
+  g_service = [FontButtlerFinderSyncListener new];
+  [g_service start];
 }
 
 static napi_value JsString(napi_env env, const char *text) {
@@ -326,18 +354,7 @@ static void CallJs(napi_env env, napi_value js_callback, void *context, void *da
     napi_set_element(env, paths, i, JsString(env, call->paths[i]));
   }
   napi_set_named_property(env, payload, "paths", paths);
-
-  napi_value sender;
-  napi_create_object(env, &sender);
-  napi_value valid;
-  napi_value adhoc;
-  napi_get_boolean(env, call->valid, &valid);
-  napi_get_boolean(env, call->adhoc, &adhoc);
-  napi_set_named_property(env, sender, "valid", valid);
-  napi_set_named_property(env, sender, "adhoc", adhoc);
-  napi_set_named_property(env, sender, "teamId", JsString(env, call->teamId));
-  napi_set_named_property(env, sender, "bundleId", JsString(env, call->bundleId));
-  napi_set_named_property(env, payload, "sender", sender);
+  napi_set_named_property(env, payload, "overflow", JsString(env, call->overflow ? "files" : ""));
 
   napi_value argv[1] = {payload};
   napi_value undefined;
@@ -358,7 +375,7 @@ static napi_value Register(napi_env env, napi_callback_info info) {
   napi_typeof(env, argv[0], &type);
   if (type != napi_function) return undefined;
 
-  InstallHandlers();
+  StartListener();
 
   if (g_tsfn) {
     napi_release_threadsafe_function(g_tsfn, napi_tsfn_release);
@@ -373,8 +390,7 @@ static napi_value Register(napi_env env, napi_callback_info info) {
   NSArray<NSDictionary *> *queued = g_queued;
   g_queued = nil;
   for (NSDictionary *item in queued) {
-    HandoffCall *call = HandoffCallCreate(item[@"action"], item[@"paths"], [item[@"valid"] boolValue],
-                                          [item[@"adhoc"] boolValue], item[@"teamId"], item[@"bundleId"]);
+    HandoffCall *call = HandoffCallCreate(item[@"action"], item[@"paths"], [item[@"overflow"] boolValue]);
     if (call && g_tsfn) napi_call_threadsafe_function(g_tsfn, call, napi_tsfn_blocking);
     else HandoffCallDestroy(call);
   }
@@ -382,7 +398,7 @@ static napi_value Register(napi_env env, napi_callback_info info) {
 }
 
 static napi_value Init(napi_env env, napi_value exports) {
-  InstallHandlers();
+  StartListener();
   napi_value registerFn;
   napi_create_function(env, "register", NAPI_AUTO_LENGTH, Register, nullptr, &registerFn);
   napi_set_named_property(env, exports, "register", registerFn);

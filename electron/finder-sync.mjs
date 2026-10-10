@@ -1,5 +1,5 @@
 import path from 'node:path'
-import { FINDER_INSTALL_AS, isClaimedFontPath, isFinderInstallAction } from './finder-install.mjs'
+import { FINDER_INSTALL_AS, isClaimedFontPath } from './finder-install.mjs'
 
 export const FINDER_SYNC_BUNDLE_ID = 'app.fontbutler.desktop.FinderSync'
 export const FINDER_SYNC_TEST_BUNDLE_ID = 'app.fontbutler.desktop.FinderSync.Test'
@@ -8,15 +8,17 @@ export const FINDER_SYNC_EXTENSION_POINT = 'com.apple.FinderSync'
 export const FINDER_SYNC_APPEX_NAME = 'Font Buttler Finder Sync.appex'
 export const FINDER_SYNC_EXECUTABLE = 'FontButtlerFinderSync'
 export const FINDER_SYNC_ENTITLEMENT = 'com.apple.security.app-sandbox'
+export const FINDER_SYNC_APP_GROUP_ENTITLEMENT = 'com.apple.security.application-groups'
 export const FINDER_SYNC_TEAM_ID = 'A7WWML89LQ'
 export const FINDER_SYNC_SETTINGS_URL =
   'x-apple.systempreferences:com.apple.LoginItems-Settings.extension'
-export const FINDER_SYNC_MONITORED_ROOT = '/'
-// 'FBFS' / 'hand', action keyword 'FBAc', sender audit token attribute 'tokn'.
-export const FINDER_SYNC_EVENT_CLASS = 0x46424653
-export const FINDER_SYNC_EVENT_ID = 0x68616e64
-export const FINDER_SYNC_ACTION_KEYWORD = 0x46424163
-export const FINDER_SYNC_SENDER_AUDIT_TOKEN = 0x746f6b6e
+export const FINDER_SYNC_VOLUMES_ROOT = '/Volumes'
+export const FINDER_SYNC_MAX_FILES = 500
+export const FINDER_SYNC_MAX_BYTES = 2 * 1024 * 1024 * 1024
+export const FINDER_SYNC_TOO_MANY_FILES = 'That selection has more than 500 files.'
+export const FINDER_SYNC_TOO_LARGE = 'That selection is larger than 2 GB.'
+export const FINDER_SYNC_CHANGED_BEFORE_INSTALL = 'The file changed before it could be installed.'
+const FINDER_SYNC_TREE_DEPTH = 10
 
 const MAX_PATH_LENGTH = 4096
 
@@ -29,45 +31,43 @@ export function finderSyncMenuTitle(action, testFeed) {
   return testFeed ? `${base} (Test)` : base
 }
 
+/** App-group id and Mach service. The test build has its own group. */
+export function finderSyncAppGroup(testFeed) {
+  return `${FINDER_SYNC_TEAM_ID}.group.${finderSyncBundleId(testFeed)}`
+}
+
+export function finderSyncMachService(testFeed) {
+  return finderSyncAppGroup(testFeed)
+}
+
+/**
+ * One code-signing requirement per flavour. The listener accepts that
+ * identifier and no other.
+ */
+export function finderSyncCodeSigningRequirement(testFeed) {
+  const identifier = finderSyncBundleId(Boolean(testFeed))
+  return `anchor apple generic and certificate leaf[subject.OU] = "${FINDER_SYNC_TEAM_ID}" and identifier "${identifier}"`
+}
+
+export function finderSyncWireAction(action) {
+  if (action === 'installAs' || action === FINDER_INSTALL_AS) return FINDER_INSTALL_AS
+  if (action === 'install') return 'install'
+  return null
+}
+
 export function finderSyncAppexBundlePath(appPath) {
   return path.join(appPath, 'Contents', 'PlugIns', FINDER_SYNC_APPEX_NAME)
 }
 
 /**
- * The appex may hand off only when its signature is valid, it is not ad-hoc,
- * the team is Font Buttler's, and the bundle ID is this build's appex.
- * A release app refuses the test appex, and a test app refuses the release appex.
- * A URL is not a sender.
+ * Home and /Volumes. `/` is not monitored. File Provider folders are not added.
+ * `home` is ignored when it is not a safe absolute path.
  */
-export function finderSyncSenderAccepted(sender, { testFeed = false } = {}) {
-  if (!sender || typeof sender !== 'object') return false
-  if (sender.valid !== true) return false
-  if (sender.adhoc === true) return false
-  if (sender.teamId !== FINDER_SYNC_TEAM_ID) return false
-  if (sender.bundleId !== finderSyncBundleId(testFeed)) return false
-  return true
-}
-
-export function acceptFinderSyncHandoff(payload, options = {}) {
-  const action = payload?.action
-  const paths = []
-  const seen = new Set()
-  for (const raw of payload?.paths ?? []) {
-    if (typeof raw !== 'string') continue
-    const filePath = raw.trim()
-    if (!filePath || seen.has(filePath)) continue
-    seen.add(filePath)
-    paths.push(filePath)
-  }
-  if (!isFinderInstallAction(action)) return { ok: false, reason: 'action' }
-  if (!finderSyncSenderAccepted(payload?.sender, options)) return { ok: false, reason: 'sender' }
-  if (paths.length === 0) return { ok: false, reason: 'paths' }
-  return { ok: true, action, paths }
-}
-
-/** Finder Sync watches the local root only. File Provider folders are not added. */
-export function finderSyncMonitorDirectories() {
-  return [FINDER_SYNC_MONITORED_ROOT]
+export function finderSyncMonitorDirectories(home) {
+  const directories = []
+  if (typeof home === 'string' && home !== '/' && isSafeFinderSyncPath(home)) directories.push(home)
+  directories.push(FINDER_SYNC_VOLUMES_ROOT)
+  return directories
 }
 
 /**
@@ -175,7 +175,43 @@ function magicMatchesExtension(ext, kind) {
   return false
 }
 
-function inspectFontFile(filePath, io) {
+function resolveTrustedLink(linkPath, io) {
+  if (linkPath !== '/tmp' && linkPath !== '/var') return null
+  let target
+  try {
+    target = io.readlinkSync(linkPath)
+  } catch {
+    return null
+  }
+  if (typeof target !== 'string' || !target || target.includes('\0')) return null
+  const parent = linkPath.slice(0, linkPath.lastIndexOf('/')) || '/'
+  const resolved = target.startsWith('/')
+    ? target.replace(/\/+$/, '') || '/'
+    : `${parent === '/' ? '' : parent}/${target}`.replace(/\/\.\//g, '/')
+  const normalized = []
+  for (const part of resolved.split('/')) {
+    if (!part || part === '.') continue
+    if (part === '..') return null
+    normalized.push(part)
+  }
+  const absolute = `/${normalized.join('/')}`
+  const expected = linkPath === '/tmp' ? '/private/tmp' : '/private/var'
+  if (absolute !== expected) return null
+  try {
+    const stat = io.lstatSync(absolute)
+    if (stat?.isSymbolicLink?.() || !stat?.isDirectory?.()) return null
+  } catch {
+    return null
+  }
+  return absolute
+}
+
+/**
+ * Walk the path. `/tmp` and `/var` may be the standard symlinks to
+ * `/private/tmp` and `/private/var`. Every other symlink is refused.
+ * The returned path is the one later opened with O_NOFOLLOW.
+ */
+function resolveFinderSyncPath(filePath, io) {
   const parts = filePath.split('/').filter(Boolean)
   let current = ''
   let last = null
@@ -185,30 +221,182 @@ function inspectFontFile(filePath, io) {
     try {
       stat = io.lstatSync(current)
     } catch {
-      return 'File not found.'
+      return { error: 'File not found.' }
     }
-    if (stat?.isSymbolicLink?.()) return 'Symlink paths are not installed.'
+    if (stat?.isSymbolicLink?.()) {
+      const redirected = resolveTrustedLink(current, io)
+      if (!redirected) return { error: 'Symlink paths are not installed.' }
+      current = redirected
+      try {
+        last = io.lstatSync(current)
+      } catch {
+        return { error: 'File not found.' }
+      }
+      continue
+    }
     last = stat
   }
-  if (last?.isDirectory?.()) return null
-  if (!last?.isFile?.()) return 'Not a regular file.'
-  if (!isClaimedFontPath(filePath)) return 'Not a font file.'
-  let header
+  return { path: current || '/', stat: last }
+}
+
+function headerFromIo(filePath, io, fd) {
   try {
-    header = io.readPrefix(filePath, 4)
+    if (fd != null && typeof io.readAt === 'function') return io.readAt(fd, 4)
+    return io.readPrefix(filePath, 4)
   } catch (error) {
-    if (error?.code === 'ELOOP') return 'Symlink paths are not installed.'
-    return 'Not a font file.'
+    if (error?.code === 'ELOOP') return { error: 'Symlink paths are not installed.' }
+    return { error: 'Not a font file.' }
   }
-  if (!magicMatchesExtension(fontExtension(filePath), fontMagicKind(header))) return 'Not a font file.'
-  return null
+}
+
+function closeHandle(io, handle) {
+  if (handle?.fd == null || typeof io.closeSync !== 'function') return
+  try {
+    io.closeSync(handle.fd)
+  } catch {
+    // The descriptor is already unusable.
+  }
+}
+
+function openChecked(filePath, io, directory) {
+  if (typeof io.openSync !== 'function') return { fd: null, stat: null }
+  let fd
+  try {
+    fd = io.openSync(filePath, directory)
+  } catch (error) {
+    if (error?.code === 'ELOOP') return { error: 'Symlink paths are not installed.' }
+    return { error: directory ? 'File not found.' : 'Not a font file.' }
+  }
+  if (fd == null) return { fd: null, stat: null }
+  if (typeof io.fstatSync !== 'function') return { fd, stat: null }
+  try {
+    const stat = io.fstatSync(fd)
+    return { fd, stat }
+  } catch {
+    closeHandle(io, { fd })
+    return { error: 'File not found.' }
+  }
+}
+
+function inspectFontFile(filePath, io) {
+  const resolved = resolveFinderSyncPath(filePath, io)
+  if (resolved.error) return { error: resolved.error }
+  const pathToUse = resolved.path
+  const last = resolved.stat
+  if (last?.isDirectory?.()) {
+    const opened = openChecked(pathToUse, io, true)
+    if (opened.error) return { error: opened.error }
+    const stat = opened.stat ?? last
+    if (opened.fd != null && !stat?.isDirectory?.()) {
+      closeHandle(io, { fd: opened.fd })
+      return { error: 'Not a regular file.' }
+    }
+    return {
+      path: pathToUse,
+      kind: 'dir',
+      handle:
+        opened.fd == null
+          ? null
+          : { path: pathToUse, fd: opened.fd, dev: stat.dev, ino: stat.ino, kind: 'dir' },
+    }
+  }
+  if (!last?.isFile?.()) return { error: 'Not a regular file.' }
+  if (!isClaimedFontPath(pathToUse)) return { error: 'Not a font file.' }
+  const opened = openChecked(pathToUse, io, false)
+  if (opened.error) return { error: opened.error }
+  const fd = opened.fd
+  const header = headerFromIo(pathToUse, io, fd)
+  if (header?.error) {
+    closeHandle(io, { fd })
+    return { error: header.error }
+  }
+  if (!magicMatchesExtension(fontExtension(pathToUse), fontMagicKind(header))) {
+    closeHandle(io, { fd })
+    return { error: 'Not a font file.' }
+  }
+  const stat = opened.stat ?? last
+  if (fd != null && !stat?.isFile?.()) {
+    closeHandle(io, { fd })
+    return { error: 'Not a regular file.' }
+  }
+  return {
+    path: pathToUse,
+    kind: 'file',
+    handle:
+      fd == null
+        ? null
+        : { path: pathToUse, fd, dev: stat.dev, ino: stat.ino, kind: 'file', size: Number(stat.size) || 0 },
+    size: Number(stat?.size) || 0,
+  }
+}
+
+function emptySelection(rejected = [], limitError = null) {
+  return {
+    paths: [],
+    rejected,
+    handles: [],
+    limitError,
+    close() {},
+  }
+}
+
+function closeHandles(io, handles) {
+  for (const handle of handles) closeHandle(io, handle)
+}
+
+/**
+ * Count regular files under a folder without following symlinks.
+ * A symlink entry counts as one file so a directory of links cannot skip the cap.
+ */
+function measureTree(dirPath, io, state, depth) {
+  if (state.limit || state.error) return
+  if (depth > FINDER_SYNC_TREE_DEPTH) return
+  if (typeof io.readdirSync !== 'function') return
+  let names
+  try {
+    names = io.readdirSync(dirPath) ?? []
+  } catch {
+    state.error = 'File not found.'
+    return
+  }
+  for (const name of names) {
+    if (state.limit || state.error) return
+    if (typeof name !== 'string' || !name || name.includes('/') || name.includes('\0') || name === '.' || name === '..') {
+      continue
+    }
+    const child = `${dirPath}/${name}`
+    let stat
+    try {
+      stat = io.lstatSync(child)
+    } catch {
+      continue
+    }
+    if (stat?.isSymbolicLink?.()) {
+      state.files += 1
+    } else if (stat?.isDirectory?.()) {
+      measureTree(child, io, state, depth + 1)
+      continue
+    } else if (stat?.isFile?.()) {
+      state.files += 1
+      state.bytes += Number(stat.size) || 0
+    } else {
+      continue
+    }
+    if (state.files > FINDER_SYNC_MAX_FILES) state.limit = 'files'
+    else if (state.bytes > FINDER_SYNC_MAX_BYTES) state.limit = 'bytes'
+  }
+}
+
+function limitMessage(limit) {
+  return limit === 'bytes' ? FINDER_SYNC_TOO_LARGE : FINDER_SYNC_TOO_MANY_FILES
 }
 
 /**
  * Re-check a Finder Sync selection before the existing install flow.
- * Font files must be regular files with font magic. Folders are accepted as
- * folders and are not walked here; the Services install path imports them.
- * Symlinks are refused so a link cannot escape to a different file.
+ * Font files must be regular files with font magic. Folders are accepted and
+ * measured so a directory cannot skip the file and byte caps. Symlinks are
+ * refused except the standard `/tmp` and `/var` links. An open descriptor is
+ * held so the install can confirm the same inode.
  */
 export function validateFinderSyncSelection(filePaths, io) {
   const selection = []
@@ -227,22 +415,105 @@ export function validateFinderSyncSelection(filePaths, io) {
     selection.push(filePath)
   }
 
-  const accepted = []
-  for (const filePath of selection) {
-    const reason = inspectFontFile(filePath, io)
-    if (reason) rejected.push({ path: filePath, reason })
-    else accepted.push(filePath)
+  if (selection.length > FINDER_SYNC_MAX_FILES) {
+    return emptySelection(rejected, FINDER_SYNC_TOO_MANY_FILES)
   }
 
-  const selectionSet = new Set(selection)
-  const paths = accepted.filter((filePath) => selectionSet.has(filePath))
-  if (paths.length > selection.length) {
-    return {
-      paths: [],
-      rejected: [{ path: '', reason: 'The request included more files than the selection.' }],
+  const paths = []
+  const handles = []
+  const state = { files: 0, bytes: 0, limit: null, error: null }
+
+  for (const filePath of selection) {
+    const inspected = inspectFontFile(filePath, io)
+    if (inspected.error) {
+      rejected.push({ path: filePath, reason: inspected.error })
+      continue
+    }
+    if (inspected.kind === 'dir') {
+      measureTree(inspected.path, io, state, 1)
+      if (state.error) {
+        closeHandle(io, inspected.handle)
+        closeHandles(io, handles)
+        rejected.push({ path: filePath, reason: state.error })
+        return emptySelection(rejected)
+      }
+      if (state.limit) {
+        closeHandle(io, inspected.handle)
+        closeHandles(io, handles)
+        return emptySelection(rejected, limitMessage(state.limit))
+      }
+      paths.push(inspected.path)
+      if (inspected.handle) handles.push(inspected.handle)
+      continue
+    }
+    state.files += 1
+    state.bytes += Number(inspected.size) || 0
+    if (state.files > FINDER_SYNC_MAX_FILES || state.bytes > FINDER_SYNC_MAX_BYTES) {
+      closeHandle(io, inspected.handle)
+      closeHandles(io, handles)
+      const limit = state.bytes > FINDER_SYNC_MAX_BYTES && state.files <= FINDER_SYNC_MAX_FILES ? 'bytes' : 'files'
+      return emptySelection(rejected, limitMessage(limit))
+    }
+    paths.push(inspected.path)
+    if (inspected.handle) handles.push(inspected.handle)
+  }
+
+  return {
+    paths,
+    rejected,
+    handles,
+    limitError: null,
+    close() {
+      closeHandles(io, handles)
+    },
+  }
+}
+
+/**
+ * Confirm each held descriptor still names the same file, then reopen that
+ * path with O_NOFOLLOW and compare inodes. A swap between the check and the
+ * install is refused.
+ */
+export function revalidateFinderSyncHandles(handles, io) {
+  for (const handle of handles ?? []) {
+    if (!handle || handle.fd == null || typeof io.fstatSync !== 'function' || typeof io.openSync !== 'function') {
+      return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL }
+    }
+    let current
+    try {
+      current = io.fstatSync(handle.fd)
+    } catch {
+      return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL }
+    }
+    const directory = handle.kind === 'dir'
+    if (directory ? !current?.isDirectory?.() : !current?.isFile?.()) {
+      return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL }
+    }
+    if (current.dev !== handle.dev || current.ino !== handle.ino) {
+      return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL }
+    }
+    let reopened
+    try {
+      reopened = io.openSync(handle.path, directory)
+    } catch {
+      return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL }
+    }
+    try {
+      const again = io.fstatSync(reopened)
+      if (!again || again.dev !== handle.dev || again.ino !== handle.ino) {
+        return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL }
+      }
+      if (!directory) {
+        const header = headerFromIo(handle.path, io, reopened)
+        if (header?.error || !magicMatchesExtension(fontExtension(handle.path), fontMagicKind(header))) {
+          return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL }
+        }
+      }
+    } finally {
+      closeHandle(io, { fd: reopened })
     }
   }
-  return { paths, rejected }
+  return { ok: true }
 }
 
 export function formatFinderSyncRejections(rejected) {

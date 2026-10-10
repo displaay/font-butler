@@ -45,9 +45,11 @@ import {
 } from './finder-install.mjs'
 import {
   FINDER_SYNC_SETTINGS_URL,
-  acceptFinderSyncHandoff,
+  FINDER_SYNC_TOO_MANY_FILES,
+  finderSyncWireAction,
   formatFinderSyncRejections,
   refreshFinderSyncRegistration,
+  revalidateFinderSyncHandles,
   validateFinderSyncSelection,
 } from './finder-sync.mjs'
 import { deliverNativeNotice, electronNotificationPermission } from './notify.mjs'
@@ -840,26 +842,36 @@ async function openFont(filePath) {
   showMainWindow()
 }
 
-function enqueueFinderJob(action, filePaths) {
-  return finderJobs.enqueue(action, filePaths)
-}
-
-const finderSyncClaimedPaths = new Set()
-
-function claimFinderSyncPaths(filePaths) {
-  for (const filePath of filePaths ?? []) finderSyncClaimedPaths.add(filePath)
-}
-
-function finderSyncClaimsPath(filePath) {
-  return finderSyncClaimedPaths.has(filePath)
+function enqueueFinderJob(action, filePaths, options) {
+  return finderJobs.enqueue(action, filePaths, options)
 }
 
 function finderSyncIo() {
+  const flagsFor = (directory) => {
+    let flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0)
+    if (directory && fs.constants.O_DIRECTORY) flags |= fs.constants.O_DIRECTORY
+    return flags
+  }
   return {
     lstatSync: (filePath) => fs.lstatSync(filePath),
+    readlinkSync: (filePath) => fs.readlinkSync(filePath),
+    readdirSync: (filePath) => fs.readdirSync(filePath),
+    openSync(filePath, directory) {
+      return fs.openSync(filePath, flagsFor(Boolean(directory)))
+    },
+    closeSync(fd) {
+      fs.closeSync(fd)
+    },
+    fstatSync(fd) {
+      return fs.fstatSync(fd)
+    },
+    readAt(fd, length) {
+      const buffer = Buffer.alloc(length)
+      const bytes = fs.readSync(fd, buffer, 0, length, 0)
+      return buffer.subarray(0, bytes)
+    },
     readPrefix(filePath, length) {
-      const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0)
-      const fd = fs.openSync(filePath, flags)
+      const fd = fs.openSync(filePath, flagsFor(false))
       try {
         const buffer = Buffer.alloc(length)
         const bytes = fs.readSync(fd, buffer, 0, length, 0)
@@ -873,7 +885,14 @@ function finderSyncIo() {
 
 function enqueueValidatedFinderInstall(action, filePaths) {
   const checked = validateFinderSyncSelection(filePaths, finderSyncIo())
+  if (checked.limitError) {
+    checked.close?.()
+    dialog.showErrorBox(finderInstallTitle(action), checked.limitError)
+    showMainWindow()
+    return
+  }
   if (checked.paths.length === 0) {
+    checked.close?.()
     dialog.showErrorBox(
       finderInstallTitle(action),
       formatFinderSyncRejections(checked.rejected) || 'No installable font files in that selection.',
@@ -884,7 +903,7 @@ function enqueueValidatedFinderInstall(action, filePaths) {
   if (checked.rejected.length) {
     dialog.showErrorBox(finderInstallTitle(action), formatFinderSyncRejections(checked.rejected))
   }
-  enqueueFinderJob(action, checked.paths)
+  enqueueFinderJob(action, checked.paths, { handles: checked.handles, close: checked.close })
 }
 
 function runningTestFeed() {
@@ -912,13 +931,17 @@ function registerFinderSyncReceiver() {
   try {
     const addon = require('./finder-sync-receiver.node')
     addon.register((payload) => {
-      const decision = acceptFinderSyncHandoff(payload, { testFeed: runningTestFeed() })
-      if (!decision.ok) {
-        console.error('Finder Sync handoff refused', decision.reason)
+      const action = finderSyncWireAction(payload?.action)
+      if (!action) {
+        console.error('Finder Sync handoff refused', 'action')
         return
       }
-      claimFinderSyncPaths(decision.paths)
-      enqueueValidatedFinderInstall(decision.action, decision.paths)
+      if (payload?.overflow === 'files') {
+        dialog.showErrorBox(finderInstallTitle(action), FINDER_SYNC_TOO_MANY_FILES)
+        showMainWindow()
+        return
+      }
+      enqueueValidatedFinderInstall(action, Array.isArray(payload?.paths) ? payload.paths : [])
     })
     return true
   } catch (error) {
@@ -977,7 +1000,15 @@ async function promptFinderInstallAs(entries) {
   return { familyName, destinationIds }
 }
 
-async function runFinderJob(action, filePaths) {
+async function runFinderJob(action, filePaths, job) {
+  if (action !== FINDER_LINK_TO && job?.handles?.length) {
+    const again = revalidateFinderSyncHandles(job.handles, finderSyncIo())
+    if (!again.ok) {
+      dialog.showErrorBox(finderInstallTitle(action), again.reason)
+      showMainWindow()
+      return
+    }
+  }
   if (action === FINDER_LINK_TO) {
     runFinderLinkTo(filePaths)
     return
@@ -1881,7 +1912,6 @@ if (!gotLock) {
       void openFont(filePath)
       return
     }
-    if (finderSyncClaimsPath(filePath)) return
     queuedFiles.push(filePath)
   })
 
@@ -2148,11 +2178,9 @@ if (!gotLock) {
     }
     const fromArgv = process.argv.filter((arg) => /\.(ttf|otf|ttc|otc|woff2?)$/i.test(arg))
     for (const filePath of [...queuedFiles, ...fromArgv]) {
-      if (finderSyncClaimsPath(filePath)) continue
       await openFont(filePath)
     }
     queuedFiles.length = 0
-    finderSyncClaimedPaths.clear()
     await finderJobs.start()
   })
 

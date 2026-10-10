@@ -4,9 +4,11 @@
   <dict>
     <key>com.apple.security.cs.allow-jit</key>
     <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
     <key>com.apple.security.application-groups</key>
     <array>
-      <string>A7WWML89LQ.group.app.fontbutler.desktop.FinderSync</string>
+      <string>A7WWML89LQ.group.app.fontbutler.desktop.FinderSync.Test</string>
     </array>
   </dict>
 </plist>

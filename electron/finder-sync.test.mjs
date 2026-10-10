@@ -6,40 +6,47 @@ import { test } from 'node:test'
 import { DEVELOPER_ID_TEAM } from './app-update-install.mjs'
 import { FINDER_INSTALL, FINDER_INSTALL_AS, FINDER_LINK_TO } from './finder-install.mjs'
 import {
-  FINDER_SYNC_ACTION_KEYWORD,
+  FINDER_SYNC_APP_GROUP_ENTITLEMENT,
   FINDER_SYNC_BUNDLE_ID,
   FINDER_SYNC_ENTITLEMENT,
-  FINDER_SYNC_EVENT_CLASS,
-  FINDER_SYNC_EVENT_ID,
   FINDER_SYNC_EXECUTABLE,
   FINDER_SYNC_EXTENSION_POINT,
+  FINDER_SYNC_MAX_BYTES,
+  FINDER_SYNC_MAX_FILES,
   FINDER_SYNC_PRINCIPAL_CLASS,
-  FINDER_SYNC_SENDER_AUDIT_TOKEN,
   FINDER_SYNC_SETTINGS_URL,
   FINDER_SYNC_TEAM_ID,
   FINDER_SYNC_TEST_BUNDLE_ID,
-  acceptFinderSyncHandoff,
+  FINDER_SYNC_TOO_LARGE,
+  FINDER_SYNC_TOO_MANY_FILES,
+  FINDER_SYNC_CHANGED_BEFORE_INSTALL,
+  finderSyncAppGroup,
   finderSyncAppexBundlePath,
   finderSyncBundleId,
+  finderSyncCodeSigningRequirement,
+  finderSyncMachService,
   finderSyncMenuTitle,
   finderSyncMonitorDirectories,
-  finderSyncSenderAccepted,
+  finderSyncWireAction,
   fontMagicKind,
   formatFinderSyncRejections,
   isSafeFinderSyncPath,
   parsePluginkitFinderSync,
   planFinderSyncRegistration,
   refreshFinderSyncRegistration,
+  revalidateFinderSyncHandles,
   validateFinderSyncSelection,
 } from './finder-sync.mjs'
 import { compileFinderSyncReceiverAddon } from '../scripts/build-finder-sync-receiver.mjs'
 import { finderSyncReleaseFailures } from '../scripts/assert-notarized-mac-release.mjs'
 import {
   entitlementKeysFromCodesign,
+  entitlementTextListsGroup,
   finderSyncAppexFailures,
   finderSyncAppexPath,
   finderSyncCodesignIdentity,
   finderSyncCompileArgs,
+  finderSyncEntitlementsPlist,
   finderSyncInfoPlist,
   finderSyncSignArgs,
   macosSwiftTarget,
@@ -49,6 +56,7 @@ import {
   verifyFinderSyncAppex,
 } from '../scripts/build-finder-sync.mjs'
 import { DEVELOPER_ID_IDENTITY } from '../scripts/mac-signing.mjs'
+import { runFinderSyncXpcRejectionTest } from '../scripts/test-finder-sync-xpc.mjs'
 
 function readRepo(relativePath) {
   return readFileSync(new URL(`../${relativePath}`, import.meta.url), 'utf8')
@@ -86,81 +94,37 @@ const TTF = Buffer.from([0x00, 0x01, 0x00, 0x00])
 const TTC = Buffer.from('ttcf')
 const WOFF2 = Buffer.from('wOF2')
 
-function signedSender(bundleId, extra = {}) {
-  return {
-    valid: true,
-    adhoc: false,
-    teamId: FINDER_SYNC_TEAM_ID,
-    bundleId,
-    ...extra,
-  }
+function signedGroupKeys() {
+  return [FINDER_SYNC_ENTITLEMENT, FINDER_SYNC_APP_GROUP_ENTITLEMENT]
 }
 
-test('Finder Sync install accepts only a signed appex from this build', () => {
+test('Finder Sync handoff names one app group and one code-signing requirement per flavour', () => {
   assert.equal(FINDER_SYNC_TEAM_ID, DEVELOPER_ID_TEAM)
   assert.equal(finderSyncMenuTitle(FINDER_INSTALL, false), 'Install')
   assert.equal(finderSyncMenuTitle(FINDER_INSTALL_AS, true), 'Install as… (Test)')
-  const release = {
-    action: FINDER_INSTALL,
-    paths: ['/Fonts/A.otf', '/Fonts/A.otf', ' /Fonts/B.ttf '],
-    sender: signedSender(FINDER_SYNC_BUNDLE_ID),
-  }
-  assert.deepEqual(acceptFinderSyncHandoff(release), {
-    ok: true,
-    action: FINDER_INSTALL,
-    paths: ['/Fonts/A.otf', '/Fonts/B.ttf'],
-  })
-  assert.equal(finderSyncSenderAccepted(release.sender, { testFeed: false }), true)
-  assert.equal(acceptFinderSyncHandoff(release, { testFeed: true }).ok, false)
-  assert.equal(acceptFinderSyncHandoff(release, { testFeed: true }).reason, 'sender')
-
-  const testBuild = {
-    action: FINDER_INSTALL_AS,
-    paths: ['/Fonts/Display.otf'],
-    sender: signedSender(FINDER_SYNC_TEST_BUNDLE_ID),
-  }
-  assert.equal(acceptFinderSyncHandoff(testBuild).reason, 'sender')
-  assert.deepEqual(acceptFinderSyncHandoff(testBuild, { testFeed: true }), {
-    ok: true,
-    action: FINDER_INSTALL_AS,
-    paths: ['/Fonts/Display.otf'],
-  })
-
+  assert.equal(finderSyncWireAction('install'), FINDER_INSTALL)
+  assert.equal(finderSyncWireAction('installAs'), FINDER_INSTALL_AS)
+  assert.equal(finderSyncWireAction(FINDER_INSTALL_AS), FINDER_INSTALL_AS)
+  assert.equal(finderSyncWireAction(FINDER_LINK_TO), null)
+  assert.equal(finderSyncAppGroup(false), finderSyncMachService(false))
+  assert.equal(finderSyncAppGroup(true), finderSyncMachService(true))
+  assert.equal(finderSyncAppGroup(false), `${FINDER_SYNC_TEAM_ID}.group.${FINDER_SYNC_BUNDLE_ID}`)
+  assert.equal(finderSyncAppGroup(true), `${FINDER_SYNC_TEAM_ID}.group.${FINDER_SYNC_TEST_BUNDLE_ID}`)
+  assert.notEqual(finderSyncAppGroup(false), finderSyncAppGroup(true))
+  const releaseRequirement = finderSyncCodeSigningRequirement(false)
+  const testRequirement = finderSyncCodeSigningRequirement(true)
   assert.equal(
-    acceptFinderSyncHandoff({ ...release, sender: signedSender(FINDER_SYNC_BUNDLE_ID, { teamId: 'OTHERTEAM1' }) }).reason,
-    'sender',
+    releaseRequirement,
+    `anchor apple generic and certificate leaf[subject.OU] = "${FINDER_SYNC_TEAM_ID}" and identifier "${FINDER_SYNC_BUNDLE_ID}"`,
   )
   assert.equal(
-    acceptFinderSyncHandoff({ ...release, sender: signedSender(FINDER_SYNC_BUNDLE_ID, { adhoc: true }) }).reason,
-    'sender',
+    testRequirement,
+    `anchor apple generic and certificate leaf[subject.OU] = "${FINDER_SYNC_TEAM_ID}" and identifier "${FINDER_SYNC_TEST_BUNDLE_ID}"`,
   )
-  assert.equal(
-    acceptFinderSyncHandoff({ ...release, sender: signedSender(FINDER_SYNC_BUNDLE_ID, { valid: false }) }).reason,
-    'sender',
-  )
-  assert.equal(acceptFinderSyncHandoff({ ...release, sender: signedSender('app.fontbutler.desktop') }).reason, 'sender')
-  assert.equal(acceptFinderSyncHandoff({ ...release, sender: null }).reason, 'sender')
-  assert.equal(acceptFinderSyncHandoff({ ...release, sender: { valid: 'true', teamId: FINDER_SYNC_TEAM_ID, bundleId: FINDER_SYNC_BUNDLE_ID } }).reason, 'sender')
-  assert.equal(acceptFinderSyncHandoff({ ...release, action: FINDER_LINK_TO }).reason, 'action')
-  assert.equal(acceptFinderSyncHandoff({ ...release, paths: [] }).reason, 'paths')
-  assert.equal(acceptFinderSyncHandoff('font-butler://finder/install?p=/Fonts/A.otf').reason, 'action')
-  assert.equal(
-    acceptFinderSyncHandoff({
-      action: FINDER_INSTALL,
-      paths: ['/Fonts/A.otf'],
-      url: 'font-butler://finder/install?p=/Fonts/A.otf',
-    }).reason,
-    'sender',
-  )
-  assert.equal(
-    acceptFinderSyncHandoff({
-      action: FINDER_INSTALL,
-      paths: ['/Fonts/A.otf'],
-      url: 'font-butler-test://finder/install?p=/Fonts/A.otf',
-      sender: signedSender(FINDER_SYNC_BUNDLE_ID),
-    }).ok,
-    true,
-  )
+  assert.equal(releaseRequirement.split('identifier').length, 2)
+  assert.equal(testRequirement.split('identifier').length, 2)
+  assert.equal(releaseRequirement.includes(FINDER_SYNC_TEST_BUNDLE_ID), false)
+  assert.ok(testRequirement.includes(`identifier "${FINDER_SYNC_TEST_BUNDLE_ID}"`))
 })
 
 test('validateFinderSyncSelection accepts regular font files and refuses escapes', () => {
@@ -232,7 +196,10 @@ test('validateFinderSyncSelection accepts regular font files and refuses escapes
   assert.match(reasons['/missing.otf'], /File not found/)
   assert.match(reasons['/etc/passwd'], /File not found/)
   assert.match(formatFinderSyncRejections(checked.rejected), /\/Fonts\/alias\.otf: Symlink paths are not installed\./)
-  assert.deepEqual(validateFinderSyncSelection([], ioFor({})), { paths: [], rejected: [] })
+  const empty = validateFinderSyncSelection([], ioFor({}))
+  assert.deepEqual(empty.paths, [])
+  assert.deepEqual(empty.rejected, [])
+  assert.equal(empty.limitError, null)
 
   const raced = validateFinderSyncSelection(['/Fonts/swapped.otf'], {
     lstatSync: () => fontStat('file'),
@@ -258,6 +225,7 @@ test('Finder Sync appex identity, plist, and swiftc command stay distinct for te
   assert.equal(plistString(plist, 'CFBundleIdentifier'), FINDER_SYNC_TEST_BUNDLE_ID)
   assert.equal(plistString(plist, 'FontButtlerURLScheme'), '')
   assert.doesNotMatch(plist, /FontButtlerURLScheme|font-butler/)
+  assert.equal(plistString(plist, 'FontButtlerMachService'), finderSyncMachService(true))
   assert.equal(plistString(plist, 'FontButtlerInstallTitle'), 'Install (Test)')
   assert.equal(plistString(plist, 'FontButtlerInstallAsTitle'), 'Install as… (Test)')
   const releasePlist = finderSyncInfoPlist({ bundleId: FINDER_SYNC_BUNDLE_ID, version: '0.3.10' })
@@ -287,18 +255,19 @@ test('Finder Sync appex identity, plist, and swiftc command stay distinct for te
     `Developer ID Application: ${DEVELOPER_ID_IDENTITY}`,
   )
   const entitlements = readRepo('build/entitlements.finder-sync.plist')
-  assert.deepEqual(entitlementKeysFromCodesign(entitlements), [FINDER_SYNC_ENTITLEMENT])
+  assert.deepEqual(entitlementKeysFromCodesign(entitlements), signedGroupKeys())
+  assert.equal(entitlementTextListsGroup(entitlements, finderSyncAppGroup(false)), true)
+  assert.equal(entitlementTextListsGroup(entitlements, finderSyncAppGroup(true)), false)
   assert.doesNotMatch(entitlements, /allow-jit|get-task-allow|disable-library-validation/)
+  const generated = finderSyncEntitlementsPlist(true)
+  assert.equal(entitlementTextListsGroup(generated, finderSyncAppGroup(true)), true)
+  assert.equal(entitlementTextListsGroup(generated, finderSyncAppGroup(false)), false)
 })
 
-test('Finder Sync monitors / and leaves a disabled or current extension alone', () => {
-  assert.deepEqual(
-    finderSyncMonitorDirectories({
-      home: '/Users/ada',
-      cloudChildren: ['Dropbox', 'OneDrive'],
-    }),
-    ['/'],
-  )
+test('Finder Sync monitors home and /Volumes and leaves a disabled or current extension alone', () => {
+  assert.deepEqual(finderSyncMonitorDirectories('/Users/ada'), ['/Users/ada', '/Volumes'])
+  assert.deepEqual(finderSyncMonitorDirectories('/'), ['/Volumes'])
+  assert.deepEqual(finderSyncMonitorDirectories('relative'), ['/Volumes'])
 
   const bundleId = FINDER_SYNC_TEST_BUNDLE_ID
   const current = finderSyncAppexBundlePath('/Applications/Font Buttler Test/Font Buttler.app')
@@ -397,7 +366,7 @@ test('appex signing is inside-out and the release check requires sandbox, team, 
       extensionPoint: FINDER_SYNC_EXTENSION_POINT,
       codesignVerifyStatus: 0,
       codesignDisplay: display,
-      entitlementKeys: [FINDER_SYNC_ENTITLEMENT],
+      entitlementKeys: signedGroupKeys(),
       requireDeveloperId: true,
     }),
     [],
@@ -410,7 +379,7 @@ test('appex signing is inside-out and the release check requires sandbox, team, 
     extensionPoint: FINDER_SYNC_EXTENSION_POINT,
     codesignVerifyStatus: 0,
     codesignDisplay: display,
-    entitlementKeys: [FINDER_SYNC_ENTITLEMENT],
+    entitlementKeys: signedGroupKeys(),
     requireDeveloperId: true,
   })
   assert.ok(testId.some((failure) => failure.includes(FINDER_SYNC_TEST_BUNDLE_ID)))
@@ -422,7 +391,7 @@ test('appex signing is inside-out and the release check requires sandbox, team, 
     extensionPoint: FINDER_SYNC_EXTENSION_POINT,
     codesignVerifyStatus: 0,
     codesignDisplay: 'Signature=adhoc\nTeamIdentifier=not',
-    entitlementKeys: [FINDER_SYNC_ENTITLEMENT],
+    entitlementKeys: signedGroupKeys(),
     requireDeveloperId: true,
   })
   assert.ok(adHoc.some((failure) => /ad-hoc/.test(failure)))
@@ -435,7 +404,7 @@ test('appex signing is inside-out and the release check requires sandbox, team, 
     extensionPoint: FINDER_SYNC_EXTENSION_POINT,
     codesignVerifyStatus: 0,
     codesignDisplay: display,
-    entitlementKeys: [FINDER_SYNC_ENTITLEMENT],
+    entitlementKeys: signedGroupKeys(),
     requireDeveloperId: true,
     urlScheme: 'font-butler',
   })
@@ -451,7 +420,7 @@ test('appex signing is inside-out and the release check requires sandbox, team, 
     entitlementKeys: [FINDER_SYNC_ENTITLEMENT, 'com.apple.security.cs.allow-jit'],
     requireDeveloperId: true,
   })
-  assert.ok(loose.some((failure) => /sandbox only/.test(failure)))
+  assert.ok(loose.some((failure) => /application group/.test(failure)))
   assert.deepEqual(
     finderSyncAppexFailures({
       present: false,
@@ -466,11 +435,15 @@ test('appex signing is inside-out and the release check requires sandbox, team, 
     expectedBundleId: FINDER_SYNC_TEST_BUNDLE_ID,
     requireDeveloperId: false,
     existsSync: () => true,
-    readFileSync: () => finderSyncInfoPlist({ bundleId: FINDER_SYNC_TEST_BUNDLE_ID, version: '0.9.0' }),
+    readFileSync: () => finderSyncInfoPlist({ bundleId: FINDER_SYNC_TEST_BUNDLE_ID, version: '0.9.0', testFeed: true }),
     spawnSync(command, args) {
       if (args.includes('--verify')) return { status: 0, stdout: '', stderr: '' }
       if (args.includes('--entitlements')) {
-        return { status: 0, stdout: `<key>${FINDER_SYNC_ENTITLEMENT}</key><true/>`, stderr: '' }
+        return {
+          status: 0,
+          stdout: `<key>${FINDER_SYNC_ENTITLEMENT}</key><true/><key>${FINDER_SYNC_APP_GROUP_ENTITLEMENT}</key><array><string>${finderSyncAppGroup(true)}</string></array>`,
+          stderr: '',
+        }
       }
       return { status: 0, stdout: '', stderr: 'Signature=adhoc' }
     },
@@ -512,10 +485,13 @@ test('the release assert reads the appex bundle ID against the test-feed marker'
   assert.match(assertScript, /prefixFailures\('App'/)
 })
 
-test('Finder Sync sources only hand off font selections and the pack builds the appex', () => {
+test('Finder Sync sources hand off over XPC and the pack builds the appex', () => {
   const swift = readRepo('macos/FinderSync/FinderSync.swift')
   const receiver = readRepo('electron/finder-sync-receiver.mm')
-  assert.match(swift, /fileURLWithPath: "\/"/)
+  const nativeTest = readRepo('electron/finder-sync-xpc-test.mm')
+  const validator = readRepo('electron/finder-sync.mjs')
+  assert.match(swift, /fileURLWithPath: "\/Volumes"/)
+  assert.match(swift, /homeDirectoryForCurrentUser/)
   assert.match(swift, /contextualMenuForItems/)
   assert.match(swift, /selectedItemURLs/)
   assert.match(swift, /allSatisfy\(isInstallSelection\)/)
@@ -523,40 +499,48 @@ test('Finder Sync sources only hand off font selections and the pack builds the 
   assert.match(swift, /"Install"/)
   assert.match(swift, /Install as…/)
   assert.match(swift, /FontButtlerInstallTitle/)
-  assert.match(swift, /withApplicationAt/)
+  assert.match(swift, /openApplication/)
   assert.match(swift, /parentAppURL/)
-  assert.match(swift, /appleEvent/)
-  assert.match(swift, /NSWorkspace\.shared\.open\(urls, withApplicationAt: appURL/)
-  for (const value of [FINDER_SYNC_EVENT_CLASS, FINDER_SYNC_EVENT_ID, FINDER_SYNC_ACTION_KEYWORD]) {
-    const hex = value.toString(16)
-    assert.match(swift, new RegExp(hex, 'i'))
-    assert.match(receiver, new RegExp(hex, 'i'))
-  }
-  assert.match(receiver, new RegExp(FINDER_SYNC_SENDER_AUDIT_TOKEN.toString(16), 'i'))
+  assert.match(swift, /NSXPCConnection/)
+  assert.match(swift, /submitAction/)
+  assert.match(swift, /"installAs"/)
+  assert.match(swift, /addingTimeInterval\(10\)/)
+  assert.doesNotMatch(swift, /appleEvent|withApplicationAt|AEEvent|NSAppleEventDescriptor/)
+  assert.doesNotMatch(swift, /fileURLWithPath: "\/"/)
+  const releaseRequirement = finderSyncCodeSigningRequirement(false).replaceAll('"', '\\"')
+  const testRequirement = finderSyncCodeSigningRequirement(true).replaceAll('"', '\\"')
+  assert.ok(receiver.includes(releaseRequirement))
+  assert.ok(receiver.includes(testRequirement))
+  assert.ok(receiver.includes(finderSyncMachService(false)))
+  assert.ok(receiver.includes(finderSyncMachService(true)))
+  assert.ok(nativeTest.includes(releaseRequirement))
+  assert.match(receiver, /setCodeSigningRequirement/)
+  assert.match(receiver, /SecRequirementCreateWithString/)
+  assert.match(receiver, /kSecCSStrictValidate/)
   assert.match(receiver, /SecCodeCopyGuestWithAttributes/)
   assert.match(receiver, /kSecGuestAttributeAudit/)
-  assert.match(receiver, /SecCodeCheckValidity/)
-  assert.match(receiver, /kSecCodeInfoTeamIdentifier/)
-  assert.match(receiver, /kSecCodeInfoIdentifier/)
-  assert.match(receiver, /kSecCodeSignatureAdhoc/)
-  assert.match(receiver, new RegExp(FINDER_SYNC_TEAM_ID))
-  assert.match(receiver, new RegExp(FINDER_SYNC_BUNDLE_ID.replaceAll('.', '\\.')))
-  assert.match(receiver, new RegExp(FINDER_SYNC_TEST_BUNDLE_ID.replaceAll('.', '\\.')))
-  assert.doesNotMatch(receiver, /kSecGuestAttributePid|getpid/)
+  assert.match(nativeTest, /SecCodeCopySelf/)
+  assert.match(nativeTest, /kSecCSStrictValidate/)
+  assert.match(nativeTest, /anonymousListener/)
+  assert.doesNotMatch(receiver, /strcmp|kSecCodeInfoTeamIdentifier|kSecCodeInfoIdentifier|kSecCodeSignatureAdhoc/)
+  assert.doesNotMatch(receiver, /kAEOpenDocuments|AEInstallEventHandler|kSecGuestAttributePid|getpid/)
+  assert.doesNotMatch(nativeTest, /strcmp|kSecCodeInfoTeamIdentifier/)
   assert.doesNotMatch(swift, /\/Applications\/Font Buttler\.app/)
-  assert.doesNotMatch(swift, /font-butler|FontButtlerURLScheme|URLComponents|FileManager|CloudStorage|Mobile Documents|NSXPCListener|xpc_connection/)
+  assert.doesNotMatch(swift, /font-butler|FontButtlerURLScheme|URLComponents|CloudStorage|Mobile Documents|NSXPCListener|xpc_connection/)
   assert.doesNotMatch(swift, /CTFontManager|copyItem|removeItem|trashItem|NSAppleScript|\/api\/install/)
+  assert.doesNotMatch(validator, /more files than the selection/)
 
   const main = readRepo('electron/main.mjs')
   assert.match(main, /enqueueValidatedFinderInstall/)
   assert.match(main, /validateFinderSyncSelection/)
+  assert.match(main, /revalidateFinderSyncHandles/)
   assert.match(main, /O_NOFOLLOW/)
-  assert.match(main, /acceptFinderSyncHandoff/)
+  assert.match(main, /finderSyncWireAction/)
   assert.match(main, /finder-sync-receiver\.node/)
   assert.match(main, /will-finish-launching/)
-  assert.doesNotMatch(main, /setAsDefaultProtocolClient|removeAsDefaultProtocolClient|parseFinderLaunch|parseFinderInstallUrl|enqueueFinderHandoff/)
+  assert.doesNotMatch(main, /acceptFinderSyncHandoff|claimFinderSyncPaths|setAsDefaultProtocolClient|removeAsDefaultProtocolClient|parseFinderLaunch|parseFinderInstallUrl|enqueueFinderHandoff/)
   assert.match(main, /refreshFinderSyncRegistration/)
-  assert.match(main, /enqueueFinderJob\(action, checked\.paths\)/)
+  assert.match(main, /handles: checked\.handles/)
   assert.match(main, /open-finder-extensions/)
   assert.match(main, /FINDER_SYNC_SETTINGS_URL/)
   assert.equal(
@@ -598,5 +582,176 @@ test('Finder Sync sources only hand off font selections and the pack builds the 
   if (process.platform !== 'darwin') {
     assert.equal(prepared.ok, false)
     assert.match(prepared.reason, /macOS/)
+  }
+})
+
+test('Finder Sync resolves /tmp and /var, caps the selection, and rechecks the open file', () => {
+  const reads = []
+  const trusted = validateFinderSyncSelection(
+    ['/tmp/A.otf', '/var/B.ttf', '/tmp/elsewhere.otf', '/Fonts/link.otf'],
+    {
+      lstatSync(filePath) {
+        const nodes = {
+          '/tmp': fontStat('symlink'),
+          '/private': fontStat('dir'),
+          '/private/tmp': fontStat('dir'),
+          '/private/tmp/A.otf': { ...fontStat('file'), header: OTTO, dev: 1, ino: 2, size: 8 },
+          '/private/tmp/elsewhere.otf': fontStat('symlink'),
+          '/var': fontStat('symlink'),
+          '/private/var': fontStat('dir'),
+          '/private/var/B.ttf': { ...fontStat('file'), header: TTF, dev: 1, ino: 3, size: 8 },
+          '/Fonts': fontStat('dir'),
+          '/Fonts/link.otf': fontStat('symlink'),
+        }
+        if (!nodes[filePath]) {
+          const error = new Error('missing')
+          error.code = 'ENOENT'
+          throw error
+        }
+        return nodes[filePath]
+      },
+      readlinkSync(filePath) {
+        if (filePath === '/tmp') return 'private/tmp'
+        if (filePath === '/var') return 'private/var'
+        if (filePath === '/tmp/elsewhere.otf') return '/etc/passwd'
+        return 'nope'
+      },
+      readPrefix(filePath) {
+        reads.push(filePath)
+        if (filePath === '/private/tmp/A.otf') return OTTO
+        if (filePath === '/private/var/B.ttf') return TTF
+        throw new Error('unreadable')
+      },
+    },
+  )
+  assert.deepEqual(trusted.paths, ['/private/tmp/A.otf', '/private/var/B.ttf'])
+  assert.equal(trusted.limitError, null)
+  const reasons = Object.fromEntries(trusted.rejected.map((item) => [item.path, item.reason]))
+  assert.match(reasons['/tmp/elsewhere.otf'], /Symlink/)
+  assert.match(reasons['/Fonts/link.otf'], /Symlink/)
+
+  const tooMany = validateFinderSyncSelection(
+    Array.from({ length: FINDER_SYNC_MAX_FILES + 1 }, (_, index) => `/Fonts/${index}.otf`),
+    ioFor({}),
+  )
+  assert.equal(tooMany.limitError, FINDER_SYNC_TOO_MANY_FILES)
+  assert.deepEqual(tooMany.paths, [])
+
+  const huge = validateFinderSyncSelection(['/Fonts/Huge.otf'], {
+    lstatSync: () => ({ ...fontStat('file'), size: FINDER_SYNC_MAX_BYTES + 1 }),
+    readPrefix: () => OTTO,
+  })
+  assert.equal(huge.limitError, FINDER_SYNC_TOO_LARGE)
+  assert.deepEqual(huge.paths, [])
+
+  const names = Array.from({ length: 3 }, (_, index) => `${index}.otf`)
+  const folder = validateFinderSyncSelection(['/Fonts/Family'], {
+    lstatSync(filePath) {
+      if (filePath === '/Fonts' || filePath === '/Fonts/Family') return fontStat('dir')
+      return { ...fontStat('file'), size: 10 }
+    },
+    readdirSync(filePath) {
+      if (filePath === '/Fonts/Family') return names
+      return []
+    },
+  })
+  assert.deepEqual(folder.paths, ['/Fonts/Family'])
+  assert.equal(folder.limitError, null)
+
+  let currentIno = 7
+  const handles = []
+  const raced = validateFinderSyncSelection(['/Fonts/A.otf'], {
+    lstatSync: () => fontStat('file'),
+    openSync() {
+      return 4
+    },
+    closeSync() {},
+    fstatSync: () => ({ ...fontStat('file'), dev: 1, ino: currentIno, size: 4 }),
+    readAt: () => OTTO,
+  })
+  assert.equal(raced.handles[0].ino, 7)
+  handles.push(raced.handles[0])
+  currentIno = 8
+  const changed = revalidateFinderSyncHandles(handles, {
+    fstatSync(fd) {
+      return { ...fontStat('file'), dev: 1, ino: fd === 4 ? 7 : currentIno, size: 4 }
+    },
+    openSync() {
+      return 5
+    },
+    closeSync() {},
+    readAt: () => OTTO,
+  })
+  assert.equal(changed.ok, false)
+  assert.equal(changed.reason, FINDER_SYNC_CHANGED_BEFORE_INSTALL)
+  raced.close()
+})
+
+test('the native XPC rejection probe runs on macOS and is skipped elsewhere', () => {
+  const result = runFinderSyncXpcRejectionTest()
+  if (process.platform === 'darwin') {
+    assert.equal(result.skipped, false)
+    assert.equal(result.ok, true, result.reason)
+  } else {
+    assert.equal(result.ok, false)
+    assert.equal(result.skipped, true)
+  }
+})
+
+test('the release assert checks the stapled appex with a deep verify and spctl', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-appex-spctl-'))
+  try {
+    const app = path.join(root, 'Font Buttler.app')
+    mkdirSync(path.join(app, 'Contents', 'Resources', 'app'), { recursive: true })
+    writeFileSync(path.join(app, 'Contents', 'Resources', 'app', 'package.json'), JSON.stringify({ name: 'font-butler' }))
+    const appex = finderSyncAppexPath(app)
+    mkdirSync(path.join(appex, 'Contents'), { recursive: true })
+    writeFileSync(
+      path.join(appex, 'Contents', 'Info.plist'),
+      finderSyncInfoPlist({ bundleId: FINDER_SYNC_BUNDLE_ID, version: '0.3.10' }),
+    )
+    const calls = []
+    const group = finderSyncAppGroup(false)
+    const failures = finderSyncReleaseFailures(app, {
+      runCommand(command, args) {
+        calls.push([command, args])
+        if (command === 'spctl') return { status: 0, output: 'source=Notarized Developer ID' }
+        if (command === 'codesign' && args.includes('--entitlements')) {
+          return {
+            status: 0,
+            output: `<key>${FINDER_SYNC_ENTITLEMENT}</key><key>${FINDER_SYNC_APP_GROUP_ENTITLEMENT}</key><string>${group}</string>`,
+          }
+        }
+        return {
+          status: 0,
+          output: `Authority=Developer ID Application: ${DEVELOPER_ID_IDENTITY}\nTeamIdentifier=${DEVELOPER_ID_TEAM}`,
+        }
+      },
+    })
+    assert.deepEqual(failures, [], failures.join('\n'))
+    assert.ok(calls.some((call) => call[0] === 'codesign' && call[1].includes('--deep') && call[1].includes('--strict')))
+    assert.ok(calls.some((call) => call[0] === 'spctl' && call[1].includes(appex)))
+
+    const rejected = finderSyncReleaseFailures(app, {
+      runCommand(command, args) {
+        if (command === 'spctl') return { status: 1, output: 'rejected' }
+        if (command === 'codesign' && args.includes('--verify')) return { status: 1, output: '' }
+        if (command === 'codesign' && args.includes('--entitlements')) {
+          return {
+            status: 0,
+            output: `<key>${FINDER_SYNC_ENTITLEMENT}</key><key>${FINDER_SYNC_APP_GROUP_ENTITLEMENT}</key><string>${finderSyncAppGroup(true)}</string>`,
+          }
+        }
+        return {
+          status: 0,
+          output: `Authority=Developer ID Application: ${DEVELOPER_ID_IDENTITY}\nTeamIdentifier=${DEVELOPER_ID_TEAM}`,
+        }
+      },
+    })
+    assert.ok(rejected.some((failure) => /--deep --strict/.test(failure)))
+    assert.ok(rejected.some((failure) => /Notarized Developer ID/.test(failure)))
+    assert.ok(rejected.some((failure) => failure.includes(group)))
+  } finally {
+    rmSync(root, { recursive: true, force: true })
   }
 })

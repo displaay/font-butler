@@ -13,7 +13,7 @@ import {
 } from '../electron/app-update-install.mjs'
 import { sha512Base64 } from './mac-dmg-staple.mjs'
 import { DEVELOPER_ID_IDENTITY, TEST_FEED_BUILD_ENV, TEST_FEED_VERSION_ENV } from './mac-signing.mjs'
-import { finderSyncBundleId, finderSyncMenuTitle } from '../electron/finder-sync.mjs'
+import { finderSyncAppGroup, finderSyncBundleId, finderSyncMachService, finderSyncMenuTitle } from '../electron/finder-sync.mjs'
 import {
   entitlementKeysFromCodesign,
   finderSyncAppexFailures,
@@ -36,6 +36,7 @@ export function notarizationFailures({
   staplerDmgAppStatus = 1,
   spctlOutput = '',
   spctlStatus = 1,
+  expectedAppGroup = '',
 }) {
   const failures = []
   if (/Signature=adhoc/i.test(codesignDisplay)) failures.push('The app is ad-hoc signed.')
@@ -45,6 +46,18 @@ export function notarizationFailures({
   if (/get-task-allow/.test(entitlements)) failures.push('Release entitlements include get-task-allow.')
   if (/disable-library-validation/.test(entitlements)) {
     failures.push('Release entitlements disable library validation.')
+  }
+  if (expectedAppGroup) {
+    const exact = `<string>${expectedAppGroup}</string>`
+    if (!String(entitlements).includes(exact)) {
+      failures.push(`Release entitlements must include the application group ${expectedAppGroup}.`)
+    }
+    const other = expectedAppGroup.endsWith('.Test')
+      ? expectedAppGroup.slice(0, -'.Test'.length)
+      : `${expectedAppGroup}.Test`
+    if (String(entitlements).includes(`<string>${other}</string>`)) {
+      failures.push("Release entitlements include the other build's application group.")
+    }
   }
   if (codesignVerifyStatus !== 0) {
     failures.push('codesign --verify --deep --strict failed. A helper, framework, or native module is unsigned.')
@@ -227,8 +240,10 @@ export function finderSyncReleaseFailures(appPath, { readFile = readFileSync, ex
     plist = ''
   }
   const display = runCommand('codesign', ['-dv', '--verbose=4', appex])
-  const verify = runCommand('codesign', ['--verify', '--strict', '--verbose=2', appex])
+  const verify = runCommand('codesign', ['--verify', '--deep', '--strict', '--verbose=2', appex])
   const entitlements = runCommand('codesign', ['-d', '--entitlements', ':-', appex])
+  const spctl = runCommand('spctl', ['-a', '-vv', '-t', 'exec', appex])
+  const expectedAppGroup = finderSyncAppGroup(testFeed)
   return finderSyncAppexFailures({
     present: true,
     bundleId: plistString(plist, 'CFBundleIdentifier'),
@@ -238,12 +253,19 @@ export function finderSyncReleaseFailures(appPath, { readFile = readFileSync, ex
     codesignDisplay: display.output,
     codesignVerifyStatus: verify.status,
     entitlementKeys: entitlementKeysFromCodesign(entitlements.output),
+    entitlementText: entitlements.output,
     requireDeveloperId: true,
     urlScheme: plistString(plist, 'FontButtlerURLScheme'),
     installTitle: plistString(plist, 'FontButtlerInstallTitle'),
     expectedInstallTitle: finderSyncMenuTitle('install', testFeed),
     installAsTitle: plistString(plist, 'FontButtlerInstallAsTitle'),
     expectedInstallAsTitle: finderSyncMenuTitle('install-as', testFeed),
+    expectedAppGroup,
+    machService: plistString(plist, 'FontButtlerMachService'),
+    expectedMachService: finderSyncMachService(testFeed),
+    requireNotarized: true,
+    spctlStatus: spctl.status,
+    spctlOutput: spctl.output,
   })
 }
 
@@ -252,6 +274,7 @@ function prefixFailures(where, failures) {
 }
 
 function evidenceForApp(app, extra) {
+  const testFeed = readAppTestFeedMarker(app) === true
   const display = run('codesign', ['-dv', '--verbose=4', app])
   const verify = run('codesign', ['--verify', '--deep', '--strict', '--verbose=2', app])
   const entitlements = run('codesign', ['-d', '--entitlements', ':-', app])
@@ -263,6 +286,7 @@ function evidenceForApp(app, extra) {
     staplerAppStatus: staplerStatus(app),
     spctlOutput: spctl.output,
     spctlStatus: spctl.status,
+    expectedAppGroup: finderSyncAppGroup(testFeed),
     ...extra,
   })
 }
