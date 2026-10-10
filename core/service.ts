@@ -1487,14 +1487,28 @@ export class FontButlerService {
     return result
   }
 
-  async requestLogout(): Promise<{ requested: boolean; message?: string; error?: string }> {
-    return requestMacLogout((result) => {
-      emitNotice({
-        kind: 'warning',
-        source: 'logout',
-        message: result.message || LOGOUT_FAILED_MESSAGE,
-      })
-    })
+  async requestLogout(): Promise<{
+    requested: boolean
+    cancelled?: boolean
+    message?: string
+    error?: string
+  }> {
+    return requestMacLogout(
+      (result) => {
+        emitNotice({
+          kind: 'warning',
+          source: 'logout',
+          message: result.message || LOGOUT_FAILED_MESSAGE,
+        })
+      },
+      (message) => {
+        emitNotice({
+          kind: 'info',
+          source: 'logout-waiting',
+          message,
+        })
+      },
+    )
   }
 
   async clearOfficeFontCache(): Promise<{ mac: boolean; cleared: boolean }> {

@@ -175,8 +175,8 @@ export type Notice = {
   message: string
   entryId?: string
   operationId?: string
-  /** Watch-folder failures are buffered until the window can show them. Logout failures open an in-app dialog. */
-  source?: 'watch' | 'logout'
+  /** Watch-folder failures are buffered until the window can show them. Logout failures are a main-process dialog. */
+  source?: 'watch' | 'logout' | 'logout-waiting'
 }
 
 export type ViewLayout = 'list' | 'grid'

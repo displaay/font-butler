@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { LOGOUT_CANCELLED, LOGOUT_FAILED_MESSAGE, LOGOUT_FAILED_TITLE } from '../../shared/logout.ts'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -10,9 +11,7 @@ import {
 export const FONT_CACHE_CLEAR_WARNING =
   'Some apps may not see new or updated fonts until you log out.'
 
-export const LOGOUT_FAILED_TITLE = "Logging out didn't happen"
-export const LOGOUT_FAILED_MESSAGE =
-  "Logging out didn't happen. Use Apple menu > Log Out to finish rebuilding font caches."
+export { LOGOUT_FAILED_TITLE, LOGOUT_FAILED_MESSAGE }
 
 type Phase = 'idle' | 'confirm' | 'clearing' | 'cleared' | 'logout-failed'
 
@@ -131,10 +130,12 @@ export function ClearFontCachesControl({
               onClick={() => {
                 void onLogOut()
                   .then((result) => {
-                    const outcome = result as { requested?: boolean; message?: string } | undefined
+                    const outcome = result as
+                      | { requested?: boolean; cancelled?: boolean; message?: string }
+                      | undefined
                     if (outcome && outcome.requested === false) {
-                      if (/cancelled/i.test(outcome.message ?? '')) {
-                        setLogoutFallback(outcome.message || 'Log out was cancelled.')
+                      if (outcome.cancelled === true) {
+                        setLogoutFallback(outcome.message || LOGOUT_CANCELLED)
                         return
                       }
                       setPhase('logout-failed')

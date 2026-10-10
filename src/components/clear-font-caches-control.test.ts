@@ -214,94 +214,56 @@ test('Clear font caches runs only after confirmation and logout is optional', as
   assert.ok(buttonNamed(failed, 'OK'))
   assert.equal(buttonNamed(failed, 'Log out now'), undefined)
 
-  const failures = [
+  const outcomes = [
     {
-      name: '-1743',
-      result: {
-        requested: false,
-        message: "Logging out didn't happen. Use Apple menu > Log Out to finish rebuilding font caches.",
-        error: 'osascript is not allowed to send keystrokes. (-1743)',
-      },
+      name: 'cancelled-flag',
+      result: { requested: false, cancelled: true, message: 'The confirm was dismissed.' },
+      failureDialog: false,
     },
     {
-      name: 'generic',
-      result: {
-        requested: false,
-        message: "Logging out didn't happen. Use Apple menu > Log Out to finish rebuilding font caches.",
-        error: 'osascript failed: System Events is not running',
-      },
-    },
-    {
-      name: 'timeout',
-      result: {
-        requested: false,
-        message: "Logging out didn't happen. Use Apple menu > Log Out to finish rebuilding font caches.",
-        error: 'spawn osascript ETIMEDOUT: timed out',
-      },
+      name: 'cancel-text-without-flag',
+      result: { requested: false, message: 'Log out was cancelled.' },
+      failureDialog: true,
     },
   ]
-  const previousNotification = globalThis.Notification
-  class DeniedNotification {
-    static permission = 'denied'
-    static isSupported() {
-      return false
-    }
-    constructor() {
-      throw new Error('notifications unavailable')
-    }
-    show() {
-      throw new Error('notifications unavailable')
-    }
-  }
-  globalThis.Notification = DeniedNotification as unknown as typeof Notification
-  try {
-    for (const failure of failures) {
-      await act(async () => {
-        root.render(
-          createElement(ClearFontCachesControl, {
-            onClear: async () => {
-              calls.push(`clear-${failure.name}`)
-            },
-            onLogOut: async () => {
-              calls.push(`logout-${failure.name}`)
-              if (globalThis.Notification) {
-                try {
-                  new globalThis.Notification('Font Buttler')
-                } catch {
-                  // Permission is denied. The dialog still has to appear.
-                }
-              }
-              return failure.result
-            },
-          }),
-        )
-      })
-      const openFailure = buttonNamed(document.body, 'Clear font caches')
-      assert.ok(openFailure, failure.name)
-      await act(async () => {
-        openFailure.click()
-      })
-      const confirmFailure = document.body.querySelector('[role="dialog"]')
-      assert.ok(confirmFailure, failure.name)
-      const confirmFailureButton = buttonNamed(confirmFailure, 'Clear font caches')
-      assert.ok(confirmFailureButton, failure.name)
-      await act(async () => {
-        confirmFailureButton.click()
-      })
-      const logoutFailure = buttonNamed(document.body, 'Log out now')
-      assert.ok(logoutFailure, failure.name)
-      await act(async () => {
-        logoutFailure.click()
-      })
-      const dialog = document.body.querySelector('[role="dialog"]')
-      assert.ok(dialog, failure.name)
+  for (const outcome of outcomes) {
+    await act(async () => {
+      root.render(
+        createElement(ClearFontCachesControl, {
+          onClear: async () => {
+            calls.push(`clear-${outcome.name}`)
+          },
+          onLogOut: async () => outcome.result,
+        }),
+      )
+    })
+    const openOutcome = buttonNamed(document.body, 'Clear font caches')
+    assert.ok(openOutcome, outcome.name)
+    await act(async () => {
+      openOutcome.click()
+    })
+    const confirmOutcome = document.body.querySelector('[role="dialog"]')
+    assert.ok(confirmOutcome, outcome.name)
+    const confirmOutcomeButton = buttonNamed(confirmOutcome, 'Clear font caches')
+    assert.ok(confirmOutcomeButton, outcome.name)
+    await act(async () => {
+      confirmOutcomeButton.click()
+    })
+    const logoutOutcome = buttonNamed(document.body, 'Log out now')
+    assert.ok(logoutOutcome, outcome.name)
+    await act(async () => {
+      logoutOutcome.click()
+    })
+    const dialog = document.body.querySelector('[role="dialog"]')
+    assert.ok(dialog, outcome.name)
+    if (outcome.failureDialog) {
       assert.match(dialog.textContent ?? '', /Logging out didn't happen/)
-      assert.match(dialog.textContent ?? '', /Apple menu > Log Out/)
-      assert.match(dialog.textContent ?? '', /rebuilding font caches/)
-      assert.equal(globalThis.Notification, DeniedNotification)
+      assert.equal(buttonNamed(dialog, 'Log out now'), undefined)
+    } else {
+      assert.match(dialog.textContent ?? '', /The confirm was dismissed\./)
+      assert.equal(dialog.textContent?.includes("Logging out didn't happen"), false)
+      assert.ok(buttonNamed(dialog, 'Log out now'))
     }
-  } finally {
-    globalThis.Notification = previousNotification
   }
 
   await act(async () => {

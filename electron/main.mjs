@@ -45,7 +45,13 @@ import {
   suggestedFamilyName,
 } from './finder-install.mjs'
 import { deliverNativeNotice, electronNotificationPermission } from './notify.mjs'
-import { logoutFailedDialogOptions, presentLogoutFailure } from './logout-dialog.mjs'
+import {
+  logoutFailedDialogOptions,
+  logoutMenuResultAction,
+  presentLogoutFailure,
+  presentLogoutNotice,
+  showLogoutMessageBox,
+} from './logout-dialog.mjs'
 import { createWatchNoticeBuffer, isWatchFailureNotice } from './watch-notices.mjs'
 import {
   buildTrayMenuModel,
@@ -1035,9 +1041,20 @@ async function confirmFontCacheClear() {
   return choice.response === 0
 }
 
+function showAppMessageBox(options) {
+  return showLogoutMessageBox(dialog, mainWindow, options)
+}
+
+function rendererCanPresentLogoutNotice() {
+  const win = mainWindow
+  if (!win || win.isDestroyed() || mainWindowKind !== 'main') return false
+  if (!win.isVisible() || win.isMinimized()) return false
+  if (win.webContents.isLoading()) return false
+  return true
+}
+
 async function offerLogoutAfterFontCacheClear() {
-  const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined
-  const options = {
+  const choice = await showAppMessageBox({
     type: 'info',
     title: 'Font caches cleared',
     message: FONT_CACHE_CLEAR_WARNING,
@@ -1045,30 +1062,25 @@ async function offerLogoutAfterFontCacheClear() {
     buttons: ['Log out now', 'Later'],
     defaultId: 1,
     cancelId: 1,
-  }
-  const choice = parent
-    ? await dialog.showMessageBox(parent, options)
-    : await dialog.showMessageBox(options)
+  })
   if (choice.response !== 0) return
   const result = await postApi('/api/session/logout', {})
-  if (result && result.message === 'Log out was cancelled.') {
-    const cancelled = {
+  const action = logoutMenuResultAction(result)
+  if (action === 'cancelled') {
+    await showAppMessageBox({
       type: 'info',
       title: 'Log out',
-      message: result.message,
+      message: result.message || 'Log out was cancelled.',
       buttons: ['OK'],
       defaultId: 0,
-    }
-    if (parent) await dialog.showMessageBox(parent, cancelled)
-    else await dialog.showMessageBox(cancelled)
+    })
     return
   }
-  if (!result || result.requested === false) {
-    const showDialog = (options) =>
-      parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options)
+  if (action === 'failed') {
     await presentLogoutFailure({
       message: result && result.message,
-      showDialog,
+      getParent: () => mainWindow,
+      showDialog: (parent, options) => showLogoutMessageBox(dialog, parent, options),
       notify: () =>
         maybeNotify({
           kind: 'warning',
@@ -1500,6 +1512,7 @@ function maybeNotify(notice) {
   })
   lastNoticeKey = result.lastKey
   lastNoticeAt = result.lastAt
+  return result.shown === true
 }
 
 function applyAdobeCacheSetting(enabled) {
@@ -1571,12 +1584,28 @@ function handleApiEvent(event) {
     applyNativeNotificationSetting(event.settings.nativeNotifications)
   }
   if (event.type === 'notice' && event.notice) {
-    try {
-      maybeNotify(event.notice)
-    } catch {
-      // A missing notification permission must not drop the in-app dialog.
+    if (event.notice.source === 'logout' || event.notice.source === 'logout-waiting') {
+      presentLogoutNotice({
+        notice: event.notice,
+        getWindow: () => mainWindow,
+        rendererVisible: rendererCanPresentLogoutNotice(),
+        showMessageBox: (parent, options) => showLogoutMessageBox(dialog, parent, options),
+        showWaitingNotice: (parent, options) => showLogoutMessageBox(dialog, parent, options),
+        notify(notice) {
+          try {
+            return maybeNotify(notice)
+          } catch {
+            return false
+          }
+        },
+      })
+    } else {
+      try {
+        maybeNotify(event.notice)
+      } catch {
+        // A missing notification permission must not drop the in-app dialog.
+      }
     }
-    if (event.notice.source === 'logout') showMainWindow()
     if (isWatchFailureNotice(event.notice)) {
       deliverWatchNotices(watchNoticeBuffer.push(event.notice))
     }

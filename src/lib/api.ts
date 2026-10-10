@@ -340,7 +340,9 @@ export const api = {
   clearFontCaches: () =>
     json<{ mac: boolean; cleared: boolean }>(post('/api/caches/font', { confirm: true })),
   requestLogout: () =>
-    json<{ requested: boolean; message?: string; error?: string }>(post('/api/session/logout', {})),
+    json<{ requested: boolean; cancelled?: boolean; message?: string; error?: string }>(
+      post('/api/session/logout', {}),
+    ),
   uninstallSystem: (path: string) => json<{ ok: boolean }>(post('/api/system/uninstall', { path })),
   deactivateSystem: (path: string) =>
     json<{ ok: boolean }>(post('/api/system/deactivate', { path })),

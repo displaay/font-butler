@@ -21,7 +21,10 @@ import {
   LOGOUT_CANCELLED,
   LOGOUT_FAILED_MESSAGE,
   LOGOUT_FALLBACK,
+  LOGOUT_STILL_WAITING_MESSAGE,
+  LOGOUT_STILL_WAITING_MS,
   logoutResultFromExecError,
+  startMacLogoutProcess,
   parseActivatedFontLookup,
   requestMacLogout,
   resetUserFontCopyCache,
@@ -169,6 +172,7 @@ test('ensure fails on register failure and never falls back to process scope', (
     stderr: 'execution error: System Events got an error: osascript is not allowed to send keystrokes. (-1743)',
   })
   assert.equal(denied.requested, false)
+  assert.equal(denied.cancelled, undefined)
   assert.equal(denied.message, LOGOUT_FAILED_MESSAGE)
   assert.match(denied.message, /Logging out didn't happen/)
   assert.match(denied.message, /Apple menu > Log Out/)
@@ -178,6 +182,7 @@ test('ensure fails on register failure and never falls back to process scope', (
     stderr: 'execution error: User canceled. (-128)',
   })
   assert.equal(cancelled.requested, false)
+  assert.equal(cancelled.cancelled, true)
   assert.equal(cancelled.message, LOGOUT_CANCELLED)
   assert.notEqual(cancelled.message, LOGOUT_FALLBACK)
   assert.match(cancelled.error, /-128/)
@@ -533,12 +538,14 @@ test('logout reports an open confirm as accepted and keeps -128 and -1743', asyn
     report(logoutResultFromExecError({ stderr: 'User canceled. (-128)' }))
   }, 1_000)
   assert.equal(cancelled.requested, false)
+  assert.equal(cancelled.cancelled, true)
   assert.equal(cancelled.message, LOGOUT_CANCELLED)
 
   const denied = await awaitMacLogoutRequest((report) => {
     report(logoutResultFromExecError({ stderr: 'osascript is not allowed to send keystrokes. (-1743)' }))
   }, 1_000)
   assert.equal(denied.requested, false)
+  assert.equal(denied.cancelled, undefined)
   assert.equal(denied.message, LOGOUT_FAILED_MESSAGE)
 })
 
@@ -806,6 +813,113 @@ test('a logout denial after the accept window still opens the failure path', asy
     assert.match(text, /logout failed[\s\S]*-1743/)
     assert.match(text, /logout failed[\s\S]*-600/)
     assert.match(text, /logout failed[\s\S]*timed out/)
+  } finally {
+    if (previous === undefined) delete process.env.FONT_BUTLER_LOG
+    else process.env.FONT_BUTLER_LOG = previous
+    fs.rmSync(logFile, { force: true })
+  }
+})
+
+test('the logout process keeps running while macOS is still deciding', () => {
+  const calls: unknown[][] = []
+  let killed = false
+  startMacLogoutProcess((...args) => {
+    calls.push(args)
+    return {
+      unref() {},
+      kill() {
+        killed = true
+      },
+    }
+  }, () => {})
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0]?.[0], 'osascript')
+  assert.deepEqual(calls[0]?.[1], ['-e', MAC_LOGOUT_APPLESCRIPT])
+  assert.equal(typeof calls[0]?.[2], 'function')
+  assert.equal(calls[0]?.[3], undefined)
+  assert.equal(killed, false)
+  assert.equal(LOGOUT_STILL_WAITING_MS, 30_000)
+  assert.doesNotMatch(requestMacLogout.toString(), /timeout/)
+  assert.doesNotMatch(startMacLogoutProcess.toString(), /\.kill\(/)
+})
+
+test('a wait followed by success shows no failure dialog, and a wait followed by -1743 shows it once', async () => {
+  const logFile = path.join(os.tmpdir(), `font-butler-logout-wait-${process.pid}.log`)
+  const previous = process.env.FONT_BUTLER_LOG
+  process.env.FONT_BUTLER_LOG = logFile
+  try {
+    const successNotices: string[] = []
+    const successFailures: Array<{ message?: string }> = []
+    let successReported = false
+    const accepted = await awaitMacLogoutRequest(
+      (report) => {
+        setTimeout(() => {
+          successReported = true
+          report({ requested: true })
+          report({ requested: true })
+        }, 40)
+      },
+      5,
+      (result) => successFailures.push(result),
+      {
+        stillWaitingAfterMs: 15,
+        onStillWaiting: (message) => successNotices.push(message),
+      },
+    )
+    assert.equal(accepted.requested, true)
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    assert.equal(successReported, true)
+    assert.deepEqual(successFailures, [])
+    assert.deepEqual(successNotices, [LOGOUT_STILL_WAITING_MESSAGE])
+
+    const failureNotices: string[] = []
+    const failureDialogs: Array<{ message?: string; error?: string; cancelled?: boolean }> = []
+    await awaitMacLogoutRequest(
+      (report) => {
+        setTimeout(() => {
+          const result = logoutResultFromExecError({
+            stderr: 'osascript is not allowed to send keystrokes. (-1743)',
+          })
+          report(result)
+          report(result)
+        }, 40)
+      },
+      5,
+      (result) => failureDialogs.push(result),
+      {
+        stillWaitingAfterMs: 15,
+        onStillWaiting: (message) => failureNotices.push(message),
+      },
+    )
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    assert.deepEqual(failureNotices, [LOGOUT_STILL_WAITING_MESSAGE])
+    assert.equal(failureDialogs.length, 1)
+    assert.equal(failureDialogs[0]?.message, LOGOUT_FAILED_MESSAGE)
+    assert.equal(failureDialogs[0]?.cancelled, undefined)
+    assert.match(failureDialogs[0]?.error ?? '', /-1743/)
+    assert.doesNotMatch(LOGOUT_STILL_WAITING_MESSAGE, /didn't happen/)
+
+    const earlyNotices: string[] = []
+    const earlyFailures: unknown[] = []
+    await awaitMacLogoutRequest(
+      (report) => {
+        setTimeout(() => report({ requested: true }), 10)
+      },
+      5,
+      (result) => earlyFailures.push(result),
+      {
+        stillWaitingAfterMs: 50,
+        onStillWaiting: (message) => earlyNotices.push(message),
+      },
+    )
+    await new Promise((resolve) => setTimeout(resolve, 70))
+    assert.deepEqual(earlyNotices, [])
+    assert.deepEqual(earlyFailures, [])
+
+    const text = fs.readFileSync(logFile, 'utf8')
+    assert.match(text, /logout still waiting/)
+    assert.match(text, /Still waiting for macOS/)
+    assert.match(text, /logout failed[\s\S]*-1743/)
   } finally {
     if (previous === undefined) delete process.env.FONT_BUTLER_LOG
     else process.env.FONT_BUTLER_LOG = previous

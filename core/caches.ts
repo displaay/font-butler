@@ -11,6 +11,21 @@ import { getPaths, isMac } from './paths.ts'
 import { readAcceptablePostScriptNames, readFilePostScriptNames, readFontName } from './rename.ts'
 import type { AdobeFontCacheInfo, OfficeFontCacheInfo } from './types.ts'
 import { isMacUserFontFile, macUserFontsRoot } from './user-fonts.ts'
+import {
+  LOGOUT_CANCELLED,
+  LOGOUT_FAILED_MESSAGE,
+  LOGOUT_FAILED_TITLE,
+  LOGOUT_FALLBACK,
+  LOGOUT_STILL_WAITING_MESSAGE,
+} from '../shared/logout.ts'
+
+export {
+  LOGOUT_CANCELLED,
+  LOGOUT_FAILED_MESSAGE,
+  LOGOUT_FAILED_TITLE,
+  LOGOUT_FALLBACK,
+  LOGOUT_STILL_WAITING_MESSAGE,
+}
 
 /** Session, then persistent user. Process scope (1) dies with this process and is never used. */
 export const REGISTRATION_SCOPES = [3, 2] as const
@@ -37,21 +52,17 @@ export const ATSUTIL_CLEAR_COMMANDS: readonly (readonly string[])[] = [
 /** AppleScript that asks macOS to log out. System Events still shows its own confirm. */
 export const MAC_LOGOUT_APPLESCRIPT = 'tell application "System Events" to log out'
 
-/** Shown when Font Buttler cannot send the logout Apple event (for example -1743). */
-export const LOGOUT_FALLBACK = 'Use Apple menu > Log Out'
-
-/** In-app copy when logout did not happen. The raw osascript error stays in main.log. */
-export const LOGOUT_FAILED_TITLE = "Logging out didn't happen"
-export const LOGOUT_FAILED_MESSAGE =
-  "Logging out didn't happen. Use Apple menu > Log Out to finish rebuilding font caches."
-
-/** Shown when the user dismisses the System Events logout confirm (-128). */
-export const LOGOUT_CANCELLED = 'Log out was cancelled.'
 /**
  * How long to wait for an immediate Apple-event failure before treating an
- * open logout confirm as accepted. The dialog itself has no timeout.
+ * open logout confirm as accepted. The confirm itself is left running.
  */
 export const LOGOUT_ACCEPT_MS = 1_000
+
+/**
+ * How long osascript may sit unanswered before we say we are still waiting.
+ * This does not kill the process: the user may still click Allow.
+ */
+export const LOGOUT_STILL_WAITING_MS = 30_000
 
 export const FONT_NOT_VISIBLE_WARNING = 'Not visible to other apps yet'
 
@@ -289,6 +300,7 @@ export async function clearUserFontCache(
 
 export function logoutResultFromExecError(error: unknown): {
   requested: false
+  cancelled?: boolean
   message: string
   error: string
 } {
@@ -300,53 +312,98 @@ export function logoutResultFromExecError(error: unknown): {
       .join('\n') || String(error)
   logMain('install', `logout failed ${detail}`)
   if (/\(-128\)/.test(detail)) {
-    return { requested: false, message: LOGOUT_CANCELLED, error: detail }
+    return { requested: false, cancelled: true, message: LOGOUT_CANCELLED, error: detail }
   }
   return { requested: false, message: LOGOUT_FAILED_MESSAGE, error: detail }
 }
 
 export type MacLogoutResult = {
   requested: boolean
+  /** True only for the System Events confirm dismissal (-128). */
+  cancelled?: boolean
   message?: string
   error?: string
+}
+
+type LogoutExec = (
+  file: string,
+  args: readonly string[],
+  callback: (error: unknown) => void,
+) => { unref?: () => void }
+
+/**
+ * Start osascript with no kill timer. A long Automation prompt must stay alive
+ * so a later Allow click can still log out.
+ */
+export function startMacLogoutProcess(exec: LogoutExec, report: (result: MacLogoutResult) => void): void {
+  const child = exec('osascript', ['-e', MAC_LOGOUT_APPLESCRIPT], (error) => {
+    if (error) report(logoutResultFromExecError(error))
+    else report({ requested: true })
+  })
+  child?.unref?.()
 }
 
 /**
  * Start the logout Apple event without waiting for the confirm dialog.
  * An immediate failure (-128, -1743) is reported. If the dialog is still
- * open after the accept window, the request was accepted.
+ * open after the accept window, the request was accepted. A later wait
+ * notice does not mean logout failed, and it does not stop osascript.
  */
 export function awaitMacLogoutRequest(
   start: (report: (result: MacLogoutResult) => void) => void,
   acceptAfterMs = LOGOUT_ACCEPT_MS,
   onLateFailure?: (result: MacLogoutResult) => void,
+  options?: {
+    stillWaitingAfterMs?: number
+    onStillWaiting?: (message: string) => void
+  },
 ): Promise<MacLogoutResult> {
+  const stillWaitingAfterMs = options?.stillWaitingAfterMs ?? LOGOUT_STILL_WAITING_MS
+  const onStillWaiting = options?.onStillWaiting
   return new Promise((resolve) => {
     let settled = false
-    const finish = (result: MacLogoutResult) => {
+    let execFinished = false
+    let failureDelivered = false
+    const deliverExec = (result: MacLogoutResult) => {
+      if (execFinished) return
+      execFinished = true
+      clearTimeout(waitTimer)
       if (settled) {
-        if (result.requested === false) {
-          logMain('install', `logout settled after accept ${result.message || ''} ${result.error || ''}`.trim())
-          if (result.message !== LOGOUT_CANCELLED) onLateFailure?.(result)
+        logMain('install', `logout settled after accept ${result.message || ''} ${result.error || ''}`.trim())
+        if (result.requested === false && result.cancelled !== true && !failureDelivered) {
+          failureDelivered = true
+          onLateFailure?.(result)
         }
         return
       }
       settled = true
-      clearTimeout(timer)
+      clearTimeout(acceptTimer)
       logMain(
         'install',
-        `logout result requested=${result.requested}${result.message ? ` ${result.message}` : ''}${result.error ? ` ${result.error}` : ''}`.trim(),
+        `logout result requested=${result.requested}${result.cancelled ? ' cancelled' : ''}${result.message ? ` ${result.message}` : ''}${result.error ? ` ${result.error}` : ''}`.trim(),
       )
       resolve(result)
     }
-    const timer = setTimeout(() => finish({ requested: true }), acceptAfterMs)
-    if (typeof timer.unref === 'function') timer.unref()
-    start(finish)
+    const acceptTimer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      logMain('install', 'logout result requested=true')
+      resolve({ requested: true })
+    }, acceptAfterMs)
+    const waitTimer = setTimeout(() => {
+      if (execFinished) return
+      logMain('install', `logout still waiting ${LOGOUT_STILL_WAITING_MESSAGE}`)
+      onStillWaiting?.(LOGOUT_STILL_WAITING_MESSAGE)
+    }, stillWaitingAfterMs)
+    if (typeof acceptTimer.unref === 'function') acceptTimer.unref()
+    if (typeof waitTimer.unref === 'function') waitTimer.unref()
+    start(deliverExec)
   })
 }
 
 export async function requestMacLogout(
   onLateFailure?: (result: MacLogoutResult) => void,
+  onStillWaiting?: (message: string) => void,
 ): Promise<MacLogoutResult> {
   if (!isMac()) return { requested: false, message: LOGOUT_FAILED_MESSAGE }
   if (process.env.FONT_BUTLER_TEST === '1' && process.env.FONT_BUTLER_NATIVE !== '1') {
@@ -354,12 +411,11 @@ export async function requestMacLogout(
   }
   logMain('install', 'logout request')
   return awaitMacLogoutRequest((report) => {
-    const child = execFile('osascript', ['-e', MAC_LOGOUT_APPLESCRIPT], (error) => {
-      if (error) report(logoutResultFromExecError(error))
-      else report({ requested: true })
-    })
-    child.unref()
-  }, LOGOUT_ACCEPT_MS, onLateFailure)
+    startMacLogoutProcess(execFile, report)
+  }, LOGOUT_ACCEPT_MS, onLateFailure, {
+    stillWaitingAfterMs: LOGOUT_STILL_WAITING_MS,
+    onStillWaiting,
+  })
 }
 
 export async function clearOfficeFontCache(): Promise<{ mac: boolean; cleared: boolean }> {
