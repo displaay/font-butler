@@ -33,8 +33,12 @@ int main(int argc, const char *argv[]) {
     void (^reject)(NSError *error) = ^(NSError *error) {
       if (settled) return;
       settled = YES;
-      NSString *reason = error.localizedDescription.length ? error.localizedDescription : @"connection invalidated";
-      fprintf(stderr, "rejected: %s\n", reason.UTF8String);
+      if (error) {
+        fprintf(stderr, "rejected: %s %ld %s\n", error.domain.UTF8String ?: "unknown", (long)error.code,
+                error.localizedDescription.UTF8String ?: "");
+      } else {
+        fprintf(stderr, "rejected: connection invalidated\n");
+      }
       status = 1;
       dispatch_semaphore_signal(done);
     };

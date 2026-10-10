@@ -101,6 +101,7 @@ static NSString *const kReleaseService = @"A7WWML89LQ.group.app.fontbutler.deskt
 static NSString *const kTestService = @"A7WWML89LQ.group.app.fontbutler.desktop.FinderSync.Test";
 static NSString *const kReleaseSocketName = @"fontbutler-finder-sync.sock";
 static NSString *const kTestSocketName = @"fontbutler-finder-sync-test.sock";
+static NSString *const kSocketDirectory = @"fontbutler-fs";
 static const NSUInteger kFinderSyncMaxFiles = 500;
 static const uint32_t kMaxFrame = 2 * 1024 * 1024;
 
@@ -119,6 +120,7 @@ static NSLock *HandoffLock(void) {
 typedef struct {
   char *action;
   char *requestId;
+  char *userError;
   char **paths;
   size_t count;
   bool overflow;
@@ -128,11 +130,12 @@ static char *DupCString(const char *value) {
   return strdup(value ? value : "");
 }
 
-static HandoffCall *HandoffCallCreate(NSString *action, NSArray<NSString *> *paths, bool overflow, NSString *requestId) {
+static HandoffCall *HandoffCallCreate(NSString *action, NSArray<NSString *> *paths, bool overflow, NSString *requestId, NSString *userError) {
   HandoffCall *call = (HandoffCall *)calloc(1, sizeof(HandoffCall));
   if (!call) return nullptr;
   call->action = DupCString(action.UTF8String);
   call->requestId = DupCString(requestId.UTF8String);
+  call->userError = DupCString(userError.UTF8String);
   call->overflow = overflow;
   call->count = overflow ? 0 : paths.count;
   if (call->count > kFinderSyncMaxFiles) call->count = kFinderSyncMaxFiles;
@@ -148,6 +151,7 @@ static void HandoffCallDestroy(HandoffCall *call) {
   if (!call) return;
   free(call->action);
   free(call->requestId);
+  free(call->userError);
   for (size_t i = 0; i < call->count; i += 1) free(call->paths[i]);
   free(call->paths);
   free(call);
@@ -300,7 +304,7 @@ static BOOL GuestMeetsRequirement(audit_token_t token, NSString *requirementStri
   return signatureStatus == errSecSuccess;
 }
 
-static void DispatchHandoff(NSString *action, NSArray<NSString *> *paths, bool overflow, NSString *requestId) {
+static void DispatchHandoff(NSString *action, NSArray<NSString *> *paths, bool overflow, NSString *requestId, NSString *userError) {
   NSLock *lock = HandoffLock();
   [lock lock];
   napi_threadsafe_function tsfn = g_tsfn;
@@ -311,12 +315,13 @@ static void DispatchHandoff(NSString *action, NSArray<NSString *> *paths, bool o
       @"paths" : overflow ? @[] : (paths ?: @[]),
       @"overflow" : @(overflow),
       @"requestId" : requestId ?: @"",
+      @"userError" : userError ?: @"",
     }];
     [lock unlock];
     return;
   }
   [lock unlock];
-  HandoffCall *call = HandoffCallCreate(action, paths, overflow, requestId);
+  HandoffCall *call = HandoffCallCreate(action, paths, overflow, requestId, userError);
   if (call) napi_call_threadsafe_function(tsfn, call, napi_tsfn_blocking);
 }
 
@@ -356,15 +361,16 @@ static BOOL PeerIsAgent(int fd) {
 }
 
 // The group-container path does not fit in sockaddr_un.sun_path (104 bytes)
-// once a real home directory is included. The socket is in the per-user
-// temporary directory, mode 0600, and the peer must be this build's agent.
+// once a real home directory is included. The socket is inside a private
+// 0700 directory under the per-user temporary directory. The peer must be
+// this build's agent. The directory name matches finder-sync.mjs.
 static BOOL SocketPath(char *out, size_t outSize) {
   if (!out || outSize < 8) return NO;
   char temp[PATH_MAX];
   size_t wrote = confstr(_CS_DARWIN_USER_TEMP_DIR, temp, sizeof(temp));
   if (wrote == 0 || wrote >= sizeof(temp)) return NO;
   const char *separator = temp[strlen(temp) - 1] == '/' ? "" : "/";
-  int formatted = snprintf(out, outSize, "%s%s%s", temp, separator, CurrentSocketName().UTF8String);
+  int formatted = snprintf(out, outSize, "%s%s%s/%s", temp, separator, kSocketDirectory.UTF8String, CurrentSocketName().UTF8String);
   if (formatted <= 0 || (size_t)formatted >= outSize) return NO;
   if ((size_t)formatted >= sizeof(((struct sockaddr_un *)0)->sun_path)) return NO;
   return YES;
@@ -411,6 +417,13 @@ static void HandleClient(int fd) {
     close(fd);
     return;
   }
+  NSString *userError = [json[@"error"] isKindOfClass:[NSString class]] ? json[@"error"] : @"";
+  if (userError.length > 0 && userError.length <= 500) {
+    DispatchHandoff(@"", @[], false, @"", userError);
+    ReplyOk(fd, YES);
+    close(fd);
+    return;
+  }
   NSString *action = [json[@"action"] isKindOfClass:[NSString class]] ? json[@"action"] : @"";
   BOOL known = [action isEqualToString:@"install"] || [action isEqualToString:@"installAs"];
   if (!known) {
@@ -429,7 +442,7 @@ static void HandleClient(int fd) {
     }
   }
   NSString *requestId = [json[@"requestId"] isKindOfClass:[NSString class]] ? json[@"requestId"] : @"";
-  DispatchHandoff(action, overflow ? @[] : accepted, overflow, requestId);
+  DispatchHandoff(action, overflow ? @[] : accepted, overflow, requestId, @"");
   ReplyOk(fd, YES);
   close(fd);
 }
@@ -448,15 +461,35 @@ static void AcceptLoop(void) {
 }
 
 // The per-user temporary directory must already be a 0700 directory owned
-// by this user. Mode on the socket is not how the peer is authenticated.
-static BOOL TempDirIsUserPrivate(const char *temp) {
-  if (!temp || !temp[0]) return NO;
+// by this user. The socket then lives in a subdirectory this process creates
+// with mkdir 0700. An existing directory is not chmodded: it must already
+// be a non-symlink directory owned by this user with mode 0700, or bind is
+// refused. Mode on the socket is not how the peer is authenticated.
+static BOOL DirectoryIsUserPrivate(const char *dir) {
+  if (!dir || !dir[0]) return NO;
   struct stat st;
-  if (lstat(temp, &st) != 0) return NO;
+  if (lstat(dir, &st) != 0) return NO;
   if (S_ISLNK(st.st_mode) || !S_ISDIR(st.st_mode)) return NO;
   if (st.st_uid != getuid()) return NO;
   if ((st.st_mode & 0777) != 0700) return NO;
   return YES;
+}
+
+static BOOL TempDirIsUserPrivate(const char *temp) {
+  return DirectoryIsUserPrivate(temp);
+}
+
+static BOOL EnsurePrivateSocketDir(const char *temp, char *dirOut, size_t dirOutSize) {
+  if (!TempDirIsUserPrivate(temp)) return NO;
+  const char *separator = temp[strlen(temp) - 1] == '/' ? "" : "/";
+  int formatted = snprintf(dirOut, dirOutSize, "%s%s%s", temp, separator, kSocketDirectory.UTF8String);
+  if (formatted <= 0 || (size_t)formatted >= dirOutSize) return NO;
+  if (mkdir(dirOut, 0700) == 0) {
+    if (chmod(dirOut, 0700) != 0) return NO;
+  } else if (errno != EEXIST) {
+    return NO;
+  }
+  return DirectoryIsUserPrivate(dirOut);
 }
 
 static void StartSocket(void) {
@@ -465,40 +498,40 @@ static void StartSocket(void) {
   char temp[PATH_MAX];
   size_t wrote = confstr(_CS_DARWIN_USER_TEMP_DIR, temp, sizeof(temp));
   if (wrote == 0 || wrote >= sizeof(temp)) return;
-  if (!TempDirIsUserPrivate(temp)) return;
+  char socketDir[PATH_MAX];
+  if (!EnsurePrivateSocketDir(temp, socketDir, sizeof(socketDir))) return;
   char socketPath[sizeof(((struct sockaddr_un *)0)->sun_path)];
   if (!SocketPath(socketPath, sizeof(socketPath))) return;
-  mode_t previousMask = umask(0077);
   struct stat existing;
   if (lstat(socketPath, &existing) == 0) {
-    if (S_ISLNK(existing.st_mode) || !S_ISSOCK(existing.st_mode) || existing.st_uid != getuid()) {
-      umask(previousMask);
-      return;
-    }
+    if (S_ISLNK(existing.st_mode) || !S_ISSOCK(existing.st_mode) || existing.st_uid != getuid()) return;
     unlink(socketPath);
   }
   int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-  if (fd < 0) {
-    umask(previousMask);
-    return;
-  }
+  if (fd < 0) return;
   fchmod(fd, 0600);
   struct sockaddr_un address;
   memset(&address, 0, sizeof(address));
   address.sun_family = AF_UNIX;
   if (strlcpy(address.sun_path, socketPath, sizeof(address.sun_path)) >= sizeof(address.sun_path)) {
     close(fd);
-    umask(previousMask);
+    return;
+  }
+  if (!DirectoryIsUserPrivate(socketDir)) {
+    close(fd);
     return;
   }
   if (bind(fd, (struct sockaddr *)&address, (socklen_t)sizeof(address)) != 0) {
     close(fd);
-    umask(previousMask);
     return;
   }
   fchmod(fd, 0600);
   chmod(socketPath, 0600);
-  umask(previousMask);
+  if (!DirectoryIsUserPrivate(socketDir)) {
+    close(fd);
+    unlink(socketPath);
+    return;
+  }
   if (listen(fd, 16) != 0) {
     close(fd);
     unlink(socketPath);
@@ -605,6 +638,7 @@ static void CallJs(napi_env env, napi_value js_callback, void *context, void *da
   napi_create_object(env, &payload);
   napi_set_named_property(env, payload, "action", JsString(env, call->action));
   napi_set_named_property(env, payload, "requestId", JsString(env, call->requestId));
+  napi_set_named_property(env, payload, "error", JsString(env, call->userError));
 
   napi_value paths;
   napi_create_array_with_length(env, call->count, &paths);
@@ -653,7 +687,7 @@ static napi_value Register(napi_env env, napi_callback_info info) {
   g_queued = nil;
   [lock unlock];
   for (NSDictionary *item in queued) {
-    HandoffCall *call = HandoffCallCreate(item[@"action"], item[@"paths"], [item[@"overflow"] boolValue], item[@"requestId"]);
+    HandoffCall *call = HandoffCallCreate(item[@"action"], item[@"paths"], [item[@"overflow"] boolValue], item[@"requestId"], item[@"userError"]);
     if (call && g_tsfn) napi_call_threadsafe_function(g_tsfn, call, napi_tsfn_blocking);
     else HandoffCallDestroy(call);
   }

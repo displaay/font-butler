@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -21,7 +21,11 @@ import {
   FINDER_SYNC_SYSTEM_FONTS_ROOT,
   FINDER_SYNC_TEAM_ID,
   FINDER_SYNC_TEST_BUNDLE_ID,
+  FINDER_SYNC_AGENT_DISABLED,
   FINDER_SYNC_MISSING_APP,
+  FINDER_SYNC_PENDING_ERROR_FILE,
+  FINDER_SYNC_REQUEST_CAP,
+  FINDER_SYNC_SOCKET_DIR,
   FINDER_SYNC_TOO_LARGE,
   FINDER_SYNC_TOO_MANY_FILES,
   FINDER_SYNC_TREE_TOO_DEEP,
@@ -41,23 +45,30 @@ import {
   finderSyncMachService,
   finderSyncMenuTitle,
   finderSyncParentCodeSigningRequirement,
+  finderSyncSocketDirectoryName,
   finderSyncSocketName,
   finderSyncMonitorDirectories,
   finderSyncWireAction,
   fontMagicKind,
   formatFinderSyncRejections,
   isSafeFinderSyncPath,
-  parseLaunchctlProgram,
+  commitFinderSyncAgentRegistration,
+  finderSyncRequestSeen,
+  noteFinderSyncRequest,
+  addFinderSyncPendingError,
   parsePluginkitFinderSync,
   planFinderSyncAgentRegistration,
   planFinderSyncRegistration,
   prepareFinderSyncSocket,
-  rememberFinderSyncRequest,
+  readFinderSyncAgentRecord,
+  readFinderSyncPendingErrors,
+  routeFinderSyncError,
   refreshFinderSyncRegistration,
   revalidateFinderSyncHandles,
   validateFinderSyncSelection,
 } from './finder-sync.mjs'
 import { compileFinderSyncReceiverAddon } from '../scripts/build-finder-sync-receiver.mjs'
+import { compileMachOSlices, strayMachOFiles } from '../scripts/macho-slices.mjs'
 import {
   compileFinderSyncAgent,
   finderSyncAgentEntitlementsPlist,
@@ -559,7 +570,9 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(swift, /#available\(macOS 13\.0, \*\)/)
   assert.match(swift, /finderSyncMissingApp/)
   assert.match(swift, /finderSyncAgentDisabled/)
-  assert.match(swift, /NSAlert/)
+  assert.doesNotMatch(swift, /UNUserNotificationCenter/)
+  assert.match(swift, /NSLog\(/)
+  assert.doesNotMatch(swift, /NSAlert/)
   assert.ok(swift.includes(FINDER_SYNC_MISSING_APP))
   assert.doesNotMatch(swift, /addingTimeInterval\(10\)/)
   assert.doesNotMatch(swift, /appleEvent|withApplicationAt|AEEvent|NSAppleEventDescriptor/)
@@ -575,6 +588,8 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.ok(agent.includes(finderSyncParentCodeSigningRequirement().replaceAll('"', '\\"')))
   assert.ok(agent.includes(finderSyncSocketName(false)))
   assert.ok(agent.includes(finderSyncSocketName(true)))
+  assert.ok(agent.includes(FINDER_SYNC_SOCKET_DIR))
+  assert.equal(finderSyncSocketDirectoryName(), FINDER_SYNC_SOCKET_DIR)
   assert.match(agent, /initWithMachServiceName/)
   assert.match(agent, /setCodeSigningRequirement/)
   assert.match(agent, /pingWithReply/)
@@ -584,7 +599,14 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(agent, /SecCodeCopyGuestWithAttributes/)
   assert.match(agent, /kSecGuestAttributeAudit/)
   assert.match(agent, /_CS_DARWIN_USER_TEMP_DIR/)
-  assert.match(agent, /g_launchFailed/)
+  assert.doesNotMatch(agent, /g_launchFailed/)
+  assert.match(agent, /g_launchedApp = NO/)
+  assert.doesNotMatch(agent, /UNUserNotificationCenter/)
+  assert.match(agent, /NSLog\(@"Finder Sync:/)
+  assert.match(agent, /finder-sync-pending-error\.json/)
+  assert.match(agent, /g_testFeed \? @"Font Buttler Test" : @"Font Buttler"/)
+  assert.doesNotMatch(readRepo('scripts/build-finder-sync-agent.mjs'), /UserNotifications/)
+  assert.doesNotMatch(readRepo('scripts/build-finder-sync.mjs'), /UserNotifications/)
   assert.ok(agent.includes(FINDER_SYNC_MISSING_APP))
   assert.match(agent, /openApplicationAtURL/)
   assert.doesNotMatch(agent, /strcmp|kSecCodeInfoTeamIdentifier|kSecGuestAttributePid|LOCAL_PEERPID|getpid/)
@@ -592,6 +614,7 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.ok(receiver.includes(testAgentRequirement))
   assert.ok(receiver.includes(finderSyncSocketName(false)))
   assert.ok(receiver.includes(finderSyncSocketName(true)))
+  assert.ok(receiver.includes(FINDER_SYNC_SOCKET_DIR))
   assert.match(receiver, /SMAppService/)
   assert.match(receiver, /agentServiceWithPlistName/)
   assert.match(receiver, /LOCAL_PEERTOKEN/)
@@ -602,7 +625,9 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(receiver, /openSystemSettingsLoginItems/)
   assert.match(receiver, /unregisterAndReturnError/)
   assert.match(receiver, /registerAndReturnError/)
-  assert.match(receiver, /umask\(0077\)/)
+  assert.doesNotMatch(receiver, /umask\s*\(/)
+  assert.match(receiver, /mkdir\(dirOut, 0700\)/)
+  assert.match(receiver, /DirectoryIsUserPrivate/)
   assert.match(receiver, /TempDirIsUserPrivate/)
   assert.match(receiver, /S_ISSOCK/)
   assert.match(receiver, /st_uid != getuid/)
@@ -640,9 +665,29 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(main, /openLoginItems/)
   assert.match(main, /registerAgent/)
   assert.match(main, /unregisterAgent/)
-  assert.match(main, /rememberFinderSyncRequest/)
-  assert.match(main, /planFinderSyncAgentRegistration/)
-  assert.match(main, /fromLaunchd \|\| record\.program/)
+  assert.match(main, /finderSyncRequestSeen/)
+  assert.match(main, /noteFinderSyncRequest/)
+  assert.match(main, /commitFinderSyncAgentRegistration/)
+  assert.match(main, /appBundlePath/)
+  assert.match(main, /routeFinderSyncError/)
+  assert.match(main, /presentFinderSyncUserError/)
+  assert.match(main, /consumeFinderSyncPendingErrors\(\)/)
+  assert.match(main, /FINDER_SYNC_PENDING_ERROR_FILE/)
+  assert.match(main, /dialog\.showErrorBox\('Font Buttler', route\.message\)/)
+  assert.doesNotMatch(main, /UNUserNotificationCenter/)
+  const readyHandler = main.slice(main.indexOf('app.whenReady()'))
+  const bootstrapAt = readyHandler.indexOf('await bootstrapApi()')
+  const consumeAt = readyHandler.indexOf('consumeFinderSyncPendingErrors()')
+  assert.ok(bootstrapAt >= 0 && consumeAt > bootstrapAt)
+  assert.doesNotMatch(main, /launchctl/)
+  assert.doesNotMatch(main, /parseLaunchctlProgram/)
+  assert.match(agent, /!ForwardErrorToApp\(message\)\) WritePendingFinderSyncError/)
+  assert.match(receiver, /json\[@"error"\]/)
+  assert.ok(swift.includes(FINDER_SYNC_AGENT_DISABLED))
+  const enableHandler = main.slice(main.indexOf("ipcMain.handle('set-finder-sync-agent-enabled'"))
+  const beforeSave = enableHandler.slice(0, enableHandler.indexOf('saveFinderSyncAgentRecord'))
+  assert.match(beforeSave, /loadFinderSyncReceiver\(\)/)
+  assert.match(beforeSave, /if \(!addon\) return false/)
   assert.match(main, /FINDER_SYNC_SETTINGS_URL/)
   assert.equal(
     FINDER_SYNC_SETTINGS_URL,
@@ -738,7 +783,10 @@ test('Finder Sync LaunchAgent plist is per flavour and the roundtrip check skips
   assert.match(roundtrip, /ping ok/)
   assert.match(roundtrip, /submit ok/)
   assert.match(roundtrip, /FinderSync\.Wrong/)
-  assert.match(roundtrip, /rejected:/)
+  assert.match(roundtrip, /rejected: connection invalidated/)
+  assert.match(roundtrip, /NSCocoaErrorDomain 4099/)
+  assert.match(roundtrip, /process\.kill\(pid, 'SIGTERM'\)/)
+  assert.match(roundtrip, /finderSyncSocketDirectoryName/)
   assert.match(roundtrip, /ad-hoc/)
   assert.doesNotMatch(finderSyncAgentEntitlementsPlist(false), /allow-jit/)
   assert.match(finderSyncAgentEntitlementsPlist(false), new RegExp(`<string>${finderSyncAppGroup(false)}</string>`))
@@ -921,29 +969,73 @@ test('a stale socket is replaced only when this user owns it, then another bind 
   }
 })
 
-test('agent registration stays on this flavour and repeats a click only once', () => {
-  const releaseProgram = '/Applications/Font Buttler.app/Contents/Helpers/FontButtlerFinderSyncAgent.app/Contents/MacOS/FontButtlerFinderSyncAgent'
-  const moved = planFinderSyncAgentRegistration({
+test('a second launch from the same bundle path does not register again', () => {
+  const bundle = '/Applications/Font Buttler.app'
+  const helper = `${bundle}/${finderSyncAgentBundleProgram()}`
+  const calls = []
+  let record = readFinderSyncAgentRecord('')
+  const launch = (status) => {
+    const committed = commitFinderSyncAgentRegistration({
+      testFeed: false,
+      currentBundle: bundle,
+      helperPath: helper,
+      version: '0.3.12',
+      record,
+      status,
+      unregister() {
+        calls.push('unregister')
+      },
+      register() {
+        calls.push('register')
+        return 'enabled'
+      },
+    })
+    record = committed.record
+    return committed
+  }
+  const first = launch('not-registered')
+  assert.deepEqual(calls, ['register'])
+  assert.equal(first.saved, true)
+  assert.equal(record.appBundlePath, bundle)
+  assert.equal(record.helperPath, helper)
+  assert.equal(record.version, '0.3.12')
+  assert.equal(record.enabled, true)
+  calls.length = 0
+  const second = launch('enabled')
+  assert.deepEqual(calls, [])
+  assert.equal(second.plan.action, 'keep')
+  const approved = launch('requires-approval')
+  assert.deepEqual(calls, [])
+  assert.equal(approved.plan.action, 'keep')
+
+  calls.length = 0
+  const movedBundle = '/Applications/Font Buttler Moved.app'
+  const moved = commitFinderSyncAgentRegistration({
     testFeed: false,
-    currentProgram: '/Applications/Font Buttler Moved.app/Contents/Helpers/FontButtlerFinderSyncAgent.app/Contents/MacOS/FontButtlerFinderSyncAgent',
-    registeredProgram: releaseProgram,
+    currentBundle: movedBundle,
+    helperPath: `${movedBundle}/${finderSyncAgentBundleProgram()}`,
+    version: '0.3.12',
+    record,
     status: 'enabled',
+    unregister() {
+      calls.push('unregister')
+    },
+    register() {
+      calls.push('register')
+      return 'requires-approval'
+    },
   })
-  assert.equal(moved.action, 'reregister')
-  assert.equal(moved.label, finderSyncAgentLabel(false))
-  assert.equal(moved.plist, finderSyncAgentPlistName(false))
-  const same = planFinderSyncAgentRegistration({
-    testFeed: false,
-    currentProgram: releaseProgram,
-    registeredProgram: releaseProgram,
-    status: 'requires-approval',
-  })
-  assert.equal(same.action, 'keep')
-  assert.equal(same.reason, 'requires-approval')
+  assert.deepEqual(calls, ['unregister', 'register'])
+  assert.equal(moved.plan.action, 'reregister')
+  assert.equal(moved.plan.reason, 'moved')
+  assert.equal(moved.plan.label, finderSyncAgentLabel(false))
+  assert.equal(moved.plan.plist, finderSyncAgentPlistName(false))
+  assert.equal(moved.record.appBundlePath, movedBundle)
+
   const optedOut = planFinderSyncAgentRegistration({
     testFeed: true,
-    currentProgram: '/Applications/Font Buttler Test.app/Contents/Helpers/FontButtlerFinderSyncAgent.app/Contents/MacOS/FontButtlerFinderSyncAgent',
-    registeredProgram: '',
+    currentBundle: '/Applications/Font Buttler Test.app',
+    recordedBundle: '',
     status: 'enabled',
     optedOut: true,
   })
@@ -952,16 +1044,187 @@ test('agent registration stays on this flavour and repeats a click only once', (
   assert.equal(optedOut.plist, finderSyncAgentPlistName(true))
   assert.notEqual(optedOut.label, finderSyncAgentLabel(false))
   assert.notEqual(optedOut.plist, finderSyncAgentPlistName(false))
-  const printed = parseLaunchctlProgram(
-    `gui/501/${finderSyncAgentLabel(true)} = {\n\tpath = /tmp/Font Buttler Test.app/Contents/MacOS/FontButtlerFinderSyncAgent\n}`,
-    finderSyncAgentLabel(true),
-  )
-  assert.equal(printed, '/tmp/Font Buttler Test.app/Contents/MacOS/FontButtlerFinderSyncAgent')
-  assert.equal(parseLaunchctlProgram(printed, finderSyncAgentLabel(false)), '')
+
+  const legacy = readFinderSyncAgentRecord('{"enabled":true,"program":"/Applications/Font Buttler.app/old-helper"}')
+  assert.equal(legacy.appBundlePath, '')
+  assert.equal(legacy.enabled, true)
+
   const seen = new Map()
-  assert.equal(rememberFinderSyncRequest(seen, 'click-1', 1_000), false)
-  assert.equal(rememberFinderSyncRequest(seen, 'click-1', 1_000 + 60_000), true)
-  assert.equal(rememberFinderSyncRequest(seen, 'click-1', 1_000 + 3 * 60_000), false)
+  assert.equal(finderSyncRequestSeen(seen, 'click-1', 1_000), false)
+  assert.equal(seen.has('click-1'), false)
+  noteFinderSyncRequest(seen, 'click-1', 1_000)
+  assert.equal(finderSyncRequestSeen(seen, 'click-1', 1_000 + 60_000), true)
+  assert.equal(finderSyncRequestSeen(seen, 'click-1', 1_000 + 3 * 60_000), false)
+  assert.equal(seen.has('click-1'), false)
+  assert.equal(finderSyncRequestSeen(seen, '', 2_000), false)
+  for (let index = 0; index < FINDER_SYNC_REQUEST_CAP; index += 1) {
+    noteFinderSyncRequest(seen, `id-${index}`, 10_000 + index)
+  }
+  assert.equal(seen.size, FINDER_SYNC_REQUEST_CAP)
+  noteFinderSyncRequest(seen, 'id-new', 20_000)
+  assert.equal(seen.size, FINDER_SYNC_REQUEST_CAP)
+  assert.equal(seen.has('id-0'), false)
+  assert.equal(seen.has('id-new'), true)
+  const before = seen.size
+  assert.equal(finderSyncRequestSeen(seen, 'fresh', 20_000), false)
+  assert.equal(seen.size, before)
+})
+
+test('Finder Sync errors use the app notification permission and a dialog when it is denied', () => {
+  const message = FINDER_SYNC_MISSING_APP
+  const granted = routeFinderSyncError({
+    message,
+    notificationsEnabled: true,
+    permission: 'granted',
+    alreadyShown: new Set(),
+  })
+  assert.equal(granted.shown, true)
+  assert.equal(granted.channel, 'notification')
+  assert.equal(granted.message, message)
+
+  const denied = routeFinderSyncError({
+    message,
+    notificationsEnabled: true,
+    permission: 'denied',
+    alreadyShown: new Set(),
+  })
+  assert.equal(denied.shown, true)
+  assert.equal(denied.channel, 'dialog')
+  assert.equal(denied.message, message)
+
+  const off = routeFinderSyncError({
+    message: `  ${FINDER_SYNC_AGENT_DISABLED}  `,
+    notificationsEnabled: false,
+    permission: 'granted',
+    alreadyShown: new Set(),
+  })
+  assert.equal(off.shown, true)
+  assert.equal(off.channel, 'dialog')
+  assert.equal(off.message, FINDER_SYNC_AGENT_DISABLED)
+
+  const duplicate = routeFinderSyncError({
+    message,
+    notificationsEnabled: true,
+    permission: 'granted',
+    alreadyShown: new Set([message]),
+  })
+  assert.equal(duplicate.shown, false)
+  assert.equal(duplicate.channel, 'duplicate')
+
+  const empty = routeFinderSyncError({
+    message: '   ',
+    notificationsEnabled: true,
+    permission: 'granted',
+  })
+  assert.equal(empty.shown, false)
+  assert.equal(empty.channel, 'none')
+
+  assert.equal(FINDER_SYNC_PENDING_ERROR_FILE, 'finder-sync-pending-error.json')
+  const first = addFinderSyncPendingError('', message, 1_000)
+  assert.equal(first.added, true)
+  const again = addFinderSyncPendingError(first.text, message, 2_000)
+  assert.equal(again.added, false)
+  assert.equal(again.text, first.text)
+  const pending = readFinderSyncPendingErrors(again.text)
+  assert.equal(pending.length, 1)
+  assert.equal(pending[0].message, message)
+  assert.equal(pending[0].at, 1_000)
+  const secondMessage = addFinderSyncPendingError(again.text, FINDER_SYNC_AGENT_DISABLED, 3_000)
+  assert.equal(secondMessage.added, true)
+  const both = readFinderSyncPendingErrors(secondMessage.text)
+  assert.deepEqual(
+    both.map((item) => item.message),
+    [message, FINDER_SYNC_AGENT_DISABLED],
+  )
+  const repeatedFile = JSON.stringify({
+    errors: [
+      { message, at: 1 },
+      { message, at: 2 },
+      { message: '  ', at: 3 },
+    ],
+  })
+  assert.equal(readFinderSyncPendingErrors(repeatedFile).length, 1)
+})
+
+test('universal slices are compiled outside the bundle and stray Mach-O is reported', () => {
+  const bundle = mkdtempSync(path.join(tmpdir(), 'font-butler-bundle-'))
+  const out = path.join(bundle, 'Contents', 'MacOS', 'FontButtlerFinderSyncAgent')
+  mkdirSync(path.dirname(out), { recursive: true })
+  const agentBuild = readRepo('scripts/build-finder-sync-agent.mjs')
+  const receiverBuild = readRepo('scripts/build-finder-sync-receiver.mjs')
+  assert.doesNotMatch(agentBuild, /\$\{out\}\.slice/)
+  assert.doesNotMatch(receiverBuild, /\$\{out\}\.slice/)
+  assert.match(agentBuild, /strayMachOFiles/)
+  assert.match(receiverBuild, /strayMachOFiles/)
+  let scratch = ''
+  try {
+    const removed = []
+    const clangOuts = []
+    const compiled = compileMachOSlices({
+      out,
+      arch: 'universal',
+      clang: 'clang++',
+      argsFor: (sliceOut, archArgs) => ['-o', sliceOut, ...archArgs],
+      spawnSync(command, args) {
+        if (command === 'clang++') {
+          const sliceOut = args[args.indexOf('-o') + 1]
+          clangOuts.push(sliceOut)
+          writeFileSync(sliceOut, Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0]))
+        }
+        if (command === 'lipo') {
+          const dest = args[args.indexOf('-output') + 1]
+          writeFileSync(dest, Buffer.from([0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 0]))
+        }
+        return { status: 0, stdout: '', stderr: '' }
+      },
+      rmSync(target, options) {
+        removed.push(target)
+        rmSync(target, options)
+      },
+      mkdtempSync(prefix) {
+        scratch = mkdtempSync(prefix)
+        return scratch
+      },
+    })
+    assert.equal(compiled.ok, true)
+    assert.equal(clangOuts.length, 2)
+    for (const sliceOut of clangOuts) {
+      assert.equal(sliceOut.startsWith(bundle), false)
+      assert.equal(existsSync(sliceOut), false)
+    }
+    assert.equal(removed.length, 1)
+    assert.equal(existsSync(scratch), false)
+    assert.deepEqual(strayMachOFiles(bundle, { allow: [out] }), [])
+    writeFileSync(`${out}.slice0`, Buffer.from([0xcf, 0xfa, 0xed, 0xfe]))
+    const stray = strayMachOFiles(bundle, { allow: [out] })
+    assert.equal(stray.length, 1)
+    assert.match(stray[0], /\.slice0$/)
+    unlinkSync(`${out}.slice0`)
+    writeFileSync(path.join(bundle, 'Contents', 'MacOS', 'extra'), Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 1, 2, 3, 4]))
+    const extra = strayMachOFiles(bundle, { allow: [out] })
+    assert.equal(extra.length, 1)
+    assert.match(extra[0], /extra$/)
+
+    const failed = compileMachOSlices({
+      out,
+      arch: 'universal',
+      clang: 'clang++',
+      argsFor: (sliceOut) => ['-o', sliceOut],
+      spawnSync(command) {
+        if (command === 'clang++') return { status: 0, stdout: '', stderr: '' }
+        return { status: 1, stdout: '', stderr: 'lipo failed' }
+      },
+      mkdtempSync(prefix) {
+        scratch = mkdtempSync(prefix)
+        return scratch
+      },
+    })
+    assert.equal(failed.ok, false)
+    assert.match(failed.reason, /lipo failed/)
+    assert.equal(existsSync(scratch), false)
+  } finally {
+    rmSync(bundle, { recursive: true, force: true })
+  }
 })
 
 test('a folder nested more than 10 levels is refused, and file names keep their spaces', () => {
