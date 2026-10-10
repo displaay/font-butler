@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { logMain } from './main-log.ts'
 import { projectRoot } from './paths.ts'
 
 /** Packaged test builds stamp this beside the app resources. The repo copy stays false. */
@@ -10,8 +11,9 @@ export type BuildIdentity = {
 }
 
 /**
- * Only a boolean `true` enables the logout probe.
- * A string, a number, or a missing field stays off.
+ * Dev and unpackaged reads: only a boolean `true` enables the logout probe.
+ * A string, a number, a missing field, or bad JSON stays off.
+ * A packaged `.app` does not use this fail-open result.
  */
 export function parseBuildIdentity(raw: string): BuildIdentity {
   try {
@@ -70,22 +72,91 @@ export function setBuildIdentityCandidatesForTests(candidates: readonly string[]
   prependedIdentityCandidates = candidates ?? []
 }
 
+export type BuildIdentityLocations = {
+  resourcesPath?: string
+  execPath?: string
+}
+
+let locationOverride: BuildIdentityLocations | null = null
+
+/** Tests pretend the process is inside a chosen app. Production leaves this empty. */
+export function setBuildIdentityLocationsForTests(locations: BuildIdentityLocations | null): void {
+  locationOverride = locations
+}
+
+/** `npm run electron` runs inside Electron.app and stays on the dev stamp. */
+const DEV_ELECTRON_BUNDLE = 'Electron.app'
+
 /**
- * Packaged apps read `Contents/Resources/build-identity.json` first.
- * When `resourcesPath` is missing, the executable is resolved only inside its
- * outermost `.app` bundle. A nested helper still sees that bundle's
- * `Contents/Resources` file, and the walk does not continue outside the bundle.
- * Dev and tests fall through to
- * `build/build-identity.json`. Environment variables are not consulted.
+ * One log line per process when a packaged stamp cannot be trusted.
+ * The app then behaves as a test build.
+ */
+export const PACKAGED_BUILD_IDENTITY_FAILURE_LOG =
+  'packaged build identity is unusable; treating this app as a test build'
+
+let packagedIdentityFailureLogged = false
+
+/** Tests start a fresh "log once" window. */
+export function resetPackagedBuildIdentityLogForTests(): void {
+  packagedIdentityFailureLogged = false
+}
+
+function logPackagedIdentityFailure(reason: string): void {
+  if (packagedIdentityFailureLogged) return
+  packagedIdentityFailureLogged = true
+  logMain('install', `${PACKAGED_BUILD_IDENTITY_FAILURE_LOG} (${reason})`)
+}
+
+function identityLocations(locations: BuildIdentityLocations = {}): BuildIdentityLocations {
+  if (!locationOverride) return locations
+  return { ...locationOverride, ...locations }
+}
+
+/**
+ * Outermost `.app` for this process, excluding the Electron dev binary.
+ * A nested helper resolves to the application bundle.
+ */
+export function packagedAppBundle(locations: BuildIdentityLocations = {}): string | null {
+  const resolved = identityLocations(locations)
+  const resources =
+    resolved.resourcesPath ??
+    (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
+  const execPath = resolved.execPath ?? process.execPath
+  let bundle: string | null = null
+  if (typeof resources === 'string' && resources.length > 0) {
+    bundle = enclosingAppBundle(resources)
+  }
+  if (!bundle && typeof execPath === 'string' && execPath.length > 0) {
+    bundle = enclosingAppBundle(path.dirname(execPath))
+  }
+  if (!bundle || path.basename(bundle) === DEV_ELECTRON_BUNDLE) return null
+  return bundle
+}
+
+/** The only stamp a packaged app reads. Dev and Electron.app return null. */
+export function packagedBuildIdentityPath(locations: BuildIdentityLocations = {}): string | null {
+  const bundle = packagedAppBundle(locations)
+  if (!bundle) return null
+  return path.join(bundle, 'Contents', 'Resources', PACKAGED_BUILD_IDENTITY_FILE)
+}
+
+/**
+ * Inside a packaged `.app`, the only file is that bundle's
+ * `Contents/Resources/build-identity.json`. There is no fallback.
+ * Dev, tests, and `Electron.app` still fall through to `build/build-identity.json`.
+ * Environment variables are not consulted.
  */
 export function buildIdentityCandidates(
   root = projectRoot,
-  locations: { resourcesPath?: string; execPath?: string } = {},
+  locations: BuildIdentityLocations = {},
 ): string[] {
+  const packaged = packagedBuildIdentityPath(locations)
+  if (packaged) return [packaged]
+  const resolved = identityLocations(locations)
   const resources =
-    locations.resourcesPath ??
+    resolved.resourcesPath ??
     (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
-  const execPath = locations.execPath ?? process.execPath
+  const execPath = resolved.execPath ?? process.execPath
   const candidates: string[] = []
   if (typeof resources === 'string' && resources.length > 0) {
     candidates.push(path.join(resources, PACKAGED_BUILD_IDENTITY_FILE))
@@ -111,7 +182,38 @@ export function loadBuildIdentityFrom(
   return { testBuild: false }
 }
 
+/**
+ * Packaged stamp. Missing, unreadable, unparseable, and non-boolean values
+ * are a test build. Boolean false stays a release. Boolean true stays a test build.
+ */
+export function readPackagedBuildIdentity(filePath: string): BuildIdentity {
+  let raw: string
+  try {
+    raw = fs.readFileSync(filePath, 'utf8')
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    logPackagedIdentityFailure(code === 'ENOENT' ? 'missing' : 'unreadable')
+    return { testBuild: true }
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    logPackagedIdentityFailure('unparseable')
+    return { testBuild: true }
+  }
+  const testBuild =
+    parsed && typeof parsed === 'object' ? (parsed as { testBuild?: unknown }).testBuild : undefined
+  if (typeof testBuild !== 'boolean') {
+    logPackagedIdentityFailure('non-boolean')
+    return { testBuild: true }
+  }
+  return { testBuild }
+}
+
 export function loadBuildIdentity(root = projectRoot): BuildIdentity {
+  const packaged = packagedBuildIdentityPath()
+  if (packaged) return readPackagedBuildIdentity(packaged)
   return loadBuildIdentityFrom(buildIdentityCandidates(root), (filePath) => {
     try {
       return fs.readFileSync(filePath, 'utf8')

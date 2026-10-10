@@ -979,6 +979,9 @@ test('a test-feed pack stamps extraMetadata and does not change a normal pack', 
     1,
   )
   assert.equal(buildIdentityStampFailures('{"testBuild":"true"}', { testBuildExpected: true }).length, 1)
+  for (const raw of ['{"testBuild":"false"}', '{"testBuild":0}', '{}', 'not json', '']) {
+    assert.match(buildIdentityStampFailures(raw, { testBuildExpected: false })[0] ?? '', /testBuild false/, raw)
+  }
   assert.match(readRepo('docs/releases.md'), /tccutil reset AppleEvents app\.fontbutler\.desktop\.test/)
 })
 
@@ -1030,6 +1033,10 @@ test('the release check rejects a logout probe identity that does not match the 
     const releaseEnabled = releaseBuildIdentityFailures(app, { testFeed: false })
     assert.equal(releaseEnabled.length, 1)
     assert.match(releaseEnabled[0], /testBuild false/)
+    writeFileSync(path.join(resources, 'build-identity.json'), '{"testBuild":"false"}\n')
+    const releaseNonBoolean = releaseBuildIdentityFailures(app, { testFeed: false })
+    assert.equal(releaseNonBoolean.length, 1)
+    assert.match(releaseNonBoolean[0], /testBuild false/)
     const bare = path.join(root, 'Font Buttler Bare.app')
     mkdirSync(path.join(bare, 'Contents', 'MacOS'), { recursive: true })
     const missingIdentity = releaseBuildIdentityFailures(bare, { testFeed: false })

@@ -536,19 +536,19 @@ export function buildIdentityStampFailures(raw, { testBuildExpected = false } = 
   } catch {
     parsed = null
   }
-  const enabled = Boolean(parsed && typeof parsed === 'object' && parsed.testBuild === true)
-  if (testBuildExpected && !enabled) {
-    return [
-      'A test-feed build must set testBuild to true in Contents/Resources/build-identity.json so the logout probe can run.',
-    ]
+  const testBuild = parsed && typeof parsed === 'object' ? parsed.testBuild : undefined
+  if (testBuildExpected) {
+    if (testBuild !== true) {
+      return [
+        'A test-feed build must set testBuild to true in Contents/Resources/build-identity.json so the logout probe can run.',
+      ]
+    }
+    return []
   }
-  if (!testBuildExpected && enabled) {
+  if (testBuild !== false) {
     return [
       'A release build must keep testBuild false in build-identity.json so the logout probe cannot run.',
     ]
-  }
-  if (!parsed || typeof parsed !== 'object' || typeof parsed.testBuild !== 'boolean') {
-    return ['build-identity.json must be readable JSON with a boolean testBuild field.']
   }
   return []
 }
