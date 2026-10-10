@@ -7,6 +7,7 @@ import { pruneStaleDuplicates } from './duplicates.ts'
 import { emitEvent } from './events.ts'
 import { entryFormat } from './formats.ts'
 import { yieldEventLoop } from './event-loop.ts'
+import { isMacUserFontFile } from './user-fonts.ts'
 import { getFontNative } from './native.ts'
 import { readFileStat } from './parse.ts'
 import type { AppPaths } from './paths.ts'
@@ -173,7 +174,9 @@ export async function removeInstalledCopy(
 ): Promise<void> {
   if (ownsLiveInstalledCopy(entry, catalog) && entry.installedPath) {
     await yieldEventLoop()
-    await getFontNative().unregisterFont(entry.installedPath)
+    if (!isMacUserFontFile(entry.installedPath)) {
+      await getFontNative().unregisterFont(entry.installedPath)
+    }
     if (fs.existsSync(entry.installedPath)) {
       await fs.promises.rm(entry.installedPath, { force: true })
     }

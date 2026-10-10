@@ -24,7 +24,9 @@ import {
 } from './install.ts'
 import { identityMutexMessage, occupiedDestinations, occupyingSiblingsForIncoming, occupiesDestination } from './identity.ts'
 import { extendMutationJournal, recordMutationDestination, withMutationJournal } from './journal.ts'
+import { assignActivationWarning, isKeptInstall } from './caches.ts'
 import { ensureFontActivation, getFontNative } from './native.ts'
+import { isMacUserFontFile } from './user-fonts.ts'
 import { applyParsedFont, parseFontFile, readFileStat } from './parse.ts'
 import type { AppPaths } from './paths.ts'
 import { addManualOwner, removeManualOwner } from './projects.ts'
@@ -66,9 +68,9 @@ export type ServiceLifecycleHost = {
   restoreConflictSnapshots(snapshots: Array<{ entry: CatalogEntry; file: string }>): Promise<void>
   parkManagedCopies(entry: CatalogEntry): Promise<void>
   unparkManagedCopies(entry: CatalogEntry, dests?: DestinationId[]): Promise<void>
-  clearCachesAfterInstall(): Promise<void>
   isLiveDestPath(filePath: string): boolean
   recordDestinationFailure(destinationId: DestinationId, reason: string): void
+  recordInstallWarning(message: string, entryId?: string): void
 }
 
 export async function installEntry(
@@ -162,13 +164,24 @@ export async function installEntry(
     ) {
       const stagedFingerprint = tryFingerprintFile(staged.stagedPath)
       if (stagedFingerprint && stagedFingerprint === entry.installedFingerprint) {
-        await ensureFontActivation(getFontNative(), entry.installedPath, true)
+        let warning: string | undefined
+        try {
+          await ensureFontActivation(getFontNative(), entry.installedPath, true)
+        } catch (error) {
+          if (!isKeptInstall(error)) throw error
+          warning = error instanceof Error ? error.message : String(error)
+          host.recordInstallWarning(warning, entry.id)
+        }
+        const previousWarning = entry.activationWarning
+        assignActivationWarning(entry, warning)
         if (isExternalSource(entry)) {
           const sourceStat = readFileStat(entry.sourcePath)
           entry.sourceMtimeMs = sourceStat.mtimeMs
           entry.sourceSize = sourceStat.size
           entry.sourceFingerprint = stagedFingerprint
           entry.sourcePresent = true
+        }
+        if (isExternalSource(entry) || entry.activationWarning !== previousWarning) {
           applyEntryFacts(entry)
           touchEntry(entry)
           saveCatalog(host.paths, catalog)
@@ -210,21 +223,55 @@ export async function installEntry(
         })
         retainedFingerprint = retained?.fingerprint
       }
-      await commitInstalledFile({
-        dest,
-        stagedPath: staged.stagedPath,
-        rollbackDir: path.join(host.paths.dataRoot, 'rollback'),
-        native: getFontNative(),
-      })
+      const rollbackDir = path.join(host.paths.dataRoot, 'rollback')
+      let parkedPrevious: string | undefined
+      let parkedFrom: string | undefined
+      if (previousInstalled && fs.existsSync(previousInstalled) && isMacUserFontFile(previousInstalled)) {
+        fs.mkdirSync(rollbackDir, { recursive: true })
+        parkedFrom = previousInstalled
+        parkedPrevious = path.join(
+          rollbackDir,
+          `previous-${newId()}${path.extname(previousInstalled) || '.ttf'}`,
+        )
+        fs.renameSync(previousInstalled, parkedPrevious)
+      }
+      let warning: string | undefined
+      try {
+        warning = await commitInstalledFile({
+          dest,
+          stagedPath: staged.stagedPath,
+          rollbackDir,
+          native: getFontNative(),
+        })
+        if (parkedPrevious && fs.existsSync(parkedPrevious)) {
+          fs.rmSync(parkedPrevious, { force: true })
+          parkedPrevious = undefined
+        }
+      } catch (error) {
+        if (
+          parkedPrevious &&
+          parkedFrom &&
+          fs.existsSync(parkedPrevious) &&
+          !fs.existsSync(parkedFrom)
+        ) {
+          fs.mkdirSync(path.dirname(parkedFrom), { recursive: true })
+          fs.renameSync(parkedPrevious, parkedFrom)
+        }
+        throw error
+      }
       if (previousInstalled && fs.existsSync(previousInstalled)) {
-        await getFontNative().unregisterFont(previousInstalled)
+        if (!isMacUserFontFile(previousInstalled)) {
+          await getFontNative().unregisterFont(previousInstalled)
+        }
         fs.rmSync(previousInstalled, { force: true })
       }
+      if (warning) host.recordInstallWarning(warning, id)
       catalog = loadCatalog(host.paths)
       entry = findById(catalog, id)
       if (!entry) {
         throw new Error('Font is not in the library.')
       }
+      assignActivationWarning(entry, warning)
       if (retainedFingerprint) {
         entry.previousRevisionId = retainedFingerprint
       }
@@ -346,12 +393,14 @@ async function installRenamedCopy(
       if (installMacos) {
         const dest = destinationForInstall(host.paths, draft, temp, { reuseInstalled: false })
         recordMutationDestination(host.paths, draft.id, dest)
-        await commitInstalledFile({
+        const warning = await commitInstalledFile({
           dest,
           stagedPath: temp,
           rollbackDir: path.join(host.paths.dataRoot, 'rollback'),
           native: getFontNative(),
         })
+        if (warning) host.recordInstallWarning(warning, draft.id)
+        assignActivationWarning(draft, warning)
         bindEntryToInstalledFile(draft, dest)
         applyParsedFont(draft, parsed)
       }
@@ -440,6 +489,7 @@ export async function uninstallEntry(
   }
   latest.disabledPath = undefined
   latest.installedPath = undefined
+  assignActivationWarning(latest, undefined)
   if (deleteSource && !latest.retailRelativePath) {
     await deleteSourceFile(sourcePath, host.paths)
     removeEntryById(latestCatalog, id)
@@ -568,12 +618,20 @@ export async function activateEntry(
       return entry
     }
     if (entry.installedPath && fs.existsSync(entry.installedPath) && host.isLiveDestPath(entry.installedPath)) {
-      await ensureFontActivation(getFontNative(), entry.installedPath, true)
+      let warning: string | undefined
+      try {
+        await ensureFontActivation(getFontNative(), entry.installedPath, true)
+      } catch (error) {
+        if (!isKeptInstall(error)) throw error
+        warning = error instanceof Error ? error.message : String(error)
+        host.recordInstallWarning(warning, entry.id)
+      }
       catalog = loadCatalog(host.paths)
       entry = findById(catalog, id)
       if (!entry) {
         throw new Error('Font is not in the library.')
       }
+      assignActivationWarning(entry, warning)
       if (options.owner === 'manual') {
         addManualOwner(entry)
       }
@@ -611,7 +669,7 @@ export async function activateEntry(
 export async function reinstallEntry(
   host: ServiceLifecycleHost,
   id: string,
-  options?: InstallOptions & { skipCacheClear?: boolean },
+  options?: InstallOptions,
 ): Promise<CatalogEntry> {
   const catalog = loadCatalog(host.paths)
   const entry = findById(catalog, id)
@@ -620,9 +678,6 @@ export async function reinstallEntry(
   }
   if (entry.status === 'deactivated') {
     return activateEntry(host, id, { owner: 'manual' })
-  }
-  if (!options?.skipCacheClear) {
-    await host.clearCachesAfterInstall()
   }
   const updated = await installEntry(host, id, entry.customFamilyName, options)
   emitNotice({
@@ -711,7 +766,6 @@ export async function bakeFeatures(
     }
     let updated: CatalogEntry
     await withMutationJournal(host.paths, { kind: 'replace', entries: [entry] }, async () => {
-      await host.clearCachesAfterInstall()
       updated = await installEntry(host, id, entry.customFamilyName, { sourcePathOverride: bakedPath })
       if (hadTrackedSource && path.resolve(trackedSource) !== path.resolve(bakedPath)) {
         recordMutationDestination(host.paths, id, trackedSource)

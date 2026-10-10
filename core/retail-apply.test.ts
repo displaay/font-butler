@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
+import { InstalledFontKept } from './caches.ts'
 import { applyRetailSync, RETAIL_PART_SUFFIX, sweepRetailPartials } from './retail-apply.ts'
 import { noopFontNative } from './native.ts'
 import { emptyRetailLocalManifest, type RetailDriftItem } from '../shared/retail.ts'
@@ -336,4 +337,27 @@ test('aborting a sync leaves remaining files incomplete', async () => {
   assert.equal(downloads, 1)
   assert.equal(result.written, 1)
   assert.equal(result.manifest.incomplete, true)
+})
+
+test('a kept duplicate warning is returned with the written retail file', async () => {
+  const { userFontsDir, stagingDir, rollbackDir } = dirs()
+  const message = 'Both copies of Reckless are installed. The other file is /tmp/other.otf.'
+  const native = noopFontNative({
+    async ensureActivation() {
+      throw new InstalledFontKept(message)
+    },
+  })
+  const result = await applyRetailSync({
+    userFontsDir,
+    stagingDir,
+    rollbackDir,
+    native,
+    drift: [added('Reckless/RecklessVF.otf', 4)],
+    download: async () => payload(4),
+    manifest: emptyRetailLocalManifest(),
+    persist: () => {},
+  })
+  assert.equal(result.written, 1)
+  assert.equal(result.writtenDests[0]?.warning, message)
+  assert.equal(fs.existsSync(path.join(userFontsDir, 'RecklessVF.otf')), true)
 })

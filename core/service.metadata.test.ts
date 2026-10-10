@@ -34,21 +34,54 @@ test('native activation failure does not persist a successful deactivate', async
     writeTestFont(source, 'StayOn', 'StayOn-Regular')
     const imported = await service.importPaths([source])
     const installed = await service.install(imported.entries[0].id)
+    const calls: string[] = []
     setFontNative(
       noopFontNative({
-        async setFontEnabled() {
+        async unregisterFont() {
+          calls.push('unregister')
           return { ok: false, native: true, error: 'Core Text refused deactivation.' }
+        },
+        async setFontEnabled(_filePath, enabled) {
+          calls.push(enabled ? 'enable' : 'disable')
+          return { ok: true, native: false }
         },
       }),
     )
     await assert.rejects(() => service.deactivate(installed.id), /Core Text refused/)
+    assert.equal(calls.includes('unregister'), true)
+    assert.equal(calls.includes('disable'), false)
     const latest = service.listCatalog().find((entry) => entry.id === installed.id)
     assert.equal(latest?.status, 'installed')
   })
 })
 
-test('Core Text success that the registry does not confirm is not persisted', async () => {
+test('unregister fail:201 still parks the font', async () => {
   const { noopFontNative } = await import('./native.ts')
+  await withService(
+    async (service, paths) => {
+      await service.init()
+      const source = path.join(paths.dataRoot, 'Gone.ttf')
+      writeTestFont(source, 'Gone', 'Gone-Regular')
+      const imported = await service.importPaths([source])
+      const installed = await service.install(imported.entries[0].id)
+      const parked = await service.deactivate(installed.id)
+      assert.equal(parked.status, 'deactivated')
+      assert.equal(fs.existsSync(installed.installedPath!), false)
+      assert.equal(fs.existsSync(parked.disabledPath!), true)
+    },
+    {
+      native: noopFontNative({
+        async unregisterFont() {
+          return { ok: false, native: true, error: 'Could not unregister the font (fail:201).' }
+        },
+      }),
+    },
+  )
+})
+
+test('deactivating a registered font unregisters that file and does not disable by name', async () => {
+  const { noopFontNative } = await import('./native.ts')
+  const calls: string[] = []
   await withService(
     async (service, paths) => {
       await service.init()
@@ -56,13 +89,21 @@ test('Core Text success that the registry does not confirm is not persisted', as
       writeTestFont(source, 'StillOn', 'StillOn-Regular')
       const imported = await service.importPaths([source])
       const installed = await service.install(imported.entries[0].id)
-      await assert.rejects(() => service.deactivate(installed.id), /did not deactivate/)
-      const latest = service.listCatalog().find((entry) => entry.id === installed.id)
-      assert.equal(latest?.status, 'installed')
+      calls.length = 0
+      const parked = await service.deactivate(installed.id)
+      assert.equal(parked.status, 'deactivated')
+      assert.equal(fs.existsSync(installed.installedPath!), false)
+      assert.equal(fs.existsSync(parked.disabledPath!), true)
+      assert.deepEqual(calls, [`unregister:${installed.installedPath}`])
     },
     {
       native: noopFontNative({
-        async setFontEnabled() {
+        async unregisterFont(filePath) {
+          calls.push(`unregister:${filePath}`)
+          return { ok: true, native: true }
+        },
+        async setFontEnabled(filePath, enabled) {
+          calls.push(`set:${filePath}:${enabled ? 1 : 0}`)
           return { ok: true, native: true }
         },
         async fontActivationStates(filePaths) {

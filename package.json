@@ -75,6 +75,7 @@
       "build/menubarTemplate@2x.png",
       "build/menubarNotificationTemplate.svg",
       "build/icons/**/*",
+      "build/build-identity.json",
       "package.json"
     ],
     "extraResources": [
@@ -111,6 +112,7 @@
       "category": "public.app-category.utilities",
       "extendInfo": {
         "NSUserNotificationsUsageDescription": "Font Buttler can notify you when fonts are installed or updated.",
+        "NSAppleEventsUsageDescription": "Font Buttler asks macOS to log out after you clear font caches. macOS will ask you to confirm before logging out.",
         "CFBundleURLTypes": [
           {
             "CFBundleURLName": "Font Buttler Finder Install",

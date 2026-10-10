@@ -45,6 +45,16 @@ import {
   suggestedFamilyName,
 } from './finder-install.mjs'
 import { deliverNativeNotice, electronNotificationPermission } from './notify.mjs'
+import {
+  LOGOUT_CANCELLED,
+  logoutFailedDialogOptions,
+  logoutProbeWouldStartDialogOptions,
+  logoutRequestFollowUp,
+  menuLogoutPathAfterCacheClear,
+  presentLogoutFailure,
+  presentLogoutNotice,
+  showLogoutMessageBox,
+} from './logout-dialog.mjs'
 import { createWatchNoticeBuffer, isWatchFailureNotice } from './watch-notices.mjs'
 import {
   buildTrayMenuModel,
@@ -1015,7 +1025,88 @@ async function runFinderInstall(action, filePaths) {
   showMainWindow()
 }
 
+const FONT_CACHE_CLEAR_WARNING = 'Some apps may not see new or updated fonts until you log out.'
+
+async function confirmFontCacheClear() {
+  const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined
+  const options = {
+    type: 'warning',
+    title: 'Clear font caches',
+    message: 'Clear font caches?',
+    detail: `This removes the macOS user font cache. ${FONT_CACHE_CLEAR_WARNING}`,
+    buttons: ['Clear font caches', 'Cancel'],
+    defaultId: 1,
+    cancelId: 1,
+  }
+  const choice = parent
+    ? await dialog.showMessageBox(parent, options)
+    : await dialog.showMessageBox(options)
+  return choice.response === 0
+}
+
+function logoutDialogHooks(attemptId) {
+  return {
+    showMainWindow,
+    getWindow: () => mainWindow,
+    isAppHidden: () => typeof app.isHidden === 'function' && app.isHidden(),
+    attemptId,
+    log: (message) => logDebug('install', message),
+  }
+}
+
+function showAppMessageBox(options) {
+  return showLogoutMessageBox(dialog, mainWindow, options, logoutDialogHooks())
+}
+
+async function offerLogoutAfterFontCacheClear(pathname) {
+  const choice = await showAppMessageBox({
+    type: 'info',
+    title: 'Font caches cleared',
+    message: FONT_CACHE_CLEAR_WARNING,
+    detail: 'macOS will ask you to confirm.',
+    buttons: ['Log out now', 'Later'],
+    defaultId: 1,
+    cancelId: 1,
+  })
+  if (choice.response !== 0) return
+  const result = await postApi(pathname, {})
+  const action = logoutRequestFollowUp(result)
+  if (action === 'ignore') return
+  if (action === 'probe-allowed') {
+    await showAppMessageBox(logoutProbeWouldStartDialogOptions())
+    return
+  }
+  if (action === 'cancelled') {
+    await showAppMessageBox({
+      type: 'info',
+      title: 'Log out',
+      message: result.message || LOGOUT_CANCELLED,
+      buttons: ['OK'],
+      defaultId: 0,
+    })
+    return
+  }
+  if (action === 'failed') {
+    await presentLogoutFailure({
+      message: result && result.message,
+      getParent: () => mainWindow,
+      showDialog: (parent, options) =>
+        showLogoutMessageBox(dialog, parent, options, logoutDialogHooks()),
+      notify: () =>
+        maybeNotify({
+          kind: 'warning',
+          source: 'logout',
+          message: (result && result.message) || logoutFailedDialogOptions().detail,
+        }),
+    })
+  }
+}
+
 async function clearCacheFromMenu(kind) {
+  if (kind === 'font') {
+    const confirmed = await confirmFontCacheClear()
+    if (!confirmed) return
+  }
   const pathByKind = {
     font: '/api/caches/font',
     office: '/api/caches/office',
@@ -1035,7 +1126,7 @@ async function clearCacheFromMenu(kind) {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({}),
+      body: JSON.stringify(kind === 'font' ? { confirm: true } : {}),
     })
     const rawBody = await response.text()
     let data
@@ -1053,6 +1144,10 @@ async function clearCacheFromMenu(kind) {
     }
     if (!response.ok) {
       throw new Error(data.error || 'Could not clear cache')
+    }
+    const logoutPath = kind === 'font' ? menuLogoutPathAfterCacheClear(data) : null
+    if (logoutPath) {
+      await offerLogoutAfterFontCacheClear(logoutPath)
     }
   } catch (error) {
     dialog.showErrorBox(
@@ -1429,6 +1524,7 @@ function maybeNotify(notice) {
   })
   lastNoticeKey = result.lastKey
   lastNoticeAt = result.lastAt
+  return result.shown === true
 }
 
 function applyAdobeCacheSetting(enabled) {
@@ -1500,7 +1596,34 @@ function handleApiEvent(event) {
     applyNativeNotificationSetting(event.settings.nativeNotifications)
   }
   if (event.type === 'notice' && event.notice) {
-    maybeNotify(event.notice)
+    if (
+      event.notice.source === 'logout' ||
+      event.notice.source === 'logout-waiting' ||
+      event.notice.source === 'logout-probe'
+    ) {
+      presentLogoutNotice({
+        notice: event.notice,
+        getWindow: () => mainWindow,
+        log: (message) => logDebug('install', message),
+        showMessageBox: (parent, options, attemptId) =>
+          showLogoutMessageBox(dialog, parent, options, logoutDialogHooks(attemptId)),
+        showWaitingNotice: (parent, options, attemptId) =>
+          showLogoutMessageBox(dialog, parent, options, logoutDialogHooks(attemptId)),
+        notify(notice) {
+          try {
+            return maybeNotify(notice)
+          } catch {
+            return false
+          }
+        },
+      })
+    } else {
+      try {
+        maybeNotify(event.notice)
+      } catch {
+        // A missing notification permission must not drop the in-app dialog.
+      }
+    }
     if (isWatchFailureNotice(event.notice)) {
       deliverWatchNotices(watchNoticeBuffer.push(event.notice))
     }
@@ -1862,6 +1985,11 @@ if (!gotLock) {
           // after a future filter, and the worker would then use the real library.
           ...(process.env.FONT_BUTLER_DATA
             ? { FONT_BUTLER_DATA: process.env.FONT_BUTLER_DATA }
+            : {}),
+          // Same reason as FONT_BUTLER_DATA: the worker must not write the
+          // real app's main.log when this process is Font Buttler Test.
+          ...(process.env.FONT_BUTLER_LOG_NAME
+            ? { FONT_BUTLER_LOG_NAME: process.env.FONT_BUTLER_LOG_NAME }
             : {}),
         },
       })

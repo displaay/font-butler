@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { readRetailToken } from './auth.ts'
+import { InstalledFontKept } from './caches.ts'
 import { loadCatalog, runCatalogTask, saveCatalog } from './catalog.ts'
 import { fingerprintFile } from './fingerprint.ts'
 import { noopFontNative, setFontNative } from './native.ts'
@@ -1557,6 +1558,41 @@ test('an occupied Fonts file still lists the retail font as not installed', asyn
   assert.ok(listing)
   assert.equal(listing.status, 'uninstalled')
   assert.equal(fs.readFileSync(path.join(paths.userFontsDir, 'RecklessVF.otf'), 'utf8'), 'mine')
+})
+
+test('a retail duplicate warning is saved and a later successful sync clears it', async () => {
+  resetRetailCache()
+  const paths = setup()
+  const message =
+    'Both copies of Reckless-Regular are installed. The other file is /tmp/other.otf.'
+  setFontNative(
+    noopFontNative({
+      async ensureActivation() {
+        throw new InstalledFontKept(message)
+      },
+    }),
+  )
+  try {
+    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await syncRetail(paths, {
+      fetchManifest: async () => manifestWith(4, 'e1'),
+      fetchFile: async () => new Uint8Array(4).fill(1),
+    })
+    const warned = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath)
+    assert.ok(warned)
+    assert.equal(warned.activationWarning, message)
+    setFontNative(noopFontNative())
+    await syncRetail(paths, {
+      fetchManifest: async () => manifestWith(4, 'e2'),
+      fetchFile: async () => new Uint8Array(4).fill(2),
+    })
+    const cleared = loadCatalog(paths).entries.find((entry) => entry.id === warned.id)
+    assert.equal(cleared?.activationWarning, undefined)
+    assert.equal(cleared?.status, 'installed')
+  } finally {
+    setFontNative(noopFontNative())
+    resetRetailCache()
+  }
 })
 
 test('dummy bytes land in Fonts without crashing catalog import', async () => {

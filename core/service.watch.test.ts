@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { onEvent } from './events.ts'
+import { noopFontNative, setFontNative } from './native.ts'
 import { fingerprintFile } from './fingerprint.ts'
 import type { AppPaths } from './paths.ts'
 import { FontButlerService } from './service.ts'
@@ -242,10 +243,27 @@ test('source updates stay outdated when auto-reinstall is off', async () => {
   }
 })
 
-test('reinstall succeeds when cache clearing is turned off', async () => {
+test('reinstall does not call atsutil and a manual clear runs only after confirmation', async () => {
   const paths = tempPaths()
-  const font = path.join(paths.dataRoot, 'SkipCache.ttf')
-  writeTestFont(font, 'SkipCache', 'SkipCache-Regular')
+  const font = path.join(paths.dataRoot, 'NoAts.ttf')
+  writeTestFont(font, 'NoAts', 'NoAts-Regular')
+  fs.writeFileSync(
+    paths.settingsPath,
+    JSON.stringify({ version: 1, skipCacheClearOnReinstall: false }),
+  )
+  const calls: string[] = []
+  setFontNative(
+    noopFontNative({
+      async clearUserFontCache(options) {
+        calls.push(`user:${JSON.stringify(options ?? null)}`)
+        return { mac: true, cleared: true }
+      },
+      async clearFontCaches() {
+        calls.push('font-caches')
+        return { mac: true, office: true, adobe: true }
+      },
+    }),
+  )
   const service = new FontButlerService(paths)
   try {
     await service.init()
@@ -253,13 +271,50 @@ test('reinstall succeeds when cache clearing is turned off', async () => {
     const entry = imported.entries[0]
     assert.ok(entry)
     await service.install(entry.id)
-    const settings = await service.updateSettings({ skipCacheClearOnReinstall: true })
-    assert.equal(settings.skipCacheClearOnReinstall, true)
     const again = await service.reinstall(entry.id)
     assert.equal(again.status, 'installed')
+    await service.reinstallMany([entry.id])
+    assert.deepEqual(calls, [])
+    await assert.rejects(
+      () => service.clearUserFontCache(),
+      /Some apps may not see new or updated fonts until you log out/,
+    )
+    assert.deepEqual(calls, [])
+    const cleared = await service.clearUserFontCache({ confirm: true })
+    assert.equal(cleared.cleared, true)
+    assert.deepEqual(calls, ['user:{"confirm":true}'])
   } finally {
+    setFontNative(null)
     service.dispose()
     await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('a simulated font-cache clear does not say the cache was removed', async () => {
+  const paths = tempPaths()
+  setFontNative(
+    noopFontNative({
+      async clearUserFontCache() {
+        return { mac: true, cleared: false, simulated: true }
+      },
+    }),
+  )
+  const notices: string[] = []
+  const stop = onEvent((event) => {
+    if (event.type === 'notice') notices.push(event.notice.message)
+  })
+  const service = new FontButlerService(paths)
+  try {
+    const cleared = await service.clearUserFontCache({ confirm: true })
+    assert.equal(cleared.cleared, false)
+    assert.equal(cleared.simulated, true)
+    assert.equal(cleared.logoutProbe, undefined)
+    assert.deepEqual(notices, ['Font caches were not cleared.'])
+  } finally {
+    stop()
+    setFontNative(null)
+    service.dispose()
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
 })

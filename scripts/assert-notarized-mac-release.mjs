@@ -12,7 +12,14 @@ import {
   resolveUpdateFeedUrl,
 } from '../electron/app-update-install.mjs'
 import { sha512Base64 } from './mac-dmg-staple.mjs'
-import { DEVELOPER_ID_IDENTITY, TEST_FEED_BUILD_ENV, TEST_FEED_VERSION_ENV } from './mac-signing.mjs'
+import {
+  DEVELOPER_ID_IDENTITY,
+  PRODUCTION_APP_ID,
+  TEST_FEED_APP_ID,
+  TEST_FEED_BUILD_ENV,
+  TEST_FEED_PRODUCT_NAME,
+  TEST_FEED_VERSION_ENV,
+} from './mac-signing.mjs'
 
 const require = createRequire(import.meta.url)
 const yaml = require('js-yaml')
@@ -356,6 +363,52 @@ export function packagedElectronMarkerFailures(appPath, { spawnImpl = spawnSync,
   return [TEST_FEED_MARKER_UNREADABLE]
 }
 
+function plistString(xml, key) {
+  const match = new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`).exec(xml)
+  return match ? match[1] : ''
+}
+
+/**
+ * Test builds must not share the real app's bundle id. Release builds must
+ * keep the production id. Missing apps are skipped; a present app without a
+ * readable identity fails.
+ */
+export function releaseBundleIdentityFailures(appPath, { testFeed = false } = {}) {
+  if (!appPath || !existsSync(appPath)) return []
+  const plistPath = path.join(appPath, 'Contents', 'Info.plist')
+  if (!existsSync(plistPath)) {
+    return [`${path.basename(appPath)} has no Info.plist to check the bundle id.`]
+  }
+  let xml = ''
+  try {
+    xml = readFileSync(plistPath, 'utf8')
+  } catch {
+    return [`Couldn't read ${path.basename(appPath)} Info.plist to check the bundle id.`]
+  }
+  const bundleId = plistString(xml, 'CFBundleIdentifier')
+  const bundleName = plistString(xml, 'CFBundleName')
+  if (testFeed) {
+    const failures = []
+    if (bundleId !== TEST_FEED_APP_ID) {
+      failures.push(
+        `A test-feed build must use bundle id ${TEST_FEED_APP_ID} so TCC permissions stay separate from Font Buttler. Found ${bundleId || 'no CFBundleIdentifier'}.`,
+      )
+    }
+    if (bundleName !== TEST_FEED_PRODUCT_NAME) {
+      failures.push(
+        `A test-feed build must use product name ${TEST_FEED_PRODUCT_NAME}. Found ${bundleName || 'no CFBundleName'}.`,
+      )
+    }
+    return failures
+  }
+  if (bundleId !== PRODUCTION_APP_ID) {
+    return [
+      `A release build must use bundle id ${PRODUCTION_APP_ID}. Found ${bundleId || 'no CFBundleIdentifier'}.`,
+    ]
+  }
+  return []
+}
+
 /** Any non-empty value counts as set. The pack stamp itself only happens for `=1`. */
 export function testFeedPublishEnvFailures(env = process.env) {
   if (String(env?.[TEST_FEED_BUILD_ENV] ?? '').trim() !== '') return [TEST_FEED_ENV_REFUSAL]
@@ -472,6 +525,101 @@ export function testFeedArchiveFailures({ zip, appPaths = [] } = {}) {
   return failures
 }
 
+/**
+ * `testBuildExpected` is true only for the packaged resources stamp of a test-feed build.
+ * The copy inside app.asar must stay false on every build.
+ */
+export function buildIdentityStampFailures(raw, { testBuildExpected = false } = {}) {
+  let parsed = null
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    parsed = null
+  }
+  const testBuild = parsed && typeof parsed === 'object' ? parsed.testBuild : undefined
+  if (testBuildExpected) {
+    if (testBuild !== true) {
+      return [
+        'A test-feed build must set testBuild to true in Contents/Resources/build-identity.json so the logout probe can run.',
+      ]
+    }
+    return []
+  }
+  if (testBuild !== false) {
+    return [
+      'A release build must keep testBuild false in build-identity.json so the logout probe cannot run.',
+    ]
+  }
+  return []
+}
+
+function readAsarBuildIdentity(asarPath) {
+  try {
+    const asar = require('@electron/asar')
+    return asar.extractFile(asarPath, 'build/build-identity.json').toString('utf8')
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The resources file is the pack stamp. The asar copy is the committed default
+ * and must stay false, including on a test-feed build.
+ */
+export function releaseBuildIdentityFailures(appPath, { testFeed = false } = {}) {
+  if (!appPath || !existsSync(appPath)) return []
+  const resourcesIdentity = path.join(appPath, 'Contents', 'Resources', 'build-identity.json')
+  const asarPath = path.join(appPath, 'Contents', 'Resources', 'app.asar')
+  const hasResources = existsSync(resourcesIdentity)
+  const hasAsar = existsSync(asarPath)
+  if (!hasResources && !hasAsar) {
+    return [
+      testFeed
+        ? 'A test-feed build must ship Contents/Resources/build-identity.json with testBuild true.'
+        : 'A release must include build-identity.json.',
+    ]
+  }
+  const failures = []
+  if (testFeed && !hasResources) {
+    failures.push(
+      'A test-feed build must ship Contents/Resources/build-identity.json with testBuild true.',
+    )
+  }
+  if (hasResources) {
+    let raw = null
+    try {
+      raw = readFileSync(resourcesIdentity, 'utf8')
+    } catch {
+      raw = null
+    }
+    for (const failure of buildIdentityStampFailures(raw, { testBuildExpected: testFeed })) {
+      pushFailure(failures, failure)
+    }
+  }
+  if (hasAsar) {
+    const raw = readAsarBuildIdentity(asarPath)
+    const asarFailures =
+      raw == null
+        ? ['app.asar must include build/build-identity.json with testBuild false.']
+        : buildIdentityStampFailures(raw, { testBuildExpected: false })
+    for (const failure of asarFailures) pushFailure(failures, failure)
+  }
+  return failures
+}
+
+/** Checks an app unpacked from the update zip or the DMG, including a missing identity file. */
+export function unpackedReleaseAppFailures(appPath, { testFeed = false } = {}) {
+  if (!appPath) return []
+  const failures = []
+  for (const failure of testFeedArchiveFailures({ appPaths: [appPath] })) {
+    pushFailure(failures, failure)
+  }
+  for (const failure of releaseBuildIdentityFailures(appPath, { testFeed })) {
+    pushFailure(failures, failure)
+  }
+  return failures
+}
+
 export async function assertNotarizedMacRelease(
   root = repoRoot,
   version = readPackVersion(root),
@@ -481,11 +629,15 @@ export async function assertNotarizedMacRelease(
   version = releaseAssetVersion(version, env)
   const overrideFailures = releaseFeedOverrideFailures()
   const files = prepareMacPublish(root, version)
+  const testFeed =
+    String(env?.[TEST_FEED_BUILD_ENV] ?? '').trim() === '1' || readAppTestFeedMarker(files.app) === true
   const testFeedFailures = []
   for (const message of [
     ...testFeedPublishEnvFailures(env),
     ...testFeedArchiveFailures({ zip: files.zip, appPaths: [files.app] }),
     ...packagedElectronMarkerFailures(files.app, { spawnImpl, env }),
+    ...releaseBundleIdentityFailures(files.app, { testFeed }),
+    ...releaseBuildIdentityFailures(files.app, { testFeed }),
   ]) {
     pushFailure(testFeedFailures, message)
   }
@@ -515,7 +667,7 @@ export async function assertNotarizedMacRelease(
       const inside = findAppBundles(mounted.mount).find((bundle) => path.basename(bundle) === 'Font Buttler.app')
       dmgAppStatus = inside ? staplerStatus(inside) : 1
       if (!inside) failures.push('The DMG does not contain Font Buttler.app.')
-      for (const failure of testFeedArchiveFailures({ appPaths: inside ? [inside] : [] })) {
+      for (const failure of unpackedReleaseAppFailures(inside, { testFeed })) {
         if (!testFeedFailures.includes(failure)) testFeedFailures.push(failure)
       }
     }
@@ -533,7 +685,7 @@ export async function assertNotarizedMacRelease(
       const inside = findAppBundles(zipDir).find((bundle) => path.basename(bundle) === 'Font Buttler.app')
       zipAppStatus = inside ? staplerStatus(inside) : 1
       if (!inside) failures.push('The update zip does not contain Font Buttler.app.')
-      for (const failure of testFeedArchiveFailures({ appPaths: inside ? [inside] : [] })) {
+      for (const failure of unpackedReleaseAppFailures(inside, { testFeed })) {
         if (!testFeedFailures.includes(failure)) testFeedFailures.push(failure)
       }
     }

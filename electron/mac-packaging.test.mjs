@@ -11,6 +11,10 @@ import {
   TEST_FEED_MARKER_UNREADABLE,
   TEST_FEED_MARKER_PROBE_FAILURE,
   assertNotarizedMacRelease,
+  buildIdentityStampFailures,
+  releaseBuildIdentityFailures,
+  unpackedReleaseAppFailures,
+  releaseBundleIdentityFailures,
   macReleaseAssetNames,
   notarizationFailures,
   packagedElectronMarkerFailures,
@@ -35,8 +39,12 @@ import {
   ADHOC_ENTITLEMENTS,
   DEVELOPER_ID_IDENTITY,
   NOTARY_KEYCHAIN_PROFILE,
+  PRODUCTION_APP_ID,
+  TEST_FEED_APP_ID,
   TEST_FEED_BUILD_ENV,
+  TEST_FEED_PRODUCT_NAME,
   TEST_FEED_VERSION_ENV,
+  applyBuildIdentityResource,
   applyNotaryEnv,
   applyTestFeedMetadata,
   developerIdInKeychainOutput,
@@ -135,14 +143,17 @@ test('electron-builder 26 accepts the mac signing config and the notarized DMG s
   ])
 })
 
-test('Developer ID entitlements are allow-jit only', () => {
+test('Developer ID entitlements allow JIT and Apple Events', () => {
   const entitlements = readRepo('build/entitlements.mac.plist')
   const adhoc = readRepo('build/entitlements.mac.adhoc.plist')
   assert.match(entitlements, /com\.apple\.security\.cs\.allow-jit/)
+  assert.match(entitlements, /com\.apple\.security\.automation\.apple-events/)
   assert.doesNotMatch(entitlements, /allow-unsigned-executable-memory/)
   assert.doesNotMatch(entitlements, /disable-library-validation/)
   assert.doesNotMatch(entitlements, /get-task-allow/)
+  assert.match(readRepo('package.json'), /NSAppleEventsUsageDescription/)
   assert.match(adhoc, /com\.apple\.security\.cs\.allow-jit/)
+  assert.match(adhoc, /com\.apple\.security\.automation\.apple-events/)
   assert.match(adhoc, /com\.apple\.security\.cs\.disable-library-validation/)
   assert.doesNotMatch(adhoc, /allow-unsigned-executable-memory/)
   assert.doesNotMatch(adhoc, /get-task-allow/)
@@ -930,6 +941,11 @@ test('a test-feed pack stamps extraMetadata and does not change a normal pack', 
   assert.equal(marked.error, null)
   assert.equal(marked.build.extraMetadata.fontButlerTestFeed, true)
   assert.equal(marked.build.extraMetadata.version, undefined)
+  assert.equal(marked.build.appId, TEST_FEED_APP_ID)
+  assert.equal(marked.build.productName, TEST_FEED_PRODUCT_NAME)
+  assert.equal(plain.build.appId, build.appId)
+  assert.equal(plain.build.productName, build.productName)
+  assert.notEqual(plain.build.appId, TEST_FEED_APP_ID)
   const higher = applyTestFeedMetadata(build, {
     [TEST_FEED_BUILD_ENV]: '1',
     [TEST_FEED_VERSION_ENV]: 'v0.9.0',
@@ -941,6 +957,100 @@ test('a test-feed pack stamps extraMetadata and does not change a normal pack', 
   const bad = applyTestFeedMetadata(build, { [TEST_FEED_BUILD_ENV]: '1', [TEST_FEED_VERSION_ENV]: 'latest' })
   assert.match(bad.error, /FONT_BUTLER_TEST_VERSION/)
   assert.match(readRepo('scripts/mac-pack.mjs'), /applyTestFeedMetadata/)
+  assert.match(readRepo('scripts/mac-pack.mjs'), /applyBuildIdentityResource/)
+  assert.equal(PRODUCTION_APP_ID, 'app.fontbutler.desktop')
+  const identity = applyBuildIdentityResource(build, {}, '/tmp/build-identity.json')
+  assert.deepEqual(identity.document, { testBuild: false })
+  assert.deepEqual(
+    applyBuildIdentityResource(build, { FONT_BUTLER_TEST: '1', FONT_BUTLER_DATA: '/tmp/isolated' }, '/tmp/id.json')
+      .document,
+    { testBuild: false },
+  )
+  assert.equal(identity.build.extraResources.at(-1).to, 'build-identity.json')
+  const markedIdentity = applyBuildIdentityResource(
+    marked.build,
+    { [TEST_FEED_BUILD_ENV]: '1', FONT_BUTLER_TEST: '1', FONT_BUTLER_DATA: '/tmp/isolated' },
+    '/tmp/build-identity.json',
+  )
+  assert.deepEqual(markedIdentity.document, { testBuild: true })
+  assert.deepEqual(buildIdentityStampFailures('{"testBuild":false}', { testBuildExpected: false }), [])
+  assert.equal(
+    buildIdentityStampFailures('{"testBuild":true}', { testBuildExpected: false }).length,
+    1,
+  )
+  assert.equal(buildIdentityStampFailures('{"testBuild":"true"}', { testBuildExpected: true }).length, 1)
+  for (const raw of ['{"testBuild":"false"}', '{"testBuild":0}', '{}', 'not json', '']) {
+    assert.match(buildIdentityStampFailures(raw, { testBuildExpected: false })[0] ?? '', /testBuild false/, raw)
+  }
+  assert.match(readRepo('docs/releases.md'), /tccutil reset AppleEvents app\.fontbutler\.desktop\.test/)
+})
+
+test('the release check rejects a test build that still uses the real bundle id', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-bundle-id-'))
+  const app = path.join(root, 'Font Buttler Test.app')
+  const plist = path.join(app, 'Contents', 'Info.plist')
+  mkdirSync(path.dirname(plist), { recursive: true })
+  const xml = (id, name) =>
+    `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>${id}</string><key>CFBundleName</key><string>${name}</string></dict></plist>\n`
+  try {
+    writeFileSync(plist, xml(PRODUCTION_APP_ID, 'Font Buttler'))
+    const shared = releaseBundleIdentityFailures(app, { testFeed: true })
+    assert.equal(shared.length, 2)
+    assert.match(shared[0], new RegExp(TEST_FEED_APP_ID))
+    assert.match(shared[1], new RegExp(TEST_FEED_PRODUCT_NAME.replace(/ /g, '\\s+')))
+    writeFileSync(plist, xml(TEST_FEED_APP_ID, TEST_FEED_PRODUCT_NAME))
+    assert.deepEqual(releaseBundleIdentityFailures(app, { testFeed: true }), [])
+    const releaseUsesTestId = releaseBundleIdentityFailures(app, { testFeed: false })
+    assert.equal(releaseUsesTestId.length, 1)
+    assert.match(releaseUsesTestId[0], new RegExp(PRODUCTION_APP_ID))
+    writeFileSync(plist, xml(PRODUCTION_APP_ID, 'Font Buttler'))
+    assert.deepEqual(releaseBundleIdentityFailures(app, { testFeed: false }), [])
+    assert.match(readRepo('scripts/assert-notarized-mac-release.mjs'), /releaseBundleIdentityFailures/)
+    assert.match(readRepo('scripts/assert-notarized-mac-release.mjs'), /releaseBuildIdentityFailures/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('the release check rejects a logout probe identity that does not match the build', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-build-identity-'))
+  const app = path.join(root, 'Font Buttler.app')
+  const resources = path.join(app, 'Contents', 'Resources')
+  mkdirSync(resources, { recursive: true })
+  const src = path.join(root, 'pack', 'build')
+  mkdirSync(src, { recursive: true })
+  writeFileSync(path.join(src, 'build-identity.json'), '{"testBuild":false}\n')
+  const asar = await import('@electron/asar')
+  await asar.createPackage(path.join(root, 'pack'), path.join(resources, 'app.asar'))
+  try {
+    writeFileSync(path.join(resources, 'build-identity.json'), '{"testBuild":false}\n')
+    assert.deepEqual(releaseBuildIdentityFailures(app, { testFeed: false }), [])
+    const missingProbe = releaseBuildIdentityFailures(app, { testFeed: true })
+    assert.equal(missingProbe.length, 1)
+    assert.match(missingProbe[0], /testBuild to true/)
+    writeFileSync(path.join(resources, 'build-identity.json'), '{"testBuild":true}\n')
+    assert.deepEqual(releaseBuildIdentityFailures(app, { testFeed: true }), [])
+    const releaseEnabled = releaseBuildIdentityFailures(app, { testFeed: false })
+    assert.equal(releaseEnabled.length, 1)
+    assert.match(releaseEnabled[0], /testBuild false/)
+    writeFileSync(path.join(resources, 'build-identity.json'), '{"testBuild":"false"}\n')
+    const releaseNonBoolean = releaseBuildIdentityFailures(app, { testFeed: false })
+    assert.equal(releaseNonBoolean.length, 1)
+    assert.match(releaseNonBoolean[0], /testBuild false/)
+    const bare = path.join(root, 'Font Buttler Bare.app')
+    mkdirSync(path.join(bare, 'Contents', 'MacOS'), { recursive: true })
+    const missingIdentity = releaseBuildIdentityFailures(bare, { testFeed: false })
+    assert.equal(missingIdentity.length, 1)
+    assert.match(missingIdentity[0], /A release must include build-identity\.json/)
+    const unpacked = unpackedReleaseAppFailures(bare, { testFeed: false })
+    assert.ok(unpacked.some((failure) => /build-identity\.json/.test(failure)))
+    const source = readRepo('scripts/assert-notarized-mac-release.mjs')
+    const zipAt = source.indexOf("mkdtempSync(path.join(tmpdir(), 'font-butler-zip-'))")
+    assert.ok(zipAt > 0)
+    assert.match(source.slice(zipAt, zipAt + 900), /unpackedReleaseAppFailures/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('publish refuses a test-feed environment and a zip or app that carries the marker', async () => {

@@ -1,12 +1,15 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { isKeptInstall } from './caches.ts'
 import { sourceFileExists } from './catalog.ts'
 import { yieldEventLoop } from './event-loop.ts'
 import { normalizeFormat } from './formats.ts'
+import { logMain } from './main-log.ts'
+import { ensureFontActivation, type FontNative } from './native.ts'
 import { parseFontFile, readFileStat, type ParsedFont } from './parse.ts'
 import type { CatalogEntry } from './types.ts'
-import { ensureFontActivation, type FontNative } from './native.ts'
+import { isMacUserFontFile, replaceFontFileAtomically } from './user-fonts.ts'
 
 export type StagedFont = {
   stagedPath: string
@@ -48,44 +51,71 @@ export async function commitInstalledFile(options: {
   stagedPath: string
   rollbackDir: string
   native: FontNative
-}): Promise<void> {
+  activate?: (dest: string, native: FontNative) => Promise<void>
+}): Promise<string | undefined> {
   const { dest, stagedPath, rollbackDir, native } = options
+  const activate =
+    options.activate ?? ((filePath, fontNative) => ensureFontActivation(fontNative, filePath, true))
   await yieldEventLoop()
   fs.mkdirSync(path.dirname(dest), { recursive: true })
   fs.mkdirSync(rollbackDir, { recursive: true })
   let rollback: string | undefined
   const replacing = fs.existsSync(dest)
+  const userFont = isMacUserFontFile(dest)
   if (replacing) {
     rollback = path.join(rollbackDir, `${crypto.randomUUID()}${path.extname(dest) || '.ttf'}`)
     await fs.promises.copyFile(dest, rollback)
-    // Drop the old Core Text registration before overwriting bytes at the same path.
-    // In-place copies leave running apps (Figma, etc.) serving stale outlines on later updates.
-    await native.unregisterFont(dest).catch(() => {
-      // Best-effort; a failed unregister should not block installing the new bytes.
-    })
+    // ~/Library/Fonts is activated by location. Unregistering it, then copying over the
+    // same inode, leaves fontd serving the previous outlines.
+    if (!userFont) {
+      await native.unregisterFont(dest).catch(() => {
+        // Best-effort; a failed unregister should not block installing the new bytes.
+      })
+    }
   }
   try {
-    await fs.promises.copyFile(stagedPath, dest)
-    await ensureFontActivation(native, dest, true)
+    if (userFont) {
+      await replaceFontFileAtomically(stagedPath, dest)
+      logMain('install', `user-font ${replacing ? 'update' : 'install'} ${dest} ino=${fs.statSync(dest).ino}`)
+    } else {
+      await fs.promises.copyFile(stagedPath, dest)
+      logMain('install', `copy ${dest}`)
+    }
+    await activate(dest, native)
     if (rollback) {
       fs.rmSync(rollback, { force: true })
       rollback = undefined
     }
+    return undefined
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (isKeptInstall(error)) {
+      // The new bytes stay. A visibility miss in ~/Library/Fonts, or another
+      // active copy of the same PostScript name, is a warning rather than a rollback.
+      logMain('install', `kept ${dest} ${message}`)
+      return message
+    }
+    logMain('install', `fail ${dest} ${message}`)
     if (rollback && fs.existsSync(rollback)) {
-      await fs.promises.copyFile(rollback, dest)
-      try {
-        await ensureFontActivation(native, dest, true).catch(() => {
+      if (userFont) {
+        await replaceFontFileAtomically(rollback, dest)
+      } else {
+        await fs.promises.copyFile(rollback, dest)
+        try {
+          await ensureFontActivation(native, dest, true).catch(() => {
+            // Restoring the previous bytes is best-effort after a failed activation.
+          })
+        } catch {
           // Restoring the previous bytes is best-effort after a failed activation.
-        })
-      } catch {
-        // Restoring the previous bytes is best-effort after a failed activation.
+        }
       }
     } else if (fs.existsSync(dest) && path.resolve(dest) !== path.resolve(stagedPath)) {
-      try {
-        await native.unregisterFont(dest)
-      } catch {
-        // The new copy should not stay behind after a failed first install.
+      if (!userFont) {
+        try {
+          await native.unregisterFont(dest)
+        } catch {
+          // The new copy should not stay behind after a failed first install.
+        }
       }
       fs.rmSync(dest, { force: true })
     }

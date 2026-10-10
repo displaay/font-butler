@@ -16,6 +16,7 @@ import {
   Type,
   X,
 } from 'lucide-react'
+import { ClearFontCachesControl } from '@/components/ClearFontCachesControl'
 import { FolderRelinkDialog } from '@/components/FolderRelinkDialog'
 import { FolderSetupDialog } from '@/components/FolderSetupDialog'
 import { AppUpdateCard } from '@/components/AppUpdateCard'
@@ -108,7 +109,7 @@ const CATEGORIES: {
     id: 'caches',
     label: 'Caches',
     icon: Eraser,
-    description: 'Clear Office and Adobe font caches when you reinstall or use the Font cache menu.',
+    description: 'Clear Office and Adobe caches from the Font cache menu. The macOS font cache is cleared only when you choose Clear font caches.',
   },
   {
     id: 'history',
@@ -130,7 +131,6 @@ type SettingsPatch = {
   clearOfficeFontCache?: boolean
   clearAdobeFontCache?: boolean
   autoReinstallOnUpdate?: boolean
-  skipCacheClearOnReinstall?: boolean
   nativeNotifications?: boolean
   onboardingCompleted?: boolean
   revisionBudgetBytes?: number
@@ -1087,7 +1087,7 @@ function CachesPane({
       <SettingsSection title="Microsoft Office">
         <SettingsRow
           label="Remove MS Office cache"
-          description="Clear Office’s FontCache when you reinstall fonts or use the Font cache menu. Turn this off to leave Office alone."
+          description="Clear Office’s FontCache from the Font cache menu. Reinstall leaves it alone. Turn this off to leave Office alone."
           htmlFor="clear-office-font-cache"
           extra={
             officeCacheEnabled ? (
@@ -1137,7 +1137,7 @@ function CachesPane({
       <SettingsSection title="Adobe">
         <SettingsRow
           label="Remove Adobe font cache"
-          description="Clear Adobe font list caches when you reinstall fonts or use the Font cache menu. Open Adobe apps still need a relaunch. Turn this off to leave Adobe alone."
+          description="Clear Adobe font list caches from the Font cache menu. Reinstall leaves them alone. Open Adobe apps still need a relaunch. Turn this off to leave Adobe alone."
           htmlFor="clear-adobe-font-cache"
           extra={
             adobeCacheEnabled ? (
@@ -1195,21 +1195,16 @@ function CachesPane({
         </SettingsRow>
       </SettingsSection>
 
-      <SettingsSection title="Reinstall">
+      <SettingsSection title="macOS">
         <SettingsRow
-          label="Clear caches during reinstall"
-          description="Clear ATS, Office, and Adobe caches when you reinstall fonts. Turn this off to skip that step. The Font cache menu still works."
-          htmlFor="clear-caches-on-reinstall"
+          label="Clear font caches"
+          description="Removes the macOS user font cache. Some apps may not see new or updated fonts until you log out. Reinstall never does this."
         >
-          <input
-            id="clear-caches-on-reinstall"
-            type="checkbox"
-            checked={settings?.skipCacheClearOnReinstall !== true}
-            disabled={busy || !settings}
-            onChange={(event) =>
-              void onSave({ skipCacheClearOnReinstall: !event.target.checked })
-            }
-            className={checkboxClass}
+          <ClearFontCachesControl
+            disabled={busy}
+            onClear={() => api.clearFontCaches()}
+            onLogOut={() => api.requestLogout()}
+            onProbe={() => api.requestLogoutProbe()}
           />
         </SettingsRow>
       </SettingsSection>

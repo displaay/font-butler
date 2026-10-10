@@ -11,6 +11,8 @@ import { denyRemoteRequest, isAuthorizedApiRequest, resolveStaticAsset } from '.
 import { checkAppUpdate } from '../core/app-update.ts'
 import { currentCatalogGeneration } from '../core/catalog.ts'
 import { FontButlerService } from '../core/service.ts'
+import { mountSessionLogoutRoutes } from './session-logout.ts'
+import { mountUserFontCacheRoute } from './user-font-cache-route.ts'
 import { catalogEvent } from '../core/service-helpers.ts'
 import { closeFontAnalysisWorker } from '../core/font-analysis.ts'
 import { closeAllWatchers } from '../core/watch.ts'
@@ -304,7 +306,6 @@ app.post('/api/settings', async (c) => {
     clearOfficeFontCache?: boolean
     clearAdobeFontCache?: boolean
     autoReinstallOnUpdate?: boolean
-    skipCacheClearOnReinstall?: boolean
     nativeNotifications?: boolean
     onboardingCompleted?: boolean
     revisionBudgetBytes?: number
@@ -721,17 +722,8 @@ app.post('/api/system/deactivate', async (c) => {
   }
 })
 
-app.post('/api/caches/font', async (c) => {
-  try {
-    const result = await service.clearUserFontCache()
-    return c.json(result)
-  } catch (error) {
-    return c.json(
-      { error: error instanceof Error ? error.message : 'Could not remove font cache' },
-      400,
-    )
-  }
-})
+mountUserFontCacheRoute(app, service)
+mountSessionLogoutRoutes(app, service)
 
 app.post('/api/caches/office', async (c) => {
   try {

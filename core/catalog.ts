@@ -96,25 +96,49 @@ function readCatalogFile(catalogPath: string): CatalogFile {
   return catalog
 }
 
+type CatalogLease = {
+  /** Resolves the gate the next queued task is waiting on. */
+  release: () => void
+}
+
 let catalogQueue: Promise<void> = Promise.resolve()
-const catalogLock = new AsyncLocalStorage<boolean>()
+const catalogLock = new AsyncLocalStorage<CatalogLease>()
 let catalogGeneration = 0
 
 export function currentCatalogGeneration(): number {
   return catalogGeneration
 }
 
+function takeCatalogGate(): { gate: Promise<void>; release: () => void } {
+  let releaseGate!: () => void
+  let released = false
+  const gate = new Promise<void>((resolve) => {
+    releaseGate = () => {
+      if (released) return
+      released = true
+      resolve()
+    }
+  })
+  const prev = catalogQueue
+  catalogQueue = gate
+  return { gate: prev, release: releaseGate }
+}
+
 export function runCatalogTask<T>(task: () => Promise<T> | T): Promise<T> {
   if (catalogLock.getStore()) {
     return Promise.resolve().then(() => task())
   }
-  const run = async () => catalogLock.run(true, () => task())
-  const result = catalogQueue.then(run, run)
-  catalogQueue = result.then(
-    () => undefined,
-    () => undefined,
-  )
-  return result
+  const { gate: prev, release } = takeCatalogGate()
+  const lease: CatalogLease = { release }
+  const run = () =>
+    catalogLock.run(lease, async () => {
+      try {
+        return await task()
+      } finally {
+        lease.release()
+      }
+    })
+  return prev.then(run, run)
 }
 
 export function loadCatalog(paths: AppPaths): CatalogFile {

@@ -105,18 +105,151 @@ function buildNameTable(records: NameRecord[]): Buffer {
 
 type SfntTable = { tag: string; buffer: Buffer }
 
-function parseSfnt(file: Buffer): { sfntVersion: number; tables: SfntTable[] } {
-  const sfntVersion = file.readUInt32BE(0)
-  const numTables = file.readUInt16BE(4)
+const TTC_TAG = 0x74746366
+
+/** Byte offsets of each sfnt in a TTC/OTC. A standalone font is a single face at 0. */
+function collectionFaceStarts(file: Buffer): number[] {
+  if (file.length < 12 || file.readUInt32BE(0) !== TTC_TAG) return [0]
+  const numFonts = file.readUInt32BE(8)
+  if (numFonts <= 0 || numFonts > 1024) return [0]
+  const starts: number[] = []
+  for (let i = 0; i < numFonts; i++) {
+    const offsetPos = 12 + i * 4
+    if (offsetPos + 4 > file.length) break
+    starts.push(file.readUInt32BE(offsetPos))
+  }
+  return starts.length > 0 ? starts : [0]
+}
+
+/**
+ * Table offsets in a collection are absolute from the start of the file, not from the face header.
+ */
+function parseSfntAt(file: Buffer, start: number): { sfntVersion: number; tables: SfntTable[] } {
+  if (start < 0 || start + 12 > file.length) {
+    throw new Error('Font face is outside the file')
+  }
+  const sfntVersion = file.readUInt32BE(start)
+  const numTables = file.readUInt16BE(start + 4)
   const tables: SfntTable[] = []
   for (let i = 0; i < numTables; i++) {
-    const o = 12 + i * 16
+    const o = start + 12 + i * 16
+    if (o + 16 > file.length) throw new Error('Font table directory is truncated')
     const tag = file.subarray(o, o + 4).toString('ascii')
     const offset = file.readUInt32BE(o + 8)
     const length = file.readUInt32BE(o + 12)
+    if (offset < 0 || length < 0 || offset + length > file.length) {
+      throw new Error('Font table is truncated')
+    }
     tables.push({ tag, buffer: Buffer.from(file.subarray(offset, offset + length)) })
   }
   return { sfntVersion, tables }
+}
+
+function parseSfnt(file: Buffer): { sfntVersion: number; tables: SfntTable[] } {
+  return parseSfntAt(file, 0)
+}
+
+function preferredName(records: NameRecord[], nameID: number): string {
+  const matches = records.filter((record) => record.nameID === nameID && record.text.trim())
+  const preferred =
+    matches.find((record) => record.platformID === 3 && record.languageID === 0x409) ||
+    matches.find((record) => record.platformID === 1 && record.languageID === 0) ||
+    matches[0]
+  return preferred?.text.trim() ?? ''
+}
+
+/** Name IDs of fvar instance PostScript names. Absent when the instance record has no PS name. */
+function fvarInstancePostScriptNameIds(buf: Buffer): number[] {
+  if (buf.length < 16) return []
+  const axesArrayOffset = buf.readUInt16BE(4)
+  const axisCount = buf.readUInt16BE(8)
+  const axisSize = buf.readUInt16BE(10)
+  const instanceCount = buf.readUInt16BE(12)
+  const instanceSize = buf.readUInt16BE(14)
+  if (axisCount <= 0 || axisSize <= 0 || instanceCount <= 0 || instanceSize <= 0) return []
+  // Instance coords are 16.16 Fixed (4 bytes each), after the name ID and flags.
+  const postScriptOffset = 4 + axisCount * 4
+  if (instanceSize < postScriptOffset + 2) return []
+  const ids: number[] = []
+  for (let i = 0; i < instanceCount; i++) {
+    const record = axesArrayOffset + axisCount * axisSize + i * instanceSize
+    if (record + postScriptOffset + 2 > buf.length) break
+    const nameID = buf.readUInt16BE(record + postScriptOffset)
+    if (nameID > 0) ids.push(nameID)
+  }
+  return ids
+}
+
+function faceStart(file: Buffer, faceIndex: number): number {
+  const starts = collectionFaceStarts(file)
+  return starts[faceIndex] ?? starts[0] ?? 0
+}
+
+/** Name-table string (name ID 5 is the version). Empty when the font has no such record. */
+export function readFontName(filePath: string, nameID: number, faceIndex = 0): string {
+  try {
+    const file = fs.readFileSync(filePath)
+    const { tables } = parseSfntAt(file, faceStart(file, faceIndex))
+    const nameTable = tables.find((table) => table.tag === 'name')
+    if (!nameTable) return ''
+    return preferredName(readNameTable(nameTable.buffer), nameID)
+  } catch {
+    return ''
+  }
+}
+
+/** Name ID 6 and fvar instance PostScript names for every face. Reads the name table only. */
+export function readFilePostScriptNames(filePath: string): string[] {
+  try {
+    const file = fs.readFileSync(filePath)
+    const names = new Set<string>()
+    for (const start of collectionFaceStarts(file)) {
+      let tables: SfntTable[]
+      try {
+        tables = parseSfntAt(file, start).tables
+      } catch {
+        continue
+      }
+      const nameTable = tables.find((table) => table.tag === 'name')
+      if (!nameTable) continue
+      const records = readNameTable(nameTable.buffer)
+      const fallback = preferredName(records, 6)
+      if (fallback) names.add(fallback)
+      const fvar = tables.find((table) => table.tag === 'fvar')
+      if (fvar) {
+        for (const nameID of fvarInstancePostScriptNameIds(fvar.buffer)) {
+          const text = preferredName(records, nameID)
+          if (text) names.add(text)
+        }
+      }
+    }
+    return [...names]
+  } catch {
+    return []
+  }
+}
+
+export function readAcceptablePostScriptNames(filePath: string, faceIndex = 0): string[] {
+  try {
+    const file = fs.readFileSync(filePath)
+    const { tables } = parseSfntAt(file, faceStart(file, faceIndex))
+    const nameTable = tables.find((table) => table.tag === 'name')
+    if (!nameTable) return []
+    const records = readNameTable(nameTable.buffer)
+    const names = new Set<string>()
+    const fallback = preferredName(records, 6)
+    if (fallback) names.add(fallback)
+    const fvar = tables.find((table) => table.tag === 'fvar')
+    if (fvar) {
+      for (const nameID of fvarInstancePostScriptNameIds(fvar.buffer)) {
+        const text = preferredName(records, nameID)
+        if (text) names.add(text)
+      }
+    }
+    return [...names]
+  } catch {
+    return []
+  }
 }
 
 function packSfnt(sfntVersion: number, tables: SfntTable[]): Buffer {

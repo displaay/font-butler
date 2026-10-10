@@ -28,6 +28,8 @@ import { ReplaceFormatDialog } from '@/components/ReplaceFormatDialog'
 import { RetailCollisionDialog } from '@/components/RetailCollisionDialog'
 import { LatinPreviewProvider } from '@/components/AaPreview'
 import { SettingsDialog } from '@/components/SettingsDialog'
+import { logoutNoticeAction } from '@/lib/logout-notice'
+import { publishLogoutProbeResult } from '@/lib/logout-probe-result'
 import { Sidebar, type Tab } from '@/components/Sidebar'
 import { SystemCard } from '@/components/SystemCard'
 import {
@@ -595,13 +597,16 @@ function AppShell() {
     void boot()
     const seenWatchFailures = new Set<string>()
     const presentNotice = (notice: Notice) => {
+      if (notice.source === 'logout-probe') publishLogoutProbeResult(notice)
+      if (logoutNoticeAction(notice.source) === 'ignore') return
       if (notice.kind === 'error' && notice.source === 'watch') {
         const key = notice.operationId ?? notice.message
         if (seenWatchFailures.has(key)) return
         seenWatchFailures.add(key)
       }
-      if (notice.kind === 'error' || !busyRef.current) {
-        toast[notice.kind === 'error' ? 'error' : 'success'](notice.message, {
+      if (notice.kind === 'error' || notice.kind === 'warning' || !busyRef.current) {
+        const level = notice.kind === 'error' ? 'error' : notice.kind === 'warning' ? 'warning' : 'success'
+        toast[level](notice.message, {
           action: notice.operationId
             ? {
                 label: 'Activity',

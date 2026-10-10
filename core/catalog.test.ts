@@ -13,6 +13,7 @@ import {
   loadCatalog,
   occupantsAtPath,
   resolveStatusWhenSourceMissing,
+  runCatalogTask,
   saveCatalog,
 } from './catalog.ts'
 import { tempPaths } from './test-util.ts'
@@ -290,4 +291,27 @@ test('buildPathOccupancyIndex matches occupantsAtPath for installed files', () =
   } finally {
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
+})
+
+test('a catalog task waits while another task still holds the queue', async () => {
+  const order: string[] = []
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const first = runCatalogTask(async () => {
+    order.push('a')
+    await gate
+    order.push('a-end')
+  })
+  await new Promise((resolve) => setImmediate(resolve))
+  const second = runCatalogTask(async () => {
+    order.push('b')
+  })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.deepEqual(order, ['a'])
+  release()
+  await first
+  await second
+  assert.deepEqual(order, ['a', 'a-end', 'b'])
 })

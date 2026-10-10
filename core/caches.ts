@@ -1,11 +1,109 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { assertSafeShellPath } from './auth.ts'
+import { loadBuildIdentity } from './build-identity.ts'
+import { logMain } from './main-log.ts'
+import { parseFontFile } from './parse.ts'
 import { getPaths, isMac } from './paths.ts'
+import { readAcceptablePostScriptNames, readFilePostScriptNames, readFontName } from './rename.ts'
 import type { AdobeFontCacheInfo, OfficeFontCacheInfo } from './types.ts'
+import { isMacUserFontFile, macUserFontsRoot } from './user-fonts.ts'
+import {
+  LOGOUT_CANCELLED,
+  LOGOUT_FAILED_MESSAGE,
+  LOGOUT_FAILED_TITLE,
+  LOGOUT_FALLBACK,
+  LOGOUT_PROBE_WOULD_START_NOTICE,
+  LOGOUT_STILL_WAITING_MESSAGE,
+} from '../shared/logout.ts'
+
+export {
+  LOGOUT_CANCELLED,
+  LOGOUT_FAILED_MESSAGE,
+  LOGOUT_FAILED_TITLE,
+  LOGOUT_FALLBACK,
+  LOGOUT_PROBE_WOULD_START_NOTICE,
+  LOGOUT_STILL_WAITING_MESSAGE,
+}
+
+/** Session, then persistent user. Process scope (1) dies with this process and is never used. */
+export const REGISTRATION_SCOPES = [3, 2] as const
+/** kCTFontManagerErrorAlreadyRegistered */
+export const ALREADY_REGISTERED_CODE = 105
+/** kCTFontManagerErrorNotRegistered. After logout the session registration is already gone. */
+export const NOT_REGISTERED_CODE = 201
+
+export function registrationSucceeded(attempts: Array<{ ok: boolean; code: number }>): boolean {
+  return attempts.some((attempt) => attempt.ok || attempt.code === ALREADY_REGISTERED_CODE)
+}
+
+/**
+ * `atsutil` arguments for a confirmed manual font-cache clear.
+ * These delete the user font registry and stop fontd, so user fonts do not
+ * activate again until logout. No other caller may receive them.
+ */
+export const ATSUTIL_CLEAR_COMMANDS: readonly (readonly string[])[] = [
+  ['databases', '-removeUser'],
+  ['server', '-shutdown'],
+  ['server', '-ping'],
+]
+
+/** AppleScript that asks macOS to log out. System Events still shows its own confirm. */
+export const MAC_LOGOUT_APPLESCRIPT = 'tell application "System Events" to log out'
+
+/**
+ * Harmless System Events event for the test-build logout probe.
+ * `count processes` is a real Apple event, so macOS shows the Automation prompt.
+ * It returns -1743 on Don't Allow. It never logs the user out.
+ */
+export const MAC_LOGOUT_PROBE_APPLESCRIPT = 'tell application "System Events" to count processes'
+
+/**
+ * How long to wait for an immediate Apple-event failure before treating an
+ * open logout confirm as accepted. The confirm itself is left running.
+ */
+export const LOGOUT_ACCEPT_MS = 1_000
+
+/**
+ * How long osascript may sit unanswered before we say we are still waiting.
+ * This does not kill the process: the user may still click Allow.
+ */
+export const LOGOUT_STILL_WAITING_MS = 30_000
+
+export const FONT_NOT_VISIBLE_WARNING = 'Not visible to other apps yet'
+
+const VERIFY_BUDGET_MS = 10_000
+const VERIFY_INTERVAL_MS = 400
+/** One lookup must not outlive the verification budget while the catalog queue is held. */
+export const LOOKUP_ATTEMPT_MS = 3_000
+const LOOKUP_DIRECT_TIMEOUT_MS = 20_000
+
+/** A failed fresh-process check that must keep the new file instead of rolling it back. */
+export class InstalledFontKept extends Error {
+  readonly keepFile = true
+  constructor(message: string) {
+    super(message)
+    this.name = 'InstalledFontKept'
+  }
+}
+
+export function isKeptInstall(error: unknown): boolean {
+  return (
+    error instanceof InstalledFontKept ||
+    (typeof error === 'object' &&
+      error !== null &&
+      (error as { keepFile?: boolean }).keepFile === true)
+  )
+}
+
+export function atsutilCommands(options: { confirm?: boolean } = {}): string[][] {
+  if (options.confirm !== true) return []
+  return ATSUTIL_CLEAR_COMMANDS.map((args) => [...args])
+}
 
 export function locateOfficeFontCache(home = os.homedir()): OfficeFontCacheInfo {
   const groupContainers = path.join(home, 'Library/Group Containers')
@@ -159,9 +257,30 @@ export function applyAdobeFontCacheClear(home: string): boolean {
 
 const execFileAsync = promisify(execFile)
 
+type CacheToolExec = (
+  file: string,
+  args: readonly string[],
+  options: { timeout?: number },
+  callback: (error: Error | null) => void,
+) => unknown
+
+let cacheToolExec: CacheToolExec = (file, args, options, callback) => {
+  execFile(file, [...args], options, callback)
+}
+
+/** Tests replace the process spawn used for atsutil. Production uses `execFile`. */
+export function setCacheToolExecForTests(exec: CacheToolExec | null): void {
+  cacheToolExec = exec ?? ((file, args, options, callback) => execFile(file, [...args], options, callback))
+}
+
 async function runQuiet(command: string, args: string[]): Promise<void> {
   try {
-    await execFileAsync(command, args, { timeout: 15_000 })
+    await new Promise<void>((resolve, reject) => {
+      cacheToolExec(command, args, { timeout: 15_000 }, (error) => {
+        if (error) reject(error)
+        else resolve()
+      })
+    })
   } catch {
     // Cache tools are best-effort; missing binaries should not fail install.
   }
@@ -181,21 +300,63 @@ function emptyDir(dir: string): void {
   }
 }
 
+function cacheDataIsIsolated(): boolean {
+  return Boolean(process.env.FONT_BUTLER_DATA ?? process.env.FONTCASE_DATA)
+}
+
+/**
+ * Live cache tools stay off for a stamped test build.
+ * `FONT_BUTLER_NATIVE_CACHES=1` cannot turn them back on, and a missing
+ * `FONT_BUTLER_DATA` cannot either. Callers still pass their own testBuild flag.
+ */
 export function allowRealCacheMutation(): boolean {
-  const isolated = Boolean(process.env.FONT_BUTLER_DATA ?? process.env.FONTCASE_DATA)
-  if (!isolated) return true
+  if (loadBuildIdentity().testBuild === true) return false
+  if (!cacheDataIsIsolated()) return true
   return process.env.FONT_BUTLER_NATIVE_CACHES === '1'
 }
 
-export async function clearUserFontCache(): Promise<{ mac: boolean; cleared: boolean }> {
-  if (!isMac()) {
-    return { mac: false, cleared: false }
+export const ATSUTIL_SKIPPED_LOG = 'atsutil skipped; font caches were not cleared'
+
+export function userFontCacheClearOutcome(input: {
+  mac: boolean
+  confirmed: boolean
+  allowMutation: boolean
+  testBuild?: boolean
+}): { mac: boolean; cleared: boolean; simulated?: boolean; runAtsutil: boolean } {
+  if (!input.confirmed) return { mac: input.mac, cleared: false, runAtsutil: false }
+  if (!input.mac) return { mac: false, cleared: false, runAtsutil: false }
+  // Caller-level defense. allowRealCacheMutation() also refuses a stamped test build.
+  if (input.testBuild === true || !input.allowMutation) {
+    return { mac: true, cleared: false, simulated: true, runAtsutil: false }
+  }
+  return { mac: true, cleared: true, runAtsutil: true }
+}
+
+let userFontCacheHostMac: boolean | null = null
+
+/** Tests pretend the host is macOS so a missing testBuild guard would call atsutil. */
+export function setUserFontCacheHostMacForTests(mac: boolean | null): void {
+  userFontCacheHostMac = mac
+}
+
+export async function clearUserFontCache(
+  options: { confirm?: boolean } = {},
+): Promise<{ mac: boolean; cleared: boolean; simulated?: boolean }> {
+  const outcome = userFontCacheClearOutcome({
+    mac: userFontCacheHostMac ?? isMac(),
+    confirmed: options.confirm === true,
+    allowMutation: allowRealCacheMutation(),
+    testBuild: loadBuildIdentity().testBuild === true,
+  })
+  if (!outcome.runAtsutil) {
+    if (outcome.simulated) logMain('install', ATSUTIL_SKIPPED_LOG)
+    return { mac: outcome.mac, cleared: outcome.cleared, simulated: outcome.simulated }
   }
   const paths = getPaths()
-  if (allowRealCacheMutation()) {
-    await runQuiet('atsutil', ['databases', '-removeUser'])
-    await runQuiet('atsutil', ['server', '-shutdown'])
-    await runQuiet('atsutil', ['server', '-ping'])
+  const commands = atsutilCommands({ confirm: true })
+  logMain('install', `atsutil ${commands.map((args) => args.join(' ')).join('; ')}`)
+  for (const args of commands) {
+    await runQuiet('atsutil', args)
   }
   if (fs.existsSync(paths.atsCacheDir)) {
     emptyDir(paths.atsCacheDir)
@@ -203,11 +364,325 @@ export async function clearUserFontCache(): Promise<{ mac: boolean; cleared: boo
   return { mac: true, cleared: true }
 }
 
+function logoutLog(message: string, attemptId?: string): void {
+  const suffix = attemptId ? ` attemptId=${attemptId}` : ''
+  logMain('install', `${message}${suffix}`)
+}
+
+export function logoutResultFromExecError(error: unknown, attemptId?: string): {
+  requested: false
+  cancelled?: boolean
+  message: string
+  error: string
+  attemptId?: string
+} {
+  const err = error as { message?: string; stderr?: string | Buffer; stdout?: string | Buffer }
+  const detail =
+    [err?.stderr, err?.stdout, err?.message]
+      .map((part) => (Buffer.isBuffer(part) ? part.toString('utf8') : part))
+      .filter((part) => typeof part === 'string' && part.trim())
+      .join('\n') || String(error)
+  logoutLog(`logout failed ${detail}`, attemptId)
+  const id = attemptId ? { attemptId } : {}
+  if (/\(-128\)/.test(detail)) {
+    return { requested: false, cancelled: true, message: LOGOUT_CANCELLED, error: detail, ...id }
+  }
+  return { requested: false, message: LOGOUT_FAILED_MESSAGE, error: detail, ...id }
+}
+
+export type MacLogoutResult = {
+  requested: boolean
+  /** True only for the System Events confirm dismissal (-128). */
+  cancelled?: boolean
+  message?: string
+  error?: string
+  /** Allow on the test-build probe. Logout was not started. */
+  probeAllowed?: boolean
+  /** Set when the flight starts. A second click that joins keeps this id. */
+  attemptId?: string
+}
+
+type LogoutExec = (
+  file: string,
+  args: readonly string[],
+  callback: (error: unknown) => void,
+) => { unref?: () => void }
+
+let macLogoutExec: LogoutExec = execFile
+
+/** Tests replace osascript. Production uses `execFile`. */
+export function setMacLogoutExecForTests(exec: LogoutExec | null): void {
+  macLogoutExec = exec ?? execFile
+}
+
+/**
+ * Start osascript with no kill timer. A long Automation prompt must stay alive
+ * so a later Allow click can still log out.
+ */
+export function startMacLogoutProcess(
+  exec: LogoutExec,
+  report: (result: MacLogoutResult) => void,
+  attemptId?: string,
+): void {
+  const child = exec('osascript', ['-e', MAC_LOGOUT_APPLESCRIPT], (error) => {
+    if (error) report(logoutResultFromExecError(error, attemptId))
+    else report(attemptId ? { requested: true, attemptId } : { requested: true })
+  })
+  child?.unref?.()
+}
+
+/**
+ * Start the logout Apple event without waiting for the confirm dialog.
+ * An immediate failure (-128, -1743) is reported. If the dialog is still
+ * open after the accept window, the request was accepted. A later wait
+ * notice does not mean logout failed, and it does not stop osascript.
+ */
+export function awaitMacLogoutRequest(
+  start: (report: (result: MacLogoutResult) => void) => void,
+  acceptAfterMs = LOGOUT_ACCEPT_MS,
+  onLateFailure?: (result: MacLogoutResult) => void,
+  options?: {
+    stillWaitingAfterMs?: number
+    onStillWaiting?: (message: string, attemptId?: string) => void
+    onLateSuccess?: (result: MacLogoutResult) => void
+    attemptId?: string
+  },
+): Promise<MacLogoutResult> {
+  const stillWaitingAfterMs = options?.stillWaitingAfterMs ?? LOGOUT_STILL_WAITING_MS
+  const onStillWaiting = options?.onStillWaiting
+  const onLateSuccess = options?.onLateSuccess
+  const attemptId = options?.attemptId
+  const withAttempt = (result: MacLogoutResult): MacLogoutResult =>
+    attemptId && !result.attemptId ? { ...result, attemptId } : result
+  return new Promise((resolve) => {
+    let settled = false
+    let execFinished = false
+    let failureDelivered = false
+    const deliverExec = (incoming: MacLogoutResult) => {
+      if (execFinished) return
+      execFinished = true
+      clearTimeout(waitTimer)
+      const result = withAttempt(incoming)
+      if (settled) {
+        logoutLog(
+          `logout settled after accept ${result.message || ''} ${result.error || ''}`.trim(),
+          attemptId,
+        )
+        if (result.requested === false && result.cancelled !== true && !failureDelivered) {
+          failureDelivered = true
+          onLateFailure?.(result)
+        } else if (result.requested === true) {
+          onLateSuccess?.(result)
+        }
+        return
+      }
+      settled = true
+      clearTimeout(acceptTimer)
+      logoutLog(
+        `logout result requested=${result.requested}${result.cancelled ? ' cancelled' : ''}${result.message ? ` ${result.message}` : ''}${result.error ? ` ${result.error}` : ''}`.trim(),
+        attemptId,
+      )
+      resolve(result)
+    }
+    const acceptTimer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      logoutLog('logout result requested=true', attemptId)
+      resolve(attemptId ? { requested: true, attemptId } : { requested: true })
+    }, acceptAfterMs)
+    const waitTimer = setTimeout(() => {
+      if (execFinished) return
+      logoutLog(`logout still waiting ${LOGOUT_STILL_WAITING_MESSAGE}`, attemptId)
+      onStillWaiting?.(LOGOUT_STILL_WAITING_MESSAGE, attemptId)
+    }, stillWaitingAfterMs)
+    if (typeof acceptTimer.unref === 'function') acceptTimer.unref()
+    if (typeof waitTimer.unref === 'function') waitTimer.unref()
+    start(deliverExec)
+  })
+}
+
+type LogoutFlight = {
+  attemptId: string
+  accepted: Promise<MacLogoutResult>
+  finished: Promise<void>
+}
+
+let logoutAttemptSerial = 0
+
+export function resetLogoutAttemptIdsForTests(): void {
+  logoutAttemptSerial = 0
+}
+
+function nextLogoutAttemptId(): string {
+  logoutAttemptSerial += 1
+  return `logout-${logoutAttemptSerial}`
+}
+
+let logoutFlight: LogoutFlight | null = null
+
+export function resetSharedMacLogout(): void {
+  logoutFlight = null
+}
+
+/**
+ * One osascript at a time. A second request joins the in-flight promise until
+ * that process reports, including after the accept window has already resolved.
+ */
+export function shareMacLogout(
+  start: (report: (result: MacLogoutResult) => void, attemptId: string) => void,
+  onLateFailure?: (result: MacLogoutResult) => void,
+  onStillWaiting?: (message: string, attemptId?: string) => void,
+  acceptAfterMs = LOGOUT_ACCEPT_MS,
+): Promise<MacLogoutResult> {
+  if (logoutFlight) {
+    logoutLog('logout request joined', logoutFlight.attemptId)
+    return logoutFlight.accepted
+  }
+  const attemptId = nextLogoutAttemptId()
+  logoutLog('logout request', attemptId)
+  let markFinished = () => {}
+  const finished = new Promise<void>((resolve) => {
+    markFinished = resolve
+  })
+  const accepted = awaitMacLogoutRequest(
+    (report) => {
+      start((result) => {
+        report(result)
+        markFinished()
+      }, attemptId)
+    },
+    acceptAfterMs,
+    onLateFailure,
+    { onStillWaiting, attemptId },
+  )
+  const flight: LogoutFlight = { attemptId, accepted, finished }
+  logoutFlight = flight
+  void finished.finally(() => {
+    if (logoutFlight === flight) logoutFlight = null
+  })
+  return accepted
+}
+
+export async function requestMacLogout(
+  onLateFailure?: (result: MacLogoutResult) => void,
+  onStillWaiting?: (message: string, attemptId?: string) => void,
+  onSimulated?: (message: string, attemptId?: string) => void,
+): Promise<MacLogoutResult> {
+  const identity = loadBuildIdentity()
+  // Lowest logout gate. Every caller, including a future one, runs the probe.
+  if (identity.testBuild === true) {
+    return requestLogoutProbe(identity, {
+      exec: macLogoutExec,
+      onLateFailure,
+      onStillWaiting,
+      onSimulated,
+    })
+  }
+  if (!isMac()) return { requested: false, message: LOGOUT_FAILED_MESSAGE }
+  if (process.env.FONT_BUTLER_TEST === '1' && process.env.FONT_BUTLER_NATIVE !== '1') {
+    return { requested: false, message: LOGOUT_FAILED_MESSAGE }
+  }
+  return shareMacLogout(
+    (report, attemptId) => startMacLogoutProcess(macLogoutExec, report, attemptId),
+    onLateFailure,
+    onStillWaiting,
+  )
+}
+
+export type LogoutProbeResult = MacLogoutResult & { ignored?: boolean }
+
+type LogoutProbeHooks = {
+  exec?: LogoutExec
+  onLateFailure?: (result: MacLogoutResult) => void
+  onStillWaiting?: (message: string, attemptId?: string) => void
+  onSimulated?: (message: string, attemptId?: string) => void
+  acceptAfterMs?: number
+  stillWaitingAfterMs?: number
+}
+
+let probeFlight: LogoutFlight | null = null
+
+export function resetLogoutProbe(): void {
+  probeFlight = null
+}
+
+/**
+ * Test-build stand-in for logout. `testBuild: true` in build-identity.json is
+ * the only switch. The Apple event is `count processes`, and its result goes through
+ * the same accept window, still-waiting notice, and late-failure path as
+ * requestMacLogout. Allow shows that logout would start, without starting it.
+ */
+export function requestLogoutProbe(
+  identity: { testBuild?: boolean } | null | undefined,
+  hooks: LogoutProbeHooks = {},
+): Promise<LogoutProbeResult> {
+  if (identity?.testBuild !== true) {
+    return Promise.resolve({ requested: false, ignored: true })
+  }
+  if (probeFlight) {
+    logoutLog('logout probe request joined', probeFlight.attemptId)
+    return probeFlight.accepted
+  }
+  const attemptId = nextLogoutAttemptId()
+  const exec = hooks.exec ?? macLogoutExec
+  let noted = false
+  const noteAllowed = () => {
+    if (noted) return
+    noted = true
+    hooks.onSimulated?.(LOGOUT_PROBE_WOULD_START_NOTICE, attemptId)
+  }
+  let markFinished = () => {}
+  const finished = new Promise<void>((resolve) => {
+    markFinished = resolve
+  })
+  logoutLog('logout probe request', attemptId)
+  const accepted = awaitMacLogoutRequest(
+    (report) => {
+      try {
+        const child = exec('osascript', ['-e', MAC_LOGOUT_PROBE_APPLESCRIPT], (error) => {
+          if (error) report(logoutResultFromExecError(error, attemptId))
+          else {
+            report({
+              requested: true,
+              probeAllowed: true,
+              message: LOGOUT_PROBE_WOULD_START_NOTICE,
+              attemptId,
+            })
+          }
+          markFinished()
+        })
+        child?.unref?.()
+      } catch (error) {
+        report(logoutResultFromExecError(error, attemptId))
+        markFinished()
+      }
+    },
+    hooks.acceptAfterMs ?? LOGOUT_ACCEPT_MS,
+    hooks.onLateFailure,
+    {
+      stillWaitingAfterMs: hooks.stillWaitingAfterMs ?? LOGOUT_STILL_WAITING_MS,
+      onStillWaiting: hooks.onStillWaiting,
+      attemptId,
+      onLateSuccess: (result) => {
+        if (result.requested === true && result.probeAllowed === true) noteAllowed()
+      },
+    },
+  )
+  const flight: LogoutFlight = { attemptId, accepted, finished }
+  probeFlight = flight
+  void finished.finally(() => {
+    if (probeFlight === flight) probeFlight = null
+  })
+  return accepted
+}
+
 export async function clearOfficeFontCache(): Promise<{ mac: boolean; cleared: boolean }> {
   if (!isMac()) {
     return { mac: false, cleared: false }
   }
   if (!allowRealCacheMutation()) {
+    // The fallback path is the live Office Group Container unless data is isolated.
+    if (!cacheDataIsIsolated()) return { mac: true, cleared: false }
     const fallback = getPaths().officeFontCacheDir
     if (fs.existsSync(fallback)) {
       emptyDir(fallback)
@@ -241,14 +716,13 @@ export async function clearAdobeFontCache(home = os.homedir()): Promise<{
 export async function clearFontCaches(
   options: { office?: boolean; adobe?: boolean } = {},
 ): Promise<{ mac: boolean; office: boolean; adobe: boolean }> {
-  const font = await clearUserFontCache()
   const office =
     options.office === false ? { cleared: false } : await clearOfficeFontCache()
   const adobe = options.adobe === false ? { cleared: false } : await clearAdobeFontCache()
-  return { mac: font.mac, office: office.cleared, adobe: adobe.cleared }
+  return { mac: false, office: office.cleared, adobe: adobe.cleared }
 }
 
-const FONT_ENABLE_SCRIPT = `ObjC.import('CoreText')
+export const FONT_ENABLE_SCRIPT = `ObjC.import('CoreText')
 ObjC.import('Foundation')
 function descriptorsFor(filePath) {
   const url = $.NSURL.fileURLWithPath(filePath)
@@ -323,15 +797,50 @@ function isEnabled(filePath, available) {
   }
   return false
 }
-function registerUrl(filePath, register) {
+function isMacUserLibraryFontPath(filePath) {
+  const s = String(filePath)
+  if (s.indexOf('/System/Library/Fonts/') >= 0) return false
+  return /\\/Users\\/[^\\/]+\\/Library\\/Fonts\\//.test(s)
+}
+function registerAtScopes(filePath, register) {
+  if (isMacUserLibraryFontPath(filePath)) return 'skip'
   const url = $.NSURL.fileURLWithPath(filePath)
   const fn = register ? $.CTFontManagerRegisterFontsForURL : $.CTFontManagerUnregisterFontsForURL
-  // macOS user-visible registration is kCTFontManagerScopeSession (3). Scope 2 is persistent and
-  // often returns paramErr (-50) for ~/Library/Fonts paths. Scope 1 is process-only, which made
-  // Figma and other apps miss fonts while fc-list still saw the files on disk.
-  if (Boolean(ObjC.unwrap(fn(url, 3, null)))) return true
-  if (Boolean(ObjC.unwrap(fn(url, 2, null)))) return true
-  return Boolean(ObjC.unwrap(fn(url, 1, null)))
+  const scopes = ${JSON.stringify([...REGISTRATION_SCOPES])}
+  const alreadyRegistered = ${ALREADY_REGISTERED_CODE}
+  let lastCode = 0
+  for (let i = 0; i < scopes.length; i++) {
+    const scope = scopes[i]
+    const error = Ref()
+    let ok = false
+    let code = 0
+    try {
+      const result = fn(url, scope, error)
+      if (result === true || result === 1) ok = true
+      else if (result === false || result === 0 || result == null) ok = false
+      else {
+        try { ok = Boolean(ObjC.unwrap(result)) } catch (unwrapError) { ok = Boolean(result) }
+      }
+    } catch (callError) {
+      ok = false
+    }
+    try {
+      const err = error[0]
+      if (err) {
+        let nsError = err
+        try { nsError = ObjC.castRefToObject(err) } catch (castError) { nsError = err }
+        const raw = nsError.code
+        code = Number(raw && raw.js ? ObjC.unwrap(raw) : raw)
+        if (!isFinite(code)) code = 0
+      }
+    } catch (readError) {
+      code = 0
+    }
+    if (ok) return 'ok:0:' + scope
+    if (register && code === alreadyRegistered) return 'ok:' + alreadyRegistered + ':' + scope
+    lastCode = code
+  }
+  return 'fail:' + lastCode
 }
 function run(argv) {
   const mode = argv[0]
@@ -361,10 +870,13 @@ function run(argv) {
   if (mode === 'ensure') {
     const filePath = argv[1]
     const enabled = argv[2] === '1'
-    if (enabled) registerUrl(filePath, true)
+    if (isMacUserLibraryFontPath(filePath)) return 'skip'
+    if (!enabled) return registerAtScopes(filePath, false)
+    const registered = registerAtScopes(filePath, true)
+    if (String(registered).indexOf('fail') === 0) return registered
     const descs = descriptorsFor(filePath)
     if (!descs || Number(descs.count) === 0) return 'fail'
-    $.CTFontManagerEnableFontDescriptors(descs, enabled)
+    $.CTFontManagerEnableFontDescriptors(descs, true)
     if (isUserFontsDomainPath(filePath)) {
       if (!enabled) return 'ok'
       if (pathExists(filePath) && canRenderUserFont(filePath)) return 'ok'
@@ -373,14 +885,46 @@ function run(argv) {
     return on === enabled ? 'ok' : 'fail'
   }
   if (mode === 'register') {
-    return registerUrl(argv[1], true) ? 'ok' : 'fail'
+    return registerAtScopes(argv[1], true)
   }
   if (mode === 'unregister') {
-    return registerUrl(argv[1], false) ? 'ok' : 'fail'
+    return registerAtScopes(argv[1], false)
   }
   return '{}'
 }
 `
+
+export function fontManagerSucceeded(stdout: string): boolean {
+  const text = stdout.trim()
+  if (text === 'ok' || text === 'skip' || text.startsWith('ok:')) return true
+  const fail = /^fail:(-?\d+)/.exec(text)
+  if (fail && registrationSucceeded([{ ok: false, code: Number(fail[1]) }])) return true
+  return false
+}
+
+/** Unregister may report 105 or 201 when this process no longer holds the registration. */
+export function unregisterSucceeded(stdout: string): boolean {
+  if (fontManagerSucceeded(stdout)) return true
+  const fail = /^fail:(-?\d+)/.exec(stdout.trim())
+  if (!fail) return false
+  const code = Number(fail[1])
+  return code === NOT_REGISTERED_CODE || code === ALREADY_REGISTERED_CODE
+}
+
+export function unregisterErrorIsAlreadyGone(error: string | undefined): boolean {
+  return new RegExp(`fail:(?:${NOT_REGISTERED_CODE}|${ALREADY_REGISTERED_CODE})\\b`).test(error || '')
+}
+
+function fontManagerError(mode: string, detail: string): string {
+  if (detail.startsWith('fail')) {
+    if (mode === 'register') return `Could not register the font (${detail}).`
+    if (mode === 'unregister') return `Could not unregister the font (${detail}).`
+    return `Could not change font activation (${detail}).`
+  }
+  if (mode === 'register') return 'Could not register the font.'
+  if (mode === 'unregister') return 'Could not unregister the font.'
+  return 'Could not change font activation.'
+}
 
 async function runFontManager(mode: string, filePath: string, extra: string[] = []): Promise<FontEnableResult> {
   const safePath = assertSafeShellPath(filePath)
@@ -390,32 +934,17 @@ async function runFontManager(mode: string, filePath: string, extra: string[] = 
       ['-l', 'JavaScript', '-e', FONT_ENABLE_SCRIPT, mode, safePath, ...extra],
       { timeout: 10_000 },
     )
-    if (stdout.trim() !== 'ok') {
-      return {
-        ok: false,
-        native: true,
-        error:
-          mode === 'register'
-            ? 'Could not register the font.'
-            : mode === 'unregister'
-              ? 'Could not unregister the font.'
-              : 'Could not change font activation.',
-      }
+    const detail = stdout.trim()
+    logMain('register', `${mode} ${safePath} ${detail}`)
+    const succeeded = mode === 'unregister' ? unregisterSucceeded(detail) : fontManagerSucceeded(detail)
+    if (!succeeded) {
+      return { ok: false, native: true, error: fontManagerError(mode, detail) }
     }
     return { ok: true, native: true }
   } catch (error) {
-    return {
-      ok: false,
-      native: true,
-      error:
-        error instanceof Error
-          ? error.message
-          : mode === 'register'
-            ? 'Could not register the font.'
-            : mode === 'unregister'
-              ? 'Could not unregister the font.'
-              : 'Could not change font activation.',
-    }
+    const message = error instanceof Error ? error.message : fontManagerError(mode, '')
+    logMain('register', `${mode} ${safePath} error ${message}`)
+    return { ok: false, native: true, error: message }
   }
 }
 
@@ -423,11 +952,19 @@ export async function registerFont(filePath: string): Promise<FontEnableResult> 
   if (!isMac() || !filePath) {
     return { ok: true, native: false }
   }
+  if (isMacUserFontFile(filePath)) {
+    logMain('register', `skip register ${filePath}`)
+    return { ok: true, native: false }
+  }
   return runFontManager('register', filePath)
 }
 
 export async function unregisterFont(filePath: string): Promise<FontEnableResult> {
   if (!isMac() || !filePath) {
+    return { ok: true, native: false }
+  }
+  if (isMacUserFontFile(filePath)) {
+    logMain('register', `skip unregister ${filePath}`)
     return { ok: true, native: false }
   }
   return runFontManager('unregister', filePath)
@@ -512,4 +1049,624 @@ export async function fontActivationStates(filePaths: string[]): Promise<Activat
     }
   }
   return { ok: true, native: true, states }
+}
+
+export type ActivatedFontLookup = {
+  ok: boolean
+  postscript: string
+  family: string
+  version: string
+  path: string
+  listed: boolean
+  error?: string
+  timedOut?: boolean
+}
+
+export const FONT_LOOKUP_SCRIPT = `ObjC.import('CoreText')
+ObjC.import('Foundation')
+ObjC.import('AppKit')
+function fail(error) {
+  let message = 'Font lookup failed.'
+  try {
+    if (typeof error === 'string' && error.trim()) message = error.trim()
+    else if (error && error.message) message = String(error.message)
+    else if (error != null) message = String(error)
+  } catch (stringifyError) {
+    message = 'Font lookup failed.'
+  }
+  message = String(message).replace(/\\s+/g, ' ').trim() || 'Font lookup failed.'
+  return 'fail:' + message
+}
+function objcString(value) {
+  if (value == null) return ''
+  return String(ObjC.unwrap(ObjC.castRefToObject(value)) || '')
+}
+function miss(reason, extra) {
+  const body = extra || {}
+  body.ok = false
+  body.reason = String(reason)
+  if (!body.postscript) body.postscript = ''
+  if (!body.family) body.family = ''
+  if (!body.version) body.version = ''
+  if (!body.path) body.path = ''
+  if (body.listed !== true) body.listed = false
+  return JSON.stringify(body)
+}
+function lookupFont(psName) {
+  const font = $.CTFontCreateWithName($(psName), 12, null)
+  if (!font) return miss('missing')
+  const actual = objcString($.CTFontCopyPostScriptName(font))
+  const family = objcString($.CTFontCopyFamilyName(font))
+  const version = objcString($.CTFontCopyName(font, $.kCTFontVersionNameKey))
+  const found = { postscript: actual, family: family, version: version }
+  const nsFont = $.NSFont.fontWithNameSize($(psName), 12)
+  if (!nsFont || nsFont.isNil()) return miss('NSFont could not open ' + psName, found)
+  const url = nsFont.fontDescriptor.objectForKey('NSCTFontFileURLAttribute')
+  if (!url || url.isNil() || url.path == null) return miss('NSFont has no file URL for ' + psName, found)
+  const filePath = String(ObjC.unwrap(url.path) || '')
+  if (!filePath) return miss('NSFont file URL for ' + psName + ' was empty', found)
+  let listed = false
+  const families = $.CTFontManagerCopyAvailableFontFamilyNames()
+  const arr = families ? ObjC.castRefToObject(families) : null
+  if (arr) {
+    const n = Number(arr.count)
+    for (let i = 0; i < n; i++) {
+      if (String(ObjC.unwrap(arr.objectAtIndex(i))) === family) {
+        listed = true
+        break
+      }
+    }
+  }
+  return JSON.stringify({
+    ok: true,
+    postscript: actual,
+    family: family,
+    version: version,
+    path: filePath,
+    listed: listed
+  })
+}
+function run(argv) {
+  try {
+    return lookupFont(String(argv[0] || ''))
+  } catch (error) {
+    return fail(error)
+  }
+}
+`
+
+export function fontPathsMatch(left: string, right: string): boolean {
+  const normalize = (value: string) => {
+    if (!value) return ''
+    let resolved = path.resolve(value)
+    try {
+      resolved = fs.realpathSync(resolved)
+    } catch {
+      // Keep the path we were given when the file is already gone.
+    }
+    if (resolved.startsWith('/private/var/') || resolved.startsWith('/private/tmp/')) {
+      return resolved.slice('/private'.length)
+    }
+    return resolved
+  }
+  const a = normalize(left)
+  const b = normalize(right)
+  return Boolean(a) && a === b
+}
+
+export function nativeFontVerificationEnabled(): boolean {
+  if (!isMac()) return false
+  if (process.env.FONT_BUTLER_TEST === '1' && process.env.FONT_BUTLER_NATIVE !== '1') return false
+  return true
+}
+
+export function versionsMatch(reported: string, expected: string): boolean {
+  const normalize = (value: string) => value.trim().replace(/\s+/g, ' ')
+  const actual = normalize(reported)
+  const wanted = normalize(expected)
+  if (!actual || !wanted) return true
+  if (actual.toLowerCase() === wanted.toLowerCase()) return true
+  const strip = (value: string) => value.replace(/^version\s+/i, '').trim()
+  return strip(actual).toLowerCase() === strip(wanted).toLowerCase()
+}
+
+const emptyLookup = (): ActivatedFontLookup => ({
+  ok: false,
+  postscript: '',
+  family: '',
+  version: '',
+  path: '',
+  listed: false,
+})
+
+/** A script or bridge failure. This is not a "font not visible yet" result. */
+export function brokenLookupMessage(detail: string): string {
+  const line = detail
+    .split('\n')
+    .map((part) => part.trim())
+    .find(Boolean) || 'Font lookup failed.'
+  return line.startsWith('fail:') ? line : `fail:${line}`
+}
+
+export function parseActivatedFontLookup(stdout: string, postscriptName = ''): ActivatedFontLookup {
+  const text = stdout.trim()
+  if (!text || text.startsWith('fail:') || !text.startsWith('{')) {
+    const message = brokenLookupMessage(text || 'Font lookup returned nothing.')
+    logMain('verify', `lookup ${postscriptName} ${message}`)
+    return { ...emptyLookup(), error: message }
+  }
+  try {
+    const parsed = JSON.parse(text) as Partial<ActivatedFontLookup> & { reason?: string }
+    const reason = parsed.reason ? String(parsed.reason) : ''
+    return {
+      ok: Boolean(parsed.ok),
+      postscript: String(parsed.postscript || ''),
+      family: String(parsed.family || ''),
+      version: String(parsed.version || ''),
+      path: String(parsed.path || ''),
+      listed: Boolean(parsed.listed),
+      error: parsed.ok ? undefined : reason || 'Could not look up the font.',
+    }
+  } catch (error) {
+    const message = brokenLookupMessage(error instanceof Error ? error.message : 'Could not read the font lookup.')
+    logMain('verify', `lookup ${postscriptName} ${message}`)
+    return { ...emptyLookup(), error: message }
+  }
+}
+
+function execTimedOut(error: unknown): boolean {
+  const err = error as { killed?: boolean; code?: string; message?: string }
+  return err?.killed === true || err?.code === 'ETIMEDOUT' || /timed out/i.test(err?.message || '')
+}
+
+export async function lookupActivatedFont(
+  postscriptName: string,
+  options: { timeoutMs?: number } = {},
+): Promise<ActivatedFontLookup> {
+  if (!postscriptName.trim()) {
+    return { ...emptyLookup(), error: 'The font has no PostScript name.' }
+  }
+  const timeout = options.timeoutMs ?? LOOKUP_DIRECT_TIMEOUT_MS
+  try {
+    const { stdout } = await execFileAsync(
+      'osascript',
+      ['-l', 'JavaScript', '-e', FONT_LOOKUP_SCRIPT, postscriptName],
+      { timeout },
+    )
+    return parseActivatedFontLookup(stdout, postscriptName)
+  } catch (error) {
+    const err = error as { message?: string; stderr?: string | Buffer; stdout?: string | Buffer }
+    const stdout = Buffer.isBuffer(err?.stdout) ? err.stdout.toString('utf8') : err?.stdout
+    if (typeof stdout === 'string' && stdout.trim().startsWith('fail:')) {
+      return parseActivatedFontLookup(stdout, postscriptName)
+    }
+    if (execTimedOut(error)) {
+      const message = 'fail:Font lookup timed out.'
+      logMain('verify', `lookup ${postscriptName} ${message}`)
+      return { ...emptyLookup(), error: message, timedOut: true }
+    }
+    const detail =
+      [err?.stderr, err?.stdout, err?.message]
+        .map((part) => (Buffer.isBuffer(part) ? part.toString('utf8') : part))
+        .filter((part) => typeof part === 'string' && part.trim())
+        .join('\n') || 'Could not look up the font.'
+    const message = brokenLookupMessage(detail)
+    logMain('verify', `lookup ${postscriptName} ${message}`)
+    return { ...emptyLookup(), error: message }
+  }
+}
+
+function waitForFont(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
+}
+
+/**
+ * Ask a fresh process which file Core Text serves for this PostScript name.
+ * Retries so fontd can notice a renamed file in ~/Library/Fonts.
+ */
+export async function awaitActivatedFont(
+  postscriptName: string,
+  filePath: string,
+  options: { version?: string; attempts?: number } = {},
+): Promise<ActivatedFontLookup> {
+  const attempts = options.attempts ?? 20
+  let last: ActivatedFontLookup = {
+    ok: false,
+    postscript: '',
+    family: '',
+    version: '',
+    path: '',
+    listed: false,
+    error: 'Could not look up the font.',
+  }
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    last = await lookupActivatedFont(postscriptName)
+    const versionOk = !options.version || versionsMatch(last.version, options.version)
+    if (
+      last.ok &&
+      last.postscript === postscriptName &&
+      last.listed &&
+      fontPathsMatch(last.path, filePath) &&
+      versionOk
+    ) {
+      return last
+    }
+    if (attempt + 1 < attempts) await waitForFont(400)
+  }
+  return last
+}
+
+export function installedFontCheckError(filePath: string, message: string, keep: boolean): Error {
+  if (message.startsWith('fail:')) {
+    if (isMacUserFontFile(filePath)) {
+      const text = /not visible to other apps yet/i.test(message)
+        ? message
+        : `${message} The font is ${FONT_NOT_VISIBLE_WARNING.toLowerCase()}.`
+      logMain('verify', `kept ${filePath} ${text}`)
+      return new InstalledFontKept(text)
+    }
+    logMain('verify', `fail ${filePath} ${message}`)
+    return new Error(message)
+  }
+  return keptVerificationError(filePath, message, keep)
+}
+
+function keptVerificationError(filePath: string, message: string, keep: boolean): Error {
+  const userFont = isMacUserFontFile(filePath)
+  if (!(keep || userFont)) return new Error(message)
+  const anotherCopy = isDuplicateCopyWarning(message)
+  const text =
+    userFont && !anotherCopy && !/not visible to other apps yet/i.test(message)
+      ? `${message} The font is ${FONT_NOT_VISIBLE_WARNING.toLowerCase()}.`
+      : message
+  return new InstalledFontKept(text)
+}
+
+/**
+ * Faces that have a PostScript name, keyed by their original collection index.
+ * Filtering first would renumber a later face and read the wrong name table.
+ */
+export function verificationFaceChecks(
+  filePath: string,
+  faces: Array<{ postscriptName: string }>,
+): Array<{ index: number; ps: string; acceptable: Set<string>; version: string }> {
+  return faces.flatMap((face, index) => {
+    const ps = face.postscriptName.trim()
+    if (!ps) return []
+    return [
+      {
+        index,
+        ps,
+        acceptable: new Set([ps, ...readAcceptablePostScriptNames(filePath, index)]),
+        version: readFontName(filePath, 5, index),
+      },
+    ]
+  })
+}
+
+const USER_FONT_COPY_EXTENSIONS = new Set(['.ttf', '.otf', '.ttc', '.otc'])
+
+type VerificationBatch = {
+  deadline: number
+  now: () => number
+  /** Set after one walk, including a walk that stopped at the deadline. */
+  scanned: boolean
+  /** PostScript name to every file that produced it during this batch's walk. */
+  byName: Map<string, string[]>
+}
+
+const verificationBatch = new AsyncLocalStorage<VerificationBatch>()
+const userFontNameCache = new Map<string, string[]>()
+let userFontNameReads = 0
+
+export function resetUserFontCopyCache(): void {
+  userFontNameCache.clear()
+  userFontNameReads = 0
+}
+
+export function userFontCopyReadCount(): number {
+  return userFontNameReads
+}
+
+/** One deadline for every activation check inside `run`, including not-found retries. */
+export function withVerificationBatch<T>(
+  run: () => Promise<T>,
+  options: { now?: () => number; budgetMs?: number } = {},
+): Promise<T> {
+  if (verificationBatch.getStore()) return run()
+  const now = options.now ?? Date.now
+  return verificationBatch.run(
+    {
+      deadline: now() + (options.budgetMs ?? VERIFY_BUDGET_MS),
+      now,
+      scanned: false,
+      byName: new Map(),
+    },
+    run,
+  )
+}
+
+export function duplicateCopyWarning(name: string, otherPath: string): string {
+  return `Both copies of ${name} are installed. The other file is ${otherPath}.`
+}
+
+export function isDuplicateCopyWarning(message: string): boolean {
+  return /Both copies of .+ are installed\./.test(message) || /already served/.test(message)
+}
+
+export function assignActivationWarning(
+  entry: { activationWarning?: string },
+  warning: string | undefined,
+): void {
+  if (warning && isDuplicateCopyWarning(warning)) entry.activationWarning = warning
+  else delete entry.activationWarning
+}
+
+/**
+ * Walk font files under `root`. `now()` is checked before each directory, so a
+ * spent budget never opens the next folder. `visit` returning false stops the
+ * walk immediately, including directories that have not been opened yet.
+ */
+export function visitUserFontFiles(
+  root: string,
+  visit: (filePath: string) => boolean | void,
+  now: () => number = () => 0,
+  deadline = Number.POSITIVE_INFINITY,
+): void {
+  const seen = new Set<string>()
+  const pending = [root]
+  while (pending.length > 0) {
+    if (now() >= deadline) return
+    const dir = pending.pop()
+    if (!dir) continue
+    let resolved = dir
+    try {
+      resolved = fs.realpathSync(dir)
+    } catch {
+      continue
+    }
+    if (seen.has(resolved)) continue
+    seen.add(resolved)
+    let entries: fs.Dirent[]
+    try {
+      entries = fs.readdirSync(resolved, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    entries.sort((a, b) => a.name.localeCompare(b.name))
+    const subdirs: string[] = []
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue
+      const full = path.join(resolved, entry.name)
+      let stat: fs.Stats
+      try {
+        stat = fs.statSync(full)
+      } catch {
+        continue
+      }
+      if (stat.isDirectory()) {
+        subdirs.push(full)
+        continue
+      }
+      if (!USER_FONT_COPY_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) continue
+      if (visit(full) === false) return
+    }
+    for (const sub of subdirs) pending.push(sub)
+  }
+}
+
+export function listUserFontFiles(
+  root: string,
+  now: () => number = () => 0,
+  deadline = Number.POSITIVE_INFINITY,
+): string[] {
+  const files: string[] = []
+  visitUserFontFiles(
+    root,
+    (full) => {
+      files.push(full)
+    },
+    now,
+    deadline,
+  )
+  files.sort()
+  return files
+}
+
+/** `budget` means the deadline passed before this cache-miss read. */
+function cachedPostScriptNames(
+  filePath: string,
+  now: () => number,
+  deadline: number,
+): string[] | 'budget' {
+  let stat: fs.Stats
+  try {
+    stat = fs.statSync(filePath)
+  } catch {
+    return []
+  }
+  const key = `${path.resolve(filePath)}\0${stat.mtimeMs}\0${stat.size}`
+  const hit = userFontNameCache.get(key)
+  if (hit) return hit
+  if (now() >= deadline) return 'budget'
+  userFontNameReads += 1
+  const names = readFilePostScriptNames(filePath)
+  userFontNameCache.set(key, names)
+  return names
+}
+
+function otherCopyFromMap(
+  byName: Map<string, string[]>,
+  wanted: Set<string>,
+  installedPath: string,
+): string | undefined {
+  for (const name of wanted) {
+    const paths = byName.get(name)
+    if (!paths) continue
+    const other = paths.find((candidate) => !fontPathsMatch(candidate, installedPath))
+    if (other) return other
+  }
+  return undefined
+}
+
+/**
+ * Another file under ~/Library/Fonts (or the test override) with one of these
+ * PostScript names. Name tables only, cached by path, mtime, and size. One
+ * walk per verification batch, and each uncached read counts against `deadline`.
+ */
+export function findOtherUserFontCopy(
+  installedPath: string,
+  names: Iterable<string>,
+  options: { now?: () => number; deadline?: number } = {},
+): string | undefined {
+  const wanted = new Set([...names].map((name) => name.trim()).filter(Boolean))
+  const batch = verificationBatch.getStore()
+  const now = options.now ?? batch?.now ?? Date.now
+  const deadline = options.deadline ?? batch?.deadline ?? now() + VERIFY_BUDGET_MS
+  if (wanted.size === 0) return undefined
+  if (batch?.scanned) return otherCopyFromMap(batch.byName, wanted, installedPath)
+  const root = macUserFontsRoot()
+  if (!root || !fs.existsSync(root)) {
+    if (batch) batch.scanned = true
+    return undefined
+  }
+  if (now() >= deadline) {
+    if (batch) batch.scanned = true
+    return undefined
+  }
+  const byName = batch?.byName ?? new Map<string, string[]>()
+  let match: string | undefined
+  visitUserFontFiles(
+    root,
+    (full) => {
+      const psNames = cachedPostScriptNames(full, now, deadline)
+      if (psNames === 'budget') return false
+      for (const name of psNames) {
+        const paths = byName.get(name)
+        if (paths) {
+          if (!paths.some((candidate) => fontPathsMatch(candidate, full))) paths.push(full)
+        } else {
+          byName.set(name, [full])
+        }
+        if (!match && wanted.has(name) && !fontPathsMatch(full, installedPath)) match = full
+      }
+      return true
+    },
+    now,
+    deadline,
+  )
+  if (batch) batch.scanned = true
+  return match ?? otherCopyFromMap(byName, wanted, installedPath)
+}
+
+type FontLookup = (
+  postscriptName: string,
+  options: { timeoutMs: number },
+) => Promise<ActivatedFontLookup>
+
+export async function verifyInstalledFont(filePath: string): Promise<void> {
+  if (!nativeFontVerificationEnabled()) {
+    logMain('verify', `skip ${filePath}`)
+    return
+  }
+  // Stay on the catalog queue. The check is capped at VERIFY_BUDGET_MS, and
+  // releasing the queue here lets another task save over this one.
+  await runInstalledFontVerification(filePath)
+}
+
+export async function runInstalledFontVerification(
+  filePath: string,
+  options: {
+    lookup?: FontLookup
+    now?: () => number
+    budgetMs?: number
+  } = {},
+): Promise<void> {
+  const lookup = options.lookup ?? ((postscriptName, lookupOptions) => lookupActivatedFont(postscriptName, lookupOptions))
+  const batch = verificationBatch.getStore()
+  const now = options.now ?? batch?.now ?? Date.now
+  const deadline = batch ? batch.deadline : now() + (options.budgetMs ?? VERIFY_BUDGET_MS)
+  const parsed = parseFontFile(filePath)
+  const checks = verificationFaceChecks(filePath, parsed.faces)
+  if (checks.length === 0) {
+    const message = 'Could not read a PostScript name from the installed font.'
+    logMain('verify', `fail ${filePath} ${message}`)
+    throw installedFontCheckError(filePath, message, false)
+  }
+  const userFont = isMacUserFontFile(filePath)
+  const watched = new Set<string>()
+  for (const check of checks) {
+    watched.add(check.ps)
+    for (const name of check.acceptable) watched.add(name)
+  }
+  const otherCopy = findOtherUserFontCopy(filePath, watched, { now, deadline })
+  if (otherCopy) {
+    const message = duplicateCopyWarning(checks[0]?.ps ?? 'the font', otherCopy)
+    logMain('verify', `kept ${filePath} ${message}`)
+    throw installedFontCheckError(filePath, message, true)
+  }
+  let lastError = 'Core Text did not activate the installed font.'
+  let lastKeep = userFont
+  while (true) {
+    let failed = ''
+    let keep = userFont
+    let stop = false
+    for (const check of checks) {
+      const remaining = deadline - now()
+      if (remaining <= 0) {
+        failed = lastError
+        stop = true
+        break
+      }
+      const timeoutMs = Math.min(LOOKUP_ATTEMPT_MS, remaining)
+      const result = await lookup(check.ps, { timeoutMs })
+      logMain(
+        'verify',
+        `${check.ps} -> ps=${result.postscript || '?'} path=${result.path || '?'} version=${result.version || '?'} listed=${result.listed} file=${filePath}`,
+      )
+      if (result.timedOut || result.error?.startsWith('fail:')) {
+        failed = result.error || 'fail:Font lookup timed out.'
+        keep = userFont
+        stop = true
+        break
+      }
+      if (!result.ok) {
+        failed = result.error || `Core Text did not resolve ${check.ps}.`
+        keep = userFont
+        break
+      }
+      if (!check.acceptable.has(result.postscript)) {
+        const fallback = /helvetica/i.test(result.postscript) || /helvetica/i.test(result.path)
+        failed = fallback
+          ? `Core Text resolved ${check.ps} to a fallback font (${result.postscript || result.path}).`
+          : `Core Text resolved ${check.ps} to ${result.postscript || 'another font'} instead of the installed file.`
+        keep = userFont
+        break
+      }
+      if (!fontPathsMatch(result.path, filePath)) {
+        failed = duplicateCopyWarning(check.ps, result.path || 'another file')
+        keep = true
+        break
+      }
+      if (check.version && result.version && !versionsMatch(result.version, check.version)) {
+        failed = `Core Text is serving ${result.version} for ${check.ps}, not ${check.version}.`
+        keep = userFont
+        break
+      }
+    }
+    if (!failed) {
+      logMain('verify', `ok ${filePath}`)
+      return
+    }
+    lastError = failed
+    lastKeep = keep
+    if (stop || now() >= deadline) break
+    const remaining = deadline - now()
+    await waitForFont(Math.min(VERIFY_INTERVAL_MS, remaining))
+    if (now() >= deadline) break
+  }
+  logMain('verify', `fail ${filePath} ${lastError}`)
+  throw installedFontCheckError(filePath, lastError, lastKeep)
 }

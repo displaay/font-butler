@@ -86,11 +86,13 @@ export function createDebugLogStore(options = {}) {
   }
 }
 
-export function defaultLogFilePath(homeDir = os.homedir(), platform = process.platform) {
+export function defaultLogFilePath(homeDir = os.homedir(), platform = process.platform, env = process.env) {
+  const named = env && typeof env.FONT_BUTLER_LOG_NAME === 'string' ? env.FONT_BUTLER_LOG_NAME.trim() : ''
+  const folder = named || 'Font Buttler'
   if (platform === 'darwin') {
-    return path.join(homeDir, 'Library', 'Logs', 'Font Buttler', 'main.log')
+    return path.join(homeDir, 'Library', 'Logs', folder, 'main.log')
   }
-  return path.join(homeDir, '.local', 'state', 'Font Buttler', 'logs', 'main.log')
+  return path.join(homeDir, '.local', 'state', folder, 'logs', 'main.log')
 }
 
 export function rotateLogFileIfNeeded(filePath, maxBytes = LOG_FILE_MAX_BYTES) {

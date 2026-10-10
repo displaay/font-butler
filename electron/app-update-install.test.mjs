@@ -17,6 +17,8 @@ import {
   DEVELOPER_ID_TEAM,
   GITHUB_LATEST_API,
   buildMacSwapScript,
+  detectAppUpdateRuntime,
+  findUpdateAppBundle,
   cleanupOpenedUpdateDmgs,
   createAppUpdateInstaller,
   isAllowedUpdateRequest,
@@ -1031,6 +1033,36 @@ test('readBundleShortVersion reads CFBundleShortVersionString and converts a bin
     /could not be read/,
   )
   rmSync(root, { recursive: true, force: true })
+})
+
+test('the updater recognises a renamed Font Buttler Test app', () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'font-butler-test-app-'))
+  try {
+    const app = path.join(root, 'Font Buttler Test.app')
+    const exe = path.join(app, 'Contents', 'MacOS', 'Font Buttler Test')
+    mkdirSync(path.dirname(exe), { recursive: true })
+    writeFileSync(exe, '')
+    const runtime = detectAppUpdateRuntime(exe, () => ({ status: 1, stdout: '', stderr: '' }))
+    assert.equal(runtime.packaged, true)
+    assert.equal(runtime.appPath, app)
+
+    const other = path.join(root, 'Other.app', 'Contents', 'MacOS', 'Other')
+    mkdirSync(path.dirname(other), { recursive: true })
+    writeFileSync(other, '')
+    assert.equal(detectAppUpdateRuntime(other, () => ({ status: 0, stdout: '', stderr: '' })).packaged, false)
+
+    const direct = path.join(root, 'unpacked')
+    mkdirSync(path.join(direct, 'Font Buttler Test.app'), { recursive: true })
+    assert.equal(findUpdateAppBundle(direct), path.join(direct, 'Font Buttler Test.app'))
+    const nestedRoot = path.join(root, 'nested')
+    const nested = path.join(nestedRoot, 'payload', 'Font Buttler Test.app')
+    mkdirSync(nested, { recursive: true })
+    assert.equal(findUpdateAppBundle(nestedRoot), nested)
+    mkdirSync(path.join(direct, 'Font Buttler.app'), { recursive: true })
+    assert.equal(findUpdateAppBundle(direct), path.join(direct, 'Font Buttler.app'))
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('the swap script restores the previous app if the new bundle cannot be moved', () => {

@@ -52,6 +52,7 @@ test('a marked build isolates userData and sets FONT_BUTLER_DATA when it is unse
     assert.equal(plan.setDataEnv, true)
     assert.equal(app.paths.userData, userData)
     assert.equal(env.FONT_BUTLER_DATA, path.join(userData, 'data'))
+    assert.equal(env.FONT_BUTLER_LOG_NAME, TEST_FEED_USER_DATA_DIR)
     assert.equal(plan.dataDir, env.FONT_BUTLER_DATA)
   } finally {
     rmSync(root, { recursive: true, force: true })
@@ -70,6 +71,7 @@ test('a marked build keeps an explicit FONT_BUTLER_DATA and still moves userData
     assert.equal(plan.setDataEnv, false)
     assert.equal(app.paths.userData, path.join(appData, TEST_FEED_USER_DATA_DIR))
     assert.equal(env.FONT_BUTLER_DATA, path.join(root, 'custom-data'))
+    assert.equal(env.FONT_BUTLER_LOG_NAME, TEST_FEED_USER_DATA_DIR)
     assert.equal(plan.dataDir, env.FONT_BUTLER_DATA)
   } finally {
     rmSync(root, { recursive: true, force: true })
@@ -91,6 +93,7 @@ test('an unmarked build does not change userData or FONT_BUTLER_DATA', () => {
     assert.equal(app.paths.userData, originalUserData)
     assert.equal(app.setPathCalls.length, 0)
     assert.equal(env.FONT_BUTLER_DATA, undefined)
+    assert.equal(env.FONT_BUTLER_LOG_NAME, undefined)
     assert.equal(env.OTHER, 'kept')
     assert.deepEqual(
       planTestFeedDataIsolation({ testFeedBuild: false, appData, env: { FONT_BUTLER_DATA: '/tmp/real' } }),
@@ -128,6 +131,7 @@ test('an unreadable running-app marker stays unmarked and does not isolate', () 
     assert.equal(app.paths.userData, originalUserData)
     assert.equal(app.setPathCalls.length, 0)
     assert.equal(env.FONT_BUTLER_DATA, undefined)
+    assert.equal(env.FONT_BUTLER_LOG_NAME, undefined)
     assert.equal(originalUserData.endsWith(TEST_FEED_USER_DATA_DIR), false)
   } finally {
     rmSync(root, { recursive: true, force: true })
@@ -150,6 +154,7 @@ test('no environment variable can turn isolation on, and only the marker can', (
     assert.equal(plain.isolate, false)
     assert.equal(plainApp.setPathCalls.length, 0)
     assert.equal(tempting.FONT_BUTLER_DATA, undefined)
+    assert.equal(tempting.FONT_BUTLER_LOG_NAME, undefined)
 
     const off = {
       FONT_BUTLER_TEST_FEED_BUILD: '0',
@@ -161,6 +166,7 @@ test('no environment variable can turn isolation on, and only the marker can', (
     assert.equal(turnedOn.isolate, true)
     assert.deepEqual(markedApp.setPathCalls, [['userData', path.join(root, 'Application Support', TEST_FEED_USER_DATA_DIR)]])
     assert.equal(off.FONT_BUTLER_DATA, path.join(root, 'Application Support', TEST_FEED_USER_DATA_DIR, 'data'))
+    assert.equal(off.FONT_BUTLER_LOG_NAME, TEST_FEED_USER_DATA_DIR)
 
     const late = fakeApp(path.join(root, 'Application Support'), { ready: true })
     assert.throws(
@@ -187,5 +193,7 @@ test('main sets test-feed userData and FONT_BUTLER_DATA before the single-instan
   const helper = readFileSync(new URL('./test-feed-data.mjs', import.meta.url), 'utf8')
   assert.match(helper, /app\.setPath\('userData', plan\.userData\)/)
   assert.match(helper, /env\.FONT_BUTLER_DATA = plan\.dataDir/)
+  assert.match(helper, /env\.FONT_BUTLER_LOG_NAME = TEST_FEED_USER_DATA_DIR/)
   assert.match(main, /FONT_BUTLER_DATA: process\.env\.FONT_BUTLER_DATA/)
+  assert.match(main, /FONT_BUTLER_LOG_NAME: process\.env\.FONT_BUTLER_LOG_NAME/)
 })

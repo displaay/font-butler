@@ -77,6 +77,18 @@ test('native notices only fire when enabled, hidden, and not duplicated', () => 
     }),
     false,
   )
+  assert.equal(
+    shouldShowNativeNotice({
+      enabled: true,
+      windowHidden: true,
+      kind: 'warning',
+      key: 'warning:1:not visible',
+      lastKey: null,
+      now: 1000,
+      lastAt: 0,
+    }),
+    true,
+  )
 })
 
 test('deliverNativeNotice constructs a notification only for a hidden enabled window', () => {
@@ -126,6 +138,21 @@ test('deliverNativeNotice constructs a notification only for a hidden enabled wi
   })
   assert.equal(skippedVisible.shown, false)
   assert.equal(created.length, 1)
+
+  const warning = deliverNativeNotice({
+    notice: { kind: 'warning', entryId: '1', message: 'Inter is not visible to other apps yet' },
+    enabled: true,
+    windowHidden: true,
+    lastKey: null,
+    lastAt: 0,
+    now: 4000,
+    createNotification(options) {
+      created.push(options)
+      return fakeNotification()
+    },
+  })
+  assert.equal(warning.shown, true)
+  assert.equal(created.at(-1).body, 'Inter is not visible to other apps yet')
 })
 
 test('notification click is wired by the caller', () => {

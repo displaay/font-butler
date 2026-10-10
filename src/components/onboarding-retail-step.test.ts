@@ -101,7 +101,6 @@ const settings = {
   clearOfficeFontCache: false,
   clearAdobeFontCache: false,
   autoReinstallOnUpdate: false,
-  skipCacheClearOnReinstall: false,
   nativeNotifications: false,
   onboardingCompleted: false,
 } as AppSettings

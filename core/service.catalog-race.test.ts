@@ -40,10 +40,8 @@ test('source changes during a delayed deactivate stay outdated', async () => {
     },
     {
       native: noopFontNative({
-        async setFontEnabled(filePath, enabled) {
-          if (!enabled && path.basename(filePath) === 'A.ttf') {
-            await holdA
-          }
+        async unregisterFont(filePath) {
+          if (path.basename(filePath) === 'A.ttf') await holdA
           return { ok: true, native: false }
         },
       }),

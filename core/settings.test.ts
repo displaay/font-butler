@@ -51,7 +51,6 @@ function sampleSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     clearOfficeFontCache: true,
     clearAdobeFontCache: true,
     autoReinstallOnUpdate: false,
-    skipCacheClearOnReinstall: false,
     nativeNotifications: false,
     onboardingCompleted: false,
     revisionBudgetBytes: 1024 * 1024 * 1024,
@@ -161,7 +160,6 @@ test('loadSettings fills installAfterUpload on older settings files', () => {
     assert.equal(settings.clearOfficeFontCache, true)
     assert.equal(settings.clearAdobeFontCache, true)
     assert.equal(settings.autoReinstallOnUpdate, false)
-    assert.equal(settings.skipCacheClearOnReinstall, false)
     assert.equal(settings.nativeNotifications, false)
     assert.equal(settings.onboardingCompleted, true)
     assert.deepEqual(settings.watchFolders, [])
@@ -405,20 +403,17 @@ test('loadSettings keeps a stored autoReinstallOnUpdate true', () => {
   }
 })
 
-test('loadSettings defaults skipCacheClearOnReinstall to false', () => {
+test('loadSettings ignores a stored skipCacheClearOnReinstall flag', () => {
   const paths = tempPaths()
   try {
-    assert.equal(loadSettings(paths).skipCacheClearOnReinstall, false)
-  } finally {
-    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
-  }
-})
-
-test('loadSettings keeps a stored skipCacheClearOnReinstall true', () => {
-  const paths = tempPaths()
-  try {
-    saveSettings(paths, sampleSettings({ skipCacheClearOnReinstall: true }))
-    assert.equal(loadSettings(paths).skipCacheClearOnReinstall, true)
+    fs.mkdirSync(paths.dataRoot, { recursive: true })
+    fs.writeFileSync(
+      paths.settingsPath,
+      JSON.stringify({ version: 1, skipCacheClearOnReinstall: false }),
+    )
+    const settings = loadSettings(paths)
+    assert.equal('skipCacheClearOnReinstall' in settings, false)
+    assert.equal(settings.autoReinstallOnUpdate, false)
   } finally {
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }

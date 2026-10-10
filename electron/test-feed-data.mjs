@@ -21,6 +21,11 @@ export function planTestFeedDataIsolation({ testFeedBuild = false, appData = '',
   return { isolate: true, userData, dataDir, setDataEnv: unset }
 }
 
+/** Point main.log at Font Buttler Test when this process is the marked test build. */
+export function rememberTestFeedLogName(plan, env = process.env) {
+  if (plan?.isolate === true) env.FONT_BUTLER_LOG_NAME = TEST_FEED_USER_DATA_DIR
+}
+
 /**
  * Apply the plan to a real Electron `app` before the single-instance lock.
  * The marker is read from the running bundle, so a LaunchServices relaunch
@@ -42,5 +47,6 @@ export function applyTestFeedDataIsolation(app, env = process.env, execPath = pr
   }
   app.setPath('userData', plan.userData)
   if (plan.setDataEnv) env.FONT_BUTLER_DATA = plan.dataDir
+  rememberTestFeedLogName(plan, env)
   return plan
 }

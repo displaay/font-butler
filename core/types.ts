@@ -140,6 +140,8 @@ export type CatalogEntry = {
   format: string
   /** Font Book-style library-card glyph(s), derived from cmap coverage. */
   previewSample?: string
+  /** Persistent duplicate-copy warning shown on the library card. */
+  activationWarning?: string
   addedAt: number
   updatedAt: number
 }
@@ -169,12 +171,14 @@ export type SystemFace = {
 }
 
 export type Notice = {
-  kind: 'installed' | 'reinstalled' | 'error' | 'info'
+  kind: 'installed' | 'reinstalled' | 'error' | 'info' | 'warning'
   message: string
   entryId?: string
   operationId?: string
-  /** Watch-folder failures are buffered until the window can show them. */
-  source?: 'watch'
+  /** Watch-folder failures are buffered until the window can show them. Logout failures are a main-process dialog. */
+  source?: 'watch' | 'logout' | 'logout-waiting' | 'logout-probe'
+  /** One logout or probe flight. A joined click reuses it. */
+  attemptId?: string
 }
 
 export type ViewLayout = 'list' | 'grid'
@@ -278,7 +282,6 @@ export type AppSettings = {
   clearOfficeFontCache: boolean
   clearAdobeFontCache: boolean
   autoReinstallOnUpdate: boolean
-  skipCacheClearOnReinstall: boolean
   nativeNotifications: boolean
   onboardingCompleted: boolean
   revisionBudgetBytes: number
