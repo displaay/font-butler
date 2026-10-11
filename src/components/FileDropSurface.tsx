@@ -1,8 +1,12 @@
 import { useEffect, useRef, type ReactNode, type RefObject } from 'react'
 import { hasFontButlerEntries } from '@/lib/projects'
 
-/** Hide a stuck overlay once file dragover events stop arriving. */
-const DRAG_OVER_IDLE_MS = 300
+/**
+ * Hide a stuck overlay once file dragover events stop arriving.
+ * A still pointer only produces dragover about every 350±200ms, so the
+ * window has to be longer than that gap.
+ */
+const DRAG_OVER_IDLE_MS = 1000
 
 function transferHasFiles(dataTransfer: DataTransfer | null): boolean {
   if (!dataTransfer) return false
@@ -38,6 +42,7 @@ export function FileDropSurface({
   const onDraggingChangeRef = useRef(onDraggingChange)
   const onDropRef = useRef(onDrop)
   const watchdogRef = useRef<number | undefined>(undefined)
+  const internalImageDragRef = useRef(false)
 
   function reset() {
     window.clearTimeout(watchdogRef.current)
@@ -56,7 +61,7 @@ export function FileDropSurface({
 
   useEffect(() => {
     const accepts = (dataTransfer: DataTransfer | null) => {
-      if (ignoreRef?.current) return false
+      if (ignoreRef?.current || internalImageDragRef.current) return false
       if (!dataTransfer || hasFontButlerEntries(dataTransfer)) return false
       return transferHasFiles(dataTransfer)
     }
@@ -89,7 +94,14 @@ export function FileDropSurface({
       if (!accepts(event.dataTransfer)) return
       event.preventDefault()
       if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
-      if (draggingRef.current) show()
+      show()
+    }
+    const onDragStart = (event: DragEvent) => {
+      const target = event.target
+      internalImageDragRef.current = target instanceof Element && target.tagName === 'IMG'
+    }
+    const onDragEndImage = () => {
+      internalImageDragRef.current = false
     }
     const onLeave = (event: DragEvent) => {
       const next = event.relatedTarget
@@ -112,11 +124,13 @@ export function FileDropSurface({
       if (event.key === 'Escape') clear()
     }
     const capture = true
+    window.addEventListener('dragstart', onDragStart, capture)
     window.addEventListener('dragenter', onEnter, capture)
     window.addEventListener('dragover', onOver, capture)
     window.addEventListener('dragleave', onLeave, capture)
     window.addEventListener('drop', clear, capture)
     window.addEventListener('dragend', clear, capture)
+    window.addEventListener('dragend', onDragEndImage, capture)
     window.addEventListener('blur', clear, capture)
     document.addEventListener('visibilitychange', onVisibility, capture)
     window.addEventListener('mousemove', onMouseMove, capture)
@@ -124,11 +138,13 @@ export function FileDropSurface({
     window.addEventListener('click', clear, capture)
     return () => {
       window.clearTimeout(watchdogRef.current)
+      window.removeEventListener('dragstart', onDragStart, capture)
       window.removeEventListener('dragenter', onEnter, capture)
       window.removeEventListener('dragover', onOver, capture)
       window.removeEventListener('dragleave', onLeave, capture)
       window.removeEventListener('drop', clear, capture)
       window.removeEventListener('dragend', clear, capture)
+      window.removeEventListener('dragend', onDragEndImage, capture)
       window.removeEventListener('blur', clear, capture)
       document.removeEventListener('visibilitychange', onVisibility, capture)
       window.removeEventListener('mousemove', onMouseMove, capture)

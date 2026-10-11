@@ -19,6 +19,7 @@ import { emitNotice } from './service-helpers.ts'
 import { countInstallableFormats, isWebFontFile } from './formats.ts'
 import { forgetFontAnalysis } from './font-analysis.ts'
 import { tryFingerprintFile } from './fingerprint.ts'
+import { isUnlinkedSource } from './unlinked-sources.ts'
 import { isFontFile, isPreviewableFontFile, readFileStat } from './parse.ts'
 import { applyEntryFacts } from './state.ts'
 import type { AppPaths } from './paths.ts'
@@ -1065,6 +1066,7 @@ export async function syncInboxWatcher(
   const queueImport = (filePath: string, event: 'add' | 'change') => {
     if (!isPreviewableFontFile(filePath)) return
     const resolved = path.resolve(filePath)
+    if (inboxPaths && isUnlinkedSource(inboxPaths, resolved)) return
     if (event === 'change') {
       const rejection = inboxRejected.get(resolved)
       const inFlight = inboxInFlight.has(resolved)

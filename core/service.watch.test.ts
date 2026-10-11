@@ -172,6 +172,58 @@ test('a folder with install new unchecked does not install new fonts', async () 
   }
 })
 
+test('an unlinked watch-folder font stays out until it changes or is added again', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  const font = path.join(inbox, 'Stay.ttf')
+  writeTestFont(font, 'Stay', 'Stay-Regular')
+  const service = new FontButlerService(paths)
+  try {
+    await service.updateSettings({ onboardingCompleted: true })
+    const configured = await service.configureFolder({
+      root: inbox,
+      policy: 'install-new',
+    })
+    await service.startWatching(configured.folder.id)
+    const [entry] = service.listCatalog()
+    assert.ok(entry)
+    assert.equal(entry.status, 'installed')
+    await service.uninstallAndUnlinkMany([entry.id])
+    assert.equal(service.listCatalog().length, 0)
+    assert.equal(fs.existsSync(font), true)
+
+    service.dispose()
+    await closeAllWatchers()
+    const restarted = new FontButlerService(paths)
+    await restarted.init()
+    assert.equal(restarted.listCatalog().length, 0, 'a rescan must not import the unlinked file')
+
+    const manual = await restarted.importPaths([font])
+    assert.equal(manual.entries.length, 1)
+    const added = manual.entries[0]!
+    const installed = await restarted.install(added.id)
+    await restarted.uninstallAndUnlinkMany([installed.id])
+    assert.equal(restarted.listCatalog().length, 0)
+    restarted.dispose()
+    await closeAllWatchers()
+
+    const stillGone = new FontButlerService(paths)
+    await stillGone.init()
+    assert.equal(stillGone.listCatalog().length, 0)
+    stillGone.dispose()
+    await closeAllWatchers()
+
+    writeTestFont(font, 'Stay', 'Stay-Regular', { version: 'Version 2.000' })
+    const changed = new FontButlerService(paths)
+    await changed.init()
+    assert.equal(changed.listCatalog().length, 1, 'a new fingerprint is allowed back in')
+    changed.dispose()
+  } finally {
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
 test('updateSettings rejects a missing watch folder', async () => {
   const paths = tempPaths()
   const service = new FontButlerService(paths)

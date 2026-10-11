@@ -2,7 +2,9 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { test } from 'node:test'
+import { findById, loadCatalog, saveCatalog } from './catalog.ts'
 import { classifyImportFile } from './planner.ts'
+import { setUnlinkForgetFaultForTest } from './service.ts'
 import { inspectRelinkCandidate } from './relink.ts'
 import { fingerprintFile } from './fingerprint.ts'
 import { displayStateLabel, inspectSourceAvailability, isCleanupEligible } from './state.ts'
@@ -543,6 +545,62 @@ test('uninstall and unlink refuses a user font that has no source link', async (
     assert.equal(service.listCatalog()[0]?.status, 'installed')
     assert.equal(fs.existsSync(font), true)
     assert.equal(service.listActivity().some((item) => item.action === 'uninstall-unlink'), false)
+  })
+})
+
+test('uninstall and unlink refuses before uninstall when the Adobe copy cannot be removed', async () => {
+  await withService(async (service, paths) => {
+    const source = path.join(paths.dataRoot, 'AdobeLocked.ttf')
+    writeTestFont(source, 'AdobeLocked', 'AdobeLocked-Regular')
+    const imported = await service.importPaths([source])
+    const entry = await service.install(imported.entries[0]!.id, undefined, { destinationId: 'adobe-shared' })
+    const adobe = entry.installations?.find((item) => item.destinationId === 'adobe-shared')
+    assert.ok(adobe?.path)
+    const adobeDir = path.dirname(adobe.path)
+    fs.chmodSync(adobeDir, 0o555)
+    try {
+      await assert.rejects(() => service.uninstallAndUnlinkMany([entry.id]), /Adobe copy/)
+      const still = service.listCatalog().find((item) => item.id === entry.id)
+      assert.equal(still?.status, 'installed')
+      assert.equal(fs.existsSync(adobe.path), true)
+      assert.equal(fs.existsSync(source), true)
+      assert.equal(service.listActivity().some((item) => item.action === 'uninstall-unlink'), false)
+    } finally {
+      fs.chmodSync(adobeDir, 0o755)
+    }
+  })
+})
+
+test('uninstall and unlink records a partial when the row cannot be forgotten', async () => {
+  await withService(async (service, paths) => {
+    const source = path.join(paths.dataRoot, 'ForgetFault.ttf')
+    writeTestFont(source, 'ForgetFault', 'ForgetFault-Regular')
+    const imported = await service.importPaths([source])
+    const installed = await service.install(imported.entries[0]!.id)
+    assert.ok(installed.installedPath)
+    const installedPath = installed.installedPath
+    setUnlinkForgetFaultForTest((id) => {
+      const catalog = loadCatalog(paths)
+      const entry = findById(catalog, id)
+      if (!entry) throw new Error('Font is not in the library.')
+      entry.status = 'installed'
+      entry.installedPath = source
+      saveCatalog(paths, catalog)
+    })
+    try {
+      const result = await service.uninstallAndUnlinkMany([installed.id])
+      assert.equal(result.removed, 0)
+      assert.equal(fs.existsSync(installedPath), false)
+      assert.equal(fs.existsSync(source), true)
+      assert.equal(service.listCatalog().length, 1)
+      const operation = service.listActivity().find((item) => item.action === 'uninstall-unlink')
+      assert.equal(operation?.outcome, 'partial')
+      assert.equal(operation?.undoable, false)
+      assert.match(operation?.items[0]?.reason ?? '', /still listed/)
+      assert.equal(service.listActivity().some((item) => item.action === 'uninstall'), false)
+    } finally {
+      setUnlinkForgetFaultForTest(undefined)
+    }
   })
 })
 

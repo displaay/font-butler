@@ -20,6 +20,7 @@ import {
   type FontAnalysis,
 } from './font-analysis.ts'
 import { tryFingerprintFile } from './fingerprint.ts'
+import { isUnlinkedSource } from './unlinked-sources.ts'
 import { folderForPath, isExcluded, mostSpecificOwner } from './folders.ts'
 import {
   applyParsedFont,
@@ -152,7 +153,10 @@ export function importOneUnlocked(
 export type InboxImportHost = {
   readonly paths: AppPaths
   listCatalog(): CatalogEntry[]
-  importPaths(filePaths: string[]): Promise<{
+  importPaths(
+    filePaths: string[],
+    options?: { watch?: boolean },
+  ): Promise<{
     entries: CatalogEntry[]
     errors: string[]
     ignored: number
@@ -189,6 +193,7 @@ export async function importInboxFiles(
 ): Promise<InboxImportResult> {
   const settings = loadSettings(host.paths)
   const allowed = filePaths.filter((filePath) => {
+    if (isUnlinkedSource(host.paths, filePath)) return false
     const folder = folderForPath(settings.folders, filePath)
     if (!folder) return true
     if (!folder.watching || folder.paused || isExcluded(folder, filePath)) return false
@@ -276,7 +281,7 @@ export async function importInboxFiles(
     return inboxFailureResult(unreadable, failureReasons)
   }
   const beforeIds = new Set(host.listCatalog().map((entry) => entry.id))
-  const result = await host.importPaths(auto)
+  const result = await host.importPaths(auto, { watch: true })
   const imported = new Set(result.entries.map((entry) => path.resolve(entry.sourcePath)))
   const failed = new Set<string>()
   for (const filePath of unreadable) {

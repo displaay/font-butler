@@ -456,13 +456,21 @@ export async function dropOrphanRetailListings(paths: AppPaths): Promise<number>
 }
 
 /** Uninstall owned Fonts copies and drop every retail listing from the catalog. */
-async function removeRetailCollection(paths: AppPaths): Promise<void> {
+async function removeRetailCollection(
+  paths: AppPaths,
+  swap?: { trigger: Extract<OperationTrigger, 'retail' | 'retail-auto'> },
+): Promise<void> {
   await runCatalogTask(async () => {
     const catalog = loadCatalog(paths)
     const retail = catalog.entries.filter((entry) => entry.retailRelativePath)
+    const families = new Set(retail.map((entry) => displayFamily(entry)))
+    const swapItems = swap ? retail.map((entry) => retailSucceededItem(entry, families.size > 1)) : []
     for (const entry of retail) {
       await yieldEventLoop()
-      await uninstallRetailEntry(paths, entry, catalog)
+      await uninstallRetailEntry(paths, entry, catalog, { record: !swap })
+    }
+    if (swapItems.length && swap) {
+      recordRetailOperation(paths, 'retail-update', swapItems, swap.trigger)
     }
     if (retail.length) {
       saveCatalog(paths, catalog)
@@ -478,6 +486,7 @@ async function uninstallRetailEntry(
   paths: AppPaths,
   entry: CatalogEntry,
   catalog: ReturnType<typeof loadCatalog>,
+  options?: { record?: boolean },
 ): Promise<void> {
   const parkedPath = entry.disabledPath
   const relative = entry.retailRelativePath
@@ -492,7 +501,9 @@ async function uninstallRetailEntry(
     fs.rmSync(cached, { force: true })
   }
   removeEntryById(catalog, entry.id)
-  recordRetailOperation(paths, 'retail-uninstall', [retailSucceededItem(entry, false)], 'retail')
+  if (options?.record !== false) {
+    recordRetailOperation(paths, 'retail-uninstall', [retailSucceededItem(entry, false)], 'retail')
+  }
 }
 
 /**
@@ -521,12 +532,17 @@ async function releaseTurnedOffRetailFamilies(
     )
     if (!released.length) return
     const local = loadRetailManifest(paths)
+    const familyNames = new Set(released.map((entry) => displayFamily(entry)))
+    const removeItems =
+      action === 'remove'
+        ? released.map((entry) => retailSucceededItem(entry, familyNames.size > 1))
+        : []
     for (const entry of released) {
       await yieldEventLoop()
       const relative = entry.retailRelativePath!
       delete local.files[relative]
       if (action === 'remove') {
-        await uninstallRetailEntry(paths, entry, catalog)
+        await uninstallRetailEntry(paths, entry, catalog, { record: false })
         continue
       }
       entry.retailRelativePath = undefined
@@ -535,6 +551,9 @@ async function releaseTurnedOffRetailFamilies(
       touchEntry(entry)
       applyEntryFacts(entry)
       upsertEntry(catalog, entry)
+    }
+    if (removeItems.length) {
+      recordRetailOperation(paths, 'retail-uninstall', removeItems, 'retail')
     }
     saveCatalog(paths, catalog)
     saveRetailManifest(paths, local)
@@ -840,7 +859,11 @@ function statRetailInstall(paths: AppPaths) {
  * Decided on the worker's answer, not when the token is saved: a pasted token may itself be the trial one.
  * Workers older than trial tokens send no `mode` and only ever served retail.
  */
-async function adoptRetailCollectionMode(paths: AppPaths, manifest: RetailManifest): Promise<void> {
+async function adoptRetailCollectionMode(
+  paths: AppPaths,
+  manifest: RetailManifest,
+  trigger: Extract<OperationTrigger, 'retail' | 'retail-auto'>,
+): Promise<void> {
   const next = manifestMode(manifest)
   const local = loadRetailManifest(paths)
   const previous = retailLocalManifestMode(local)
@@ -851,7 +874,7 @@ async function adoptRetailCollectionMode(paths: AppPaths, manifest: RetailManife
     // on disk are left alone — without a record we cannot tell whose they are.
     await dropFilelessListingsOutside(paths, manifest)
   } else if (previous !== next) {
-    await removeRetailCollection(paths)
+    await removeRetailCollection(paths, { trigger })
     // Not `resetRetailCache()`: it aborts the in-flight sync, and runSync calls this from inside one.
     cache.drift = []
     cache.skipped = []
@@ -1001,6 +1024,10 @@ function retailSucceededItem(entry: CatalogEntry, severalFamilies: boolean): Ope
 
 const RETAIL_UPDATE_DRIFT_KINDS = new Set<RetailDriftItem['kind']>(['changed', 'missing-locally', 'corrupt-locally'])
 
+function isCanceledRetailReason(reason: string): boolean {
+  return /^canceled\.?$/i.test(reason.trim())
+}
+
 /** One Activity row for a finished sync pass: installed files succeeded, sync errors failed. */
 function recordRetailSyncPass(
   paths: AppPaths,
@@ -1031,6 +1058,7 @@ function recordRetailSyncPass(
     const splitAt = error.indexOf(': ')
     const relativePath = splitAt === -1 ? error : error.slice(0, splitAt)
     const reason = splitAt === -1 ? error : error.slice(splitAt + 2)
+    if (isCanceledRetailReason(reason)) continue
     const item: OperationItem = {
       id: newId(),
       label: relativePath,
@@ -1399,7 +1427,7 @@ export async function checkRetail(
       await inflightSync.catch(() => undefined)
       if (tokenChangedSince(paths, token)) return emitRetail(paths)
     }
-    await adoptRetailCollectionMode(paths, manifest)
+    await adoptRetailCollectionMode(paths, manifest, 'retail')
     await ensureRetailListings(paths, manifest)
     await reconcileRetailCatalog(paths, loadRetailManifest(paths))
     const drift = measureDrift(paths, manifest)
@@ -1567,7 +1595,7 @@ async function runAutomaticResume(
       cache.progress = null
       return emitRetail(paths)
     }
-    await adoptRetailCollectionMode(paths, manifest)
+    await adoptRetailCollectionMode(paths, manifest, 'retail-auto')
     await ensureRetailListings(paths, manifest)
     await reconcileRetailCatalog(paths, loadRetailManifest(paths))
 
@@ -1666,7 +1694,7 @@ async function runSync(
       cache.progress = null
       return emitRetail(paths)
     }
-    await adoptRetailCollectionMode(paths, manifest)
+    await adoptRetailCollectionMode(paths, manifest, 'retail')
     await ensureRetailListings(paths, manifest)
     await reconcileRetailCatalog(paths, loadRetailManifest(paths))
 

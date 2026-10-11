@@ -95,6 +95,7 @@ import {
   type FontAnalysis,
 } from './font-analysis.ts'
 import { fingerprintFile, tryFingerprintFile } from './fingerprint.ts'
+import { allowUnlinkedSource, isUnlinkedSource, rememberUnlinkedSource } from './unlinked-sources.ts'
 import {
   reconcileMutationJournals,
   recordMutationDestination,
@@ -388,6 +389,13 @@ export function emitLogoutProbeNotice(message: string, attemptId?: string): void
   })
 }
 
+/** Test seam: runs after a successful uninstall and before the catalog row is forgotten. */
+let unlinkForgetFaultForTest: ((id: string) => void) | undefined
+
+export function setUnlinkForgetFaultForTest(fault: ((id: string) => void) | undefined): void {
+  unlinkForgetFaultForTest = fault
+}
+
 export class FontButlerService {
   readonly paths: AppPaths
   private autoReinstallTimer: ReturnType<typeof setTimeout> | null = null
@@ -569,6 +577,7 @@ export class FontButlerService {
       if (choice === 'skip') {
         removeDuplicateWarning(this.paths, id)
       } else if (choice === 'replace') {
+        allowUnlinkedSource(this.paths, warning.path)
         const targetId = warning.activeEntryId ?? warning.conflictingEntryIds[0]
         if (!targetId) throw new Error('There is no active copy to replace.')
         const catalog = loadCatalog(this.paths)
@@ -587,9 +596,11 @@ export class FontButlerService {
         entries.push(await this.installEntry(targetId))
         removeDuplicateWarning(this.paths, id)
       } else if (choice === 'add-inactive') {
+        allowUnlinkedSource(this.paths, warning.path)
         entries.push(this.importOneUnlocked(warning.path, { forceNew: true }))
         removeDuplicateWarning(this.paths, id)
       } else if (choice === 'switch') {
+        allowUnlinkedSource(this.paths, warning.path)
         const imported = this.importOneUnlocked(warning.path, { forceNew: true })
         const occupying = occupyingSiblings(loadCatalog(this.paths).entries, imported, this.paths)[0]
         const switched = await this.switchToEntry(imported.id)
@@ -603,6 +614,7 @@ export class FontButlerService {
         if (!familyName) {
           throw new Error('Choose a family name to Install as…')
         }
+        allowUnlinkedSource(this.paths, warning.path)
         const imported = this.importOneUnlocked(warning.path, { forceNew: true })
         entries.push(await this.installEntry(imported.id, familyName))
         removeDuplicateWarning(this.paths, id)
@@ -834,13 +846,16 @@ export class FontButlerService {
     return inspectDropPaths(paths)
   }
 
-  async importPaths(filePaths: string[]): Promise<{
+  async importPaths(filePaths: string[], options?: { watch?: boolean }): Promise<{
     entries: CatalogEntry[]
     errors: string[]
     ignored: number
   }> {
     return runCatalogTask(async () => {
       const expanded = expandImportPaths(filePaths)
+      if (!options?.watch) {
+        for (const filePath of expanded.files) allowUnlinkedSource(this.paths, filePath)
+      }
       const errors = [...expanded.errors]
       const imported: CatalogEntry[] = []
       const catalog = loadCatalog(this.paths)
@@ -914,6 +929,7 @@ export class FontButlerService {
   async openWith(filePath: string): Promise<CatalogEntry> {
     return runCatalogTask(async () => {
       const resolved = path.resolve(filePath)
+      allowUnlinkedSource(this.paths, resolved)
       if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
         return this.openFolderUnlocked(resolved)
       }
@@ -1216,6 +1232,7 @@ export class FontButlerService {
       let removed = 0
       let familyName: string | undefined
       let mutated = false
+      let partial = false
       const progress = this.familyProgress('uninstall-unlink', unique)
       progress.start()
       for (const id of unique) {
@@ -1230,17 +1247,35 @@ export class FontButlerService {
           const refusal = this.uninstallAndUnlinkRefusal(current)
           if (refusal) throw new Error(refusal)
           const label = displayEntry(current)
+          const sourcePath = current.sourcePath
+          const fingerprint = current.sourceFingerprint || tryFingerprintFile(sourcePath)
           await this.uninstallEntry(id)
           mutated = true
-          const after = findById(loadCatalog(this.paths), id)
-          if (after) await this.forgetEntry(id)
-          removed += 1
-          items.push({
-            id: crypto.randomUUID(),
-            entryId: id,
-            label,
-            outcome: 'succeeded',
-          })
+          try {
+            unlinkForgetFaultForTest?.(id)
+            const after = findById(loadCatalog(this.paths), id)
+            if (after) await this.forgetEntry(id)
+            if (fingerprint) rememberUnlinkedSource(this.paths, sourcePath, fingerprint)
+            removed += 1
+            items.push({
+              id: crypto.randomUUID(),
+              entryId: id,
+              label,
+              outcome: 'succeeded',
+            })
+          } catch (error) {
+            partial = true
+            const reason = error instanceof Error ? error.message : String(error)
+            const message = `Uninstalled ${label}, but it is still listed. ${reason}`
+            errors.push(message)
+            items.push({
+              id: crypto.randomUUID(),
+              entryId: id,
+              label,
+              outcome: 'failed',
+              reason: message,
+            })
+          }
         } catch (error) {
           const reason = error instanceof Error ? error.message : String(error)
           errors.push(reason)
@@ -1259,11 +1294,16 @@ export class FontButlerService {
         await progress.mark(id)
       }
       if (removed > 0 || mutated) {
-        this.commitOperation('uninstall-unlink', items, familyName, false, familyNames)
+        const operation = this.commitOperation('uninstall-unlink', items, familyName, false, familyNames)
+        if (operation && partial) {
+          operation.outcome = 'partial'
+          upsertOperation(this.paths, operation)
+          emitEvent({ type: 'operations', operations: loadOperations(this.paths) })
+        }
       }
       await syncWatchers(this.paths)
       emitCatalog(this.paths)
-      if (removed === 0) {
+      if (removed === 0 && !partial) {
         throw new Error(errors[0] ?? 'Could not uninstall and unlink that font.')
       }
       return { removed }
@@ -2202,6 +2242,7 @@ export class FontButlerService {
           })
           continue
         }
+        if (item.path) allowUnlinkedSource(this.paths, item.path)
         try {
           let relatedEntryId: string | undefined
           if (item.classification === 'unsupported') {
@@ -3833,6 +3874,7 @@ export class FontButlerService {
     const catalog = loadCatalog(this.paths)
     for (let index = 0; index < expanded.files.length; index += 1) {
       const filePath = expanded.files[index]!
+      allowUnlinkedSource(this.paths, filePath)
       try {
         imported.push(await this.importAnalyzedUnlocked(filePath, { catalog, persist: false }))
       } catch (error) {
@@ -4150,6 +4192,18 @@ export class FontButlerService {
     ) {
       return 'Only installed fonts can be uninstalled and unlinked.'
     }
+    const adobe = copyAt(entry, 'adobe-shared')
+    if (copyCannotBeRemoved(adobe?.path) || copyCannotBeRemoved(adobe?.parkedPath)) {
+      return 'The Adobe copy is still on disk, so this font cannot be unlinked.'
+    }
+    if (copyCannotBeRemoved(entry.installedPath) || copyCannotBeRemoved(entry.disabledPath)) {
+      return 'The installed copy is still on disk, so this font cannot be unlinked.'
+    }
+    try {
+      this.assertPinnedInstall(entry)
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error)
+    }
     return null
   }
 
@@ -4284,7 +4338,7 @@ export class FontButlerService {
               listInboxFontFiles(folder.root).filter((filePath) => !isExcluded(folder, filePath)),
             ),
         ),
-      ].filter((filePath) => !known.has(filePath))
+      ].filter((filePath) => !known.has(filePath) && !isUnlinkedSource(this.paths, filePath))
       if (discovered.length) {
         await runInboxImportBatch(discovered, () => this.importInboxFiles(discovered), {
           immediate: true,
@@ -4945,6 +4999,22 @@ export class FontButlerService {
     upsertOperation(this.paths, operation)
     emitEvent({ type: 'operations', operations: loadOperations(this.paths) })
     return operation
+  }
+}
+
+/** True when a managed copy is still on disk and its folder cannot be written, so unlink would fail. */
+function copyCannotBeRemoved(filePath: string | undefined): boolean {
+  if (!filePath) return false
+  try {
+    if (!fs.statSync(filePath).isFile()) return false
+  } catch {
+    return false
+  }
+  try {
+    fs.accessSync(path.dirname(filePath), fs.constants.W_OK)
+    return false
+  } catch {
+    return true
   }
 }
 

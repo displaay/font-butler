@@ -375,6 +375,15 @@ for (const via of ['check', 'sync'] as const) {
     )
     assert.equal('Reckless/Reckless-TRIAL-VF.otf' in loadRetailManifest(paths).files, false)
     assert.equal(status.drift.some((item) => item.kind === 'removed'), false)
+    const swap = loadOperations(paths).filter((operation) => operation.action === 'retail-update')
+    assert.equal(swap.length, 1)
+    assert.equal(swap[0]?.trigger, 'retail')
+    assert.equal(swap[0]?.undoable, false)
+    assert.equal(swap[0]?.items.every((item) => item.outcome === 'succeeded'), true)
+    assert.equal(
+      loadOperations(paths).some((operation) => operation.action === 'retail-uninstall'),
+      false,
+    )
   })
 }
 
@@ -1166,6 +1175,12 @@ test('an interrupted Sync does not mark the pass as automatic', async () => {
   const paused = loadRetailManifest(paths)
   assert.equal(paused.incomplete, true)
   assert.equal(paused.incompleteAutomatic, undefined)
+  assert.equal(
+    loadOperations(paths).some((operation) =>
+      operation.items.some((item) => /canceled/i.test(item.reason ?? '')),
+    ),
+    false,
+  )
 })
 
 test('leftover listings without an incomplete flag wait for an explicit sync', async () => {
@@ -3362,7 +3377,68 @@ test('None with "remove" uninstalls the installed fonts of the families turned o
     assert.equal(fs.existsSync(dest), false)
     assert.equal(loadCatalog(paths).entries.some((entry) => entry.retailRelativePath), false)
     assert.equal(loadRetailManifest(paths).files['Reckless/RecklessVF.otf'], undefined)
+    const removals = loadOperations(paths).filter((operation) => operation.action === 'retail-uninstall')
+    assert.equal(removals.length, 1)
+    assert.equal(removals[0]?.items.length, 1)
+    assert.equal(removals[0]?.items[0]?.outcome, 'succeeded')
   })
+})
+
+test('turning off two families records one retail-uninstall Activity row', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 't' })
+  const remote: RetailManifest = {
+    generatedAt: '2026-01-01T00:00:00.000Z',
+    collections: [
+      {
+        glyphsFile: 'Reckless',
+        revisionId: 'rev-1',
+        lastRegeneratedAt: '2026-01-01T00:00:00.000Z',
+        files: [
+          {
+            key: 'Reckless/rev-1/RecklessVF.otf',
+            relativePath: 'Reckless/RecklessVF.otf',
+            size: 4,
+            etag: 'e1',
+            uploaded: '2026-01-01T00:00:00.000Z',
+            familyName: 'Reckless',
+          },
+        ],
+      },
+      {
+        glyphsFile: 'Zangezi',
+        revisionId: 'rev-1',
+        lastRegeneratedAt: '2026-01-01T00:00:00.000Z',
+        files: [
+          {
+            key: 'Zangezi/rev-1/Zangezi.otf',
+            relativePath: 'Zangezi/Zangezi.otf',
+            size: 4,
+            etag: 'e1',
+            uploaded: '2026-01-01T00:00:00.000Z',
+            familyName: 'Zangezi',
+          },
+        ],
+      },
+    ],
+    skipped: [],
+  }
+  await syncRetail(paths, {
+    fetchManifest: async () => remote,
+    fetchFile: async () => new Uint8Array(4).fill(1),
+  })
+  await configureRetailSync(paths, {
+    disabledGlyphsFiles: ['Reckless', 'Zangezi'],
+    disableAction: 'remove',
+  })
+  const removals = loadOperations(paths).filter((operation) => operation.action === 'retail-uninstall')
+  assert.equal(removals.length, 1)
+  assert.equal(removals[0]?.items.length, 2)
+  assert.equal(removals[0]?.trigger, 'retail')
+  assert.equal(removals[0]?.undoable, false)
+  assert.equal(removals[0]?.items.every((item) => item.outcome === 'succeeded'), true)
+  assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'RecklessVF.otf')), false)
+  assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'Zangezi.otf')), false)
 })
 
 test('None with "keep" detaches installed fonts so a later sync neither deletes nor duplicates them', async () => {
