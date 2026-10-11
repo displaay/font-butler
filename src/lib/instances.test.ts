@@ -106,7 +106,7 @@ test('one variable file with upright and italic instances hovers only the uprigh
     namedInstances: [
       { name: 'Condensed Regular', coordinates: { wght: 400, wdth: 75, slnt: 0 } },
       { name: 'Condensed Medium', coordinates: { wght: 500, wdth: 75, slnt: 0 } },
-      { name: 'Regular', coordinates: { wght: 400, wdth: 100 } },
+      { name: 'Regular', coordinates: { wght: 400, wdth: 100, slnt: 0 } },
       { name: 'Medium', coordinates: { wght: 500, wdth: 100, slnt: 0 } },
       { name: 'Italic', coordinates: { wght: 400, wdth: 100, slnt: -12 } },
       { name: 'Bold Italic', coordinates: { wght: 700, wdth: 100, slnt: -12 } },

@@ -576,15 +576,13 @@ export function CyclingAaPreview({
     >
       {interpolateVariation ? (
         <div className="absolute inset-0 flex items-center justify-center">
-          {/* Keep the loaded face's weight and style. Animating font-weight
-              selects a static instance at that exact weight and the glyphs snap. */}
           <AaGlyph
             family={visibleFace.family}
-            weight={rest.weight ?? visibleFace.weight}
-            italic={Boolean(rest.italic)}
+            weight={visibleFace.weight}
+            italic={visibleFace.italic}
             variation={visibleFace.variation}
             pendingSize="glyph"
-            wait={rest.wait !== false && visibleFace.wait !== false}
+            wait={visibleFace.wait !== false}
             sample={visibleFace.sample ?? sample}
             fit
             animateVariation={cycling}

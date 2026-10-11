@@ -225,7 +225,6 @@ test('hover morph keeps one italic cut and one preview sample while the instance
       assert.match(host.textContent ?? '', /Aa/)
       assert.equal(host.textContent?.includes('ACi'), false)
       assert.equal(host.textContent?.includes('Italic'), false)
-      assert.equal(glyph?.style.fontWeight, String(faces[0]!.weight))
       assert.notEqual(glyph?.style.fontVariationSettings, faces[0]!.variation)
 
       await act(async () => {
@@ -233,61 +232,11 @@ test('hover morph keeps one italic cut and one preview sample while the instance
       })
       assert.equal(preview?.getAttribute('data-preview-motion'), 'morph')
       assert.match(host.textContent ?? '', /Aa/)
-      assert.equal(glyph?.style.fontWeight, String(faces[0]!.weight))
     } finally {
       await act(async () => {
         root.unmount()
       })
       host.remove()
     }
-  }
-})
-
-test('a weight-only hover cycle stays on the loaded variable face when other weights are not ready', async () => {
-  const readySpec = 'normal 400 24px "fc-coolkit"'
-  const fonts = {
-    check: (spec: string) => spec === readySpec,
-    load: () => Promise.resolve([]),
-    addEventListener() {},
-    removeEventListener() {},
-    forEach(callback: (face: { family: string; weight: string; style: string; status: string }) => void) {
-      callback({ family: 'fc-coolkit', weight: '1 1000', style: 'normal', status: 'loaded' })
-    },
-  }
-  Object.defineProperty(document, 'fonts', { configurable: true, value: fonts })
-
-  const { createElement, act } = await import('react')
-  const { createRoot } = await import('react-dom/client')
-  const { CyclingAaPreview } = await import('./AaPreview.tsx')
-  const faces = [
-    { family: 'fc-coolkit', weight: 300, italic: false, label: 'Light', variation: "'wght' 300", sample: 'Aa', wait: true },
-    { family: 'fc-coolkit', weight: 400, italic: false, label: 'Regular', variation: "'wght' 400", sample: 'Aa', wait: true },
-    { family: 'fc-coolkit', weight: 700, italic: false, label: 'Bold', variation: "'wght' 700", sample: 'Aa', wait: true },
-  ]
-  const host = document.createElement('div')
-  document.body.appendChild(host)
-  const root = createRoot(host)
-  try {
-    await act(async () => {
-      root.render(
-        createElement(CyclingAaPreview, {
-          faces,
-          rest: faces[1]!,
-          active: true,
-          size: 3,
-        }),
-      )
-    })
-    const glyph = host.querySelector('.font-preview') as HTMLElement | null
-    assert.ok(glyph, 'the morph glyph stays mounted')
-    assert.equal(host.querySelector('[aria-label="Loading preview"]'), null)
-    assert.equal(glyph?.style.fontWeight, '400')
-    assert.equal(glyph?.textContent, 'Aa')
-    assert.notEqual(glyph?.style.fontVariationSettings, "'wght' 400")
-  } finally {
-    await act(async () => {
-      root.unmount()
-    })
-    host.remove()
   }
 })

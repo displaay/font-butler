@@ -38,48 +38,6 @@ export function variationSettings(coordinates?: Record<string, number>): string 
   return parts.length > 0 ? parts.join(', ') : undefined
 }
 
-function parseVariation(value?: string): Record<string, number> {
-  const coordinates: Record<string, number> = {}
-  if (!value) return coordinates
-  for (const match of value.matchAll(/'([^']+)'\s+(-?\d+(?:\.\d+)?)/g)) {
-    const tag = match[1]
-    const number = Number(match[2])
-    if (tag && Number.isFinite(number)) coordinates[tag] = number
-  }
-  return coordinates
-}
-
-/**
- * Hover steps must list the same axes. A step that drops an axis (or adds one)
- * cannot interpolate, so the preview snaps to that instance.
- */
-function shareVariationAxes(rows: InstanceRow[]): InstanceRow[] {
-  const parsed = rows.map((row) => parseVariation(row.variation))
-  const tags: string[] = []
-  for (const coordinates of parsed) {
-    for (const tag of Object.keys(coordinates)) {
-      if (!tags.includes(tag)) tags.push(tag)
-    }
-  }
-  if (tags.length === 0) return rows
-  return rows.map((row, index) => {
-    const coordinates = parsed[index] ?? {}
-    let missing = false
-    const filled: Record<string, number> = {}
-    for (const tag of tags) {
-      const value = coordinates[tag]
-      if (value !== undefined) {
-        filled[tag] = value
-        continue
-      }
-      missing = true
-      filled[tag] = parsed.find((item) => item[tag] !== undefined)?.[tag] ?? 0
-    }
-    if (!missing) return row
-    return { ...row, variation: variationSettings(filled) }
-  })
-}
-
 function weightFromStyleName(name: string, fallback = 400): number {
   const compact = name.replace(/[\s\-_]/g, '').toLowerCase()
   if (/hairline|ultrathin|extrathin/.test(compact)) return 100
@@ -232,7 +190,7 @@ export function catalogHoverInstanceRows(group: FamilyGroup, retail?: RetailSync
       cut.push(row)
     }
   }
-  return shareVariationAxes(cut)
+  return cut
 }
 
 function rowsFromSystemFace(face: SystemFace): InstanceRow[] {
