@@ -396,6 +396,19 @@ export function setUnlinkForgetFaultForTest(fault: ((id: string) => void) | unde
   unlinkForgetFaultForTest = fault
 }
 
+/** `FONT_BUTLER_FAIL` value that fails the forget after an uninstall-and-unlink. */
+const UNLINK_FORGET_AFTER_UNINSTALL_FAULT = 'unlink-forget-after-uninstall'
+
+/**
+ * Test builds only. A release stamp (`testBuild: false`) ignores the env var,
+ * so a packaged release cannot be forced down the partial unlink path.
+ */
+function throwUnlinkForgetAfterUninstallFault(): void {
+  if (process.env.FONT_BUTLER_FAIL !== UNLINK_FORGET_AFTER_UNINSTALL_FAULT) return
+  if (loadBuildIdentity().testBuild !== true) return
+  throw new Error('Could not remove the font from the list.')
+}
+
 export class FontButlerService {
   readonly paths: AppPaths
   private autoReinstallTimer: ReturnType<typeof setTimeout> | null = null
@@ -1255,7 +1268,7 @@ export class FontButlerService {
           try {
             unlinkForgetFaultForTest?.(id)
             const after = findById(loadCatalog(this.paths), id)
-            if (after) await this.forgetEntry(id)
+            if (after) await this.forgetEntry(id, { afterUninstall: true })
             rememberUnlinkedSource(this.paths, sourcePath)
             removed += 1
             items.push({
@@ -3836,8 +3849,9 @@ export class FontButlerService {
 
   private async forgetEntry(
     id: string,
-    options: { deleteFiles?: boolean } = {},
+    options: { deleteFiles?: boolean; afterUninstall?: boolean } = {},
   ): Promise<CatalogEntry> {
+    if (options.afterUninstall) throwUnlinkForgetAfterUninstallFault()
     const catalog = loadCatalog(this.paths)
     const entry = findById(catalog, id)
     if (!entry) {
