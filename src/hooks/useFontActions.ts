@@ -43,7 +43,7 @@ import {
 } from '@/lib/group'
 import { canSwitchTo } from '@/lib/identity'
 import { actionCopy, actionCopyFor, adobeInstallCopy, adobeUninstallCopy, progressActionCopy, uninstallAndUnlinkConfirm } from '@/lib/notify'
-import { batchResultCopy, type BatchOutcome } from '@/lib/results'
+import { batchResultCopy, partialUnlinkWarning, type BatchOutcome } from '@/lib/results'
 import { doneToastAction, latestUndoableOperationId } from '@/lib/toastAction'
 import { updateGroupsForIds } from '@/lib/updateInventory'
 import type {
@@ -758,6 +758,16 @@ export function useFontActions({
         const patch = catalogPatchFromResult(result)
         if (patch.length) {
           setEntries((current) => mergeCatalogEntries(current, patch))
+        }
+        const warning = partialUnlinkWarning(result)
+        if (warning) {
+          toast.warning(warning, {
+            action: {
+              label: 'Activity',
+              onClick: () => setTab('activity'),
+            },
+          })
+          return
         }
         const outcome = result && typeof result === 'object' ? (result as BatchOutcome) : undefined
         const { message, failedIds } = batchResultCopy(copy.done, outcome)

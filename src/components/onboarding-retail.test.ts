@@ -105,6 +105,14 @@ test('onboarding retail lists show and install choices without a second sync con
   assert.equal(settings.includes('>Trial<'), false)
 })
 
+test('retail labels stay hidden until token status has loaded', () => {
+  const html = markup({ status: null, deferInstall: true })
+  const heading = html.slice(0, html.indexOf('aria-label="Displaay retail sync"'))
+  assert.match(heading, /Displaay retail/)
+  assert.equal(heading.includes('>Trials<'), false)
+  assert.equal(html.includes('>Valid token<'), false)
+})
+
 test('retail font list stays hidden until sync is on', () => {
   const html = markup({
     status: status({ enabled: false, fonts: [], mode: null, pending: 0, checkedAt: null }),

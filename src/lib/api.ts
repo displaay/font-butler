@@ -271,9 +271,9 @@ export const api = {
       post('/api/uninstall', { ids, deleteSource: options?.deleteSource }),
     ),
   uninstallAndUnlink: (id: string) =>
-    json<{ removed: number }>(post('/api/uninstall-unlink', { id })),
+    json<{ removed: number; partial?: boolean; error?: string }>(post('/api/uninstall-unlink', { id })),
   uninstallAndUnlinkMany: (ids: string[]) =>
-    json<{ removed: number }>(post('/api/uninstall-unlink', { ids })),
+    json<{ removed: number; partial?: boolean; error?: string }>(post('/api/uninstall-unlink', { ids })),
   deactivate: (id: string) => json<{ entry: CatalogEntry }>(post('/api/deactivate', { id })),
   deactivateMany: (ids: string[]) =>
     json<{ entries: CatalogEntry[] }>(post('/api/deactivate', { ids })),

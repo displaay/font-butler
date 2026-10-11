@@ -590,6 +590,8 @@ test('uninstall and unlink records a partial when the row cannot be forgotten', 
     try {
       const result = await service.uninstallAndUnlinkMany([installed.id])
       assert.equal(result.removed, 0)
+      assert.equal(result.partial, true)
+      assert.match(result.error ?? '', /still listed/)
       assert.equal(fs.existsSync(installedPath), false)
       assert.equal(fs.existsSync(source), true)
       assert.equal(service.listCatalog().length, 1)

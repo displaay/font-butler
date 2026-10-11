@@ -671,7 +671,7 @@ export function RetailPane({
         <>
           <DisplaayMark className="size-4" />
           Displaay retail
-          {retailHeadingShowsTrials(status) ? <TrialsBadge /> : null}
+          {status != null && retailHeadingShowsTrials(status) ? <TrialsBadge /> : null}
         </>
       }
     >
@@ -758,7 +758,7 @@ export function RetailPane({
         label={
           <span className="inline-flex items-center gap-1.5">
             Advanced
-            {savedRetailTokenIsValid(status) ? <ValidTokenBadge /> : null}
+            {status != null && savedRetailTokenIsValid(status) ? <ValidTokenBadge /> : null}
           </span>
         }
         htmlFor={advancedId}

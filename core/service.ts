@@ -1220,7 +1220,9 @@ export class FontButlerService {
     })
   }
 
-  async uninstallAndUnlinkMany(ids: string[]): Promise<{ removed: number }> {
+  async uninstallAndUnlinkMany(
+    ids: string[],
+  ): Promise<{ removed: number; partial?: boolean; error?: string }> {
     return runCatalogTask(async () => {
       const unique = [...new Set(ids.filter((id) => id))]
       if (unique.length === 0) {
@@ -1304,6 +1306,13 @@ export class FontButlerService {
       emitCatalog(this.paths)
       if (removed === 0 && !partial) {
         throw new Error(errors[0] ?? 'Could not uninstall and unlink that font.')
+      }
+      if (removed === 0 && partial) {
+        return {
+          removed,
+          partial: true,
+          error: errors.join('\n') || 'Could not uninstall and unlink that font.',
+        }
       }
       return { removed }
     })

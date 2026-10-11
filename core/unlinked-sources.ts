@@ -11,13 +11,31 @@ function listPath(paths: AppPaths): string {
   return path.join(paths.dataRoot, 'unlinked-sources.json')
 }
 
-/** Absolute path with symlinks resolved, so the same file matches however it was named. */
+/**
+ * Absolute path with symlinks resolved, so the same file matches however it was named.
+ * macOS paths are compared case-insensitively and in composed form.
+ */
 function normalizeUnlinkedPath(filePath: string): string {
   const resolved = path.resolve(filePath)
+  let absolute = resolved
+  if (typeof fs.realpathSync.native === 'function') {
+    try {
+      absolute = fs.realpathSync.native(resolved)
+    } catch {
+      absolute = resolved
+    }
+  }
+  const composed = absolute.normalize('NFC')
+  return process.platform === 'darwin' ? composed.toLowerCase() : composed
+}
+
+/** A list that cannot be parsed is moved aside so the next write does not erase it. */
+function backupCorruptUnlinkedList(target: string): void {
+  if (!fs.existsSync(target)) return
   try {
-    return fs.realpathSync(resolved)
+    JSON.parse(fs.readFileSync(target, 'utf8'))
   } catch {
-    return resolved
+    fs.renameSync(target, `${target}.bak`)
   }
 }
 
@@ -50,6 +68,7 @@ function saveUnlinkedPaths(paths: AppPaths, sourcePaths: string[]): void {
   const target = listPath(paths)
   const temp = `${target}.${process.pid}.tmp`
   fs.writeFileSync(temp, JSON.stringify(data))
+  backupCorruptUnlinkedList(target)
   fs.renameSync(temp, target)
 }
 

@@ -7,6 +7,19 @@ export type BatchOutcome = {
   preview?: number
 }
 
+/**
+ * A partial uninstall-and-unlink that forgot nothing should warn.
+ * The success toast would otherwise say the font was uninstalled and unlinked.
+ */
+export function partialUnlinkWarning(result: unknown): string | null {
+  if (!result || typeof result !== 'object') return null
+  const value = result as { removed?: unknown; partial?: unknown; error?: unknown }
+  if (value.partial !== true) return null
+  if (typeof value.removed === 'number' && value.removed > 0) return null
+  if (typeof value.error === 'string' && value.error.length > 0) return value.error
+  return 'Could not uninstall and unlink that font.'
+}
+
 export function batchResultCopy(
   done: string,
   outcome?: BatchOutcome,
