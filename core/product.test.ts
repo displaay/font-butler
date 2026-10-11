@@ -11,7 +11,7 @@ import {
 import { findById, loadCatalog, saveCatalog } from './catalog.ts'
 import { classifyImportFile } from './planner.ts'
 import { setUnlinkForgetFaultForTest } from './service.ts'
-import { setUnlinkedBackupRenameForTest } from './unlinked-sources.ts'
+import { setUnlinkedBackupRenameForTest, setUnlinkedListReadForTest } from './unlinked-sources.ts'
 import { inspectRelinkCandidate } from './relink.ts'
 import { fingerprintFile } from './fingerprint.ts'
 import { displayStateLabel, inspectSourceAvailability, isCleanupEligible } from './state.ts'
@@ -576,6 +576,49 @@ test('uninstall and unlink refuses before uninstall when the Adobe copy cannot b
       fs.chmodSync(adobeDir, 0o755)
     }
   })
+})
+
+test('an unlink during an unlinked-list read error is partial and warns the font may come back', async () => {
+  const logFile = path.join(os.tmpdir(), `font-butler-unlink-read-${process.pid}.log`)
+  const previousLog = process.env.FONT_BUTLER_LOG
+  process.env.FONT_BUTLER_LOG = logFile
+  try {
+  await withService(async (service, paths) => {
+    const source = path.join(paths.dataRoot, 'ReadError.ttf')
+    writeTestFont(source, 'ReadError', 'ReadError-Regular')
+    const imported = await service.importPaths([source])
+    const installed = await service.install(imported.entries[0]!.id)
+    const list = path.join(paths.dataRoot, 'unlinked-sources.json')
+    fs.writeFileSync(list, '{"version":1,"paths":[]}')
+    setUnlinkedListReadForTest((filePath) => {
+      if (filePath === list) {
+        const error = new Error('EACCES: permission denied') as NodeJS.ErrnoException
+        error.code = 'EACCES'
+        throw error
+      }
+      return fs.readFileSync(filePath, 'utf8')
+    })
+    try {
+      const result = await service.uninstallAndUnlinkMany([installed.id])
+      assert.equal(result.removed, 0)
+      assert.equal(result.partial, true)
+      assert.match(result.error ?? '', /may come back from a watch folder/)
+      assert.equal(service.listCatalog().length, 0)
+      assert.equal(fs.readFileSync(list, 'utf8'), '{"version":1,"paths":[]}')
+      const operation = service.listActivity().find((item) => item.action === 'uninstall-unlink')
+      assert.equal(operation?.outcome, 'partial')
+      assert.match(operation?.items[0]?.reason ?? '', /may come back from a watch folder/)
+      assert.match(fs.readFileSync(logFile, 'utf8'), /may come back from a watch folder/)
+    } finally {
+      setUnlinkedListReadForTest(undefined)
+    }
+  })
+  } finally {
+    setUnlinkedListReadForTest(undefined)
+    if (previousLog === undefined) delete process.env.FONT_BUTLER_LOG
+    else process.env.FONT_BUTLER_LOG = previousLog
+    fs.rmSync(logFile, { force: true })
+  }
 })
 
 test('uninstall and unlink records a partial when the row cannot be forgotten', async () => {

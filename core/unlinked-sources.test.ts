@@ -150,10 +150,7 @@ test('a corrupt unlinked list with no valid bak resets on a manual add', () => {
       assert.deepEqual(notices, [
         "Font Buttler couldn't read its list of unlinked fonts and started a new one. Fonts you unlinked earlier may reappear from watch folders. You can unlink them again.",
       ])
-      assert.equal(
-        takePendingUnlinkedListResetNotice()?.message,
-        "Font Buttler couldn't read its list of unlinked fonts and started a new one. Fonts you unlinked earlier may reappear from watch folders. You can unlink them again.",
-      )
+      assert.equal(takePendingUnlinkedListResetNotice(), null)
       allowUnlinkedSource(paths, blocked)
       assert.equal(notices.length, 1)
     } finally {
@@ -181,9 +178,37 @@ test('an EACCES read leaves the unlinked list untouched and skips auto-import', 
       const blocked = path.join(paths.dataRoot, 'Blocked.otf')
       assert.equal(isUnlinkedSource(paths, blocked), true)
       allowUnlinkedSource(paths, blocked)
-      rememberUnlinkedSource(paths, blocked)
+      assert.throws(() => rememberUnlinkedSource(paths, blocked), /may come back from a watch folder/)
       assert.equal(fs.readFileSync(target, 'utf8'), body)
       assert.equal(fs.existsSync(`${target}.bak`), false)
+      assert.equal(isUnlinkedSource(paths, blocked), true)
+    } finally {
+      setUnlinkedListReadForTest(undefined)
+    }
+  })
+})
+
+test('a corrupt unlinked list stays unread when the backup cannot be read', () => {
+  withTemp((paths) => {
+    const target = listFile(paths)
+    const bak = `${target}.bak`
+    fs.mkdirSync(paths.dataRoot, { recursive: true })
+    fs.writeFileSync(target, '{')
+    fs.writeFileSync(bak, 'kept-backup')
+    setUnlinkedListReadForTest((filePath) => {
+      if (filePath === bak) {
+        const error = new Error('EACCES: permission denied') as NodeJS.ErrnoException
+        error.code = 'EACCES'
+        throw error
+      }
+      return fs.readFileSync(filePath, 'utf8')
+    })
+    try {
+      const blocked = path.join(paths.dataRoot, 'Blocked.otf')
+      assert.equal(isUnlinkedSource(paths, blocked), true)
+      allowUnlinkedSource(paths, blocked)
+      assert.equal(fs.readFileSync(target, 'utf8'), '{')
+      assert.equal(fs.readFileSync(bak, 'utf8'), 'kept-backup')
       assert.equal(isUnlinkedSource(paths, blocked), true)
     } finally {
       setUnlinkedListReadForTest(undefined)

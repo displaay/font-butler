@@ -43,7 +43,7 @@ test('an unlinked-list reset stays queued until a window takes it', () => {
   try {
     publishUnlinkedListReset(notice)
     assert.deepEqual(seen, [notice.message])
-    assert.deepEqual(takePendingUnlinkedListResetNotice(), notice)
+    assert.equal(takePendingUnlinkedListResetNotice(), null)
   } finally {
     stop()
     takePendingUnlinkedListResetNotice()

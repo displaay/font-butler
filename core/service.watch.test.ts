@@ -268,7 +268,7 @@ test('a corrupt unlinked list with no backup is reset on launch and watch import
     assert.deepEqual(stored.paths, [])
     assert.match(fs.readFileSync(logFile, 'utf8'), /Reset unlinked-sources.json/)
     assert.ok(notices.some((message) => message.includes('may reappear from watch folders')))
-    assert.match(takePendingUnlinkedListResetNotice()?.message ?? '', /may reappear from watch folders/)
+    assert.equal(takePendingUnlinkedListResetNotice(), null)
     restarted.dispose()
   } finally {
     stop()

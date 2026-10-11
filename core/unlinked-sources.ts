@@ -7,6 +7,17 @@ import type { AppPaths } from './paths.ts'
 const UNLINKED_LIST_RESET_MESSAGE =
   "Font Buttler couldn't read its list of unlinked fonts and started a new one. Fonts you unlinked earlier may reappear from watch folders. You can unlink them again."
 
+/** Toast and Activity text when an unlink cannot be recorded. */
+export const UNLINKED_LIST_READ_ERROR =
+  'The unlinked list could not be read, so this font may come back from a watch folder.'
+
+export class UnlinkedListReadError extends Error {
+  constructor() {
+    super(UNLINKED_LIST_READ_ERROR)
+    this.name = 'UnlinkedListReadError'
+  }
+}
+
 type UnlinkedSourceFile = {
   version: 1
   paths: string[]
@@ -212,9 +223,8 @@ function loadUnlinkedList(target: string): LoadedList {
   if (main !== 'missing' && main !== 'invalid') return { status: 'ready', paths: main.paths }
   if (main === 'missing') return { status: 'ready', paths: [] }
   const backup = readListDocument(backupPath(target))
-  if (backup !== 'missing' && backup !== 'invalid' && backup !== 'unreadable') {
-    return { status: 'ready', paths: backup.paths }
-  }
+  if (backup === 'unreadable') return { status: 'read-error', paths: [] }
+  if (backup !== 'missing' && backup !== 'invalid') return { status: 'ready', paths: backup.paths }
   return { status: 'resettable', paths: [] }
 }
 
@@ -386,7 +396,10 @@ export function rememberUnlinkedSource(paths: AppPaths, sourcePath: string): voi
   if (!sourcePath) return
   const resolved = normalizeUnlinkedPath(sourcePath)
   const loaded = cachedList(paths)
-  if (loaded.status === 'read-error') return
+  if (loaded.status === 'read-error') {
+    logMain('catalog', UNLINKED_LIST_READ_ERROR)
+    throw new UnlinkedListReadError()
+  }
   const mode = caseModeFor(resolved)
   if (loaded.status === 'ready' && loaded.keys.some((item) => keysMatch(item, resolved, mode))) return
   saveUnlinkedPaths(paths, uniquePaths([...loaded.keys, resolved], mode))

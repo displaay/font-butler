@@ -95,7 +95,13 @@ import {
   type FontAnalysis,
 } from './font-analysis.ts'
 import { fingerprintFile, tryFingerprintFile } from './fingerprint.ts'
-import { allowUnlinkedSource, isUnlinkedSource, recoverUnlinkedSourcesSafely, rememberUnlinkedSource } from './unlinked-sources.ts'
+import {
+  allowUnlinkedSource,
+  isUnlinkedSource,
+  recoverUnlinkedSourcesSafely,
+  rememberUnlinkedSource,
+  UnlinkedListReadError,
+} from './unlinked-sources.ts'
 import {
   reconcileMutationJournals,
   recordMutationDestination,
@@ -1282,7 +1288,10 @@ export class FontButlerService {
           } catch (error) {
             partial = true
             const reason = error instanceof Error ? error.message : String(error)
-            const message = `Uninstalled ${label}, but it is still listed. ${reason}`
+            const message =
+              error instanceof UnlinkedListReadError
+                ? reason
+                : `Uninstalled ${label}, but it is still listed. ${reason}`
             errors.push(message)
             items.push({
               id: crypto.randomUUID(),
