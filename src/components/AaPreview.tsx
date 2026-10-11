@@ -44,7 +44,6 @@ export type PreviewFace = {
   italic?: boolean
   label: string
   variation?: string
-  widthClass?: string
   /** Glyphs for this face. Hover stays on one sample when every row comes from one file. */
   sample?: string
   wait?: boolean
@@ -577,13 +576,15 @@ export function CyclingAaPreview({
     >
       {interpolateVariation ? (
         <div className="absolute inset-0 flex items-center justify-center">
+          {/* Keep the loaded face's weight and style. Animating font-weight
+              selects a static instance at that exact weight and the glyphs snap. */}
           <AaGlyph
             family={visibleFace.family}
-            weight={visibleFace.weight}
-            italic={visibleFace.italic}
+            weight={rest.weight ?? visibleFace.weight}
+            italic={Boolean(rest.italic)}
             variation={visibleFace.variation}
             pendingSize="glyph"
-            wait={visibleFace.wait !== false}
+            wait={rest.wait !== false && visibleFace.wait !== false}
             sample={visibleFace.sample ?? sample}
             fit
             animateVariation={cycling}

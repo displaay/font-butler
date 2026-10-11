@@ -94,65 +94,46 @@ test('variable-font instance rows fall back to wght when namedInstances are miss
   assert.equal(instanceRowVariation(face, 'Bold'), "'wght' 700")
 })
 
-test('roman and italic variable files hover-morph the upright preview cut', () => {
-  const romanFace = vfFace()
-  const italicFace: FontFaceInfo = {
-    ...vfFace(),
-    styleName: 'Italic',
-    fullName: 'Recoleta Italic',
-    postscriptName: 'Recoleta-Italic',
-    instanceNames: ['Italic', 'Bold Italic'],
+test('one variable file with upright and italic instances hovers only the upright cut', () => {
+  const face: FontFaceInfo = {
+    familyName: 'Bagoss',
+    styleName: 'Regular',
+    fullName: 'Bagoss Collection VF',
+    postscriptName: 'Bagoss-VF',
+    isVariable: true,
+    instanceCount: 6,
+    instanceNames: ['Condensed Regular', 'Condensed Medium', 'Regular', 'Medium', 'Italic', 'Bold Italic'],
     namedInstances: [
-      { name: 'Italic', coordinates: { wght: 400 } },
-      { name: 'Bold Italic', coordinates: { wght: 700 } },
+      { name: 'Condensed Regular', coordinates: { wght: 400, wdth: 75, slnt: 0 } },
+      { name: 'Condensed Medium', coordinates: { wght: 500, wdth: 75, slnt: 0 } },
+      { name: 'Regular', coordinates: { wght: 400, wdth: 100 } },
+      { name: 'Medium', coordinates: { wght: 500, wdth: 100, slnt: 0 } },
+      { name: 'Italic', coordinates: { wght: 400, wdth: 100, slnt: -12 } },
+      { name: 'Bold Italic', coordinates: { wght: 700, wdth: 100, slnt: -12 } },
     ],
-    italic: true,
+    weight: 400,
+    italic: false,
   }
-  const roman: CatalogEntry = {
-    id: 'roman',
-    sourcePath: '/tmp/Recoleta-Roman.ttf',
-    sourceMtimeMs: 1,
-    sourceSize: 1,
-    status: 'installed',
-    faces: [romanFace],
-    format: 'ttf',
-    addedAt: 1,
-    updatedAt: 1,
-    installedPath: '/Library/Fonts/Recoleta-Roman.ttf',
-  }
-  const italic: CatalogEntry = {
-    ...roman,
-    id: 'italic',
-    sourcePath: '/tmp/Recoleta-Italic.ttf',
-    faces: [italicFace],
-    installedPath: '/Library/Fonts/Recoleta-Italic.ttf',
-  }
-  const grouped = groupCatalog([roman, italic])[0]!
-  assert.equal(grouped.previewEntryId, 'roman')
-  const rows = catalogInstanceRows(grouped)
-  assert.equal(rows.length, 5)
-  const mixed = rows.map((row) => ({
-    family: `fc-${row.catalogEntryId}`,
+  const grouped = groupCatalog([variableEntry('bagoss', face, { previewSample: 'Aa' })])[0]!
+  assert.equal(grouped.entries.length, 1)
+  const mixed = catalogInstanceRows(grouped).map((row) => ({
+    family: 'fc-bagoss',
     italic: row.italic,
     variation: row.variation,
   }))
   assert.equal(facesSupportVariationInterpolation(mixed), false)
   const hoverRows = catalogHoverInstanceRows(grouped)
   assert.deepEqual(
-    hoverRows.map((row) => [row.catalogEntryId, row.label, row.italic, row.variation]),
+    hoverRows.map((row) => [row.label, row.italic, row.previewSample, row.variation]),
     [
-      ['roman', 'Light', false, "'wght' 300"],
-      ['roman', 'Regular', false, "'wght' 400"],
-      ['roman', 'Bold', false, "'wght' 700"],
+      ['Condensed Regular', false, 'Aa', "'wght' 400, 'wdth' 75, 'slnt' 0"],
+      ['Condensed Medium', false, 'Aa', "'wght' 500, 'wdth' 75, 'slnt' 0"],
+      ['Regular', false, 'Aa', "'wght' 400, 'wdth' 100, 'slnt' 0"],
+      ['Medium', false, 'Aa', "'wght' 500, 'wdth' 100, 'slnt' 0"],
     ],
   )
-  const faces = hoverRows.map((row) => ({
-    family: `fc-${row.catalogEntryId}`,
-    italic: row.italic,
-    variation: row.variation,
-  }))
-  const rest = faces.find((face) => face.variation === "'wght' 400")!
-  assert.equal(facesSupportVariationInterpolation(facesMatchingRestCut(faces, rest)), true)
+  assert.equal(hoverRows.some((row) => row.label.includes('Italic')), false)
+  assertHoverMorphs(hoverRows, 'Aa')
 })
 
 test('catalog hover preview keeps only the single VF entry when static retail cuts share the family', () => {
@@ -214,144 +195,43 @@ function assertHoverMorphs(rows: ReturnType<typeof catalogHoverInstanceRows>, sa
   assert.ok(rows.length >= 2)
   assert.ok(rows.every((row) => row.previewSample === sample))
   assert.equal(new Set(rows.map((row) => row.catalogEntryId)).size, 1)
-  assert.equal(new Set(rows.map((row) => row.widthClass)).size, 1)
+  assert.equal(new Set(rows.map((row) => Boolean(row.italic))).size, 1)
+  const variations = rows.map((row) => row.variation)
+  assert.ok(variations.every((variation) => Boolean(variation)))
+  assert.ok(new Set(variations).size >= 2)
   const faces = rows.map((row) => ({
     family: `fc-${row.catalogEntryId}`,
     italic: row.italic,
-    widthClass: row.widthClass,
     variation: row.variation,
   }))
   assert.equal(facesSupportVariationInterpolation(facesMatchingRestCut(faces, faces[0]!)), true)
 }
 
-test('a multi-width family hovers only the resting width and keeps its preview text', () => {
-  const condensed = variableEntry('bagoss-condensed', {
-    familyName: 'Bagoss',
-    styleName: 'Condensed Regular',
-    fullName: 'Bagoss Condensed Regular',
-    postscriptName: 'Bagoss-CondensedRegular',
-    isVariable: true,
-    instanceCount: 2,
-    instanceNames: ['Condensed Regular', 'Condensed Medium'],
-    namedInstances: [
-      { name: 'Condensed Regular', coordinates: { wght: 400, wdth: 75 } },
-      { name: 'Condensed Medium', coordinates: { wght: 500, wdth: 75 } },
-    ],
-    weight: 400,
-    italic: false,
-  }, { previewSample: 'Aa' })
-  const normal = variableEntry('bagoss', {
-    familyName: 'Bagoss',
+test('a weight-only variable file keeps every upright instance and distinct wght strings', () => {
+  const weights = [100, 200, 300, 400, 500, 600, 700, 800, 900]
+  const names = ['Thin', 'ExtraLight', 'Light', 'Regular', 'Medium', 'SemiBold', 'Bold', 'ExtraBold', 'Black']
+  const face: FontFaceInfo = {
+    familyName: 'Coolkit VF',
     styleName: 'Regular',
-    fullName: 'Bagoss Regular',
-    postscriptName: 'Bagoss-Regular',
+    fullName: 'Coolkit VF',
+    postscriptName: 'CoolkitVF',
     isVariable: true,
-    instanceCount: 2,
-    instanceNames: ['Regular', 'Medium'],
-    namedInstances: [
-      { name: 'Regular', coordinates: { wght: 400, wdth: 100 } },
-      { name: 'Medium', coordinates: { wght: 500, wdth: 100 } },
-    ],
-    weight: 400,
-    italic: false,
-  }, { previewSample: 'ACi' })
-  const grouped = groupCatalog([condensed, normal])[0]!
-  assert.equal(grouped.previewEntryId, 'bagoss-condensed')
-  const mixed = catalogInstanceRows(grouped)
-  assert.ok(mixed.some((row) => row.previewSample === 'ACi'))
-  const hoverRows = catalogHoverInstanceRows(grouped)
-  assert.deepEqual(
-    hoverRows.map((row) => [row.catalogEntryId, row.label, row.widthClass, row.previewSample]),
-    [
-      ['bagoss-condensed', 'Condensed Regular', 'condensed', 'Aa'],
-      ['bagoss-condensed', 'Condensed Medium', 'condensed', 'Aa'],
-    ],
-  )
-  assertHoverMorphs(hoverRows, 'Aa')
-
-  const condensedFace = condensed.faces[0]!
-  const normalFace = normal.faces[0]!
-  const oneFile = variableEntry('bagoss-file', condensedFace, { previewSample: 'Aa' })
-  oneFile.faces = [condensedFace, normalFace]
-  const single = groupCatalog([oneFile])[0]!
-  const singleHover = catalogHoverInstanceRows(single)
-  assert.deepEqual(
-    singleHover.map((row) => row.label),
-    ['Condensed Regular', 'Condensed Medium'],
-  )
-  assertHoverMorphs(singleHover, 'Aa')
-
-  const mixedFace: FontFaceInfo = {
-    familyName: 'Bagoss',
-    styleName: 'Regular',
-    fullName: 'Bagoss',
-    postscriptName: 'Bagoss-VF',
-    isVariable: true,
-    instanceCount: 4,
-    instanceNames: ['Condensed Regular', 'Condensed Medium', 'Regular', 'Medium'],
-    namedInstances: [
-      { name: 'Condensed Regular', coordinates: { wght: 400, wdth: 75 } },
-      { name: 'Condensed Medium', coordinates: { wght: 500, wdth: 75 } },
-      { name: 'Regular', coordinates: { wght: 400, wdth: 100 } },
-      { name: 'Medium', coordinates: { wght: 500, wdth: 100 } },
-    ],
+    instanceCount: names.length,
+    instanceNames: names,
+    namedInstances: names.map((name, index) => ({ name, coordinates: { wght: weights[index]! } })),
     weight: 400,
     italic: false,
   }
-  const mixedHover = catalogHoverInstanceRows(groupCatalog([variableEntry('bagoss-mixed', mixedFace, { previewSample: 'Aa' })])[0]!)
-  assert.deepEqual(
-    mixedHover.map((row) => [row.label, row.widthClass, row.previewSample]),
-    [
-      ['Condensed Regular', 'condensed', 'Aa'],
-      ['Condensed Medium', 'condensed', 'Aa'],
-    ],
-  )
-  assertHoverMorphs(mixedHover, 'Aa')
-})
-
-test('a family with several variable files hovers only the card file and keeps its preview text', () => {
-  const coolkit = variableEntry('coolkit', {
-    familyName: 'Coolkit VF',
-    styleName: 'Regular',
-    fullName: 'Coolkit VF Regular',
-    postscriptName: 'CoolkitVF-Regular',
-    isVariable: true,
-    instanceCount: 2,
-    instanceNames: ['Light', 'Regular'],
-    namedInstances: [
-      { name: 'Light', coordinates: { wght: 300 } },
-      { name: 'Regular', coordinates: { wght: 400 } },
-    ],
-    weight: 400,
-    italic: false,
-  }, { previewSample: 'Aa' })
-  const other = variableEntry('coolkit-display', {
-    familyName: 'Coolkit VF',
-    styleName: 'Display',
-    fullName: 'Coolkit VF Display',
-    postscriptName: 'CoolkitVF-Display',
-    isVariable: true,
-    instanceCount: 2,
-    instanceNames: ['Light', 'Regular'],
-    namedInstances: [
-      { name: 'Light', coordinates: { wght: 300, opsz: 72 } },
-      { name: 'Regular', coordinates: { wght: 400, opsz: 72 } },
-    ],
-    weight: 400,
-    italic: false,
-  }, { previewSample: 'ACi' })
-  const grouped = groupCatalog([coolkit, other])[0]!
-  assert.equal(grouped.previewEntryId, 'coolkit')
+  const grouped = groupCatalog([variableEntry('coolkit', face, { previewSample: 'Aa' })])[0]!
+  assert.equal(grouped.entries.length, 1)
   const hoverRows = catalogHoverInstanceRows(grouped)
+  assert.equal(hoverRows.length, 9)
   assert.deepEqual(
-    hoverRows.map((row) => [row.catalogEntryId, row.label, row.previewSample, row.variation]),
-    [
-      ['coolkit', 'Light', 'Aa', "'wght' 300"],
-      ['coolkit', 'Regular', 'Aa', "'wght' 400"],
-    ],
+    hoverRows.map((row) => row.variation),
+    weights.map((weight) => `'wght' ${weight}`),
   )
+  assert.ok(hoverRows.every((row) => row.italic === false && row.previewSample === 'Aa'))
   assertHoverMorphs(hoverRows, 'Aa')
-  assert.equal(hoverRows.some((row) => row.previewSample === 'ACi'), false)
 })
 
 test('an italic-only variable file still hover-morphs that italic cut', () => {

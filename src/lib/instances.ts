@@ -10,61 +10,6 @@ import type {
   SystemFamilyGroup,
 } from './types'
 
-export type WidthClass =
-  | 'ultra-condensed'
-  | 'extra-condensed'
-  | 'condensed'
-  | 'semi-condensed'
-  | 'normal'
-  | 'semi-expanded'
-  | 'expanded'
-  | 'extra-expanded'
-  | 'ultra-expanded'
-
-const WIDTH_CLASS_PATTERNS: Array<[WidthClass, RegExp]> = [
-  ['ultra-condensed', /ultracondensed/],
-  ['extra-condensed', /extracondensed|extracompressed/],
-  ['semi-condensed', /semicondensed|semicompressed/],
-  ['condensed', /condensed|compressed/],
-  ['ultra-expanded', /ultraexpanded|ultraextended/],
-  ['extra-expanded', /extraexpanded|extraextended/],
-  ['semi-expanded', /semiexpanded|semiextended/],
-  ['expanded', /expanded|extended/],
-]
-
-/** Width cut named in a family, style, or instance, ignoring weight and italic words. */
-export function widthClassFromName(name: string): WidthClass | undefined {
-  const compact = name.replace(/[\s\-_]/g, '').toLowerCase()
-  for (const [width, pattern] of WIDTH_CLASS_PATTERNS) {
-    if (pattern.test(compact)) return width
-  }
-  return undefined
-}
-
-function faceWidthClass(face: FontFaceInfo): WidthClass {
-  return widthClassFromName(face.styleName) ?? widthClassFromName(face.familyName) ?? 'normal'
-}
-
-/** wdth 100 is the normal cut. Other values follow the OpenType width-class percentages. */
-function widthClassFromAxis(coordinates?: Record<string, number>): WidthClass | undefined {
-  const wdth = coordinates?.wdth
-  if (wdth === undefined || !Number.isFinite(wdth)) return undefined
-  if (wdth <= 50) return 'ultra-condensed'
-  if (wdth <= 62.5) return 'extra-condensed'
-  if (wdth <= 75) return 'condensed'
-  if (wdth < 100) return 'semi-condensed'
-  if (wdth === 100) return 'normal'
-  if (wdth < 125) return 'semi-expanded'
-  if (wdth === 125) return 'expanded'
-  if (wdth <= 150) return 'extra-expanded'
-  return 'ultra-expanded'
-}
-
-function rowWidthClass(face: FontFaceInfo, label: string): WidthClass {
-  const named = face.namedInstances?.find((item) => item.name === label)
-  return widthClassFromAxis(named?.coordinates) ?? widthClassFromName(label) ?? faceWidthClass(face)
-}
-
 export type InstanceRow = {
   key: string
   label: string
@@ -74,8 +19,6 @@ export type InstanceRow = {
   format?: string
   weight?: number
   italic?: boolean
-  /** Width cut of this named instance, so hover can stay inside one width family. */
-  widthClass?: WidthClass
   variation?: string
   installState?: InstanceInstallState
   hasSource?: boolean
@@ -93,6 +36,48 @@ export function variationSettings(coordinates?: Record<string, number>): string 
     .filter(([, value]) => Number.isFinite(value))
     .map(([tag, value]) => `'${tag}' ${value}`)
   return parts.length > 0 ? parts.join(', ') : undefined
+}
+
+function parseVariation(value?: string): Record<string, number> {
+  const coordinates: Record<string, number> = {}
+  if (!value) return coordinates
+  for (const match of value.matchAll(/'([^']+)'\s+(-?\d+(?:\.\d+)?)/g)) {
+    const tag = match[1]
+    const number = Number(match[2])
+    if (tag && Number.isFinite(number)) coordinates[tag] = number
+  }
+  return coordinates
+}
+
+/**
+ * Hover steps must list the same axes. A step that drops an axis (or adds one)
+ * cannot interpolate, so the preview snaps to that instance.
+ */
+function shareVariationAxes(rows: InstanceRow[]): InstanceRow[] {
+  const parsed = rows.map((row) => parseVariation(row.variation))
+  const tags: string[] = []
+  for (const coordinates of parsed) {
+    for (const tag of Object.keys(coordinates)) {
+      if (!tags.includes(tag)) tags.push(tag)
+    }
+  }
+  if (tags.length === 0) return rows
+  return rows.map((row, index) => {
+    const coordinates = parsed[index] ?? {}
+    let missing = false
+    const filled: Record<string, number> = {}
+    for (const tag of tags) {
+      const value = coordinates[tag]
+      if (value !== undefined) {
+        filled[tag] = value
+        continue
+      }
+      missing = true
+      filled[tag] = parsed.find((item) => item[tag] !== undefined)?.[tag] ?? 0
+    }
+    if (!missing) return row
+    return { ...row, variation: variationSettings(filled) }
+  })
 }
 
 function weightFromStyleName(name: string, fallback = 400): number {
@@ -223,22 +208,12 @@ function restingHoverFace(entry: CatalogEntry): FontFaceInfo | undefined {
   return faces.find((face) => !face.italic) ?? faces[0]
 }
 
-function namedWidth(face: FontFaceInfo): WidthClass | undefined {
-  return widthClassFromName(face.styleName) ?? widthClassFromName(face.familyName)
-}
-
-/** Width of the cut the card is showing, including a width that lives only on the first instance. */
-function restingWidth(face: FontFaceInfo): WidthClass {
-  const named = namedWidth(face)
-  if (named) return named
-  const first = variableInstanceNames(face)[0]
-  return first ? rowWidthClass(face, first) : faceWidthClass(face)
-}
-
 /**
- * Instance rows for grid hover preview. Rows come from the single VF entry behind
- * the card and keep that resting face's family, width class, and italic flag, so
- * every row shares the file's variation axes and preview text.
+ * Instance rows for grid hover preview. Rows come from the variable file behind
+ * the card and keep the resting face's italic flag. `rowsFromFace` sets that
+ * flag per instance name, so a file that mixes upright and italic instances
+ * would otherwise fail the smooth check. Widths stay in the cycle: they are
+ * other values of the same axes.
  */
 export function catalogHoverInstanceRows(group: FamilyGroup, retail?: RetailSyncView | null): InstanceRow[] {
   const rows = catalogInstanceRows(group, retail)
@@ -247,20 +222,17 @@ export function catalogHoverInstanceRows(group: FamilyGroup, retail?: RetailSync
   const rest = restingHoverFace(chosen)
   if (!rest) return rows.filter((row) => row.catalogEntryId === chosen.id)
   const italic = Boolean(rest.italic)
-  const width = restingWidth(rest)
   const cut: InstanceRow[] = []
   for (const face of chosen.faces) {
-    if (face.familyName !== rest.familyName || Boolean(face.italic) !== italic) continue
-    const faceWidth = namedWidth(face)
-    if (faceWidth && faceWidth !== width) continue
+    if (face.familyName !== rest.familyName) continue
     if (!face.isVariable || variableInstanceNames(face).length === 0) continue
     for (const row of rows) {
       if (row.catalogEntryId !== chosen.id || row.sublabel !== face.postscriptName) continue
-      if (Boolean(row.italic) !== italic || rowWidthClass(face, row.label) !== width) continue
-      cut.push({ ...row, widthClass: width })
+      if (Boolean(row.italic) !== italic) continue
+      cut.push(row)
     }
   }
-  return cut
+  return shareVariationAxes(cut)
 }
 
 function rowsFromSystemFace(face: SystemFace): InstanceRow[] {

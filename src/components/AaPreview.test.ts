@@ -132,7 +132,7 @@ test('a roman plus italic variable family morphs the upright cut instead of cros
   }
 })
 
-test('hover morph keeps one width and one preview sample while the instance label changes', async () => {
+test('hover morph keeps one italic cut and one preview sample while the instance label changes', async () => {
   const { createElement, act } = await import('react')
   const { createRoot } = await import('react-dom/client')
   const { CyclingAaPreview } = await import('./AaPreview.tsx')
@@ -157,79 +157,50 @@ test('hover morph keeps one width and one preview sample while the instance labe
     }
   }
   const bagoss = groupCatalog([
-    entry('bagoss-condensed', {
+    entry('bagoss', {
       familyName: 'Bagoss',
-      styleName: 'Condensed Regular',
-      fullName: 'Bagoss Condensed Regular',
-      postscriptName: 'Bagoss-CondensedRegular',
+      styleName: 'Regular',
+      fullName: 'Bagoss Collection VF',
+      postscriptName: 'Bagoss-VF',
       isVariable: true,
-      instanceCount: 2,
-      instanceNames: ['Condensed Regular', 'Condensed Medium'],
+      instanceCount: 4,
+      instanceNames: ['Condensed Regular', 'Regular', 'Italic', 'Bold Italic'],
       namedInstances: [
-        { name: 'Condensed Regular', coordinates: { wght: 400, wdth: 75 } },
-        { name: 'Condensed Medium', coordinates: { wght: 500, wdth: 75 } },
+        { name: 'Condensed Regular', coordinates: { wght: 400, wdth: 75, slnt: 0 } },
+        { name: 'Regular', coordinates: { wght: 400, wdth: 100, slnt: 0 } },
+        { name: 'Italic', coordinates: { wght: 400, wdth: 100, slnt: -12 } },
+        { name: 'Bold Italic', coordinates: { wght: 700, wdth: 100, slnt: -12 } },
       ],
       weight: 400,
       italic: false,
     }, 'Aa'),
-    entry('bagoss', {
-      familyName: 'Bagoss',
-      styleName: 'Regular',
-      fullName: 'Bagoss Regular',
-      postscriptName: 'Bagoss-Regular',
-      isVariable: true,
-      instanceCount: 2,
-      instanceNames: ['Regular', 'Medium'],
-      namedInstances: [
-        { name: 'Regular', coordinates: { wght: 400, wdth: 100 } },
-        { name: 'Medium', coordinates: { wght: 500, wdth: 100 } },
-      ],
-      weight: 400,
-      italic: false,
-    }, 'ACi'),
   ])[0]!
+  const names = ['Thin', 'ExtraLight', 'Light', 'Regular', 'Medium', 'SemiBold', 'Bold', 'ExtraBold', 'Black']
   const coolkit = groupCatalog([
     entry('coolkit', {
       familyName: 'Coolkit VF',
       styleName: 'Regular',
-      fullName: 'Coolkit VF Regular',
-      postscriptName: 'CoolkitVF-Regular',
+      fullName: 'Coolkit VF',
+      postscriptName: 'CoolkitVF',
       isVariable: true,
-      instanceCount: 2,
-      instanceNames: ['Light', 'Regular'],
-      namedInstances: [
-        { name: 'Light', coordinates: { wght: 300 } },
-        { name: 'Regular', coordinates: { wght: 400 } },
-      ],
+      instanceCount: names.length,
+      instanceNames: names,
+      namedInstances: names.map((name, index) => ({ name, coordinates: { wght: (index + 1) * 100 } })),
       weight: 400,
       italic: false,
     }, 'Aa'),
-    entry('coolkit-display', {
-      familyName: 'Coolkit VF',
-      styleName: 'Display',
-      fullName: 'Coolkit VF Display',
-      postscriptName: 'CoolkitVF-Display',
-      isVariable: true,
-      instanceCount: 2,
-      instanceNames: ['Light', 'Regular'],
-      namedInstances: [
-        { name: 'Light', coordinates: { wght: 300, opsz: 72 } },
-        { name: 'Regular', coordinates: { wght: 400, opsz: 72 } },
-      ],
-      weight: 400,
-      italic: false,
-    }, 'ACi'),
   ])[0]!
 
   for (const grouped of [bagoss, coolkit]) {
     const hoverRows = catalogHoverInstanceRows(grouped)
+    const variations = new Set(hoverRows.map((row) => row.variation))
+    assert.ok(variations.size >= 2)
     const faces = hoverRows.map((row) => ({
       family: `fc-${row.catalogEntryId}`,
       weight: row.weight,
       italic: row.italic,
       label: row.label,
       variation: row.variation,
-      widthClass: row.widthClass,
       sample: row.previewSample,
       wait: false,
     }))
@@ -248,22 +219,75 @@ test('hover morph keeps one width and one preview sample while the instance labe
         )
       })
       const preview = host.querySelector('[data-preview-motion]')
+      const glyph = host.querySelector('.font-preview') as HTMLElement | null
       assert.equal(preview?.getAttribute('data-preview-motion'), 'morph')
       assert.equal(host.querySelector('[class*="opacity-0"]'), null)
       assert.match(host.textContent ?? '', /Aa/)
       assert.equal(host.textContent?.includes('ACi'), false)
+      assert.equal(host.textContent?.includes('Italic'), false)
+      assert.equal(glyph?.style.fontWeight, String(faces[0]!.weight))
+      assert.notEqual(glyph?.style.fontVariationSettings, faces[0]!.variation)
 
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 650))
       })
       assert.equal(preview?.getAttribute('data-preview-motion'), 'morph')
       assert.match(host.textContent ?? '', /Aa/)
-      assert.equal(host.textContent?.includes('ACi'), false)
+      assert.equal(glyph?.style.fontWeight, String(faces[0]!.weight))
     } finally {
       await act(async () => {
         root.unmount()
       })
       host.remove()
     }
+  }
+})
+
+test('a weight-only hover cycle stays on the loaded variable face when other weights are not ready', async () => {
+  const readySpec = 'normal 400 24px "fc-coolkit"'
+  const fonts = {
+    check: (spec: string) => spec === readySpec,
+    load: () => Promise.resolve([]),
+    addEventListener() {},
+    removeEventListener() {},
+    forEach(callback: (face: { family: string; weight: string; style: string; status: string }) => void) {
+      callback({ family: 'fc-coolkit', weight: '1 1000', style: 'normal', status: 'loaded' })
+    },
+  }
+  Object.defineProperty(document, 'fonts', { configurable: true, value: fonts })
+
+  const { createElement, act } = await import('react')
+  const { createRoot } = await import('react-dom/client')
+  const { CyclingAaPreview } = await import('./AaPreview.tsx')
+  const faces = [
+    { family: 'fc-coolkit', weight: 300, italic: false, label: 'Light', variation: "'wght' 300", sample: 'Aa', wait: true },
+    { family: 'fc-coolkit', weight: 400, italic: false, label: 'Regular', variation: "'wght' 400", sample: 'Aa', wait: true },
+    { family: 'fc-coolkit', weight: 700, italic: false, label: 'Bold', variation: "'wght' 700", sample: 'Aa', wait: true },
+  ]
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  try {
+    await act(async () => {
+      root.render(
+        createElement(CyclingAaPreview, {
+          faces,
+          rest: faces[1]!,
+          active: true,
+          size: 3,
+        }),
+      )
+    })
+    const glyph = host.querySelector('.font-preview') as HTMLElement | null
+    assert.ok(glyph, 'the morph glyph stays mounted')
+    assert.equal(host.querySelector('[aria-label="Loading preview"]'), null)
+    assert.equal(glyph?.style.fontWeight, '400')
+    assert.equal(glyph?.textContent, 'Aa')
+    assert.notEqual(glyph?.style.fontVariationSettings, "'wght' 400")
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
   }
 })

@@ -46,11 +46,23 @@ export function catalogFontFaceRules(
   faces: Array<{ weight?: number; italic?: boolean; isVariable?: boolean }>,
 ): string[] {
   const descriptors = faces.length > 0 ? faces : [{ weight: 400, italic: false }]
-  return descriptors.map((face) => {
+  // A variable file covers every instance weight. A static weight rule for the
+  // same family would win at that exact weight and the hover would snap off the VF.
+  const variableFaces = descriptors.filter((face) => face.isVariable)
+  const source = variableFaces.length > 0 ? variableFaces : descriptors
+  const seen = new Set<string>()
+  const rules: string[] = []
+  for (const face of source) {
     const weight = face.isVariable ? '1 1000' : String(face.weight ?? 400)
     const style = face.italic ? 'italic' : 'normal'
-    return `@font-face{font-family:"${family}";src:url("${url}");font-weight:${weight};font-style:${style};font-display:block;}`
-  })
+    const key = `${weight}:${style}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    rules.push(
+      `@font-face{font-family:"${family}";src:url("${url}");font-weight:${weight};font-style:${style};font-display:block;}`,
+    )
+  }
+  return rules
 }
 
 export function systemFontUrl(filePath: string, revision?: string | number): string {

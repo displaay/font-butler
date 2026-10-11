@@ -107,6 +107,18 @@ test('variable faces register a weight range so instance hover can interpolate',
   assert.match(rules[0]!, /font-weight:1 1000/)
 })
 
+test('a variable file does not also register static instance weights', () => {
+  const rules = catalogFontFaceRules('fc-coolkit', '/api/font-file/coolkit', [
+    { weight: 400, italic: false, isVariable: true },
+    { weight: 700, italic: false, isVariable: false },
+    { weight: 400, italic: true, isVariable: false },
+  ])
+  assert.equal(rules.length, 1)
+  assert.match(rules[0]!, /font-weight:1 1000/)
+  assert.match(rules[0]!, /font-style:normal/)
+  assert.equal(rules.some((rule) => /font-weight:700/.test(rule)), false)
+})
+
 test('captured revision preview URLs stay pinned when the live source fingerprint changes', () => {
   const captured = 'a'.repeat(64)
   const opened = entry({ sourceFingerprint: captured, installedFingerprint: 'b'.repeat(64) })

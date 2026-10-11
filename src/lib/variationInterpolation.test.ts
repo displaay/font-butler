@@ -67,18 +67,19 @@ test('hover morph checks the resting cut when roman and italic rows are mixed', 
   )
 })
 
-test('hover morph keeps the resting width when a family mixes width cuts', () => {
+test('hover morph keeps mixed widths when every row is the resting italic cut', () => {
   const faces = [
-    { family: 'fc-bagoss', italic: false, widthClass: 'condensed', variation: "'wght' 400, 'wdth' 75" },
-    { family: 'fc-bagoss', italic: false, widthClass: 'condensed', variation: "'wght' 500, 'wdth' 75" },
-    { family: 'fc-bagoss', italic: false, widthClass: 'normal', variation: "'wght' 400, 'wdth' 100" },
+    { family: 'fc-bagoss', italic: false, variation: "'wght' 400, 'wdth' 75, 'slnt' 0" },
+    { family: 'fc-bagoss', italic: false, variation: "'wght' 400, 'wdth' 100, 'slnt' 0" },
+    { family: 'fc-bagoss', italic: true, variation: "'wght' 400, 'wdth' 100, 'slnt' -12" },
   ]
   const rest = faces[0]!
   assert.equal(facesSupportVariationInterpolation(faces), false)
-  assert.equal(facesSupportVariationInterpolation(facesMatchingRestCut(faces, rest)), true)
+  const upright = facesMatchingRestCut(faces, rest)
+  assert.equal(facesSupportVariationInterpolation(upright), true)
   assert.deepEqual(
-    facesMatchingRestCut(faces, rest).map((face) => face.widthClass),
-    ['condensed', 'condensed'],
+    upright.map((face) => face.variation),
+    ["'wght' 400, 'wdth' 75, 'slnt' 0", "'wght' 400, 'wdth' 100, 'slnt' 0"],
   )
 })
 
