@@ -10,6 +10,61 @@ import type {
   SystemFamilyGroup,
 } from './types'
 
+export type WidthClass =
+  | 'ultra-condensed'
+  | 'extra-condensed'
+  | 'condensed'
+  | 'semi-condensed'
+  | 'normal'
+  | 'semi-expanded'
+  | 'expanded'
+  | 'extra-expanded'
+  | 'ultra-expanded'
+
+const WIDTH_CLASS_PATTERNS: Array<[WidthClass, RegExp]> = [
+  ['ultra-condensed', /ultracondensed/],
+  ['extra-condensed', /extracondensed|extracompressed/],
+  ['semi-condensed', /semicondensed|semicompressed/],
+  ['condensed', /condensed|compressed/],
+  ['ultra-expanded', /ultraexpanded|ultraextended/],
+  ['extra-expanded', /extraexpanded|extraextended/],
+  ['semi-expanded', /semiexpanded|semiextended/],
+  ['expanded', /expanded|extended/],
+]
+
+/** Width cut named in a family, style, or instance, ignoring weight and italic words. */
+export function widthClassFromName(name: string): WidthClass | undefined {
+  const compact = name.replace(/[\s\-_]/g, '').toLowerCase()
+  for (const [width, pattern] of WIDTH_CLASS_PATTERNS) {
+    if (pattern.test(compact)) return width
+  }
+  return undefined
+}
+
+function faceWidthClass(face: FontFaceInfo): WidthClass {
+  return widthClassFromName(face.styleName) ?? widthClassFromName(face.familyName) ?? 'normal'
+}
+
+/** wdth 100 is the normal cut. Other values follow the OpenType width-class percentages. */
+function widthClassFromAxis(coordinates?: Record<string, number>): WidthClass | undefined {
+  const wdth = coordinates?.wdth
+  if (wdth === undefined || !Number.isFinite(wdth)) return undefined
+  if (wdth <= 50) return 'ultra-condensed'
+  if (wdth <= 62.5) return 'extra-condensed'
+  if (wdth <= 75) return 'condensed'
+  if (wdth < 100) return 'semi-condensed'
+  if (wdth === 100) return 'normal'
+  if (wdth < 125) return 'semi-expanded'
+  if (wdth === 125) return 'expanded'
+  if (wdth <= 150) return 'extra-expanded'
+  return 'ultra-expanded'
+}
+
+function rowWidthClass(face: FontFaceInfo, label: string): WidthClass {
+  const named = face.namedInstances?.find((item) => item.name === label)
+  return widthClassFromAxis(named?.coordinates) ?? widthClassFromName(label) ?? faceWidthClass(face)
+}
+
 export type InstanceRow = {
   key: string
   label: string
@@ -19,6 +74,8 @@ export type InstanceRow = {
   format?: string
   weight?: number
   italic?: boolean
+  /** Width cut of this named instance, so hover can stay inside one width family. */
+  widthClass?: WidthClass
   variation?: string
   installState?: InstanceInstallState
   hasSource?: boolean
@@ -149,45 +206,61 @@ function entryHasHoverInstances(entry: CatalogEntry): boolean {
 }
 
 /**
- * The variable file hover should cycle. A Roman file plus an Italic file used to be
- * returned together, which mixed italic flags and @font-face families and forced a
- * cross-fade. Prefer the preview entry when it is variable, otherwise the upright file.
+ * The variable file the card is showing. A family can hold several VF files; hover
+ * uses the preview file, or the only VF when static cuts share the card with it.
  */
 function hoverVariableEntry(group: FamilyGroup): CatalogEntry | undefined {
   const vfEntries = group.entries.filter(entryHasHoverInstances)
   if (vfEntries.length === 0) return undefined
   const preview = vfEntries.find((entry) => entry.id === group.previewEntryId)
   if (preview) return preview
-  return (
-    vfEntries.find((entry) =>
-      entry.faces.some((face) => face.isVariable && !face.italic && variableInstanceNames(face).length > 0),
-    ) ?? vfEntries[0]
-  )
+  return vfEntries.length === 1 ? vfEntries[0] : undefined
 }
 
-function restingFaceItalic(entry: CatalogEntry): boolean {
-  const face =
-    entry.faces.find((item) => item.isVariable && !item.italic) ??
-    entry.faces.find((item) => !item.italic) ??
-    entry.faces[0]
-  return Boolean(face?.italic)
+/** Face the card rests on: the first upright variable face, or the only face in an italic file. */
+function restingHoverFace(entry: CatalogEntry): FontFaceInfo | undefined {
+  const faces = entry.faces.filter((face) => face.isVariable && variableInstanceNames(face).length > 0)
+  return faces.find((face) => !face.italic) ?? faces[0]
+}
+
+function namedWidth(face: FontFaceInfo): WidthClass | undefined {
+  return widthClassFromName(face.styleName) ?? widthClassFromName(face.familyName)
+}
+
+/** Width of the cut the card is showing, including a width that lives only on the first instance. */
+function restingWidth(face: FontFaceInfo): WidthClass {
+  const named = namedWidth(face)
+  if (named) return named
+  const first = variableInstanceNames(face)[0]
+  return first ? rowWidthClass(face, first) : faceWidthClass(face)
 }
 
 /**
- * Instance rows for grid hover preview. When a family mixes static retail cuts with one
- * variable font file, cycle only that file's named instances so variation interpolation
- * can run on a single @font-face family. Roman and Italic variable files stay separate:
- * hover follows the upright preview cut.
+ * Instance rows for grid hover preview. Rows come from the single VF entry behind
+ * the card and keep that resting face's family, width class, and italic flag, so
+ * every row shares the file's variation axes and preview text.
  */
 export function catalogHoverInstanceRows(group: FamilyGroup, retail?: RetailSyncView | null): InstanceRow[] {
   const rows = catalogInstanceRows(group, retail)
   const chosen = hoverVariableEntry(group)
   if (!chosen) return rows
-  const vfRows = rows.filter((row) => row.catalogEntryId === chosen.id)
-  if (vfRows.length < 2) return rows
-  const italic = restingFaceItalic(chosen)
-  const cut = vfRows.filter((row) => Boolean(row.italic) === italic)
-  return cut.length >= 2 ? cut : vfRows
+  const rest = restingHoverFace(chosen)
+  if (!rest) return rows.filter((row) => row.catalogEntryId === chosen.id)
+  const italic = Boolean(rest.italic)
+  const width = restingWidth(rest)
+  const cut: InstanceRow[] = []
+  for (const face of chosen.faces) {
+    if (face.familyName !== rest.familyName || Boolean(face.italic) !== italic) continue
+    const faceWidth = namedWidth(face)
+    if (faceWidth && faceWidth !== width) continue
+    if (!face.isVariable || variableInstanceNames(face).length === 0) continue
+    for (const row of rows) {
+      if (row.catalogEntryId !== chosen.id || row.sublabel !== face.postscriptName) continue
+      if (Boolean(row.italic) !== italic || rowWidthClass(face, row.label) !== width) continue
+      cut.push({ ...row, widthClass: width })
+    }
+  }
+  return cut
 }
 
 function rowsFromSystemFace(face: SystemFace): InstanceRow[] {

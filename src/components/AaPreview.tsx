@@ -44,6 +44,9 @@ export type PreviewFace = {
   italic?: boolean
   label: string
   variation?: string
+  widthClass?: string
+  /** Glyphs for this face. Hover stays on one sample when every row comes from one file. */
+  sample?: string
   wait?: boolean
 }
 
@@ -581,7 +584,7 @@ export function CyclingAaPreview({
             variation={visibleFace.variation}
             pendingSize="glyph"
             wait={visibleFace.wait !== false}
-            sample={sample}
+            sample={visibleFace.sample ?? sample}
             fit
             animateVariation={cycling}
           />
@@ -607,7 +610,7 @@ export function CyclingAaPreview({
                 variation={face.variation}
                 pendingSize="glyph"
                 wait={face.wait !== false}
-                sample={sample}
+                sample={face.sample ?? sample}
                 fit
                 showRetry={faceIndex === visibleIndex}
               />

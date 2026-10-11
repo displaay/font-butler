@@ -131,3 +131,139 @@ test('a roman plus italic variable family morphs the upright cut instead of cros
     host.remove()
   }
 })
+
+test('hover morph keeps one width and one preview sample while the instance label changes', async () => {
+  const { createElement, act } = await import('react')
+  const { createRoot } = await import('react-dom/client')
+  const { CyclingAaPreview } = await import('./AaPreview.tsx')
+  const { catalogHoverInstanceRows } = await import('../lib/instances.ts')
+  const { groupCatalog } = await import('../lib/group.ts')
+  type Face = import('../lib/types.ts').FontFaceInfo
+  type Entry = import('../lib/types.ts').CatalogEntry
+
+  function entry(id: string, face: Face, previewSample: string): Entry {
+    return {
+      id,
+      sourcePath: `/tmp/${id}.ttf`,
+      sourceMtimeMs: 1,
+      sourceSize: 1,
+      status: 'installed',
+      faces: [face],
+      format: 'ttf',
+      addedAt: 1,
+      updatedAt: 1,
+      installedPath: `/Library/Fonts/${id}.ttf`,
+      previewSample,
+    }
+  }
+  const bagoss = groupCatalog([
+    entry('bagoss-condensed', {
+      familyName: 'Bagoss',
+      styleName: 'Condensed Regular',
+      fullName: 'Bagoss Condensed Regular',
+      postscriptName: 'Bagoss-CondensedRegular',
+      isVariable: true,
+      instanceCount: 2,
+      instanceNames: ['Condensed Regular', 'Condensed Medium'],
+      namedInstances: [
+        { name: 'Condensed Regular', coordinates: { wght: 400, wdth: 75 } },
+        { name: 'Condensed Medium', coordinates: { wght: 500, wdth: 75 } },
+      ],
+      weight: 400,
+      italic: false,
+    }, 'Aa'),
+    entry('bagoss', {
+      familyName: 'Bagoss',
+      styleName: 'Regular',
+      fullName: 'Bagoss Regular',
+      postscriptName: 'Bagoss-Regular',
+      isVariable: true,
+      instanceCount: 2,
+      instanceNames: ['Regular', 'Medium'],
+      namedInstances: [
+        { name: 'Regular', coordinates: { wght: 400, wdth: 100 } },
+        { name: 'Medium', coordinates: { wght: 500, wdth: 100 } },
+      ],
+      weight: 400,
+      italic: false,
+    }, 'ACi'),
+  ])[0]!
+  const coolkit = groupCatalog([
+    entry('coolkit', {
+      familyName: 'Coolkit VF',
+      styleName: 'Regular',
+      fullName: 'Coolkit VF Regular',
+      postscriptName: 'CoolkitVF-Regular',
+      isVariable: true,
+      instanceCount: 2,
+      instanceNames: ['Light', 'Regular'],
+      namedInstances: [
+        { name: 'Light', coordinates: { wght: 300 } },
+        { name: 'Regular', coordinates: { wght: 400 } },
+      ],
+      weight: 400,
+      italic: false,
+    }, 'Aa'),
+    entry('coolkit-display', {
+      familyName: 'Coolkit VF',
+      styleName: 'Display',
+      fullName: 'Coolkit VF Display',
+      postscriptName: 'CoolkitVF-Display',
+      isVariable: true,
+      instanceCount: 2,
+      instanceNames: ['Light', 'Regular'],
+      namedInstances: [
+        { name: 'Light', coordinates: { wght: 300, opsz: 72 } },
+        { name: 'Regular', coordinates: { wght: 400, opsz: 72 } },
+      ],
+      weight: 400,
+      italic: false,
+    }, 'ACi'),
+  ])[0]!
+
+  for (const grouped of [bagoss, coolkit]) {
+    const hoverRows = catalogHoverInstanceRows(grouped)
+    const faces = hoverRows.map((row) => ({
+      family: `fc-${row.catalogEntryId}`,
+      weight: row.weight,
+      italic: row.italic,
+      label: row.label,
+      variation: row.variation,
+      widthClass: row.widthClass,
+      sample: row.previewSample,
+      wait: false,
+    }))
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    try {
+      await act(async () => {
+        root.render(
+          createElement(CyclingAaPreview, {
+            faces,
+            rest: faces[0]!,
+            active: true,
+            size: 3,
+          }),
+        )
+      })
+      const preview = host.querySelector('[data-preview-motion]')
+      assert.equal(preview?.getAttribute('data-preview-motion'), 'morph')
+      assert.equal(host.querySelector('[class*="opacity-0"]'), null)
+      assert.match(host.textContent ?? '', /Aa/)
+      assert.equal(host.textContent?.includes('ACi'), false)
+
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 650))
+      })
+      assert.equal(preview?.getAttribute('data-preview-motion'), 'morph')
+      assert.match(host.textContent ?? '', /Aa/)
+      assert.equal(host.textContent?.includes('ACi'), false)
+    } finally {
+      await act(async () => {
+        root.unmount()
+      })
+      host.remove()
+    }
+  }
+})

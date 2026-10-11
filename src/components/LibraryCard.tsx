@@ -179,6 +179,8 @@ export const LibraryCard = memo(function LibraryCard({
           italic: row.italic,
           label: row.label,
           variation: row.variation,
+          widthClass: row.widthClass,
+          sample: row.previewSample,
           wait: entryHasPreviewFile(rowEntry ?? preview),
         }
       }),

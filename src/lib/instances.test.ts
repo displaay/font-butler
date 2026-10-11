@@ -190,6 +190,198 @@ test('catalog hover preview keeps only the single VF entry when static retail cu
   assert.ok(hoverRows.every((row) => row.catalogEntryId === 'vf'))
 })
 
+function variableEntry(
+  id: string,
+  face: FontFaceInfo,
+  extra: Partial<CatalogEntry> = {},
+): CatalogEntry {
+  return {
+    id,
+    sourcePath: `/tmp/${id}.ttf`,
+    sourceMtimeMs: 1,
+    sourceSize: 1,
+    status: 'installed',
+    faces: [face],
+    format: 'ttf',
+    addedAt: 1,
+    updatedAt: 1,
+    installedPath: `/Library/Fonts/${id}.ttf`,
+    ...extra,
+  }
+}
+
+function assertHoverMorphs(rows: ReturnType<typeof catalogHoverInstanceRows>, sample: string) {
+  assert.ok(rows.length >= 2)
+  assert.ok(rows.every((row) => row.previewSample === sample))
+  assert.equal(new Set(rows.map((row) => row.catalogEntryId)).size, 1)
+  assert.equal(new Set(rows.map((row) => row.widthClass)).size, 1)
+  const faces = rows.map((row) => ({
+    family: `fc-${row.catalogEntryId}`,
+    italic: row.italic,
+    widthClass: row.widthClass,
+    variation: row.variation,
+  }))
+  assert.equal(facesSupportVariationInterpolation(facesMatchingRestCut(faces, faces[0]!)), true)
+}
+
+test('a multi-width family hovers only the resting width and keeps its preview text', () => {
+  const condensed = variableEntry('bagoss-condensed', {
+    familyName: 'Bagoss',
+    styleName: 'Condensed Regular',
+    fullName: 'Bagoss Condensed Regular',
+    postscriptName: 'Bagoss-CondensedRegular',
+    isVariable: true,
+    instanceCount: 2,
+    instanceNames: ['Condensed Regular', 'Condensed Medium'],
+    namedInstances: [
+      { name: 'Condensed Regular', coordinates: { wght: 400, wdth: 75 } },
+      { name: 'Condensed Medium', coordinates: { wght: 500, wdth: 75 } },
+    ],
+    weight: 400,
+    italic: false,
+  }, { previewSample: 'Aa' })
+  const normal = variableEntry('bagoss', {
+    familyName: 'Bagoss',
+    styleName: 'Regular',
+    fullName: 'Bagoss Regular',
+    postscriptName: 'Bagoss-Regular',
+    isVariable: true,
+    instanceCount: 2,
+    instanceNames: ['Regular', 'Medium'],
+    namedInstances: [
+      { name: 'Regular', coordinates: { wght: 400, wdth: 100 } },
+      { name: 'Medium', coordinates: { wght: 500, wdth: 100 } },
+    ],
+    weight: 400,
+    italic: false,
+  }, { previewSample: 'ACi' })
+  const grouped = groupCatalog([condensed, normal])[0]!
+  assert.equal(grouped.previewEntryId, 'bagoss-condensed')
+  const mixed = catalogInstanceRows(grouped)
+  assert.ok(mixed.some((row) => row.previewSample === 'ACi'))
+  const hoverRows = catalogHoverInstanceRows(grouped)
+  assert.deepEqual(
+    hoverRows.map((row) => [row.catalogEntryId, row.label, row.widthClass, row.previewSample]),
+    [
+      ['bagoss-condensed', 'Condensed Regular', 'condensed', 'Aa'],
+      ['bagoss-condensed', 'Condensed Medium', 'condensed', 'Aa'],
+    ],
+  )
+  assertHoverMorphs(hoverRows, 'Aa')
+
+  const condensedFace = condensed.faces[0]!
+  const normalFace = normal.faces[0]!
+  const oneFile = variableEntry('bagoss-file', condensedFace, { previewSample: 'Aa' })
+  oneFile.faces = [condensedFace, normalFace]
+  const single = groupCatalog([oneFile])[0]!
+  const singleHover = catalogHoverInstanceRows(single)
+  assert.deepEqual(
+    singleHover.map((row) => row.label),
+    ['Condensed Regular', 'Condensed Medium'],
+  )
+  assertHoverMorphs(singleHover, 'Aa')
+
+  const mixedFace: FontFaceInfo = {
+    familyName: 'Bagoss',
+    styleName: 'Regular',
+    fullName: 'Bagoss',
+    postscriptName: 'Bagoss-VF',
+    isVariable: true,
+    instanceCount: 4,
+    instanceNames: ['Condensed Regular', 'Condensed Medium', 'Regular', 'Medium'],
+    namedInstances: [
+      { name: 'Condensed Regular', coordinates: { wght: 400, wdth: 75 } },
+      { name: 'Condensed Medium', coordinates: { wght: 500, wdth: 75 } },
+      { name: 'Regular', coordinates: { wght: 400, wdth: 100 } },
+      { name: 'Medium', coordinates: { wght: 500, wdth: 100 } },
+    ],
+    weight: 400,
+    italic: false,
+  }
+  const mixedHover = catalogHoverInstanceRows(groupCatalog([variableEntry('bagoss-mixed', mixedFace, { previewSample: 'Aa' })])[0]!)
+  assert.deepEqual(
+    mixedHover.map((row) => [row.label, row.widthClass, row.previewSample]),
+    [
+      ['Condensed Regular', 'condensed', 'Aa'],
+      ['Condensed Medium', 'condensed', 'Aa'],
+    ],
+  )
+  assertHoverMorphs(mixedHover, 'Aa')
+})
+
+test('a family with several variable files hovers only the card file and keeps its preview text', () => {
+  const coolkit = variableEntry('coolkit', {
+    familyName: 'Coolkit VF',
+    styleName: 'Regular',
+    fullName: 'Coolkit VF Regular',
+    postscriptName: 'CoolkitVF-Regular',
+    isVariable: true,
+    instanceCount: 2,
+    instanceNames: ['Light', 'Regular'],
+    namedInstances: [
+      { name: 'Light', coordinates: { wght: 300 } },
+      { name: 'Regular', coordinates: { wght: 400 } },
+    ],
+    weight: 400,
+    italic: false,
+  }, { previewSample: 'Aa' })
+  const other = variableEntry('coolkit-display', {
+    familyName: 'Coolkit VF',
+    styleName: 'Display',
+    fullName: 'Coolkit VF Display',
+    postscriptName: 'CoolkitVF-Display',
+    isVariable: true,
+    instanceCount: 2,
+    instanceNames: ['Light', 'Regular'],
+    namedInstances: [
+      { name: 'Light', coordinates: { wght: 300, opsz: 72 } },
+      { name: 'Regular', coordinates: { wght: 400, opsz: 72 } },
+    ],
+    weight: 400,
+    italic: false,
+  }, { previewSample: 'ACi' })
+  const grouped = groupCatalog([coolkit, other])[0]!
+  assert.equal(grouped.previewEntryId, 'coolkit')
+  const hoverRows = catalogHoverInstanceRows(grouped)
+  assert.deepEqual(
+    hoverRows.map((row) => [row.catalogEntryId, row.label, row.previewSample, row.variation]),
+    [
+      ['coolkit', 'Light', 'Aa', "'wght' 300"],
+      ['coolkit', 'Regular', 'Aa', "'wght' 400"],
+    ],
+  )
+  assertHoverMorphs(hoverRows, 'Aa')
+  assert.equal(hoverRows.some((row) => row.previewSample === 'ACi'), false)
+})
+
+test('an italic-only variable file still hover-morphs that italic cut', () => {
+  const italic = variableEntry('concrette-italic', {
+    familyName: 'Concrette Italic',
+    styleName: 'Italic',
+    fullName: 'Concrette Italic',
+    postscriptName: 'ConcretteItalic-Italic',
+    isVariable: true,
+    instanceCount: 2,
+    instanceNames: ['Light Italic', 'Bold Italic'],
+    namedInstances: [
+      { name: 'Light Italic', coordinates: { wght: 300 } },
+      { name: 'Bold Italic', coordinates: { wght: 700 } },
+    ],
+    weight: 400,
+    italic: true,
+  }, { previewSample: 'Aa' })
+  const grouped = groupCatalog([italic])[0]!
+  const hoverRows = catalogHoverInstanceRows(grouped)
+  assert.deepEqual(
+    hoverRows.map((row) => [row.label, row.italic, row.previewSample]),
+    [
+      ['Light Italic', true, 'Aa'],
+      ['Bold Italic', true, 'Aa'],
+    ],
+  )
+  assertHoverMorphs(hoverRows, 'Aa')
+})
+
 function staticFace(familyName: string, styleName: string, italic = false): FontFaceInfo {
   return {
     familyName,

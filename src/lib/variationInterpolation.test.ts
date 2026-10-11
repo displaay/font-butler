@@ -67,6 +67,21 @@ test('hover morph checks the resting cut when roman and italic rows are mixed', 
   )
 })
 
+test('hover morph keeps the resting width when a family mixes width cuts', () => {
+  const faces = [
+    { family: 'fc-bagoss', italic: false, widthClass: 'condensed', variation: "'wght' 400, 'wdth' 75" },
+    { family: 'fc-bagoss', italic: false, widthClass: 'condensed', variation: "'wght' 500, 'wdth' 75" },
+    { family: 'fc-bagoss', italic: false, widthClass: 'normal', variation: "'wght' 400, 'wdth' 100" },
+  ]
+  const rest = faces[0]!
+  assert.equal(facesSupportVariationInterpolation(faces), false)
+  assert.equal(facesSupportVariationInterpolation(facesMatchingRestCut(faces, rest)), true)
+  assert.deepEqual(
+    facesMatchingRestCut(faces, rest).map((face) => face.widthClass),
+    ['condensed', 'condensed'],
+  )
+})
+
 test('facesSupportVariationInterpolation accepts retail VF rows with wght-only variation strings', () => {
   const family = 'fc-retail-vf'
   assert.equal(
