@@ -148,18 +148,6 @@ function entryHasHoverInstances(entry: CatalogEntry): boolean {
   return entry.faces.some((face) => face.isVariable && variableInstanceNames(face).length > 0)
 }
 
-/**
- * The variable file the card is showing. A family can hold several VF files; hover
- * uses the preview file, or the only VF when static cuts share the card with it.
- */
-function hoverVariableEntry(group: FamilyGroup): CatalogEntry | undefined {
-  const vfEntries = group.entries.filter(entryHasHoverInstances)
-  if (vfEntries.length === 0) return undefined
-  const preview = vfEntries.find((entry) => entry.id === group.previewEntryId)
-  if (preview) return preview
-  return vfEntries.length === 1 ? vfEntries[0] : undefined
-}
-
 /** Face the card rests on: the first upright variable face, or the only face in an italic file. */
 function restingHoverFace(entry: CatalogEntry): FontFaceInfo | undefined {
   const faces = entry.faces.filter((face) => face.isVariable && variableInstanceNames(face).length > 0)
@@ -167,30 +155,23 @@ function restingHoverFace(entry: CatalogEntry): FontFaceInfo | undefined {
 }
 
 /**
- * Instance rows for grid hover preview. Rows come from the variable file behind
- * the card and keep the resting face's italic flag. `rowsFromFace` sets that
- * flag per instance name, so a file that mixes upright and italic instances
- * would otherwise fail the smooth check. Widths stay in the cycle: they are
- * other values of the same axes.
+ * Instance rows for grid hover preview. A single variable file keeps the resting
+ * face's italic flag. `rowsFromFace` sets that flag per instance name, so a file
+ * that mixes upright and italic instances would otherwise fail the smooth check.
+ * Widths stay in the cycle.
  */
 export function catalogHoverInstanceRows(group: FamilyGroup, retail?: RetailSyncView | null): InstanceRow[] {
   const rows = catalogInstanceRows(group, retail)
-  const chosen = hoverVariableEntry(group)
-  if (!chosen) return rows
+  const vfEntries = group.entries.filter(entryHasHoverInstances)
+  if (vfEntries.length !== 1) return rows
+  const chosen = vfEntries[0]!
+  const vfRows = rows.filter((row) => row.catalogEntryId === chosen.id)
+  if (vfRows.length < 2) return rows
   const rest = restingHoverFace(chosen)
-  if (!rest) return rows.filter((row) => row.catalogEntryId === chosen.id)
+  if (!rest) return vfRows
   const italic = Boolean(rest.italic)
-  const cut: InstanceRow[] = []
-  for (const face of chosen.faces) {
-    if (face.familyName !== rest.familyName) continue
-    if (!face.isVariable || variableInstanceNames(face).length === 0) continue
-    for (const row of rows) {
-      if (row.catalogEntryId !== chosen.id || row.sublabel !== face.postscriptName) continue
-      if (Boolean(row.italic) !== italic) continue
-      cut.push(row)
-    }
-  }
-  return cut
+  const cut = vfRows.filter((row) => Boolean(row.italic) === italic)
+  return cut.length > 0 ? cut : vfRows
 }
 
 function rowsFromSystemFace(face: SystemFace): InstanceRow[] {

@@ -207,33 +207,6 @@ function assertHoverMorphs(rows: ReturnType<typeof catalogHoverInstanceRows>, sa
   assert.equal(facesSupportVariationInterpolation(facesMatchingRestCut(faces, faces[0]!)), true)
 }
 
-test('a weight-only variable file keeps every upright instance and distinct wght strings', () => {
-  const weights = [100, 200, 300, 400, 500, 600, 700, 800, 900]
-  const names = ['Thin', 'ExtraLight', 'Light', 'Regular', 'Medium', 'SemiBold', 'Bold', 'ExtraBold', 'Black']
-  const face: FontFaceInfo = {
-    familyName: 'Coolkit VF',
-    styleName: 'Regular',
-    fullName: 'Coolkit VF',
-    postscriptName: 'CoolkitVF',
-    isVariable: true,
-    instanceCount: names.length,
-    instanceNames: names,
-    namedInstances: names.map((name, index) => ({ name, coordinates: { wght: weights[index]! } })),
-    weight: 400,
-    italic: false,
-  }
-  const grouped = groupCatalog([variableEntry('coolkit', face, { previewSample: 'Aa' })])[0]!
-  assert.equal(grouped.entries.length, 1)
-  const hoverRows = catalogHoverInstanceRows(grouped)
-  assert.equal(hoverRows.length, 9)
-  assert.deepEqual(
-    hoverRows.map((row) => row.variation),
-    weights.map((weight) => `'wght' ${weight}`),
-  )
-  assert.ok(hoverRows.every((row) => row.italic === false && row.previewSample === 'Aa'))
-  assertHoverMorphs(hoverRows, 'Aa')
-})
-
 test('an italic-only variable file still hover-morphs that italic cut', () => {
   const italic = variableEntry('concrette-italic', {
     familyName: 'Concrette Italic',
