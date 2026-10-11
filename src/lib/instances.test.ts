@@ -7,6 +7,7 @@ import {
   systemInstanceRows,
   variationSettings,
 } from './instances.ts'
+import { facesMatchingRestCut, facesSupportVariationInterpolation } from './variationInterpolation.ts'
 import { groupCatalog } from './group.ts'
 import type { CatalogEntry, FamilyGroup, FontFaceInfo, SystemFace } from './types.ts'
 
@@ -91,6 +92,67 @@ test('variable-font instance rows fall back to wght when namedInstances are miss
     ["'wght' 300", "'wght' 400", "'wght' 700"],
   )
   assert.equal(instanceRowVariation(face, 'Bold'), "'wght' 700")
+})
+
+test('roman and italic variable files hover-morph the upright preview cut', () => {
+  const romanFace = vfFace()
+  const italicFace: FontFaceInfo = {
+    ...vfFace(),
+    styleName: 'Italic',
+    fullName: 'Recoleta Italic',
+    postscriptName: 'Recoleta-Italic',
+    instanceNames: ['Italic', 'Bold Italic'],
+    namedInstances: [
+      { name: 'Italic', coordinates: { wght: 400 } },
+      { name: 'Bold Italic', coordinates: { wght: 700 } },
+    ],
+    italic: true,
+  }
+  const roman: CatalogEntry = {
+    id: 'roman',
+    sourcePath: '/tmp/Recoleta-Roman.ttf',
+    sourceMtimeMs: 1,
+    sourceSize: 1,
+    status: 'installed',
+    faces: [romanFace],
+    format: 'ttf',
+    addedAt: 1,
+    updatedAt: 1,
+    installedPath: '/Library/Fonts/Recoleta-Roman.ttf',
+  }
+  const italic: CatalogEntry = {
+    ...roman,
+    id: 'italic',
+    sourcePath: '/tmp/Recoleta-Italic.ttf',
+    faces: [italicFace],
+    installedPath: '/Library/Fonts/Recoleta-Italic.ttf',
+  }
+  const grouped = groupCatalog([roman, italic])[0]!
+  assert.equal(grouped.previewEntryId, 'roman')
+  const rows = catalogInstanceRows(grouped)
+  assert.equal(rows.length, 5)
+  const mixed = rows.map((row) => ({
+    family: `fc-${row.catalogEntryId}`,
+    italic: row.italic,
+    variation: row.variation,
+  }))
+  assert.equal(facesSupportVariationInterpolation(mixed), false)
+  const hoverRows = catalogHoverInstanceRows(grouped)
+  assert.deepEqual(
+    hoverRows.map((row) => [row.catalogEntryId, row.label, row.italic, row.variation]),
+    [
+      ['roman', 'Light', false, "'wght' 300"],
+      ['roman', 'Regular', false, "'wght' 400"],
+      ['roman', 'Bold', false, "'wght' 700"],
+    ],
+  )
+  const faces = hoverRows.map((row) => ({
+    family: `fc-${row.catalogEntryId}`,
+    italic: row.italic,
+    variation: row.variation,
+  }))
+  const rest = faces.find((face) => face.variation === "'wght' 400")!
+  assert.equal(facesSupportVariationInterpolation(facesMatchingRestCut(faces, rest)), true)
 })
 
 test('catalog hover preview keeps only the single VF entry when static retail cuts share the family', () => {

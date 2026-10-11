@@ -93,3 +93,41 @@ test('a failed preview shows a retry control and does not paint the unloaded fam
     setPreviewLoadTimeoutForTests(PREVIEW_LOAD_TIMEOUT_MS)
   }
 })
+
+test('a roman plus italic variable family morphs the upright cut instead of cross-fading', async () => {
+  const { createElement, act } = await import('react')
+  const { createRoot } = await import('react-dom/client')
+  const { CyclingAaPreview } = await import('./AaPreview.tsx')
+
+  const faces = [
+    { family: 'fc-roman', weight: 300, italic: false, label: 'Light', variation: "'wght' 300", wait: false },
+    { family: 'fc-roman', weight: 700, italic: false, label: 'Bold', variation: "'wght' 700", wait: false },
+    { family: 'fc-italic', weight: 400, italic: true, label: 'Italic', variation: "'wght' 400", wait: false },
+  ]
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  try {
+    await act(async () => {
+      root.render(
+        createElement(CyclingAaPreview, {
+          faces,
+          rest: faces[0],
+          active: true,
+          size: 3,
+          sample: 'Aa',
+        }),
+      )
+    })
+    const preview = host.querySelector('[data-preview-motion]')
+    assert.equal(preview?.getAttribute('data-preview-motion'), 'morph')
+    assert.equal(host.querySelector('[class*="opacity-0"]'), null)
+    assert.match(host.textContent ?? '', /Light|Bold/)
+    assert.equal(host.textContent?.includes('Italic'), false)
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  }
+})

@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { facesSupportVariationInterpolation } from './variationInterpolation.ts'
+import {
+  facesMatchingRestCut,
+  facesSupportVariationInterpolation,
+} from './variationInterpolation.ts'
 
 function vfFace(label: string, variation: string) {
   return { family: 'Recoleta', italic: false, label, variation }
@@ -45,6 +48,22 @@ test('facesSupportVariationInterpolation requires matching VF variation strings'
       { family: 'Recoleta', italic: false, label: 'Bold' },
     ]),
     false,
+  )
+})
+
+test('hover morph checks the resting cut when roman and italic rows are mixed', () => {
+  const faces = [
+    { family: 'fc-roman', italic: false, variation: "'wght' 300" },
+    { family: 'fc-roman', italic: false, variation: "'wght' 700" },
+    { family: 'fc-italic', italic: true, variation: "'wght' 400" },
+    { family: 'fc-italic', italic: true, variation: "'wght' 700" },
+  ]
+  const rest = faces[0]!
+  assert.equal(facesSupportVariationInterpolation(faces), false)
+  assert.equal(facesSupportVariationInterpolation(facesMatchingRestCut(faces, rest)), true)
+  assert.deepEqual(
+    facesMatchingRestCut(faces, { family: 'fc-italic', italic: true }).map((face) => face.variation),
+    ["'wght' 400", "'wght' 700"],
   )
 })
 

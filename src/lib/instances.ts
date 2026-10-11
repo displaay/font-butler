@@ -144,20 +144,50 @@ export function catalogInstanceRows(group: FamilyGroup, retail?: RetailSyncView 
   return rows
 }
 
+function entryHasHoverInstances(entry: CatalogEntry): boolean {
+  return entry.faces.some((face) => face.isVariable && variableInstanceNames(face).length > 0)
+}
+
+/**
+ * The variable file hover should cycle. A Roman file plus an Italic file used to be
+ * returned together, which mixed italic flags and @font-face families and forced a
+ * cross-fade. Prefer the preview entry when it is variable, otherwise the upright file.
+ */
+function hoverVariableEntry(group: FamilyGroup): CatalogEntry | undefined {
+  const vfEntries = group.entries.filter(entryHasHoverInstances)
+  if (vfEntries.length === 0) return undefined
+  const preview = vfEntries.find((entry) => entry.id === group.previewEntryId)
+  if (preview) return preview
+  return (
+    vfEntries.find((entry) =>
+      entry.faces.some((face) => face.isVariable && !face.italic && variableInstanceNames(face).length > 0),
+    ) ?? vfEntries[0]
+  )
+}
+
+function restingFaceItalic(entry: CatalogEntry): boolean {
+  const face =
+    entry.faces.find((item) => item.isVariable && !item.italic) ??
+    entry.faces.find((item) => !item.italic) ??
+    entry.faces[0]
+  return Boolean(face?.italic)
+}
+
 /**
  * Instance rows for grid hover preview. When a family mixes static retail cuts with one
  * variable font file, cycle only that file's named instances so variation interpolation
- * can run on a single @font-face family.
+ * can run on a single @font-face family. Roman and Italic variable files stay separate:
+ * hover follows the upright preview cut.
  */
 export function catalogHoverInstanceRows(group: FamilyGroup, retail?: RetailSyncView | null): InstanceRow[] {
   const rows = catalogInstanceRows(group, retail)
-  const vfEntries = group.entries.filter((entry) =>
-    entry.faces.some((face) => face.isVariable && variableInstanceNames(face).length > 0),
-  )
-  if (vfEntries.length !== 1) return rows
-  const vfEntryId = vfEntries[0]!.id
-  const vfRows = rows.filter((row) => row.catalogEntryId === vfEntryId)
-  return vfRows.length >= 2 ? vfRows : rows
+  const chosen = hoverVariableEntry(group)
+  if (!chosen) return rows
+  const vfRows = rows.filter((row) => row.catalogEntryId === chosen.id)
+  if (vfRows.length < 2) return rows
+  const italic = restingFaceItalic(chosen)
+  const cut = vfRows.filter((row) => Boolean(row.italic) === italic)
+  return cut.length >= 2 ? cut : vfRows
 }
 
 function rowsFromSystemFace(face: SystemFace): InstanceRow[] {
