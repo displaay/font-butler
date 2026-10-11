@@ -1288,18 +1288,27 @@ export class FontButlerService {
           } catch (error) {
             partial = true
             const reason = error instanceof Error ? error.message : String(error)
-            const message =
-              error instanceof UnlinkedListReadError
-                ? reason
-                : `Uninstalled ${label}, but it is still listed. ${reason}`
-            errors.push(message)
-            items.push({
-              id: crypto.randomUUID(),
-              entryId: id,
-              label,
-              outcome: 'failed',
-              reason: message,
-            })
+            if (error instanceof UnlinkedListReadError) {
+              removed += 1
+              errors.push(reason)
+              items.push({
+                id: crypto.randomUUID(),
+                entryId: id,
+                label,
+                outcome: 'succeeded',
+                reason,
+              })
+            } else {
+              const message = `Uninstalled ${label}, but it is still listed. ${reason}`
+              errors.push(message)
+              items.push({
+                id: crypto.randomUUID(),
+                entryId: id,
+                label,
+                outcome: 'failed',
+                reason: message,
+              })
+            }
           }
         } catch (error) {
           const reason = error instanceof Error ? error.message : String(error)
