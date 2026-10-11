@@ -270,6 +270,32 @@ export function RetailBadge({ className }: { className?: string }) {
   )
 }
 
+/** Heading chip for the Displaay retail section while the collection is still the trial set. */
+export function TrialsBadge({ className }: { className?: string }) {
+  return (
+    <Badge
+      tone="warn"
+      title="Displaay trial fonts. Save a token with retail access in Settings to sync the full files."
+      className={cn('shrink-0', className)}
+    >
+      Trials
+    </Badge>
+  )
+}
+
+/** Shown next to Advanced once a saved token has been checked as the retail collection. */
+export function ValidTokenBadge({ className }: { className?: string }) {
+  return (
+    <Badge
+      tone="info"
+      title="This saved token serves the Displaay retail collection."
+      className={cn('shrink-0', className)}
+    >
+      Valid token
+    </Badge>
+  )
+}
+
 /** Shown next to `RetailBadge` when the collection came from the built-in trial token. */
 export function TrialBadge({ className }: { className?: string }) {
   return (

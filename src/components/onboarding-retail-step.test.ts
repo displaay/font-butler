@@ -222,11 +222,11 @@ test('the onboarding folders step shows Trial on the Displaay retail heading bef
 
   assert.match(document.body.textContent ?? '', /Watch folders/)
   assert.match(heading.textContent ?? '', /Displaay retail/)
-  assert.match(heading.textContent ?? '', /Trial/)
+  assert.match(heading.textContent ?? '', /Trials/)
   assert.equal(
-    heading.querySelector('[title="Displaay trial font. Save a token with retail access in Settings to sync the full files."]')
+    heading.querySelector('[title="Displaay trial fonts. Save a token with retail access in Settings to sync the full files."]')
       ?.textContent,
-    'Trial',
+    'Trials',
   )
   assert.equal(document.body.querySelector('[aria-label="Displaay retail sync"]')?.textContent?.includes('Off'), true)
   assert.equal((document.body.textContent ?? '').includes('Reckless'), false)
@@ -239,7 +239,7 @@ test('the onboarding folders step shows Trial on the Displaay retail heading bef
   await settle()
 
   const after = [...document.querySelectorAll('h3')].find((node) => node.textContent?.includes('Displaay retail'))
-  assert.match(after?.textContent ?? '', /Trial/)
+  assert.match(after?.textContent ?? '', /Trials/)
   assert.equal((document.body.textContent ?? '').includes('Reckless'), false)
 
   await act(async () => {

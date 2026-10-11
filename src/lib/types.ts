@@ -457,4 +457,6 @@ export {
   retailSyncingStatusMessage,
   retailUpdateCount,
   retailHasLiveUpdates,
+  retailHeadingShowsTrials,
+  savedRetailTokenIsValid,
 } from '../../shared/retail'
