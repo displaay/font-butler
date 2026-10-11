@@ -5,7 +5,7 @@ import { logMain } from './main-log.ts'
 import type { AppPaths } from './paths.ts'
 
 const UNLINKED_LIST_RESET_MESSAGE =
-  'The unlinked-font list was reset because it could not be read. Watched folders can import those fonts again.'
+  "Font Buttler couldn't read its list of unlinked fonts and started a new one. Fonts you unlinked earlier may reappear from watch folders. You can unlink them again."
 
 type UnlinkedSourceFile = {
   version: 1

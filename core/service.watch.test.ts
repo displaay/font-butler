@@ -267,7 +267,7 @@ test('a corrupt unlinked list with no backup is reset on launch and watch import
     assert.equal(stored.version, 1)
     assert.deepEqual(stored.paths, [])
     assert.match(fs.readFileSync(logFile, 'utf8'), /Reset unlinked-sources.json/)
-    assert.ok(notices.some((message) => message.includes('unlinked-font list was reset')))
+    assert.ok(notices.some((message) => message.includes('may reappear from watch folders')))
     restarted.dispose()
   } finally {
     stop()

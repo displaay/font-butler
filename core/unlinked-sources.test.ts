@@ -146,7 +146,7 @@ test('an unreadable unlinked list with no valid bak resets on a manual add', () 
       assert.deepEqual(stored.paths, [])
       assert.equal(isUnlinkedSource(paths, blocked), false)
       assert.deepEqual(notices, [
-        'The unlinked-font list was reset because it could not be read. Watched folders can import those fonts again.',
+        "Font Buttler couldn't read its list of unlinked fonts and started a new one. Fonts you unlinked earlier may reappear from watch folders. You can unlink them again.",
       ])
       allowUnlinkedSource(paths, blocked)
       assert.equal(notices.length, 1)
