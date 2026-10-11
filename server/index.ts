@@ -1,10 +1,10 @@
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
-import { streamSSE } from 'hono/streaming'
 import fs from 'node:fs'
 import path from 'node:path'
 import { contentDisposition, shouldIncludeBootstrapToken } from '../core/auth.ts'
-import { emitEvent, onEvent, takePendingUnlinkedListResetNotice, takePendingWatchFailureNotices } from '../core/events.ts'
+import { emitEvent } from '../core/events.ts'
+import { mountEventsRoutes } from './events-stream.ts'
 import { isFullyUnderAnyRoot } from '../core/containment.ts'
 import { MAX_UPLOAD_BATCH_BYTES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES } from '../core/constants.ts'
 import { denyRemoteRequest, isAuthorizedApiRequest, resolveStaticAsset } from '../core/http.ts'
@@ -1176,74 +1176,15 @@ app.get('/api/system-font', (c) => {
   }
 })
 
-app.get('/api/events', (c) => {
-  return streamSSE(c, async (stream) => {
-    let closed = false
-    const close = () => {
-      closed = true
-      unsubscribe()
-      sseClosers.delete(close)
-    }
-    const seenWatchFailures = new Set<string>()
-    let deliveredUnlinkedReset = false
-    const watchFailureKey = (notice: { operationId?: string; message: string }) =>
-      notice.operationId || notice.message
-    const unsubscribe = onEvent(async (event) => {
-      if (closed) {
-        return
-      }
-      if (event.type === 'notice' && event.notice.kind === 'error' && event.notice.source === 'watch') {
-        const key = watchFailureKey(event.notice)
-        if (seenWatchFailures.has(key)) return
-        seenWatchFailures.add(key)
-      }
-      if (event.type === 'notice' && event.notice.source === 'unlinked-list') {
-        if (deliveredUnlinkedReset) return
-        deliveredUnlinkedReset = true
-      }
-      try {
-        await stream.writeSSE({ data: JSON.stringify(event) })
-      } catch {
-        close()
-      }
-    })
+mountEventsRoutes(app, {
+  paths: service.paths,
+  catalogEvent: () => catalogEvent(service.listCatalog()),
+  onOpen: (close) => {
     sseClosers.add(close)
-    stream.onAbort(close)
-    await stream.writeSSE({
-      data: JSON.stringify(catalogEvent(service.listCatalog())),
-    })
-    const unlinkedReset = takePendingUnlinkedListResetNotice()
-    if (unlinkedReset && !deliveredUnlinkedReset) {
-      deliveredUnlinkedReset = true
-      try {
-        await stream.writeSSE({ data: JSON.stringify({ type: 'notice', notice: unlinkedReset }) })
-      } catch {
-        close()
-      }
-    }
-    for (const notice of takePendingWatchFailureNotices()) {
-      if (closed) break
-      const key = watchFailureKey(notice)
-      if (seenWatchFailures.has(key)) continue
-      seenWatchFailures.add(key)
-      try {
-        await stream.writeSSE({ data: JSON.stringify({ type: 'notice', notice }) })
-      } catch {
-        close()
-        break
-      }
-    }
-    while (!closed) {
-      await stream.sleep(15_000)
-      if (!closed) {
-        try {
-          await stream.writeSSE({ data: JSON.stringify({ type: 'ping' }) })
-        } catch {
-          close()
-        }
-      }
-    }
-  })
+  },
+  onClose: (close) => {
+    sseClosers.delete(close)
+  },
 })
 
   if (options.staticDir) {

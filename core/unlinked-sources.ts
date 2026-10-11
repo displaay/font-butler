@@ -374,7 +374,7 @@ export function recoverUnlinkedSources(paths: AppPaths): boolean {
     'catalog',
     'Reset unlinked-sources.json because it could not be read and had no valid backup.',
   )
-  publishUnlinkedListReset({
+  publishUnlinkedListReset(paths, {
     kind: 'warning',
     source: 'unlinked-list',
     message: UNLINKED_LIST_RESET_MESSAGE,

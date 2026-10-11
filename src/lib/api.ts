@@ -271,9 +271,15 @@ export const api = {
       post('/api/uninstall', { ids, deleteSource: options?.deleteSource }),
     ),
   uninstallAndUnlink: (id: string) =>
-    json<{ removed: number; partial?: boolean; error?: string }>(post('/api/uninstall-unlink', { id })),
+    json<{ removed: number; partial?: boolean; error?: string; unreadableList?: number }>(
+      post('/api/uninstall-unlink', { id }),
+    ),
   uninstallAndUnlinkMany: (ids: string[]) =>
-    json<{ removed: number; partial?: boolean; error?: string }>(post('/api/uninstall-unlink', { ids })),
+    json<{ removed: number; partial?: boolean; error?: string; unreadableList?: number }>(
+      post('/api/uninstall-unlink', { ids }),
+    ),
+  acknowledgeUnlinkedListReset: () =>
+    json<{ ok: boolean }>(post('/api/notices/unlinked-list-reset/ack', {})),
   deactivate: (id: string) => json<{ entry: CatalogEntry }>(post('/api/deactivate', { id })),
   deactivateMany: (ids: string[]) =>
     json<{ entries: CatalogEntry[] }>(post('/api/deactivate', { ids })),
@@ -537,7 +543,7 @@ export function subscribeEvents(onEvent: (event: unknown) => void): () => void {
     while (!abort.signal.aborted) {
       try {
         await ensureToken()
-        const response = await fetch('/api/events', {
+        const response = await fetch('/api/events?client=window', {
           headers: authHeaders(),
           signal: abort.signal,
         })

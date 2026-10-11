@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { test } from 'node:test'
-import { onEvent, takePendingUnlinkedListResetNotice } from './events.ts'
+import { acknowledgeUnlinkedListReset, onEvent, peekPendingUnlinkedListResetNotice } from './events.ts'
 import type { AppPaths } from './paths.ts'
 import { tempPaths } from './test-util.ts'
 import {
@@ -150,12 +150,17 @@ test('a corrupt unlinked list with no valid bak resets on a manual add', () => {
       assert.deepEqual(notices, [
         "Font Buttler couldn't read its list of unlinked fonts and started a new one. Fonts you unlinked earlier may reappear from watch folders. You can unlink them again.",
       ])
-      assert.equal(takePendingUnlinkedListResetNotice(), null)
+      assert.equal(
+        peekPendingUnlinkedListResetNotice(paths)?.message,
+        "Font Buttler couldn't read its list of unlinked fonts and started a new one. Fonts you unlinked earlier may reappear from watch folders. You can unlink them again.",
+      )
+      acknowledgeUnlinkedListReset(paths)
+      assert.equal(peekPendingUnlinkedListResetNotice(paths), null)
       allowUnlinkedSource(paths, blocked)
       assert.equal(notices.length, 1)
     } finally {
       stop()
-      takePendingUnlinkedListResetNotice()
+      acknowledgeUnlinkedListReset(paths)
     }
   })
 })

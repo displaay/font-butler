@@ -1243,7 +1243,7 @@ export class FontButlerService {
 
   async uninstallAndUnlinkMany(
     ids: string[],
-  ): Promise<{ removed: number; partial?: boolean; error?: string }> {
+  ): Promise<{ removed: number; partial?: boolean; error?: string; unreadableList?: number }> {
     return runCatalogTask(async () => {
       const unique = [...new Set(ids.filter((id) => id))]
       if (unique.length === 0) {
@@ -1253,6 +1253,7 @@ export class FontButlerService {
       const familyNames = new Map<string, string>()
       const errors: string[] = []
       let removed = 0
+      let unreadableList = 0
       let familyName: string | undefined
       let mutated = false
       let partial = false
@@ -1290,6 +1291,7 @@ export class FontButlerService {
             const reason = error instanceof Error ? error.message : String(error)
             if (error instanceof UnlinkedListReadError) {
               removed += 1
+              unreadableList += 1
               errors.push(reason)
               items.push({
                 id: crypto.randomUUID(),
@@ -1345,6 +1347,7 @@ export class FontButlerService {
           removed,
           partial: true,
           error: errors.join('\n') || 'Could not uninstall and unlink that font.',
+          ...(unreadableList > 0 ? { unreadableList } : {}),
         }
       }
       return { removed }

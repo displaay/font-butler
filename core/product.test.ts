@@ -601,6 +601,7 @@ test('an unlink during an unlinked-list read error is partial and warns the font
     try {
       const result = await service.uninstallAndUnlinkMany([installed.id])
       assert.equal(result.removed, 1)
+      assert.equal(result.unreadableList, 1)
       assert.equal(result.partial, true)
       assert.match(result.error ?? '', /may come back from a watch folder/)
       assert.equal(service.listCatalog().length, 0)

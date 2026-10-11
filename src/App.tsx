@@ -618,6 +618,9 @@ function AppShell() {
               }
             : undefined,
         })
+        if (notice.source === 'unlinked-list') {
+          void api.acknowledgeUnlinkedListReset().catch(() => {})
+        }
       }
       if (notice.entryId) {
         const match = entriesRef.current.find((entry) => entry.id === notice.entryId)

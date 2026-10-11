@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { onEvent, takePendingUnlinkedListResetNotice } from './events.ts'
+import { acknowledgeUnlinkedListReset, onEvent, peekPendingUnlinkedListResetNotice } from './events.ts'
 import { noopFontNative, setFontNative } from './native.ts'
 import { fingerprintFile } from './fingerprint.ts'
 import { isUnlinkedSource, setUnlinkedListSaveFaultForTest } from './unlinked-sources.ts'
@@ -268,11 +268,13 @@ test('a corrupt unlinked list with no backup is reset on launch and watch import
     assert.deepEqual(stored.paths, [])
     assert.match(fs.readFileSync(logFile, 'utf8'), /Reset unlinked-sources.json/)
     assert.ok(notices.some((message) => message.includes('may reappear from watch folders')))
-    assert.equal(takePendingUnlinkedListResetNotice(), null)
+    assert.match(peekPendingUnlinkedListResetNotice(paths)?.message ?? '', /may reappear from watch folders/)
+    acknowledgeUnlinkedListReset(paths)
+    assert.equal(peekPendingUnlinkedListResetNotice(paths), null)
     restarted.dispose()
   } finally {
     stop()
-    takePendingUnlinkedListResetNotice()
+    acknowledgeUnlinkedListReset(paths)
     if (previousLog === undefined) delete process.env.FONT_BUTLER_LOG
     else process.env.FONT_BUTLER_LOG = previousLog
     await closeAllWatchers()
