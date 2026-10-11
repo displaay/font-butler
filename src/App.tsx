@@ -27,6 +27,7 @@ import { RenameDialog } from '@/components/RenameDialog'
 import { ReplaceFormatDialog } from '@/components/ReplaceFormatDialog'
 import { RetailCollisionDialog } from '@/components/RetailCollisionDialog'
 import { LatinPreviewProvider } from '@/components/AaPreview'
+import { FileDropSurface } from '@/components/FileDropSurface'
 import { SettingsDialog } from '@/components/SettingsDialog'
 import { logoutNoticeAction } from '@/lib/logout-notice'
 import { publishLogoutProbeResult } from '@/lib/logout-probe-result'
@@ -1974,24 +1975,20 @@ function AppShell() {
 
   return (
     <LatinPreviewProvider text={latinPreviewText(settings?.latinPreview)}>
-      <div
+      <FileDropSurface
         className="flex h-dvh min-h-0 flex-col overflow-hidden bg-background text-foreground md:flex-row"
-        onDragEnter={(event) => {
-          if (fontDragRef.current || hasFontButlerEntries(event.dataTransfer)) return
-          event.preventDefault()
-          setDragging(true)
-        }}
-        onDragOver={(event) => {
-          if (fontDragRef.current || hasFontButlerEntries(event.dataTransfer)) return
-          event.preventDefault()
-          event.dataTransfer.dropEffect = 'copy'
-        }}
-        onDragLeave={(event) => {
-          if (event.currentTarget === event.target) setDragging(false)
-        }}
-        onDrop={(event) => {
-          event.preventDefault()
-          void handleDrop(event.dataTransfer)
+        dragging={dragging}
+        ignoreRef={fontDragRef}
+        label={
+          tab === 'library' && projectFilter
+            ? `Drop fonts or folders to add them to ${
+                projects.find((item) => item.id === projectFilter)?.name ?? 'this project'
+              }`
+            : 'Drop fonts or folders to add them'
+        }
+        onDraggingChange={setDragging}
+        onDrop={(dataTransfer) => {
+          void handleDrop(dataTransfer)
         }}
       >
         <FontFaceStyles
@@ -2886,17 +2883,6 @@ function AppShell() {
           )}
         </div>
 
-        {dragging && (
-          <div className="pointer-events-none fixed inset-3 z-40 flex items-center justify-center rounded-lg border border-dashed border-foreground/20 bg-background/80 md:left-[14.75rem]">
-            <p className="text-base font-medium tracking-tight">
-              {tab === 'library' && projectFilter
-                ? `Drop fonts or folders to add them to ${
-                    projects.find((item) => item.id === projectFilter)?.name ?? 'this project'
-                  }`
-                : 'Drop fonts or folders to add them'}
-            </p>
-          </div>
-        )}
         <DropFolderDialog
           open={Boolean(folderDrop)}
           folders={folderDrop?.folders ?? []}
@@ -3136,7 +3122,7 @@ function AppShell() {
         />
         <MarqueeOverlay rect={marqueeRect} />
         <Toaster theme={settings?.theme ?? 'system'} />
-      </div>
+      </FileDropSurface>
     </LatinPreviewProvider>
   )
 }
