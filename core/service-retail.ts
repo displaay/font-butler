@@ -25,7 +25,8 @@ import {
   saveRetailManifest,
   statRetailFile,
 } from './retail-sync.ts'
-import { catalogEvent, newId, now, removeInstalledCopy, touchEntry } from './service-helpers.ts'
+import { createOperation, finishOperation, loadOperations, upsertOperation } from './operations.ts'
+import { catalogEvent, displayEntry, displayFamily, newId, now, removeInstalledCopy, touchEntry } from './service-helpers.ts'
 import {
   DEFAULT_RETAIL_TRIAL_TOKEN,
   DEFAULT_RETAIL_WORKER_BASE_URL,
@@ -35,7 +36,7 @@ import {
 } from './settings.ts'
 import { removeAdobeCopy } from './service-destinations.ts'
 import { applyEntryFacts } from './state.ts'
-import type { AppSettings, CatalogEntry, FontFaceInfo, RetailSyncSettings } from './types.ts'
+import type { AppSettings, CatalogEntry, FontFaceInfo, OperationItem, OperationTrigger, RetailSyncSettings } from './types.ts'
 import {
   familyHasValidDropReplacement,
   findOutsideCollisionsForRetailFamilies,
@@ -948,10 +949,44 @@ function destNeedsFaceParse(
   return liveFingerprint !== recordedFingerprintForDest(entry, dest)
 }
 
+function recordRetailInstallActivity(
+  paths: AppPaths,
+  trigger: OperationTrigger,
+  installed: Array<{ entry: CatalogEntry; action: 'install' | 'install-update' }>,
+): void {
+  const actions = ['install', 'install-update'] as const
+  for (const action of actions) {
+    const group = installed.filter((item) => item.action === action)
+    if (group.length === 0) continue
+    const families = new Set(group.map((item) => displayFamily(item.entry)))
+    const items: OperationItem[] = group.map((item) => {
+      const label = displayEntry(item.entry)
+      return {
+        id: newId(),
+        entryId: item.entry.id,
+        label: families.size > 1 ? `${displayFamily(item.entry)} · ${label}` : label,
+        outcome: 'succeeded',
+        expectedRevision: item.entry.installedFingerprint,
+        expectedStatus: item.entry.status,
+      }
+    })
+    const operation = finishOperation(
+      createOperation({
+        trigger,
+        action,
+        familyName: families.size === 1 ? [...families][0] : undefined,
+      }),
+      items,
+    )
+    upsertOperation(paths, operation)
+  }
+  emitEvent({ type: 'operations', operations: loadOperations(paths) })
+}
+
 async function catalogRetailWrites(
   paths: AppPaths,
   written: Array<{ relativePath: string; dest: string; parked: boolean; warning?: string }>,
-  options: { parse?: 'always' | 'if-unconfirmed' } = {},
+  options: { parse?: 'always' | 'if-unconfirmed'; recordActivity?: OperationTrigger } = {},
 ): Promise<void> {
   if (written.length === 0) return
   // Held across yields so a concurrent uninstall/import cannot save a newer catalog that we then
@@ -960,6 +995,7 @@ async function catalogRetailWrites(
   await runCatalogTask(async () => {
     const parse = options.parse ?? 'always'
     const catalog = loadCatalog(paths)
+    const installed: Array<{ entry: CatalogEntry; action: 'install' | 'install-update' }> = []
     let dirty = false
     for (let index = 0; index < written.length; index += 1) {
       await yieldEventLoop()
@@ -1004,6 +1040,8 @@ async function catalogRetailWrites(
         // Dummy or unreadable bytes still keep the listing.
       }
       if (!entry) continue
+      const previousStatus = entry.status
+      const previousFingerprint = entry.installedFingerprint
       entry.retailRelativePath = item.relativePath
       if (item.parked && wasDeactivated) {
         const livePath = entry.installedPath ?? previousMacos?.path ?? resolveRetailInstallPath(paths.userFontsDir, item.relativePath) ?? item.dest
@@ -1056,10 +1094,19 @@ async function catalogRetailWrites(
       touchEntry(entry)
       applyEntryFacts(entry)
       dirty = true
+      const live = !item.parked && entry.status === 'installed'
+      const wasLive = previousStatus === 'installed' || previousStatus === 'outdated'
+      const bytesChanged = Boolean(fingerprint && fingerprint !== previousFingerprint)
+      if (options.recordActivity && live && (!wasLive || bytesChanged)) {
+        installed.push({ entry, action: wasLive ? 'install-update' : 'install' })
+      }
     }
     if (dirty) {
       saveCatalog(paths, catalog)
       emitEvent(catalogEvent(catalog.entries))
+    }
+    if (options.recordActivity && installed.length > 0) {
+      recordRetailInstallActivity(paths, options.recordActivity, installed)
     }
   })
 }
@@ -1106,7 +1153,7 @@ async function persistAutomaticManifest(
   written?: Array<{ relativePath: string; dest: string; parked: boolean; warning?: string }>,
 ): Promise<void> {
   saveRetailManifest(paths, stampAutomaticManifest(next))
-  if (written?.length) await catalogRetailWrites(paths, written)
+  if (written?.length) await catalogRetailWrites(paths, written, { recordActivity: 'startup' })
 }
 
 function syncedFamilyNames(local: RetailLocalManifest): Set<string> {
@@ -1650,7 +1697,7 @@ async function runSync(
       persist: async (next, written) => {
         saveRetailManifest(paths, next)
         if (written?.length) {
-          await catalogRetailWrites(paths, written)
+          await catalogRetailWrites(paths, written, { recordActivity: 'manual' })
         }
       },
       destFor: (relativePath) => destForRelativePath(paths, relativePath),

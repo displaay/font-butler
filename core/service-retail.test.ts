@@ -34,6 +34,7 @@ import {
 } from './retail-collisions.ts'
 import { DEFAULT_RETAIL_TRIAL_TOKEN, loadSettings, saveSettings } from './settings.ts'
 import { RETAIL_DOWNLOAD_CONCURRENCY } from './retail-apply.ts'
+import { loadOperations } from './operations.ts'
 import { loadRetailManifest, saveRetailManifest } from './retail-sync.ts'
 import { withService, writeTestFont } from './test-util.ts'
 import {
@@ -1833,6 +1834,39 @@ test('retailFontsFromCollections sorts and marks disabled families', () => {
       },
     ],
   )
+})
+
+test('installing a retail font records an Activity install', async () => {
+  resetRetailCache()
+  const paths = setup()
+  const source = path.join(paths.dataRoot, 'Reckless-Regular.otf')
+  writeTestFont(source, 'Reckless', 'Reckless-Regular', { format: 'otf', style: 'Regular' })
+  const bytes = fs.readFileSync(source)
+  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await syncRetail(paths, {
+    fetchManifest: async () => manifestWith(bytes.length, 'e1', 'Reckless-Regular.otf'),
+    fetchFile: async () => new Uint8Array(bytes),
+  })
+  const listing = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath === 'Reckless/Reckless-Regular.otf')
+  assert.ok(listing)
+  assert.equal(listing.status, 'installed')
+  const operations = loadOperations(paths)
+  assert.equal(operations.length, 1)
+  const operation = operations[0]
+  assert.equal(operation?.action, 'install')
+  assert.equal(operation?.trigger, 'manual')
+  assert.equal(operation?.familyName, 'Reckless')
+  assert.equal(operation?.undoable, true)
+  assert.equal(operation?.items.length, 1)
+  assert.equal(operation?.items[0]?.outcome, 'succeeded')
+  assert.equal(operation?.items[0]?.entryId, listing.id)
+  assert.match(operation?.items[0]?.label ?? '', /Regular/)
+
+  await syncRetail(paths, {
+    fetchManifest: async () => manifestWith(bytes.length, 'e1', 'Reckless-Regular.otf'),
+    fetchFile: async () => new Uint8Array(bytes),
+  })
+  assert.equal(loadOperations(paths).length, 1)
 })
 
 test('uninstalling a retail font keeps the listing', async () => {
