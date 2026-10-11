@@ -492,6 +492,7 @@ async function uninstallRetailEntry(
     fs.rmSync(cached, { force: true })
   }
   removeEntryById(catalog, entry.id)
+  recordRetailOperation(paths, 'retail-uninstall', [retailSucceededItem(entry, false)], 'retail')
 }
 
 /**
@@ -576,6 +577,7 @@ async function uninstallUnselectedRetailFormats(paths: AppPaths, config: RetailS
     const mode = optOutModeOf(config)
     const selected = selectedFormatsFromFonts(fonts)
     const catalog = loadCatalog(paths)
+    const removed: CatalogEntry[] = []
     let dirty = false
     for (const entry of catalog.entries) {
       const relative = entry.retailRelativePath
@@ -602,12 +604,22 @@ async function uninstallUnselectedRetailFormats(paths: AppPaths, config: RetailS
         entry.installations = []
         resetRetailListingSource(entry, [livePath ?? '', parkedPath ?? ''])
         upsertEntry(catalog, entry)
+        removed.push(entry)
         dirty = true
       }
     }
     if (dirty) {
       saveCatalog(paths, catalog)
       emitEvent(catalogEvent(catalog.entries))
+    }
+    if (removed.length > 0) {
+      const several = new Set(removed.map((entry) => displayFamily(entry))).size > 1
+      recordRetailOperation(
+        paths,
+        'retail-uninstall',
+        removed.map((entry) => retailSucceededItem(entry, several)),
+        'retail',
+      )
     }
   })
 }
@@ -949,44 +961,96 @@ function destNeedsFaceParse(
   return liveFingerprint !== recordedFingerprintForDest(entry, dest)
 }
 
-function recordRetailInstallActivity(
+type RetailOperationAction = 'retail-install' | 'retail-update' | 'retail-uninstall'
+
+function recordRetailOperation(
   paths: AppPaths,
+  action: RetailOperationAction,
+  items: OperationItem[],
   trigger: OperationTrigger,
-  installed: Array<{ entry: CatalogEntry; action: 'install' | 'install-update' }>,
 ): void {
-  const actions = ['install', 'install-update'] as const
-  for (const action of actions) {
-    const group = installed.filter((item) => item.action === action)
-    if (group.length === 0) continue
-    const families = new Set(group.map((item) => displayFamily(item.entry)))
-    const items: OperationItem[] = group.map((item) => {
-      const label = displayEntry(item.entry)
-      return {
-        id: newId(),
-        entryId: item.entry.id,
-        label: families.size > 1 ? `${displayFamily(item.entry)} · ${label}` : label,
-        outcome: 'succeeded',
-        expectedRevision: item.entry.installedFingerprint,
-        expectedStatus: item.entry.status,
-      }
-    })
-    const operation = finishOperation(
-      createOperation({
-        trigger,
-        action,
-        familyName: families.size === 1 ? [...families][0] : undefined,
-      }),
-      items,
-    )
-    upsertOperation(paths, operation)
+  if (items.length === 0) return
+  const catalog = loadCatalog(paths)
+  const families = new Set<string>()
+  for (const item of items) {
+    const entry = item.entryId ? catalog.entries.find((candidate) => candidate.id === item.entryId) : undefined
+    if (entry) families.add(displayFamily(entry))
   }
+  const operation = finishOperation(
+    createOperation({
+      trigger,
+      action,
+      familyName: families.size === 1 ? [...families][0] : undefined,
+    }),
+    items,
+  )
+  operation.undoable = false
+  upsertOperation(paths, operation)
   emitEvent({ type: 'operations', operations: loadOperations(paths) })
+}
+
+function retailSucceededItem(entry: CatalogEntry, severalFamilies: boolean): OperationItem {
+  const label = displayEntry(entry)
+  return {
+    id: newId(),
+    entryId: entry.id,
+    label: severalFamilies ? `${displayFamily(entry)} · ${label}` : label,
+    outcome: 'succeeded',
+  }
+}
+
+const RETAIL_UPDATE_DRIFT_KINDS = new Set<RetailDriftItem['kind']>(['changed', 'missing-locally', 'corrupt-locally'])
+
+/** One Activity row for a finished sync pass: installed files succeeded, sync errors failed. */
+function recordRetailSyncPass(
+  paths: AppPaths,
+  result: { errors: string[]; writtenDests: Array<{ relativePath: string; parked: boolean }> },
+  drift: RetailDriftItem[],
+  trigger: Extract<OperationTrigger, 'retail' | 'retail-auto'>,
+): void {
+  const kindByPath = new Map(drift.map((item) => [item.relativePath, item.kind]))
+  const catalog = loadCatalog(paths)
+  const installed: OperationItem[] = []
+  const updated: OperationItem[] = []
+  for (const written of result.writtenDests) {
+    if (written.parked) continue
+    const entry = findRetailEntry(catalog, written.relativePath)
+    const item: OperationItem = {
+      id: newId(),
+      entryId: entry?.id,
+      label: entry ? displayEntry(entry) : written.relativePath,
+      outcome: 'succeeded',
+    }
+    const kind = kindByPath.get(written.relativePath)
+    if (kind && RETAIL_UPDATE_DRIFT_KINDS.has(kind)) updated.push(item)
+    else installed.push(item)
+  }
+  const installErrors: OperationItem[] = []
+  const updateErrors: OperationItem[] = []
+  for (const error of result.errors) {
+    const splitAt = error.indexOf(': ')
+    const relativePath = splitAt === -1 ? error : error.slice(0, splitAt)
+    const reason = splitAt === -1 ? error : error.slice(splitAt + 2)
+    const item: OperationItem = {
+      id: newId(),
+      label: relativePath,
+      outcome: 'failed',
+      reason,
+    }
+    const kind = kindByPath.get(relativePath)
+    if (kind && RETAIL_UPDATE_DRIFT_KINDS.has(kind)) updateErrors.push(item)
+    else installErrors.push(item)
+  }
+  const installItems = [...installed, ...installErrors]
+  const updateItems = [...updated, ...updateErrors]
+  if (installItems.length > 0) recordRetailOperation(paths, 'retail-install', installItems, trigger)
+  if (updateItems.length > 0) recordRetailOperation(paths, 'retail-update', updateItems, trigger)
 }
 
 async function catalogRetailWrites(
   paths: AppPaths,
   written: Array<{ relativePath: string; dest: string; parked: boolean; warning?: string }>,
-  options: { parse?: 'always' | 'if-unconfirmed'; recordActivity?: OperationTrigger } = {},
+  options: { parse?: 'always' | 'if-unconfirmed' } = {},
 ): Promise<void> {
   if (written.length === 0) return
   // Held across yields so a concurrent uninstall/import cannot save a newer catalog that we then
@@ -995,7 +1059,6 @@ async function catalogRetailWrites(
   await runCatalogTask(async () => {
     const parse = options.parse ?? 'always'
     const catalog = loadCatalog(paths)
-    const installed: Array<{ entry: CatalogEntry; action: 'install' | 'install-update' }> = []
     let dirty = false
     for (let index = 0; index < written.length; index += 1) {
       await yieldEventLoop()
@@ -1040,8 +1103,6 @@ async function catalogRetailWrites(
         // Dummy or unreadable bytes still keep the listing.
       }
       if (!entry) continue
-      const previousStatus = entry.status
-      const previousFingerprint = entry.installedFingerprint
       entry.retailRelativePath = item.relativePath
       if (item.parked && wasDeactivated) {
         const livePath = entry.installedPath ?? previousMacos?.path ?? resolveRetailInstallPath(paths.userFontsDir, item.relativePath) ?? item.dest
@@ -1094,19 +1155,10 @@ async function catalogRetailWrites(
       touchEntry(entry)
       applyEntryFacts(entry)
       dirty = true
-      const live = !item.parked && entry.status === 'installed'
-      const wasLive = previousStatus === 'installed' || previousStatus === 'outdated'
-      const bytesChanged = Boolean(fingerprint && fingerprint !== previousFingerprint)
-      if (options.recordActivity && live && (!wasLive || bytesChanged)) {
-        installed.push({ entry, action: wasLive ? 'install-update' : 'install' })
-      }
     }
     if (dirty) {
       saveCatalog(paths, catalog)
       emitEvent(catalogEvent(catalog.entries))
-    }
-    if (options.recordActivity && installed.length > 0) {
-      recordRetailInstallActivity(paths, options.recordActivity, installed)
     }
   })
 }
@@ -1124,12 +1176,6 @@ async function reconcileRetailCatalog(
   // Restart reconnect: skip fontkit when faces exist and dest bytes already match the catalog.
   await catalogRetailWrites(paths, written, { parse: 'if-unconfirmed' })
 }
-
-const RETAIL_UPDATE_DRIFT_KINDS = new Set<RetailDriftItem['kind']>([
-  'changed',
-  'missing-locally',
-  'corrupt-locally',
-])
 
 /** Keep the automatic-pass marker on every persist while the download is still unfinished. */
 function stampAutomaticManifest(next: RetailLocalManifest): RetailLocalManifest {
@@ -1153,7 +1199,7 @@ async function persistAutomaticManifest(
   written?: Array<{ relativePath: string; dest: string; parked: boolean; warning?: string }>,
 ): Promise<void> {
   saveRetailManifest(paths, stampAutomaticManifest(next))
-  if (written?.length) await catalogRetailWrites(paths, written, { recordActivity: 'startup' })
+  if (written?.length) await catalogRetailWrites(paths, written)
 }
 
 function syncedFamilyNames(local: RetailLocalManifest): Set<string> {
@@ -1273,6 +1319,7 @@ async function applyAutomaticDrift(
     },
     signal: options.signal,
   })
+  recordRetailSyncPass(paths, result, options.todo, 'retail-auto')
   cache.drift = measureDrift(paths, options.manifest)
   cache.skipped = options.manifest.skipped
   cache.error = result.errors.length ? result.errors.slice(0, 5).join(' ') : null
@@ -1696,9 +1743,7 @@ async function runSync(
       manifest: loadRetailManifest(paths),
       persist: async (next, written) => {
         saveRetailManifest(paths, next)
-        if (written?.length) {
-          await catalogRetailWrites(paths, written, { recordActivity: 'manual' })
-        }
+        if (written?.length) await catalogRetailWrites(paths, written)
       },
       destFor: (relativePath) => destForRelativePath(paths, relativePath),
       withLock: (task) => runCatalogTask(task),
@@ -1712,6 +1757,7 @@ async function runSync(
       },
       signal: options.signal,
     })
+    recordRetailSyncPass(paths, result, syncDrift, 'retail')
 
     // persist already cataloged each batch under the lock; replaying writtenDests would
     // overwrite an uninstall or deactivate that landed between persist and this point.

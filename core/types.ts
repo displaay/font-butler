@@ -317,6 +317,8 @@ export type OperationTrigger =
   | 'manual'
   | 'open-with'
   | 'startup'
+  | 'retail'
+  | 'retail-auto'
 
 export type OperationOutcome = 'pending' | 'succeeded' | 'partial' | 'failed' | 'canceled'
 

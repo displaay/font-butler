@@ -241,11 +241,26 @@ export type OperationItem = {
   previousEntry?: CatalogEntry
 }
 
+export type OperationTrigger =
+  | 'import'
+  | 'watch'
+  | 'menu-bar'
+  | 'project'
+  | 'repair'
+  | 'relink'
+  | 'restore'
+  | 'undo'
+  | 'manual'
+  | 'open-with'
+  | 'startup'
+  | 'retail'
+  | 'retail-auto'
+
 export type Operation = {
   id: string
   startedAt: number
   finishedAt?: number
-  trigger: string
+  trigger: OperationTrigger
   action: string
   familyName?: string
   items: OperationItem[]

@@ -1836,7 +1836,53 @@ test('retailFontsFromCollections sorts and marks disabled families', () => {
   )
 })
 
-test('installing a retail font records an Activity install', async () => {
+test('syncing a retail font records a retail-install Activity entry', async () => {
+  resetRetailCache()
+  const paths = setup()
+  const source = path.join(paths.dataRoot, 'Reckless-Regular.otf')
+  writeTestFont(source, 'Reckless', 'Reckless-Regular', { format: 'otf', style: 'Regular' })
+  const bytes = fs.readFileSync(source)
+  await configureRetailSync(paths, { enabled: true, token: 't' })
+  const operationEvents: Array<{ action: string; trigger: string }> = []
+  const stop = onEvent((event) => {
+    if (event.type !== 'operations') return
+    for (const operation of event.operations) {
+      operationEvents.push({ action: operation.action, trigger: operation.trigger })
+    }
+  })
+  try {
+    await syncRetail(paths, {
+      fetchManifest: async () => manifestWith(bytes.length, 'e1', 'Reckless-Regular.otf'),
+      fetchFile: async () => new Uint8Array(bytes),
+    })
+  } finally {
+    stop()
+  }
+  const listing = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath === 'Reckless/Reckless-Regular.otf')
+  assert.ok(listing)
+  assert.equal(listing.status, 'installed')
+  const operations = loadOperations(paths)
+  assert.equal(operations.length, 1)
+  const operation = operations[0]
+  assert.equal(operation?.action, 'retail-install')
+  assert.equal(operation?.trigger, 'retail')
+  assert.equal(operation?.familyName, 'Reckless')
+  assert.equal(operation?.undoable, false)
+  assert.equal(operation?.unread, false)
+  assert.equal(operation?.items.length, 1)
+  assert.equal(operation?.items[0]?.outcome, 'succeeded')
+  assert.equal(operation?.items[0]?.entryId, listing.id)
+  assert.match(operation?.items[0]?.label ?? '', /Regular/)
+  assert.ok(operationEvents.some((event) => event.action === 'retail-install' && event.trigger === 'retail'))
+
+  await syncRetail(paths, {
+    fetchManifest: async () => manifestWith(bytes.length, 'e1', 'Reckless-Regular.otf'),
+    fetchFile: async () => new Uint8Array(bytes),
+  })
+  assert.equal(loadOperations(paths).length, 1)
+})
+
+test('an automatic retail update records a retail-update Activity entry', async () => {
   resetRetailCache()
   const paths = setup()
   const source = path.join(paths.dataRoot, 'Reckless-Regular.otf')
@@ -1847,26 +1893,31 @@ test('installing a retail font records an Activity install', async () => {
     fetchManifest: async () => manifestWith(bytes.length, 'e1', 'Reckless-Regular.otf'),
     fetchFile: async () => new Uint8Array(bytes),
   })
-  const listing = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath === 'Reckless/Reckless-Regular.otf')
-  assert.ok(listing)
-  assert.equal(listing.status, 'installed')
-  const operations = loadOperations(paths)
-  assert.equal(operations.length, 1)
-  const operation = operations[0]
-  assert.equal(operation?.action, 'install')
-  assert.equal(operation?.trigger, 'manual')
-  assert.equal(operation?.familyName, 'Reckless')
-  assert.equal(operation?.undoable, true)
-  assert.equal(operation?.items.length, 1)
-  assert.equal(operation?.items[0]?.outcome, 'succeeded')
-  assert.equal(operation?.items[0]?.entryId, listing.id)
-  assert.match(operation?.items[0]?.label ?? '', /Regular/)
-
-  await syncRetail(paths, {
-    fetchManifest: async () => manifestWith(bytes.length, 'e1', 'Reckless-Regular.otf'),
-    fetchFile: async () => new Uint8Array(bytes),
+  writeTestFont(source, 'Reckless', 'Reckless-Regular', { format: 'otf', style: 'Regular', version: 'Version 2.000' })
+  const nextBytes = fs.readFileSync(source)
+  const operationEvents: Array<{ action: string; trigger: string }> = []
+  const stop = onEvent((event) => {
+    if (event.type !== 'operations') return
+    for (const operation of event.operations) {
+      operationEvents.push({ action: operation.action, trigger: operation.trigger })
+    }
   })
-  assert.equal(loadOperations(paths).length, 1)
+  try {
+    await checkRetail(paths, {
+      fetchManifest: async () => manifestWith(nextBytes.length, 'e2', 'Reckless-Regular.otf'),
+      fetchFile: async () => new Uint8Array(nextBytes),
+    })
+  } finally {
+    stop()
+  }
+  const updates = loadOperations(paths).filter((operation) => operation.action === 'retail-update')
+  assert.equal(updates.length, 1)
+  assert.equal(updates[0]?.trigger, 'retail-auto')
+  assert.equal(updates[0]?.undoable, false)
+  assert.equal(updates[0]?.unread, true)
+  assert.equal(updates[0]?.items[0]?.outcome, 'succeeded')
+  assert.equal(updates[0]?.familyName, 'Reckless')
+  assert.ok(operationEvents.some((event) => event.action === 'retail-update' && event.trigger === 'retail-auto'))
 })
 
 test('uninstalling a retail font keeps the listing', async () => {
