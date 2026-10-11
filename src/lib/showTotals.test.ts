@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   SHOW_TOTALS_KEY,
+  activityCountVisible,
   readShowTotals,
   setShowTotal,
   watchShowTotalId,
@@ -43,6 +44,18 @@ test('writeShowTotals persists the map', () => {
   const storage = memoryStorage()
   writeShowTotals({ system: true }, storage)
   assert.deepEqual(readShowTotals(storage), { system: true })
+})
+
+test('activity count stays hidden until Show total is on', () => {
+  assert.equal(activityCountVisible(false), false)
+  assert.equal(activityCountVisible(false, false), false)
+  assert.equal(activityCountVisible(true), true)
+  assert.equal(activityCountVisible(false, true), true)
+  const storage = memoryStorage()
+  writeShowTotals(setShowTotal({}, 'activity', true), storage)
+  assert.equal(readShowTotals(storage).activity, true)
+  writeShowTotals(setShowTotal(readShowTotals(storage), 'activity', false), storage)
+  assert.equal(readShowTotals(storage).activity, undefined)
 })
 
 test('watchShowTotalId normalizes folder paths', () => {
