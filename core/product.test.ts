@@ -3,10 +3,15 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { setBuildIdentityCandidatesForTests } from './build-identity.ts'
+import {
+  loadBuildIdentity,
+  setBuildIdentityCandidatesForTests,
+  setBuildIdentityLocationsForTests,
+} from './build-identity.ts'
 import { findById, loadCatalog, saveCatalog } from './catalog.ts'
 import { classifyImportFile } from './planner.ts'
 import { setUnlinkForgetFaultForTest } from './service.ts'
+import { setUnlinkedBackupRenameForTest } from './unlinked-sources.ts'
 import { inspectRelinkCandidate } from './relink.ts'
 import { fingerprintFile } from './fingerprint.ts'
 import { displayStateLabel, inspectSourceAvailability, isCleanupEligible } from './state.ts'
@@ -664,6 +669,107 @@ test('a release build ignores FONT_BUTLER_FAIL=unlink-forget-after-uninstall', a
       assert.equal(service.listCatalog().length, 0)
     }),
   )
+})
+
+test('a mixed unlink batch warns when some rows stay listed', async () => {
+  await withService(async (service, paths) => {
+    const firstSource = path.join(paths.dataRoot, 'Kept.ttf')
+    const secondSource = path.join(paths.dataRoot, 'Stuck.ttf')
+    writeTestFont(firstSource, 'Kept', 'Kept-Regular')
+    writeTestFont(secondSource, 'Stuck', 'Stuck-Regular')
+    const imported = await service.importPaths([firstSource, secondSource])
+    const installed = []
+    for (const entry of imported.entries) installed.push(await service.install(entry.id))
+    const stuck = installed.find((entry) => entry.faces[0]?.familyName === 'Stuck')
+    assert.ok(stuck)
+    setUnlinkForgetFaultForTest((id) => {
+      if (id === stuck.id) throw new Error('row stayed listed')
+    })
+    try {
+      const result = await service.uninstallAndUnlinkMany(installed.map((entry) => entry.id))
+      assert.equal(result.removed, 1)
+      assert.equal(result.partial, true)
+      assert.match(result.error ?? '', /still listed/)
+      assert.match(result.error ?? '', /row stayed listed/)
+      assert.equal(service.listCatalog().length, 1)
+      assert.equal(service.listCatalog()[0]?.id, stuck.id)
+    } finally {
+      setUnlinkForgetFaultForTest(undefined)
+    }
+  })
+})
+
+function packagedFaultLayout(): { root: string; resources: string; identity: string } {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-fault-app-'))
+  const resources = path.join(root, 'Font Buttler.app', 'Contents', 'Resources')
+  fs.mkdirSync(resources, { recursive: true })
+  return { root, resources, identity: path.join(resources, 'build-identity.json') }
+}
+
+async function withPackagedFaultStamp(writeStamp: (identityFile: string) => void): Promise<void> {
+  const layout = packagedFaultLayout()
+  writeStamp(layout.identity)
+  const previous = process.env.FONT_BUTLER_FAIL
+  process.env.FONT_BUTLER_FAIL = 'unlink-forget-after-uninstall'
+  setBuildIdentityLocationsForTests({ resourcesPath: layout.resources })
+  try {
+    assert.equal(loadBuildIdentity().testBuild, true)
+    await withService(async (service, paths) => {
+      const source = path.join(paths.dataRoot, 'ReleaseStamp.ttf')
+      writeTestFont(source, 'ReleaseStamp', 'ReleaseStamp-Regular')
+      const imported = await service.importPaths([source])
+      const installed = await service.install(imported.entries[0]!.id)
+      const result = await service.uninstallAndUnlinkMany([installed.id])
+      assert.equal(result.removed, 1)
+      assert.equal(result.partial, undefined)
+      assert.equal(service.listCatalog().length, 0)
+      assert.equal(fs.existsSync(source), true)
+    })
+  } finally {
+    setBuildIdentityLocationsForTests(null)
+    if (previous === undefined) delete process.env.FONT_BUTLER_FAIL
+    else process.env.FONT_BUTLER_FAIL = previous
+    fs.rmSync(layout.root, { recursive: true, force: true })
+  }
+}
+
+test('a missing packaged stamp ignores FONT_BUTLER_FAIL and still removes the row', async () => {
+  await withPackagedFaultStamp(() => {})
+})
+
+test('a corrupt packaged stamp ignores FONT_BUTLER_FAIL and still removes the row', async () => {
+  await withPackagedFaultStamp((identity) => {
+    fs.writeFileSync(identity, '{"testBuild":')
+  })
+})
+
+test('a failed unlinked-list backup does not turn a finished unlink into a partial', async () => {
+  const logFile = path.join(os.tmpdir(), `font-butler-unlink-backup-${process.pid}.log`)
+  const previousLog = process.env.FONT_BUTLER_LOG
+  process.env.FONT_BUTLER_LOG = logFile
+  setUnlinkedBackupRenameForTest(() => {
+    throw new Error('backup rename failed')
+  })
+  try {
+    await withService(async (service, paths) => {
+      fs.mkdirSync(paths.dataRoot, { recursive: true })
+      fs.writeFileSync(path.join(paths.dataRoot, 'unlinked-sources.json'), '{')
+      const source = path.join(paths.dataRoot, 'BackupFail.ttf')
+      writeTestFont(source, 'BackupFail', 'BackupFail-Regular')
+      const imported = await service.importPaths([source])
+      const installed = await service.install(imported.entries[0]!.id)
+      const result = await service.uninstallAndUnlinkMany([installed.id])
+      assert.equal(result.removed, 1)
+      assert.equal(result.partial, undefined)
+      assert.equal(service.listCatalog().length, 0)
+      assert.match(fs.readFileSync(logFile, 'utf8'), /could not back up unlinked-sources.json/)
+    })
+  } finally {
+    setUnlinkedBackupRenameForTest(undefined)
+    if (previousLog === undefined) delete process.env.FONT_BUTLER_LOG
+    else process.env.FONT_BUTLER_LOG = previousLog
+    fs.rmSync(logFile, { force: true })
+  }
 })
 
 test('uninstall retains enough data for undo', async () => {

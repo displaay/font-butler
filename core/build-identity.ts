@@ -222,3 +222,30 @@ export function loadBuildIdentity(root = projectRoot): BuildIdentity {
     }
   })
 }
+
+/**
+ * Fault switches only. A missing, unreadable, or corrupt packaged stamp stays off.
+ * The logout probe still uses `readPackagedBuildIdentity`, which fails open.
+ */
+export function loadFaultSwitchTestBuild(): boolean {
+  const packaged = packagedBuildIdentityPath()
+  if (packaged) return readStrictTestBuildFile(packaged)
+  return loadBuildIdentity().testBuild === true
+}
+
+function readStrictTestBuildFile(filePath: string): boolean {
+  let raw: string
+  try {
+    raw = fs.readFileSync(filePath, 'utf8')
+  } catch {
+    return false
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return false
+  }
+  if (!parsed || typeof parsed !== 'object') return false
+  return (parsed as { testBuild?: unknown }).testBuild === true
+}

@@ -213,6 +213,63 @@ test('an unlinked watch-folder font stays out after the file is updated', async 
   }
 })
 
+test('a corrupt unlinked list does not let watch or inbox bring fonts back', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  const blocked = path.join(inbox, 'Blocked.ttf')
+  writeTestFont(blocked, 'Blocked', 'Blocked-Regular')
+  fs.writeFileSync(path.join(paths.dataRoot, 'unlinked-sources.json'), '{')
+  const service = new FontButlerService(paths)
+  try {
+    await service.updateSettings({ onboardingCompleted: true })
+    const configured = await service.configureFolder({ root: inbox, policy: 'install-new' })
+    await service.startWatching(configured.folder.id)
+    assert.equal(service.listCatalog().length, 0)
+    assert.equal(isUnlinkedSource(paths, blocked), true)
+    const manual = await service.importPaths([blocked])
+    assert.equal(manual.entries.length, 1)
+    assert.equal(service.listCatalog().length, 1)
+  } finally {
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('a valid unlinked bak keeps that font out and still imports other inbox files', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  const stay = path.join(inbox, 'Stay.ttf')
+  writeTestFont(stay, 'Stay', 'Stay-Regular')
+  const service = new FontButlerService(paths)
+  try {
+    await service.updateSettings({ onboardingCompleted: true })
+    const configured = await service.configureFolder({ root: inbox, policy: 'install-new' })
+    await service.startWatching(configured.folder.id)
+    const stayEntry = service.listCatalog().find((entry) => entry.faces[0]?.familyName === 'Stay')
+    assert.ok(stayEntry)
+    await service.uninstallAndUnlinkMany([stayEntry.id])
+    const list = path.join(paths.dataRoot, 'unlinked-sources.json')
+    fs.copyFileSync(list, `${list}.bak`)
+    fs.writeFileSync(list, '{"version":9}')
+    const other = path.join(inbox, 'Other.ttf')
+    writeTestFont(other, 'Other', 'Other-Regular')
+    service.dispose()
+    await closeAllWatchers()
+    const restarted = new FontButlerService(paths)
+    await restarted.init()
+    const names = restarted.listCatalog().map((entry) => entry.faces[0]?.familyName).sort()
+    assert.deepEqual(names, ['Other'])
+    assert.equal(isUnlinkedSource(paths, stay), true)
+    const manual = await restarted.importPaths([stay])
+    assert.equal(manual.entries.length, 1)
+    restarted.dispose()
+  } finally {
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
 test('updateSettings rejects a missing watch folder', async () => {
   const paths = tempPaths()
   const service = new FontButlerService(paths)

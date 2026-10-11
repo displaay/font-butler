@@ -4,7 +4,13 @@ import path from 'node:path'
 import { test } from 'node:test'
 import type { AppPaths } from './paths.ts'
 import { tempPaths } from './test-util.ts'
-import { allowUnlinkedSource, isUnlinkedSource, rememberUnlinkedSource } from './unlinked-sources.ts'
+import {
+  allowUnlinkedSource,
+  isUnlinkedSource,
+  rememberUnlinkedSource,
+  setUnlinkedBackupRenameForTest,
+  setUnlinkedCaseModeForTest,
+} from './unlinked-sources.ts'
 
 function withTemp(run: (paths: AppPaths) => void): void {
   const paths = tempPaths('font-butler-unlinked-')
@@ -12,16 +18,6 @@ function withTemp(run: (paths: AppPaths) => void): void {
     run(paths)
   } finally {
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
-  }
-}
-
-function withPlatform(platform: NodeJS.Platform, run: () => void): void {
-  const previous = process.platform
-  Object.defineProperty(process, 'platform', { value: platform })
-  try {
-    run()
-  } finally {
-    Object.defineProperty(process, 'platform', { value: previous })
   }
 }
 
@@ -38,36 +34,55 @@ test('unlinked path keys treat composed and decomposed names as the same file', 
     assert.equal(isUnlinkedSource(paths, composed), true)
     assert.equal(isUnlinkedSource(paths, decomposed), true)
     const stored = JSON.parse(fs.readFileSync(listFile(paths), 'utf8')) as { paths: string[] }
-    const expected = path.resolve(composed).normalize('NFC')
-    assert.equal(stored.paths[0], process.platform === 'darwin' ? expected.toLowerCase() : expected)
+    const expected = path.join(fs.realpathSync.native(paths.dataRoot), 'Café.otf').normalize('NFC')
+    assert.equal(stored.paths[0], expected)
     allowUnlinkedSource(paths, composed)
     assert.equal(isUnlinkedSource(paths, decomposed), false)
   })
 })
 
-test('unlinked path keys ignore case on darwin and keep it elsewhere', () => {
+test('unlinked path keys fold case only on case-insensitive volumes', () => {
   const upperName = path.join('Fonts', 'Reckless.otf')
   const lowerName = path.join('fonts', 'reckless.otf')
-  withPlatform('darwin', () => {
-    withTemp((paths) => {
-      const upper = path.join(paths.dataRoot, upperName)
-      const lower = path.join(paths.dataRoot, lowerName)
-      rememberUnlinkedSource(paths, upper)
-      assert.equal(isUnlinkedSource(paths, lower), true)
-      const stored = JSON.parse(fs.readFileSync(listFile(paths), 'utf8')) as { paths: string[] }
-      assert.equal(stored.paths[0], path.resolve(upper).normalize('NFC').toLowerCase())
-      allowUnlinkedSource(paths, lower)
-      assert.equal(isUnlinkedSource(paths, upper), false)
-    })
+  withTemp((paths) => {
+    const upper = path.join(paths.dataRoot, upperName)
+    const lower = path.join(paths.dataRoot, lowerName)
+    rememberUnlinkedSource(paths, upper)
+    assert.equal(isUnlinkedSource(paths, lower), false)
+    assert.equal(isUnlinkedSource(paths, upper), true)
+    const stored = JSON.parse(fs.readFileSync(listFile(paths), 'utf8')) as { paths: string[] }
+    assert.equal(stored.paths[0], stored.paths[0].normalize('NFC'))
+    assert.notEqual(stored.paths[0], stored.paths[0].toLowerCase())
   })
-  withPlatform('linux', () => {
-    withTemp((paths) => {
-      const upper = path.join(paths.dataRoot, upperName)
-      const lower = path.join(paths.dataRoot, lowerName)
-      rememberUnlinkedSource(paths, upper)
-      assert.equal(isUnlinkedSource(paths, lower), false)
-      assert.equal(isUnlinkedSource(paths, upper), true)
-    })
+  for (const mode of ['insensitive', 'unknown'] as const) {
+    setUnlinkedCaseModeForTest(mode)
+    try {
+      withTemp((paths) => {
+        const upper = path.join(paths.dataRoot, upperName)
+        const lower = path.join(paths.dataRoot, lowerName)
+        rememberUnlinkedSource(paths, upper)
+        assert.equal(isUnlinkedSource(paths, lower), true, mode)
+        allowUnlinkedSource(paths, lower)
+        assert.equal(isUnlinkedSource(paths, upper), false, mode)
+      })
+    } finally {
+      setUnlinkedCaseModeForTest(null)
+    }
+  }
+})
+
+test('a missing unlinked file keeps the real parent directory', () => {
+  withTemp((paths) => {
+    const real = path.join(paths.dataRoot, 'real')
+    fs.mkdirSync(real)
+    const link = path.join(paths.dataRoot, 'link')
+    fs.symlinkSync(real, link)
+    const viaLink = path.join(link, 'Font.otf')
+    rememberUnlinkedSource(paths, viaLink)
+    const stored = JSON.parse(fs.readFileSync(listFile(paths), 'utf8')) as { paths: string[] }
+    const expected = path.join(fs.realpathSync.native(real), 'Font.otf').normalize('NFC')
+    assert.equal(stored.paths[0], expected)
+    assert.equal(isUnlinkedSource(paths, path.join(real, 'Font.otf')), true)
   })
 })
 
@@ -84,6 +99,70 @@ test('a corrupt unlinked-sources file is moved to a bak before a new list is wri
     assert.equal(stored.version, 1)
     assert.equal(isUnlinkedSource(paths, fresh), true)
     assert.equal(stored.paths.includes('/earlier/Font.otf'), false)
+  })
+})
+
+test('a wrong-shape unlinked list uses a valid bak and merges it without replacing that bak', () => {
+  withTemp((paths) => {
+    const target = listFile(paths)
+    const earlier = path.join(paths.dataRoot, 'Earlier.otf')
+    const fresh = path.join(paths.dataRoot, 'Fresh.otf')
+    fs.mkdirSync(paths.dataRoot, { recursive: true })
+    const bakBody = JSON.stringify({ version: 1, paths: [path.resolve(earlier)] })
+    fs.writeFileSync(`${target}.bak`, bakBody)
+    const wrong = JSON.stringify({ version: 2, paths: ['/ignored/Shape.otf'] })
+    fs.writeFileSync(target, wrong)
+    assert.equal(isUnlinkedSource(paths, earlier), true)
+    assert.equal(isUnlinkedSource(paths, fresh), false)
+    rememberUnlinkedSource(paths, fresh)
+    assert.equal(fs.readFileSync(`${target}.bak`, 'utf8'), bakBody)
+    const stamped = fs.readdirSync(paths.dataRoot).filter((name) => name.includes('.bak') && name !== 'unlinked-sources.json.bak')
+    assert.equal(stamped.length, 1)
+    assert.equal(fs.readFileSync(path.join(paths.dataRoot, stamped[0]!), 'utf8'), wrong)
+    const stored = JSON.parse(fs.readFileSync(target, 'utf8')) as { paths: string[] }
+    assert.equal(stored.paths.some((item) => item.endsWith('Earlier.otf')), true)
+    assert.equal(stored.paths.some((item) => item.endsWith('Fresh.otf')), true)
+    assert.equal(isUnlinkedSource(paths, earlier), true)
+    assert.equal(isUnlinkedSource(paths, fresh), true)
+  })
+})
+
+test('an unreadable unlinked list with no valid bak blocks every auto-import path', () => {
+  withTemp((paths) => {
+    const target = listFile(paths)
+    fs.mkdirSync(paths.dataRoot, { recursive: true })
+    fs.writeFileSync(target, '{')
+    const blocked = path.join(paths.dataRoot, 'Blocked.otf')
+    assert.equal(isUnlinkedSource(paths, blocked), true)
+    allowUnlinkedSource(paths, blocked)
+    assert.equal(fs.readFileSync(target, 'utf8'), '{')
+    assert.equal(isUnlinkedSource(paths, blocked), true)
+  })
+})
+
+test('a failed unlinked-list backup rename is logged and does not throw', () => {
+  withTemp((paths) => {
+    const target = listFile(paths)
+    const logFile = path.join(paths.dataRoot, 'main.log')
+    const previousLog = process.env.FONT_BUTLER_LOG
+    process.env.FONT_BUTLER_LOG = logFile
+    fs.mkdirSync(paths.dataRoot, { recursive: true })
+    fs.writeFileSync(target, '{')
+    setUnlinkedBackupRenameForTest(() => {
+      throw new Error('backup rename failed')
+    })
+    try {
+      const fresh = path.join(paths.dataRoot, 'Fresh.otf')
+      rememberUnlinkedSource(paths, fresh)
+      assert.equal(isUnlinkedSource(paths, fresh), true)
+      const stored = JSON.parse(fs.readFileSync(target, 'utf8')) as { version: number }
+      assert.equal(stored.version, 1)
+      assert.match(fs.readFileSync(logFile, 'utf8'), /could not back up unlinked-sources.json: backup rename failed/)
+    } finally {
+      setUnlinkedBackupRenameForTest(undefined)
+      if (previousLog === undefined) delete process.env.FONT_BUTLER_LOG
+      else process.env.FONT_BUTLER_LOG = previousLog
+    }
   })
 })
 

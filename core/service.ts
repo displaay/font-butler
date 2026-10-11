@@ -18,7 +18,7 @@ import {
   upsertEntry,
 } from './catalog.ts'
 import { getOrCreateApiToken } from './auth.ts'
-import { cacheClearLogoutProbe, loadBuildIdentity } from './build-identity.ts'
+import { cacheClearLogoutProbe, loadBuildIdentity, loadFaultSwitchTestBuild } from './build-identity.ts'
 import { readFontPreviewBytes } from './font-bytes.ts'
 import {
   assignActivationWarning,
@@ -405,7 +405,8 @@ const UNLINK_FORGET_AFTER_UNINSTALL_FAULT = 'unlink-forget-after-uninstall'
  */
 function throwUnlinkForgetAfterUninstallFault(): void {
   if (process.env.FONT_BUTLER_FAIL !== UNLINK_FORGET_AFTER_UNINSTALL_FAULT) return
-  if (loadBuildIdentity().testBuild !== true) return
+  // Strict stamp: missing or corrupt packaged identity stays off, unlike the logout probe.
+  if (!loadFaultSwitchTestBuild()) return
   throw new Error('Could not remove the font from the list.')
 }
 
@@ -1320,7 +1321,7 @@ export class FontButlerService {
       if (removed === 0 && !partial) {
         throw new Error(errors[0] ?? 'Could not uninstall and unlink that font.')
       }
-      if (removed === 0 && partial) {
+      if (partial) {
         return {
           removed,
           partial: true,
