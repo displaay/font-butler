@@ -633,7 +633,13 @@ test('several watch-folder updates record one automatic reinstall', async () => 
       if (entry.status !== 'installed' || !entry.installedPath) return false
       return !fs.readFileSync(entry.installedPath).equals(secondBytes)
     })
-    const operations = service.listActivity().filter((item) => item.action === 'reinstall')
+    // The installed bytes are written before the activity row is saved.
+    const activityStart = Date.now()
+    let operations = service.listActivity().filter((item) => item.action === 'reinstall')
+    while (operations.length === 0 && Date.now() - activityStart < 2000) {
+      await new Promise((resolve) => setTimeout(resolve, 40))
+      operations = service.listActivity().filter((item) => item.action === 'reinstall')
+    }
     assert.equal(operations.length, 1)
     assert.equal(operations[0]?.trigger, 'watch')
     assert.equal(operations[0]?.unread, true)
