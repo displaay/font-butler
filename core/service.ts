@@ -95,7 +95,7 @@ import {
   type FontAnalysis,
 } from './font-analysis.ts'
 import { fingerprintFile, tryFingerprintFile } from './fingerprint.ts'
-import { allowUnlinkedSource, isUnlinkedSource, rememberUnlinkedSource } from './unlinked-sources.ts'
+import { allowUnlinkedSource, isUnlinkedSource, recoverUnlinkedSources, rememberUnlinkedSource } from './unlinked-sources.ts'
 import {
   reconcileMutationJournals,
   recordMutationDestination,
@@ -497,6 +497,7 @@ export class FontButlerService {
   /** Fast path: validate catalog and apply cheap on-disk fixes only. */
   async initCatalogPhase(): Promise<void> {
     ensureDirs(this.paths)
+    recoverUnlinkedSources(this.paths)
     const recovered = await reconcileMutationJournals(this.paths, getFontNative())
     if (recovered.length) {
       emitCatalog(this.paths)

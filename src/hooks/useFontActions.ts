@@ -43,7 +43,7 @@ import {
 } from '@/lib/group'
 import { canSwitchTo } from '@/lib/identity'
 import { actionCopy, actionCopyFor, adobeInstallCopy, adobeUninstallCopy, progressActionCopy, uninstallAndUnlinkConfirm } from '@/lib/notify'
-import { batchResultCopy, partialUnlinkWarning, type BatchOutcome } from '@/lib/results'
+import { batchResultCopy, partialUnlinkKeepsDoneToast, partialUnlinkWarning, type BatchOutcome } from '@/lib/results'
 import { doneToastAction, latestUndoableOperationId } from '@/lib/toastAction'
 import { updateGroupsForIds } from '@/lib/updateInventory'
 import type {
@@ -767,7 +767,7 @@ export function useFontActions({
               onClick: () => setTab('activity'),
             },
           })
-          return
+          if (!partialUnlinkKeepsDoneToast(result)) return
         }
         const outcome = result && typeof result === 'object' ? (result as BatchOutcome) : undefined
         const { message, failedIds } = batchResultCopy(copy.done, outcome)

@@ -22,6 +22,13 @@ export function partialUnlinkWarning(result: unknown): string | null {
   return 'Could not uninstall and unlink that font.'
 }
 
+/** A mixed unlink still shows the success toast for the rows that were removed. */
+export function partialUnlinkKeepsDoneToast(result: unknown): boolean {
+  if (!result || typeof result !== 'object') return false
+  const removed = (result as { removed?: unknown }).removed
+  return typeof removed === 'number' && removed > 0
+}
+
 export function batchResultCopy(
   done: string,
   outcome?: BatchOutcome,

@@ -236,6 +236,48 @@ test('a corrupt unlinked list does not let watch or inbox bring fonts back', asy
   }
 })
 
+test('a corrupt unlinked list with no backup is reset on launch and watch import resumes', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  const font = path.join(inbox, 'Returns.ttf')
+  writeTestFont(font, 'Returns', 'Returns-Regular')
+  fs.writeFileSync(path.join(paths.dataRoot, 'unlinked-sources.json'), '{')
+  const logFile = path.join(paths.dataRoot, 'main.log')
+  const previousLog = process.env.FONT_BUTLER_LOG
+  process.env.FONT_BUTLER_LOG = logFile
+  const service = new FontButlerService(paths)
+  const notices: string[] = []
+  const stop = onEvent((event) => {
+    if (event.type === 'notice') notices.push(event.notice.message)
+  })
+  try {
+    await service.updateSettings({ onboardingCompleted: true })
+    const configured = await service.configureFolder({ root: inbox, policy: 'install-new' })
+    await service.startWatching(configured.folder.id)
+    assert.equal(service.listCatalog().length, 0)
+    service.dispose()
+    await closeAllWatchers()
+    const restarted = new FontButlerService(paths)
+    await restarted.init()
+    assert.equal(restarted.listCatalog().length, 1)
+    assert.equal(restarted.listCatalog()[0]?.faces[0]?.familyName, 'Returns')
+    const stored = JSON.parse(
+      fs.readFileSync(path.join(paths.dataRoot, 'unlinked-sources.json'), 'utf8'),
+    ) as { version: number; paths: string[] }
+    assert.equal(stored.version, 1)
+    assert.deepEqual(stored.paths, [])
+    assert.match(fs.readFileSync(logFile, 'utf8'), /Reset unlinked-sources.json/)
+    assert.ok(notices.some((message) => message.includes('unlinked-font list was reset')))
+    restarted.dispose()
+  } finally {
+    stop()
+    if (previousLog === undefined) delete process.env.FONT_BUTLER_LOG
+    else process.env.FONT_BUTLER_LOG = previousLog
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
 test('a valid unlinked bak keeps that font out and still imports other inbox files', async () => {
   const paths = tempPaths()
   const inbox = path.join(paths.dataRoot, 'inbox')

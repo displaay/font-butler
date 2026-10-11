@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { partialUnlinkWarning } from './results.ts'
+import { partialUnlinkKeepsDoneToast, partialUnlinkWarning } from './results.ts'
 
 test('a partial unlink that removed nothing warns instead of claiming success', () => {
   assert.equal(
@@ -19,4 +19,7 @@ test('a partial unlink that removed nothing warns instead of claiming success', 
   )
   assert.equal(partialUnlinkWarning({ removed: 1 }), null)
   assert.equal(partialUnlinkWarning(null), null)
+  assert.equal(partialUnlinkKeepsDoneToast({ removed: 1, partial: true }), true)
+  assert.equal(partialUnlinkKeepsDoneToast({ removed: 0, partial: true }), false)
+  assert.equal(partialUnlinkKeepsDoneToast(null), false)
 })

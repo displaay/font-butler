@@ -5,6 +5,7 @@ import type { Notice, ServiceEvent } from './types.ts'
 const bus = new EventEmitter()
 bus.setMaxListeners(20)
 const pendingWatchFailures: Notice[] = []
+let pendingUnlinkedListReset: Notice | null = null
 
 export function emitEvent(event: ServiceEvent): void {
   if (
@@ -30,6 +31,22 @@ export function emitEvent(event: ServiceEvent): void {
 /** Watch failures emitted while nobody was listening. The next subscriber takes them. */
 export function takePendingWatchFailureNotices(): Notice[] {
   return pendingWatchFailures.splice(0, pendingWatchFailures.length)
+}
+
+/** One reset notice, held when the window is not listening yet. */
+export function publishUnlinkedListReset(notice: Notice): void {
+  if (bus.listenerCount('event') === 0) {
+    pendingUnlinkedListReset = notice
+    return
+  }
+  pendingUnlinkedListReset = null
+  emitEvent({ type: 'notice', notice })
+}
+
+export function takePendingUnlinkedListResetNotice(): Notice | null {
+  const notice = pendingUnlinkedListReset
+  pendingUnlinkedListReset = null
+  return notice
 }
 
 export function onEvent(listener: (event: ServiceEvent) => void): () => void {

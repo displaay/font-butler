@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { test } from 'node:test'
+import { onEvent, takePendingUnlinkedListResetNotice } from './events.ts'
 import type { AppPaths } from './paths.ts'
 import { tempPaths } from './test-util.ts'
 import {
@@ -127,16 +128,55 @@ test('a wrong-shape unlinked list uses a valid bak and merges it without replaci
   })
 })
 
-test('an unreadable unlinked list with no valid bak blocks every auto-import path', () => {
+test('an unreadable unlinked list with no valid bak resets on a manual add', () => {
   withTemp((paths) => {
     const target = listFile(paths)
     fs.mkdirSync(paths.dataRoot, { recursive: true })
     fs.writeFileSync(target, '{')
     const blocked = path.join(paths.dataRoot, 'Blocked.otf')
     assert.equal(isUnlinkedSource(paths, blocked), true)
-    allowUnlinkedSource(paths, blocked)
-    assert.equal(fs.readFileSync(target, 'utf8'), '{')
-    assert.equal(isUnlinkedSource(paths, blocked), true)
+    const notices: string[] = []
+    const stop = onEvent((event) => {
+      if (event.type === 'notice') notices.push(event.notice.message)
+    })
+    try {
+      allowUnlinkedSource(paths, blocked)
+      const stored = JSON.parse(fs.readFileSync(target, 'utf8')) as { version: number; paths: string[] }
+      assert.equal(stored.version, 1)
+      assert.deepEqual(stored.paths, [])
+      assert.equal(isUnlinkedSource(paths, blocked), false)
+      assert.deepEqual(notices, [
+        'The unlinked-font list was reset because it could not be read. Watched folders can import those fonts again.',
+      ])
+      allowUnlinkedSource(paths, blocked)
+      assert.equal(notices.length, 1)
+    } finally {
+      stop()
+      takePendingUnlinkedListResetNotice()
+    }
+  })
+})
+
+test('timestamped unlinked backups keep the newest three', () => {
+  withTemp((paths) => {
+    const target = listFile(paths)
+    fs.mkdirSync(paths.dataRoot, { recursive: true })
+    fs.writeFileSync(`${target}.bak`, JSON.stringify({ version: 1, paths: [] }))
+    for (let index = 0; index < 5; index += 1) {
+      fs.writeFileSync(target, `{bad ${index}`)
+      rememberUnlinkedSource(paths, path.join(paths.dataRoot, `Font${index}.otf`))
+    }
+    const stamped = fs
+      .readdirSync(paths.dataRoot)
+      .filter(
+        (name) =>
+          name.startsWith('unlinked-sources.json.') &&
+          name.endsWith('.bak') &&
+          name !== 'unlinked-sources.json.bak',
+      )
+    assert.equal(stamped.length, 3)
+    const kept = JSON.parse(fs.readFileSync(`${target}.bak`, 'utf8')) as { version: number }
+    assert.equal(kept.version, 1)
   })
 })
 
@@ -157,7 +197,10 @@ test('a failed unlinked-list backup rename is logged and does not throw', () => 
       assert.equal(isUnlinkedSource(paths, fresh), true)
       const stored = JSON.parse(fs.readFileSync(target, 'utf8')) as { version: number }
       assert.equal(stored.version, 1)
-      assert.match(fs.readFileSync(logFile, 'utf8'), /could not back up unlinked-sources.json: backup rename failed/)
+      assert.match(
+        fs.readFileSync(logFile, 'utf8'),
+        /could not back up unlinked-sources.json: backup rename failed\. Overwriting the corrupt file\./,
+      )
     } finally {
       setUnlinkedBackupRenameForTest(undefined)
       if (previousLog === undefined) delete process.env.FONT_BUTLER_LOG

@@ -4,7 +4,7 @@ import { streamSSE } from 'hono/streaming'
 import fs from 'node:fs'
 import path from 'node:path'
 import { contentDisposition, shouldIncludeBootstrapToken } from '../core/auth.ts'
-import { emitEvent, onEvent, takePendingWatchFailureNotices } from '../core/events.ts'
+import { emitEvent, onEvent, takePendingUnlinkedListResetNotice, takePendingWatchFailureNotices } from '../core/events.ts'
 import { isFullyUnderAnyRoot } from '../core/containment.ts'
 import { MAX_UPLOAD_BATCH_BYTES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES } from '../core/constants.ts'
 import { denyRemoteRequest, isAuthorizedApiRequest, resolveStaticAsset } from '../core/http.ts'
@@ -1207,6 +1207,14 @@ app.get('/api/events', (c) => {
     await stream.writeSSE({
       data: JSON.stringify(catalogEvent(service.listCatalog())),
     })
+    const unlinkedReset = takePendingUnlinkedListResetNotice()
+    if (unlinkedReset) {
+      try {
+        await stream.writeSSE({ data: JSON.stringify({ type: 'notice', notice: unlinkedReset }) })
+      } catch {
+        close()
+      }
+    }
     for (const notice of takePendingWatchFailureNotices()) {
       if (closed) break
       const key = watchFailureKey(notice)

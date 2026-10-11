@@ -1,7 +1,11 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { publishUnlinkedListReset } from './events.ts'
 import { logMain } from './main-log.ts'
 import type { AppPaths } from './paths.ts'
+
+const UNLINKED_LIST_RESET_MESSAGE =
+  'The unlinked-font list was reset because it could not be read. Watched folders can import those fonts again.'
 
 type UnlinkedSourceFile = {
   version: 1
@@ -133,16 +137,15 @@ function caseModeFor(filePath: string): CaseMode {
     const cached = caseModeByDev.get(stat.dev)
     if (cached) return cached
     const mode = detectCaseMode(ancestor)
-    if (mode !== 'unknown') caseModeByDev.set(stat.dev, mode)
+    caseModeByDev.set(stat.dev, mode)
     return mode
   } catch {
     return 'unknown'
   }
 }
 
-function keysMatch(stored: string, candidate: string): boolean {
+function keysMatch(stored: string, candidate: string, mode: CaseMode): boolean {
   if (stored === candidate) return true
-  const mode = caseModeFor(candidate)
   if (mode === 'sensitive') return false
   return stored.toLowerCase() === candidate.toLowerCase()
 }
@@ -238,6 +241,39 @@ function nextBackupPath(target: string): string {
   return `${target}.${stamp}.${process.pid}.bak`
 }
 
+/** Timestamped copies only. The plain `.bak` stays, because that is the recovery source. */
+function pruneTimestampedBackups(target: string): void {
+  const dir = path.dirname(target)
+  const base = path.basename(target)
+  const plain = `${base}.bak`
+  let names: string[]
+  try {
+    names = fs.readdirSync(dir)
+  } catch {
+    return
+  }
+  const ranked = names
+    .filter((name) => name.startsWith(`${base}.`) && name.endsWith('.bak') && name !== plain)
+    .map((name) => {
+      const full = path.join(dir, name)
+      let mtime = 0
+      try {
+        mtime = fs.statSync(full).mtimeMs
+      } catch {
+        mtime = 0
+      }
+      return { full, name, mtime }
+    })
+    .sort((left, right) => right.mtime - left.mtime || right.name.localeCompare(left.name))
+  for (const extra of ranked.slice(3)) {
+    try {
+      fs.rmSync(extra.full, { force: true })
+    } catch {
+      // A leftover backup must not fail the unlink that already succeeded.
+    }
+  }
+}
+
 function saveUnlinkedPaths(paths: AppPaths, sourcePaths: string[]): void {
   fs.mkdirSync(paths.dataRoot, { recursive: true })
   const target = listPath(paths)
@@ -248,11 +284,13 @@ function saveUnlinkedPaths(paths: AppPaths, sourcePaths: string[]): void {
   if (main === 'invalid') {
     try {
       renameUnlinkedBackup(target, nextBackupPath(target))
+      pruneTimestampedBackups(target)
     } catch (error) {
       // The forget already succeeded. Losing the rename must not undo that.
+      const reason = error instanceof Error ? error.message : String(error)
       logMain(
         'catalog',
-        `could not back up unlinked-sources.json: ${error instanceof Error ? error.message : String(error)}`,
+        `could not back up unlinked-sources.json: ${reason}. Overwriting the corrupt file.`,
       )
     }
   }
@@ -260,13 +298,30 @@ function saveUnlinkedPaths(paths: AppPaths, sourcePaths: string[]): void {
   listCache = null
 }
 
-function uniquePaths(paths: string[]): string[] {
+function uniquePaths(paths: string[], mode: CaseMode): string[] {
   const unique: string[] = []
   for (const item of paths) {
-    if (unique.some((kept) => keysMatch(kept, item))) continue
+    if (unique.some((kept) => keysMatch(kept, item, mode))) continue
     unique.push(item)
   }
   return unique
+}
+
+/**
+ * A corrupt list with no valid backup blocks every auto-import.
+ * Move it aside and write an empty list so watch and inbox can resume.
+ * Runs at startup and when a manual add finds the list still unreadable.
+ */
+export function recoverUnlinkedSources(paths: AppPaths): boolean {
+  const loaded = cachedList(paths)
+  if (!loaded.unknown) return false
+  saveUnlinkedPaths(paths, [])
+  logMain(
+    'catalog',
+    'Reset unlinked-sources.json because it could not be read and had no valid backup.',
+  )
+  publishUnlinkedListReset({ kind: 'warning', message: UNLINKED_LIST_RESET_MESSAGE })
+  return true
 }
 
 /** Remember a source that was uninstalled and unlinked. Later bytes at this path stay ignored. */
@@ -274,8 +329,9 @@ export function rememberUnlinkedSource(paths: AppPaths, sourcePath: string): voi
   if (!sourcePath) return
   const resolved = normalizeUnlinkedPath(sourcePath)
   const loaded = cachedList(paths)
-  if (!loaded.unknown && loaded.keys.some((item) => keysMatch(item, resolved))) return
-  saveUnlinkedPaths(paths, uniquePaths([...loaded.keys, resolved]))
+  const mode = caseModeFor(resolved)
+  if (!loaded.unknown && loaded.keys.some((item) => keysMatch(item, resolved, mode))) return
+  saveUnlinkedPaths(paths, uniquePaths([...loaded.keys, resolved], mode))
 }
 
 /**
@@ -285,9 +341,13 @@ export function rememberUnlinkedSource(paths: AppPaths, sourcePath: string): voi
 export function allowUnlinkedSource(paths: AppPaths, sourcePath: string): void {
   if (!sourcePath) return
   const loaded = cachedList(paths)
-  if (loaded.unknown) return
+  if (loaded.unknown) {
+    recoverUnlinkedSources(paths)
+    return
+  }
   const resolved = normalizeUnlinkedPath(sourcePath)
-  const next = loaded.keys.filter((item) => !keysMatch(item, resolved))
+  const mode = caseModeFor(resolved)
+  const next = loaded.keys.filter((item) => !keysMatch(item, resolved, mode))
   if (next.length === loaded.keys.length) return
   saveUnlinkedPaths(paths, next)
 }
@@ -301,5 +361,6 @@ export function isUnlinkedSource(paths: AppPaths, sourcePath: string): boolean {
   const loaded = cachedList(paths)
   if (loaded.unknown) return true
   const resolved = normalizeUnlinkedPath(sourcePath)
-  return loaded.keys.some((item) => keysMatch(item, resolved))
+  const mode = caseModeFor(resolved)
+  return loaded.keys.some((item) => keysMatch(item, resolved, mode))
 }
