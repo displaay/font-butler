@@ -1248,14 +1248,13 @@ export class FontButlerService {
           if (refusal) throw new Error(refusal)
           const label = displayEntry(current)
           const sourcePath = current.sourcePath
-          const fingerprint = current.sourceFingerprint || tryFingerprintFile(sourcePath)
           await this.uninstallEntry(id)
           mutated = true
           try {
             unlinkForgetFaultForTest?.(id)
             const after = findById(loadCatalog(this.paths), id)
             if (after) await this.forgetEntry(id)
-            if (fingerprint) rememberUnlinkedSource(this.paths, sourcePath, fingerprint)
+            rememberUnlinkedSource(this.paths, sourcePath)
             removed += 1
             items.push({
               id: crypto.randomUUID(),
