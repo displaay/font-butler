@@ -11,6 +11,8 @@ import {
   rememberUnlinkedSource,
   setUnlinkedBackupRenameForTest,
   setUnlinkedCaseModeForTest,
+  setUnlinkedListReadForTest,
+  setUnlinkedListSaveFaultForTest,
 } from './unlinked-sources.ts'
 
 function withTemp(run: (paths: AppPaths) => void): void {
@@ -128,7 +130,7 @@ test('a wrong-shape unlinked list uses a valid bak and merges it without replaci
   })
 })
 
-test('an unreadable unlinked list with no valid bak resets on a manual add', () => {
+test('a corrupt unlinked list with no valid bak resets on a manual add', () => {
   withTemp((paths) => {
     const target = listFile(paths)
     fs.mkdirSync(paths.dataRoot, { recursive: true })
@@ -148,11 +150,71 @@ test('an unreadable unlinked list with no valid bak resets on a manual add', () 
       assert.deepEqual(notices, [
         "Font Buttler couldn't read its list of unlinked fonts and started a new one. Fonts you unlinked earlier may reappear from watch folders. You can unlink them again.",
       ])
+      assert.equal(
+        takePendingUnlinkedListResetNotice()?.message,
+        "Font Buttler couldn't read its list of unlinked fonts and started a new one. Fonts you unlinked earlier may reappear from watch folders. You can unlink them again.",
+      )
       allowUnlinkedSource(paths, blocked)
       assert.equal(notices.length, 1)
     } finally {
       stop()
       takePendingUnlinkedListResetNotice()
+    }
+  })
+})
+
+test('an EACCES read leaves the unlinked list untouched and skips auto-import', () => {
+  withTemp((paths) => {
+    const target = listFile(paths)
+    const body = '{"version":1,"paths":["/kept/Font.otf"]}'
+    fs.mkdirSync(paths.dataRoot, { recursive: true })
+    fs.writeFileSync(target, body)
+    setUnlinkedListReadForTest((filePath) => {
+      if (filePath === target) {
+        const error = new Error('EACCES: permission denied') as NodeJS.ErrnoException
+        error.code = 'EACCES'
+        throw error
+      }
+      return fs.readFileSync(filePath, 'utf8')
+    })
+    try {
+      const blocked = path.join(paths.dataRoot, 'Blocked.otf')
+      assert.equal(isUnlinkedSource(paths, blocked), true)
+      allowUnlinkedSource(paths, blocked)
+      rememberUnlinkedSource(paths, blocked)
+      assert.equal(fs.readFileSync(target, 'utf8'), body)
+      assert.equal(fs.existsSync(`${target}.bak`), false)
+      assert.equal(isUnlinkedSource(paths, blocked), true)
+    } finally {
+      setUnlinkedListReadForTest(undefined)
+    }
+  })
+})
+
+test('a failed unlinked-list reset does not throw and leaves auto-import skipped', () => {
+  withTemp((paths) => {
+    const target = listFile(paths)
+    const logFile = path.join(paths.dataRoot, 'reset.log')
+    const previousLog = process.env.FONT_BUTLER_LOG
+    process.env.FONT_BUTLER_LOG = logFile
+    fs.mkdirSync(paths.dataRoot, { recursive: true })
+    fs.writeFileSync(target, '{')
+    setUnlinkedListSaveFaultForTest(() => {
+      throw new Error('no space left on device')
+    })
+    try {
+      const blocked = path.join(paths.dataRoot, 'Blocked.otf')
+      allowUnlinkedSource(paths, blocked)
+      assert.equal(fs.readFileSync(target, 'utf8'), '{')
+      assert.equal(isUnlinkedSource(paths, blocked), true)
+      assert.match(
+        fs.readFileSync(logFile, 'utf8'),
+        /could not reset unlinked-sources.json: no space left on device/,
+      )
+    } finally {
+      setUnlinkedListSaveFaultForTest(undefined)
+      if (previousLog === undefined) delete process.env.FONT_BUTLER_LOG
+      else process.env.FONT_BUTLER_LOG = previousLog
     }
   })
 })
@@ -199,7 +261,7 @@ test('a failed unlinked-list backup rename is logged and does not throw', () => 
       assert.equal(stored.version, 1)
       assert.match(
         fs.readFileSync(logFile, 'utf8'),
-        /could not back up unlinked-sources.json: backup rename failed\. Overwriting the corrupt file\./,
+        /could not back up unlinked-sources.json: backup rename failed\. The corrupt file was overwritten with a new list\./,
       )
     } finally {
       setUnlinkedBackupRenameForTest(undefined)

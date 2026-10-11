@@ -1185,6 +1185,7 @@ app.get('/api/events', (c) => {
       sseClosers.delete(close)
     }
     const seenWatchFailures = new Set<string>()
+    let deliveredUnlinkedReset = false
     const watchFailureKey = (notice: { operationId?: string; message: string }) =>
       notice.operationId || notice.message
     const unsubscribe = onEvent(async (event) => {
@@ -1195,6 +1196,10 @@ app.get('/api/events', (c) => {
         const key = watchFailureKey(event.notice)
         if (seenWatchFailures.has(key)) return
         seenWatchFailures.add(key)
+      }
+      if (event.type === 'notice' && event.notice.source === 'unlinked-list') {
+        if (deliveredUnlinkedReset) return
+        deliveredUnlinkedReset = true
       }
       try {
         await stream.writeSSE({ data: JSON.stringify(event) })
@@ -1208,7 +1213,8 @@ app.get('/api/events', (c) => {
       data: JSON.stringify(catalogEvent(service.listCatalog())),
     })
     const unlinkedReset = takePendingUnlinkedListResetNotice()
-    if (unlinkedReset) {
+    if (unlinkedReset && !deliveredUnlinkedReset) {
+      deliveredUnlinkedReset = true
       try {
         await stream.writeSSE({ data: JSON.stringify({ type: 'notice', notice: unlinkedReset }) })
       } catch {

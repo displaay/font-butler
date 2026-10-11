@@ -4,10 +4,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { onEvent } from './events.ts'
+import { onEvent, takePendingUnlinkedListResetNotice } from './events.ts'
 import { noopFontNative, setFontNative } from './native.ts'
 import { fingerprintFile } from './fingerprint.ts'
-import { isUnlinkedSource } from './unlinked-sources.ts'
+import { isUnlinkedSource, setUnlinkedListSaveFaultForTest } from './unlinked-sources.ts'
 import type { AppPaths } from './paths.ts'
 import { isBackgroundActivityTrigger } from './operations.ts'
 import { FontButlerService } from './service.ts'
@@ -268,9 +268,50 @@ test('a corrupt unlinked list with no backup is reset on launch and watch import
     assert.deepEqual(stored.paths, [])
     assert.match(fs.readFileSync(logFile, 'utf8'), /Reset unlinked-sources.json/)
     assert.ok(notices.some((message) => message.includes('may reappear from watch folders')))
+    assert.match(takePendingUnlinkedListResetNotice()?.message ?? '', /may reappear from watch folders/)
     restarted.dispose()
   } finally {
     stop()
+    takePendingUnlinkedListResetNotice()
+    if (previousLog === undefined) delete process.env.FONT_BUTLER_LOG
+    else process.env.FONT_BUTLER_LOG = previousLog
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('a failed unlinked-list reset does not block launch or a manual add', async () => {
+  const paths = tempPaths()
+  const inbox = path.join(paths.dataRoot, 'inbox')
+  const font = path.join(inbox, 'Stays.ttf')
+  writeTestFont(font, 'Stays', 'Stays-Regular')
+  fs.writeFileSync(path.join(paths.dataRoot, 'unlinked-sources.json'), '{')
+  const logFile = path.join(paths.dataRoot, 'reset.log')
+  const previousLog = process.env.FONT_BUTLER_LOG
+  process.env.FONT_BUTLER_LOG = logFile
+  setUnlinkedListSaveFaultForTest(() => {
+    throw new Error('read-only file system')
+  })
+  const service = new FontButlerService(paths)
+  try {
+    await service.updateSettings({ onboardingCompleted: true })
+    const configured = await service.configureFolder({ root: inbox, policy: 'install-new' })
+    await service.startWatching(configured.folder.id)
+    assert.equal(service.listCatalog().length, 0)
+    service.dispose()
+    await closeAllWatchers()
+    const restarted = new FontButlerService(paths)
+    await restarted.init()
+    assert.equal(restarted.listCatalog().length, 0)
+    assert.equal(fs.readFileSync(path.join(paths.dataRoot, 'unlinked-sources.json'), 'utf8'), '{')
+    assert.equal(isUnlinkedSource(paths, font), true)
+    const manual = await restarted.importPaths([font])
+    assert.equal(manual.entries.length, 1)
+    assert.equal(fs.readFileSync(path.join(paths.dataRoot, 'unlinked-sources.json'), 'utf8'), '{')
+    assert.match(fs.readFileSync(logFile, 'utf8'), /could not reset unlinked-sources.json: read-only file system/)
+    restarted.dispose()
+  } finally {
+    setUnlinkedListSaveFaultForTest(undefined)
     if (previousLog === undefined) delete process.env.FONT_BUTLER_LOG
     else process.env.FONT_BUTLER_LOG = previousLog
     await closeAllWatchers()

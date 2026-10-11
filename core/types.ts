@@ -176,7 +176,7 @@ export type Notice = {
   entryId?: string
   operationId?: string
   /** Watch-folder failures are buffered until the window can show them. Logout failures are a main-process dialog. */
-  source?: 'watch' | 'logout' | 'logout-waiting' | 'logout-probe'
+  source?: 'watch' | 'logout' | 'logout-waiting' | 'logout-probe' | 'unlinked-list'
   /** One logout or probe flight. A joined click reuses it. */
   attemptId?: string
 }

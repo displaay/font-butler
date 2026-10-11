@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { emitEvent, onEvent, takePendingWatchFailureNotices } from './events.ts'
+import {
+  emitEvent,
+  onEvent,
+  publishUnlinkedListReset,
+  takePendingUnlinkedListResetNotice,
+  takePendingWatchFailureNotices,
+} from './events.ts'
 
 test('a watch failure delivered live is not replayed to a later subscriber', () => {
   takePendingWatchFailureNotices()
@@ -18,6 +24,30 @@ test('a watch failure delivered live is not replayed to a later subscriber', () 
   stop()
   assert.deepEqual(seen, [notice.message])
   assert.deepEqual(takePendingWatchFailureNotices(), [])
+})
+
+test('an unlinked-list reset stays queued until a window takes it', () => {
+  takePendingUnlinkedListResetNotice()
+  const notice = {
+    kind: 'warning' as const,
+    source: 'unlinked-list' as const,
+    message: 'Font Buttler could not read the unlinked list.',
+  }
+  publishUnlinkedListReset(notice)
+  assert.deepEqual(takePendingUnlinkedListResetNotice(), notice)
+  assert.equal(takePendingUnlinkedListResetNotice(), null)
+  const seen: string[] = []
+  const stop = onEvent((event) => {
+    if (event.type === 'notice' && event.notice.source === 'unlinked-list') seen.push(event.notice.message)
+  })
+  try {
+    publishUnlinkedListReset(notice)
+    assert.deepEqual(seen, [notice.message])
+    assert.deepEqual(takePendingUnlinkedListResetNotice(), notice)
+  } finally {
+    stop()
+    takePendingUnlinkedListResetNotice()
+  }
 })
 
 test('a watch failure emitted before anyone is listening still arrives for the next subscriber', () => {

@@ -14,9 +14,15 @@ type UnlinkedSourceFile = {
 
 type CaseMode = 'sensitive' | 'insensitive' | 'unknown'
 
+type ListStatus = 'ready' | 'resettable' | 'read-error'
+
 type LoadedList = {
-  /** True when the file is bad and no valid .bak can stand in. Auto-import stays off. */
-  unknown: boolean
+  /**
+   * ready: missing, valid, or recovered from a valid .bak.
+   * resettable: the file read, but the JSON is bad or the shape is wrong, and no valid .bak can stand in.
+   * read-error: the read failed for a reason other than a missing file. Leave the file untouched.
+   */
+  status: ListStatus
   paths: string[]
 }
 
@@ -38,6 +44,21 @@ export function setUnlinkedCaseModeForTest(mode: CaseMode | null): void {
 
 let renameUnlinkedBackup: (from: string, to: string) => void = (from, to) => {
   fs.renameSync(from, to)
+}
+
+let readUnlinkedListFile: (filePath: string) => string = (filePath) => fs.readFileSync(filePath, 'utf8')
+
+/** Tests simulate EACCES and other read failures. Production reads the file directly. */
+export function setUnlinkedListReadForTest(read: ((filePath: string) => string) | undefined): void {
+  readUnlinkedListFile = read ?? ((filePath) => fs.readFileSync(filePath, 'utf8'))
+  listCache = null
+}
+
+let unlinkedListSaveFault: (() => void) | undefined
+
+/** Tests make the reset write fail. Production does not set this. */
+export function setUnlinkedListSaveFaultForTest(fault: (() => void) | undefined): void {
+  unlinkedListSaveFault = fault
 }
 
 /** Tests force the backup rename to fail. Production uses fs.renameSync. */
@@ -150,13 +171,13 @@ function keysMatch(stored: string, candidate: string, mode: CaseMode): boolean {
   return stored.toLowerCase() === candidate.toLowerCase()
 }
 
-function readListDocument(filePath: string): 'missing' | 'invalid' | { paths: string[] } {
+function readListDocument(filePath: string): 'missing' | 'unreadable' | 'invalid' | { paths: string[] } {
   let raw: string
   try {
-    raw = fs.readFileSync(filePath, 'utf8')
+    raw = readUnlinkedListFile(filePath)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'missing'
-    return 'invalid'
+    return 'unreadable'
   }
   let parsed: unknown
   try {
@@ -187,18 +208,21 @@ function readListDocument(filePath: string): 'missing' | 'invalid' | { paths: st
 
 function loadUnlinkedList(target: string): LoadedList {
   const main = readListDocument(target)
-  if (main !== 'missing' && main !== 'invalid') return { unknown: false, paths: main.paths }
-  if (main === 'missing') return { unknown: false, paths: [] }
+  if (main === 'unreadable') return { status: 'read-error', paths: [] }
+  if (main !== 'missing' && main !== 'invalid') return { status: 'ready', paths: main.paths }
+  if (main === 'missing') return { status: 'ready', paths: [] }
   const backup = readListDocument(backupPath(target))
-  if (backup !== 'missing' && backup !== 'invalid') return { unknown: false, paths: backup.paths }
-  return { unknown: true, paths: [] }
+  if (backup !== 'missing' && backup !== 'invalid' && backup !== 'unreadable') {
+    return { status: 'ready', paths: backup.paths }
+  }
+  return { status: 'resettable', paths: [] }
 }
 
 type ListCache = {
   target: string
   mainKey: string
   bakKey: string
-  unknown: boolean
+  status: ListStatus
   keys: string[]
 }
 
@@ -227,8 +251,8 @@ function cachedList(paths: AppPaths): ListCache {
     return listCache
   }
   const loaded = loadUnlinkedList(target)
-  const keys = loaded.unknown ? [] : loaded.paths.map((item) => normalizeUnlinkedPath(item))
-  listCache = { target, mainKey, bakKey, unknown: loaded.unknown, keys }
+  const keys = loaded.status === 'ready' ? loaded.paths.map((item) => normalizeUnlinkedPath(item)) : []
+  listCache = { target, mainKey, bakKey, status: loaded.status, keys }
   return listCache
 }
 
@@ -275,27 +299,39 @@ function pruneTimestampedBackups(target: string): void {
 }
 
 function saveUnlinkedPaths(paths: AppPaths, sourcePaths: string[]): void {
+  unlinkedListSaveFault?.()
   fs.mkdirSync(paths.dataRoot, { recursive: true })
   const target = listPath(paths)
   const main = readListDocument(target)
+  if (main === 'unreadable') {
+    logMain('catalog', 'unlinked-sources.json could not be read, so it was left unchanged.')
+    return
+  }
   const data: UnlinkedSourceFile = { version: 1, paths: sourcePaths }
   const temp = `${target}.${process.pid}.tmp`
   fs.writeFileSync(temp, JSON.stringify(data))
+  let backupFailure: string | undefined
   if (main === 'invalid') {
     try {
       renameUnlinkedBackup(target, nextBackupPath(target))
-      pruneTimestampedBackups(target)
+      try {
+        pruneTimestampedBackups(target)
+      } catch {
+        // The corrupt file is already aside. Pruning old copies must not fail the write.
+      }
     } catch (error) {
       // The forget already succeeded. Losing the rename must not undo that.
-      const reason = error instanceof Error ? error.message : String(error)
-      logMain(
-        'catalog',
-        `could not back up unlinked-sources.json: ${reason}. Overwriting the corrupt file.`,
-      )
+      backupFailure = error instanceof Error ? error.message : String(error)
     }
   }
   fs.renameSync(temp, target)
   listCache = null
+  if (backupFailure) {
+    logMain(
+      'catalog',
+      `could not back up unlinked-sources.json: ${backupFailure}. The corrupt file was overwritten with a new list.`,
+    )
+  }
 }
 
 function uniquePaths(paths: string[], mode: CaseMode): string[] {
@@ -307,21 +343,42 @@ function uniquePaths(paths: string[], mode: CaseMode): string[] {
   return unique
 }
 
+function logUnlinkedResetFailure(error: unknown): void {
+  const reason = error instanceof Error ? error.message : String(error)
+  logMain(
+    'catalog',
+    `could not reset unlinked-sources.json: ${reason}. Watch and inbox will not auto-import until the list can be read.`,
+  )
+}
+
 /**
- * A corrupt list with no valid backup blocks every auto-import.
+ * A list that reads but does not parse, with no valid backup, blocks every auto-import.
  * Move it aside and write an empty list so watch and inbox can resume.
- * Runs at startup and when a manual add finds the list still unreadable.
+ * A read error is left untouched. Runs at startup and on a manual add.
  */
 export function recoverUnlinkedSources(paths: AppPaths): boolean {
   const loaded = cachedList(paths)
-  if (!loaded.unknown) return false
+  if (loaded.status !== 'resettable') return false
   saveUnlinkedPaths(paths, [])
   logMain(
     'catalog',
     'Reset unlinked-sources.json because it could not be read and had no valid backup.',
   )
-  publishUnlinkedListReset({ kind: 'warning', message: UNLINKED_LIST_RESET_MESSAGE })
+  publishUnlinkedListReset({
+    kind: 'warning',
+    source: 'unlinked-list',
+    message: UNLINKED_LIST_RESET_MESSAGE,
+  })
   return true
+}
+
+/** Startup and manual add. A failed reset is logged and does not block the caller. */
+export function recoverUnlinkedSourcesSafely(paths: AppPaths): void {
+  try {
+    recoverUnlinkedSources(paths)
+  } catch (error) {
+    logUnlinkedResetFailure(error)
+  }
 }
 
 /** Remember a source that was uninstalled and unlinked. Later bytes at this path stay ignored. */
@@ -329,8 +386,9 @@ export function rememberUnlinkedSource(paths: AppPaths, sourcePath: string): voi
   if (!sourcePath) return
   const resolved = normalizeUnlinkedPath(sourcePath)
   const loaded = cachedList(paths)
+  if (loaded.status === 'read-error') return
   const mode = caseModeFor(resolved)
-  if (!loaded.unknown && loaded.keys.some((item) => keysMatch(item, resolved, mode))) return
+  if (loaded.status === 'ready' && loaded.keys.some((item) => keysMatch(item, resolved, mode))) return
   saveUnlinkedPaths(paths, uniquePaths([...loaded.keys, resolved], mode))
 }
 
@@ -341,8 +399,9 @@ export function rememberUnlinkedSource(paths: AppPaths, sourcePath: string): voi
 export function allowUnlinkedSource(paths: AppPaths, sourcePath: string): void {
   if (!sourcePath) return
   const loaded = cachedList(paths)
-  if (loaded.unknown) {
-    recoverUnlinkedSources(paths)
+  if (loaded.status === 'read-error') return
+  if (loaded.status === 'resettable') {
+    recoverUnlinkedSourcesSafely(paths)
     return
   }
   const resolved = normalizeUnlinkedPath(sourcePath)
@@ -353,13 +412,13 @@ export function allowUnlinkedSource(paths: AppPaths, sourcePath: string): void {
 }
 
 /**
- * True when this path was unlinked, or the list is unreadable and no valid backup can stand in.
- * Watch and inbox treat that unknown list as "do not auto-import".
+ * True when this path was unlinked, or the list cannot be trusted yet.
+ * Watch and inbox treat a resettable list and a read error as "do not auto-import".
  */
 export function isUnlinkedSource(paths: AppPaths, sourcePath: string): boolean {
   if (!sourcePath) return false
   const loaded = cachedList(paths)
-  if (loaded.unknown) return true
+  if (loaded.status !== 'ready') return true
   const resolved = normalizeUnlinkedPath(sourcePath)
   const mode = caseModeFor(resolved)
   return loaded.keys.some((item) => keysMatch(item, resolved, mode))

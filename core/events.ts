@@ -33,13 +33,14 @@ export function takePendingWatchFailureNotices(): Notice[] {
   return pendingWatchFailures.splice(0, pendingWatchFailures.length)
 }
 
-/** One reset notice, held when the window is not listening yet. */
+/**
+ * Keep the reset notice until a window connects and takes it.
+ * An already-open window also hears the live event. The queued copy stays
+ * so a window that was not ready yet still receives it.
+ */
 export function publishUnlinkedListReset(notice: Notice): void {
-  if (bus.listenerCount('event') === 0) {
-    pendingUnlinkedListReset = notice
-    return
-  }
-  pendingUnlinkedListReset = null
+  pendingUnlinkedListReset = notice
+  if (bus.listenerCount('event') === 0) return
   emitEvent({ type: 'notice', notice })
 }
 
