@@ -87,6 +87,7 @@ test('catalogBatchPlan uses entry-level eligibility for a mixed family', () => {
     partialActiveStyles: 1,
     deactivate: 1,
     uninstall: 1,
+    uninstallAndUnlink: 1,
     uninstallAndRemove: 1,
     reinstall: 0,
     repair: 0,
@@ -124,6 +125,7 @@ test('familyCardPlan never offers Deactivate on a not-installed family card', ()
   assert.equal(plan.install, 2)
   assert.equal(plan.deactivate, 0)
   assert.equal(plan.uninstall, 0)
+  assert.equal(plan.uninstallAndUnlink, 0)
   assert.equal(plan.uninstallAndRemove, 0)
   assert.equal(plan.activate, 0)
   assert.equal(plan.reinstall, 0)
@@ -137,10 +139,28 @@ test('catalogBatchPlan does not uninstall-and-delete a not-installed family', ()
   const plan = catalogBatchPlan(groups)
   assert.equal(isNotInstalledLabel(familyBadgeEntry(groups[0]!)), true)
   assert.equal(plan.uninstall, 0)
+  assert.equal(plan.uninstallAndUnlink, 0)
   assert.equal(plan.uninstallAndRemove, 0)
   assert.equal(plan.deleteFiles, 1)
   assert.equal(plan.forget, 1)
   assert.equal(plan.install > 0, true)
+})
+
+test('catalogBatchPlan offers uninstall and unlink only for a linked install', () => {
+  const linked = groupCatalog([entry('linked', 'Linked', 'installed')])
+  assert.equal(catalogBatchPlan(linked).uninstallAndUnlink, 1)
+  assert.equal(actionLabel('Uninstall and unlink', 1, false), 'Uninstall and unlink')
+  assert.equal(actionLabel('Uninstall and unlink', 2, true), 'Uninstall and unlink 2 fonts')
+  const adopted = groupCatalog([
+    {
+      ...entry('adopted', 'Adopted', 'installed'),
+      sourcePath: '/Library/Fonts/Adopted.otf',
+      installedPath: '/Library/Fonts/Adopted.otf',
+    },
+  ])
+  const plan = catalogBatchPlan(adopted)
+  assert.equal(plan.uninstall, 1)
+  assert.equal(plan.uninstallAndUnlink, 0)
 })
 
 test('familyCardPlan still deactivates an installed family', () => {
@@ -169,6 +189,7 @@ test('catalogBatchPlan keeps only actions every selected family can take', () =>
     activate: 0,
     deactivate: 0,
     uninstall: 0,
+    uninstallAndUnlink: 0,
     uninstallAndRemove: 0,
     reinstall: 0,
     repair: 0,

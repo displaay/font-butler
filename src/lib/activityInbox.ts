@@ -7,6 +7,7 @@ export const ACTIVITY_ACTION_LABELS: Record<string, string> = {
   install: 'installed',
   'install-update': 'update installed',
   uninstall: 'uninstalled',
+  'uninstall-unlink': 'uninstalled and unlinked',
   reinstall: 'reinstalled',
   repair: 'repaired',
   'apply-plan': 'imported',

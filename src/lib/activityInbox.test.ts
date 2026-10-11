@@ -34,6 +34,10 @@ test('watch activity displays as automatic', () => {
 test('activityRowLabel uses past tense with the family first', () => {
   assert.equal(activityRowLabel({ action: 'install', familyName: 'Inter' }), 'Inter installed')
   assert.equal(activityRowLabel({ action: 'uninstall', familyName: 'Fenul' }), 'Fenul uninstalled')
+  assert.equal(
+    activityRowLabel({ action: 'uninstall-unlink', familyName: 'Fenul' }),
+    'Fenul uninstalled and unlinked',
+  )
   assert.equal(activityRowLabel({ action: 'deactivate', familyName: 'Fenul' }), 'Fenul deactivated')
   assert.equal(activityRowLabel({ action: 'apply-plan', familyName: 'News' }), 'News imported')
   assert.equal(activityRowLabel({ action: 'apply-plan' }), 'Imported')

@@ -1204,6 +1204,72 @@ export class FontButlerService {
     })
   }
 
+  async uninstallAndUnlinkMany(ids: string[]): Promise<{ removed: number }> {
+    return runCatalogTask(async () => {
+      const unique = [...new Set(ids.filter((id) => id))]
+      if (unique.length === 0) {
+        throw new Error('Missing id or ids')
+      }
+      const items: OperationItem[] = []
+      const familyNames = new Map<string, string>()
+      const errors: string[] = []
+      let removed = 0
+      let familyName: string | undefined
+      let mutated = false
+      const progress = this.familyProgress('uninstall-unlink', unique)
+      progress.start()
+      for (const id of unique) {
+        const current = findById(loadCatalog(this.paths), id)
+        if (current) {
+          const name = displayFamily(current)
+          familyNames.set(id, name)
+          familyName ??= name
+        }
+        try {
+          if (!current) throw new Error('Font is not in the library.')
+          const refusal = this.uninstallAndUnlinkRefusal(current)
+          if (refusal) throw new Error(refusal)
+          const label = displayEntry(current)
+          await this.uninstallEntry(id)
+          mutated = true
+          const after = findById(loadCatalog(this.paths), id)
+          if (after) await this.forgetEntry(id)
+          removed += 1
+          items.push({
+            id: crypto.randomUUID(),
+            entryId: id,
+            label,
+            outcome: 'succeeded',
+          })
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error)
+          errors.push(reason)
+          if (current) {
+            items.push(this.operationItem(current, 'failed', reason))
+          } else {
+            items.push({
+              id: crypto.randomUUID(),
+              entryId: id,
+              label: id,
+              outcome: 'failed',
+              reason,
+            })
+          }
+        }
+        await progress.mark(id)
+      }
+      if (removed > 0 || mutated) {
+        this.commitOperation('uninstall-unlink', items, familyName, false, familyNames)
+      }
+      await syncWatchers(this.paths)
+      emitCatalog(this.paths)
+      if (removed === 0) {
+        throw new Error(errors[0] ?? 'Could not uninstall and unlink that font.')
+      }
+      return { removed }
+    })
+  }
+
   async deactivate(id: string): Promise<CatalogEntry> {
     return runCatalogTask(async () => {
       const entry = await this.deactivateEntry(id, { removeManualOwner: true })
@@ -4071,6 +4137,20 @@ export class FontButlerService {
         )
       }
     }
+  }
+
+  private uninstallAndUnlinkRefusal(entry: CatalogEntry): string | null {
+    if (entry.retailRelativePath) return 'Displaay retail fonts stay in the collection.'
+    if (entry.customFamilyName || !isExternalSource(entry)) {
+      return 'This font has no source link to remove.'
+    }
+    if (
+      entry.previewOnly ||
+      (entry.status !== 'installed' && entry.status !== 'outdated' && entry.status !== 'deactivated')
+    ) {
+      return 'Only installed fonts can be uninstalled and unlinked.'
+    }
+    return null
   }
 
   private assertPinnedInstall(entry: CatalogEntry): void {

@@ -126,6 +126,15 @@ export function uninstallableIds(group: { entries: CatalogEntry[] }): string[] {
   return uninstallableEntries(group).map((entry) => entry.id)
 }
 
+/** Installed styles that also keep a separate source link. Unlink removes both. */
+export function uninstallAndUnlinkEntries(group: { entries: CatalogEntry[] }): CatalogEntry[] {
+  return uninstallableEntries(group).filter((entry) => entryHasTrackedSource(entry))
+}
+
+export function uninstallAndUnlinkIds(group: { entries: CatalogEntry[] }): string[] {
+  return uninstallAndUnlinkEntries(group).map((entry) => entry.id)
+}
+
 export function repairableIds(group: { entries: CatalogEntry[] }): string[] {
   return repairableEntries(group).map((entry) => entry.id)
 }

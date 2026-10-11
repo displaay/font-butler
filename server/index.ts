@@ -541,6 +541,22 @@ app.post('/api/uninstall', async (c) => {
   }
 })
 
+app.post('/api/uninstall-unlink', async (c) => {
+  const body = await c.req.json<{ id?: string; ids?: string[] }>()
+  const ids = body.ids?.length ? body.ids : body.id ? [body.id] : []
+  if (ids.length === 0) {
+    return c.json({ error: 'Missing id or ids' }, 400)
+  }
+  try {
+    return c.json(await service.uninstallAndUnlinkMany(ids))
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : 'Could not uninstall and unlink that font' },
+      400,
+    )
+  }
+})
+
 app.post('/api/deactivate', async (c) => {
   const body = await c.req.json<{ id?: string; ids?: string[] }>()
   try {

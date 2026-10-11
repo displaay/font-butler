@@ -576,3 +576,4 @@ export type BatchProgressAction =
   | 'deactivate'
   | 'reinstall'
   | 'forget'
+  | 'uninstall-unlink'

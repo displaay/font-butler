@@ -501,6 +501,51 @@ test('uninstall activity names each file instead of only the family', async () =
   })
 })
 
+test('uninstall and unlink removes the catalog row and keeps the source file', async () => {
+  await withService(async (service, paths) => {
+    const regular = path.join(paths.dataRoot, 'Fenul-Regular.otf')
+    const bold = path.join(paths.dataRoot, 'Fenul-Bold.otf')
+    writeTestFont(regular, 'Fenul', 'Fenul-Regular', { style: 'Regular', format: 'otf' })
+    writeTestFont(bold, 'Fenul', 'Fenul-Bold', { style: 'Bold', format: 'otf', weight: 700 })
+    const imported = await service.importPaths([regular, bold])
+    const installed = await service.installMany(imported.entries.map((item) => item.id))
+    const installedPaths = installed.map((item) => item.installedPath).filter((item): item is string => Boolean(item))
+    assert.ok(installedPaths.length > 0)
+    const result = await service.uninstallAndUnlinkMany(imported.entries.map((item) => item.id))
+    assert.equal(result.removed, 2)
+    assert.equal(service.listCatalog().length, 0)
+    assert.equal(fs.existsSync(regular), true)
+    assert.equal(fs.existsSync(bold), true)
+    for (const installedPath of installedPaths) {
+      assert.equal(fs.existsSync(installedPath), false)
+    }
+    const operations = service.listActivity()
+    assert.equal(operations.some((item) => item.action === 'uninstall'), false)
+    const operation = operations.find((item) => item.action === 'uninstall-unlink')
+    assert.equal(operation?.familyName, 'Fenul')
+    assert.equal(operation?.undoable, false)
+    assert.deepEqual(
+      operation?.items.map((item) => item.label).sort(),
+      ['Bold · OTF', 'Regular · OTF'],
+    )
+  })
+})
+
+test('uninstall and unlink refuses a user font that has no source link', async () => {
+  await withService(async (service, paths) => {
+    const font = path.join(paths.userFontsDir, 'Plain.ttf')
+    writeTestFont(font, 'Plain', 'Plain-Regular')
+    await service.init()
+    const [entry] = service.listCatalog()
+    assert.ok(entry)
+    await assert.rejects(() => service.uninstallAndUnlinkMany([entry.id]), /source link/)
+    assert.equal(service.listCatalog().length, 1)
+    assert.equal(service.listCatalog()[0]?.status, 'installed')
+    assert.equal(fs.existsSync(font), true)
+    assert.equal(service.listActivity().some((item) => item.action === 'uninstall-unlink'), false)
+  })
+})
+
 test('uninstall retains enough data for undo', async () => {
   await withService(async (service, paths) => {
     const source = path.join(paths.dataRoot, 'UndoUninstall.ttf')

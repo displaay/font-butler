@@ -1409,6 +1409,8 @@ function AppShell() {
     deleteFilesSelected,
     uninstallAndRemoveFor,
     uninstallAndRemoveSelected,
+    uninstallAndUnlinkFor,
+    uninstallAndUnlinkSelected,
     uninstallSelected,
     uninstallFormatFrom,
     swapFormatFrom,
@@ -2413,6 +2415,13 @@ function AppShell() {
                             }
                             void uninstallAndRemoveFor([group])
                           }}
+                          onUninstallAndUnlink={() => {
+                            if (useBatch) {
+                              void uninstallAndUnlinkSelected()
+                              return
+                            }
+                            void uninstallAndUnlinkFor([group])
+                          }}
                           onUninstallFromAdobe={() =>
                             useBatch
                               ? void uninstallFromAdobeFor(catalogSelection)
@@ -2555,6 +2564,7 @@ function AppShell() {
                   onActivate={() => void activateSelected()}
                   onDeactivate={() => void deactivateSelected()}
                   onUninstall={() => void uninstallSelected()}
+                  onUninstallAndUnlink={() => void uninstallAndUnlinkSelected()}
                   onUninstallAndRemove={() => void uninstallAndRemoveSelected()}
                   onUninstallFromAdobe={() => void uninstallFromAdobeFor(catalogSelection)}
                   onReinstall={() => void reinstallSelected()}
@@ -2723,6 +2733,10 @@ function AppShell() {
                 if (!selectedGroup) return
                 void uninstallAndRemoveFor([selectedGroup])
               }}
+              onUninstallAndUnlink={() => {
+                if (!selectedGroup) return
+                void uninstallAndUnlinkFor([selectedGroup])
+              }}
               onUninstallFromAdobe={() => selectedGroup && void uninstallFromAdobeFor([selectedGroup])}
               onDeactivate={() =>
                 selectedGroup &&
@@ -2838,6 +2852,7 @@ function AppShell() {
                         onActivate: () => void activateSelected(),
                         onDeactivate: () => void deactivateSelected(),
                         onUninstall: () => void uninstallSelected(),
+                        onUninstallAndUnlink: () => void uninstallAndUnlinkSelected(),
                         onUninstallAndRemove: () => void uninstallAndRemoveSelected(),
                         onReinstall: () => void reinstallSelected(),
                         onForget: () => void forgetSelected(),
@@ -2853,6 +2868,7 @@ function AppShell() {
                         onActivate: () => void activateSelected(),
                         onDeactivate: () => void deactivateSelected(),
                         onUninstall: () => void uninstallSelected(),
+                        onUninstallAndUnlink: () => void uninstallAndUnlinkSelected(),
                         onUninstallAndRemove: () => void uninstallAndRemoveSelected(),
                         onUninstallFromAdobe: () => void uninstallFromAdobeFor(catalogSelection),
                         onReinstall: () => void reinstallSelected(),
