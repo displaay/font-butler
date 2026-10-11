@@ -1,5 +1,8 @@
-import { useEffect, useRef, type DragEvent as ReactDragEvent, type ReactNode, type RefObject } from 'react'
+import { useEffect, useRef, type ReactNode, type RefObject } from 'react'
 import { hasFontButlerEntries } from '@/lib/projects'
+
+/** Hide a stuck overlay once file dragover events stop arriving. */
+const DRAG_OVER_IDLE_MS = 300
 
 function transferHasFiles(dataTransfer: DataTransfer | null): boolean {
   if (!dataTransfer) return false
@@ -29,35 +32,75 @@ export function FileDropSurface({
   onDraggingChange: (dragging: boolean) => void
   onDrop: (dataTransfer: DataTransfer) => void
 }) {
+  const rootRef = useRef<HTMLDivElement>(null)
   const depthRef = useRef(0)
   const draggingRef = useRef(dragging)
   const onDraggingChangeRef = useRef(onDraggingChange)
+  const onDropRef = useRef(onDrop)
+  const watchdogRef = useRef<number | undefined>(undefined)
 
   function reset() {
+    window.clearTimeout(watchdogRef.current)
     depthRef.current = 0
     if (!draggingRef.current) return
     draggingRef.current = false
     onDraggingChangeRef.current(false)
   }
 
-  function accepts(dataTransfer: DataTransfer | null): boolean {
-    if (ignoreRef?.current) return false
-    if (!dataTransfer || hasFontButlerEntries(dataTransfer)) return false
-    return transferHasFiles(dataTransfer)
-  }
-
   useEffect(() => {
     draggingRef.current = dragging
     onDraggingChangeRef.current = onDraggingChange
+    onDropRef.current = onDrop
     if (!dragging) depthRef.current = 0
-  }, [dragging, onDraggingChange])
+  }, [dragging, onDraggingChange, onDrop])
 
   useEffect(() => {
+    const accepts = (dataTransfer: DataTransfer | null) => {
+      if (ignoreRef?.current) return false
+      if (!dataTransfer || hasFontButlerEntries(dataTransfer)) return false
+      return transferHasFiles(dataTransfer)
+    }
+    const show = () => {
+      window.clearTimeout(watchdogRef.current)
+      watchdogRef.current = window.setTimeout(() => {
+        depthRef.current = 0
+        if (!draggingRef.current) return
+        draggingRef.current = false
+        onDraggingChangeRef.current(false)
+      }, DRAG_OVER_IDLE_MS)
+      if (draggingRef.current) return
+      draggingRef.current = true
+      onDraggingChangeRef.current(true)
+    }
     const clear = () => {
+      window.clearTimeout(watchdogRef.current)
       depthRef.current = 0
       if (!draggingRef.current) return
       draggingRef.current = false
       onDraggingChangeRef.current(false)
+    }
+    const onEnter = (event: DragEvent) => {
+      if (!accepts(event.dataTransfer)) return
+      event.preventDefault()
+      depthRef.current += 1
+      show()
+    }
+    const onOver = (event: DragEvent) => {
+      if (!accepts(event.dataTransfer)) return
+      event.preventDefault()
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+      if (draggingRef.current) show()
+    }
+    const onLeave = (event: DragEvent) => {
+      const next = event.relatedTarget
+      const root = rootRef.current
+      const inside = next instanceof Node && Boolean(root && (next === root || root.contains(next)))
+      if (next == null || !inside) {
+        clear()
+        return
+      }
+      depthRef.current = Math.max(0, depthRef.current - 1)
+      if (depthRef.current === 0) clear()
     }
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') clear()
@@ -68,59 +111,40 @@ export function FileDropSurface({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') clear()
     }
-    window.addEventListener('drop', clear)
-    window.addEventListener('dragend', clear)
-    window.addEventListener('blur', clear)
-    document.addEventListener('visibilitychange', onVisibility)
-    window.addEventListener('mousemove', onMouseMove)
-    window.addEventListener('keydown', onKeyDown)
-    window.addEventListener('click', clear)
+    const capture = true
+    window.addEventListener('dragenter', onEnter, capture)
+    window.addEventListener('dragover', onOver, capture)
+    window.addEventListener('dragleave', onLeave, capture)
+    window.addEventListener('drop', clear, capture)
+    window.addEventListener('dragend', clear, capture)
+    window.addEventListener('blur', clear, capture)
+    document.addEventListener('visibilitychange', onVisibility, capture)
+    window.addEventListener('mousemove', onMouseMove, capture)
+    window.addEventListener('keydown', onKeyDown, capture)
+    window.addEventListener('click', clear, capture)
     return () => {
-      window.removeEventListener('drop', clear)
-      window.removeEventListener('dragend', clear)
-      window.removeEventListener('blur', clear)
-      document.removeEventListener('visibilitychange', onVisibility)
-      window.removeEventListener('mousemove', onMouseMove)
-      window.removeEventListener('keydown', onKeyDown)
-      window.removeEventListener('click', clear)
+      window.clearTimeout(watchdogRef.current)
+      window.removeEventListener('dragenter', onEnter, capture)
+      window.removeEventListener('dragover', onOver, capture)
+      window.removeEventListener('dragleave', onLeave, capture)
+      window.removeEventListener('drop', clear, capture)
+      window.removeEventListener('dragend', clear, capture)
+      window.removeEventListener('blur', clear, capture)
+      document.removeEventListener('visibilitychange', onVisibility, capture)
+      window.removeEventListener('mousemove', onMouseMove, capture)
+      window.removeEventListener('keydown', onKeyDown, capture)
+      window.removeEventListener('click', clear, capture)
     }
-  }, [])
-
-  function onDragEnter(event: ReactDragEvent<HTMLDivElement>) {
-    if (!accepts(event.dataTransfer)) return
-    event.preventDefault()
-    depthRef.current += 1
-    if (!draggingRef.current) {
-      draggingRef.current = true
-      onDraggingChange(true)
-    }
-  }
-
-  function onDragOver(event: ReactDragEvent<HTMLDivElement>) {
-    if (!accepts(event.dataTransfer)) return
-    event.preventDefault()
-    event.dataTransfer.dropEffect = 'copy'
-  }
-
-  function onDragLeave(event: ReactDragEvent<HTMLDivElement>) {
-    if (event.relatedTarget == null) {
-      reset()
-      return
-    }
-    depthRef.current = Math.max(0, depthRef.current - 1)
-    if (depthRef.current === 0) reset()
-  }
+  }, [ignoreRef])
 
   return (
     <div
+      ref={rootRef}
       className={className}
-      onDragEnter={onDragEnter}
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
       onDrop={(event) => {
         event.preventDefault()
         reset()
-        onDrop(event.dataTransfer)
+        onDropRef.current(event.dataTransfer)
       }}
     >
       {children}
