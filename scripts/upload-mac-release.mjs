@@ -14,11 +14,17 @@ export const MAC_RELEASE_NOTES = `This build is signed with Developer ID and not
 
 If you are on Font Buttler 0.3.8 or earlier, download this version manually once and replace the app. Those builds were ad-hoc signed, and their Update badge does not install. After this signed version is the one you run, later releases install from the Update badge next to Settings.
 
-Reinstalling a font in ~/Library/Fonts no longer clears the macOS font cache, so Figma and other apps keep seeing your fonts after an automatic reinstall. The file is replaced in place for macOS to pick up, and a reinstall counts as done only after a fresh check finds the font (#61).
+Uninstall and unlink removes an installed font from the library and leaves its source file on disk. It is on the font card menu, the selection bar, and the inspector, asks first, and is recorded in Activity. Watch folders do not import that file again until you add it back (#73).
 
-Clear font caches is now a manual action in Settings. It asks first, because user fonts will not activate until you log out, then offers Log out now or Later (#61).
+The Activity count in the sidebar is hidden until you check Show total (#73).
 
-If Log out now fails, Font Buttler shows a dialog with the error instead of doing nothing (#61).`
+Settings shows a Trials label for the Displaay retail trial and Valid token once a retail token is checked (#73).
+
+The drop overlay appears only when you drag font files, and no longer gets stuck (#73).
+
+Variable fonts that mix upright and italic instances, such as Bagoss Collection VF, morph smoothly on hover (#73).
+
+Retail sync, updates, and uninstalls are recorded in Activity (#73).`
 
 export function missingTagMessage(tag) {
   return `Tag ${tag} is not on origin. Create it from the release commit and push it before uploading:\n  git tag ${tag}\n  git push origin ${tag}`
