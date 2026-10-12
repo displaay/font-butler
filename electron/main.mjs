@@ -1769,7 +1769,7 @@ async function listenForApiEvents() {
   while (!isQuitting) {
     try {
       const token = await ensureApiToken()
-      const response = await fetch(`${API}/api/events`, {
+      const response = await fetch(`${API}/api/events?client=background`, {
         headers: { Authorization: `Bearer ${token}` },
       })
       if (!response.ok || !response.body) {

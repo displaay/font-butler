@@ -18,7 +18,7 @@ import {
   upsertEntry,
 } from './catalog.ts'
 import { getOrCreateApiToken } from './auth.ts'
-import { cacheClearLogoutProbe, loadBuildIdentity } from './build-identity.ts'
+import { cacheClearLogoutProbe, loadBuildIdentity, loadFaultSwitchTestBuild } from './build-identity.ts'
 import { readFontPreviewBytes } from './font-bytes.ts'
 import {
   assignActivationWarning,
@@ -95,6 +95,13 @@ import {
   type FontAnalysis,
 } from './font-analysis.ts'
 import { fingerprintFile, tryFingerprintFile } from './fingerprint.ts'
+import {
+  allowUnlinkedSource,
+  isUnlinkedSource,
+  recoverUnlinkedSourcesSafely,
+  rememberUnlinkedSource,
+  UnlinkedListReadError,
+} from './unlinked-sources.ts'
 import {
   reconcileMutationJournals,
   recordMutationDestination,
@@ -388,6 +395,27 @@ export function emitLogoutProbeNotice(message: string, attemptId?: string): void
   })
 }
 
+/** Test seam: runs after a successful uninstall and before the catalog row is forgotten. */
+let unlinkForgetFaultForTest: ((id: string) => void) | undefined
+
+export function setUnlinkForgetFaultForTest(fault: ((id: string) => void) | undefined): void {
+  unlinkForgetFaultForTest = fault
+}
+
+/** `FONT_BUTLER_FAIL` value that fails the forget after an uninstall-and-unlink. */
+const UNLINK_FORGET_AFTER_UNINSTALL_FAULT = 'unlink-forget-after-uninstall'
+
+/**
+ * Test builds only. A release stamp (`testBuild: false`) ignores the env var,
+ * so a packaged release cannot be forced down the partial unlink path.
+ */
+function throwUnlinkForgetAfterUninstallFault(): void {
+  if (process.env.FONT_BUTLER_FAIL !== UNLINK_FORGET_AFTER_UNINSTALL_FAULT) return
+  // Strict stamp: missing or corrupt packaged identity stays off, unlike the logout probe.
+  if (!loadFaultSwitchTestBuild()) return
+  throw new Error('Could not remove the font from the list.')
+}
+
 export class FontButlerService {
   readonly paths: AppPaths
   private autoReinstallTimer: ReturnType<typeof setTimeout> | null = null
@@ -475,6 +503,7 @@ export class FontButlerService {
   /** Fast path: validate catalog and apply cheap on-disk fixes only. */
   async initCatalogPhase(): Promise<void> {
     ensureDirs(this.paths)
+    recoverUnlinkedSourcesSafely(this.paths)
     const recovered = await reconcileMutationJournals(this.paths, getFontNative())
     if (recovered.length) {
       emitCatalog(this.paths)
@@ -569,6 +598,7 @@ export class FontButlerService {
       if (choice === 'skip') {
         removeDuplicateWarning(this.paths, id)
       } else if (choice === 'replace') {
+        allowUnlinkedSource(this.paths, warning.path)
         const targetId = warning.activeEntryId ?? warning.conflictingEntryIds[0]
         if (!targetId) throw new Error('There is no active copy to replace.')
         const catalog = loadCatalog(this.paths)
@@ -587,9 +617,11 @@ export class FontButlerService {
         entries.push(await this.installEntry(targetId))
         removeDuplicateWarning(this.paths, id)
       } else if (choice === 'add-inactive') {
+        allowUnlinkedSource(this.paths, warning.path)
         entries.push(this.importOneUnlocked(warning.path, { forceNew: true }))
         removeDuplicateWarning(this.paths, id)
       } else if (choice === 'switch') {
+        allowUnlinkedSource(this.paths, warning.path)
         const imported = this.importOneUnlocked(warning.path, { forceNew: true })
         const occupying = occupyingSiblings(loadCatalog(this.paths).entries, imported, this.paths)[0]
         const switched = await this.switchToEntry(imported.id)
@@ -603,6 +635,7 @@ export class FontButlerService {
         if (!familyName) {
           throw new Error('Choose a family name to Install as…')
         }
+        allowUnlinkedSource(this.paths, warning.path)
         const imported = this.importOneUnlocked(warning.path, { forceNew: true })
         entries.push(await this.installEntry(imported.id, familyName))
         removeDuplicateWarning(this.paths, id)
@@ -834,13 +867,16 @@ export class FontButlerService {
     return inspectDropPaths(paths)
   }
 
-  async importPaths(filePaths: string[]): Promise<{
+  async importPaths(filePaths: string[], options?: { watch?: boolean }): Promise<{
     entries: CatalogEntry[]
     errors: string[]
     ignored: number
   }> {
     return runCatalogTask(async () => {
       const expanded = expandImportPaths(filePaths)
+      if (!options?.watch) {
+        for (const filePath of expanded.files) allowUnlinkedSource(this.paths, filePath)
+      }
       const errors = [...expanded.errors]
       const imported: CatalogEntry[] = []
       const catalog = loadCatalog(this.paths)
@@ -914,6 +950,7 @@ export class FontButlerService {
   async openWith(filePath: string): Promise<CatalogEntry> {
     return runCatalogTask(async () => {
       const resolved = path.resolve(filePath)
+      allowUnlinkedSource(this.paths, resolved)
       if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
         return this.openFolderUnlocked(resolved)
       }
@@ -1201,6 +1238,119 @@ export class FontButlerService {
         return result
       }
       return entries
+    })
+  }
+
+  async uninstallAndUnlinkMany(
+    ids: string[],
+  ): Promise<{ removed: number; partial?: boolean; error?: string; unreadableList?: number }> {
+    return runCatalogTask(async () => {
+      const unique = [...new Set(ids.filter((id) => id))]
+      if (unique.length === 0) {
+        throw new Error('Missing id or ids')
+      }
+      const items: OperationItem[] = []
+      const familyNames = new Map<string, string>()
+      const errors: string[] = []
+      let removed = 0
+      let unreadableList = 0
+      let familyName: string | undefined
+      let mutated = false
+      let partial = false
+      const progress = this.familyProgress('uninstall-unlink', unique)
+      progress.start()
+      for (const id of unique) {
+        const current = findById(loadCatalog(this.paths), id)
+        if (current) {
+          const name = displayFamily(current)
+          familyNames.set(id, name)
+          familyName ??= name
+        }
+        try {
+          if (!current) throw new Error('Font is not in the library.')
+          const refusal = this.uninstallAndUnlinkRefusal(current)
+          if (refusal) throw new Error(refusal)
+          const label = displayEntry(current)
+          const sourcePath = current.sourcePath
+          await this.uninstallEntry(id)
+          mutated = true
+          try {
+            unlinkForgetFaultForTest?.(id)
+            const after = findById(loadCatalog(this.paths), id)
+            if (after) await this.forgetEntry(id, { afterUninstall: true })
+            rememberUnlinkedSource(this.paths, sourcePath)
+            removed += 1
+            items.push({
+              id: crypto.randomUUID(),
+              entryId: id,
+              label,
+              outcome: 'succeeded',
+            })
+          } catch (error) {
+            partial = true
+            const reason = error instanceof Error ? error.message : String(error)
+            if (error instanceof UnlinkedListReadError) {
+              removed += 1
+              unreadableList += 1
+              errors.push(reason)
+              items.push({
+                id: crypto.randomUUID(),
+                entryId: id,
+                label,
+                outcome: 'succeeded',
+                reason,
+              })
+            } else {
+              const message = `Uninstalled ${label}, but it is still listed. ${reason}`
+              errors.push(message)
+              items.push({
+                id: crypto.randomUUID(),
+                entryId: id,
+                label,
+                outcome: 'failed',
+                reason: message,
+              })
+            }
+          }
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error)
+          errors.push(reason)
+          if (current) {
+            items.push(this.operationItem(current, 'failed', reason))
+          } else {
+            items.push({
+              id: crypto.randomUUID(),
+              entryId: id,
+              label: id,
+              outcome: 'failed',
+              reason,
+            })
+          }
+        }
+        await progress.mark(id)
+      }
+      if (removed > 0 || mutated) {
+        const operation = this.commitOperation('uninstall-unlink', items, familyName, false, familyNames)
+        if (operation && partial) {
+          operation.outcome = 'partial'
+          upsertOperation(this.paths, operation)
+          emitEvent({ type: 'operations', operations: loadOperations(this.paths) })
+        }
+      }
+      await syncWatchers(this.paths)
+      emitCatalog(this.paths)
+      if (removed === 0 && !partial) {
+        throw new Error(errors[0] ?? 'Could not uninstall and unlink that font.')
+      }
+      if (partial) {
+        return {
+          removed,
+          partial: true,
+          error: errors.join('\n') || 'Could not uninstall and unlink that font.',
+          ...(unreadableList > 0 ? { unreadableList } : {}),
+        }
+      }
+      return { removed }
     })
   }
 
@@ -2136,6 +2286,7 @@ export class FontButlerService {
           })
           continue
         }
+        if (item.path) allowUnlinkedSource(this.paths, item.path)
         try {
           let relatedEntryId: string | undefined
           if (item.classification === 'unsupported') {
@@ -3721,8 +3872,9 @@ export class FontButlerService {
 
   private async forgetEntry(
     id: string,
-    options: { deleteFiles?: boolean } = {},
+    options: { deleteFiles?: boolean; afterUninstall?: boolean } = {},
   ): Promise<CatalogEntry> {
+    if (options.afterUninstall) throwUnlinkForgetAfterUninstallFault()
     const catalog = loadCatalog(this.paths)
     const entry = findById(catalog, id)
     if (!entry) {
@@ -3767,6 +3919,7 @@ export class FontButlerService {
     const catalog = loadCatalog(this.paths)
     for (let index = 0; index < expanded.files.length; index += 1) {
       const filePath = expanded.files[index]!
+      allowUnlinkedSource(this.paths, filePath)
       try {
         imported.push(await this.importAnalyzedUnlocked(filePath, { catalog, persist: false }))
       } catch (error) {
@@ -4073,6 +4226,32 @@ export class FontButlerService {
     }
   }
 
+  private uninstallAndUnlinkRefusal(entry: CatalogEntry): string | null {
+    if (entry.retailRelativePath) return 'Displaay retail fonts stay in the collection.'
+    if (entry.customFamilyName || !isExternalSource(entry)) {
+      return 'This font has no source link to remove.'
+    }
+    if (
+      entry.previewOnly ||
+      (entry.status !== 'installed' && entry.status !== 'outdated' && entry.status !== 'deactivated')
+    ) {
+      return 'Only installed fonts can be uninstalled and unlinked.'
+    }
+    const adobe = copyAt(entry, 'adobe-shared')
+    if (copyCannotBeRemoved(adobe?.path) || copyCannotBeRemoved(adobe?.parkedPath)) {
+      return 'The Adobe copy is still on disk, so this font cannot be unlinked.'
+    }
+    if (copyCannotBeRemoved(entry.installedPath) || copyCannotBeRemoved(entry.disabledPath)) {
+      return 'The installed copy is still on disk, so this font cannot be unlinked.'
+    }
+    try {
+      this.assertPinnedInstall(entry)
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error)
+    }
+    return null
+  }
+
   private assertPinnedInstall(entry: CatalogEntry): void {
     const pin = this.activeProjectPin(entry.id)
     if (!pin) return
@@ -4204,7 +4383,7 @@ export class FontButlerService {
               listInboxFontFiles(folder.root).filter((filePath) => !isExcluded(folder, filePath)),
             ),
         ),
-      ].filter((filePath) => !known.has(filePath))
+      ].filter((filePath) => !known.has(filePath) && !isUnlinkedSource(this.paths, filePath))
       if (discovered.length) {
         await runInboxImportBatch(discovered, () => this.importInboxFiles(discovered), {
           immediate: true,
@@ -4865,6 +5044,22 @@ export class FontButlerService {
     upsertOperation(this.paths, operation)
     emitEvent({ type: 'operations', operations: loadOperations(this.paths) })
     return operation
+  }
+}
+
+/** True when a managed copy is still on disk and its folder cannot be written, so unlink would fail. */
+function copyCannotBeRemoved(filePath: string | undefined): boolean {
+  if (!filePath) return false
+  try {
+    if (!fs.statSync(filePath).isFile()) return false
+  } catch {
+    return false
+  }
+  try {
+    fs.accessSync(path.dirname(filePath), fs.constants.W_OK)
+    return false
+  } catch {
+    return true
   }
 }
 

@@ -9,6 +9,8 @@ import {
   emptyImportError,
   importDoneCopy,
   progressActionCopy,
+  uninstallAndUnlinkConfirm,
+  verbForBatchAction,
 } from './notify.ts'
 
 test('actionCopy names the family and uses an ellipsis while pending', () => {
@@ -34,6 +36,20 @@ test('actionCopy names source files for delete and uninstall-and-delete', () => 
     pending: 'Uninstalling and deleting sources of Recoleta…',
     done: 'Uninstalled and deleted sources of Recoleta',
   })
+})
+
+test('uninstall and unlink confirms that the source file stays', () => {
+  assert.equal(
+    uninstallAndUnlinkConfirm([{ familyName: 'Fenul' }]),
+    'Uninstall Fenul and remove its source link? It will disappear from Font Buttler. The source file stays on disk.',
+  )
+  assert.match(uninstallAndUnlinkConfirm([{ familyName: 'Fenul' }, { familyName: 'Reckless' }]), /2 fonts/)
+  assert.deepEqual(actionCopyFor('uninstallAndUnlink', [{ familyName: 'Fenul' }]), {
+    pending: 'Uninstalling and unlinking Fenul…',
+    done: 'Uninstalled and unlinked Fenul',
+  })
+  assert.equal(verbForBatchAction('uninstall-unlink'), 'uninstallAndUnlink')
+  assert.equal(progressActionCopy('uninstallAndUnlink', 1, 2), 'Uninstalling and unlinking… 1/2')
 })
 
 test('actionCopyFor uses a live count when more than one family is selected', () => {

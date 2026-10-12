@@ -270,6 +270,16 @@ export const api = {
     json<{ entries: CatalogEntry[]; operationId?: string; undoable?: boolean }>(
       post('/api/uninstall', { ids, deleteSource: options?.deleteSource }),
     ),
+  uninstallAndUnlink: (id: string) =>
+    json<{ removed: number; partial?: boolean; error?: string; unreadableList?: number }>(
+      post('/api/uninstall-unlink', { id }),
+    ),
+  uninstallAndUnlinkMany: (ids: string[]) =>
+    json<{ removed: number; partial?: boolean; error?: string; unreadableList?: number }>(
+      post('/api/uninstall-unlink', { ids }),
+    ),
+  acknowledgeUnlinkedListReset: () =>
+    json<{ ok: boolean }>(post('/api/notices/unlinked-list-reset/ack', {})),
   deactivate: (id: string) => json<{ entry: CatalogEntry }>(post('/api/deactivate', { id })),
   deactivateMany: (ids: string[]) =>
     json<{ entries: CatalogEntry[] }>(post('/api/deactivate', { ids })),
@@ -533,7 +543,7 @@ export function subscribeEvents(onEvent: (event: unknown) => void): () => void {
     while (!abort.signal.aborted) {
       try {
         await ensureToken()
-        const response = await fetch('/api/events', {
+        const response = await fetch('/api/events?client=window', {
           headers: authHeaders(),
           signal: abort.signal,
         })
@@ -616,7 +626,7 @@ export function isActionProgressEvent(
   value: unknown,
 ): value is {
   type: 'action-progress'
-  action: 'install' | 'uninstall' | 'activate' | 'deactivate' | 'reinstall' | 'forget'
+  action: 'install' | 'uninstall' | 'activate' | 'deactivate' | 'reinstall' | 'forget' | 'uninstall-unlink'
   done: number
   total: number
 } {

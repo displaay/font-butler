@@ -105,6 +105,14 @@ test('onboarding retail lists show and install choices without a second sync con
   assert.equal(settings.includes('>Trial<'), false)
 })
 
+test('retail labels stay hidden until token status has loaded', () => {
+  const html = markup({ status: null, deferInstall: true })
+  const heading = html.slice(0, html.indexOf('aria-label="Displaay retail sync"'))
+  assert.match(heading, /Displaay retail/)
+  assert.equal(heading.includes('>Trials<'), false)
+  assert.equal(html.includes('>Valid token<'), false)
+})
+
 test('retail font list stays hidden until sync is on', () => {
   const html = markup({
     status: status({ enabled: false, fonts: [], mode: null, pending: 0, checkedAt: null }),
@@ -112,7 +120,7 @@ test('retail font list stays hidden until sync is on', () => {
   })
   const heading = html.slice(0, html.indexOf('aria-label="Displaay retail sync"'))
   assert.match(heading, /Displaay retail/)
-  assert.match(heading, />Trial</)
+  assert.match(heading, />Trials</)
   assert.equal(html.includes('Reckless'), false)
   assert.equal(html.includes('Worker token'), false)
   assert.match(html, /aria-label="Displaay retail sync"/)
@@ -126,6 +134,27 @@ test('a confirmed retail collection hides the onboarding trial heading', () => {
   const heading = html.slice(0, html.indexOf('aria-label="Displaay retail sync"'))
   assert.match(heading, /Displaay retail/)
   assert.equal(heading.includes('>Trial<'), false)
+  assert.equal(heading.includes('>Trials<'), false)
+})
+
+test('a saved retail token replaces the trials heading with a valid token label', () => {
+  const html = markup({
+    status: status({ hasToken: true, mode: 'retail', fonts: [], pending: 0 }),
+    deferInstall: false,
+  })
+  const heading = html.slice(0, html.indexOf('aria-label="Displaay retail sync"'))
+  assert.match(heading, /Displaay retail/)
+  assert.equal(heading.includes('>Trials<'), false)
+  const advanced = html.slice(html.indexOf('>Advanced<'))
+  assert.match(advanced, />Valid token</)
+  assert.equal(html.includes('>Trials<'), false)
+})
+
+test('settings shows trials on the retail heading until a token is valid', () => {
+  const html = markup({ deferInstall: false })
+  const heading = html.slice(0, html.indexOf('aria-label="Displaay retail sync"'))
+  assert.match(heading, />Trials</)
+  assert.equal(html.includes('>Valid token<'), false)
 })
 
 test('onboarding embeds the Settings retail pane and does not sync while it is open', async () => {

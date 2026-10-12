@@ -45,6 +45,7 @@ import {
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
 import {
+  activityCountVisible,
   readShowTotals,
   setShowTotal,
   watchShowTotalId,
@@ -318,7 +319,7 @@ export function LibraryFilterGroups({
   )
 }
 
-function SidebarItem({
+export function SidebarItem({
   active,
   icon: Icon,
   label,
@@ -851,13 +852,16 @@ export function Sidebar({
                       ? counts.updates + (searching ? 0 : retailPending)
                       : counts.updates
               }
-              showTotal={item.id === 'updates' || searching || Boolean(showTotals[item.id])}
+              showTotal={
+                item.id === 'activity'
+                  ? activityCountVisible(Boolean(showTotals.activity), searching)
+                  : item.id === 'updates' || searching || Boolean(showTotals[item.id])
+              }
               lockTotal={item.id === 'updates'}
               onShowTotalChange={(value) => changeShowTotal(item.id, value)}
               onClick={() => onTabChange(item.id)}
               className="flex-1 md:flex-none"
               badgeTone={item.id === 'updates' ? 'warn' : 'muted'}
-              unreadCount={item.id === 'activity' && !searching ? activityUnread : 0}
               hoverAction={
                 item.id === 'updates' && counts.updates > 0 && onReinstallAllUpdates
                   ? {

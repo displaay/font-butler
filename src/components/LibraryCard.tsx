@@ -65,6 +65,7 @@ export const LibraryCard = memo(function LibraryCard({
   onLocateSource,
   onUninstall,
   onUninstallFormat,
+  onUninstallAndUnlink,
   onUninstallAndRemove,
   onUninstallFromAdobe,
   onDeactivate,
@@ -121,6 +122,7 @@ export const LibraryCard = memo(function LibraryCard({
   onLocateSource?: () => void
   onUninstall: () => void
   onUninstallFormat: (format: string) => void
+  onUninstallAndUnlink?: () => void
   onUninstallAndRemove: () => void
   onUninstallFromAdobe?: () => void
   onDeactivate: () => void
@@ -558,6 +560,7 @@ export const LibraryCard = memo(function LibraryCard({
           onReinstall={onReinstall}
           onDeactivate={onDeactivate}
           onUninstall={onUninstall}
+          onUninstallAndUnlink={onUninstallAndUnlink}
           onUninstallAndRemove={onUninstallAndRemove}
           onUninstallFromAdobe={onUninstallFromAdobe}
           onActivate={onActivate}

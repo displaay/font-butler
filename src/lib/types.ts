@@ -141,7 +141,7 @@ export type Notice = {
   message: string
   entryId?: string
   operationId?: string
-  source?: 'watch' | 'logout' | 'logout-waiting' | 'logout-probe'
+  source?: 'watch' | 'logout' | 'logout-waiting' | 'logout-probe' | 'unlinked-list'
   /** One logout or probe flight. A joined click reuses it. */
   attemptId?: string
 }
@@ -241,11 +241,26 @@ export type OperationItem = {
   previousEntry?: CatalogEntry
 }
 
+export type OperationTrigger =
+  | 'import'
+  | 'watch'
+  | 'menu-bar'
+  | 'project'
+  | 'repair'
+  | 'relink'
+  | 'restore'
+  | 'undo'
+  | 'manual'
+  | 'open-with'
+  | 'startup'
+  | 'retail'
+  | 'retail-auto'
+
 export type Operation = {
   id: string
   startedAt: number
   finishedAt?: number
-  trigger: string
+  trigger: OperationTrigger
   action: string
   familyName?: string
   items: OperationItem[]
@@ -457,4 +472,6 @@ export {
   retailSyncingStatusMessage,
   retailUpdateCount,
   retailHasLiveUpdates,
+  retailHeadingShowsTrials,
+  savedRetailTokenIsValid,
 } from '../../shared/retail'

@@ -65,7 +65,7 @@ export function createOperation(input: {
 }
 
 export function isBackgroundActivityTrigger(trigger: OperationTrigger | string): boolean {
-  return trigger === 'watch' || trigger === 'startup'
+  return trigger === 'watch' || trigger === 'startup' || trigger === 'retail-auto'
 }
 
 export function findOperationByIdempotency(paths: AppPaths, key: string | undefined): Operation | undefined {

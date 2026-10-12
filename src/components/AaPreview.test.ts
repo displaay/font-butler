@@ -93,3 +93,125 @@ test('a failed preview shows a retry control and does not paint the unloaded fam
     setPreviewLoadTimeoutForTests(PREVIEW_LOAD_TIMEOUT_MS)
   }
 })
+
+test('a roman plus italic variable family morphs the upright cut instead of cross-fading', async () => {
+  const { createElement, act } = await import('react')
+  const { createRoot } = await import('react-dom/client')
+  const { CyclingAaPreview } = await import('./AaPreview.tsx')
+
+  const faces = [
+    { family: 'fc-roman', weight: 300, italic: false, label: 'Light', variation: "'wght' 300", wait: false },
+    { family: 'fc-roman', weight: 700, italic: false, label: 'Bold', variation: "'wght' 700", wait: false },
+    { family: 'fc-italic', weight: 400, italic: true, label: 'Italic', variation: "'wght' 400", wait: false },
+  ]
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  try {
+    await act(async () => {
+      root.render(
+        createElement(CyclingAaPreview, {
+          faces,
+          rest: faces[0],
+          active: true,
+          size: 3,
+          sample: 'Aa',
+        }),
+      )
+    })
+    const preview = host.querySelector('[data-preview-motion]')
+    assert.equal(preview?.getAttribute('data-preview-motion'), 'morph')
+    assert.equal(host.querySelector('[class*="opacity-0"]'), null)
+    assert.match(host.textContent ?? '', /Light|Bold/)
+    assert.equal(host.textContent?.includes('Italic'), false)
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  }
+})
+
+test('hover morph keeps the upright cut of one variable file that also contains italics', async () => {
+  const { createElement, act } = await import('react')
+  const { createRoot } = await import('react-dom/client')
+  const { CyclingAaPreview } = await import('./AaPreview.tsx')
+  const { catalogHoverInstanceRows } = await import('../lib/instances.ts')
+  const { groupCatalog } = await import('../lib/group.ts')
+  type Face = import('../lib/types.ts').FontFaceInfo
+  type Entry = import('../lib/types.ts').CatalogEntry
+
+  function entry(id: string, face: Face): Entry {
+    return {
+      id,
+      sourcePath: `/tmp/${id}.ttf`,
+      sourceMtimeMs: 1,
+      sourceSize: 1,
+      status: 'installed',
+      faces: [face],
+      format: 'ttf',
+      addedAt: 1,
+      updatedAt: 1,
+      installedPath: `/Library/Fonts/${id}.ttf`,
+    }
+  }
+  const bagoss = groupCatalog([
+    entry('bagoss', {
+      familyName: 'Bagoss',
+      styleName: 'Regular',
+      fullName: 'Bagoss Collection VF',
+      postscriptName: 'Bagoss-VF',
+      isVariable: true,
+      instanceCount: 4,
+      instanceNames: ['Condensed Regular', 'Regular', 'Italic', 'Bold Italic'],
+      namedInstances: [
+        { name: 'Condensed Regular', coordinates: { wght: 400, wdth: 75, slnt: 0 } },
+        { name: 'Regular', coordinates: { wght: 400, wdth: 100, slnt: 0 } },
+        { name: 'Italic', coordinates: { wght: 400, wdth: 100, slnt: -12 } },
+        { name: 'Bold Italic', coordinates: { wght: 700, wdth: 100, slnt: -12 } },
+      ],
+      weight: 400,
+      italic: false,
+    }),
+  ])[0]!
+  const hoverRows = catalogHoverInstanceRows(bagoss)
+  const variations = new Set(hoverRows.map((row) => row.variation))
+  assert.ok(variations.size >= 2)
+  assert.equal(hoverRows.some((row) => row.italic), false)
+  const faces = hoverRows.map((row) => ({
+    family: `fc-${row.catalogEntryId}`,
+    weight: row.weight,
+    italic: row.italic,
+    label: row.label,
+    variation: row.variation,
+    wait: false,
+  }))
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  try {
+    await act(async () => {
+      root.render(
+        createElement(CyclingAaPreview, {
+          faces,
+          rest: faces[0]!,
+          active: true,
+          size: 3,
+          sample: 'Aa',
+        }),
+      )
+    })
+    const preview = host.querySelector('[data-preview-motion]')
+    const glyph = host.querySelector('.font-preview') as HTMLElement | null
+    assert.equal(preview?.getAttribute('data-preview-motion'), 'morph')
+    assert.equal(host.querySelector('[class*="opacity-0"]'), null)
+    assert.match(host.textContent ?? '', /Aa/)
+    assert.equal(host.textContent?.includes('Italic'), false)
+    assert.notEqual(glyph?.style.fontVariationSettings, faces[0]!.variation)
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  }
+})

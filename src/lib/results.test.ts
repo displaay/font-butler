@@ -1,0 +1,35 @@
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+import { partialUnlinkKeepsDoneToast, partialUnlinkWarning } from './results.ts'
+
+test('a partial unlink that removed nothing warns instead of claiming success', () => {
+  assert.equal(
+    partialUnlinkWarning({
+      removed: 0,
+      partial: true,
+      error: 'Uninstalled Fenul Regular, but it is still listed. Catalog write failed.',
+    }),
+    'Uninstalled Fenul Regular, but it is still listed. Catalog write failed.',
+  )
+  assert.equal(partialUnlinkWarning({ removed: 0, partial: true }), 'Could not uninstall and unlink that font.')
+  assert.equal(partialUnlinkWarning({ removed: 2, partial: true, error: 'one failed' }), 'one failed')
+  assert.equal(
+    partialUnlinkWarning({ removed: 1, partial: true }),
+    'Uninstalled and unlinked some fonts. Others are still listed.',
+  )
+  assert.equal(partialUnlinkWarning({ removed: 1 }), null)
+  assert.equal(partialUnlinkWarning(null), null)
+  assert.equal(partialUnlinkKeepsDoneToast({ removed: 1, partial: true }), true)
+  assert.equal(partialUnlinkKeepsDoneToast({ removed: 0, partial: true }), false)
+  assert.equal(partialUnlinkKeepsDoneToast(null), false)
+  assert.equal(
+    partialUnlinkKeepsDoneToast({
+      removed: 2,
+      partial: true,
+      unreadableList: 2,
+      error: 'The unlinked list could not be read, so this font may come back from a watch folder.',
+    }),
+    false,
+  )
+  assert.equal(partialUnlinkKeepsDoneToast({ removed: 2, partial: true, unreadableList: 1 }), true)
+})

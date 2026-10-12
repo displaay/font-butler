@@ -133,7 +133,7 @@ function jsonResponse(body: unknown, status = 200): Response {
   })
 }
 
-test('the onboarding folders step shows Trial on the Displaay retail heading before the list loads', async () => {
+test('the onboarding folders step shows Trials only after retail status has loaded', async () => {
   let releaseStatus: (() => void) | null = null
   const statusGate = new Promise<void>((resolve) => {
     releaseStatus = resolve
@@ -222,11 +222,11 @@ test('the onboarding folders step shows Trial on the Displaay retail heading bef
 
   assert.match(document.body.textContent ?? '', /Watch folders/)
   assert.match(heading.textContent ?? '', /Displaay retail/)
-  assert.match(heading.textContent ?? '', /Trial/)
+  assert.equal((heading.textContent ?? '').includes('Trials'), false)
+  assert.equal((document.body.textContent ?? '').includes('Valid token'), false)
   assert.equal(
-    heading.querySelector('[title="Displaay trial font. Save a token with retail access in Settings to sync the full files."]')
-      ?.textContent,
-    'Trial',
+    heading.querySelector('[title="Displaay trial fonts. Save a token with retail access in Settings to sync the full files."]'),
+    null,
   )
   assert.equal(document.body.querySelector('[aria-label="Displaay retail sync"]')?.textContent?.includes('Off'), true)
   assert.equal((document.body.textContent ?? '').includes('Reckless'), false)
@@ -239,7 +239,7 @@ test('the onboarding folders step shows Trial on the Displaay retail heading bef
   await settle()
 
   const after = [...document.querySelectorAll('h3')].find((node) => node.textContent?.includes('Displaay retail'))
-  assert.match(after?.textContent ?? '', /Trial/)
+  assert.match(after?.textContent ?? '', /Trials/)
   assert.equal((document.body.textContent ?? '').includes('Reckless'), false)
 
   await act(async () => {

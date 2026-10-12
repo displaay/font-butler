@@ -9,6 +9,7 @@ export type ActionVerb =
   | 'forget'
   | 'deleteFiles'
   | 'uninstallAndRemove'
+  | 'uninstallAndUnlink'
 
 const ACTION_WORDS: Record<ActionVerb, { pending: string; done: string }> = {
   install: { pending: 'Installing', done: 'Installed' },
@@ -21,6 +22,10 @@ const ACTION_WORDS: Record<ActionVerb, { pending: string; done: string }> = {
   uninstallAndRemove: {
     pending: 'Uninstalling and deleting sources of',
     done: 'Uninstalled and deleted sources of',
+  },
+  uninstallAndUnlink: {
+    pending: 'Uninstalling and unlinking',
+    done: 'Uninstalled and unlinked',
   },
 }
 
@@ -70,9 +75,11 @@ export function verbForBatchAction(
     action === 'forget' ||
     action === 'remove' ||
     action === 'deleteFiles' ||
-    action === 'uninstallAndRemove'
+    action === 'uninstallAndRemove' ||
+    action === 'uninstallAndUnlink' ||
+    action === 'uninstall-unlink'
   ) {
-    return action
+    return action === 'uninstall-unlink' ? 'uninstallAndUnlink' : action
   }
   return null
 }
@@ -136,6 +143,13 @@ export function adobeUninstallCopy(count: number): { pending: string; done: stri
     pending: `Removing ${count} Adobe testing copies…`,
     done: `Removed ${count} Adobe testing copies`,
   }
+}
+
+export function uninstallAndUnlinkConfirm(groups: { familyName: string }[]): string {
+  if (groups.length === 1) {
+    return `Uninstall ${groups[0]!.familyName} and remove its source link? It will disappear from Font Buttler. The source file stays on disk.`
+  }
+  return `Uninstall ${groups.length} fonts and remove their source links? They will disappear from Font Buttler. The source files stay on disk.`
 }
 
 export function emptyImportError(visibleErrors: string[], ignored = 0): string {

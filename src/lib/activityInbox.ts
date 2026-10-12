@@ -7,6 +7,10 @@ export const ACTIVITY_ACTION_LABELS: Record<string, string> = {
   install: 'installed',
   'install-update': 'update installed',
   uninstall: 'uninstalled',
+  'uninstall-unlink': 'uninstalled and unlinked',
+  'retail-install': 'installed',
+  'retail-update': 'updated',
+  'retail-uninstall': 'uninstalled',
   reinstall: 'reinstalled',
   repair: 'repaired',
   'apply-plan': 'imported',
@@ -94,7 +98,7 @@ export function unreadActivityCount(operations: Array<{ unread?: boolean }>): nu
 }
 
 export function isBackgroundActivityTrigger(trigger: string): boolean {
-  return trigger === 'watch' || trigger === 'startup'
+  return trigger === 'watch' || trigger === 'startup' || trigger === 'retail-auto'
 }
 
 export function activityTriggerLabel(trigger: string): string {

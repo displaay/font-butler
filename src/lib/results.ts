@@ -7,6 +7,33 @@ export type BatchOutcome = {
   preview?: number
 }
 
+/**
+ * Any partial uninstall-and-unlink should warn, including a mix of removed and still-listed fonts.
+ * The success toast would otherwise say every font was uninstalled and unlinked.
+ */
+export function partialUnlinkWarning(result: unknown): string | null {
+  if (!result || typeof result !== 'object') return null
+  const value = result as { removed?: unknown; partial?: unknown; error?: unknown }
+  if (value.partial !== true) return null
+  if (typeof value.error === 'string' && value.error.length > 0) return value.error
+  if (typeof value.removed === 'number' && value.removed > 0) {
+    return 'Uninstalled and unlinked some fonts. Others are still listed.'
+  }
+  return 'Could not uninstall and unlink that font.'
+}
+
+/**
+ * A mixed unlink still shows the success toast for rows that were fully unlinked.
+ * When every counted removal hit the unreadable list, only the warning is shown.
+ */
+export function partialUnlinkKeepsDoneToast(result: unknown): boolean {
+  if (!result || typeof result !== 'object') return false
+  const value = result as { removed?: unknown; unreadableList?: unknown }
+  const removed = typeof value.removed === 'number' ? value.removed : 0
+  const unreadable = typeof value.unreadableList === 'number' ? value.unreadableList : 0
+  return removed > unreadable
+}
+
 export function batchResultCopy(
   done: string,
   outcome?: BatchOutcome,

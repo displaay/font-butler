@@ -7,6 +7,7 @@ import {
   systemInstanceRows,
   variationSettings,
 } from './instances.ts'
+import { facesMatchingRestCut, facesSupportVariationInterpolation } from './variationInterpolation.ts'
 import { groupCatalog } from './group.ts'
 import type { CatalogEntry, FamilyGroup, FontFaceInfo, SystemFace } from './types.ts'
 
@@ -93,6 +94,48 @@ test('variable-font instance rows fall back to wght when namedInstances are miss
   assert.equal(instanceRowVariation(face, 'Bold'), "'wght' 700")
 })
 
+test('one variable file with upright and italic instances hovers only the upright cut', () => {
+  const face: FontFaceInfo = {
+    familyName: 'Bagoss',
+    styleName: 'Regular',
+    fullName: 'Bagoss Collection VF',
+    postscriptName: 'Bagoss-VF',
+    isVariable: true,
+    instanceCount: 6,
+    instanceNames: ['Condensed Regular', 'Condensed Medium', 'Regular', 'Medium', 'Italic', 'Bold Italic'],
+    namedInstances: [
+      { name: 'Condensed Regular', coordinates: { wght: 400, wdth: 75, slnt: 0 } },
+      { name: 'Condensed Medium', coordinates: { wght: 500, wdth: 75, slnt: 0 } },
+      { name: 'Regular', coordinates: { wght: 400, wdth: 100, slnt: 0 } },
+      { name: 'Medium', coordinates: { wght: 500, wdth: 100, slnt: 0 } },
+      { name: 'Italic', coordinates: { wght: 400, wdth: 100, slnt: -12 } },
+      { name: 'Bold Italic', coordinates: { wght: 700, wdth: 100, slnt: -12 } },
+    ],
+    weight: 400,
+    italic: false,
+  }
+  const grouped = groupCatalog([variableEntry('bagoss', face, { previewSample: 'Aa' })])[0]!
+  assert.equal(grouped.entries.length, 1)
+  const mixed = catalogInstanceRows(grouped).map((row) => ({
+    family: 'fc-bagoss',
+    italic: row.italic,
+    variation: row.variation,
+  }))
+  assert.equal(facesSupportVariationInterpolation(mixed), false)
+  const hoverRows = catalogHoverInstanceRows(grouped)
+  assert.deepEqual(
+    hoverRows.map((row) => [row.label, row.italic, row.previewSample, row.variation]),
+    [
+      ['Condensed Regular', false, 'Aa', "'wght' 400, 'wdth' 75, 'slnt' 0"],
+      ['Condensed Medium', false, 'Aa', "'wght' 500, 'wdth' 75, 'slnt' 0"],
+      ['Regular', false, 'Aa', "'wght' 400, 'wdth' 100, 'slnt' 0"],
+      ['Medium', false, 'Aa', "'wght' 500, 'wdth' 100, 'slnt' 0"],
+    ],
+  )
+  assert.equal(hoverRows.some((row) => row.label.includes('Italic')), false)
+  assertHoverMorphs(hoverRows, 'Aa')
+})
+
 test('catalog hover preview keeps only the single VF entry when static retail cuts share the family', () => {
   const vf: FontFaceInfo = {
     ...vfFace(),
@@ -126,6 +169,70 @@ test('catalog hover preview keeps only the single VF entry when static retail cu
   const hoverRows = catalogHoverInstanceRows(grouped)
   assert.equal(hoverRows.length, 3)
   assert.ok(hoverRows.every((row) => row.catalogEntryId === 'vf'))
+})
+
+function variableEntry(
+  id: string,
+  face: FontFaceInfo,
+  extra: Partial<CatalogEntry> = {},
+): CatalogEntry {
+  return {
+    id,
+    sourcePath: `/tmp/${id}.ttf`,
+    sourceMtimeMs: 1,
+    sourceSize: 1,
+    status: 'installed',
+    faces: [face],
+    format: 'ttf',
+    addedAt: 1,
+    updatedAt: 1,
+    installedPath: `/Library/Fonts/${id}.ttf`,
+    ...extra,
+  }
+}
+
+function assertHoverMorphs(rows: ReturnType<typeof catalogHoverInstanceRows>, sample: string) {
+  assert.ok(rows.length >= 2)
+  assert.ok(rows.every((row) => row.previewSample === sample))
+  assert.equal(new Set(rows.map((row) => row.catalogEntryId)).size, 1)
+  assert.equal(new Set(rows.map((row) => Boolean(row.italic))).size, 1)
+  const variations = rows.map((row) => row.variation)
+  assert.ok(variations.every((variation) => Boolean(variation)))
+  assert.ok(new Set(variations).size >= 2)
+  const faces = rows.map((row) => ({
+    family: `fc-${row.catalogEntryId}`,
+    italic: row.italic,
+    variation: row.variation,
+  }))
+  assert.equal(facesSupportVariationInterpolation(facesMatchingRestCut(faces, faces[0]!)), true)
+}
+
+test('an italic-only variable file still hover-morphs that italic cut', () => {
+  const italic = variableEntry('concrette-italic', {
+    familyName: 'Concrette Italic',
+    styleName: 'Italic',
+    fullName: 'Concrette Italic',
+    postscriptName: 'ConcretteItalic-Italic',
+    isVariable: true,
+    instanceCount: 2,
+    instanceNames: ['Light Italic', 'Bold Italic'],
+    namedInstances: [
+      { name: 'Light Italic', coordinates: { wght: 300 } },
+      { name: 'Bold Italic', coordinates: { wght: 700 } },
+    ],
+    weight: 400,
+    italic: true,
+  }, { previewSample: 'Aa' })
+  const grouped = groupCatalog([italic])[0]!
+  const hoverRows = catalogHoverInstanceRows(grouped)
+  assert.deepEqual(
+    hoverRows.map((row) => [row.label, row.italic, row.previewSample]),
+    [
+      ['Light Italic', true, 'Aa'],
+      ['Bold Italic', true, 'Aa'],
+    ],
+  )
+  assertHoverMorphs(hoverRows, 'Aa')
 })
 
 function staticFace(familyName: string, styleName: string, italic = false): FontFaceInfo {

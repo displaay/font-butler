@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { ChevronDown, Filter, Loader2, Search } from 'lucide-react'
 import { DisplaayMark } from '@/components/DisplaayMark'
-import { TrialBadge } from '@/components/Badges'
+import { TrialBadge, TrialsBadge, ValidTokenBadge } from '@/components/Badges'
 import { SettingsRow, SettingsSection, settingsSelectClass } from '@/components/SettingsRow'
 import { Button } from '@/components/ui/button'
 import { Input, PasswordInput } from '@/components/ui/input'
@@ -24,7 +24,9 @@ import {
   retailDriftSummary,
   retailFamiliesOffInstalled,
   retailFamiliesOffNeedsChoice,
+  retailHeadingShowsTrials,
   retailSyncInProgress,
+  savedRetailTokenIsValid,
   type RetailDisableAction,
   type RetailFontFormat,
   type RetailSkip,
@@ -669,7 +671,7 @@ export function RetailPane({
         <>
           <DisplaayMark className="size-4" />
           Displaay retail
-          {deferInstall && status?.mode !== 'retail' ? <TrialBadge /> : null}
+          {status != null && retailHeadingShowsTrials(status) ? <TrialsBadge /> : null}
         </>
       }
     >
@@ -753,7 +755,12 @@ export function RetailPane({
       </SettingsRow>
 
       <SettingsRow
-        label="Advanced"
+        label={
+          <span className="inline-flex items-center gap-1.5">
+            Advanced
+            {status != null && savedRetailTokenIsValid(status) ? <ValidTokenBadge /> : null}
+          </span>
+        }
         htmlFor={advancedId}
         description="Show the worker address and token."
       >

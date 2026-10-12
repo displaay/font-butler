@@ -23,8 +23,10 @@ import {
   retailSyncFamilyProgress,
   retailSyncIsOn,
   retailSyncingStatusMessage,
+  retailHeadingShowsTrials,
   retailUpdateCount,
   retailHasLiveUpdates,
+  savedRetailTokenIsValid,
   type RetailSyncFont,
 } from '../../shared/retail.ts'
 
@@ -494,4 +496,15 @@ test('the syncing status is recognised and ends with any status that has no prog
   assert.equal(retailSyncInProgress({ progress: null }), false)
   assert.equal(retailSyncInProgress({ progress: { done: 0, total: 0 } }), false)
   assert.equal(retailSyncInProgress(null), false)
+})
+
+test('retail heading and valid-token labels follow the saved token check', () => {
+  assert.equal(retailHeadingShowsTrials({ mode: 'trial' }), true)
+  assert.equal(retailHeadingShowsTrials({ mode: null }), true)
+  assert.equal(retailHeadingShowsTrials(null), true)
+  assert.equal(retailHeadingShowsTrials({ mode: 'retail' }), false)
+  assert.equal(savedRetailTokenIsValid({ hasToken: true, mode: 'retail' }), true)
+  assert.equal(savedRetailTokenIsValid({ hasToken: true, mode: 'trial' }), false)
+  assert.equal(savedRetailTokenIsValid({ hasToken: false, mode: 'retail' }), false)
+  assert.equal(savedRetailTokenIsValid(null), false)
 })

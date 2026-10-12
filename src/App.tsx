@@ -27,6 +27,7 @@ import { RenameDialog } from '@/components/RenameDialog'
 import { ReplaceFormatDialog } from '@/components/ReplaceFormatDialog'
 import { RetailCollisionDialog } from '@/components/RetailCollisionDialog'
 import { LatinPreviewProvider } from '@/components/AaPreview'
+import { FileDropSurface } from '@/components/FileDropSurface'
 import { SettingsDialog } from '@/components/SettingsDialog'
 import { logoutNoticeAction } from '@/lib/logout-notice'
 import { publishLogoutProbeResult } from '@/lib/logout-probe-result'
@@ -617,6 +618,9 @@ function AppShell() {
               }
             : undefined,
         })
+        if (notice.source === 'unlinked-list') {
+          void api.acknowledgeUnlinkedListReset().catch(() => {})
+        }
       }
       if (notice.entryId) {
         const match = entriesRef.current.find((entry) => entry.id === notice.entryId)
@@ -1409,6 +1413,8 @@ function AppShell() {
     deleteFilesSelected,
     uninstallAndRemoveFor,
     uninstallAndRemoveSelected,
+    uninstallAndUnlinkFor,
+    uninstallAndUnlinkSelected,
     uninstallSelected,
     uninstallFormatFrom,
     swapFormatFrom,
@@ -1972,24 +1978,20 @@ function AppShell() {
 
   return (
     <LatinPreviewProvider text={latinPreviewText(settings?.latinPreview)}>
-      <div
+      <FileDropSurface
         className="flex h-dvh min-h-0 flex-col overflow-hidden bg-background text-foreground md:flex-row"
-        onDragEnter={(event) => {
-          if (fontDragRef.current || hasFontButlerEntries(event.dataTransfer)) return
-          event.preventDefault()
-          setDragging(true)
-        }}
-        onDragOver={(event) => {
-          if (fontDragRef.current || hasFontButlerEntries(event.dataTransfer)) return
-          event.preventDefault()
-          event.dataTransfer.dropEffect = 'copy'
-        }}
-        onDragLeave={(event) => {
-          if (event.currentTarget === event.target) setDragging(false)
-        }}
-        onDrop={(event) => {
-          event.preventDefault()
-          void handleDrop(event.dataTransfer)
+        dragging={dragging}
+        ignoreRef={fontDragRef}
+        label={
+          tab === 'library' && projectFilter
+            ? `Drop fonts or folders to add them to ${
+                projects.find((item) => item.id === projectFilter)?.name ?? 'this project'
+              }`
+            : 'Drop fonts or folders to add them'
+        }
+        onDraggingChange={setDragging}
+        onDrop={(dataTransfer) => {
+          void handleDrop(dataTransfer)
         }}
       >
         <FontFaceStyles
@@ -2413,6 +2415,13 @@ function AppShell() {
                             }
                             void uninstallAndRemoveFor([group])
                           }}
+                          onUninstallAndUnlink={() => {
+                            if (useBatch) {
+                              void uninstallAndUnlinkSelected()
+                              return
+                            }
+                            void uninstallAndUnlinkFor([group])
+                          }}
                           onUninstallFromAdobe={() =>
                             useBatch
                               ? void uninstallFromAdobeFor(catalogSelection)
@@ -2555,6 +2564,7 @@ function AppShell() {
                   onActivate={() => void activateSelected()}
                   onDeactivate={() => void deactivateSelected()}
                   onUninstall={() => void uninstallSelected()}
+                  onUninstallAndUnlink={() => void uninstallAndUnlinkSelected()}
                   onUninstallAndRemove={() => void uninstallAndRemoveSelected()}
                   onUninstallFromAdobe={() => void uninstallFromAdobeFor(catalogSelection)}
                   onReinstall={() => void reinstallSelected()}
@@ -2723,6 +2733,10 @@ function AppShell() {
                 if (!selectedGroup) return
                 void uninstallAndRemoveFor([selectedGroup])
               }}
+              onUninstallAndUnlink={() => {
+                if (!selectedGroup) return
+                void uninstallAndUnlinkFor([selectedGroup])
+              }}
               onUninstallFromAdobe={() => selectedGroup && void uninstallFromAdobeFor([selectedGroup])}
               onDeactivate={() =>
                 selectedGroup &&
@@ -2838,6 +2852,7 @@ function AppShell() {
                         onActivate: () => void activateSelected(),
                         onDeactivate: () => void deactivateSelected(),
                         onUninstall: () => void uninstallSelected(),
+                        onUninstallAndUnlink: () => void uninstallAndUnlinkSelected(),
                         onUninstallAndRemove: () => void uninstallAndRemoveSelected(),
                         onReinstall: () => void reinstallSelected(),
                         onForget: () => void forgetSelected(),
@@ -2853,6 +2868,7 @@ function AppShell() {
                         onActivate: () => void activateSelected(),
                         onDeactivate: () => void deactivateSelected(),
                         onUninstall: () => void uninstallSelected(),
+                        onUninstallAndUnlink: () => void uninstallAndUnlinkSelected(),
                         onUninstallAndRemove: () => void uninstallAndRemoveSelected(),
                         onUninstallFromAdobe: () => void uninstallFromAdobeFor(catalogSelection),
                         onReinstall: () => void reinstallSelected(),
@@ -2870,17 +2886,6 @@ function AppShell() {
           )}
         </div>
 
-        {dragging && (
-          <div className="pointer-events-none fixed inset-3 z-40 flex items-center justify-center rounded-lg border border-dashed border-foreground/20 bg-background/80 md:left-[14.75rem]">
-            <p className="text-base font-medium tracking-tight">
-              {tab === 'library' && projectFilter
-                ? `Drop fonts or folders to add them to ${
-                    projects.find((item) => item.id === projectFilter)?.name ?? 'this project'
-                  }`
-                : 'Drop fonts or folders to add them'}
-            </p>
-          </div>
-        )}
         <DropFolderDialog
           open={Boolean(folderDrop)}
           folders={folderDrop?.folders ?? []}
@@ -3120,7 +3125,7 @@ function AppShell() {
         />
         <MarqueeOverlay rect={marqueeRect} />
         <Toaster theme={settings?.theme ?? 'system'} />
-      </div>
+      </FileDropSurface>
     </LatinPreviewProvider>
   )
 }

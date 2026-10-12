@@ -192,6 +192,23 @@ export type RetailSyncStatus = {
   progress: RetailSyncProgress | null
 }
 
+/**
+ * A saved worker token is valid once a check has confirmed it serves the retail collection.
+ * The built-in trial token and a saved token that only unlocks trials stay on `mode: 'trial'`.
+ */
+export function savedRetailTokenIsValid(
+  status: { hasToken?: boolean; mode?: RetailCollectionMode | null } | null | undefined,
+): boolean {
+  return Boolean(status?.hasToken && status.mode === 'retail')
+}
+
+/** The Displaay retail heading shows TRIALS until the worker has served the retail collection. */
+export function retailHeadingShowsTrials(
+  status: { mode?: RetailCollectionMode | null } | null | undefined,
+): boolean {
+  return status?.mode !== 'retail'
+}
+
 export type RetailSyncProgress = {
   /** Families whose files in this pass have all been written or failed. */
   done: number

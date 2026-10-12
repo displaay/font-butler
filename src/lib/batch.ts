@@ -8,6 +8,7 @@ import {
   reinstallableIds,
   repairableIds,
   uninstallableIds,
+  uninstallAndUnlinkIds,
 } from './eligibility.ts'
 import { occupyingStyleCount, uniqueEntryFormats, uniqueStyleCount } from './formats.ts'
 import {
@@ -34,6 +35,8 @@ export type CatalogBatchPlan = {
   partialActiveStyles?: number
   deactivate: number
   uninstall: number
+  /** Families that are installed and linked, so they can leave the app without deleting the source file. */
+  uninstallAndUnlink: number
   uninstallAndRemove: number
   reinstall: number
   repair: number
@@ -70,6 +73,7 @@ export function catalogBatchPlan(groups: FamilyGroup[], adobeAvailable = true): 
     ...(activate && plan.activateFormat ? { activateFormat: plan.activateFormat } : {}),
     deactivate: shared((part) => part.deactivate),
     uninstall: shared((part) => part.uninstall),
+    uninstallAndUnlink: shared((part) => part.uninstallAndUnlink),
     uninstallAndRemove: shared((part) => part.uninstallAndRemove),
     reinstall: shared((part) => part.reinstall),
     repair: shared((part) => part.repair),
@@ -86,6 +90,7 @@ function catalogBatchPlanUnion(groups: FamilyGroup[], adobeAvailable = true): Ca
   let activate = 0
   let deactivate = 0
   let uninstall = 0
+  let uninstallAndUnlink = 0
   let uninstallAndRemove = 0
   let reinstall = 0
   let repair = 0
@@ -116,6 +121,7 @@ function catalogBatchPlanUnion(groups: FamilyGroup[], adobeAvailable = true): Ca
       uninstall += toUninstall.length || 1
       if (hasTrackedSource(group)) uninstallAndRemove += 1
     }
+    if (uninstallAndUnlinkIds(group).length) uninstallAndUnlink += 1
     reinstall += reinstallableIds(group).length
     repair += repairableIds(group).length
     if (isForgettableOnlyGroup(group)) forget += 1
@@ -147,6 +153,7 @@ function catalogBatchPlanUnion(groups: FamilyGroup[], adobeAvailable = true): Ca
     ...(partialActiveStyles ? { partialActiveStyles } : {}),
     deactivate,
     uninstall,
+    uninstallAndUnlink,
     uninstallAndRemove,
     reinstall,
     repair,
@@ -169,6 +176,7 @@ export function familyCardPlan(group: FamilyGroup, adobeAvailable = true): Catal
     plan.deactivate === 0 &&
     plan.uninstall === 0 &&
     plan.uninstallAndRemove === 0 &&
+    plan.uninstallAndUnlink === 0 &&
     plan.activate === 0 &&
     plan.reinstall === 0
   ) {
@@ -179,6 +187,7 @@ export function familyCardPlan(group: FamilyGroup, adobeAvailable = true): Catal
     deactivate: 0,
     uninstall: 0,
     uninstallAndRemove: 0,
+    uninstallAndUnlink: 0,
     activate: 0,
     activateFormat: undefined,
     partialActiveStyles: undefined,
@@ -269,6 +278,7 @@ export function hasCatalogBatchActions(plan: CatalogBatchPlan): boolean {
     plan.activate > 0 ||
     plan.deactivate > 0 ||
     plan.uninstall > 0 ||
+    plan.uninstallAndUnlink > 0 ||
     plan.uninstallAndRemove > 0 ||
     plan.reinstall > 0 ||
     plan.repair > 0 ||
@@ -298,6 +308,11 @@ export function actionLabel(verb: string, count: number, multi: boolean): string
     return count === 1 && !multi
       ? verb
       : `Uninstall and delete sources of ${count} ${count === 1 ? 'font' : 'fonts'}`
+  }
+  if (verb === 'Uninstall and unlink') {
+    return count === 1 && !multi
+      ? verb
+      : `Uninstall and unlink ${count} ${count === 1 ? 'font' : 'fonts'}`
   }
   if (!multi) return verb
   return `${verb} ${count} ${count === 1 ? 'font' : 'fonts'}`

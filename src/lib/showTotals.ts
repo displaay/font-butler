@@ -2,7 +2,16 @@ import { normalizeWatchPath } from './watchFolders.ts'
 
 export const SHOW_TOTALS_KEY = 'font-butler-show-totals'
 
-export type ShowTotalId = 'library' | 'system' | 'updates' | `watch:${string}`
+export type ShowTotalId = 'library' | 'system' | 'updates' | 'activity' | `watch:${string}`
+
+/**
+ * Activity's sidebar count stays hidden until Show total is on.
+ * Unread used to replace that badge, so the checkbox changed nothing.
+ * Searching still shows the filtered count, the same as the other tabs.
+ */
+export function activityCountVisible(showTotal: boolean, searching = false): boolean {
+  return Boolean(searching || showTotal)
+}
 
 export function watchShowTotalId(folder: string): ShowTotalId {
   return `watch:${normalizeWatchPath(folder)}`

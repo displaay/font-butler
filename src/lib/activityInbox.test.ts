@@ -4,6 +4,7 @@ import {
   activityItemLabel,
   activityRowLabel,
   activityTriggerLabel,
+  isBackgroundActivityTrigger,
   entryActivityLabel,
   mergeUnreadFlags,
   unreadActivityCount,
@@ -29,11 +30,21 @@ test('watch activity displays as automatic', () => {
   assert.equal(activityTriggerLabel('startup'), 'startup')
   assert.equal(activityTriggerLabel('manual'), 'manual')
   assert.equal(activityTriggerLabel('import'), 'import')
+  assert.equal(isBackgroundActivityTrigger('retail-auto'), true)
+  assert.equal(isBackgroundActivityTrigger('retail'), false)
+  assert.equal(isBackgroundActivityTrigger('startup'), true)
 })
 
 test('activityRowLabel uses past tense with the family first', () => {
   assert.equal(activityRowLabel({ action: 'install', familyName: 'Inter' }), 'Inter installed')
   assert.equal(activityRowLabel({ action: 'uninstall', familyName: 'Fenul' }), 'Fenul uninstalled')
+  assert.equal(activityRowLabel({ action: 'retail-install', familyName: 'Reckless' }), 'Reckless installed')
+  assert.equal(activityRowLabel({ action: 'retail-update', familyName: 'Reckless' }), 'Reckless updated')
+  assert.equal(activityRowLabel({ action: 'retail-uninstall', familyName: 'Reckless' }), 'Reckless uninstalled')
+  assert.equal(
+    activityRowLabel({ action: 'uninstall-unlink', familyName: 'Fenul' }),
+    'Fenul uninstalled and unlinked',
+  )
   assert.equal(activityRowLabel({ action: 'deactivate', familyName: 'Fenul' }), 'Fenul deactivated')
   assert.equal(activityRowLabel({ action: 'apply-plan', familyName: 'News' }), 'News imported')
   assert.equal(activityRowLabel({ action: 'apply-plan' }), 'Imported')

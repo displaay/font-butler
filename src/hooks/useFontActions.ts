@@ -13,6 +13,7 @@ import {
   reinstallableIds,
   repairableIds,
   uninstallableIds,
+  uninstallAndUnlinkIds,
 } from '@/lib/eligibility'
 import {
   conflictInstanceNames,
@@ -41,8 +42,8 @@ import {
   uniquePaths,
 } from '@/lib/group'
 import { canSwitchTo } from '@/lib/identity'
-import { actionCopy, actionCopyFor, adobeInstallCopy, adobeUninstallCopy, progressActionCopy } from '@/lib/notify'
-import { batchResultCopy, type BatchOutcome } from '@/lib/results'
+import { actionCopy, actionCopyFor, adobeInstallCopy, adobeUninstallCopy, progressActionCopy, uninstallAndUnlinkConfirm } from '@/lib/notify'
+import { batchResultCopy, partialUnlinkKeepsDoneToast, partialUnlinkWarning, type BatchOutcome } from '@/lib/results'
 import { doneToastAction, latestUndoableOperationId } from '@/lib/toastAction'
 import { updateGroupsForIds } from '@/lib/updateInventory'
 import type {
@@ -624,6 +625,22 @@ export function useFontActions({
     await uninstallAndRemoveFor(selectedCatalogGroups())
   }
 
+  async function uninstallAndUnlinkFor(groups: FamilyGroup[]) {
+    const targets = groups.filter((group) => uninstallAndUnlinkIds(group).length > 0)
+    if (targets.length === 0) return
+    const confirmed = window.confirm(uninstallAndUnlinkConfirm(targets))
+    if (!confirmed) return
+    const ids = targets.flatMap(uninstallAndUnlinkIds)
+    await run(async () => {
+      if (ids.length > 1) return api.uninstallAndUnlinkMany(ids)
+      if (ids.length === 1) return api.uninstallAndUnlink(ids[0]!)
+    }, actionCopyFor('uninstallAndUnlink', targets))
+  }
+
+  async function uninstallAndUnlinkSelected() {
+    await uninstallAndUnlinkFor(selectedCatalogGroups())
+  }
+
   async function uninstallSelected() {
     if (tab === 'system') {
       await removeSelected()
@@ -742,6 +759,16 @@ export function useFontActions({
         if (patch.length) {
           setEntries((current) => mergeCatalogEntries(current, patch))
         }
+        const warning = partialUnlinkWarning(result)
+        if (warning) {
+          toast.warning(warning, {
+            action: {
+              label: 'Activity',
+              onClick: () => setTab('activity'),
+            },
+          })
+          if (!partialUnlinkKeepsDoneToast(result)) return
+        }
         const outcome = result && typeof result === 'object' ? (result as BatchOutcome) : undefined
         const { message, failedIds } = batchResultCopy(copy.done, outcome)
         const operationId =
@@ -808,6 +835,8 @@ export function useFontActions({
     deleteFilesSelected,
     uninstallAndRemoveFor,
     uninstallAndRemoveSelected,
+    uninstallAndUnlinkFor,
+    uninstallAndUnlinkSelected,
     uninstallSelected,
     uninstallFormatFrom,
     swapFormatFrom,

@@ -144,20 +144,34 @@ export function catalogInstanceRows(group: FamilyGroup, retail?: RetailSyncView 
   return rows
 }
 
+function entryHasHoverInstances(entry: CatalogEntry): boolean {
+  return entry.faces.some((face) => face.isVariable && variableInstanceNames(face).length > 0)
+}
+
+/** Face the card rests on: the first upright variable face, or the only face in an italic file. */
+function restingHoverFace(entry: CatalogEntry): FontFaceInfo | undefined {
+  const faces = entry.faces.filter((face) => face.isVariable && variableInstanceNames(face).length > 0)
+  return faces.find((face) => !face.italic) ?? faces[0]
+}
+
 /**
- * Instance rows for grid hover preview. When a family mixes static retail cuts with one
- * variable font file, cycle only that file's named instances so variation interpolation
- * can run on a single @font-face family.
+ * Instance rows for grid hover preview. A single variable file keeps the resting
+ * face's italic flag. `rowsFromFace` sets that flag per instance name, so a file
+ * that mixes upright and italic instances would otherwise fail the smooth check.
+ * Widths stay in the cycle.
  */
 export function catalogHoverInstanceRows(group: FamilyGroup, retail?: RetailSyncView | null): InstanceRow[] {
   const rows = catalogInstanceRows(group, retail)
-  const vfEntries = group.entries.filter((entry) =>
-    entry.faces.some((face) => face.isVariable && variableInstanceNames(face).length > 0),
-  )
+  const vfEntries = group.entries.filter(entryHasHoverInstances)
   if (vfEntries.length !== 1) return rows
-  const vfEntryId = vfEntries[0]!.id
-  const vfRows = rows.filter((row) => row.catalogEntryId === vfEntryId)
-  return vfRows.length >= 2 ? vfRows : rows
+  const chosen = vfEntries[0]!
+  const vfRows = rows.filter((row) => row.catalogEntryId === chosen.id)
+  if (vfRows.length < 2) return rows
+  const rest = restingHoverFace(chosen)
+  if (!rest) return vfRows
+  const italic = Boolean(rest.italic)
+  const cut = vfRows.filter((row) => Boolean(row.italic) === italic)
+  return cut.length > 0 ? cut : vfRows
 }
 
 function rowsFromSystemFace(face: SystemFace): InstanceRow[] {

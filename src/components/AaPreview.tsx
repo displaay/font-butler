@@ -15,7 +15,10 @@ import { Loader2 } from 'lucide-react'
 import { usePreviewFontStatus } from '@/hooks/usePreviewFontReady'
 import { paintedPreviewIndices } from '@/lib/cyclingPreview'
 import { fitPreviewTransform } from '@/lib/fitPreview'
-import { facesSupportVariationInterpolation } from '@/lib/variationInterpolation'
+import {
+  facesMatchingRestCut,
+  facesSupportVariationInterpolation,
+} from '@/lib/variationInterpolation'
 import { applyLatinPreviewSample, DEFAULT_LATIN_PREVIEW_TEXT } from '@/lib/latinPreview'
 import { cn } from '@/lib/utils'
 
@@ -539,20 +542,22 @@ export function CyclingAaPreview({
   size: number
   sample?: string
 }) {
+  const allFaces = faces.length > 0 ? faces : [rest]
+  const morphFaces = facesMatchingRestCut(allFaces, rest)
+  const interpolateVariation = facesSupportVariationInterpolation(morphFaces)
+  const layers = interpolateVariation ? morphFaces : allFaces
   const restIndex = Math.max(
     0,
-    faces.findIndex(
+    layers.findIndex(
       (face) =>
         face.family === rest.family &&
         (face.weight ?? 400) === (rest.weight ?? 400) &&
         Boolean(face.italic) === Boolean(rest.italic),
     ),
   )
-  const cycling = active && faces.length > 1
-  const index = useHoverCycle(faces.length, cycling, restIndex)
-  const layers = faces.length > 0 ? faces : [rest]
+  const cycling = active && layers.length > 1
+  const index = useHoverCycle(layers.length, cycling, restIndex)
   const visibleIndex = cycling ? index : restIndex
-  const interpolateVariation = facesSupportVariationInterpolation(layers)
   const painted = interpolateVariation
     ? [visibleIndex]
     : paintedPreviewIndices(layers.length, visibleIndex, cycling)
@@ -565,6 +570,7 @@ export function CyclingAaPreview({
         previewPaintClass,
       )}
       style={{ fontSize: `${size}rem`, minHeight: `${size * 2}rem` }}
+      data-preview-motion={interpolateVariation ? 'morph' : 'crossfade'}
     >
       {interpolateVariation ? (
         <div className="absolute inset-0 flex items-center justify-center">

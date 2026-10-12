@@ -34,6 +34,7 @@ import {
 } from './retail-collisions.ts'
 import { DEFAULT_RETAIL_TRIAL_TOKEN, loadSettings, saveSettings } from './settings.ts'
 import { RETAIL_DOWNLOAD_CONCURRENCY } from './retail-apply.ts'
+import { loadOperations } from './operations.ts'
 import { loadRetailManifest, saveRetailManifest } from './retail-sync.ts'
 import { withService, writeTestFont } from './test-util.ts'
 import {
@@ -374,6 +375,15 @@ for (const via of ['check', 'sync'] as const) {
     )
     assert.equal('Reckless/Reckless-TRIAL-VF.otf' in loadRetailManifest(paths).files, false)
     assert.equal(status.drift.some((item) => item.kind === 'removed'), false)
+    const swap = loadOperations(paths).filter((operation) => operation.action === 'retail-update')
+    assert.equal(swap.length, 1)
+    assert.equal(swap[0]?.trigger, 'retail')
+    assert.equal(swap[0]?.undoable, false)
+    assert.equal(swap[0]?.items.every((item) => item.outcome === 'succeeded'), true)
+    assert.equal(
+      loadOperations(paths).some((operation) => operation.action === 'retail-uninstall'),
+      false,
+    )
   })
 }
 
@@ -1165,6 +1175,12 @@ test('an interrupted Sync does not mark the pass as automatic', async () => {
   const paused = loadRetailManifest(paths)
   assert.equal(paused.incomplete, true)
   assert.equal(paused.incompleteAutomatic, undefined)
+  assert.equal(
+    loadOperations(paths).some((operation) =>
+      operation.items.some((item) => /canceled/i.test(item.reason ?? '')),
+    ),
+    false,
+  )
 })
 
 test('leftover listings without an incomplete flag wait for an explicit sync', async () => {
@@ -1833,6 +1849,90 @@ test('retailFontsFromCollections sorts and marks disabled families', () => {
       },
     ],
   )
+})
+
+test('syncing a retail font records a retail-install Activity entry', async () => {
+  resetRetailCache()
+  const paths = setup()
+  const source = path.join(paths.dataRoot, 'Reckless-Regular.otf')
+  writeTestFont(source, 'Reckless', 'Reckless-Regular', { format: 'otf', style: 'Regular' })
+  const bytes = fs.readFileSync(source)
+  await configureRetailSync(paths, { enabled: true, token: 't' })
+  const operationEvents: Array<{ action: string; trigger: string }> = []
+  const stop = onEvent((event) => {
+    if (event.type !== 'operations') return
+    for (const operation of event.operations) {
+      operationEvents.push({ action: operation.action, trigger: operation.trigger })
+    }
+  })
+  try {
+    await syncRetail(paths, {
+      fetchManifest: async () => manifestWith(bytes.length, 'e1', 'Reckless-Regular.otf'),
+      fetchFile: async () => new Uint8Array(bytes),
+    })
+  } finally {
+    stop()
+  }
+  const listing = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath === 'Reckless/Reckless-Regular.otf')
+  assert.ok(listing)
+  assert.equal(listing.status, 'installed')
+  const operations = loadOperations(paths)
+  assert.equal(operations.length, 1)
+  const operation = operations[0]
+  assert.equal(operation?.action, 'retail-install')
+  assert.equal(operation?.trigger, 'retail')
+  assert.equal(operation?.familyName, 'Reckless')
+  assert.equal(operation?.undoable, false)
+  assert.equal(operation?.unread, false)
+  assert.equal(operation?.items.length, 1)
+  assert.equal(operation?.items[0]?.outcome, 'succeeded')
+  assert.equal(operation?.items[0]?.entryId, listing.id)
+  assert.match(operation?.items[0]?.label ?? '', /Regular/)
+  assert.ok(operationEvents.some((event) => event.action === 'retail-install' && event.trigger === 'retail'))
+
+  await syncRetail(paths, {
+    fetchManifest: async () => manifestWith(bytes.length, 'e1', 'Reckless-Regular.otf'),
+    fetchFile: async () => new Uint8Array(bytes),
+  })
+  assert.equal(loadOperations(paths).length, 1)
+})
+
+test('an automatic retail update records a retail-update Activity entry', async () => {
+  resetRetailCache()
+  const paths = setup()
+  const source = path.join(paths.dataRoot, 'Reckless-Regular.otf')
+  writeTestFont(source, 'Reckless', 'Reckless-Regular', { format: 'otf', style: 'Regular' })
+  const bytes = fs.readFileSync(source)
+  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await syncRetail(paths, {
+    fetchManifest: async () => manifestWith(bytes.length, 'e1', 'Reckless-Regular.otf'),
+    fetchFile: async () => new Uint8Array(bytes),
+  })
+  writeTestFont(source, 'Reckless', 'Reckless-Regular', { format: 'otf', style: 'Regular', version: 'Version 2.000' })
+  const nextBytes = fs.readFileSync(source)
+  const operationEvents: Array<{ action: string; trigger: string }> = []
+  const stop = onEvent((event) => {
+    if (event.type !== 'operations') return
+    for (const operation of event.operations) {
+      operationEvents.push({ action: operation.action, trigger: operation.trigger })
+    }
+  })
+  try {
+    await checkRetail(paths, {
+      fetchManifest: async () => manifestWith(nextBytes.length, 'e2', 'Reckless-Regular.otf'),
+      fetchFile: async () => new Uint8Array(nextBytes),
+    })
+  } finally {
+    stop()
+  }
+  const updates = loadOperations(paths).filter((operation) => operation.action === 'retail-update')
+  assert.equal(updates.length, 1)
+  assert.equal(updates[0]?.trigger, 'retail-auto')
+  assert.equal(updates[0]?.undoable, false)
+  assert.equal(updates[0]?.unread, true)
+  assert.equal(updates[0]?.items[0]?.outcome, 'succeeded')
+  assert.equal(updates[0]?.familyName, 'Reckless')
+  assert.ok(operationEvents.some((event) => event.action === 'retail-update' && event.trigger === 'retail-auto'))
 })
 
 test('uninstalling a retail font keeps the listing', async () => {
@@ -3277,7 +3377,68 @@ test('None with "remove" uninstalls the installed fonts of the families turned o
     assert.equal(fs.existsSync(dest), false)
     assert.equal(loadCatalog(paths).entries.some((entry) => entry.retailRelativePath), false)
     assert.equal(loadRetailManifest(paths).files['Reckless/RecklessVF.otf'], undefined)
+    const removals = loadOperations(paths).filter((operation) => operation.action === 'retail-uninstall')
+    assert.equal(removals.length, 1)
+    assert.equal(removals[0]?.items.length, 1)
+    assert.equal(removals[0]?.items[0]?.outcome, 'succeeded')
   })
+})
+
+test('turning off two families records one retail-uninstall Activity row', async () => {
+  const paths = setup()
+  await configureRetailSync(paths, { enabled: true, token: 't' })
+  const remote: RetailManifest = {
+    generatedAt: '2026-01-01T00:00:00.000Z',
+    collections: [
+      {
+        glyphsFile: 'Reckless',
+        revisionId: 'rev-1',
+        lastRegeneratedAt: '2026-01-01T00:00:00.000Z',
+        files: [
+          {
+            key: 'Reckless/rev-1/RecklessVF.otf',
+            relativePath: 'Reckless/RecklessVF.otf',
+            size: 4,
+            etag: 'e1',
+            uploaded: '2026-01-01T00:00:00.000Z',
+            familyName: 'Reckless',
+          },
+        ],
+      },
+      {
+        glyphsFile: 'Zangezi',
+        revisionId: 'rev-1',
+        lastRegeneratedAt: '2026-01-01T00:00:00.000Z',
+        files: [
+          {
+            key: 'Zangezi/rev-1/Zangezi.otf',
+            relativePath: 'Zangezi/Zangezi.otf',
+            size: 4,
+            etag: 'e1',
+            uploaded: '2026-01-01T00:00:00.000Z',
+            familyName: 'Zangezi',
+          },
+        ],
+      },
+    ],
+    skipped: [],
+  }
+  await syncRetail(paths, {
+    fetchManifest: async () => remote,
+    fetchFile: async () => new Uint8Array(4).fill(1),
+  })
+  await configureRetailSync(paths, {
+    disabledGlyphsFiles: ['Reckless', 'Zangezi'],
+    disableAction: 'remove',
+  })
+  const removals = loadOperations(paths).filter((operation) => operation.action === 'retail-uninstall')
+  assert.equal(removals.length, 1)
+  assert.equal(removals[0]?.items.length, 2)
+  assert.equal(removals[0]?.trigger, 'retail')
+  assert.equal(removals[0]?.undoable, false)
+  assert.equal(removals[0]?.items.every((item) => item.outcome === 'succeeded'), true)
+  assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'RecklessVF.otf')), false)
+  assert.equal(fs.existsSync(path.join(paths.userFontsDir, 'Zangezi.otf')), false)
 })
 
 test('None with "keep" detaches installed fonts so a later sync neither deletes nor duplicates them', async () => {

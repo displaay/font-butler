@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowLeftRight, CircleMinus, CirclePlus, FolderOpen, ListX, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
+import { ArrowLeftRight, CircleMinus, CirclePlus, FolderOpen, ListX, Power, PowerOff, RefreshCw, Trash2, Unlink } from 'lucide-react'
 import { AdobeLogo } from '@/components/Badges'
 import { Button } from '@/components/ui/button'
 import { SplitInstallButton, SplitUninstallButton, type SplitUninstallExtra } from '@/components/SplitUninstallButton'
@@ -39,6 +39,7 @@ export function CatalogBatchButtons({
   onActivate,
   onDeactivate,
   onUninstall,
+  onUninstallAndUnlink,
   onUninstallAndRemove,
   onUninstallFromAdobe,
   onReinstall,
@@ -56,6 +57,7 @@ export function CatalogBatchButtons({
   onActivate: () => void
   onDeactivate: () => void
   onUninstall: () => void
+  onUninstallAndUnlink?: () => void
   onUninstallAndRemove?: () => void
   onUninstallFromAdobe?: () => void
   onReinstall: () => void
@@ -141,6 +143,11 @@ export function CatalogBatchButtons({
           onUninstall={onUninstall}
           menuPlacement={splitMenuPlacement}
         />
+      )}
+      {plan.uninstallAndUnlink > 0 && onUninstallAndUnlink && (
+        <Button size="sm" variant="destructive" disabled={busy} onClick={onUninstallAndUnlink}>
+          <Unlink /> {actionLabel('Uninstall and unlink', plan.uninstallAndUnlink, multi)}
+        </Button>
       )}
       {!extrasOnSplit &&
         plan.uninstallAndRemove > 0 &&
@@ -310,6 +317,7 @@ export function CatalogMenuItems({
   onRepair,
   onDeactivate,
   onUninstall,
+  onUninstallAndUnlink,
   onUninstallAndRemove,
   onUninstallFromAdobe,
   onActivate,
@@ -331,6 +339,7 @@ export function CatalogMenuItems({
   onRepair?: () => void
   onDeactivate: () => void
   onUninstall: () => void
+  onUninstallAndUnlink?: () => void
   onUninstallAndRemove?: () => void
   onUninstallFromAdobe?: () => void
   onActivate: () => void
@@ -353,6 +362,7 @@ export function CatalogMenuItems({
     plan.deactivate > 0 ||
     plan.uninstall > 0 ||
     plan.adobeUninstall > 0 ||
+    plan.uninstallAndUnlink > 0 ||
     plan.uninstallAndRemove > 0 ||
     formatUninstalls.length >= 2 ||
     Boolean(formatSwap)
@@ -410,6 +420,15 @@ export function CatalogMenuItems({
           onSelect={onUninstall}
         >
           <CircleMinus /> Uninstall
+        </ContextMenuItem>
+      )}
+      {plan.uninstallAndUnlink > 0 && onUninstallAndUnlink && (
+        <ContextMenuItem
+          disabled={busy}
+          className={destructiveMenuItemClass}
+          onSelect={onUninstallAndUnlink}
+        >
+          <Unlink /> {actionLabel('Uninstall and unlink', plan.uninstallAndUnlink, multi)}
         </ContextMenuItem>
       )}
       {plan.adobeUninstall > 0 && onUninstallFromAdobe ? (

@@ -4,6 +4,15 @@ export type VariationPreviewFace = {
   variation?: string
 }
 
+/** Faces that share the resting preview's family and italic cut. */
+export function facesMatchingRestCut<T extends VariationPreviewFace>(
+  faces: readonly T[],
+  rest: VariationPreviewFace,
+): T[] {
+  const italic = Boolean(rest.italic)
+  return faces.filter((face) => face.family === rest.family && Boolean(face.italic) === italic)
+}
+
 /** True when hover cycling can morph axes instead of cross-fading static instances. */
 export function facesSupportVariationInterpolation(faces: VariationPreviewFace[]): boolean {
   if (faces.length < 2) return false

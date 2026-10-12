@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
-import { ArrowLeftRight, CircleMinus, FolderOpen, Link2, ListX, Loader2, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
+import { ArrowLeftRight, CircleMinus, FolderOpen, Link2, ListX, Loader2, Power, PowerOff, RefreshCw, Trash2, Unlink } from 'lucide-react'
 import { CatalogBatchButtons, SystemBatchButtons } from '@/components/BatchActions'
 import { DuplicateCopyBadges, SourceBadge, RetailBadge, StateBadges, FormatBadges, AdobeLogo, TrialBadge } from '@/components/Badges'
 import { Badge } from '@/components/ui/badge'
@@ -58,6 +58,7 @@ export function Inspector({
   onRepair,
   onUninstall,
   onUninstallFormat,
+  onUninstallAndUnlink,
   onUninstallAndRemove,
   onUninstallFromAdobe,
   onDeactivate,
@@ -104,6 +105,7 @@ export function Inspector({
   onRepair?: () => void
   onUninstall: () => void
   onUninstallFormat?: (format: string) => void
+  onUninstallAndUnlink?: () => void
   onUninstallAndRemove?: () => void
   onUninstallFromAdobe?: () => void
   onDeactivate: () => void
@@ -140,6 +142,7 @@ export function Inspector({
     onActivate: () => void
     onDeactivate: () => void
     onUninstall: () => void
+    onUninstallAndUnlink?: () => void
     onUninstallAndRemove?: () => void
     onUninstallFromAdobe?: () => void
     onReinstall: () => void
@@ -192,6 +195,7 @@ export function Inspector({
             onActivate={multiSelect.onActivate}
             onDeactivate={multiSelect.onDeactivate}
             onUninstall={multiSelect.onUninstall}
+            onUninstallAndUnlink={multiSelect.onUninstallAndUnlink}
             onUninstallAndRemove={multiSelect.onUninstallAndRemove}
             onUninstallFromAdobe={multiSelect.onUninstallFromAdobe}
             onReinstall={multiSelect.onReinstall}
@@ -492,6 +496,11 @@ export function Inspector({
                 onUninstall={onUninstall}
               />
             )}
+            {plan.uninstallAndUnlink > 0 && onUninstallAndUnlink ? (
+              <Button size="sm" variant="destructive" disabled={busy} onClick={onUninstallAndUnlink}>
+                <Unlink /> Uninstall and unlink
+              </Button>
+            ) : null}
             {plan.uninstall === 0 && plan.uninstallAndRemove > 0 && onUninstallAndRemove ? (
               <Button size="sm" variant="destructive" disabled={busy} onClick={onUninstallAndRemove}>
                 <Trash2 /> Uninstall and delete sources
