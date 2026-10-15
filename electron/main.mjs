@@ -25,6 +25,7 @@ import {
   detectAppUpdateRuntime,
   openedUpdateDmgRecordFile,
 } from './app-update-install.mjs'
+import { createExternalFontOpenNotifier } from './external-font-open-notify.mjs'
 import { applyTestFeedDataIsolation } from './test-feed-data.mjs'
 import { macosDockIconPng } from './dock-icon.mjs'
 import { createLoginItemApplier } from './login-item.mjs'
@@ -831,7 +832,28 @@ async function getApi(pathname) {
   return data
 }
 
+let externalFontOpenNotify = null
+
+function getExternalFontOpenNotify() {
+  if (!externalFontOpenNotify) {
+    externalFontOpenNotify = createExternalFontOpenNotifier((payload) => {
+      sendWhenReady('external-font-open', payload)
+    })
+  }
+  return externalFontOpenNotify
+}
+
+function notifyOpenFontPending() {
+  showMainWindow()
+  getExternalFontOpenNotify().pending()
+}
+
+function notifyOpenFontDone() {
+  getExternalFontOpenNotify().done()
+}
+
 async function openFont(filePath) {
+  notifyOpenFontPending()
   try {
     await postApi('/api/open', { path: filePath })
   } catch (error) {
@@ -840,8 +862,9 @@ async function openFont(filePath) {
       'Could not open font',
       error instanceof Error ? error.message : 'Could not open font',
     )
+  } finally {
+    notifyOpenFontDone()
   }
-  showMainWindow()
 }
 
 function enqueueFinderJob(action, filePaths) {
@@ -974,6 +997,7 @@ async function runFinderInstall(action, filePaths) {
     showMainWindow()
     return
   }
+  notifyOpenFontPending()
   try {
     await ensureApiToken()
     const imported = await postApi('/api/import', { paths: collected.paths })
@@ -1021,6 +1045,8 @@ async function runFinderInstall(action, filePaths) {
       finderInstallTitle(action),
       error instanceof Error ? error.message : 'Install failed',
     )
+  } finally {
+    notifyOpenFontDone()
   }
   showMainWindow()
 }
