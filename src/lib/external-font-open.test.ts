@@ -2,9 +2,11 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   EXTERNAL_FONT_OPEN_LOADING,
+  applyExternalFontOpenDepth,
   externalFontOpenFinished,
   externalFontOpenLoadingMessage,
   externalFontOpenStarted,
+  shouldClearExternalFontOpenStatus,
   shouldShowSingleActionProgress,
 } from './external-font-open.ts'
 
@@ -30,4 +32,16 @@ test('single-item install progress shows during an external open', () => {
   assert.equal(shouldShowSingleActionProgress(1, 0), false)
   assert.equal(shouldShowSingleActionProgress(1, 1), true)
   assert.equal(shouldShowSingleActionProgress(3, 0), true)
+})
+
+test('external open status clears when depth returns to zero while owned', () => {
+  assert.equal(shouldClearExternalFontOpenStatus(true, 1), false)
+  assert.equal(shouldClearExternalFontOpenStatus(true, 0), true)
+  assert.equal(shouldClearExternalFontOpenStatus(false, 0), false)
+})
+
+test('applyExternalFontOpenDepth uses absolute renderer payload', () => {
+  assert.equal(applyExternalFontOpenDepth({ depth: 2 }), 2)
+  assert.equal(applyExternalFontOpenDepth({ depth: 0 }, 3), 0)
+  assert.equal(applyExternalFontOpenDepth({}, 1), 1)
 })

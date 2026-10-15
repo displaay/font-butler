@@ -11,14 +11,14 @@ function emitExternalFontOpenDepth() {
   for (const listener of externalFontOpenListeners) listener({ depth })
 }
 
-ipcRenderer.on('open-font-pending', () => {
-  externalFontOpenDepth += 1
+function applyExternalFontOpenDepth(payload) {
+  const depth = payload?.depth
+  externalFontOpenDepth = typeof depth === 'number' && depth >= 0 ? depth : externalFontOpenDepth
   emitExternalFontOpenDepth()
-})
+}
 
-ipcRenderer.on('open-font-done', () => {
-  externalFontOpenDepth = Math.max(0, externalFontOpenDepth - 1)
-  emitExternalFontOpenDepth()
+ipcRenderer.on('external-font-open', (_event, payload) => {
+  applyExternalFontOpenDepth(payload)
 })
 ipcRenderer.on('watch-notices', (_event, notices) => {
   const list = Array.isArray(notices) ? notices : []

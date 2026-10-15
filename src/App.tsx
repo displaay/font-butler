@@ -95,8 +95,9 @@ import {
 } from '@/lib/preferences'
 import { closedSettingsFocus, startOnboardingFromSettings } from '@/lib/settingsSession'
 import {
-  EXTERNAL_FONT_OPEN_LOADING,
+  applyExternalFontOpenDepth,
   externalFontOpenLoadingMessage,
+  shouldClearExternalFontOpenStatus,
   shouldShowSingleActionProgress,
 } from '@/lib/external-font-open'
 import { actionCopy, emptyImportError, importDoneCopy, progressActionCopy, verbForBatchAction } from '@/lib/notify'
@@ -195,6 +196,7 @@ function AppShell() {
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
   const externalFontOpenRef = useRef({ depth: 0 })
+  const externalFontOpenOwnsStatusRef = useRef(false)
   const [retailBusy, setRetailBusy] = useState(false)
   const catalogRevisionRef = useRef(0)
   const entriesRef = useRef<CatalogEntry[]>([])
@@ -418,12 +420,17 @@ function AppShell() {
   }
 
   function syncExternalFontOpenStatus() {
-    const message = externalFontOpenLoadingMessage(externalFontOpenRef.current)
+    const state = externalFontOpenRef.current
+    const message = externalFontOpenLoadingMessage(state)
     if (message) {
+      externalFontOpenOwnsStatusRef.current = true
       setActionStatus(message)
       return
     }
-    clearActionStatusIf((current) => current === EXTERNAL_FONT_OPEN_LOADING)
+    if (shouldClearExternalFontOpenStatus(externalFontOpenOwnsStatusRef.current, state.depth)) {
+      externalFontOpenOwnsStatusRef.current = false
+      setActionStatus(null)
+    }
   }
 
   function queueFontWork(work: () => Promise<void>) {
@@ -678,7 +685,12 @@ function AppShell() {
         shouldShowSingleActionProgress(event.total, externalFontOpenRef.current.depth)
       ) {
         const verb = verbForBatchAction(event.action)
-        if (verb) setActionStatus(progressActionCopy(verb, event.done, event.total))
+        if (verb) {
+          if (externalFontOpenRef.current.depth > 0) {
+            externalFontOpenOwnsStatusRef.current = true
+          }
+          setActionStatus(progressActionCopy(verb, event.done, event.total))
+        }
         return
       }
       if (isTestInstallsEvent(event)) {
@@ -812,7 +824,7 @@ function AppShell() {
       setTab('library')
     })
     const stopExternalFontOpen = window.fontButlerDesktop?.onExternalFontOpen?.((payload) => {
-      const depth = typeof payload?.depth === 'number' && payload.depth >= 0 ? payload.depth : 0
+      const depth = applyExternalFontOpenDepth(payload, externalFontOpenRef.current.depth)
       externalFontOpenRef.current = { depth }
       syncExternalFontOpenStatus()
     })

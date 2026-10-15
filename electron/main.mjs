@@ -25,6 +25,7 @@ import {
   detectAppUpdateRuntime,
   openedUpdateDmgRecordFile,
 } from './app-update-install.mjs'
+import { createExternalFontOpenNotifier } from './external-font-open-notify.mjs'
 import { applyTestFeedDataIsolation } from './test-feed-data.mjs'
 import { macosDockIconPng } from './dock-icon.mjs'
 import { createLoginItemApplier } from './login-item.mjs'
@@ -831,14 +832,24 @@ async function getApi(pathname) {
   return data
 }
 
+let externalFontOpenNotify = null
+
+function getExternalFontOpenNotify() {
+  if (!externalFontOpenNotify) {
+    externalFontOpenNotify = createExternalFontOpenNotifier((payload) => {
+      sendWhenReady('external-font-open', payload)
+    })
+  }
+  return externalFontOpenNotify
+}
+
 function notifyOpenFontPending() {
-  sendWhenReady('open-font-pending')
+  showMainWindow()
+  getExternalFontOpenNotify().pending()
 }
 
 function notifyOpenFontDone() {
-  const win = mainWindow
-  if (!win || win.isDestroyed()) return
-  win.webContents.send('open-font-done')
+  getExternalFontOpenNotify().done()
 }
 
 async function openFont(filePath) {

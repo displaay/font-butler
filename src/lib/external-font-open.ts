@@ -19,3 +19,13 @@ export function externalFontOpenLoadingMessage(state: ExternalFontOpenDepthState
 export function shouldShowSingleActionProgress(total: number, externalOpenDepth: number): boolean {
   return total > 1 || (total >= 1 && externalOpenDepth > 0)
 }
+
+/** Clear ActionStatus when an external open owned the pill (including install progress). */
+export function shouldClearExternalFontOpenStatus(ownsStatus: boolean, depth: number): boolean {
+  return ownsStatus && depth === 0
+}
+
+export function applyExternalFontOpenDepth(payload: { depth?: number } | undefined, fallback = 0): number {
+  const depth = payload?.depth
+  return typeof depth === 'number' && depth >= 0 ? depth : fallback
+}
