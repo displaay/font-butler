@@ -123,12 +123,17 @@ export function FileDropSurface({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') clear()
     }
+    const onDropCapture = (event: DragEvent) => {
+      if (!accepts(event.dataTransfer)) return
+      event.preventDefault()
+      clear()
+    }
     const capture = true
     window.addEventListener('dragstart', onDragStart, capture)
     window.addEventListener('dragenter', onEnter, capture)
     window.addEventListener('dragover', onOver, capture)
     window.addEventListener('dragleave', onLeave, capture)
-    window.addEventListener('drop', clear, capture)
+    window.addEventListener('drop', onDropCapture, capture)
     window.addEventListener('dragend', clear, capture)
     window.addEventListener('dragend', onDragEndImage, capture)
     window.addEventListener('blur', clear, capture)
@@ -142,7 +147,7 @@ export function FileDropSurface({
       window.removeEventListener('dragenter', onEnter, capture)
       window.removeEventListener('dragover', onOver, capture)
       window.removeEventListener('dragleave', onLeave, capture)
-      window.removeEventListener('drop', clear, capture)
+      window.removeEventListener('drop', onDropCapture, capture)
       window.removeEventListener('dragend', clear, capture)
       window.removeEventListener('dragend', onDragEndImage, capture)
       window.removeEventListener('blur', clear, capture)
@@ -168,6 +173,12 @@ export function FileDropSurface({
         <div
           data-file-drop-overlay=""
           className="fixed inset-3 z-40 flex items-center justify-center rounded-lg border border-dashed border-foreground/20 bg-background/80 md:left-[14.75rem]"
+          onDrop={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            reset()
+            onDropRef.current(event.dataTransfer)
+          }}
           onClick={(event) => {
             event.preventDefault()
             event.stopPropagation()

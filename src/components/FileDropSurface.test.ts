@@ -183,6 +183,55 @@ test('file drags reach the overlay when a project row stops propagation, and fon
   }
 })
 
+test('a file drop on the overlay reaches onDrop', async () => {
+  const { createElement, useState, act } = await import('react')
+  const { createRoot } = await import('react-dom/client')
+  const { FileDropSurface } = await import('./FileDropSurface.tsx')
+  const dropped: DataTransfer[] = []
+
+  function Harness() {
+    const [dragging, setDragging] = useState(false)
+    return createElement(
+      FileDropSurface,
+      {
+        dragging,
+        label: 'Drop fonts or folders to add them',
+        onDraggingChange: setDragging,
+        onDrop: (dataTransfer: DataTransfer) => {
+          dropped.push(dataTransfer)
+        },
+      },
+      createElement('div', null, 'library'),
+    )
+  }
+
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  try {
+    await act(async () => {
+      root.render(createElement(Harness))
+    })
+    const surface = host.firstElementChild
+    assert.ok(surface)
+    await act(async () => {
+      drag(surface, 'dragenter', ['Files'])
+    })
+    const overlay = host.querySelector('[data-file-drop-overlay]')
+    assert.ok(overlay)
+    await act(async () => {
+      drag(overlay, 'drop', ['Files'])
+    })
+    assert.equal(dropped.length, 1)
+    assert.equal(host.querySelector('[data-file-drop-overlay]'), null)
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  }
+})
+
 test('the drop overlay hides when file dragover events stop', async () => {
   const { createElement, useState, act } = await import('react')
   const { createRoot } = await import('react-dom/client')
