@@ -2,6 +2,24 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron')
 
 const queuedWatchNotices = []
 const watchNoticeListeners = new Set()
+
+let externalFontOpenDepth = 0
+const externalFontOpenListeners = new Set()
+
+function emitExternalFontOpenDepth() {
+  const depth = externalFontOpenDepth
+  for (const listener of externalFontOpenListeners) listener({ depth })
+}
+
+ipcRenderer.on('open-font-pending', () => {
+  externalFontOpenDepth += 1
+  emitExternalFontOpenDepth()
+})
+
+ipcRenderer.on('open-font-done', () => {
+  externalFontOpenDepth = Math.max(0, externalFontOpenDepth - 1)
+  emitExternalFontOpenDepth()
+})
 ipcRenderer.on('watch-notices', (_event, notices) => {
   const list = Array.isArray(notices) ? notices : []
   if (list.length === 0) return
@@ -65,5 +83,13 @@ contextBridge.exposeInMainWorld('fontButlerDesktop', {
     const listener = (_event, payload) => callback(payload)
     ipcRenderer.on('finder-link-to', listener)
     return () => ipcRenderer.removeListener('finder-link-to', listener)
+  },
+  onExternalFontOpen: (callback) => {
+    const listener = (payload) => callback(payload)
+    externalFontOpenListeners.add(listener)
+    if (externalFontOpenDepth > 0) {
+      callback({ depth: externalFontOpenDepth })
+    }
+    return () => externalFontOpenListeners.delete(listener)
   },
 })

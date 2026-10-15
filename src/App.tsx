@@ -94,6 +94,11 @@ import {
   shouldShowOnboarding,
 } from '@/lib/preferences'
 import { closedSettingsFocus, startOnboardingFromSettings } from '@/lib/settingsSession'
+import {
+  EXTERNAL_FONT_OPEN_LOADING,
+  externalFontOpenLoadingMessage,
+  shouldShowSingleActionProgress,
+} from '@/lib/external-font-open'
 import { actionCopy, emptyImportError, importDoneCopy, progressActionCopy, verbForBatchAction } from '@/lib/notify'
 import { planNeedsReview } from '@/lib/planner'
 import { clearFontDragImage } from '@/lib/dragPreview'
@@ -189,6 +194,7 @@ function AppShell() {
   // Font-file work is queued; busy disables duplicate action clicks while dialogs stay usable.
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
+  const externalFontOpenRef = useRef({ depth: 0 })
   const [retailBusy, setRetailBusy] = useState(false)
   const catalogRevisionRef = useRef(0)
   const entriesRef = useRef<CatalogEntry[]>([])
@@ -409,6 +415,15 @@ function AppShell() {
     } catch {
       // The pane offers a manual retry; a missing status must not surface as an app error.
     }
+  }
+
+  function syncExternalFontOpenStatus() {
+    const message = externalFontOpenLoadingMessage(externalFontOpenRef.current)
+    if (message) {
+      setActionStatus(message)
+      return
+    }
+    clearActionStatusIf((current) => current === EXTERNAL_FONT_OPEN_LOADING)
   }
 
   function queueFontWork(work: () => Promise<void>) {
@@ -658,7 +673,10 @@ function AppShell() {
         setAppUpdate(event.update)
         return
       }
-      if (isActionProgressEvent(event) && event.total > 1) {
+      if (
+        isActionProgressEvent(event) &&
+        shouldShowSingleActionProgress(event.total, externalFontOpenRef.current.depth)
+      ) {
         const verb = verbForBatchAction(event.action)
         if (verb) setActionStatus(progressActionCopy(verb, event.done, event.total))
         return
@@ -793,6 +811,11 @@ function AppShell() {
       setFinderLinkPaths(paths)
       setTab('library')
     })
+    const stopExternalFontOpen = window.fontButlerDesktop?.onExternalFontOpen?.((payload) => {
+      const depth = typeof payload?.depth === 'number' && payload.depth >= 0 ? payload.depth : 0
+      externalFontOpenRef.current = { depth }
+      syncExternalFontOpenStatus()
+    })
     return () => {
       window.removeEventListener('keydown', onKeyDown)
       stopInstall?.()
@@ -800,6 +823,7 @@ function AppShell() {
       stopReinstall?.()
       stopOpenTab?.()
       stopFinderLinkTo?.()
+      stopExternalFontOpen?.()
     }
   }, [])
 

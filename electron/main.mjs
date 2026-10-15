@@ -831,7 +831,18 @@ async function getApi(pathname) {
   return data
 }
 
+function notifyOpenFontPending() {
+  sendWhenReady('open-font-pending')
+}
+
+function notifyOpenFontDone() {
+  const win = mainWindow
+  if (!win || win.isDestroyed()) return
+  win.webContents.send('open-font-done')
+}
+
 async function openFont(filePath) {
+  notifyOpenFontPending()
   try {
     await postApi('/api/open', { path: filePath })
   } catch (error) {
@@ -840,8 +851,9 @@ async function openFont(filePath) {
       'Could not open font',
       error instanceof Error ? error.message : 'Could not open font',
     )
+  } finally {
+    notifyOpenFontDone()
   }
-  showMainWindow()
 }
 
 function enqueueFinderJob(action, filePaths) {
@@ -974,6 +986,7 @@ async function runFinderInstall(action, filePaths) {
     showMainWindow()
     return
   }
+  notifyOpenFontPending()
   try {
     await ensureApiToken()
     const imported = await postApi('/api/import', { paths: collected.paths })
@@ -1021,6 +1034,8 @@ async function runFinderInstall(action, filePaths) {
       finderInstallTitle(action),
       error instanceof Error ? error.message : 'Install failed',
     )
+  } finally {
+    notifyOpenFontDone()
   }
   showMainWindow()
 }
