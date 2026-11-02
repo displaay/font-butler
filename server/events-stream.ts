@@ -10,9 +10,11 @@ import type { AppPaths } from '../core/paths.ts'
 
 /**
  * SSE for catalog events.
- * A window client (`?client=window`) is the only one that is offered the pending
- * unlinked-list reset. It stays pending until that renderer acks. Background and
- * tray clients receive live events and must not clear the flag.
+ * A window client (`?client=window`) is the only one that receives an unlinked-list
+ * reset, live or pending. Background and tray clients do not: they do not clear the
+ * pending notice, so a live copy there plus the pending copy on the next window
+ * would show the notice twice. The same reset id is written at most once per connection.
+ * It stays pending until that renderer acks that id.
  */
 export function mountEventsRoutes(
   app: Hono,
@@ -23,8 +25,15 @@ export function mountEventsRoutes(
     onClose?: (close: () => void) => void
   },
 ): void {
-  app.post('/api/notices/unlinked-list-reset/ack', (c) => {
-    acknowledgeUnlinkedListReset(options.paths)
+  app.post('/api/notices/unlinked-list-reset/ack', async (c) => {
+    let resetId = ''
+    try {
+      const body = await c.req.json<{ resetId?: unknown }>()
+      if (body && typeof body.resetId === 'string') resetId = body.resetId
+    } catch {
+      resetId = ''
+    }
+    acknowledgeUnlinkedListReset(options.paths, resetId)
     return c.json({ ok: true })
   })
 
@@ -38,9 +47,21 @@ export function mountEventsRoutes(
         options.onClose?.(close)
       }
       const seenWatchFailures = new Set<string>()
-      let deliveredUnlinkedReset = false
+      let deliveredResetId = ''
       const watchFailureKey = (notice: { operationId?: string; message: string }) =>
         notice.operationId || notice.message
+      const markUnlinkedReset = (resetId: string | undefined): boolean => {
+        if (!windowClient) return false
+        const id = resetId || ''
+        if (id) {
+          if (id === deliveredResetId) return false
+          deliveredResetId = id
+          return true
+        }
+        if (deliveredResetId) return false
+        deliveredResetId = '*'
+        return true
+      }
       const unsubscribe = onEvent(async (event) => {
         if (closed) {
           return
@@ -51,8 +72,7 @@ export function mountEventsRoutes(
           seenWatchFailures.add(key)
         }
         if (event.type === 'notice' && event.notice.source === 'unlinked-list') {
-          if (deliveredUnlinkedReset) return
-          deliveredUnlinkedReset = true
+          if (!markUnlinkedReset(event.notice.resetId)) return
         }
         try {
           await stream.writeSSE({ data: JSON.stringify(event) })
@@ -67,8 +87,7 @@ export function mountEventsRoutes(
       })
       if (windowClient) {
         const unlinkedReset = peekPendingUnlinkedListResetNotice(options.paths)
-        if (unlinkedReset && !deliveredUnlinkedReset) {
-          deliveredUnlinkedReset = true
+        if (unlinkedReset && markUnlinkedReset(unlinkedReset.resetId)) {
           try {
             await stream.writeSSE({ data: JSON.stringify({ type: 'notice', notice: unlinkedReset }) })
           } catch {

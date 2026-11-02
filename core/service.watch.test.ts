@@ -268,13 +268,15 @@ test('a corrupt unlinked list with no backup is reset on launch and watch import
     assert.deepEqual(stored.paths, [])
     assert.match(fs.readFileSync(logFile, 'utf8'), /Reset unlinked-sources.json/)
     assert.ok(notices.some((message) => message.includes('may reappear from watch folders')))
-    assert.match(peekPendingUnlinkedListResetNotice(paths)?.message ?? '', /may reappear from watch folders/)
-    acknowledgeUnlinkedListReset(paths)
+    const pendingReset = peekPendingUnlinkedListResetNotice(paths)
+    assert.match(pendingReset?.message ?? '', /may reappear from watch folders/)
+    assert.equal(acknowledgeUnlinkedListReset(paths, pendingReset?.resetId ?? ''), true)
     assert.equal(peekPendingUnlinkedListResetNotice(paths), null)
     restarted.dispose()
   } finally {
     stop()
-    acknowledgeUnlinkedListReset(paths)
+    const leftoverReset = peekPendingUnlinkedListResetNotice(paths)
+    if (leftoverReset?.resetId) acknowledgeUnlinkedListReset(paths, leftoverReset.resetId)
     if (previousLog === undefined) delete process.env.FONT_BUTLER_LOG
     else process.env.FONT_BUTLER_LOG = previousLog
     await closeAllWatchers()

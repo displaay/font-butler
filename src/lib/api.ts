@@ -278,8 +278,8 @@ export const api = {
     json<{ removed: number; partial?: boolean; error?: string; unreadableList?: number }>(
       post('/api/uninstall-unlink', { ids }),
     ),
-  acknowledgeUnlinkedListReset: () =>
-    json<{ ok: boolean }>(post('/api/notices/unlinked-list-reset/ack', {})),
+  acknowledgeUnlinkedListReset: (resetId: string) =>
+    json<{ ok: boolean }>(post('/api/notices/unlinked-list-reset/ack', { resetId })),
   deactivate: (id: string) => json<{ entry: CatalogEntry }>(post('/api/deactivate', { id })),
   deactivateMany: (ids: string[]) =>
     json<{ entries: CatalogEntry[] }>(post('/api/deactivate', { ids })),

@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -8,6 +9,17 @@ import type { Notice, ServiceEvent } from './types.ts'
 const bus = new EventEmitter()
 bus.setMaxListeners(20)
 const pendingWatchFailures: Notice[] = []
+/**
+ * Latest reset whose pending file could not be written, keyed by data root.
+ * The next window connection reads this instead of dropping the notice.
+ */
+const pendingUnlinkedResets = new Map<string, Notice>()
+let unlinkedListResetWriteFault: (() => void) | undefined
+
+/** Tests make the pending-file write throw. Production does not set this. */
+export function setUnlinkedListResetWriteFaultForTest(fault: (() => void) | undefined): void {
+  unlinkedListResetWriteFault = fault
+}
 
 export function unlinkedListResetPendingPath(paths: AppPaths): string {
   return path.join(paths.dataRoot, 'unlinked-list-reset-pending.json')
@@ -39,34 +51,16 @@ export function takePendingWatchFailureNotices(): Notice[] {
   return pendingWatchFailures.splice(0, pendingWatchFailures.length)
 }
 
-/**
- * Keep the reset notice until a window renderer acknowledges it was shown.
- * The flag is on disk so quitting before that ack does not drop it.
- * Live listeners still receive it, and that delivery does not clear the flag.
- */
-export function publishUnlinkedListReset(paths: AppPaths, notice: Notice): void {
-  const file = unlinkedListResetPendingPath(paths)
-  try {
-    fs.mkdirSync(paths.dataRoot, { recursive: true })
-    const temp = `${file}.${process.pid}.tmp`
-    fs.writeFileSync(temp, JSON.stringify({ pending: true, notice }))
-    fs.renameSync(temp, file)
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error)
-    logMain('catalog', `could not save the unlinked-list reset notice: ${reason}`)
-  }
-  emitEvent({ type: 'notice', notice })
-}
-
-/** Read the pending notice. Does not clear it. */
-export function peekPendingUnlinkedListResetNotice(paths: AppPaths): Notice | null {
+function readStoredUnlinkedListReset(paths: AppPaths): Notice | null {
   try {
     const parsed = JSON.parse(fs.readFileSync(unlinkedListResetPendingPath(paths), 'utf8')) as {
       pending?: boolean
+      id?: string
       notice?: Notice
     }
     if (parsed.pending === true && parsed.notice?.source === 'unlinked-list' && parsed.notice.message) {
-      return parsed.notice
+      const resetId = parsed.notice.resetId || (typeof parsed.id === 'string' ? parsed.id : '')
+      return resetId ? { ...parsed.notice, resetId } : parsed.notice
     }
   } catch {
     return null
@@ -74,9 +68,56 @@ export function peekPendingUnlinkedListResetNotice(paths: AppPaths): Notice | nu
   return null
 }
 
-/** A window renderer calls this after the notice is on screen. */
-export function acknowledgeUnlinkedListReset(paths: AppPaths): void {
+/**
+ * Keep the reset notice until a window renderer acknowledges that reset.
+ * The flag is on disk so quitting before that ack does not drop it.
+ * A failed write stays in memory for the next window connection.
+ * Live listeners still receive it, and that delivery does not clear the flag.
+ * Each publish is its own reset id. An ack names the reset it saw.
+ */
+export function publishUnlinkedListReset(paths: AppPaths, notice: Notice): void {
+  const resetId = crypto.randomUUID()
+  const stamped: Notice = { ...notice, resetId }
+  const file = unlinkedListResetPendingPath(paths)
+  try {
+    unlinkedListResetWriteFault?.()
+    fs.mkdirSync(paths.dataRoot, { recursive: true })
+    const temp = `${file}.${process.pid}.tmp`
+    try {
+      fs.writeFileSync(temp, JSON.stringify({ pending: true, id: resetId, notice: stamped }))
+      fs.renameSync(temp, file)
+    } catch (error) {
+      fs.rmSync(temp, { force: true })
+      throw error
+    }
+    pendingUnlinkedResets.delete(paths.dataRoot)
+  } catch (error) {
+    pendingUnlinkedResets.set(paths.dataRoot, stamped)
+    const reason = error instanceof Error ? error.message : String(error)
+    logMain('catalog', `could not save the unlinked-list reset notice: ${reason}`)
+  }
+  emitEvent({ type: 'notice', notice: stamped })
+}
+
+/**
+ * Read the pending notice. Does not clear it.
+ * A reset kept in memory after a failed write wins over an older file.
+ */
+export function peekPendingUnlinkedListResetNotice(paths: AppPaths): Notice | null {
+  return pendingUnlinkedResets.get(paths.dataRoot) ?? readStoredUnlinkedListReset(paths)
+}
+
+/**
+ * A window renderer calls this after that reset is on screen.
+ * An id that is not the current reset is ignored, so an older window
+ * cannot clear a reset that happened later.
+ */
+export function acknowledgeUnlinkedListReset(paths: AppPaths, resetId: string): boolean {
+  const current = peekPendingUnlinkedListResetNotice(paths)
+  if (!resetId || current?.resetId !== resetId) return false
+  pendingUnlinkedResets.delete(paths.dataRoot)
   fs.rmSync(unlinkedListResetPendingPath(paths), { force: true })
+  return true
 }
 
 export function onEvent(listener: (event: ServiceEvent) => void): () => void {

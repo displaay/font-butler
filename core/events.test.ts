@@ -10,9 +10,11 @@ import {
   onEvent,
   peekPendingUnlinkedListResetNotice,
   publishUnlinkedListReset,
+  setUnlinkedListResetWriteFaultForTest,
   takePendingWatchFailureNotices,
   unlinkedListResetPendingPath,
 } from './events.ts'
+import type { Notice } from './types.ts'
 
 test('a watch failure delivered live is not replayed to a later subscriber', () => {
   takePendingWatchFailureNotices()
@@ -44,8 +46,10 @@ test('an unlinked-list reset stays on disk until a window acknowledges it', () =
   try {
     publishUnlinkedListReset(paths, notice)
     assert.equal(fs.existsSync(unlinkedListResetPendingPath(paths)), true)
-    assert.deepEqual(peekPendingUnlinkedListResetNotice(paths), notice)
-    assert.deepEqual(peekPendingUnlinkedListResetNotice(paths), notice)
+    const first = peekPendingUnlinkedListResetNotice(paths)
+    assert.ok(first?.resetId)
+    assert.deepEqual(noticeWithoutResetId(first), notice)
+    assert.deepEqual(peekPendingUnlinkedListResetNotice(paths), first)
     const seen: string[] = []
     const stop = onEvent((event) => {
       if (event.type === 'notice' && event.notice.source === 'unlinked-list') seen.push(event.notice.message)
@@ -53,15 +57,58 @@ test('an unlinked-list reset stays on disk until a window acknowledges it', () =
     try {
       publishUnlinkedListReset(paths, notice)
       assert.deepEqual(seen, [notice.message])
-      assert.deepEqual(peekPendingUnlinkedListResetNotice(paths), notice)
+      const second = peekPendingUnlinkedListResetNotice(paths)
+      assert.ok(second?.resetId)
+      assert.notEqual(second?.resetId, first.resetId)
+      assert.deepEqual(noticeWithoutResetId(second), notice)
     } finally {
       stop()
     }
-    acknowledgeUnlinkedListReset(paths)
+    const current = peekPendingUnlinkedListResetNotice(paths)
+    assert.equal(acknowledgeUnlinkedListReset(paths, first.resetId!), false)
+    assert.equal(peekPendingUnlinkedListResetNotice(paths)?.resetId, current?.resetId)
+    assert.equal(acknowledgeUnlinkedListReset(paths, current?.resetId ?? ''), true)
     assert.equal(peekPendingUnlinkedListResetNotice(paths), null)
     assert.equal(fs.existsSync(unlinkedListResetPendingPath(paths)), false)
   } finally {
-    acknowledgeUnlinkedListReset(paths)
+    const leftover = peekPendingUnlinkedListResetNotice(paths)
+    if (leftover?.resetId) acknowledgeUnlinkedListReset(paths, leftover.resetId)
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+function noticeWithoutResetId(notice: Notice | null): Omit<Notice, 'resetId'> | null {
+  if (!notice) return null
+  const { resetId: _resetId, ...rest } = notice
+  return rest
+}
+
+test('a failed unlinked-list pending write keeps the notice for the next reader', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-reset-write-'))
+  const paths = buildPaths({ override: root, mac: false })
+  ensureDirs(paths)
+  const notice = {
+    kind: 'warning' as const,
+    source: 'unlinked-list' as const,
+    message: 'Font Buttler could not read the unlinked list.',
+  }
+  setUnlinkedListResetWriteFaultForTest(() => {
+    throw new Error('disk full')
+  })
+  try {
+    publishUnlinkedListReset(paths, notice)
+    assert.equal(fs.existsSync(unlinkedListResetPendingPath(paths)), false)
+    const pending = peekPendingUnlinkedListResetNotice(paths)
+    assert.ok(pending?.resetId)
+    assert.deepEqual(noticeWithoutResetId(pending), notice)
+    assert.equal(acknowledgeUnlinkedListReset(paths, 'stale-reset'), false)
+    assert.equal(peekPendingUnlinkedListResetNotice(paths)?.resetId, pending?.resetId)
+    assert.equal(acknowledgeUnlinkedListReset(paths, pending?.resetId ?? ''), true)
+    assert.equal(peekPendingUnlinkedListResetNotice(paths), null)
+  } finally {
+    setUnlinkedListResetWriteFaultForTest(undefined)
+    const leftover = peekPendingUnlinkedListResetNotice(paths)
+    if (leftover?.resetId) acknowledgeUnlinkedListReset(paths, leftover.resetId)
     fs.rmSync(root, { recursive: true, force: true })
   }
 })
