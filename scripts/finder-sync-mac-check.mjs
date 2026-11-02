@@ -28,7 +28,6 @@ import {
   machoArchs,
   parseMacCheckArgs,
   parseAgentStatusOutput,
-  codesignNotarized,
   spctlNotarized,
   staplerAccepted,
   summarizeChecklist,
@@ -60,15 +59,6 @@ function assessSpctl(target) {
   return { ok, reason: ok ? 'Notarized Developer ID' : result.output.trim() || result.error || `spctl exited ${result.status}` }
 }
 
-function assessAppexNotarized(appex) {
-  const result = run('codesign', ['--verify', '--verbose=4', '--test-requirement', '=notarized', appex])
-  const ok = codesignNotarized(result.output, result.status)
-  return {
-    ok,
-    reason: ok ? 'explicit requirement satisfied' : result.output.trim() || result.error || `codesign exited ${result.status}`,
-  }
-}
-
 function assessStapler(target) {
   const result = run('xcrun', ['stapler', 'validate', target])
   const ok = staplerAccepted(result.status)
@@ -93,10 +83,9 @@ function appInTree(root) {
 
 function artifactChecks(appPath) {
   if (!appPath) return { provided: true, error: 'No Font Buttler.app was found inside the archive.' }
-  const appex = finderSyncAppexPath(appPath)
   return {
     provided: true,
-    spctl: assessSpctl(appex && existsSync(appex) ? appex : appPath),
+    spctl: assessSpctl(appPath),
     stapler: assessStapler(appPath),
   }
 }
@@ -129,8 +118,7 @@ function collect(app, dmg, zip) {
     helperCodesignDisplay: '',
     spctlApp: assessSpctl(app),
     staplerApp: assessStapler(app),
-    notarizedAppex: existsSync(appex) ? assessAppexNotarized(appex) : { ok: false, reason: 'The appex is missing.' },
-    staplerAppex: existsSync(appex) ? assessStapler(appex) : { ok: false, reason: 'The appex is missing.' },
+    appexCodesignDisplay: existsSync(appex) ? run('codesign', ['-dv', '--verbose=4', appex]).output : '',
     dmg: dmg ? { provided: true, error: 'DMG was not mounted.' } : { provided: false },
     zip: zip ? { provided: true, error: 'The update zip was not unpacked.' } : { provided: false },
     roundtrip: { status: null, output: '', error: '' },

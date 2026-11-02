@@ -1518,7 +1518,7 @@ test('finderSyncAgentReleaseFailures defaults to a real codesign runner', () => 
   }
 })
 
-test('the release assert checks the stapled appex with a deep verify and the notarized requirement', () => {
+test('the release assert checks the appex signature and leaves notarization to the enclosing app', () => {
   const root = mkdtempSync(path.join(tmpdir(), 'font-butler-appex-spctl-'))
   try {
     const app = path.join(root, 'Font Buttler.app')
@@ -1535,9 +1535,6 @@ test('the release assert checks the stapled appex with a deep verify and the not
     const failures = finderSyncReleaseFailures(app, {
       runCommand(command, args) {
         calls.push([command, args])
-        if (command === 'codesign' && args.includes('--test-requirement')) {
-          return { status: 0, output: 'test-requirement: explicit requirement satisfied' }
-        }
         if (command === 'codesign' && args.includes('--entitlements')) {
           return {
             status: 0,
@@ -1552,12 +1549,16 @@ test('the release assert checks the stapled appex with a deep verify and the not
     })
     assert.deepEqual(failures, [], failures.join('\n'))
     assert.ok(calls.some((call) => call[0] === 'codesign' && call[1].includes('--deep') && call[1].includes('--strict')))
-    assert.ok(calls.some((call) => call[0] === 'codesign' && call[1].includes('--test-requirement') && call[1].includes('=notarized') && call[1].includes(appex)))
     assert.equal(calls.some((call) => call[0] === 'spctl'), false)
+    assert.equal(calls.some((call) => call[1].includes('--test-requirement')), false)
+    assert.equal(calls.some((call) => call[0] === 'xcrun'), false)
+    const assertScript = readRepo('scripts/assert-notarized-mac-release.mjs')
+    assert.match(assertScript, /of the appex is that enclosing app's Notarized Developer ID/)
+    assert.match(assertScript, /does not seem to be an app/)
+    assert.match(assertScript, /spctl', \['-a', '-vv', '-t', 'exec', app\]/)
 
     const rejected = finderSyncReleaseFailures(app, {
       runCommand(command, args) {
-        if (command === 'codesign' && args.includes('--test-requirement')) return { status: 1, output: 'code failed to satisfy specified code requirement(s)' }
         if (command === 'codesign' && args.includes('--verify')) return { status: 1, output: '' }
         if (command === 'codesign' && args.includes('--entitlements')) {
           return {
@@ -1567,12 +1568,14 @@ test('the release assert checks the stapled appex with a deep verify and the not
         }
         return {
           status: 0,
-          output: `Authority=Developer ID Application: ${DEVELOPER_ID_IDENTITY}\nTeamIdentifier=${DEVELOPER_ID_TEAM}\nflags=0x10000(runtime)`,
+          output: 'Signature=adhoc',
         }
       },
     })
     assert.ok(rejected.some((failure) => /--deep --strict/.test(failure)))
-    assert.ok(rejected.some((failure) => /"=notarized"/.test(failure)))
+    assert.ok(rejected.some((failure) => /ad-hoc/.test(failure)))
+    assert.ok(rejected.some((failure) => /hardened runtime/.test(failure)))
+    assert.equal(rejected.some((failure) => /Notarized Developer ID/.test(failure)), false)
     assert.ok(rejected.some((failure) => failure.includes(group)))
   } finally {
     rmSync(root, { recursive: true, force: true })

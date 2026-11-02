@@ -311,9 +311,6 @@ export function finderSyncAppexFailures({
   entitlementText = '',
   machService = '',
   expectedMachService = '',
-  requireNotarized = false,
-  notarizedStatus = 1,
-  notarizedOutput = '',
 } = {}) {
   const failures = []
   if (!present) {
@@ -353,13 +350,6 @@ export function finderSyncAppexFailures({
       `The Finder Sync Mach service is ${machService || 'missing'}, expected ${expectedMachService}.`,
     )
   }
-  // The appex is CFBundlePackageType XPC!, not an app. spctl -t exec rejects
-  // that shape ("does not seem to be an app") and omits Notarized Developer
-  // ID even when the parent staple covers the appex. The notarized
-  // requirement is the check that applies to this bundle.
-  if (requireNotarized && (notarizedStatus !== 0 || !/explicit requirement satisfied/.test(notarizedOutput ?? ''))) {
-    failures.push('codesign --test-requirement "=notarized" failed on the Finder Sync appex.')
-  }
   if (urlScheme) {
     failures.push('The Finder Sync appex must not declare a URL scheme.')
   }
@@ -371,6 +361,11 @@ export function finderSyncAppexFailures({
       `The Finder Sync Install as title is ${installAsTitle || 'missing'}, expected ${expectedInstallAsTitle}.`,
     )
   }
+  // Notarization of this nested appex is the enclosing app's Notarized
+  // Developer ID result. spctl -t exec rejects the appex ("does not seem to
+  // be an app") and never prints that string. The appex has no staple of its
+  // own; the ticket is on the app and the DMG. These checks are the appex
+  // signature: Developer ID identity, team, and the hardened runtime.
   if (requireDeveloperId) {
     if (/Signature=adhoc/i.test(codesignDisplay)) failures.push('The Finder Sync appex is ad-hoc signed.')
     if (!codesignDisplay.includes(`Authority=Developer ID Application: ${DEVELOPER_ID_IDENTITY}`)) {

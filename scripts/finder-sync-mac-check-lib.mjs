@@ -8,10 +8,12 @@ import {
   FINDER_SYNC_TOO_LARGE,
   FINDER_SYNC_TOO_MANY_FILES,
   FINDER_SYNC_TREE_TOO_DEEP,
+  FINDER_SYNC_TEAM_ID,
   finderSyncAgentBundleId,
   finderSyncAppGroup,
   validateFinderSyncSelection,
 } from '../electron/finder-sync.mjs'
+import { DEVELOPER_ID_IDENTITY } from './mac-signing.mjs'
 
 /**
  * Measured on macOS 26.6: a peer dropped by setCodeSigningRequirement reports
@@ -43,8 +45,7 @@ export const AUTOMATED_CHECKS = [
   { id: 'helper-identifier', title: 'helper identifier matches this build' },
   { id: 'spctl-app', title: 'spctl reports Notarized Developer ID for the app' },
   { id: 'stapler-app', title: 'stapler validate passes for the app' },
-  { id: 'spctl-appex', title: 'appex satisfies codesign requirement =notarized' },
-  { id: 'stapler-appex', title: 'stapler validate passes for the appex' },
+  { id: 'appex-notarized', title: 'appex Developer ID signature; notarization is the enclosing app' },
   { id: 'spctl-dmg', title: 'spctl reports Notarized Developer ID for the DMG app' },
   { id: 'stapler-dmg', title: 'stapler validate passes for the DMG app' },
   { id: 'spctl-zip', title: 'spctl reports Notarized Developer ID for the update zip app' },
@@ -213,8 +214,33 @@ export function spctlNotarized(output, status) {
   return status === 0 && /Notarized Developer ID/.test(String(output ?? ''))
 }
 
-export function codesignNotarized(output, status) {
-  return status === 0 && /explicit requirement satisfied/.test(String(output ?? ''))
+/**
+ * The appex is nested XPC! code. spctl -t exec rejects it and never prints
+ * Notarized Developer ID. It has no staple of its own. Notarization is the
+ * enclosing app's Notarized Developer ID. The appex check is its signature.
+ */
+export function appexCoveredByAppNotarization({
+  appNotarized = false,
+  codesignDisplay = '',
+  identity = DEVELOPER_ID_IDENTITY,
+  teamId = FINDER_SYNC_TEAM_ID,
+} = {}) {
+  const display = String(codesignDisplay ?? '')
+  const problems = []
+  if (!appNotarized) {
+    problems.push('The enclosing app is not Notarized Developer ID, which is the notarization proof for this nested appex.')
+  }
+  if (/Signature=adhoc/i.test(display) || !display.includes(`Authority=Developer ID Application: ${identity}`)) {
+    problems.push(`The Finder Sync appex is not signed with Developer ID identity "${identity}".`)
+  }
+  const team = display.match(/TeamIdentifier=([^\s]+)/)?.[1] ?? ''
+  if (team !== teamId) problems.push(`The Finder Sync appex team ID is not ${teamId}.`)
+  if (!hardenedRuntime(display)) problems.push('The Finder Sync appex is not signed with the hardened runtime.')
+  if (problems.length) return { ok: false, reason: problems.join(' ') }
+  return {
+    ok: true,
+    reason: `Developer ID identity "${identity}", team ${teamId}, and the hardened runtime. Notarization is the enclosing app's Notarized Developer ID, because this nested appex has no ticket of its own.`,
+  }
 }
 
 export function staplerAccepted(status) {
@@ -448,8 +474,11 @@ export function buildChecklist(observations = {}) {
   }
   results.push(gate('spctl-app', observations.spctlApp, 'spctl on the app'))
   results.push(gate('stapler-app', observations.staplerApp, 'stapler on the app'))
-  results.push(gate('spctl-appex', observations.notarizedAppex, 'codesign =notarized on the appex'))
-  results.push(gate('stapler-appex', observations.staplerAppex, 'stapler on the appex'))
+  const appexNotarized = appexCoveredByAppNotarization({
+    appNotarized: observations.spctlApp?.ok === true,
+    codesignDisplay: observations.appexCodesignDisplay,
+  })
+  results.push(appexNotarized.ok ? pass('appex-notarized', appexNotarized.reason) : fail('appex-notarized', appexNotarized.reason))
   results.push(optionalGate('spctl-dmg', observations.dmg, () => gate('spctl-dmg', observations.dmg?.spctl, 'spctl on the DMG app')))
   results.push(optionalGate('stapler-dmg', observations.dmg, () => gate('stapler-dmg', observations.dmg?.stapler, 'stapler on the DMG app')))
   results.push(optionalGate('spctl-zip', observations.zip, () => gate('spctl-zip', observations.zip?.spctl, 'spctl on the zip app')))

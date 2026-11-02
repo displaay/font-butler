@@ -18,7 +18,7 @@ import {
   parseAgentStatusOutput,
   parseMacCheckArgs,
   sameArchSet,
-  codesignNotarized,
+  appexCoveredByAppNotarization,
   spctlNotarized,
   staplerAccepted,
   straySliceNames,
@@ -56,8 +56,7 @@ function passingObservations(extra = {}) {
     helperCodesignDisplay: 'Identifier=app.fontbutler.desktop.FinderSyncAgent\nflags=0x10000(runtime)\n',
     spctlApp: { ok: true, reason: 'Notarized Developer ID' },
     staplerApp: { ok: true, reason: 'stapler validate passed' },
-    notarizedAppex: { ok: true, reason: 'explicit requirement satisfied' },
-    staplerAppex: { ok: true, reason: 'stapler validate passed' },
+    appexCodesignDisplay: 'Authority=Developer ID Application: DANIEL QUISEK (A7WWML89LQ)\nTeamIdentifier=A7WWML89LQ\nflags=0x10000(runtime)\n',
     dmg: { provided: false },
     zip: { provided: false },
     roundtrip: {
@@ -93,9 +92,25 @@ test('the Mac checklist parses codesign, spctl, and agent status without a Mac',
   assert.equal(entitlementsHaveKey('<key>com.apple.security.cs.allow-jit</key>', 'com.apple.security.cs.allow-jit'), true)
   assert.equal(spctlNotarized('source=Notarized Developer ID', 0), true)
   assert.equal(spctlNotarized('rejected', 1), false)
-  assert.equal(codesignNotarized('test-requirement: explicit requirement satisfied', 0), true)
-  assert.equal(codesignNotarized('explicit requirement satisfied', 1), false)
-  assert.equal(codesignNotarized('source=Notarized Developer ID', 0), false)
+  const measuredAppexSpctl = 'Font Buttler Finder Sync.appex: rejected (the code is valid but does not seem to be an app)\norigin=Developer ID Application: DANIEL QUISEK (A7WWML89LQ)'
+  assert.equal(spctlNotarized(measuredAppexSpctl, 3), false)
+  const signedAppex = appexCoveredByAppNotarization({
+    appNotarized: true,
+    codesignDisplay: 'Authority=Developer ID Application: DANIEL QUISEK (A7WWML89LQ)\nTeamIdentifier=A7WWML89LQ\nflags=0x10000(runtime)',
+  })
+  assert.equal(signedAppex.ok, true)
+  assert.match(signedAppex.reason, /enclosing app's Notarized Developer ID/)
+  assert.match(signedAppex.reason, /no ticket of its own/)
+  const unsignedAppex = appexCoveredByAppNotarization({ appNotarized: true, codesignDisplay: measuredAppexSpctl })
+  assert.equal(unsignedAppex.ok, false)
+  const unnotarizedApp = appexCoveredByAppNotarization({
+    appNotarized: false,
+    codesignDisplay: 'Authority=Developer ID Application: DANIEL QUISEK (A7WWML89LQ)\nTeamIdentifier=A7WWML89LQ\nflags=0x10000(runtime)',
+  })
+  assert.equal(unnotarizedApp.ok, false)
+  assert.match(unnotarizedApp.reason, /enclosing app is not Notarized Developer ID/)
+  assert.equal(AUTOMATED_CHECKS.some((item) => item.id === 'stapler-appex'), false)
+  assert.equal(AUTOMATED_CHECKS.some((item) => item.id === 'spctl-appex'), false)
   assert.equal(staplerAccepted(0), true)
   assert.equal(staplerAccepted(1), false)
   assert.deepEqual(parseAgentStatusOutput('noise\nfinder-sync-agent-status {"status":"requires-approval"}\n'), {
