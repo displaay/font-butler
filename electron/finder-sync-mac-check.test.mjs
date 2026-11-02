@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import {
   AUTOMATED_CHECKS,
-  FINDER_SYNC_REJECTION,
+  xpcRequirementRejectionProven,
   MANUAL_MAC_CHECKS,
   buildChecklist,
   entitlementsHaveKey,
@@ -59,9 +59,17 @@ function passingObservations(extra = {}) {
     roundtrip: {
       status: 0,
       output: [
-        'positive: ping ok',
-        'negative: rejected: connection invalidated',
-        'wrong-identifier: rejected: NSCocoaErrorDomain 4099',
+        'positive: pid 4',
+        'ping ok',
+        'absent: pid 5',
+        'rejected: NSCocoaErrorDomain 4097 Couldn’t communicate with a helper application.',
+        'absent requirement-reached: no',
+        'ad-hoc: pid 6',
+        'rejected: NSCocoaErrorDomain 4097 Couldn’t communicate with a helper application.',
+        'ad-hoc requirement-reached: yes',
+        'wrong-identifier: pid 7',
+        'rejected: NSCocoaErrorDomain 4097 Couldn’t communicate with a helper application.',
+        'wrong-identifier requirement-reached: yes',
         'submit: submit ok',
       ].join('\n'),
     },
@@ -95,11 +103,24 @@ test('the Mac checklist parses codesign, spctl, and agent status without a Mac',
     status: 'requires-approval',
   })
   assert.equal(parseAgentStatusOutput('no status here'), null)
-  assert.equal(FINDER_SYNC_REJECTION.test('rejected: connection invalidated'), true)
-  assert.equal(FINDER_SYNC_REJECTION.test('rejected: NSCocoaErrorDomain 4099 something'), true)
-  assert.equal(FINDER_SYNC_REJECTION.test('rejected: something else'), false)
+  const bare = [
+    'positive: ping ok',
+    'absent: rejected: NSCocoaErrorDomain 4097 Couldn’t communicate with a helper application.',
+    'absent requirement-reached: no',
+    'ad-hoc: rejected: NSCocoaErrorDomain 4097 Couldn’t communicate with a helper application.',
+    'ad-hoc requirement-reached: no',
+    'wrong-identifier: rejected: NSCocoaErrorDomain 4097 Couldn’t communicate with a helper application.',
+    'wrong-identifier requirement-reached: no',
+  ].join('\n')
+  assert.equal(xpcRequirementRejectionProven(bare), false)
+  const reached = bare
+    .replace('ad-hoc requirement-reached: no', 'ad-hoc requirement-reached: yes')
+    .replace('wrong-identifier requirement-reached: no', 'wrong-identifier requirement-reached: yes')
+  assert.equal(xpcRequirementRejectionProven(reached), true)
+  assert.equal(xpcRequirementRejectionProven(reached.replace('ad-hoc: rejected:', 'ad-hoc: ping ok\nrejected:')), false)
   const roundtrip = readFileSync(new URL('../scripts/finder-sync-roundtrip-check', import.meta.url), 'utf8')
-  assert.match(roundtrip, /rejected: connection invalidated\|rejected: NSCocoaErrorDomain 4099/)
+  assert.match(roundtrip, /xpc-requirement\.log/)
+  assert.match(roundtrip, /4097 alone/)
   const command = readFileSync(new URL('../scripts/finder-sync-mac-check.mjs', import.meta.url), 'utf8')
   const guard = command.indexOf("process.platform !== 'darwin'")
   const collectCall = command.indexOf('const results = collect(')

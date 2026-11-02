@@ -13,8 +13,13 @@ import {
   validateFinderSyncSelection,
 } from '../electron/finder-sync.mjs'
 
-export const FINDER_SYNC_REJECTION =
-  /^(?:rejected: connection invalidated|rejected: NSCocoaErrorDomain 4099(?:\s|$))/
+/**
+ * NSCocoaErrorDomain 4097 (NSXPCConnectionInterrupted) is also what a missing
+ * Mach service returns. It is not, by itself, evidence that
+ * setCodeSigningRequirement refused the peer. The proof is the helper's
+ * xpc-requirement.log pid line, printed by the roundtrip as
+ * `requirement-reached: yes`, plus no successful reply.
+ */
 
 const CPU_NAMES = new Map([
   [0x01000007, 'x86_64'],
@@ -295,28 +300,39 @@ function selectionProbes() {
   return { tooMany, huge, deep, linked }
 }
 
+function labeledTranscript(body, label) {
+  const marker = `${label}:`
+  const start = body.indexOf(marker)
+  if (start < 0) return ''
+  const rest = body.slice(start + marker.length)
+  const next = rest.search(/\n(?:positive|absent|ad-hoc|wrong-identifier|submit):/)
+  return next < 0 ? rest : rest.slice(0, next)
+}
+
+export function xpcRequirementRejectionProven(text) {
+  const body = String(text ?? '')
+  if (!body.includes('absent requirement-reached: no')) return false
+  for (const label of ['ad-hoc', 'wrong-identifier']) {
+    if (!body.includes(`${label} requirement-reached: yes`)) return false
+    const transcript = labeledTranscript(body, label)
+    if (/ping ok|submit ok/.test(transcript)) return false
+  }
+  return true
+}
+
 export function classifyRoundtripOutput(text, status) {
   const body = String(text ?? '')
-  const rejections = body
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith('rejected:') || line.includes('rejected:'))
-    .map((line) => {
-      const at = line.indexOf('rejected:')
-      return line.slice(at).trim()
-    })
-  const rejectedOk = rejections.filter((line) => FINDER_SYNC_REJECTION.test(line)).length >= 2
-  const acceptedNegative = /was accepted/.test(body)
-  const ping = body.includes('ping ok')
+  const positive = labeledTranscript(body, 'positive')
+  const ping = /ping ok/.test(positive) || (positive === '' && body.includes('ping ok'))
   const submit = body.includes('submit ok')
   const invalid = /invalid connection/i.test(body)
   const ok = status === 0
   return {
     xpcAccept: ok && ping,
-    xpcReject: ok && rejectedOk && !acceptedNegative,
+    xpcReject: ok && xpcRequirementRejectionProven(body),
     socketSubmit: ok && submit,
     launchd: ok && ping && !invalid,
-    reason: body.trim().split(/\r?\n/).slice(-4).join(' ') || `exit ${status}`,
+    reason: body.trim().split(/\r?\n/).slice(-6).join(' ') || `exit ${status}`,
   }
 }
 

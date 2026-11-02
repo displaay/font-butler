@@ -352,6 +352,41 @@ static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL over
                reply:(void (^)(NSString *error))reply;
 @end
 
+// Diagnostic for the roundtrip check only. The requirement itself is enforced
+// by setCodeSigningRequirement above. A pid in this file means that connection
+// reached the listener. NSCocoaErrorDomain 4097 alone does not mean that.
+static void NoteXpcRequirementApplied(pid_t pid) {
+  if (pid <= 0) return;
+  char temp[PATH_MAX];
+  size_t wrote = confstr(_CS_DARWIN_USER_TEMP_DIR, temp, sizeof(temp));
+  if (wrote == 0 || wrote >= sizeof(temp)) return;
+  const char *separator = temp[strlen(temp) - 1] == '/' ? "" : "/";
+  char dir[PATH_MAX];
+  int formatted = snprintf(dir, sizeof(dir), "%s%s%s", temp, separator, kSocketDirectory.UTF8String);
+  if (formatted <= 0 || (size_t)formatted >= sizeof(dir)) return;
+  struct stat st;
+  if (lstat(dir, &st) != 0) {
+    if (mkdir(dir, 0700) != 0) return;
+    chmod(dir, 0700);
+  } else if (S_ISLNK(st.st_mode) || !S_ISDIR(st.st_mode)) {
+    return;
+  }
+  char file[PATH_MAX];
+  formatted = snprintf(file, sizeof(file), "%s/xpc-requirement.log", dir);
+  if (formatted <= 0 || (size_t)formatted >= sizeof(file)) return;
+  if (lstat(file, &st) == 0 && !S_ISREG(st.st_mode)) return;
+  int fd = open(file, O_CREAT | O_WRONLY | O_APPEND | O_NOFOLLOW, 0600);
+  if (fd < 0) return;
+  if (fchmod(fd, 0600) != 0) {
+    close(fd);
+    return;
+  }
+  char line[64];
+  int count = snprintf(line, sizeof(line), "pid %d\n", (int)pid);
+  if (count > 0) WriteAll(fd, line, (size_t)count);
+  close(fd);
+}
+
 @interface FontButtlerFinderSyncAgent : NSObject <NSXPCListenerDelegate, FontButtlerFinderSyncHandoff>
 @property(nonatomic, strong) NSXPCListener *listener;
 @property(nonatomic, copy) NSString *requirement;
@@ -386,6 +421,7 @@ static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL over
   if (created != errSecSuccess) return NO;
   if (@available(macOS 13.0, *)) {
     [connection setCodeSigningRequirement:requirement];
+    NoteXpcRequirementApplied(connection.processIdentifier);
   } else {
     return NO;
   }
