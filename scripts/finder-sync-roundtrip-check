@@ -8,17 +8,16 @@
  *
  * The positive client is signed with Developer ID and the appex identifier.
  * One negative client is ad-hoc signed with that identifier. Another is
- * Developer ID signed with a different identifier. Both must print
- * The negative clients must reach the helper (it records their pid when it
- * applies setCodeSigningRequirement) and must not receive ping ok or submit ok.
- * NSCocoaErrorDomain 4097 by itself is also what a missing service returns, so
- * it is not treated as proof of a requirement rejection. The app this script launches is killed
+ * Developer ID signed with a different identifier. Both must report
+ * NSCocoaErrorDomain 4097, or 4099 on older macOS. "rejected: connection
+ * invalidated" means launchd did not vend the service, and is not a
+ * requirement rejection. The app this script launches is killed
  * before the script exits.
  * Off macOS this prints a skip line and exits 0.
  */
 import { spawn, spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -33,7 +32,6 @@ import { DEVELOPER_ID_IDENTITY } from './mac-signing.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const clientSource = path.join(repoRoot, 'macos/FinderSyncAgent/FinderSyncPingClient.mm')
-const REQUIREMENT_LOG = 'xpc-requirement.log'
 let appPid = 0
 
 function stopLaunchedApp() {
@@ -79,25 +77,26 @@ function run(command, args, options = {}) {
   return spawnSync(command, args, { encoding: 'utf8', ...options })
 }
 
-function clientPid(text) {
-  const match = String(text ?? '').match(/^pid (\d+)$/m)
-  return match ? match[1] : ''
+const REQUIREMENT_REJECTION = /^(?:rejected: NSCocoaErrorDomain 4097(?:\s|$)|rejected: NSCocoaErrorDomain 4099(?:\s|$))/
+const NOT_VENDED = /^rejected: connection invalidated$/
+
+function rejectionLine(text) {
+  return String(text ?? '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.startsWith('rejected:')) ?? ''
 }
 
-function loggedRequirementPids(logPath) {
-  if (!existsSync(logPath)) return new Set()
-  const pids = new Set()
-  for (const line of readFileSync(logPath, 'utf8').split(/\n/)) {
-    const match = /^pid (\d+)$/.exec(line.trim())
-    if (match) pids.add(match[1])
+function rejectionProblem(text, label) {
+  if (text.includes('ping ok') || text.includes('submit ok')) return `The ${label} client was accepted.`
+  const line = rejectionLine(text)
+  if (NOT_VENDED.test(line)) {
+    return `The ${label} client reported "connection invalidated", so the Mach service was not vended. That is not a requirement rejection.`
   }
-  return pids
-}
-
-function clientWasRefused(text) {
-  const body = String(text ?? '')
-  if (body.includes('ping ok') || body.includes('submit ok')) return false
-  return body.includes('rejected:')
+  if (!REQUIREMENT_REJECTION.test(line)) {
+    return `The ${label} client was not rejected with NSCocoaErrorDomain 4097 or 4099.\n${text}`
+  }
+  return ''
 }
 
 function main() {
@@ -205,47 +204,29 @@ function main() {
     if (ping.status !== 0 || !ping.stdout?.includes('ping ok')) {
       fail('The Developer ID client did not receive a ping reply.')
     }
-    const tempDir = run('getconf', ['DARWIN_USER_TEMP_DIR'])
-    const socketDir = (tempDir.stdout ?? '').trim()
-    if (!socketDir) fail('DARWIN_USER_TEMP_DIR was empty.')
-    const requirementLog = path.join(socketDir, finderSyncSocketDirectoryName(), REQUIREMENT_LOG)
     const probe = (binary, args) => {
       const result = run(binary, args, { timeout: 20000 })
       return `${result.stdout ?? ''}\n${result.stderr ?? ''}`
     }
     const problems = []
-    const absentService = `${service}.not-vended`
-    const absentText = probe(negative, [absentService])
-    const absentPid = clientPid(absentText)
-    const absentReached = loggedRequirementPids(requirementLog).has(absentPid)
-    console.log(`absent: ${absentText.trim() || 'no output'}`)
-    console.log(`absent requirement-reached: ${absentReached ? 'yes' : 'no'}`)
-    if (absentReached) problems.push('The absent Mach service reached the helper, so the control is invalid.')
-    if (!clientWasRefused(absentText)) problems.push('The absent Mach service did not fail.')
+    const controlText = probe(positive, [`${service}.not-vended`])
+    console.log(`control: ${controlText.trim() || 'no output'}`)
+    if (!NOT_VENDED.test(rejectionLine(controlText))) {
+      problems.push('The bogus Mach service did not report "connection invalidated", which is the nobody-home signal.')
+    }
     const adHocText = probe(negative, [service])
-    const adHocReached = loggedRequirementPids(requirementLog).has(clientPid(adHocText))
-    console.log(`ad-hoc: ${adHocText.trim() || 'no output'}`)
-    console.log(`ad-hoc requirement-reached: ${adHocReached ? 'yes' : 'no'}`)
-    if (!adHocReached) {
-      problems.push(
-        'The ad-hoc client did not reach setCodeSigningRequirement. NSCocoaErrorDomain 4097 alone is also what a missing service returns, so it is not a requirement rejection.',
-      )
-    } else if (!clientWasRefused(adHocText)) {
-      problems.push('The ad-hoc client was accepted.')
-    }
+    console.log(`negative: ${adHocText.trim() || 'no output'}`)
+    const adHocProblem = rejectionProblem(adHocText, 'ad-hoc')
+    if (adHocProblem) problems.push(adHocProblem)
     const wrongRunText = probe(wrong, [service])
-    const wrongReached = loggedRequirementPids(requirementLog).has(clientPid(wrongRunText))
     console.log(`wrong-identifier: ${wrongRunText.trim() || 'no output'}`)
-    console.log(`wrong-identifier requirement-reached: ${wrongReached ? 'yes' : 'no'}`)
-    if (!wrongReached) {
-      problems.push(
-        'The wrong-identifier client did not reach setCodeSigningRequirement. NSCocoaErrorDomain 4097 alone is not a requirement rejection.',
-      )
-    } else if (!clientWasRefused(wrongRunText)) {
-      problems.push('The wrong-identifier client was accepted.')
-    }
+    const wrongProblem = rejectionProblem(wrongRunText, 'wrong-identifier')
+    if (wrongProblem) problems.push(wrongProblem)
     if (problems.length) fail(problems.join('\n'))
 
+    const tempDir = run('getconf', ['DARWIN_USER_TEMP_DIR'])
+    const socketDir = (tempDir.stdout ?? '').trim()
+    if (!socketDir) fail('DARWIN_USER_TEMP_DIR was empty.')
     const appProcess = spawn(binary, [], { detached: true, stdio: 'ignore' })
     appPid = appProcess.pid ?? 0
     appProcess.unref()

@@ -3,6 +3,9 @@ import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import {
   AUTOMATED_CHECKS,
+  FINDER_SYNC_NOT_VENDED,
+  FINDER_SYNC_REJECTION,
+  clientRejectionKind,
   xpcRequirementRejectionProven,
   MANUAL_MAC_CHECKS,
   buildChecklist,
@@ -59,17 +62,9 @@ function passingObservations(extra = {}) {
     roundtrip: {
       status: 0,
       output: [
-        'positive: pid 4',
-        'ping ok',
-        'absent: pid 5',
-        'rejected: NSCocoaErrorDomain 4097 Couldn’t communicate with a helper application.',
-        'absent requirement-reached: no',
-        'ad-hoc: pid 6',
-        'rejected: NSCocoaErrorDomain 4097 Couldn’t communicate with a helper application.',
-        'ad-hoc requirement-reached: yes',
-        'wrong-identifier: pid 7',
-        'rejected: NSCocoaErrorDomain 4097 Couldn’t communicate with a helper application.',
-        'wrong-identifier requirement-reached: yes',
+        'positive: ping ok',
+        'negative: rejected: NSCocoaErrorDomain 4097 Couldn\'t communicate with a helper application.',
+        'wrong-identifier: rejected: NSCocoaErrorDomain 4097 Couldn\'t communicate with a helper application.',
         'submit: submit ok',
       ].join('\n'),
     },
@@ -103,24 +98,30 @@ test('the Mac checklist parses codesign, spctl, and agent status without a Mac',
     status: 'requires-approval',
   })
   assert.equal(parseAgentStatusOutput('no status here'), null)
-  const bare = [
+  const measuredNegative = 'rejected: NSCocoaErrorDomain 4097 Couldn\'t communicate with a helper application.'
+  const measuredControl = 'rejected: connection invalidated'
+  assert.equal(FINDER_SYNC_REJECTION.test(measuredNegative), true)
+  assert.equal(FINDER_SYNC_REJECTION.test('rejected: NSCocoaErrorDomain 4099'), true)
+  assert.equal(FINDER_SYNC_REJECTION.test(measuredControl), false)
+  assert.equal(FINDER_SYNC_NOT_VENDED.test(measuredControl), true)
+  assert.equal(clientRejectionKind(measuredNegative), 'requirement')
+  assert.equal(clientRejectionKind(measuredControl), 'not-vended')
+  assert.equal(clientRejectionKind('ping ok'), 'accepted')
+  const measured = [
     'positive: ping ok',
-    'absent: rejected: NSCocoaErrorDomain 4097 Couldn’t communicate with a helper application.',
-    'absent requirement-reached: no',
-    'ad-hoc: rejected: NSCocoaErrorDomain 4097 Couldn’t communicate with a helper application.',
-    'ad-hoc requirement-reached: no',
-    'wrong-identifier: rejected: NSCocoaErrorDomain 4097 Couldn’t communicate with a helper application.',
-    'wrong-identifier requirement-reached: no',
+    `negative: ${measuredNegative}`,
+    `wrong-identifier: ${measuredNegative}`,
+    `control: ${measuredControl}`,
+    'submit: submit ok',
   ].join('\n')
-  assert.equal(xpcRequirementRejectionProven(bare), false)
-  const reached = bare
-    .replace('ad-hoc requirement-reached: no', 'ad-hoc requirement-reached: yes')
-    .replace('wrong-identifier requirement-reached: no', 'wrong-identifier requirement-reached: yes')
-  assert.equal(xpcRequirementRejectionProven(reached), true)
-  assert.equal(xpcRequirementRejectionProven(reached.replace('ad-hoc: rejected:', 'ad-hoc: ping ok\nrejected:')), false)
+  assert.equal(xpcRequirementRejectionProven(measured), true)
+  const nobodyHome = measured
+    .replaceAll(measuredNegative, measuredControl)
+  assert.equal(xpcRequirementRejectionProven(nobodyHome), false)
   const roundtrip = readFileSync(new URL('../scripts/finder-sync-roundtrip-check', import.meta.url), 'utf8')
-  assert.match(roundtrip, /xpc-requirement\.log/)
-  assert.match(roundtrip, /4097 alone/)
+  assert.match(roundtrip, /NSCocoaErrorDomain 4097/)
+  assert.match(roundtrip, /NSCocoaErrorDomain 4099/)
+  assert.match(roundtrip, /not a requirement rejection/)
   const command = readFileSync(new URL('../scripts/finder-sync-mac-check.mjs', import.meta.url), 'utf8')
   const guard = command.indexOf("process.platform !== 'darwin'")
   const collectCall = command.indexOf('const results = collect(')
@@ -165,10 +166,14 @@ test('a complete signed-app observation passes, and a missing entitlement or pen
   assert.equal(summarizeChecklist(pending).ok, false)
 
   const invalid = buildChecklist(passingObservations({
-    roundtrip: { status: 0, output: 'positive: invalid connection\nnegative: rejected: connection invalidated\nwrong-identifier: rejected: NSCocoaErrorDomain 4099\nsubmit: submit ok' },
+    roundtrip: {
+      status: 0,
+      output: 'positive: ping ok\nnegative: rejected: connection invalidated\nwrong-identifier: rejected: connection invalidated\nsubmit: submit ok',
+    },
   }))
+  assert.equal(invalid.find((item) => item.id === 'xpc-reject').state, 'fail')
   assert.equal(invalid.find((item) => item.id === 'launchd-vend').state, 'fail')
-  assert.match(invalid.find((item) => item.id === 'launchd-vend').reason, /invalid connection/)
+  assert.match(invalid.find((item) => item.id === 'launchd-vend').reason, /not vended/)
 
   const args = parseMacCheckArgs(['/Applications/Font Buttler.app', '--dmg', '/tmp/Font.dmg', '--json'])
   assert.equal(args.error, '')

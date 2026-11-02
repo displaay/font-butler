@@ -14,12 +14,15 @@ import {
 } from '../electron/finder-sync.mjs'
 
 /**
- * NSCocoaErrorDomain 4097 (NSXPCConnectionInterrupted) is also what a missing
- * Mach service returns. It is not, by itself, evidence that
- * setCodeSigningRequirement refused the peer. The proof is the helper's
- * xpc-requirement.log pid line, printed by the roundtrip as
- * `requirement-reached: yes`, plus no successful reply.
+ * Measured on macOS 26.6: a peer dropped by setCodeSigningRequirement reports
+ * NSCocoaErrorDomain 4097. 4099 is the older invalidated code. "connection
+ * invalidated" with no NSError is the invalidationHandler for a Mach service
+ * nobody owns, and is not a requirement rejection.
  */
+export const FINDER_SYNC_REJECTION =
+  /^(?:rejected: NSCocoaErrorDomain 4097(?:\s|$)|rejected: NSCocoaErrorDomain 4099(?:\s|$))/
+
+export const FINDER_SYNC_NOT_VENDED = /^rejected: connection invalidated$/
 
 const CPU_NAMES = new Map([
   [0x01000007, 'x86_64'],
@@ -50,7 +53,7 @@ export const AUTOMATED_CHECKS = [
   { id: 'xpc-reject', title: 'ad-hoc and wrong-identifier clients are rejected' },
   { id: 'socket-submit', title: 'submit ok through the helper socket' },
   { id: 'xpc-anonymous', title: 'anonymous XPC listener rejects a foreign client' },
-  { id: 'launchd-vend', title: 'launchd vends the Mach service (no invalid connection)' },
+  { id: 'launchd-vend', title: 'launchd vends the Mach service (positive ping ok)' },
   { id: 'limit-files', title: 'more than 500 files is refused' },
   { id: 'limit-bytes', title: 'more than 2 GB is refused' },
   { id: 'limit-depth', title: 'more than 10 levels of nesting is refused' },
@@ -305,34 +308,48 @@ function labeledTranscript(body, label) {
   const start = body.indexOf(marker)
   if (start < 0) return ''
   const rest = body.slice(start + marker.length)
-  const next = rest.search(/\n(?:positive|absent|ad-hoc|wrong-identifier|submit):/)
+  const next = rest.search(/\n(?:positive|negative|wrong-identifier|control|submit):/)
   return next < 0 ? rest : rest.slice(0, next)
+}
+
+export function rejectionLines(text) {
+  return String(text ?? '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('rejected:'))
+}
+
+/** requirement | not-vended | accepted | other */
+export function clientRejectionKind(text) {
+  const lines = rejectionLines(text)
+  const succeeded = /ping ok|submit ok/.test(String(text ?? ''))
+  if (lines.some((line) => FINDER_SYNC_REJECTION.test(line)) && !succeeded) return 'requirement'
+  if (lines.some((line) => FINDER_SYNC_NOT_VENDED.test(line)) && !lines.some((line) => FINDER_SYNC_REJECTION.test(line))) {
+    return 'not-vended'
+  }
+  if (succeeded) return 'accepted'
+  return 'other'
 }
 
 export function xpcRequirementRejectionProven(text) {
   const body = String(text ?? '')
-  if (!body.includes('absent requirement-reached: no')) return false
-  for (const label of ['ad-hoc', 'wrong-identifier']) {
-    if (!body.includes(`${label} requirement-reached: yes`)) return false
-    const transcript = labeledTranscript(body, label)
-    if (/ping ok|submit ok/.test(transcript)) return false
-  }
-  return true
+  return ['negative', 'wrong-identifier'].every((label) => clientRejectionKind(labeledTranscript(body, label)) === 'requirement')
 }
 
 export function classifyRoundtripOutput(text, status) {
   const body = String(text ?? '')
-  const positive = labeledTranscript(body, 'positive')
-  const ping = /ping ok/.test(positive) || (positive === '' && body.includes('ping ok'))
+  const ping = /ping ok/.test(labeledTranscript(body, 'positive'))
+  const notVended = ['negative', 'wrong-identifier'].some((label) => clientRejectionKind(labeledTranscript(body, label)) === 'not-vended')
   const submit = body.includes('submit ok')
-  const invalid = /invalid connection/i.test(body)
   const ok = status === 0
   return {
     xpcAccept: ok && ping,
     xpcReject: ok && xpcRequirementRejectionProven(body),
     socketSubmit: ok && submit,
-    launchd: ok && ping && !invalid,
-    reason: body.trim().split(/\r?\n/).slice(-6).join(' ') || `exit ${status}`,
+    launchd: ok && ping && !notVended,
+    reason: notVended
+      ? 'connection invalidated means the Mach service was not vended'
+      : body.trim().split(/\r?\n/).slice(-6).join(' ') || `exit ${status}`,
   }
 }
 

@@ -1,6 +1,5 @@
 #import <Cocoa/Cocoa.h>
 #include <stdio.h>
-#include <unistd.h>
 
 @protocol FontButtlerFinderSyncHandoff
 - (void)pingWithReply:(void (^)(NSString *error))reply;
@@ -37,9 +36,8 @@ int main(int argc, const char *argv[]) {
       if (!error) {
         fprintf(stderr, "rejected: connection invalidated\n");
       } else {
-        // Print the underlying chain. A bare NSCocoaErrorDomain 4097 is also
-        // what a missing service returns, so it is not by itself a requirement
-        // failure. NSXPCConnectionCodeSigningRequirementFailure is 4102.
+        // 4097 is NSXPCConnectionInterrupted: the service was there and dropped
+        // the peer. "connection invalidated" with no NSError is nobody listening.
         for (int depth = 0; error && depth < 6; depth += 1) {
           fprintf(stderr, "rejected: %s %ld %s\n", error.domain.UTF8String ?: "unknown", (long)error.code,
                   error.localizedDescription.UTF8String ?: "");
@@ -50,7 +48,6 @@ int main(int argc, const char *argv[]) {
       status = 1;
       dispatch_semaphore_signal(done);
     };
-    fprintf(stderr, "pid %d\n", (int)getpid());
     connection.interruptionHandler = ^{
       reject(nil);
     };
