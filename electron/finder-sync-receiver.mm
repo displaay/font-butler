@@ -168,8 +168,9 @@ static BOOL ReadJsonNumber(id value, uint64_t *out) {
     return YES;
   }
   if ([value isKindOfClass:[NSString class]]) {
-    if ([value hasPrefix:@"-"]) return NO;
-    *out = strtoull(value.UTF8String, nullptr, 10);
+    NSString *text = (NSString *)value;
+    if ([text hasPrefix:@"-"]) return NO;
+    *out = strtoull(text.UTF8String, nullptr, 10);
     return YES;
   }
   return NO;

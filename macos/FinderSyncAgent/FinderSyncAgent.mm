@@ -377,10 +377,18 @@ static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL over
 - (BOOL)listener:(NSXPCListener *)listener shouldAcceptNewConnection:(NSXPCConnection *)connection {
   (void)listener;
   NSString *requirement = self.requirement.length ? self.requirement : (g_testFeed ? kTestRequirement : kReleaseRequirement);
-  if ([connection respondsToSelector:@selector(setCodeSigningRequirement:)]) {
+  // NSXPCConnection has no public auditToken. setCodeSigningRequirement is the
+  // supported check: the XPC runtime evaluates it against the peer. A process
+  // id is not a substitute. Before macOS 13 the connection is refused.
+  SecRequirementRef parsed = NULL;
+  OSStatus created = SecRequirementCreateWithString((__bridge CFStringRef)requirement, kSecCSDefaultFlags, &parsed);
+  if (parsed) CFRelease(parsed);
+  if (created != errSecSuccess) return NO;
+  if (@available(macOS 13.0, *)) {
     [connection setCodeSigningRequirement:requirement];
+  } else {
+    return NO;
   }
-  if (!GuestMeetsRequirement(connection.auditToken, requirement)) return NO;
   connection.exportedInterface = [NSXPCInterface interfaceWithProtocol:@protocol(FontButtlerFinderSyncHandoff)];
   connection.exportedObject = self;
   [connection resume];

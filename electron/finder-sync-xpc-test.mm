@@ -30,38 +30,6 @@ static BOOL SelfMeetsRequirement(NSString *text) {
   return check == errSecSuccess;
 }
 
-static BOOL GuestMeetsRequirement(audit_token_t token, NSString *requirementString) {
-  SecRequirementRef requirement = NULL;
-  if (SecRequirementCreateWithString((__bridge CFStringRef)requirementString, kSecCSDefaultFlags, &requirement) != errSecSuccess ||
-      !requirement) {
-    return NO;
-  }
-  CFDataRef auditData = CFDataCreate(kCFAllocatorDefault, (const UInt8 *)&token, (CFIndex)sizeof(token));
-  if (!auditData) {
-    CFRelease(requirement);
-    return NO;
-  }
-  const void *keys[] = {kSecGuestAttributeAudit};
-  const void *values[] = {auditData};
-  CFDictionaryRef attributes = CFDictionaryCreate(kCFAllocatorDefault, keys, values, 1, &kCFTypeDictionaryKeyCallBacks,
-                                                 &kCFTypeDictionaryValueCallBacks);
-  SecCodeRef guest = NULL;
-  OSStatus copyStatus = errSecInternalError;
-  if (attributes) {
-    copyStatus = SecCodeCopyGuestWithAttributes(NULL, attributes, kSecCSDefaultFlags, &guest);
-    CFRelease(attributes);
-  }
-  CFRelease(auditData);
-  if (copyStatus != errSecSuccess || !guest) {
-    CFRelease(requirement);
-    return NO;
-  }
-  OSStatus signatureStatus = SecCodeCheckValidity(guest, kSecCSStrictValidate, requirement);
-  CFRelease(guest);
-  CFRelease(requirement);
-  return signatureStatus == errSecSuccess;
-}
-
 @protocol FontButtlerFinderSyncHandoff
 - (void)submitAction:(NSString *)action paths:(NSArray<NSString *> *)paths reply:(void (^)(NSString *error))reply;
 @end
@@ -74,10 +42,13 @@ static BOOL GuestMeetsRequirement(audit_token_t token, NSString *requirementStri
 
 - (BOOL)listener:(NSXPCListener *)listener shouldAcceptNewConnection:(NSXPCConnection *)connection {
   (void)listener;
-  if ([connection respondsToSelector:@selector(setCodeSigningRequirement:)]) {
+  // Same public check as the helper. This process is not the appex, so the
+  // requirement must reject it. There is no public auditToken to read.
+  if (@available(macOS 13.0, *)) {
     [connection setCodeSigningRequirement:kReleaseRequirement];
+  } else {
+    return NO;
   }
-  if (!GuestMeetsRequirement(connection.auditToken, kReleaseRequirement)) return NO;
   connection.exportedInterface = [NSXPCInterface interfaceWithProtocol:@protocol(FontButtlerFinderSyncHandoff)];
   connection.exportedObject = self;
   [connection resume];
