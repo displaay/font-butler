@@ -786,6 +786,40 @@ export function retailListingHasLocalFile(entry: RetailLibraryEntry): boolean {
 }
 
 /**
+ * Shown when Install is asked for a Displaay retail row whose bytes were never downloaded.
+ * The Settings toggle is "Displaay retail sync" under Watch folders. Downloading is Sync,
+ * or turning the family on — the same words the retail pane already uses.
+ */
+export const RETAIL_NOT_DOWNLOADED_SYNC_OFF =
+  'This Displaay retail font has not been downloaded. Turn on Displaay retail sync in Settings → Watch folders. Nothing is downloaded until you Sync or turn the family on.'
+
+export const RETAIL_NOT_DOWNLOADED_SYNC_ON =
+  'This Displaay retail font has not been downloaded. In Settings → Watch folders, Sync or turn the family on to download it.'
+
+/**
+ * True when this retail row has no source because it was never downloaded.
+ * `sourceAvailability: 'none'` and an empty source path are that case.
+ * Any other availability, or a source path that was recorded, means a file
+ * was expected and is gone — that is still "the source file is missing".
+ */
+export function retailSourceNeverDownloaded(entry: RetailLibraryEntry): boolean {
+  if (!entry.retailRelativePath?.trim()) return false
+  if (entry.sourceAvailability && entry.sourceAvailability !== 'none') return false
+  if (entry.sourcePath?.trim()) return false
+  if (retailListingHasLocalFile(entry)) return false
+  return true
+}
+
+/** Install error for a never-downloaded retail row, or null when the source should have existed. */
+export function retailNotDownloadedInstallMessage(
+  entry: RetailLibraryEntry,
+  syncEnabled: boolean,
+): string | null {
+  if (!retailSourceNeverDownloaded(entry)) return null
+  return syncEnabled ? RETAIL_NOT_DOWNLOADED_SYNC_ON : RETAIL_NOT_DOWNLOADED_SYNC_OFF
+}
+
+/**
  * Installed, deactivated, or otherwise on the Mac. An `uninstalled` retail listing can still point at a
  * copy parked in the retail cache (a re-sync after an uninstall); that copy is ours, not the user's.
  */

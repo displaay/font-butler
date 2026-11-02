@@ -329,6 +329,7 @@ import {
 } from './service-retail.ts'
 import {
   isOrphanRetailListing,
+  retailNotDownloadedInstallMessage,
   type RetailCollisionAction,
   type RetailFamilyCollision,
   type RetailSyncStatus,
@@ -1092,7 +1093,11 @@ export class FontButlerService {
           items.push({ id: crypto.randomUUID(), entryId: id, label: id, outcome: 'failed', reason })
           await progress.mark(id)
         } else if (entry.status === 'source-missing') {
-          const reason = 'The source file is missing.'
+          const reason =
+            retailNotDownloadedInstallMessage(
+              entry,
+              Boolean(loadSettings(this.paths).retailSync?.enabled),
+            ) ?? 'The source file is missing.'
           errors.push(reason)
           items.push({ id: crypto.randomUUID(), entryId: id, label: displayEntry(entry), outcome: 'failed', reason })
           await progress.mark(id)
@@ -1567,7 +1572,11 @@ export class FontButlerService {
           continue
         }
         if (entry.status === 'source-missing') {
-          const reason = 'The source file is missing.'
+          const reason =
+            retailNotDownloadedInstallMessage(
+              entry,
+              Boolean(loadSettings(this.paths).retailSync?.enabled),
+            ) ?? 'The source file is missing.'
           errors.push(reason)
           items.push({ id: crypto.randomUUID(), entryId: id, label: displayEntry(entry), outcome: 'failed', reason })
           await progress.mark(id)
