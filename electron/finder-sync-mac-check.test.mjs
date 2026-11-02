@@ -18,6 +18,7 @@ import {
   parseAgentStatusOutput,
   parseMacCheckArgs,
   sameArchSet,
+  codesignNotarized,
   spctlNotarized,
   staplerAccepted,
   straySliceNames,
@@ -55,7 +56,7 @@ function passingObservations(extra = {}) {
     helperCodesignDisplay: 'Identifier=app.fontbutler.desktop.FinderSyncAgent\nflags=0x10000(runtime)\n',
     spctlApp: { ok: true, reason: 'Notarized Developer ID' },
     staplerApp: { ok: true, reason: 'stapler validate passed' },
-    spctlAppex: { ok: true, reason: 'Notarized Developer ID' },
+    notarizedAppex: { ok: true, reason: 'explicit requirement satisfied' },
     staplerAppex: { ok: true, reason: 'stapler validate passed' },
     dmg: { provided: false },
     zip: { provided: false },
@@ -92,6 +93,9 @@ test('the Mac checklist parses codesign, spctl, and agent status without a Mac',
   assert.equal(entitlementsHaveKey('<key>com.apple.security.cs.allow-jit</key>', 'com.apple.security.cs.allow-jit'), true)
   assert.equal(spctlNotarized('source=Notarized Developer ID', 0), true)
   assert.equal(spctlNotarized('rejected', 1), false)
+  assert.equal(codesignNotarized('test-requirement: explicit requirement satisfied', 0), true)
+  assert.equal(codesignNotarized('explicit requirement satisfied', 1), false)
+  assert.equal(codesignNotarized('source=Notarized Developer ID', 0), false)
   assert.equal(staplerAccepted(0), true)
   assert.equal(staplerAccepted(1), false)
   assert.deepEqual(parseAgentStatusOutput('noise\nfinder-sync-agent-status {"status":"requires-approval"}\n'), {

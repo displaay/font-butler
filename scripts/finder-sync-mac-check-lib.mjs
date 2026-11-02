@@ -43,7 +43,7 @@ export const AUTOMATED_CHECKS = [
   { id: 'helper-identifier', title: 'helper identifier matches this build' },
   { id: 'spctl-app', title: 'spctl reports Notarized Developer ID for the app' },
   { id: 'stapler-app', title: 'stapler validate passes for the app' },
-  { id: 'spctl-appex', title: 'spctl reports Notarized Developer ID for the appex' },
+  { id: 'spctl-appex', title: 'appex satisfies codesign requirement =notarized' },
   { id: 'stapler-appex', title: 'stapler validate passes for the appex' },
   { id: 'spctl-dmg', title: 'spctl reports Notarized Developer ID for the DMG app' },
   { id: 'stapler-dmg', title: 'stapler validate passes for the DMG app' },
@@ -211,6 +211,10 @@ export function hardenedRuntime(display) {
 
 export function spctlNotarized(output, status) {
   return status === 0 && /Notarized Developer ID/.test(String(output ?? ''))
+}
+
+export function codesignNotarized(output, status) {
+  return status === 0 && /explicit requirement satisfied/.test(String(output ?? ''))
 }
 
 export function staplerAccepted(status) {
@@ -444,7 +448,7 @@ export function buildChecklist(observations = {}) {
   }
   results.push(gate('spctl-app', observations.spctlApp, 'spctl on the app'))
   results.push(gate('stapler-app', observations.staplerApp, 'stapler on the app'))
-  results.push(gate('spctl-appex', observations.spctlAppex, 'spctl on the appex'))
+  results.push(gate('spctl-appex', observations.notarizedAppex, 'codesign =notarized on the appex'))
   results.push(gate('stapler-appex', observations.staplerAppex, 'stapler on the appex'))
   results.push(optionalGate('spctl-dmg', observations.dmg, () => gate('spctl-dmg', observations.dmg?.spctl, 'spctl on the DMG app')))
   results.push(optionalGate('stapler-dmg', observations.dmg, () => gate('stapler-dmg', observations.dmg?.stapler, 'stapler on the DMG app')))

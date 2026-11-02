@@ -270,7 +270,7 @@ export function finderSyncReleaseFailures(appPath, { readFile = readFileSync, ex
   const display = runCommand('codesign', ['-dv', '--verbose=4', appex])
   const verify = runCommand('codesign', ['--verify', '--deep', '--strict', '--verbose=2', appex])
   const entitlements = runCommand('codesign', ['-d', '--entitlements', ':-', appex])
-  const spctl = runCommand('spctl', ['-a', '-vv', '-t', 'exec', appex])
+  const notarized = runCommand('codesign', ['--verify', '--verbose=4', '--test-requirement', '=notarized', appex])
   const expectedAppGroup = finderSyncAppGroup(testFeed)
   return finderSyncAppexFailures({
     present: true,
@@ -292,8 +292,8 @@ export function finderSyncReleaseFailures(appPath, { readFile = readFileSync, ex
     machService: plistString(plist, 'FontButtlerMachService'),
     expectedMachService: finderSyncMachService(testFeed),
     requireNotarized: true,
-    spctlStatus: spctl.status,
-    spctlOutput: spctl.output,
+    notarizedStatus: notarized.status,
+    notarizedOutput: notarized.output,
   })
 }
 

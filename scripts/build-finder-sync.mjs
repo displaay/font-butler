@@ -312,8 +312,8 @@ export function finderSyncAppexFailures({
   machService = '',
   expectedMachService = '',
   requireNotarized = false,
-  spctlStatus = 1,
-  spctlOutput = '',
+  notarizedStatus = 1,
+  notarizedOutput = '',
 } = {}) {
   const failures = []
   if (!present) {
@@ -353,8 +353,12 @@ export function finderSyncAppexFailures({
       `The Finder Sync Mach service is ${machService || 'missing'}, expected ${expectedMachService}.`,
     )
   }
-  if (requireNotarized && (spctlStatus !== 0 || !/Notarized Developer ID/.test(spctlOutput ?? ''))) {
-    failures.push('spctl did not report Notarized Developer ID for the Finder Sync appex.')
+  // The appex is CFBundlePackageType XPC!, not an app. spctl -t exec rejects
+  // that shape ("does not seem to be an app") and omits Notarized Developer
+  // ID even when the parent staple covers the appex. The notarized
+  // requirement is the check that applies to this bundle.
+  if (requireNotarized && (notarizedStatus !== 0 || !/explicit requirement satisfied/.test(notarizedOutput ?? ''))) {
+    failures.push('codesign --test-requirement "=notarized" failed on the Finder Sync appex.')
   }
   if (urlScheme) {
     failures.push('The Finder Sync appex must not declare a URL scheme.')

@@ -42,6 +42,7 @@ import {
   FINDER_SYNC_CHANGED_BEFORE_INSTALL,
   finderSyncAgentBundleProgram,
   finderSyncAgentCodeSigningRequirement,
+  finderSyncAgentInfoPlist,
   finderSyncAgentLabel,
   finderSyncAgentLaunchAgentPlist,
   finderSyncAgentMachServiceKeys,
@@ -82,8 +83,13 @@ import { compileFinderSyncReceiverAddon } from '../scripts/build-finder-sync-rec
 import { compileMachOSlices, strayMachOFiles } from '../scripts/macho-slices.mjs'
 import {
   compileFinderSyncAgent,
+  finderSyncAgentAppPath,
   finderSyncAgentEntitlementsPlist,
+  finderSyncAgentExecutablePath,
   finderSyncAgentFailures,
+  finderSyncAgentPlistPath,
+  finderSyncAgentReleaseFailures,
+  finderSyncAgentRunCommand,
 } from '../scripts/build-finder-sync-agent.mjs'
 import { spawnSync } from 'node:child_process'
 import { finderSyncReleaseFailures } from '../scripts/assert-notarized-mac-release.mjs'
@@ -1460,7 +1466,59 @@ test('the native XPC rejection probe runs on macOS and is skipped elsewhere', ()
   }
 })
 
-test('the release assert checks the stapled appex with a deep verify and spctl', () => {
+test('finderSyncAgentReleaseFailures defaults to a real codesign runner', () => {
+  assert.equal(typeof finderSyncAgentRunCommand, 'function')
+  assert.match(finderSyncAgentReleaseFailures.toString(), /runCommand = run\b/)
+  assert.doesNotMatch(readRepo('scripts/build-finder-sync-agent.mjs'), /runCommand \? runCommand/)
+  const missing = finderSyncAgentRunCommand('font-butler-not-a-command', ['-dv'])
+  assert.equal(missing.status, 1)
+  assert.equal(typeof missing.output, 'string')
+
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-agent-release-'))
+  try {
+    const app = path.join(root, 'Font Buttler.app')
+    mkdirSync(path.join(app, 'Contents', 'Resources', 'app'), { recursive: true })
+    writeFileSync(path.join(app, 'Contents', 'Resources', 'app', 'package.json'), JSON.stringify({ name: 'font-butler' }))
+    const plistPath = finderSyncAgentPlistPath(app, false)
+    mkdirSync(path.dirname(plistPath), { recursive: true })
+    writeFileSync(plistPath, finderSyncAgentLaunchAgentPlist(false))
+    const helperApp = finderSyncAgentAppPath(app)
+    mkdirSync(path.join(helperApp, 'Contents'), { recursive: true })
+    writeFileSync(path.join(helperApp, 'Contents', 'Info.plist'), finderSyncAgentInfoPlist({ testFeed: false }))
+    const executable = finderSyncAgentExecutablePath(app)
+    mkdirSync(path.dirname(executable), { recursive: true })
+    writeFileSync(executable, '')
+    const group = finderSyncAppGroup(false)
+    const label = finderSyncAgentLabel(false)
+    const display = `Identifier=${label}\nAuthority=Developer ID Application: ${DEVELOPER_ID_IDENTITY}\nTeamIdentifier=${DEVELOPER_ID_TEAM}\nflags=0x10000(runtime)`
+    const calls = []
+    const failures = finderSyncAgentReleaseFailures(app, {
+      runCommand(command, args) {
+        calls.push([command, args])
+        if (args.includes('--verify')) return { status: 0, output: 'valid on disk' }
+        if (args.includes('--entitlements')) return { status: 0, output: `<string>${group}</string>` }
+        return { status: 0, output: display }
+      },
+    })
+    assert.deepEqual(failures, [], failures.join('\n'))
+    assert.deepEqual(calls.map((call) => call[0]), ['codesign', 'codesign', 'codesign'])
+    assert.ok(calls.every((call) => call[1].at(-1) === helperApp))
+
+    const rejected = finderSyncAgentReleaseFailures(app, {
+      runCommand(command, args) {
+        if (args.includes('--verify')) return { status: 1, output: 'code object is not signed at all' }
+        if (args.includes('--entitlements')) return { status: 0, output: `<string>${group}</string>` }
+        return { status: 0, output: display }
+      },
+    })
+    assert.ok(rejected.some((failure) => /codesign --verify --strict failed/.test(failure)))
+    assert.equal(rejected.some((failure) => /identifier is not/.test(failure)), false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('the release assert checks the stapled appex with a deep verify and the notarized requirement', () => {
   const root = mkdtempSync(path.join(tmpdir(), 'font-butler-appex-spctl-'))
   try {
     const app = path.join(root, 'Font Buttler.app')
@@ -1477,7 +1535,9 @@ test('the release assert checks the stapled appex with a deep verify and spctl',
     const failures = finderSyncReleaseFailures(app, {
       runCommand(command, args) {
         calls.push([command, args])
-        if (command === 'spctl') return { status: 0, output: 'source=Notarized Developer ID' }
+        if (command === 'codesign' && args.includes('--test-requirement')) {
+          return { status: 0, output: 'test-requirement: explicit requirement satisfied' }
+        }
         if (command === 'codesign' && args.includes('--entitlements')) {
           return {
             status: 0,
@@ -1492,11 +1552,12 @@ test('the release assert checks the stapled appex with a deep verify and spctl',
     })
     assert.deepEqual(failures, [], failures.join('\n'))
     assert.ok(calls.some((call) => call[0] === 'codesign' && call[1].includes('--deep') && call[1].includes('--strict')))
-    assert.ok(calls.some((call) => call[0] === 'spctl' && call[1].includes(appex)))
+    assert.ok(calls.some((call) => call[0] === 'codesign' && call[1].includes('--test-requirement') && call[1].includes('=notarized') && call[1].includes(appex)))
+    assert.equal(calls.some((call) => call[0] === 'spctl'), false)
 
     const rejected = finderSyncReleaseFailures(app, {
       runCommand(command, args) {
-        if (command === 'spctl') return { status: 1, output: 'rejected' }
+        if (command === 'codesign' && args.includes('--test-requirement')) return { status: 1, output: 'code failed to satisfy specified code requirement(s)' }
         if (command === 'codesign' && args.includes('--verify')) return { status: 1, output: '' }
         if (command === 'codesign' && args.includes('--entitlements')) {
           return {
@@ -1511,7 +1572,7 @@ test('the release assert checks the stapled appex with a deep verify and spctl',
       },
     })
     assert.ok(rejected.some((failure) => /--deep --strict/.test(failure)))
-    assert.ok(rejected.some((failure) => /Notarized Developer ID/.test(failure)))
+    assert.ok(rejected.some((failure) => /"=notarized"/.test(failure)))
     assert.ok(rejected.some((failure) => failure.includes(group)))
   } finally {
     rmSync(root, { recursive: true, force: true })

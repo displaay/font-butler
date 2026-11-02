@@ -28,6 +28,7 @@ import {
   machoArchs,
   parseMacCheckArgs,
   parseAgentStatusOutput,
+  codesignNotarized,
   spctlNotarized,
   staplerAccepted,
   summarizeChecklist,
@@ -57,6 +58,15 @@ function assessSpctl(target) {
   const result = run('spctl', ['-a', '-vv', '-t', 'exec', target])
   const ok = spctlNotarized(result.output, result.status)
   return { ok, reason: ok ? 'Notarized Developer ID' : result.output.trim() || result.error || `spctl exited ${result.status}` }
+}
+
+function assessAppexNotarized(appex) {
+  const result = run('codesign', ['--verify', '--verbose=4', '--test-requirement', '=notarized', appex])
+  const ok = codesignNotarized(result.output, result.status)
+  return {
+    ok,
+    reason: ok ? 'explicit requirement satisfied' : result.output.trim() || result.error || `codesign exited ${result.status}`,
+  }
 }
 
 function assessStapler(target) {
@@ -119,7 +129,7 @@ function collect(app, dmg, zip) {
     helperCodesignDisplay: '',
     spctlApp: assessSpctl(app),
     staplerApp: assessStapler(app),
-    spctlAppex: existsSync(appex) ? assessSpctl(appex) : { ok: false, reason: 'The appex is missing.' },
+    notarizedAppex: existsSync(appex) ? assessAppexNotarized(appex) : { ok: false, reason: 'The appex is missing.' },
     staplerAppex: existsSync(appex) ? assessStapler(appex) : { ok: false, reason: 'The appex is missing.' },
     dmg: dmg ? { provided: true, error: 'DMG was not mounted.' } : { provided: false },
     zip: zip ? { provided: true, error: 'The update zip was not unpacked.' } : { provided: false },

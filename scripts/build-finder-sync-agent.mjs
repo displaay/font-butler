@@ -311,16 +311,22 @@ export function verifyFinderSyncAgent({
   return { ok: failures.length === 0, failures }
 }
 
-export function finderSyncAgentReleaseFailures(appPath, { readFile = nodeReadFileSync, exists = nodeExistsSync, runCommand } = {}) {
+function run(command, args) {
+  const result = nodeSpawnSync(command, args, { encoding: 'utf8' })
+  return {
+    status: result.status ?? 1,
+    output: `${result.stdout ?? ''}\n${result.stderr ?? ''}`,
+  }
+}
+
+export { run as finderSyncAgentRunCommand }
+
+export function finderSyncAgentReleaseFailures(appPath, { readFile = nodeReadFileSync, exists = nodeExistsSync, runCommand = run } = {}) {
   const testFeed = readAppTestFeedMarker(appPath) === true
   const helperApp = finderSyncAgentAppPath(appPath)
-  const display = runCommand ? runCommand('codesign', ['-dv', '--verbose=4', helperApp]) : { status: 1, output: '' }
-  const verify = runCommand
-    ? runCommand('codesign', ['--verify', '--strict', '--verbose=2', helperApp])
-    : { status: 1, output: '' }
-  const entitlements = runCommand
-    ? runCommand('codesign', ['-d', '--entitlements', ':-', helperApp])
-    : { status: 1, output: '' }
+  const display = runCommand('codesign', ['-dv', '--verbose=4', helperApp])
+  const verify = runCommand('codesign', ['--verify', '--strict', '--verbose=2', helperApp])
+  const entitlements = runCommand('codesign', ['-d', '--entitlements', ':-', helperApp])
   let plist = ''
   let infoPlist = ''
   const flavourPlist = finderSyncAgentPlistPath(appPath, testFeed)
