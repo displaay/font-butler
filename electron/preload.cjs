@@ -55,6 +55,14 @@ contextBridge.exposeInMainWorld('fontButlerDesktop', {
     }
     return () => watchNoticeListeners.delete(listener)
   },
+  onAnnouncement: (callback) => {
+    const listener = (_event, payload) => callback(payload)
+    ipcRenderer.on('announcement:show', listener)
+    return () => ipcRenderer.removeListener('announcement:show', listener)
+  },
+  dismissAnnouncement: (id) => {
+    ipcRenderer.send('announcement:dismiss', id)
+  },
   requestNotifications: () => ipcRenderer.invoke('request-notifications'),
   onOpenSettings: (callback) => {
     const listener = (_event, payload) => callback(payload)

@@ -1,0 +1,23 @@
+import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
+import test from 'node:test'
+import { fileURLToPath } from 'node:url'
+
+test('AnnouncementDialog reuses welcome Dialog surface classes', async () => {
+  const source = await readFile(fileURLToPath(new URL('./AnnouncementDialog.tsx', import.meta.url)), 'utf8')
+  assert.match(source, /from '@\/components\/ui\/dialog'/)
+  assert.match(source, /w-\[min\(92vw,480px\)\]/)
+  assert.match(source, /Got it/)
+  assert.doesNotMatch(source, /backdrop-filter|vibrancy|dark-glass/)
+})
+
+test('ConfettiBurst is a main-window overlay, not nested in the dialog', async () => {
+  const dialog = await readFile(fileURLToPath(new URL('./AnnouncementDialog.tsx', import.meta.url)), 'utf8')
+  const confetti = await readFile(fileURLToPath(new URL('./ConfettiBurst.tsx', import.meta.url)), 'utf8')
+  const app = await readFile(fileURLToPath(new URL('../App.tsx', import.meta.url)), 'utf8')
+  assert.doesNotMatch(dialog, /ConfettiBurst|confetti|canvas/)
+  assert.match(confetti, /fixed inset-0/)
+  assert.match(confetti, /burstConfetti/)
+  assert.match(app, /<ConfettiBurst playKey=\{confettiPlayKey\}/)
+  assert.match(app, /<AnnouncementDialog/)
+})

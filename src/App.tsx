@@ -21,7 +21,10 @@ import { ImportPlanDialog } from '@/components/ImportPlanDialog'
 import { Inspector, InspectorTabList, inspectorPaneTabs, type InspectorPaneTab } from '@/components/Inspector'
 import { LibraryCard } from '@/components/LibraryCard'
 import { MarqueeOverlay } from '@/components/MarqueeOverlay'
+import { AnnouncementDialog } from '@/components/AnnouncementDialog'
+import { ConfettiBurst } from '@/components/ConfettiBurst'
 import { OnboardingDialog } from '@/components/OnboardingDialog'
+import type { Announcement } from '../shared/announcements.ts'
 import { RelinkDialog } from '@/components/RelinkDialog'
 import { RenameDialog } from '@/components/RenameDialog'
 import { ReplaceFormatDialog } from '@/components/ReplaceFormatDialog'
@@ -247,6 +250,8 @@ function AppShell() {
   } | null>(null)
   const [checkingAppUpdate, setCheckingAppUpdate] = useState(false)
   const [onboardingOpen, setOnboardingOpen] = useState(false)
+  const [announcement, setAnnouncement] = useState<Announcement | null>(null)
+  const [confettiPlayKey, setConfettiPlayKey] = useState<number | null>(null)
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const settingsRef = useRef<AppSettings | null>(null)
   const [watchFolderFilter, setWatchFolderFilter] = useState<string | null>(null)
@@ -828,6 +833,21 @@ function AppShell() {
       externalFontOpenRef.current = { depth }
       syncExternalFontOpenStatus()
     })
+    const stopAnnouncement = window.fontButlerDesktop?.onAnnouncement?.((payload) => {
+      if (!payload || typeof payload !== 'object') return
+      const id = typeof payload.id === 'string' ? payload.id : ''
+      const title = typeof payload.title === 'string' ? payload.title : ''
+      const body = typeof payload.body === 'string' ? payload.body : ''
+      if (!id || !title) return
+      setAnnouncement({
+        id,
+        title,
+        body,
+        celebrate: payload.celebrate === true,
+        sinceVersion: typeof payload.sinceVersion === 'string' ? payload.sinceVersion : '',
+        showWhen: payload.showWhen === 'always' || payload.showWhen === 'upgrade' ? payload.showWhen : undefined,
+      })
+    })
     return () => {
       window.removeEventListener('keydown', onKeyDown)
       stopInstall?.()
@@ -836,6 +856,7 @@ function AppShell() {
       stopOpenTab?.()
       stopFinderLinkTo?.()
       stopExternalFontOpen?.()
+      stopAnnouncement?.()
     }
   }, [])
 
@@ -3148,6 +3169,16 @@ function AppShell() {
           onRetailChange={setRetail}
           onComplete={() => setOnboardingOpen(false)}
         />
+        <AnnouncementDialog
+          announcement={announcement}
+          open={Boolean(announcement) && !onboardingOpen}
+          onDismiss={(item) => {
+            setAnnouncement(null)
+            window.fontButlerDesktop?.dismissAnnouncement?.(item.id)
+            if (item.celebrate) setConfettiPlayKey(Date.now())
+          }}
+        />
+        <ConfettiBurst playKey={confettiPlayKey} />
         <RetailCollisionDialog
           open={syncCollisions.length > 0}
           mode="sync"
