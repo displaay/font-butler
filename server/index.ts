@@ -358,6 +358,32 @@ app.post('/api/duplicates/resolve', async (c) => {
   }
 })
 
+app.post('/api/duplicates/resolve-batch', async (c) => {
+  const body = await c.req.json<{
+    ids?: string[]
+    choice?: 'skip' | 'replace'
+    sameBytesOnly?: boolean
+  }>()
+  if (!Array.isArray(body.ids) || body.ids.length === 0 || !body.choice) {
+    return c.json({ error: 'Missing ids or choice' }, 400)
+  }
+  if (body.choice !== 'skip' && body.choice !== 'replace') {
+    return c.json({ error: 'Batch resolve supports skip or replace only' }, 400)
+  }
+  try {
+    return c.json(
+      await service.resolveDuplicates(body.ids, body.choice, {
+        sameBytesOnly: Boolean(body.sameBytesOnly),
+      }),
+    )
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : 'Could not resolve those duplicates' },
+      400,
+    )
+  }
+})
+
 app.post('/api/switch', async (c) => {
   const body = await c.req.json<{ id?: string }>()
   if (!body.id) {

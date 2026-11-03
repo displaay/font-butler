@@ -531,6 +531,26 @@ test('a second same-face file in one destination is warned instead of overwritin
   }
 })
 
+test('byte-identical same-face neighbor under a destination is not warned', async () => {
+  const paths = tempPaths()
+  const first = path.join(paths.adobeFontsDir, 'SameA.ttf')
+  const second = path.join(paths.adobeFontsDir, 'SameB.ttf')
+  writeTestFont(first, 'SameBytes', 'SameBytes-Regular', 'Version 1.000')
+  fs.copyFileSync(first, second)
+  const service = new FontButlerService(paths)
+  try {
+    await service.init()
+    const catalog = service.listCatalog().filter((entry) => entry.faces[0]?.familyName === 'SameBytes')
+    assert.equal(catalog.length, 1)
+    assert.equal(service.listDuplicates().length, 0)
+    assert.equal(fs.existsSync(first), true)
+    assert.equal(fs.existsSync(second), true)
+  } finally {
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
 test('a missing recorded destination copy may be restamped onto the remaining file', async () => {
   const paths = tempPaths()
   const first = path.join(paths.adobeFontsDir, 'KeepMe.ttf')

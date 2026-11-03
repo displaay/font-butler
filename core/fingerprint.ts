@@ -1,8 +1,60 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
+import type { CatalogEntry } from './types.ts'
 
 export function fingerprintBuffer(data: Buffer | Uint8Array): string {
   return crypto.createHash('sha256').update(data).digest('hex')
+}
+
+/** Catalog fingerprints that identify an entry's known bytes (source, installed, copies). */
+export function entryKnownFingerprints(
+  entry: Pick<CatalogEntry, 'sourceFingerprint' | 'installedFingerprint' | 'installations'>,
+): string[] {
+  const found = new Set<string>()
+  if (entry.sourceFingerprint) found.add(entry.sourceFingerprint)
+  if (entry.installedFingerprint) found.add(entry.installedFingerprint)
+  for (const copy of entry.installations ?? []) {
+    if (copy.fingerprint) found.add(copy.fingerprint)
+  }
+  return [...found]
+}
+
+function liveCopyPaths(
+  entry: Pick<CatalogEntry, 'installedPath' | 'installations'>,
+): string[] {
+  const paths = new Set<string>()
+  if (entry.installedPath) paths.add(entry.installedPath)
+  for (const copy of entry.installations ?? []) {
+    if (copy.path && !copy.parkedPath) paths.add(copy.path)
+  }
+  return [...paths]
+}
+
+/**
+ * True when `fingerprint` matches any recorded catalog fingerprint, or (when
+ * `includeLive`) the bytes currently at a live install path.
+ */
+export function entryMatchesFingerprint(
+  entry: Pick<
+    CatalogEntry,
+    'sourceFingerprint' | 'installedFingerprint' | 'installations' | 'installedPath'
+  >,
+  fingerprint: string | undefined,
+  options: { includeLive?: boolean } = {},
+): boolean {
+  if (!fingerprint) return false
+  if (entryKnownFingerprints(entry).includes(fingerprint)) return true
+  if (!options.includeLive) return false
+  for (const livePath of liveCopyPaths(entry)) {
+    if (tryFingerprintFile(livePath) === fingerprint) return true
+  }
+  return false
+}
+
+export function occupyingFingerprintsForEntry(
+  entry: Pick<CatalogEntry, 'sourceFingerprint' | 'installedFingerprint' | 'installations'>,
+): string[] {
+  return entryKnownFingerprints(entry)
 }
 
 export function fingerprintFile(filePath: string): string {
