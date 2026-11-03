@@ -529,7 +529,7 @@ function AppShell() {
         await waitForCatalogReady({
           onPhase: (phase) => {
             if (!cancelled && (phase === 'catalog' || phase === 'starting')) {
-              setActionStatus('Starting Font Buttler…')
+              setActionStatus('Starting Cuttler…')
             }
           },
         })
@@ -547,7 +547,7 @@ function AppShell() {
             if (cancelled) return
             setActionStatus(null)
             const message =
-              err instanceof Error ? err.message : 'Font Buttler could not finish reading fonts.'
+              err instanceof Error ? err.message : 'Cuttler could not finish reading fonts.'
             setError(message)
             toast.error(message)
           })

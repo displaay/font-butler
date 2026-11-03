@@ -16,7 +16,7 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error('Font Buttler UI error', error, info.componentStack)
+    console.error('Cuttler UI error', error, info.componentStack)
   }
 
   private resetViewSettings = () => {

@@ -491,7 +491,7 @@ test('a test-build Allow shows that logout would start and is not a logout succe
   const probeBox = logoutProbeWouldStartDialogOptions()
   assert.equal(probeBox.title, 'Test build')
   assert.equal(probeBox.message, 'Test build: logout would start now')
-  assert.equal(probeBox.detail, 'Font Buttler did not log out, and it did not quit.')
+  assert.equal(probeBox.detail, 'Cuttler did not log out, and it did not quit.')
   assert.notEqual(probeBox.title, probeBox.message)
   assert.notEqual(probeBox.detail, probeBox.message)
   assert.notEqual(probeBox.title, probeBox.detail)

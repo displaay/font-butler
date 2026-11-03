@@ -8,7 +8,7 @@ export const LOGOUT_STILL_WAITING_MESSAGE =
 export const LOGOUT_PROBE_WOULD_START_TITLE = 'Test build'
 export const LOGOUT_PROBE_WOULD_START_NOTICE = 'Test build: logout would start now'
 export const LOGOUT_PROBE_WOULD_START_DETAIL =
-  'Font Buttler did not log out, and it did not quit.'
+  'Cuttler did not log out, and it did not quit.'
 
 export function logoutProbeWouldStartDialogOptions() {
   return {

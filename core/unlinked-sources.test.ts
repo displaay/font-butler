@@ -148,11 +148,11 @@ test('a corrupt unlinked list with no valid bak resets on a manual add', () => {
       assert.deepEqual(stored.paths, [])
       assert.equal(isUnlinkedSource(paths, blocked), false)
       assert.deepEqual(notices, [
-        "Font Buttler couldn't read its list of unlinked fonts and started a new one. Fonts you unlinked earlier may reappear from watch folders. You can unlink them again.",
+        "Cuttler couldn't read its list of unlinked fonts and started a new one. Fonts you unlinked earlier may reappear from watch folders. You can unlink them again.",
       ])
       assert.equal(
         peekPendingUnlinkedListResetNotice(paths)?.message,
-        "Font Buttler couldn't read its list of unlinked fonts and started a new one. Fonts you unlinked earlier may reappear from watch folders. You can unlink them again.",
+        "Cuttler couldn't read its list of unlinked fonts and started a new one. Fonts you unlinked earlier may reappear from watch folders. You can unlink them again.",
       )
       acknowledgeUnlinkedListReset(paths)
       assert.equal(peekPendingUnlinkedListResetNotice(paths), null)

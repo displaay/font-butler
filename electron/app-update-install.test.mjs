@@ -1058,8 +1058,10 @@ test('the updater recognises a renamed Font Buttler Test app', () => {
     const nested = path.join(nestedRoot, 'payload', 'Font Buttler Test.app')
     mkdirSync(nested, { recursive: true })
     assert.equal(findUpdateAppBundle(nestedRoot), nested)
+    mkdirSync(path.join(direct, 'Cuttler.app'), { recursive: true })
+    assert.equal(findUpdateAppBundle(direct), path.join(direct, 'Cuttler.app'))
     mkdirSync(path.join(direct, 'Font Buttler.app'), { recursive: true })
-    assert.equal(findUpdateAppBundle(direct), path.join(direct, 'Font Buttler.app'))
+    assert.equal(findUpdateAppBundle(direct), path.join(direct, 'Cuttler.app'))
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -1068,26 +1070,27 @@ test('the updater recognises a renamed Font Buttler Test app', () => {
 test('the swap script restores the previous app if the new bundle cannot be moved', () => {
   const script = buildMacSwapScript({
     pid: 50,
-    currentApp: '/Applications/Font Buttler.app',
-    nextApp: '/tmp/next/Font Buttler.app',
+    currentApp: '/Applications/Cuttler.app',
+    nextApp: '/tmp/next/Cuttler.app',
+    installApp: '/Applications/Cuttler.app',
     tempDir: '/tmp/font-butler-update',
     scriptPath: '/tmp/font-butler-swap.sh',
   })
-  assert.match(script, /mv '\/tmp\/next\/Font Buttler.app' '\/Applications\/Font Buttler.app'/)
-  assert.match(script, /mv '\/Applications\/Font Buttler.app.font-butler-previous' '\/Applications\/Font Buttler.app'/)
-  assert.match(script, /open '\/Applications\/Font Buttler.app'/)
+  assert.match(script, /mv '\/tmp\/next\/Cuttler.app' '\/Applications\/Cuttler.app'/)
+  assert.match(script, /mv '\/Applications\/Cuttler.app.font-butler-previous' '\/Applications\/Cuttler.app'/)
+  assert.match(script, /open '\/Applications\/Cuttler.app'/)
   assert.match(script, /trap 'reopen_original; exit 1' ERR/)
   const reopen = script.slice(script.indexOf('reopen_original() {'), script.indexOf("trap 'reopen_original"))
-  const removePartial = reopen.indexOf("rm -rf '/Applications/Font Buttler.app'")
+  const removePartial = reopen.indexOf("rm -rf '/Applications/Cuttler.app'")
   const restoreBackup = reopen.indexOf(
-    "mv '/Applications/Font Buttler.app.font-butler-previous' '/Applications/Font Buttler.app'",
+    "mv '/Applications/Cuttler.app.font-butler-previous' '/Applications/Cuttler.app'",
   )
   assert.ok(removePartial !== -1 && restoreBackup > removePartial)
   assert.match(
     reopen,
-    /"\$moved" -eq 1 && -d '\/Applications\/Font Buttler.app.font-butler-previous'/,
+    /"\$moved" -eq 1 && -d '\/Applications\/Cuttler.app.font-butler-previous'/,
   )
-  assert.match(script, /if ! mv '\/tmp\/next\/Font Buttler.app' '\/Applications\/Font Buttler.app'; then\n  reopen_original/)
+  assert.match(script, /if ! mv '\/tmp\/next\/Cuttler.app' '\/Applications\/Cuttler.app'; then\n  reopen_original/)
   assert.throws(() => buildMacSwapScript({ pid: 0, currentApp: '/a', nextApp: '/b', tempDir: '/t', scriptPath: '/s' }))
 })
 

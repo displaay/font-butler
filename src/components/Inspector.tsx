@@ -183,7 +183,7 @@ export function Inspector({
             />
             {multiSelect.systemPlan.uninstall === 0 && (
               <p className="text-xs text-muted-foreground">
-                Protected fonts stay on the Mac. Font Buttler can only remove fonts you installed.
+                Protected fonts stay on the Mac. Cuttler can only remove fonts you installed.
               </p>
             )}
           </>
@@ -796,7 +796,7 @@ function SystemInspectorBody({
         <div className="flex flex-col gap-5">
           {!systemGroup.writable && (
             <p className="text-xs text-muted-foreground">
-              Protected fonts stay on the Mac. Font Buttler can only remove fonts you installed.
+              Protected fonts stay on the Mac. Cuttler can only remove fonts you installed.
             </p>
           )}
           {secondary}
@@ -832,7 +832,7 @@ function SourceStateCopy({ entry }: { entry: CatalogEntry }) {
   if (entry.sourceAvailability === 'offline') {
     return (
       <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
-        The source drive is offline. Font Buttler will not treat this as a deleted file.
+        The source drive is offline. Cuttler will not treat this as a deleted file.
       </div>
     )
   }

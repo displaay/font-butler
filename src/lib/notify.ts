@@ -147,9 +147,9 @@ export function adobeUninstallCopy(count: number): { pending: string; done: stri
 
 export function uninstallAndUnlinkConfirm(groups: { familyName: string }[]): string {
   if (groups.length === 1) {
-    return `Uninstall ${groups[0]!.familyName} and remove its source link? It will disappear from Font Buttler. The source file stays on disk.`
+    return `Uninstall ${groups[0]!.familyName} and remove its source link? It will disappear from Cuttler. The source file stays on disk.`
   }
-  return `Uninstall ${groups.length} fonts and remove their source links? They will disappear from Font Buttler. The source files stay on disk.`
+  return `Uninstall ${groups.length} fonts and remove their source links? They will disappear from Cuttler. The source files stay on disk.`
 }
 
 export function emptyImportError(visibleErrors: string[], ignored = 0): string {

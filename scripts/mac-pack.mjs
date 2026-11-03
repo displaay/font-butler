@@ -11,6 +11,7 @@ import {
   applyTestFeedMetadata,
   packConfig,
   planMacPack,
+  testFeedBuildRequested,
 } from './mac-signing.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -95,8 +96,22 @@ if (plan.keychainProfile) {
   // latest-mac.yml only after that hook, in publishManager.awaitTasks(), with
   // the pre-staple DMG hash. Rewrite sha512/size from the files now on disk
   // and drop the stale DMG blockmap before the notarization assert.
+  // Before hashing, rename Cuttler.app → Font Buttler.app inside the update
+  // zip so 0.3.x clients still find the bundle they accept.
   const { rewriteMacUpdateFeed } = await import('./mac-dmg-staple.mjs')
+  const { macReleaseAssetNames, readPackVersion, releaseAssetVersion } = await import(
+    './assert-notarized-mac-release.mjs'
+  )
+  const { repackLegacyUpdateZip } = await import('./repack-legacy-update-zip.mjs')
   try {
+    const version = releaseAssetVersion(readPackVersion(repoRoot), process.env)
+    const zipPath = path.join(repoRoot, 'release', macReleaseAssetNames(version).zip)
+    if (!testFeedBuildRequested(process.env)) {
+      const rewritten = repackLegacyUpdateZip(zipPath)
+      console.log(
+        `Update zip now contains ${rewritten.appName} so 0.3.x clients can install this release.`,
+      )
+    }
     await rewriteMacUpdateFeed(path.join(repoRoot, 'release'))
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))

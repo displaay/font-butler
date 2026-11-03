@@ -59,7 +59,7 @@ export function formatBootstrapFailureMessage(error, options = {}) {
   const reason = error instanceof Error ? error.message : String(error)
   const kind = classifyWorkerFailure(error, stderrTail)
   const lines = [
-    'Font Buttler could not start its local font service.',
+    'Cuttler could not start its local font service.',
     '',
     reason,
   ]
@@ -70,7 +70,7 @@ export function formatBootstrapFailureMessage(error, options = {}) {
   if (kind === 'listen-timeout') {
     lines.push(
       'The service did not begin listening in time. With a very large library, startup can take several minutes while fonts are indexed.',
-      'Quit Font Buttler completely, wait a moment, and open it again. Check Console.app (filter "Font Buttler") for "init complete".',
+      'Quit Cuttler completely, wait a moment, and open it again. Check Console.app (filter "Cuttler") for "init complete".',
     )
   } else if (kind === 'init-failed') {
     lines.push(
@@ -79,8 +79,8 @@ export function formatBootstrapFailureMessage(error, options = {}) {
     )
   } else {
     lines.push(
-      'Quit Font Buttler completely (Font Buttler → Quit) and open it again.',
-      'If it keeps failing, open Console.app, filter for "Font Buttler", and save the startup log.',
+      'Quit Cuttler completely (Cuttler → Quit) and open it again.',
+      'If it keeps failing, open Console.app, filter for "Cuttler", and save the startup log.',
     )
   }
   if (dataDir) {
@@ -105,7 +105,7 @@ export function bootstrapErrorPageHtml(message, { dark = false } = {}) {
 <head>
 <meta charset="utf-8" />
 <meta name="color-scheme" content="light dark" />
-<title>Font Buttler</title>
+<title>Cuttler</title>
 <style>
   body { font: 13px/1.45 -apple-system, BlinkMacSystemFont, sans-serif; margin: 24px; color: ${fg}; background: ${bg}; }
   h1 { font-size: 16px; margin: 0 0 12px; }
@@ -115,11 +115,11 @@ export function bootstrapErrorPageHtml(message, { dark = false } = {}) {
 </style>
 </head>
 <body>
-  <h1>Font Buttler could not start</h1>
+  <h1>Cuttler could not start</h1>
   <pre>${safe}</pre>
   <div class="actions">
     <button type="button" id="logs">Show logs</button>
-    <button type="button" id="quit">Quit Font Buttler</button>
+    <button type="button" id="quit">Quit Cuttler</button>
   </div>
   <script>
     document.getElementById('logs').addEventListener('click', () => {
@@ -138,9 +138,9 @@ export function startingPageHtml({ dark = false } = {}) {
   const bg = dark ? '#0a0a0a' : '#ffffff'
   const fg = dark ? '#f4f4f5' : '#111111'
   return `<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8" /><title>Font Buttler</title>
+<html lang="en"><head><meta charset="utf-8" /><title>Cuttler</title>
 <style>body{font:14px -apple-system,BlinkMacSystemFont,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;color:${fg};background:${bg};}</style>
-</head><body><p>Starting Font Buttler…</p></body></html>`
+</head><body><p>Starting Cuttler…</p></body></html>`
 }
 
 /** @param {{ mainWindowKind: string | null }} state @param {'bootstrap-ok' | 'bootstrap-fail' | 'activate-during-bootstrap'} event */

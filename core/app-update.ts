@@ -270,7 +270,7 @@ function statusFromLocalFeed(
     currentVersion: current,
     latestVersion: latest || null,
     updateAvailable: latest ? isNewerVersion(latest, current) : false,
-    releaseName: latest ? `Font Buttler ${latest}` : null,
+    releaseName: latest ? `Cuttler ${latest}` : null,
     releaseNotes: null,
     htmlUrl: APP_UPDATE_GITHUB_RELEASES_URL,
     publishedAt: null,

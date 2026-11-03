@@ -26,6 +26,7 @@ import {
   openedUpdateDmgRecordFile,
 } from './app-update-install.mjs'
 import { createExternalFontOpenNotifier } from './external-font-open-notify.mjs'
+import { presentPendingAnnouncement } from './announcements.mjs'
 import { applyTestFeedDataIsolation } from './test-feed-data.mjs'
 import { macosDockIconPng } from './dock-icon.mjs'
 import { createLoginItemApplier } from './login-item.mjs'
@@ -93,6 +94,13 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
+
+// productName is Cuttler; pin userData to the historical Cuttler folder so
+// libraries, settings, and tokens stay put. Leave APP_FOLDER_NAME / api-token alone.
+// Must run before ready. Test-feed isolation may override to Font Buttler Test.
+if (typeof app.isReady !== 'function' || !app.isReady()) {
+  app.setPath('userData', path.join(app.getPath('appData'), 'Font Buttler'))
+}
 
 // Before requestSingleInstanceLock and before app ready. Only the packaged
 // fontButlerTestFeed marker selects this. A LaunchServices relaunch has no
@@ -298,6 +306,15 @@ function startMainUiAfterBootstrap() {
   void loadActivity()
   void loadAppUpdate()
   void loadRetailStatus()
+  try {
+    presentPendingAnnouncement({
+      userDataDir: app.getPath('userData'),
+      currentVersion: app.getVersion(),
+      dirname: __dirname,
+    })
+  } catch (error) {
+    console.error('Could not present announcement', error)
+  }
 }
 
 async function stopPackagedApiWorker() {
@@ -378,7 +395,7 @@ async function waitForWorkerCatalogOrFailure() {
     const data = await response.json()
     if (data.phase === 'failed' || (data.error && !data.catalogReady)) {
       workerInitFailed = true
-      throw new Error(data.error || 'Font Buttler service init failed')
+      throw new Error(data.error || 'Cuttler service init failed')
     }
     if (data.catalogReady) {
       workerInitFailed = false
@@ -386,7 +403,7 @@ async function waitForWorkerCatalogOrFailure() {
     }
     await new Promise((resolve) => setTimeout(resolve, 40))
   }
-  throw new Error('Font Buttler API worker did not load the catalog in time')
+  throw new Error('Cuttler API worker did not load the catalog in time')
 }
 
 async function ensureApiToken() {
@@ -405,7 +422,7 @@ async function ensureApiToken() {
     }
   }
   if (!apiToken) {
-    throw new Error('Could not connect to Font Buttler API.')
+    throw new Error('Could not connect to Cuttler API.')
   }
   registerDebugLogSecrets()
   try {
@@ -547,7 +564,7 @@ function createBootstrapShellWindow(kind) {
     height: kind === BOOTSTRAP_STARTING_WINDOW_KIND ? 220 : 480,
     minWidth: 320,
     minHeight: 180,
-    title: 'Font Buttler',
+    title: 'Cuttler',
     icon: APP_ICON,
     backgroundColor: windowBackgroundColor(),
     show: true,
@@ -582,7 +599,7 @@ function createBootstrapErrorWindow(message) {
     height: 480,
     minWidth: 400,
     minHeight: 320,
-    title: 'Font Buttler',
+    title: 'Cuttler',
     icon: APP_ICON,
     backgroundColor: windowBackgroundColor(),
     show: true,
@@ -614,7 +631,7 @@ async function promptBootstrapRecovery(error) {
   const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined
   const options = {
     type: 'error',
-    title: 'Font Buttler could not start',
+    title: 'Cuttler could not start',
     message: 'The local font service is not available.',
     detail: message,
     buttons: ['Retry', 'Quit', 'Open troubleshooting'],
@@ -761,7 +778,7 @@ function createWindow() {
     height: 860,
     minWidth: 920,
     minHeight: 620,
-    title: 'Font Buttler',
+    title: 'Cuttler',
     icon: APP_ICON,
     backgroundColor: windowBackgroundColor(),
     titleBarStyle: 'hiddenInset',
@@ -917,8 +934,8 @@ async function promptFinderInstallAs(entries) {
     const options = {
       type: 'question',
       title: 'Install as…',
-      message: 'Where should Font Buttler install the renamed copy?',
-      detail: 'Font Buttler then asks for a family name. The original file is not changed.',
+      message: 'Where should Cuttler install the renamed copy?',
+      detail: 'Cuttler then asks for a family name. The original file is not changed.',
       buttons,
       defaultId: 0,
       cancelId: buttons.length - 1,
@@ -1161,7 +1178,7 @@ async function clearCacheFromMenu(kind) {
     } catch {
       if (response.status === 404) {
         throw new Error(
-          'The Font Buttler API is out of date. Quit Font Buttler completely, then reopen it.',
+          'The Cuttler API is out of date. Quit Cuttler completely, then reopen it.',
         )
       }
       throw new Error(
@@ -1295,7 +1312,7 @@ function buildTrayMenu() {
   /** @type {import('electron').MenuItemConstructorOptions[]} */
   const items = []
   items.push({
-    label: 'Show Font Buttler',
+    label: 'Show Cuttler',
     click: () => {
       showMainWindow()
     },
@@ -2038,7 +2055,7 @@ if (!gotLock) {
 
       child.on('exit', (code) => {
         if (!settled) {
-          const error = new Error(`Font Buttler API worker exited (${code ?? 'unknown'})`)
+          const error = new Error(`Cuttler API worker exited (${code ?? 'unknown'})`)
           if (code === 1 && /EADDRINUSE|address already in use/i.test(buffer)) {
             error.code = 'EADDRINUSE'
           } else if (code) {
@@ -2055,7 +2072,7 @@ if (!gotLock) {
         if (!apiBootstrapReady) {
           return
         }
-        console.error('Font Buttler API worker exited unexpectedly')
+        console.error('Cuttler API worker exited unexpectedly')
         void restartPackagedBackend()
       })
 
@@ -2064,7 +2081,7 @@ if (!gotLock) {
         buffer += text
         logDebugMultiline('api-worker', text)
         if (buffer.length > 64_000) buffer = buffer.slice(-32_000)
-        const match = buffer.match(/Font Buttler API on http:\/\/127\.0\.0\.1:(\d+)/)
+        const match = buffer.match(/Cuttler API on http:\/\/127\.0\.0\.1:(\d+)/)
         if (!match) return
         finish(null, { port: Number(match[1]), token: readApiTokenFile() })
       })
@@ -2117,7 +2134,7 @@ if (!gotLock) {
       try {
         await ensureApiToken()
       } catch (error) {
-        console.error('Could not connect to Font Buttler API (dev)', error)
+        console.error('Could not connect to Cuttler API (dev)', error)
       }
       apiBootstrapReady = true
       return true
@@ -2143,7 +2160,7 @@ if (!gotLock) {
       if (error && typeof error === 'object' && 'tail' in error && typeof error.tail === 'string') {
         apiWorkerLogTail = error.tail
       }
-      console.error('Could not bootstrap Font Buttler API', error)
+      console.error('Could not bootstrap Cuttler API', error)
       logDebug(
         'bootstrap',
         error instanceof Error ? error.stack ?? error.message : String(error),
@@ -2173,11 +2190,11 @@ if (!gotLock) {
         void win.loadURL(UI)
       }
       dialog.showErrorBox(
-        'Font Buttler restarted the local service',
+        'Cuttler restarted the local service',
         'The font service stopped unexpectedly and was started again. Your library was reloaded.',
       )
     } catch (error) {
-      console.error('Could not restart Font Buttler API', error)
+      console.error('Could not restart Cuttler API', error)
       apiBootstrapReady = false
       lastBootstrapError = error instanceof Error ? error : new Error(String(error))
       await showBootstrapFailure(lastBootstrapError)
@@ -2190,7 +2207,7 @@ if (!gotLock) {
     debugLogFilePath = defaultLogFilePath(app.getPath('home'))
     const fileWriter = createDebugLogFileWriter(debugLogFilePath)
     attachDebugLogPersistence(debugLog, fileWriter)
-    logDebug('main', `Font Buttler ${app.getVersion()} starting`)
+    logDebug('main', `Cuttler ${app.getVersion()} starting`)
     try {
       cleanupOpenedUpdateDmgs({
         recordFile: openedUpdateDmgRecordFile(app.getPath('userData')),

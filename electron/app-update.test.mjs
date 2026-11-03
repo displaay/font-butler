@@ -15,18 +15,18 @@ test('isAllowedAppUpdateUrl only allows this GitHub repo', () => {
 })
 
 test('trayTooltip keeps existing copy and names an app release', () => {
-  assert.equal(trayTooltip({}), 'Font Buttler')
-  assert.equal(trayTooltip({ hasUnread: true }), 'Font Buttler — unread activity')
+  assert.equal(trayTooltip({}), 'Cuttler')
+  assert.equal(trayTooltip({ hasUnread: true }), 'Cuttler — unread activity')
   assert.equal(
     trayTooltip({ hasUnread: true, hasUpdates: true, fontUpdateCount: 2 }),
-    'Font Buttler — unread activity and updates',
+    'Cuttler — unread activity and updates',
   )
-  assert.equal(trayTooltip({ hasUpdates: true, fontUpdateCount: 3 }), 'Font Buttler — 3 updates')
+  assert.equal(trayTooltip({ hasUpdates: true, fontUpdateCount: 3 }), 'Cuttler — 3 updates')
   assert.equal(
     trayTooltip({ hasAppUpdate: true }),
-    'Font Buttler — app update available',
+    'Cuttler — app update available',
   )
-  assert.equal(appUpdateRowLabel({ updateAvailable: true, latestVersion: '0.2.0' }), 'Font Buttler 0.2.0')
+  assert.equal(appUpdateRowLabel({ updateAvailable: true, latestVersion: '0.2.0' }), 'Cuttler 0.2.0')
 })
 
 test('main process never auto-downloads or auto-installs GitHub assets', () => {

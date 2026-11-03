@@ -1,10 +1,10 @@
 {
   "name": "font-butler",
-  "productName": "Font Buttler",
+  "productName": "Cuttler",
   "private": true,
-  "version": "0.3.12",
+  "version": "0.4.0",
   "description": "Source-tracked font manager for macOS",
-  "author": "Font Buttler",
+  "author": "Cuttler",
   "type": "module",
   "main": "electron/main.mjs",
   "scripts": {
@@ -58,7 +58,7 @@
   },
   "build": {
     "appId": "app.fontbutler.desktop",
-    "productName": "Font Buttler",
+    "productName": "Cuttler",
     "electronLanguages": [
       "en"
     ],
@@ -111,11 +111,12 @@
       "icon": "build/icon.icns",
       "category": "public.app-category.utilities",
       "extendInfo": {
-        "NSUserNotificationsUsageDescription": "Font Buttler can notify you when fonts are installed or updated.",
-        "NSAppleEventsUsageDescription": "Font Buttler asks macOS to log out after you clear font caches. macOS will ask you to confirm before logging out.",
+        "CFBundleDisplayName": "Cuttler",
+        "NSUserNotificationsUsageDescription": "Cuttler can notify you when fonts are installed or updated.",
+        "NSAppleEventsUsageDescription": "Cuttler asks macOS to log out after you clear font caches. macOS will ask you to confirm before logging out.",
         "CFBundleURLTypes": [
           {
-            "CFBundleURLName": "Font Buttler Finder Install",
+            "CFBundleURLName": "Cuttler Finder Install",
             "CFBundleURLSchemes": [
               "font-butler"
             ]
@@ -127,7 +128,7 @@
               "default": "Install"
             },
             "NSMessage": "installFonts",
-            "NSPortName": "Font Buttler",
+            "NSPortName": "Cuttler",
             "NSUserData": "install",
             "NSRequiredContext": {
               "NSTextContent": "FilePath"
@@ -144,7 +145,7 @@
               "default": "Install as…"
             },
             "NSMessage": "installFontsAs",
-            "NSPortName": "Font Buttler",
+            "NSPortName": "Cuttler",
             "NSUserData": "install-as",
             "NSRequiredContext": {
               "NSTextContent": "FilePath"
@@ -161,7 +162,7 @@
               "default": "Link to …"
             },
             "NSMessage": "linkFonts",
-            "NSPortName": "Font Buttler",
+            "NSPortName": "Cuttler",
             "NSUserData": "link-to",
             "NSRequiredContext": {
               "NSTextContent": "FilePath"

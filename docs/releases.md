@@ -1,6 +1,6 @@
 # GitHub Releases
 
-Font Buttler checks [GitHub Releases](https://github.com/displaay/font-butler/releases) for a newer app version. It downloads and installs that build only after a click on the **Update** badge next to Settings. It does not download on its own.
+Cuttler checks [GitHub Releases](https://github.com/displaay/font-butler/releases) for a newer app version. It downloads and installs that build only after a click on the **Update** badge next to Settings. It does not download on its own.
 
 ## How the app reads releases
 
@@ -25,16 +25,16 @@ Font Buttler checks [GitHub Releases](https://github.com/displaay/font-butler/re
 
 5. Surfaces:
 
-   - **Settings button → Update** — downloads and installs. The badge keeps its place and colours. It is a button: pointer cursor, a visible focus ring, Enter/Space, and the label `Update to Font Buttler {version}`. While the download runs it shows progress and ignores further clicks. A bad download turns the badge into an error and deletes the temp file.
+   - **Settings button → Update** — downloads and installs. The badge keeps its place and colours. It is a button: pointer cursor, a visible focus ring, Enter/Space, and the label `Update to Cuttler {version}`. While the download runs it shows progress and ignores further clicks. A bad download turns the badge into an error and deletes the temp file.
    - **Settings → General → App updates** — current version, notes, **Download** (opens the asset in the browser), **Open release**
-   - **Menu bar → Updates** — `Font Buttler {version}` opens the release page; **Download {asset}** opens the file; **Reinstall all fonts** still only reinstalls fonts
+   - **Menu bar → Updates** — `Cuttler {version}` opens the release page; **Download {asset}** opens the file; **Reinstall all fonts** still only reinstalls fonts
 
    The **Updates** tab lists font updates only. An application release does not appear there.
-   - **Font Buttler → Check for Updates…** — refreshes, then focuses Settings. It does not download.
+   - **Cuttler → Check for Updates…** — refreshes, then focuses Settings. It does not download.
 
 6. What the badge installs depends on the running app's signature, not its version:
 
-   - **In place** when the app is packaged, signed with Developer ID for team `A7WWML89LQ`, and the bundle is writable. Not when it was launched from a mounted DMG, from App Translocation, or from a read-only folder. The zip named exactly `Font-Buttler-{version}-arm64.zip` is checked against `latest-mac.yml` (sha512 and size). The app inside must be Developer ID for the same team and stapled. Then the bundle is swapped and Font Buttler relaunches. A failed check does not replace the app.
+   - **In place** when the app is packaged, signed with Developer ID for team `A7WWML89LQ`, and the bundle is writable. Not when it was launched from a mounted DMG, from App Translocation, or from a read-only folder. The zip named exactly `Font-Buttler-{version}-arm64.zip` is checked against `latest-mac.yml` (sha512 and size). The app inside must be Developer ID for the same team and stapled. Then the bundle is swapped and Cuttler relaunches. A failed check does not replace the app.
    - **DMG** otherwise, including dev Electron (`!app.isPackaged`), ad-hoc or unsigned builds, and a bundle that cannot be written. The file is the asset named exactly `Font-Buttler-{version}-arm64.dmg`. It is checked the same way, then opened. The temp DMG is deleted after it opens, or on the next launch if the image is still mounted.
 
    Neither path downloads or installs unless that release version is strictly newer than the running app.
@@ -79,7 +79,7 @@ python3 -m http.server 8765 --bind 127.0.0.1
 
 A marked build isolates itself before `app.requestSingleInstanceLock()` and before the app is ready, including after the swap relaunches it with no environment. `userData` becomes `~/Library/Application Support/Font Buttler Test`. When `FONT_BUTLER_DATA` is unset, the library, settings, and API token go in `~/Library/Application Support/Font Buttler Test/data`. Only the packaged `fontButlerTestFeed` marker does this. No environment variable can turn it on, and an unmarked build leaves `userData` and `FONT_BUTLER_DATA` alone. Settings → General → App updates shows `TEST BUILD` and that data folder on the version line. Confirm the path before clicking **Update**.
 
-The real Font Buttler uses bundle id `app.fontbutler.desktop` and may be running. A marked build uses `app.fontbutler.desktop.test` and the product name `Font Buttler Test`. Its swap relaunches with `open -n`, on both the success path and the restore path, so macOS opens this bundle instead of bringing the other app forward. An unmarked build still uses plain `open`.
+The real Cuttler uses bundle id `app.fontbutler.desktop` and may be running. A marked build uses `app.fontbutler.desktop.test` and the product name `Font Buttler Test`. Its swap relaunches with `open -n`, on both the success path and the restore path, so macOS opens this bundle instead of bringing the other app forward. An unmarked build still uses plain `open`.
 
 A marked build can exercise the logout prompt without logging out. The repo file `build/build-identity.json` has `"testBuild": false`. The pack writes `Contents/Resources/build-identity.json` with `"testBuild": true` only when `FONT_BUTLER_TEST_FEED_BUILD=1`. The running app reads that file. Inside a packaged `.app`, `Contents/Resources/build-identity.json` is the only stamp. A missing, unreadable, unparseable, or non-boolean file is a test build, and that choice is logged once. The copy in `app.asar` is not consulted. Dev and unpackaged runs still read `build/build-identity.json`. No environment variable turns the probe on, and a release build keeps `"testBuild": false`. The release check requires that value to be exactly `false`. After **Clear font caches**, the clear is simulated whether or not `FONT_BUTLER_DATA` is set. `atsutil databases -removeUser` does not run, the result is `cleared: false` and `simulated: true`, and the skip is logged. That includes a test build opened from Finder. `allowRealCacheMutation()` itself is false for that stamp, including when `FONT_BUTLER_NATIVE_CACHES=1`, so Office and Adobe clears leave the live caches in place too. `requestMacLogout()` itself runs the probe for every caller. Settings and the menu still choose that probe from the clear result. The same **Log out now** button then sends `tell application "System Events" to count processes` instead of a logout. `/api/session/logout` runs the probe and does not run the logout script. macOS shows the Automation prompt. **Don't Allow** returns -1743 and opens the failure dialog. If the prompt is still open after 30 seconds, the still-waiting notice appears and the Apple event keeps running. **Allow** shows **Test build: logout would start now**. The app does not show the normal logout success state, and it does not quit or log out.
 
@@ -150,10 +150,10 @@ The profile name is `font-butler-notary`. If it lives in a keychain other than t
 
    `release:mac` sets `APPLE_KEYCHAIN_PROFILE=font-butler-notary` when that variable is unset, then runs the same prepare steps as `npm run dist` (`build`, bundled Python, Finder and session-font addons) and packs with electron-builder `--publish never`. Signing is forced. If the Developer ID certificate is missing, or signing or notarizing fails, the command stops. It does not fall back to ad-hoc. After a successful pack it runs `scripts/assert-notarized-mac-release.mjs`.
 
-5. Verify the app, the DMG, and the update zip (Apple silicon build; the bundle is `release/mac-arm64/Font Buttler.app`):
+5. Verify the app, the DMG, and the update zip (Apple silicon build; the bundle is `release/mac-arm64/Cuttler.app`):
 
    ```bash
-   APP="release/mac-arm64/Font Buttler.app"
+   APP="release/mac-arm64/Cuttler.app"
    DMG="release/Font-Buttler-$(node -p "require('./package.json').version")-arm64.dmg"
    codesign --verify --deep --strict --verbose=2 "$APP"
    codesign -d --entitlements :- "$APP"
@@ -168,7 +168,7 @@ The profile name is `font-butler-notary`. If it lives in a keychain other than t
    Nested code is signed with the same identity. Spot-check one of each:
 
    ```bash
-   codesign --verify --verbose=2 "$APP/Contents/Frameworks/Font Buttler Helper (Renderer).app"
+   codesign --verify --verbose=2 "$APP/Contents/Frameworks/Cuttler Helper (Renderer).app"
    codesign --verify --verbose=2 "$APP/Contents/Resources/app.asar.unpacked/electron/finder-services.node"
    codesign --verify --verbose=2 "$APP/Contents/Resources/python/bin/python3"
    ```
@@ -206,7 +206,7 @@ The profile name is `font-butler-notary`. If it lives in a keychain other than t
 ```text
 This build is signed with Developer ID and notarized by Apple.
 
-If you are on Font Buttler 0.3.8 or earlier, download this version manually once and replace the app. Those builds were ad-hoc signed, and their Update badge does not install. After this signed version is the one you run, later releases install from the Update badge next to Settings.
+If you are on Cuttler 0.3.8 or earlier, download this version manually once and replace the app. Those builds were ad-hoc signed, and their Update badge does not install. After this signed version is the one you run, later releases install from the Update badge next to Settings.
 
 Uninstall and unlink removes an installed font from the library and leaves its source file on disk. It is on the font card menu, the selection bar, and the inspector, asks first, and is recorded in Activity. Watch folders do not import that file again until you add it back (#73).
 
@@ -246,7 +246,7 @@ electron-builder is 26.15.3 (`@electron/notarize` 2.5.0). No upgrade. `mac.notar
 
 The Developer ID plist has one key: `com.apple.security.cs.allow-jit`. That is what V8 on Apple silicon needs (MAP_JIT, Electron 20+). The same file is `entitlementsInherit`, so the Renderer, GPU, and Utility helpers get it too. `mac.type` stays the default `distribution`. `get-task-allow` is not in the plist, and distribution signing does not inject it.
 
-`allow-unsigned-executable-memory` is not set. `@electron/osx-sign` puts that key only on its plugin-helper default, for Pepper and Widevine. The main app, Renderer, and GPU defaults are `allow-jit` alone. Font Buttler does not load plugins.
+`allow-unsigned-executable-memory` is not set. `@electron/osx-sign` puts that key only on its plugin-helper default, for Pepper and Widevine. The main app, Renderer, and GPU defaults are `allow-jit` alone. Cuttler does not load plugins.
 
 `disable-library-validation` is not in the release plist. A Developer ID build re-signs the whole bundle with one team, so library validation should accept Electron’s frameworks, the unpacked `.node` addons, and the bundled Python Mach-O files. The ad-hoc plist does set it, because an ad-hoc signature has no team and hardened runtime would otherwise refuse those libraries. That file is used only when `npm run dist` has no Developer ID certificate and no notary profile.
 

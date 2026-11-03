@@ -87,8 +87,8 @@ export function RenameDialog({
           <DialogTitle>Install as a different name</DialogTitle>
           <DialogDescription>
             {bakeFeatures?.length
-              ? 'Font Buttler bakes the selected OpenType features into default glyphs, then writes a copy with a new family name. Your source file stays unchanged.'
-              : 'Font Buttler writes a copy with a new family name in the name and CFF tables. Your source file stays unchanged.'}
+              ? 'Cuttler bakes the selected OpenType features into default glyphs, then writes a copy with a new family name. Your source file stays unchanged.'
+              : 'Cuttler writes a copy with a new family name in the name and CFF tables. Your source file stays unchanged.'}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">

@@ -32,7 +32,7 @@ import {
 function release(partial: GithubReleaseJson = {}): GithubReleaseJson {
   return {
     tag_name: 'v0.2.0',
-    name: 'Font Buttler 0.2.0',
+    name: 'Cuttler 0.2.0',
     body: '## Changes\n- Check GitHub Releases',
     html_url: 'https://github.com/displaay/font-butler/releases/tag/v0.2.0',
     published_at: '2026-09-08T12:00:00Z',
@@ -92,11 +92,11 @@ test('parseGithubRelease flags a newer public release and parks auto-install', (
   assert.equal(status.latestVersion, '0.2.0')
   assert.equal(status.currentVersion, '0.1.1')
   assert.equal(status.autoInstall, APP_UPDATE_AUTO_INSTALL)
-  assert.equal(status.releaseName, 'Font Buttler 0.2.0')
+  assert.equal(status.releaseName, 'Cuttler 0.2.0')
   assert.match(status.releaseNotes ?? '', /Check GitHub Releases/)
   assert.equal(status.htmlUrl, 'https://github.com/displaay/font-butler/releases/tag/v0.2.0')
   assert.equal(status.preferredAsset?.name, 'Font-Buttler-0.2.0-arm64.dmg')
-  assert.equal(appUpdateRowLabel(status), 'Font Buttler 0.2.0')
+  assert.equal(appUpdateRowLabel(status), 'Cuttler 0.2.0')
 })
 
 test('parseGithubRelease does not treat the current version as an update', () => {

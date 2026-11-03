@@ -40,14 +40,24 @@ import { rawFs } from './raw-fs.mjs'
 
 export const DEVELOPER_ID_TEAM = 'A7WWML89LQ'
 export const APP_UPDATE_FEED_ENV = 'FONT_BUTLER_UPDATE_FEED_URL'
-export const APP_PRODUCT_BUNDLE = 'Font Buttler.app'
+/** Current product bundle. New installs and named-destination swaps land here. */
+export const APP_PRODUCT_BUNDLE = 'Cuttler.app'
+/**
+ * Pre-rename bundle. 0.3.x clients only accept this name inside the update zip,
+ * and running upgrades may still be this folder until the next in-place swap.
+ */
+export const LEGACY_APP_PRODUCT_BUNDLE = 'Font Buttler.app'
 /** Test-feed builds rename the product so TCC stays off the real app. */
 export const TEST_FEED_APP_BUNDLE = 'Font Buttler Test.app'
 
 export function isFontButlerAppBundle(appPath) {
   if (!appPath) return false
   const name = path.basename(appPath)
-  return name === APP_PRODUCT_BUNDLE || name === TEST_FEED_APP_BUNDLE
+  return (
+    name === APP_PRODUCT_BUNDLE ||
+    name === LEGACY_APP_PRODUCT_BUNDLE ||
+    name === TEST_FEED_APP_BUNDLE
+  )
 }
 export const GITHUB_OWNER = 'displaay'
 export const GITHUB_REPO = 'font-butler'
@@ -63,8 +73,32 @@ export const GITHUB_RELEASE_ASSET_HOSTS = new Set([
 
 const GITHUB_REPO_PREFIX = `/${GITHUB_OWNER}/${GITHUB_REPO}`
 
+/** Primary archive stem. 0.3.x clients match this exact zip/dmg name. */
+export const LEGACY_MAC_ARCHIVE_STEM = 'Font-Buttler'
+/** Optional newer stem published alongside the legacy name. */
+export const MAC_ARCHIVE_STEM = 'Cuttler'
+
 export function macArm64ArchiveName(version, ext) {
-  return `Font-Buttler-${version}-arm64.${ext}`
+  return `${LEGACY_MAC_ARCHIVE_STEM}-${version}-arm64.${ext}`
+}
+
+/** Legacy name first (required for 0.3.x), then the Cuttler alias when present in the feed. */
+export function macArm64ArchiveNames(version, ext) {
+  return [
+    `${LEGACY_MAC_ARCHIVE_STEM}-${version}-arm64.${ext}`,
+    `${MAC_ARCHIVE_STEM}-${version}-arm64.${ext}`,
+  ]
+}
+
+/**
+ * In-place updates always install into the product bundle name in the same
+ * parent folder as the running app — not into whatever `current` is named.
+ * Test-feed builds keep their isolated bundle name.
+ */
+export function resolveUpdateInstallAppPath(currentApp, { testFeedBuild = false } = {}) {
+  if (!currentApp) return null
+  const parent = path.dirname(currentApp)
+  return path.join(parent, testFeedBuild === true ? TEST_FEED_APP_BUNDLE : APP_PRODUCT_BUNDLE)
 }
 
 export function normalizeReleaseVersion(raw) {
@@ -719,7 +753,7 @@ function assertInside(parent, child) {
   }
 }
 
-const UPDATE_APP_BUNDLE_NAMES = [APP_PRODUCT_BUNDLE, TEST_FEED_APP_BUNDLE]
+const UPDATE_APP_BUNDLE_NAMES = [APP_PRODUCT_BUNDLE, LEGACY_APP_PRODUCT_BUNDLE, TEST_FEED_APP_BUNDLE]
 
 export function findUpdateAppBundle(root) {
   for (const name of UPDATE_APP_BUNDLE_NAMES) {
@@ -811,43 +845,59 @@ export function shellQuote(value) {
 
 /**
  * Replace the bundle only after this process exits.
- * Any failure restores the original bundle if it was moved, then opens that app.
- * An early `rm` failure is not left to `set -e`: the ERR trap opens the original app.
- * A cross-volume `mv` can leave a partial destination. That directory is removed
- * before the backup is moved back, and only when this script has moved the
- * original aside (`moved=1`) and the backup is a directory.
+ * Installs into `installApp` (named destination in the same parent folder),
+ * which may differ from the running `currentApp` during the Font Buttler →
+ * Cuttler rename. Any failure restores the original running bundle if it was
+ * moved, then opens that app. An early `rm` failure is not left to `set -e`:
+ * the ERR trap opens the original app. A cross-volume `mv` can leave a partial
+ * destination; that directory is removed before the backup is moved back, and
+ * only when this script has moved the original aside and the backup is a directory.
  */
-export function buildMacSwapScript({ pid, currentApp, nextApp, tempDir, scriptPath, testFeedBuild = false }) {
+export function buildMacSwapScript({
+  pid,
+  currentApp,
+  nextApp,
+  installApp,
+  tempDir,
+  scriptPath,
+  testFeedBuild = false,
+}) {
   const id = Number(pid)
   if (!Number.isInteger(id) || id <= 1) throw new Error('Invalid update process id.')
-  const backup = `${currentApp}.font-butler-previous`
+  const destination = installApp || currentApp
+  if (!destination) throw new Error('Invalid update install path.')
+  const samePath = path.resolve(currentApp) === path.resolve(destination)
   const current = shellQuote(currentApp)
-  const previous = shellQuote(backup)
+  const install = shellQuote(destination)
   const next = shellQuote(nextApp)
   const temp = shellQuote(tempDir)
   const script = shellQuote(scriptPath)
+  const currentBackup = shellQuote(`${currentApp}.font-butler-previous`)
+  const installBackup = shellQuote(`${destination}.font-butler-previous`)
   // Same bundle id as the real app. `open -n` starts this bundle instead of
   // activating the copy that is already running. Only a marked test build.
-  const openApp = testFeedBuild === true ? `open -n ${current}` : `open ${current}`
-  return `#!/bin/bash
+  const openInstall = testFeedBuild === true ? `open -n ${install}` : `open ${install}`
+  const openCurrent = testFeedBuild === true ? `open -n ${current}` : `open ${current}`
+  if (samePath) {
+    return `#!/bin/bash
 set -euo pipefail
 moved=0
 reopen_original() {
-  if [[ "$moved" -eq 1 && -d ${previous} ]]; then
+  if [[ "$moved" -eq 1 && -d ${currentBackup} ]]; then
     rm -rf ${current} || true
     if [[ ! -e ${current} ]]; then
-      mv ${previous} ${current} || true
+      mv ${currentBackup} ${current} || true
       moved=0
     fi
   fi
-  ${openApp} || true
+  ${openCurrent} || true
 }
 trap 'reopen_original; exit 1' ERR
 while kill -0 ${id} 2>/dev/null; do
   sleep 0.2
 done
-rm -rf ${previous}
-if ! mv ${current} ${previous}; then
+rm -rf ${currentBackup}
+if ! mv ${current} ${currentBackup}; then
   reopen_original
   exit 1
 fi
@@ -856,9 +906,61 @@ if ! mv ${next} ${current}; then
   reopen_original
   exit 1
 fi
-${openApp}
+${openCurrent}
 moved=0
-rm -rf ${previous}
+rm -rf ${currentBackup}
+rm -rf ${temp}
+rm -f ${script}
+`
+  }
+  return `#!/bin/bash
+set -euo pipefail
+moved_current=0
+moved_next=0
+reopen_original() {
+  if [[ "$moved_next" -eq 1 ]]; then
+    rm -rf ${install} || true
+    if [[ -d ${installBackup} && ! -e ${install} ]]; then
+      mv ${installBackup} ${install} || true
+    fi
+    moved_next=0
+  fi
+  if [[ "$moved_current" -eq 1 && -d ${currentBackup} ]]; then
+    rm -rf ${current} || true
+    if [[ ! -e ${current} ]]; then
+      mv ${currentBackup} ${current} || true
+      moved_current=0
+    fi
+  fi
+  ${openCurrent} || true
+}
+trap 'reopen_original; exit 1' ERR
+while kill -0 ${id} 2>/dev/null; do
+  sleep 0.2
+done
+rm -rf ${currentBackup}
+rm -rf ${installBackup}
+if ! mv ${current} ${currentBackup}; then
+  reopen_original
+  exit 1
+fi
+moved_current=1
+if [[ -e ${install} ]]; then
+  if ! mv ${install} ${installBackup}; then
+    reopen_original
+    exit 1
+  fi
+fi
+if ! mv ${next} ${install}; then
+  reopen_original
+  exit 1
+fi
+moved_next=1
+${openInstall}
+moved_current=0
+moved_next=0
+rm -rf ${currentBackup}
+rm -rf ${installBackup}
 rm -rf ${temp}
 rm -f ${script}
 `
@@ -1106,7 +1208,9 @@ async function runInstall(deps, fetchImpl, tempDir) {
   else await unpackZipArchive(dest, unpackDir)
   const nextApp = findUpdateAppBundle(unpackDir)
   if (!nextApp) {
-    throw new Error('The update zip does not contain Font Buttler.app or Font Buttler Test.app.')
+    throw new Error(
+      'The update zip does not contain Cuttler.app, Font Buttler.app, or Font Buttler Test.app.',
+    )
   }
   assertInside(unpackDir, nextApp)
   const verified = deps.verifyDownloadedApp
@@ -1131,12 +1235,17 @@ async function runInstall(deps, fetchImpl, tempDir) {
     refuseUpdateMarker(downloadedTestFeed ? 'Update is a test build' : 'Update is not a test build')
   }
   if (!runtime.appPath) throw new Error('The running app bundle could not be found.')
+  const installApp = resolveUpdateInstallAppPath(runtime.appPath, {
+    testFeedBuild: runtime.testFeedBuild === true,
+  })
+  if (!installApp) throw new Error('The update install path could not be resolved.')
   deps.onProgress?.({ phase: 'installing' })
   const scriptPath = path.join(tempDir, 'swap.sh')
   const script = buildMacSwapScript({
     pid: deps.pid ?? process.pid,
     currentApp: runtime.appPath,
     nextApp,
+    installApp,
     tempDir,
     scriptPath,
     testFeedBuild: runtime.testFeedBuild === true,
@@ -1378,10 +1487,12 @@ export function statusPiecesFromFeed(ymlText, feedUrl) {
   const doc = parseLatestMacYml(ymlText)
   const version = doc.version
   if (!version) return { version: '', assets: [], doc }
-  const dmgName = macArm64ArchiveName(version, 'dmg')
-  const zipName = macArm64ArchiveName(version, 'zip')
+  const names = [...macArm64ArchiveNames(version, 'dmg'), ...macArm64ArchiveNames(version, 'zip')]
   const assets = []
-  for (const name of [dmgName, zipName]) {
+  const seen = new Set()
+  for (const name of names) {
+    if (seen.has(name)) continue
+    seen.add(name)
     const entry = ymlFileEntry(doc, name)
     const url = entry ? feedAssetUrl(feedUrl, name) : null
     if (!entry || !url) continue

@@ -39,7 +39,7 @@ test('an unlinked-list reset stays on disk until a window acknowledges it', () =
   const notice = {
     kind: 'warning' as const,
     source: 'unlinked-list' as const,
-    message: 'Font Buttler could not read the unlinked list.',
+    message: 'Cuttler could not read the unlinked list.',
   }
   try {
     publishUnlinkedListReset(paths, notice)

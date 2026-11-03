@@ -21,7 +21,7 @@ test('the packaged app runs the API in a child process, not in Electron main', (
 
 test('spawnApiWorker has no fixed startup timeout', () => {
   const main = readFileSync(new URL('./main.mjs', import.meta.url), 'utf8')
-  assert.doesNotMatch(main, /Font Buttler API worker did not start'\)[\s\S]{0,120}20_000/)
+  assert.doesNotMatch(main, /Cuttler API worker did not start'\)[\s\S]{0,120}20_000/)
 })
 
 test('corrupt catalog keeps the API worker alive and reports failed health', async () => {
@@ -56,7 +56,7 @@ test('corrupt catalog keeps the API worker alive and reports failed health', asy
     })
     const started = Date.now()
     const poll = setInterval(async () => {
-      if (!stdout.includes('Font Buttler API on')) return
+      if (!stdout.includes('Cuttler API on')) return
       try {
         const response = await fetch(`http://127.0.0.1:${port}/api/health`)
         const health = await response.json()
@@ -75,7 +75,7 @@ test('corrupt catalog keeps the API worker alive and reports failed health', asy
       reject(new Error(`timed out waiting for failed health\n${stderr}`))
     }, 15_000)
   })
-  assert.match(result.stderr, /Font Buttler service init failed/)
+  assert.match(result.stderr, /Cuttler service init failed/)
   assert.equal(result.health.phase, 'failed')
   assert.ok(result.health.error)
   assert.ok(result.ms < 10_000, `expected fast failure, got ${result.ms}ms`)
@@ -88,7 +88,7 @@ test('server starts listening before catalog and background init', () => {
   assert.ok(serveCallbackIdx > 0 && runInitCallIdx > serveCallbackIdx)
   assert.match(server, /await service\.initCatalogPhase\(\)/)
   assert.match(server, /await service\.initBackgroundPhase\(\)/)
-  assert.match(server, /Font Buttler catalog ready/)
+  assert.match(server, /Cuttler catalog ready/)
   assert.doesNotMatch(server, /process\.exit\(1\)/)
   assert.match(server, /await backgroundReady/)
   assert.match(server, /service\.startPreviewBackfill\(\)/)

@@ -40,8 +40,8 @@ export function AppUpdateCard({
         <div className="min-w-0">
           <div className="text-sm font-medium">
             {updateAvailable
-              ? `Font Buttler ${status?.latestVersion} is available`
-              : 'Font Buttler is up to date'}
+              ? `Cuttler ${status?.latestVersion} is available`
+              : 'Cuttler is up to date'}
           </div>
           <p className="mt-0.5 text-[13px] leading-5 text-muted-foreground">
             {appUpdateRunningLine(status)}

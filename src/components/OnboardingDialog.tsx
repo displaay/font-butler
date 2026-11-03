@@ -45,7 +45,7 @@ function previousStep(current: Step, showDestinations: boolean): Step | null {
 
 const COPY: Record<Step, { title: string; description: string }> = {
   welcome: {
-    title: 'Welcome to Font Buttler',
+    title: 'Welcome to Cuttler',
     description:
       'A source-tracked font manager for folders you already use. Drop fonts in, or watch a folder and choose how it handles new fonts and updates.',
   },
@@ -66,7 +66,7 @@ const COPY: Record<Step, { title: string; description: string }> = {
   notify: {
     title: 'Allow notifications',
     description:
-      'Font Buttler can notify you when fonts are installed or updated. You can change this later in Settings.',
+      'Cuttler can notify you when fonts are installed or updated. You can change this later in Settings.',
   },
   icon: {
     title: 'Choose an app icon',
@@ -343,7 +343,7 @@ export function OnboardingDialog({
                 <span>
                   <span className="block text-sm">Open at login</span>
                   <span className="block text-sm text-muted-foreground">
-                    Start Font Buttler when you turn on this computer.
+                    Start Cuttler when you turn on this computer.
                   </span>
                 </span>
               </Label>

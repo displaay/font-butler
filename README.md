@@ -1,12 +1,12 @@
-# Font Buttler
+# Cuttler
 
 A source-tracked font manager for macOS — a simpler stand-in for Font Book.
 
-Drop a font file into Font Buttler and it remembers the original path. When that source file changes, Font Buttler offers a reinstall. Reinstalling uninstalls the old copy, clears user font caches (including Microsoft Office and Adobe font caches when present), then installs the new file.
+Drop a font file into Cuttler and it remembers the original path. When that source file changes, Cuttler offers a reinstall. Reinstalling uninstalls the old copy, clears user font caches (including Microsoft Office and Adobe font caches when present), then installs the new file.
 
 ## Features
 
-- **Watch folders** — Point Font Buttler at a folder of sources. New files are imported automatically; you choose whether they also install. Pause a folder, pick a destination policy per folder, or drop a folder once without watching it.
+- **Watch folders** — Point Cuttler at a folder of sources. New files are imported automatically; you choose whether they also install. Pause a folder, pick a destination policy per folder, or drop a folder once without watching it.
 - **Format swap** — Keep OTF and TTF of the same family in the library, then **Swap OTF for TTF** (or the other way) in one step. The other format stays on the card, deactivated, so you can swap back.
 - **Install as…** — Rewrite the family name across OpenType name (and CFF) tables and install a copy. The original file is never mutated. The packaged app ships Python and fonttools, so this works without a system Python.
 - **Bake OpenType features** — Turn stylistic sets, figures, and other features on in the specimen, then bake them into a reinstall or a new **Install as…** copy.
@@ -25,8 +25,8 @@ Drop a font file into Font Buttler and it remembers the original path. When that
 - Shows Font Book’s **My Fonts** (`~/Library/Fonts`) on the Fonts tab as soon as the app opens
 - Groups families, counts instances, and marks variable fonts with a **VF** badge
 - Right-click a card → **Show in Finder**
-- If Font Buttler is the default app for a font, double-clicking the file adds it to the library and installs it immediately
-- Right-click a font file in Finder → **Install**, **Install as…**, or **Link to …** (Services). **Install as…** asks for a destination and family name, then uses the same install path as the app. **Link to …** opens Font Buttler so you can pick an existing catalog family and attach this file as its tracked source.
+- If Cuttler is the default app for a font, double-clicking the file adds it to the library and installs it immediately
+- Right-click a font file in Finder → **Install**, **Install as…**, or **Link to …** (Services). **Install as…** asks for a destination and family name, then uses the same install path as the app. **Link to …** opens Cuttler so you can pick an existing catalog family and attach this file as its tracked source.
 
 ## Run on your Mac
 
@@ -35,11 +35,11 @@ npm install
 npm run electron
 ```
 
-To replace Font Book as the double-click handler: select a `.otf` or `.ttf` in Finder, **Get Info → Open with → Font Buttler → Change All**.
+To replace Font Book as the double-click handler: select a `.otf` or `.ttf` in Finder, **Get Info → Open with → Cuttler → Change All**.
 
 Finder **Install**, **Install as…**, and **Link to …** are macOS Services. They appear on `.otf`, `.ttf`, `.ttc`, `.otc`, and other font UTIs the app already claims. Run the packaged app once so Launch Services can pick them up. If the items are missing, enable them in **System Settings → Keyboard → Keyboard Shortcuts → Services**. Selecting several font files at once installs each file through the same `/api/import` then `/api/install` path the library uses. **Link to …** pairs each selected file to at most one style in the family you pick (`inspectRelink` + `applyRelink`). Extra files that don’t match stay in the queue until you dismiss; a file already linked to that style is skipped.
 
-Font Buttler installs copies into `~/Library/Fonts`, the same user font folder Font Book uses. Fonts already there show up on the Fonts tab on launch. Catalog data lives in `~/Library/Application Support/Font Buttler/`.
+Cuttler installs copies into `~/Library/Fonts`, the same user font folder Font Book uses. Fonts already there show up on the Fonts tab on launch. Catalog data lives in `~/Library/Application Support/Font Buttler/`.
 
 ### Font cache menu
 
@@ -47,7 +47,7 @@ Font Buttler installs copies into `~/Library/Fonts`, the same user font folder F
 
 ### Optional full cache reset
 
-Font Buttler clears the **user** ATS cache, Office’s `FontCache` folder, and Adobe font list caches. A machine-wide wipe still needs:
+Cuttler clears the **user** ATS cache, Office’s `FontCache` folder, and Adobe font list caches. A machine-wide wipe still needs:
 
 ```bash
 sudo atsutil databases -remove
@@ -89,7 +89,7 @@ replaces them with the full files. See [docs/retail-sync.md](docs/retail-sync.md
 
 ## App updates
 
-Font Buttler compares its running version to the latest [GitHub Release](https://github.com/displaay/font-butler/releases). When a newer release exists, a blue **Update** badge appears on **Settings** in the left column. Click that badge to download and install the release. Nothing is downloaded until the click, and further clicks are ignored while a download is already running. The Updates tab lists font updates only.
+Cuttler compares its running version to the latest [GitHub Release](https://github.com/displaay/font-butler/releases). When a newer release exists, a blue **Update** badge appears on **Settings** in the left column. Click that badge to download and install the release. Nothing is downloaded until the click, and further clicks are ignored while a download is already running. The Updates tab lists font updates only.
 
 The install path follows the signature of the running app, not its version number:
 

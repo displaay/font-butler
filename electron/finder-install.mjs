@@ -18,7 +18,7 @@ export const FONT_SERVICE_UTIS = [
   'public.truetype-collection-font',
 ]
 
-export const FINDER_SERVICE_PORT_NAME = 'Font Buttler'
+export const FINDER_SERVICE_PORT_NAME = 'Cuttler'
 export const FINDER_INSTALL_MESSAGE = 'installFonts'
 export const FINDER_INSTALL_AS_MESSAGE = 'installFontsAs'
 export const FINDER_LINK_TO_MESSAGE = 'linkFonts'
@@ -75,7 +75,7 @@ export function finderServicesPlist(options = {}) {
 export function finderUrlSchemePlist() {
   return [
     {
-      CFBundleURLName: 'Font Buttler Finder Install',
+      CFBundleURLName: 'Cuttler Finder Install',
       CFBundleURLSchemes: [FINDER_PROTOCOL],
     },
   ]
@@ -264,7 +264,7 @@ export function familyNamePromptScript(defaultName) {
   return [
     'try',
     '  tell application "System Events" to activate',
-    `  set theResult to display dialog "Font Buttler writes a copy with this family name and installs it. The original file stays unchanged." with title "Install as…" default answer "${escaped}" buttons {"Cancel", "Install renamed copy"} default button "Install renamed copy"`,
+    `  set theResult to display dialog "Cuttler writes a copy with this family name and installs it. The original file stays unchanged." with title "Install as…" default answer "${escaped}" buttons {"Cancel", "Install renamed copy"} default button "Install renamed copy"`,
     '  return text returned of theResult',
     'on error',
     '  return ""',

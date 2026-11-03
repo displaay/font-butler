@@ -41,7 +41,7 @@ test('actionCopy names source files for delete and uninstall-and-delete', () => 
 test('uninstall and unlink confirms that the source file stays', () => {
   assert.equal(
     uninstallAndUnlinkConfirm([{ familyName: 'Fenul' }]),
-    'Uninstall Fenul and remove its source link? It will disappear from Font Buttler. The source file stays on disk.',
+    'Uninstall Fenul and remove its source link? It will disappear from Cuttler. The source file stays on disk.',
   )
   assert.match(uninstallAndUnlinkConfirm([{ familyName: 'Fenul' }, { familyName: 'Reckless' }]), /2 fonts/)
   assert.deepEqual(actionCopyFor('uninstallAndUnlink', [{ familyName: 'Fenul' }]), {

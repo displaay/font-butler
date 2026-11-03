@@ -53,7 +53,7 @@ async function ensureToken(): Promise<string> {
     fetchWithTimeout('/api/bootstrap'),
   )
   if (!data.token) {
-    throw new Error('Could not connect to Font Buttler API.')
+    throw new Error('Could not connect to Cuttler API.')
   }
   apiToken = data.token
   if (data.settings) {
@@ -95,7 +95,7 @@ export async function waitForCatalogReady(options: {
     if (data.phase && options.onPhase) options.onPhase(data.phase)
     if (data.catalogReady) return data
     if (data.phase === 'failed' || data.error) {
-      throw new Error(data.error || 'Font Buttler could not start.')
+      throw new Error(data.error || 'Cuttler could not start.')
     }
     await new Promise((resolve) => setTimeout(resolve, pollMs))
   }
@@ -112,7 +112,7 @@ export async function waitForServiceReady(options: {
     if (data.phase && options.onPhase) options.onPhase(data.phase)
     if (data.ready) return data
     if (data.phase === 'failed' || data.error) {
-      throw new Error(data.error || 'Font Buttler could not start.')
+      throw new Error(data.error || 'Cuttler could not start.')
     }
     await new Promise((resolve) => setTimeout(resolve, pollMs))
   }
@@ -128,9 +128,9 @@ async function parseJson<T>(input: Promise<Response>): Promise<T> {
     const unreachable = response.status === 502 || response.status === 503 || response.status === 504
     throw new Error(
       unreachable
-        ? 'Could not reach the Font Buttler API.'
+        ? 'Could not reach the Cuttler API.'
         : response.ok
-          ? 'The Font Buttler API returned an empty response.'
+          ? 'The Cuttler API returned an empty response.'
           : `Request failed (HTTP ${response.status})`,
     )
   }

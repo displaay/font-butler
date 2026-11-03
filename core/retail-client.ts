@@ -159,7 +159,7 @@ export async function fetchRetailManifest(
     )
     if (fileCount > MAX_RETAIL_MANIFEST_FILES) {
       throw new RetailRequestError(
-        `The Displaay worker listed ${fileCount} files; Font Buttler accepts at most ${MAX_RETAIL_MANIFEST_FILES}.`,
+        `The Displaay worker listed ${fileCount} files; Cuttler accepts at most ${MAX_RETAIL_MANIFEST_FILES}.`,
       )
     }
     const mode = normalizeRetailMode(parsed.mode)

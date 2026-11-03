@@ -19,7 +19,7 @@ export function showDebugConsole({ dirname, onFirstOpen }) {
     height: 560,
     minWidth: 480,
     minHeight: 320,
-    title: 'Font Buttler — Log Console',
+    title: 'Cuttler — Log Console',
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(dirname, 'debug-console-preload.cjs'),
