@@ -109,7 +109,7 @@ export function DuplicatesDialog({
         <DialogHeader>
           <DialogTitle>Duplicates</DialogTitle>
           <DialogDescription>
-            Watched files that match an already active font. Nothing is installed until you choose.
+            Incoming files that match an already active font. Nothing is installed until you choose.
           </DialogDescription>
         </DialogHeader>
         {warnings.length > 0 ? (
@@ -202,7 +202,7 @@ export function DuplicatesDialog({
                         className="truncate font-mono text-[11px] text-muted-foreground"
                         title={warning.path}
                       >
-                        Watched: {warning.path}
+                        Incoming: {warning.path}
                       </div>
                     </div>
                   </div>
