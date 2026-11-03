@@ -258,6 +258,13 @@ export type RetailSyncSettings = {
    * covers Azeret Mono / Azeret VF after the worker started sending child families.
    */
   familyOptOuts: boolean
+  /**
+   * Displaay EULA version accepted before turning sync on (`RETAIL_EULA_VERSION`). Absent until the
+   * user consents once; existing installs are asked the next time they enable sync.
+   */
+  eulaConsentVersion?: string
+  /** ISO timestamp of that acceptance. */
+  eulaConsentAt?: string
 }
 
 export type LatinPreviewPreset = 'Aa' | 'Ag' | 'Ta' | 'ag' | 'custom'

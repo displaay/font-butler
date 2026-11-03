@@ -910,6 +910,7 @@ app.post('/api/retail/configure', async (c) => {
     disabledGlyphsFiles?: string[]
     familyFormats?: Record<string, 'otf' | 'ttf'>
     disableAction?: 'keep' | 'remove'
+    acceptEula?: boolean
   }>()
   try {
     // The token goes in on this route and never comes back out: status reports `hasToken` only.

@@ -25,6 +25,7 @@ function status(partial: Partial<RetailSyncStatus> = {}): RetailSyncStatus {
   return {
     enabled: true,
     autoCheckMinutes: 60,
+    autoInstallUpdates: true,
     configured: true,
     hasToken: false,
     mode: 'trial',
@@ -44,6 +45,8 @@ function status(partial: Partial<RetailSyncStatus> = {}): RetailSyncStatus {
     collisions: [],
     incomplete: false,
     progress: null,
+    eulaConsentVersion: null,
+    eulaConsentAt: null,
     ...partial,
   }
 }

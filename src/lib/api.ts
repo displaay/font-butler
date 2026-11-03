@@ -442,6 +442,7 @@ export const api = {
       disabledGlyphsFiles?: string[]
       familyFormats?: Record<string, 'otf' | 'ttf'>
       disableAction?: 'keep' | 'remove'
+      acceptEula?: boolean
     }) => json<{ status: RetailSyncStatus }>(post('/api/retail/configure', input)),
     check: (refresh = false, options?: { credentialsOnly?: boolean }) =>
       json<{ status: RetailSyncStatus }>(

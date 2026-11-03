@@ -777,6 +777,7 @@ function createWindow() {
   mainWindowKind = 'main'
   attachMainWindowHandlers(mainWindow)
   mainWindow.loadURL(UI)
+  // Allowlist includes GitHub Releases and the pinned Displaay EULA URL (`RETAIL_EULA_EXTERNAL_URL`).
   mainWindow.webContents.setWindowOpenHandler((details) => {
     if (isAllowedAppUpdateUrl(details.url)) {
       void shell.openExternal(details.url)

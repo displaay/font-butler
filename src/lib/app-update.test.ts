@@ -91,6 +91,8 @@ test('the Updates tab does not render or count an application update', async () 
 test('isAllowedAppUpdateUrl rejects other hosts', () => {
   assert.equal(isAllowedAppUpdateUrl('https://github.com/displaay/font-butler/releases'), true)
   assert.equal(isAllowedAppUpdateUrl('https://example.com'), false)
+  assert.equal(isAllowedAppUpdateUrl('https://displaay.net/help/licenses#read-full-terms'), true)
+  assert.equal(isAllowedAppUpdateUrl('https://displaay.net/help/licenses'), false)
 })
 
 test('cold start does not await appUpdate in the boot Promise.all', async () => {

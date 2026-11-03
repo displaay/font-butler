@@ -2946,6 +2946,7 @@ export class FontButlerService {
     disabledGlyphsFiles?: string[]
     familyFormats?: Record<string, import('../shared/retail.ts').RetailFontFormat>
     disableAction?: import('../shared/retail.ts').RetailDisableAction
+    acceptEula?: boolean
   }): Promise<RetailSyncStatus> {
     const wasEnabled = Boolean(loadSettings(this.paths).retailSync?.enabled)
     const status = await configureRetailSyncFn(this.paths, input)

@@ -537,6 +537,32 @@ test('loadSettings defaults retail disabled families to none', () => {
   }
 })
 
+test('loadSettings keeps retail EULA consent version and timestamp', () => {
+  const paths = tempPaths()
+  try {
+    saveSettings(
+      paths,
+      sampleSettings({
+        retailSync: {
+          enabled: true,
+          workerBaseUrl: 'https://w.displaay.net',
+          autoCheckMinutes: 60,
+          autoInstallUpdates: true,
+          disabledGlyphsFiles: [],
+          familyFormats: {},
+          familyOptOuts: true,
+          eulaConsentVersion: '2.0.8',
+          eulaConsentAt: '2026-09-08T12:00:00.000Z',
+        },
+      }),
+    )
+    assert.equal(loadSettings(paths).retailSync?.eulaConsentVersion, '2.0.8')
+    assert.equal(loadSettings(paths).retailSync?.eulaConsentAt, '2026-09-08T12:00:00.000Z')
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
 test('loadSettings defaults retail autoInstallUpdates on, including files that omit it', () => {
   const paths = tempPaths()
   try {

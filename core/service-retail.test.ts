@@ -43,6 +43,7 @@ import {
   isRetailFamilyOptedOut,
   normalizeDisabledGlyphsFiles,
   normalizeFamilyFormats,
+  RETAIL_EULA_VERSION,
   retailDriftSummary,
   retailFontsFromCollections,
   type RetailManifest,
@@ -130,7 +131,7 @@ test('the worker token is stored outside settings.json and never reported back',
   const paths = setup()
 
   const status = await configureRetailSync(paths, {
-    enabled: true,
+    enabled: true, acceptEula: true,
     workerBaseUrl: 'https://w.displaay.net',
     token: 'super-secret',
   })
@@ -170,11 +171,54 @@ test('a non-https worker address is rejected at configure time', async () => {
 
 test('enabling sync does not create a watch folder', async () => {
   const paths = setup()
-  const status = await configureRetailSync(paths, { enabled: true })
+  const status = await configureRetailSync(paths, { enabled: true, acceptEula: true })
   assert.equal(status.enabled, true)
   assert.equal(status.configured, true)
   assert.equal(loadSettings(paths).folders.length, 0)
   assert.equal(loadSettings(paths).watchFolders.length, 0)
+})
+
+test('enabling sync requires EULA consent and stores version plus timestamp', async () => {
+  const paths = setup()
+  await assert.rejects(
+    () => configureRetailSync(paths, { enabled: true }),
+    /End User Licence Agreement/,
+  )
+  assert.equal(loadSettings(paths).retailSync?.enabled, false)
+
+  const status = await configureRetailSync(paths, { enabled: true, acceptEula: true })
+  assert.equal(status.enabled, true)
+  assert.equal(status.eulaConsentVersion, RETAIL_EULA_VERSION)
+  assert.ok(status.eulaConsentAt)
+  assert.equal(loadSettings(paths).retailSync?.eulaConsentVersion, RETAIL_EULA_VERSION)
+  assert.equal(loadSettings(paths).retailSync?.eulaConsentAt, status.eulaConsentAt)
+
+  // Consent already stored: enable again without acceptEula.
+  const again = await configureRetailSync(paths, { enabled: true })
+  assert.equal(again.enabled, true)
+  assert.equal(again.eulaConsentVersion, RETAIL_EULA_VERSION)
+})
+
+test('already-enabled installs without consent keep syncing until the next enable', async () => {
+  const paths = setup()
+  const settings = loadSettings(paths)
+  settings.retailSync = {
+    ...settings.retailSync!,
+    enabled: true,
+  }
+  delete settings.retailSync.eulaConsentVersion
+  delete settings.retailSync.eulaConsentAt
+  saveSettings(paths, settings)
+
+  const status = await configureRetailSync(paths, { autoCheckMinutes: 15 })
+  assert.equal(status.enabled, true)
+  assert.equal(status.eulaConsentVersion, null)
+  assert.equal(status.autoCheckMinutes, 15)
+
+  await assert.rejects(
+    () => configureRetailSync(paths, { enabled: true }),
+    /End User Licence Agreement/,
+  )
 })
 
 test('turning sync off does not create a folder', async () => {
@@ -187,7 +231,7 @@ test('turning sync off does not create a folder', async () => {
 test('turning sync off keeps installed fonts unless remove is chosen', async () => {
   resetRetailCache()
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   await syncRetail(paths, {
     fetchManifest: async () => manifestWith(4, 'e1'),
     fetchFile: async () => new Uint8Array(4).fill(1),
@@ -209,7 +253,7 @@ test('turning sync off keeps installed fonts unless remove is chosen', async () 
 test('file-less retail listings are dropped after sync is off', async () => {
   resetRetailCache()
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   await syncRetail(paths, {
     fetchManifest: async () => manifestWith(4, 'e1'),
     fetchFile: async () => new Uint8Array(4).fill(1),
@@ -238,7 +282,7 @@ test('file-less retail listings are dropped after sync is off', async () => {
 test('forgetMissingSources removes orphan retail listings when sync is off', async () => {
   resetRetailCache()
   await withService(async (service, paths) => {
-    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
     await syncRetail(paths, {
       fetchManifest: async () => manifestWith(4, 'e1'),
       fetchFile: async () => new Uint8Array(4).fill(1),
@@ -268,7 +312,7 @@ test('forgetMissingSources removes orphan retail listings when sync is off', asy
 test('turning sync off with remove uninstalls fonts and drops the listings', async () => {
   resetRetailCache()
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   await syncRetail(paths, {
     fetchManifest: async () => manifestWith(4, 'e1'),
     fetchFile: async () => new Uint8Array(4).fill(1),
@@ -295,7 +339,7 @@ test('turning sync off with remove leaves a non-retail occupant in Fonts', async
     const imported = await service.importPaths([dest])
     assert.equal(imported.entries[0]?.retailRelativePath, undefined)
 
-    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
     await checkRetail(paths, { fetchManifest: async () => manifestWith(4, 'e1') })
     assert.ok(loadCatalog(paths).entries.some((entry) => entry.retailRelativePath === 'Reckless/RecklessVF.otf'))
 
@@ -314,7 +358,7 @@ test('turning sync off with remove leaves a non-retail occupant in Fonts', async
 
 test('without a saved token a check uses the built-in trial token', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true })
   const tokens: string[] = []
   const status = await checkRetail(paths, {
     fetchManifest: async (options) => {
@@ -332,7 +376,7 @@ test('without a saved token a check uses the built-in trial token', async () => 
 
 test('a saved token replaces the built-in trial token', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 'retail-token' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 'retail-token' })
   const tokens: string[] = []
   const status = await checkRetail(paths, {
     fetchManifest: async (options) => {
@@ -345,7 +389,7 @@ test('a saved token replaces the built-in trial token', async () => {
 })
 
 async function syncTrialFont(paths: AppPaths): Promise<string> {
-  await configureRetailSync(paths, { enabled: true })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true })
   const synced = await syncRetail(paths, {
     fetchManifest: async () => trialManifest(),
     fetchFile: async () => new Uint8Array(4).fill(1),
@@ -389,7 +433,7 @@ for (const via of ['check', 'sync'] as const) {
 
 test('removing the token puts the trial collection back in place of the retail one', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 'retail-token' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 'retail-token' })
   await syncRetail(paths, {
     fetchManifest: async () => ({ ...manifestWith(4, 'e1'), mode: 'retail' as const }),
     fetchFile: async () => new Uint8Array(4).fill(1),
@@ -408,7 +452,7 @@ test('removing the token puts the trial collection back in place of the retail o
 
 test('a sync record from before trial tokens is read as retail from its keys', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 'retail-token' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 'retail-token' })
   // An older worker: no `mode` in the manifest.
   await syncRetail(paths, {
     fetchManifest: async () => manifestWith(4, 'e1'),
@@ -482,7 +526,7 @@ test('a sync answered for a token the user has since replaced changes nothing', 
 
 test('a check that switches collections stops a running sync of the old one first', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true })
   const started = deferred()
   const running = syncRetail(paths, {
     fetchManifest: async () => trialManifest(),
@@ -511,7 +555,7 @@ test('a check that switches collections stops a running sync of the old one firs
 
 test('an unreadable token file is an error, not a silent switch to the trial collection', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 'retail-token' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 'retail-token' })
   await syncRetail(paths, {
     fetchManifest: async () => ({ ...manifestWith(4, 'e1'), mode: 'retail' as const }),
     fetchFile: async () => new Uint8Array(4).fill(1),
@@ -533,7 +577,7 @@ test('an unreadable token file is an error, not a silent switch to the trial col
 
 test('with no sync record, file-less listings the new collection does not name are dropped', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 'retail-token' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 'retail-token' })
   // A check-only run on a build that did not stamp the mode: listings, no files, no mode.
   await checkRetail(paths, { fetchManifest: async () => manifestWith(4, 'e1') })
   saveRetailManifest(paths, { version: 1, syncedAt: null, files: {} })
@@ -562,7 +606,7 @@ test('a failed check with a new token leaves the previous collection alone', asy
 
 test('a credentials-only check validates the worker without writing listings', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   const status = await checkRetail(paths, {
     credentialsOnly: true,
     fetchManifest: async () => manifestWith(4, 'e1'),
@@ -577,7 +621,7 @@ test('a credentials-only check validates the worker without writing listings', a
 
 test('a credentials-only check fetches the remote manifest to validate the token', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   let fetched = 0
   const status = await checkRetail(paths, {
     credentialsOnly: true,
@@ -596,7 +640,7 @@ test('a credentials-only check fetches the remote manifest to validate the token
 
 test('a credentials-only check still reports a worker error without writing listings', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   const status = await checkRetail(paths, {
     credentialsOnly: true,
     fetchManifest: async () => {
@@ -620,7 +664,7 @@ test('turning retail on after setup lists the collection without downloading', a
         return new Uint8Array(4).fill(1)
       },
     }
-    const status = await service.configureRetailSync({ enabled: true, token: 't' })
+    const status = await service.configureRetailSync({ enabled: true, acceptEula: true, token: 't' })
     assert.equal(status.error, null)
     assert.equal(status.pending, 1)
     assert.equal(downloads, 0)
@@ -635,7 +679,7 @@ test('retail stays check-only during onboarding and installs once setup closes',
   resetRetailCache()
   await withService(async (service, paths) => {
     assert.equal(service.getSettings().onboardingCompleted, false)
-    await service.configureRetailSync({ enabled: true, token: 't' })
+    await service.configureRetailSync({ enabled: true, acceptEula: true, token: 't' })
     let downloads = 0
     service.retailFetch = {
       fetchManifest: async () => manifestWith(4, 'e1'),
@@ -708,7 +752,7 @@ test('onboarding can list retail fonts and install only the families still chose
       }),
       fetchFile: async () => new Uint8Array(4).fill(1),
     }
-    await service.configureRetailSync({ enabled: true })
+    await service.configureRetailSync({ enabled: true, acceptEula: true })
     const listed = await service.checkRetail({ credentialsOnly: false })
     assert.equal(listed.mode, 'trial')
     assert.deepEqual(
@@ -736,7 +780,7 @@ test('onboarding can list retail fonts and install only the families still chose
 
 test('a check reports pending files, and a sync writes them into Fonts', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
 
   const fetchManifest = async () => manifestWith(4, 'e1')
 
@@ -757,7 +801,7 @@ test('a check reports pending files, and a sync writes them into Fonts', async (
 
 test('a regenerated file is picked up as changed on the next check', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't', autoInstallUpdates: false })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't', autoInstallUpdates: false })
 
   await syncRetail(paths, {
     fetchManifest: async () => manifestWith(4, 'e1'),
@@ -772,7 +816,7 @@ test('a regenerated file is picked up as changed on the next check', async () =>
 
 test('a worker failure surfaces as a status error, not an exception', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   const status = await checkRetail(paths, {
     fetchManifest: async () => {
       throw new Error('worker is down')
@@ -783,7 +827,7 @@ test('a worker failure surfaces as a status error, not an exception', async () =
 
 test('replacing the token discards drift measured with the old one', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   await checkRetail(paths, { fetchManifest: async () => manifestWith(4, 'e1') })
 
   const rotated = await configureRetailSync(paths, { token: 'new-token' })
@@ -793,7 +837,7 @@ test('replacing the token discards drift measured with the old one', async () =>
 
 test('toggling enabled alone keeps the existing drift', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   await checkRetail(paths, { fetchManifest: async () => manifestWith(4, 'e1') })
 
   const toggled = await configureRetailSync(paths, { enabled: false })
@@ -817,7 +861,7 @@ test('the on/off switch actually gates checking and syncing', async () => {
 
 test('a failed check keeps the old checkedAt rather than claiming a fresh measurement', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
 
   const good = await checkRetail(paths, { fetchManifest: async () => manifestWith(4, 'e1') })
   assert.ok(good.checkedAt)
@@ -834,7 +878,7 @@ test('a failed check keeps the old checkedAt rather than claiming a fresh measur
 
 test('skipped families are not reported as up to date', async () => {
   const paths = setup()
-  configureRetailSync(paths, { enabled: true, token: 't' })
+  configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   const status = await checkRetail(paths, {
     fetchManifest: async () => ({
       generatedAt: '2026-01-01T00:00:00.000Z',
@@ -852,7 +896,7 @@ test('skipped families are not reported as up to date', async () => {
 
 test('overlapping syncs share one run instead of fighting over the same files', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
 
   let downloads = 0
   const options = {
@@ -875,7 +919,7 @@ test('overlapping syncs share one run instead of fighting over the same files', 
 
 test('disabling one family during a sync waits for in-flight writes before cleanup', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   const remote: RetailManifest = {
     generatedAt: '2026-01-01T00:00:00.000Z',
     collections: [
@@ -937,7 +981,7 @@ test('disabling one family during a sync waits for in-flight writes before clean
 
 test('disabling every family aborts an in-flight sync', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   let downloads = 0
   const files = Array.from({ length: RETAIL_DOWNLOAD_CONCURRENCY + 1 }, (_, index) => ({
     basename: `File${index}.otf`,
@@ -963,7 +1007,7 @@ test('disabling every family aborts an in-flight sync', async () => {
 
 test('retail status reports family progress while a sync is running', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   const seen: Array<{ done: number; total: number } | null> = []
   const synced = await syncRetail(paths, {
     fetchManifest: async () =>
@@ -983,7 +1027,7 @@ test('retail status reports family progress while a sync is running', async () =
 
 test('turning sync off clears an interrupted download marker', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   saveRetailManifest(paths, {
     version: 1,
     syncedAt: null,
@@ -1013,7 +1057,7 @@ test('init resumes an interrupted retail download', async () => {
       { basename: 'A.otf', size: bytesA.length, etag: 'ea' },
       { basename: 'B.otf', size: bytesB.length, etag: 'eb' },
     ])
-    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
     await checkRetail(paths, { fetchManifest: async () => remote })
     saveRetailManifest(paths, { version: 1, syncedAt: null, files: {}, incomplete: true })
     resetRetailCache()
@@ -1041,7 +1085,7 @@ test('an interrupted automatic install resumes without installing a new family',
   resetRetailCache()
   await withService(async (service, paths) => {
     await service.updateSettings({ onboardingCompleted: true })
-    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
     await syncRetail(paths, {
       fetchManifest: async () => manifestWith(4, 'e1'),
       fetchFile: async () => new Uint8Array(4).fill(1),
@@ -1148,7 +1192,7 @@ test('an interrupted automatic install resumes without installing a new family',
 
 test('an interrupted Sync does not mark the pass as automatic', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   await syncRetail(paths, {
     fetchManifest: async () => manifestWith(4, 'e1'),
     fetchFile: async () => new Uint8Array(4).fill(1),
@@ -1197,7 +1241,7 @@ test('leftover listings without an incomplete flag wait for an explicit sync', a
       { basename: 'A.otf', size: bytesA.length, etag: 'ea' },
       { basename: 'B.otf', size: bytesB.length, etag: 'eb' },
     ])
-    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
     await checkRetail(paths, { fetchManifest: async () => remote })
     fs.copyFileSync(fileA, path.join(paths.userFontsDir, 'A.otf'))
     saveRetailManifest(paths, {
@@ -1242,7 +1286,7 @@ test('leftover listings without an incomplete flag wait for an explicit sync', a
 
 test('a finished sync does not resume leftover conflict listings', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   const fixture = path.join(paths.dataRoot, 'X.otf')
   writeTestFont(fixture, 'Reckless', 'Reckless-X', { format: 'otf' })
   const bytes = fs.readFileSync(fixture)
@@ -1296,7 +1340,7 @@ test('a finished sync does not resume leftover conflict listings', async () => {
 
 test('a finished sync does not resume listings that left the worker', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   const fixture = path.join(paths.dataRoot, 'A.otf')
   writeTestFont(fixture, 'Reckless', 'Reckless-A', { format: 'otf' })
   const bytes = fs.readFileSync(fixture)
@@ -1327,7 +1371,7 @@ test('a finished retail sync does not download again on init', async () => {
     writeTestFont(fixture, 'Reckless', 'RecklessVF', { format: 'otf' })
     const bytes = fs.readFileSync(fixture)
     const remote = manifestWith(bytes.length, 'e1')
-    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
     await syncRetail(paths, {
       fetchManifest: async () => remote,
       fetchFile: async () => new Uint8Array(bytes),
@@ -1365,7 +1409,7 @@ test('automatic retail install defaults on and stays off once turned off', async
 
 test('a detected retail change installs when automatic install is on', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   assert.equal(retailStatus(paths).autoInstallUpdates, true)
 
   await syncRetail(paths, {
@@ -1450,7 +1494,7 @@ test('a detected retail change installs when automatic install is on', async () 
 
 test('a detected retail change stays pending when automatic install is off', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't', autoInstallUpdates: false })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't', autoInstallUpdates: false })
   await syncRetail(paths, {
     fetchManifest: async () => manifestWith(4, 'e1'),
     fetchFile: async () => new Uint8Array(4).fill(1),
@@ -1474,7 +1518,7 @@ test('a detected retail change stays pending when automatic install is off', asy
 
 test('automatic retail install leaves opted-out families alone', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
 
   const remote = (etag: string, size: number): RetailManifest => ({
     generatedAt: '2026-01-01T00:00:00.000Z',
@@ -1556,7 +1600,7 @@ test('the autocheck interval round-trips and rejects nonsense', async () => {
 
 test('changing the interval alone does not discard measured drift', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   await checkRetail(paths, { fetchManifest: async () => manifestWith(4, 'e1') })
 
   const changed = await configureRetailSync(paths, { autoCheckMinutes: 60 })
@@ -1567,7 +1611,7 @@ test('changing the interval alone does not discard measured drift', async () => 
 test('an occupied Fonts file still lists the retail font as not installed', async () => {
   const paths = setup()
   fs.writeFileSync(path.join(paths.userFontsDir, 'RecklessVF.otf'), 'mine')
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   const status = await checkRetail(paths, { fetchManifest: async () => manifestWith(4, 'e1') })
   assert.equal(status.drift[0].kind, 'added')
   const listing = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath === 'Reckless/RecklessVF.otf')
@@ -1589,7 +1633,7 @@ test('a retail duplicate warning is saved and a later successful sync clears it'
     }),
   )
   try {
-    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
     await syncRetail(paths, {
       fetchManifest: async () => manifestWith(4, 'e1'),
       fetchFile: async () => new Uint8Array(4).fill(1),
@@ -1613,7 +1657,7 @@ test('a retail duplicate warning is saved and a later successful sync clears it'
 
 test('dummy bytes land in Fonts without crashing catalog import', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   await syncRetail(paths, {
     fetchManifest: async () => manifestWith(4, 'e1'),
     fetchFile: async () => new Uint8Array(4).fill(1),
@@ -1625,7 +1669,7 @@ test('dummy bytes land in Fonts without crashing catalog import', async () => {
 
 test('a check lists every remote retail font even before a sync', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   await checkRetail(paths, { fetchManifest: async () => manifestWith(4, 'e1') })
   const listing = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath === 'Reckless/RecklessVF.otf')
   assert.ok(listing)
@@ -1635,7 +1679,7 @@ test('a check lists every remote retail font even before a sync', async () => {
 test('a check does not catalog families the user turned off', async () => {
   const paths = setup()
   await configureRetailSync(paths, {
-    enabled: true,
+    enabled: true, acceptEula: true,
     token: 't',
     disabledGlyphsFiles: ['Reckless'],
   })
@@ -1649,7 +1693,7 @@ test('a check does not catalog families the user turned off', async () => {
 
 test('a check lists loaded families so each can be toggled', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   const status = await checkRetail(paths, {
     fetchManifest: async () => ({
       generatedAt: '2026-01-01T00:00:00.000Z',
@@ -1704,7 +1748,7 @@ test('a check lists loaded families so each can be toggled', async () => {
 
 test('sync skips families the user turned off', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't', disabledGlyphsFiles: ['Zangezi'] })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't', disabledGlyphsFiles: ['Zangezi'] })
   const keys: string[] = []
   await syncRetail(paths, {
     fetchManifest: async () => ({
@@ -1753,7 +1797,7 @@ test('sync skips families the user turned off', async () => {
 
 test('a restart still lists families from catalog listings', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   await checkRetail(paths, { fetchManifest: async () => manifestWith(4, 'e1') })
   resetRetailCache()
   const status = retailStatus(paths)
@@ -1765,7 +1809,7 @@ test('a restart still lists families from catalog listings', async () => {
 
 test('a check lists skipped families so they can still be toggled', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   const status = await checkRetail(paths, {
     fetchManifest: async () => ({
       generatedAt: '2026-01-01T00:00:00.000Z',
@@ -1857,7 +1901,7 @@ test('syncing a retail font records a retail-install Activity entry', async () =
   const source = path.join(paths.dataRoot, 'Reckless-Regular.otf')
   writeTestFont(source, 'Reckless', 'Reckless-Regular', { format: 'otf', style: 'Regular' })
   const bytes = fs.readFileSync(source)
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   const operationEvents: Array<{ action: string; trigger: string }> = []
   const stop = onEvent((event) => {
     if (event.type !== 'operations') return
@@ -1903,7 +1947,7 @@ test('an automatic retail update records a retail-update Activity entry', async 
   const source = path.join(paths.dataRoot, 'Reckless-Regular.otf')
   writeTestFont(source, 'Reckless', 'Reckless-Regular', { format: 'otf', style: 'Regular' })
   const bytes = fs.readFileSync(source)
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   await syncRetail(paths, {
     fetchManifest: async () => manifestWith(bytes.length, 'e1', 'Reckless-Regular.otf'),
     fetchFile: async () => new Uint8Array(bytes),
@@ -1941,7 +1985,7 @@ test('uninstalling a retail font keeps the listing', async () => {
     const dest = path.join(paths.userFontsDir, 'RecklessVF.otf')
     writeTestFont(dest, 'Reckless', 'RecklessVF', { format: 'otf' })
     const bytes = fs.readFileSync(dest)
-    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
     await syncRetail(paths, {
       fetchManifest: async () => manifestWith(bytes.length, 'e1'),
       fetchFile: async () => new Uint8Array(bytes),
@@ -1968,7 +2012,7 @@ test('installing a retail listing replaces the catalogue font that occupies Font
     const incoming = path.join(paths.dataRoot, 'incoming.otf')
     writeTestFont(incoming, 'Reckless', 'RecklessVF', { format: 'otf', version: 'Version 2.000' })
     const bytes = fs.readFileSync(incoming)
-    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
     await checkRetail(paths, { fetchManifest: async () => manifestWith(bytes.length, 'e2') })
     const listing = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath === 'Reckless/RecklessVF.otf')
     assert.ok(listing)
@@ -2006,7 +2050,7 @@ test('an Adobe-only install of a cached retail listing leaves the Fonts occupant
     const incoming = path.join(paths.dataRoot, 'incoming.otf')
     writeTestFont(incoming, 'Reckless', 'RecklessVF', { format: 'otf', version: 'Version 2.000' })
     const bytes = fs.readFileSync(incoming)
-    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
     await checkRetail(paths, { fetchManifest: async () => manifestWith(bytes.length, 'e2') })
     const listing = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath === 'Reckless/RecklessVF.otf')
     assert.ok(listing)
@@ -2045,7 +2089,7 @@ test('an uninstall during a later retail batch is not overwritten by stale catal
     }))
     const firstRelative = `Reckless/${files[0]!.basename}`
     const lastKey = `Reckless/rev-1/${files.at(-1)!.basename}`
-    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
     await checkRetail(paths, { fetchManifest: async () => manifestWithFiles(files) })
     const listing = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath === firstRelative)
     assert.ok(listing)
@@ -2079,7 +2123,7 @@ test('an uninstall during the same retail batch is not overwritten by stale cata
     ]
     const firstRelative = `Reckless/${files[0]!.basename}`
     const secondKey = `Reckless/rev-1/${files[1]!.basename}`
-    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
     await checkRetail(paths, { fetchManifest: async () => manifestWithFiles(files) })
     await syncRetail(paths, {
       fetchManifest: async () => manifestWithFiles(files),
@@ -2138,7 +2182,7 @@ test('a deactivate during a later retail batch keeps the parked copy', async () 
     }))
     const firstRelative = `Reckless/${files[0]!.basename}`
     const lastKey = `Reckless/rev-1/${files.at(-1)!.basename}`
-    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
     await checkRetail(paths, { fetchManifest: async () => manifestWithFiles(files) })
     const listing = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath === firstRelative)
     assert.ok(listing)
@@ -2173,7 +2217,7 @@ test('a large retail sync yields so other work on the same event loop can run', 
     size: bytes.length,
     etag: `e-${index}`,
   }))
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
 
   let catalogSaves = 0
   const renameSync = fs.renameSync
@@ -2358,7 +2402,7 @@ test('filterDisabledRetailDrift hides the unselected format as well as opted-out
 
 test('a check lists typeface children with format toggles', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   const status = await checkRetail(paths, { fetchManifest: async () => azeretManifest() })
   assert.deepEqual(
     status.fonts.map((font) => ({
@@ -2384,7 +2428,7 @@ test('a check lists typeface children with format toggles', async () => {
 test('sync downloads only the selected format of enabled families', async () => {
   const paths = setup()
   await configureRetailSync(paths, {
-    enabled: true,
+    enabled: true, acceptEula: true,
     token: 't',
     disabledGlyphsFiles: ['Azeret Mono'],
     familyFormats: { Azeret: 'ttf' },
@@ -2407,7 +2451,7 @@ test('sync downloads only the selected format of enabled families', async () => 
 
 test('switching format uninstalls the other format instead of installing both', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't', familyFormats: { Azeret: 'otf' } })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't', familyFormats: { Azeret: 'otf' } })
   const fetchManifest = async () => azeretManifest()
   await syncRetail(paths, {
     fetchManifest,
@@ -2449,7 +2493,7 @@ test('switching format uninstalls the other format instead of installing both', 
 
 test('a restart still lists typeface families from catalog listings', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   await checkRetail(paths, { fetchManifest: async () => azeretManifest() })
   resetRetailCache()
   const status = retailStatus(paths)
@@ -2462,7 +2506,7 @@ test('a restart still lists typeface families from catalog listings', async () =
 
 test('a saved typeface opt-out still covers every child family', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   const settings = loadSettings(paths)
   settings.retailSync = {
     ...settings.retailSync!,
@@ -2496,7 +2540,7 @@ test('a saved typeface opt-out still covers every child family', async () => {
 test('family-level opt-outs leave other children of the same typeface enabled', async () => {
   const paths = setup()
   await configureRetailSync(paths, {
-    enabled: true,
+    enabled: true, acceptEula: true,
     token: 't',
     disabledGlyphsFiles: ['Azeret'],
   })
@@ -2514,7 +2558,7 @@ test('family-level opt-outs leave other children of the same typeface enabled', 
 
 test('format switch awaits native unregister before deleting the old file', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't', familyFormats: { Azeret: 'otf' } })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't', familyFormats: { Azeret: 'otf' } })
   await syncRetail(paths, {
     fetchManifest: async () => azeretManifest(),
     fetchFile: async () => new Uint8Array(4).fill(1),
@@ -2545,7 +2589,7 @@ test('format switch awaits native unregister before deleting the old file', asyn
 
 test('format cleanup waits for in-flight catalog writes', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't', familyFormats: { Azeret: 'otf' } })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't', familyFormats: { Azeret: 'otf' } })
   await syncRetail(paths, {
     fetchManifest: async () => azeretManifest(),
     fetchFile: async () => new Uint8Array(4).fill(1),
@@ -2691,7 +2735,7 @@ test('retail sync pauses when a same-family font is already installed from outsi
     const dest = path.join(paths.userFontsDir, 'Reckless-Regular.otf')
     writeTestFont(dest, 'Reckless', 'Reckless-Regular', { format: 'otf' })
     await service.importPaths([dest])
-    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
 
     const paused = await syncRetail(paths, {
       fetchManifest: async () => manifestWith(4, 'e1'),
@@ -2731,7 +2775,7 @@ test('sync replace does not uninstall an outside font when the family left the c
     const dest = path.join(paths.userFontsDir, 'Reckless-Regular.otf')
     writeTestFont(dest, 'Reckless', 'Reckless-Regular', { format: 'otf' })
     await service.importPaths([dest])
-    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
 
     const paused = await syncRetail(paths, {
       fetchManifest: async () => manifestWith(4, 'e1'),
@@ -2761,7 +2805,7 @@ test('retail sync keep-old opts the family out of sync without downloading', asy
     const dest = path.join(paths.userFontsDir, 'Reckless-Regular.otf')
     writeTestFont(dest, 'Reckless', 'Reckless-Regular', { format: 'otf' })
     await service.importPaths([dest])
-    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
 
     const kept = await syncRetail(paths, {
       fetchManifest: async () => manifestWith(4, 'e1'),
@@ -2784,7 +2828,7 @@ test('retail sync keep-old opts the family out of sync without downloading', asy
 
 test('already-synced retail fonts do not collide with themselves on the next sync', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   const first = await syncRetail(paths, {
     fetchManifest: async () => manifestWith(4, 'e1'),
     fetchFile: async () => new Uint8Array(4).fill(1),
@@ -2811,7 +2855,7 @@ test('retail sync apply-all replace resolves every outside family collision', as
     writeTestFont(azeret, 'Azeret', 'Azeret-Regular', { format: 'otf' })
     writeTestFont(mono, 'Azeret Mono', 'AzeretMono-Regular', { format: 'otf' })
     await service.importPaths([azeret, mono])
-    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
 
     const paused = await syncRetail(paths, {
       fetchManifest: async () => azeretManifest(),
@@ -2842,7 +2886,7 @@ test('dropping a same-family font over an installed retail copy uninstalls retai
     const fixture = path.join(paths.dataRoot, 'fixture.otf')
     writeTestFont(fixture, 'Reckless', 'RecklessVF', { format: 'otf' })
     const bytes = fs.readFileSync(fixture)
-    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
     const synced = await syncRetail(paths, {
       fetchManifest: async () => manifestWith(bytes.length, 'e1'),
       fetchFile: async () => new Uint8Array(bytes),
@@ -2884,7 +2928,7 @@ test('drop replace does not uninstall retail when the dropped file is gone', asy
     const fixture = path.join(paths.dataRoot, 'fixture.otf')
     writeTestFont(fixture, 'Reckless', 'RecklessVF', { format: 'otf' })
     const bytes = fs.readFileSync(fixture)
-    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
     await syncRetail(paths, {
       fetchManifest: async () => manifestWith(bytes.length, 'e1'),
       fetchFile: async () => new Uint8Array(bytes),
@@ -2912,7 +2956,7 @@ test('drop replace does not uninstall retail when the dropped file is no longer 
     const fixture = path.join(paths.dataRoot, 'fixture.otf')
     writeTestFont(fixture, 'Reckless', 'RecklessVF', { format: 'otf' })
     const bytes = fs.readFileSync(fixture)
-    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
     await syncRetail(paths, {
       fetchManifest: async () => manifestWith(bytes.length, 'e1'),
       fetchFile: async () => new Uint8Array(bytes),
@@ -2942,7 +2986,7 @@ test('drop replace without planned incoming files leaves retail installed', asyn
     const fixture = path.join(paths.dataRoot, 'fixture.otf')
     writeTestFont(fixture, 'Reckless', 'RecklessVF', { format: 'otf' })
     const bytes = fs.readFileSync(fixture)
-    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
     await syncRetail(paths, {
       fetchManifest: async () => manifestWith(bytes.length, 'e1'),
       fetchFile: async () => new Uint8Array(bytes),
@@ -2964,7 +3008,7 @@ test('drop replace into a new project does not watch the dropped folder', async 
     const fixture = path.join(paths.dataRoot, 'fixture.otf')
     writeTestFont(fixture, 'Reckless', 'RecklessVF', { format: 'otf' })
     const bytes = fs.readFileSync(fixture)
-    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
     const synced = await syncRetail(paths, {
       fetchManifest: async () => manifestWith(bytes.length, 'e1'),
       fetchFile: async () => new Uint8Array(bytes),
@@ -2997,7 +3041,7 @@ test('drop replace into a new project does not watch the dropped folder', async 
 test('dropping keep cancels the import and leaves the retail copy installed', async () => {
   resetRetailCache()
   await withService(async (service, paths) => {
-    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
     await syncRetail(paths, {
       fetchManifest: async () => manifestWith(4, 'e1'),
       fetchFile: async () => new Uint8Array(4).fill(1),
@@ -3026,7 +3070,7 @@ test('resolving a drop collision does not clear pending retail-sync collisions',
     const dest = path.join(paths.userFontsDir, 'Reckless-Regular.otf')
     writeTestFont(dest, 'Reckless', 'Reckless-Regular', { format: 'otf' })
     await service.importPaths([dest])
-    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
     const paused = await syncRetail(paths, {
       fetchManifest: async () => manifestWith(4, 'e1'),
       fetchFile: async () => new Uint8Array(4).fill(1),
@@ -3053,7 +3097,7 @@ test('resolving a drop collision does not clear pending retail-sync collisions',
 test('turning sync off from a retail listing uses the keep-old opt-out path', async () => {
   resetRetailCache()
   await withService(async (service, paths) => {
-    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
     await syncRetail(paths, {
       fetchManifest: async () => manifestWith(4, 'e1'),
       fetchFile: async () => new Uint8Array(4).fill(1),
@@ -3092,7 +3136,7 @@ test('a check does not revert an uninstall that queued during reconcile', async 
       size: bytes.length,
       etag: `e-${index}`,
     }))
-    configureRetailSync(paths, { enabled: true, token: 't' })
+    configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
     await syncRetail(paths, {
       fetchManifest: async () => manifestWithFiles(files),
       fetchFile: async () => new Uint8Array(bytes),
@@ -3129,7 +3173,7 @@ test('a check reparses dest bytes that landed after an interrupted catalog write
   const fixture = path.join(paths.dataRoot, 'fixture.otf')
   writeTestFont(fixture, 'Reckless', 'RecklessVF', { format: 'otf', version: 'Version 1.000' })
   const first = fs.readFileSync(fixture)
-  configureRetailSync(paths, { enabled: true, token: 't' })
+  configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   await syncRetail(paths, {
     fetchManifest: async () => manifestWith(first.length, 'e1'),
     fetchFile: async () => new Uint8Array(first),
@@ -3169,7 +3213,7 @@ test('a parked retail cache records its fingerprint so later checks skip reparse
   const fixture = path.join(paths.dataRoot, 'fixture.otf')
   writeTestFont(fixture, 'Reckless', 'RecklessVF', { format: 'otf', version: 'Version 2.000' })
   const bytes = fs.readFileSync(fixture)
-  configureRetailSync(paths, { enabled: true, token: 't' })
+  configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   await syncRetail(paths, {
     fetchManifest: async () => manifestWith(bytes.length, 'e1'),
     fetchFile: async () => new Uint8Array(bytes),
@@ -3221,7 +3265,7 @@ function slowManyFiles(count: number) {
 
 test('None during a sync ends it with a status that is no longer syncing, and nothing after', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   const run = slowManyFiles(RETAIL_DOWNLOAD_CONCURRENCY * 3)
   const events: Array<{ done: number; total: number } | null> = []
   const stop = onEvent((event) => {
@@ -3244,7 +3288,7 @@ test('None during a sync ends it with a status that is no longer syncing, and no
 
 test('Stop syncing aborts the pass, keeps installed files, and does not resume on launch', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   const run = slowManyFiles(RETAIL_DOWNLOAD_CONCURRENCY * 3)
   const syncing = syncRetail(paths, run.options)
   while (run.downloads <= RETAIL_DOWNLOAD_CONCURRENCY) await new Promise((resolve) => setImmediate(resolve))
@@ -3261,7 +3305,7 @@ test('Stop syncing aborts the pass, keeps installed files, and does not resume o
 
 test('changing scope during a sync starts a fresh pass with the new selection', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   const remote: RetailManifest = {
     generatedAt: '2026-01-01T00:00:00.000Z',
     collections: [
@@ -3315,7 +3359,7 @@ test('changing scope during a sync starts a fresh pass with the new selection', 
 
 test('one None during a sync removes every not-installed listing of the family', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   const run = slowManyFiles(RETAIL_DOWNLOAD_CONCURRENCY * 3)
   const syncing = syncRetail(paths, run.options)
   while (run.downloads <= RETAIL_DOWNLOAD_CONCURRENCY) await new Promise((resolve) => setImmediate(resolve))
@@ -3334,7 +3378,7 @@ test('turning a family off drops a listing whose only copy is parked in the reta
   resetRetailCache()
   await withService(async (service, paths) => {
     const bytes = recklessFont(paths)
-    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
     const options = { fetchManifest: async () => manifestWith(bytes.length, 'e1'), fetchFile: async () => bytes }
     await syncRetail(paths, options)
     const listing = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath)!
@@ -3353,7 +3397,7 @@ test('turning a family off drops a listing whose only copy is parked in the reta
 
 test('a restart drops not-installed listings of families that were already off', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   await checkRetail(paths, { fetchManifest: async () => manifestWith(4, 'e1') })
   // Written by an older build: the family is off but its listing stayed.
   const settings = loadSettings(paths)
@@ -3369,7 +3413,7 @@ test('None with "remove" uninstalls the installed fonts of the families turned o
   resetRetailCache()
   await withService(async (_service, paths) => {
     const bytes = recklessFont(paths)
-    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
     await syncRetail(paths, { fetchManifest: async () => manifestWith(bytes.length, 'e1'), fetchFile: async () => bytes })
     const dest = path.join(paths.userFontsDir, 'RecklessVF.otf')
     assert.equal(fs.existsSync(dest), true)
@@ -3386,7 +3430,7 @@ test('None with "remove" uninstalls the installed fonts of the families turned o
 
 test('turning off two families records one retail-uninstall Activity row', async () => {
   const paths = setup()
-  await configureRetailSync(paths, { enabled: true, token: 't' })
+  await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
   const remote: RetailManifest = {
     generatedAt: '2026-01-01T00:00:00.000Z',
     collections: [
@@ -3446,7 +3490,7 @@ test('None with "keep" detaches installed fonts so a later sync neither deletes 
   await withService(async (_service, paths) => {
     const bytes = recklessFont(paths)
     const options = { fetchManifest: async () => manifestWith(bytes.length, 'e1'), fetchFile: async () => bytes }
-    await configureRetailSync(paths, { enabled: true, token: 't' })
+    await configureRetailSync(paths, { enabled: true, acceptEula: true, token: 't' })
     await syncRetail(paths, options)
     const dest = path.join(paths.userFontsDir, 'RecklessVF.otf')
     const before = loadCatalog(paths).entries.find((entry) => entry.retailRelativePath)!
@@ -3462,7 +3506,7 @@ test('None with "keep" detaches installed fonts so a later sync neither deletes 
     // Another pass, a collection switch off and on, and the family turned back on.
     await syncRetail(paths, options)
     await configureRetailSync(paths, { enabled: false })
-    await configureRetailSync(paths, { enabled: true })
+    await configureRetailSync(paths, { enabled: true, acceptEula: true })
     assert.equal(fs.existsSync(dest), true)
     await configureRetailSync(paths, { disabledGlyphsFiles: [] })
     const paused = await syncRetail(paths, options)

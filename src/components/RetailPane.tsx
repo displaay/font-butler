@@ -10,6 +10,7 @@ import { api } from '@/lib/api'
 import { startQueuedFontAction } from '@/lib/actionQueue'
 import { createRetailWorkGate, type RetailWorkGate } from '@/lib/retailWorkGate'
 import { RetailDisableDialog } from '@/components/RetailDisableDialog'
+import { RetailEulaDialog } from '@/components/RetailEulaDialog'
 import { RetailFamiliesOffDialog } from '@/components/RetailFamiliesOffDialog'
 import {
   DEFAULT_RETAIL_AUTOCHECK_MINUTES,
@@ -19,6 +20,7 @@ import {
   matchesRetailFontQuery,
   nextDisabledRetailFamilyNames,
   nextDisabledRetailFamilyNamesForScope,
+  retailEulaConsentIsCurrent,
   retailFamilyNamesForSyncScope,
   retailSyncOffersVfCollections,
   retailDriftSummary,
@@ -531,6 +533,7 @@ export function RetailPane({
   const workerBaseUrl = editedUrl ?? status?.workerBaseUrl ?? ''
   const [error, setError] = useState<string | null>(null)
   const [disableOpen, setDisableOpen] = useState(false)
+  const [eulaOpen, setEulaOpen] = useState(false)
   const [turningOff, setTurningOff] = useState<string[] | null>(null)
   const [checking, setChecking] = useState(
     () => Boolean(status?.enabled) && (status?.fonts.length ?? 0) === 0 && !status?.checkedAt,
@@ -664,6 +667,35 @@ export function RetailPane({
     void run(() => api.retail.configure({ enabled: false, disableAction }))
   }
 
+  const turnSyncOn = (acceptEula: boolean) => {
+    setEulaOpen(false)
+    if (!deferInstall) {
+      void run(() => api.retail.configure({ enabled: true, ...(acceptEula ? { acceptEula: true } : {}) }))
+      return
+    }
+    bundledCheckRef.current = true
+    void run(async () => {
+      try {
+        const configured = await api.retail.configure({
+          enabled: true,
+          ...(acceptEula ? { acceptEula: true } : {}),
+        })
+        if (!configured.status.enabled) return configured
+        return listCheck(true)
+      } finally {
+        bundledCheckRef.current = false
+      }
+    })
+  }
+
+  const requestTurnSyncOn = () => {
+    if (retailEulaConsentIsCurrent(status)) {
+      turnSyncOn(false)
+      return
+    }
+    setEulaOpen(true)
+  }
+
   return (
     <>
     <SettingsSection
@@ -693,20 +725,7 @@ export function RetailPane({
               else setDisableOpen(true)
               return
             }
-            if (!deferInstall) {
-              void run(() => api.retail.configure({ enabled: true }))
-              return
-            }
-            bundledCheckRef.current = true
-            void run(async () => {
-              try {
-                const configured = await api.retail.configure({ enabled: true })
-                if (!configured.status.enabled) return configured
-                return listCheck(true)
-              } finally {
-                bundledCheckRef.current = false
-              }
-            })
+            requestTurnSyncOn()
           }}
         />
       </SettingsRow>
@@ -1044,6 +1063,12 @@ export function RetailPane({
       onChoose={turnSyncOff}
     />
     )}
+    <RetailEulaDialog
+      open={eulaOpen}
+      busy={disabled}
+      onDismiss={() => setEulaOpen(false)}
+      onAccept={() => turnSyncOn(true)}
+    />
     </>
   )
 }

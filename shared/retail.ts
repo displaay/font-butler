@@ -5,6 +5,23 @@
  * reason `shared/app-update.ts` is: both the Node server and the renderer need them.
  */
 
+/** Full terms for Displaay retail sync. Pinned in the external-URL allowlist so the in-app link opens. */
+export const RETAIL_EULA_URL = 'https://displaay.net/help/licenses#read-full-terms'
+/** Licence text version the app currently requires before turning sync on. */
+export const RETAIL_EULA_VERSION = '2.0.8'
+/** Publication date shown next to the licence version in the consent dialog. */
+export const RETAIL_EULA_DATE = '08 September 2026'
+
+export function retailEulaConsentIsCurrent(
+  value?: { eulaConsentVersion?: string | null; eulaConsentAt?: string | null } | null,
+): boolean {
+  return (
+    value?.eulaConsentVersion === RETAIL_EULA_VERSION &&
+    typeof value?.eulaConsentAt === 'string' &&
+    value.eulaConsentAt.trim().length > 0
+  )
+}
+
 export type RetailFontFormat = 'otf' | 'ttf'
 
 export type RetailFile = {
@@ -190,6 +207,10 @@ export type RetailSyncStatus = {
   incomplete: boolean
   /** Family count for the in-flight download. Null when no sync is running. */
   progress: RetailSyncProgress | null
+  /** Stored EULA version when the user accepted; null until the first consent. */
+  eulaConsentVersion: string | null
+  /** ISO timestamp of the stored EULA acceptance; null until the first consent. */
+  eulaConsentAt: string | null
 }
 
 /**
