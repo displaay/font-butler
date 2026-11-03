@@ -4,8 +4,11 @@ import { Window } from 'happy-dom'
 import {
   PREVIEW_LOAD_TIMEOUT_MS,
   retryPreviewFamily,
+  setPreviewAutoRetryDelayForTests,
   setPreviewLoadTimeoutForTests,
 } from '../lib/previewReady.ts'
+
+setPreviewAutoRetryDelayForTests(0)
 import type {
   CatalogEntry,
   FamilyGroup,
@@ -479,9 +482,11 @@ test('each failed card button is followed by its own Retry', async () => {
 
 type CssFace = { family: string; weight: string; style: string; status: string; url: string }
 
-function installFailOnceFonts() {
+function installFailingFonts(options: { maxFailures?: number } = {}) {
   const statusByUrl = new Map<string, string>()
   const requested: string[] = []
+  const maxFailures = options.maxFailures ?? 1
+  let failures = 0
 
   function ruleTexts(style: Element): string[] {
     const sheet = (style as HTMLStyleElement).sheet
@@ -528,7 +533,12 @@ function installFailOnceFonts() {
       const status = statusByUrl.get(face.url) ?? 'unloaded'
       if (status === 'unloaded') {
         requested.push(face.url)
-        statusByUrl.set(face.url, /[?&]r=\d+/.test(face.url) ? 'loaded' : 'error')
+        if (failures < maxFailures) {
+          failures += 1
+          statusByUrl.set(face.url, 'error')
+        } else {
+          statusByUrl.set(face.url, 'loaded')
+        }
       }
       const next = statusByUrl.get(face.url)
       if (next === 'error') return Promise.reject(new Error('NetworkError'))
@@ -545,8 +555,13 @@ function installFailOnceFonts() {
   return requested
 }
 
-function FetchProbe({ family }: { family: string }) {
-  const status = usePreviewFontStatus(family)
+function installFailOnceFonts() {
+  // First URL fails; the auto URL-bust (r=1) succeeds.
+  return installFailingFonts({ maxFailures: 1 })
+}
+
+function FetchProbe({ family, weight = 400 }: { family: string; weight?: number }) {
+  const status = usePreviewFontStatus(family, weight)
   const state = status.failed ? 'failed' : status.ready ? 'ready' : 'loading'
   return createElement(
     'div',
@@ -593,14 +608,51 @@ async function waitForState(host: ParentNode, state: string) {
   assert.equal(host.querySelector('[data-state]')?.getAttribute('data-state'), state)
 }
 
-test('a failed font-file fetch succeeds when Retry busts the @font-face URL', async () => {
+test('a failed font-file fetch auto-busts the @font-face URL and recovers without Retry', async () => {
   const secret = 'retry-fetch-secret'
   ;(window as unknown as { fontButlerDesktop?: { getApiToken: () => Promise<string> } }).fontButlerDesktop = {
     getApiToken: async () => secret,
   }
-  const entry = catalogEntry('retry-fetch', [fontFace('Regular', 400)])
+  const entry = catalogEntry('retry-fetch', [fontFace('Regular', 430)])
   const family = catalogFontFamily(entry.id)
   const requested = installFailOnceFonts()
+  const { host, unmount } = await mount(
+    createElement(
+      'div',
+      null,
+      createElement(FontFaceStyles, { entries: [entry], catalog: [entry], systemFaces: [] }),
+      createElement(FetchProbe, { family, weight: 430 }),
+    ),
+  )
+  try {
+    await waitForState(host, 'ready')
+    assert.equal(requested.length, 2, 'auto URL bust issues a second fetch')
+    assert.equal(/[?&]r=\d+/.test(requested[0] ?? ''), false)
+    assert.match(requested[1] ?? '', /[?&]r=1(?:&|$)/)
+    assert.equal(host.querySelector('[data-fetch-retry]'), null, 'Recovered previews do not show Retry')
+    const style = document.querySelector('style[data-font-butler-face]')
+    assert.ok(style)
+    const busted = ruleUrlFromStyle(style, family)
+    assert.match(busted, /[?&]r=1(?:&|$)/)
+    const parsed = new URL(busted, 'http://127.0.0.1')
+    assert.equal(
+      verifyFontPreviewQuery(secret, parsed.pathname, Object.fromEntries(parsed.searchParams)),
+      true,
+      'the signature still validates with r on the query',
+    )
+  } finally {
+    await unmount()
+  }
+})
+
+test('a second failed font-file fetch still offers Retry after the auto bust', async () => {
+  const secret = 'retry-fetch-secret'
+  ;(window as unknown as { fontButlerDesktop?: { getApiToken: () => Promise<string> } }).fontButlerDesktop = {
+    getApiToken: async () => secret,
+  }
+  const entry = catalogEntry('retry-fetch-2', [fontFace('Regular', 400)])
+  const family = catalogFontFamily(entry.id)
+  const requested = installFailingFonts({ maxFailures: 2 })
   const { host, unmount } = await mount(
     createElement(
       'div',
@@ -611,12 +663,9 @@ test('a failed font-file fetch succeeds when Retry busts the @font-face URL', as
   )
   try {
     await waitForState(host, 'failed')
-    assert.equal(requested.length, 1, 'the first fetch is the only request while the face is in error')
-    assert.equal(/[?&]r=\d+/.test(requested[0] ?? ''), false)
+    assert.ok(requested.length >= 2, 'auto bust consumed the first failure')
     const style = document.querySelector('style[data-font-butler-face]')
     assert.ok(style?.textContent)
-    const failedUrl = ruleUrlFromStyle(style, family)
-    assert.equal(failedUrl.includes('r='), false)
     const textBeforeRetry = style.textContent
 
     const retry = host.querySelector('[data-fetch-retry]')
@@ -626,20 +675,13 @@ test('a failed font-file fetch succeeds when Retry busts the @font-face URL', as
     })
     await waitForState(host, 'ready')
 
-    assert.equal(requested.length, 2, 'Retry issues a second fetch')
-    assert.match(requested[1] ?? '', /[?&]r=1(?:&|$)/)
+    assert.ok(requested.length >= 3, 'manual Retry issues another fetch')
+    assert.match(requested.at(-1) ?? '', /[?&]r=2(?:&|$)/)
     assert.equal(style.textContent, textBeforeRetry, 'Retry replaces the matching face rule without rewriting the stylesheet text')
     const busted = ruleUrlFromStyle(style, family)
-    assert.match(busted, /[?&]r=1(?:&|$)/)
+    assert.match(busted, /[?&]r=2(?:&|$)/)
     const installed = ruleUrlFromStyle(style, catalogFontFamily(entry.id, 'installed'))
     assert.equal(/[?&]r=\d+/.test(installed), false, 'only the retried family is busted')
-    const parsed = new URL(busted, 'http://127.0.0.1')
-    assert.equal(
-      verifyFontPreviewQuery(secret, parsed.pathname, Object.fromEntries(parsed.searchParams)),
-      true,
-      'the signature still validates with r on the query',
-    )
-    assert.equal(host.querySelector('[data-state]')?.getAttribute('data-state'), 'ready')
   } finally {
     await unmount()
   }
@@ -725,7 +767,8 @@ test('an in-flight preview re-sign keeps a retry counter bumped while it waits',
   }
   const entry = catalogEntry('retry-resign', [fontFace('Regular', 400)])
   const family = catalogFontFamily(entry.id)
-  installFailOnceFonts()
+  // Two failures so auto-bust still ends on Failed before the manual Retry under test.
+  installFailingFonts({ maxFailures: 2 })
   let arm = false
   let waiting = false
   let release = () => {}
@@ -772,14 +815,14 @@ test('an in-flight preview re-sign keeps a retry counter bumped while it waits',
     const style = document.querySelector('style[data-font-butler-face="retry-resign"]')
     assert.ok(style)
     for (let attempt = 0; attempt < 40; attempt += 1) {
-      if ((style.textContent ?? '').includes('r=1') && (style.textContent ?? '').includes('77-88')) break
+      if ((style.textContent ?? '').includes('r=2') && (style.textContent ?? '').includes('77-88')) break
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 15))
       })
     }
     const written = ruleUrlFromStyle(style, family)
     assert.match(written, /77-88/)
-    assert.match(written, /[?&]r=1(?:&|$)/)
+    assert.match(written, /[?&]r=2(?:&|$)/)
     const parsed = new URL(written, 'http://127.0.0.1')
     assert.equal(
       verifyFontPreviewQuery(secret, parsed.pathname, Object.fromEntries(parsed.searchParams)),
@@ -805,7 +848,7 @@ test('the retry counter survives a preview stylesheet refresh', async () => {
   setPreviewFaceRefreshForTests(30)
   const entry = catalogEntry('retry-refresh', [fontFace('Regular', 400)])
   const family = catalogFontFamily(entry.id)
-  installFailOnceFonts()
+  installFailingFonts({ maxFailures: 2 })
   const { host, unmount } = await mount(
     createElement(
       'div',
@@ -824,16 +867,16 @@ test('the retry counter survives a preview stylesheet refresh', async () => {
       ;(retry as HTMLButtonElement).click()
     })
     await waitForState(host, 'ready')
-    assert.match(ruleUrlFromStyle(style, family), /[?&]r=1(?:&|$)/)
+    assert.match(ruleUrlFromStyle(style, family), /[?&]r=2(?:&|$)/)
     for (let attempt = 0; attempt < 40; attempt += 1) {
-      if ((style.textContent ?? '').includes('r=1')) break
+      if ((style.textContent ?? '').includes('r=2')) break
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 15))
       })
     }
-    assert.match(style.textContent ?? '', /[?&]r=1/)
+    assert.match(style.textContent ?? '', /[?&]r=2/)
     const refreshed = ruleUrlFromStyle(style, family)
-    assert.match(refreshed, /[?&]r=1(?:&|$)/)
+    assert.match(refreshed, /[?&]r=2(?:&|$)/)
     const parsed = new URL(refreshed, 'http://127.0.0.1')
     assert.equal(
       verifyFontPreviewQuery(secret, parsed.pathname, Object.fromEntries(parsed.searchParams)),
