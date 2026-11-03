@@ -9,7 +9,6 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { canSwitchToConflicts } from '@/lib/identity'
-import { formatRelativeTime } from '@/lib/utils'
 import type { CatalogEntry, DuplicateWarning } from '@/lib/types'
 
 export type DuplicateChoice = 'replace' | 'add-inactive' | 'skip' | 'switch' | 'install-as'
@@ -43,6 +42,26 @@ function isSameByteDuplicateWarning(
   return false
 }
 
+function fileName(filePath: string): string {
+  return filePath.split('/').pop() || filePath
+}
+
+function installedRole(entry: CatalogEntry): string {
+  if (entry.status === 'installed' || entry.status === 'outdated') return 'Installed now'
+  if (entry.status === 'deactivated') return 'Parked'
+  return 'Inactive'
+}
+
+function installedTitle(entry: CatalogEntry): string {
+  return entry.customFamilyName?.trim() || entry.faces[0]?.familyName?.trim() || fileName(entry.sourcePath)
+}
+
+function versionText(version: string): string {
+  const trimmed = version.trim()
+  if (!trimmed) return ''
+  return /^version\b/i.test(trimmed) ? trimmed : `Version ${trimmed}`
+}
+
 export function DuplicatesDialog({
   open,
   warnings,
@@ -66,6 +85,7 @@ export function DuplicatesDialog({
 }) {
   const [names, setNames] = useState<Record<string, string>>({})
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [installAsId, setInstallAsId] = useState<string | null>(null)
 
   const sameByteIds = useMemo(
     () => warnings.filter((warning) => isSameByteDuplicateWarning(warning, entries)).map((w) => w.id),
@@ -95,7 +115,14 @@ export function DuplicatesDialog({
   function resetAndClose() {
     setNames({})
     setSelected(new Set())
+    setInstallAsId(null)
     onClose()
+  }
+
+  function submitInstallAs(id: string) {
+    const familyName = (names[id] ?? '').trim()
+    if (!familyName) return
+    onResolve(id, 'install-as', familyName)
   }
 
   return (
@@ -178,8 +205,11 @@ export function DuplicatesDialog({
               const familyName = (names[warning.id] ?? '').trim()
               const switchAvailable = canSwitchToConflicts(warning.format, conflicts)
               const sameBytes = isSameByteDuplicateWarning(warning, entries)
+              const naming = installAsId === warning.id
+              const incomingName = warning.familyName || fileName(warning.path)
+              const version = warning.incomingVersion ? versionText(warning.incomingVersion) : ''
               return (
-                <div key={warning.id} className="space-y-2 rounded-lg border px-3 py-3">
+                <div key={warning.id} className="space-y-3 rounded-lg border px-3 py-3">
                   <div className="flex items-start gap-2">
                     <input
                       type="checkbox"
@@ -187,73 +217,56 @@ export function DuplicatesDialog({
                       checked={selected.has(warning.id)}
                       disabled={busy}
                       onChange={() => toggle(warning.id)}
-                      aria-label={`Select ${warning.familyName || warning.path}`}
+                      aria-label={`Select ${incomingName}`}
                     />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-baseline gap-2">
+                    <div className="min-w-0 flex-1 space-y-2">
+                      {conflicts.length === 0 ? (
+                        <div>
+                          <div className="text-[11px] font-medium text-muted-foreground">Installed now</div>
+                          <div className="text-sm text-muted-foreground">No longer in the library</div>
+                        </div>
+                      ) : (
+                        conflicts.map((entry) => (
+                          <div key={entry.id} className="rounded-md bg-muted/50 px-2 py-1.5">
+                            <div className="text-[11px] font-medium text-muted-foreground">
+                              {installedRole(entry)}
+                            </div>
+                            <div className="text-sm font-medium">
+                              {installedTitle(entry)} · {entry.format.toUpperCase()}
+                            </div>
+                            <div
+                              className="truncate font-mono text-[11px] text-muted-foreground"
+                              title={entry.sourcePath}
+                            >
+                              {entry.sourcePath}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                      <div className="px-2 py-1.5">
+                        <div className="flex flex-wrap items-baseline gap-2">
+                          <div className="text-[11px] font-medium text-muted-foreground">Incoming</div>
+                          {sameBytes ? (
+                            <span className="text-[11px] text-muted-foreground">Same bytes</span>
+                          ) : null}
+                        </div>
                         <div className="text-sm font-medium">
-                          {warning.familyName || warning.path.split('/').pop()}
+                          {incomingName}
+                          {warning.format ? ` · ${warning.format.toUpperCase()}` : ''}
                         </div>
-                        {sameBytes ? (
-                          <span className="text-[11px] text-muted-foreground">Same bytes</span>
+                        {version ? (
+                          <div className="text-xs text-muted-foreground">{version}</div>
                         ) : null}
-                      </div>
-                      <div
-                        className="truncate font-mono text-[11px] text-muted-foreground"
-                        title={warning.path}
-                      >
-                        Incoming: {warning.path}
+                        <div
+                          className="truncate font-mono text-[11px] text-muted-foreground"
+                          title={warning.path}
+                        >
+                          {warning.path}
+                        </div>
                       </div>
                     </div>
                   </div>
-                  {warning.incomingVersion ? (
-                    <div className="text-xs text-muted-foreground">Incoming: {warning.incomingVersion}</div>
-                  ) : null}
-                  {warning.fingerprint ? (
-                    <div className="truncate font-mono text-[11px] text-muted-foreground">
-                      Fingerprint: {warning.fingerprint.slice(0, 12)}
-                    </div>
-                  ) : null}
-                  <div className="space-y-1">
-                    {conflicts.map((entry) => (
-                      <div key={entry.id} className="rounded-md bg-muted/50 px-2 py-1.5 text-xs">
-                        <div className="font-medium">
-                          {entry.status === 'installed' || entry.status === 'outdated'
-                            ? 'Active'
-                            : entry.status === 'deactivated'
-                              ? 'Parked'
-                              : 'Inactive'}{' '}
-                          · {entry.format.toUpperCase()}
-                        </div>
-                        <div className="truncate text-muted-foreground" title={entry.sourcePath}>
-                          {entry.sourcePath}
-                        </div>
-                        <div className="text-muted-foreground">
-                          Modified {formatRelativeTime(entry.sourceMtimeMs)}
-                          {entry.installations?.length
-                            ? ` · ${entry.installations.map((copy) => copy.destinationId).join(', ')}`
-                            : entry.installedPath
-                              ? ' · macos'
-                              : ''}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium" htmlFor={`duplicate-name-${warning.id}`}>
-                      Install as… family name
-                    </label>
-                    <Input
-                      id={`duplicate-name-${warning.id}`}
-                      value={names[warning.id] ?? ''}
-                      placeholder="A separate family name"
-                      disabled={busy}
-                      onChange={(event) =>
-                        setNames((current) => ({ ...current, [warning.id]: event.target.value }))
-                      }
-                    />
-                  </div>
-                  <div className="flex flex-wrap gap-1.5 pt-1">
+                  <div className="flex flex-wrap gap-1.5">
                     <Button size="sm" disabled={busy} onClick={() => onResolve(warning.id, 'replace')}>
                       Replace active
                     </Button>
@@ -268,8 +281,9 @@ export function DuplicatesDialog({
                     <Button
                       size="sm"
                       variant="outline"
-                      disabled={busy || !familyName}
-                      onClick={() => onResolve(warning.id, 'install-as', familyName)}
+                      disabled={busy}
+                      aria-expanded={naming}
+                      onClick={() => setInstallAsId(naming ? null : warning.id)}
                     >
                       Install as…
                     </Button>
@@ -292,6 +306,37 @@ export function DuplicatesDialog({
                       Skip
                     </Button>
                   </div>
+                  {naming ? (
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium" htmlFor={`duplicate-name-${warning.id}`}>
+                        Family name
+                      </label>
+                      <div className="flex items-center gap-1.5">
+                        <Input
+                          id={`duplicate-name-${warning.id}`}
+                          value={names[warning.id] ?? ''}
+                          placeholder="A separate family name"
+                          disabled={busy}
+                          autoFocus
+                          onChange={(event) =>
+                            setNames((current) => ({ ...current, [warning.id]: event.target.value }))
+                          }
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') submitInstallAs(warning.id)
+                            if (event.key === 'Escape') setInstallAsId(null)
+                          }}
+                        />
+                        {familyName ? (
+                          <Button size="sm" disabled={busy} onClick={() => submitInstallAs(warning.id)}>
+                            Install
+                          </Button>
+                        ) : null}
+                        <Button size="sm" variant="ghost" disabled={busy} onClick={() => setInstallAsId(null)}>
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               )
             })
