@@ -601,7 +601,7 @@ export class FontButlerService {
       if (!fs.existsSync(warning.path)) {
         removeDuplicateWarning(this.paths, id)
         emitDuplicates(this.paths)
-        throw new Error('That watched file is no longer available.')
+        throw new Error('That incoming file is no longer available.')
       }
       const entries: CatalogEntry[] = []
       if (choice === 'skip') {
@@ -710,7 +710,7 @@ export class FontButlerService {
           try {
             if (!fs.existsSync(warning.path)) {
               removeDuplicateWarning(this.paths, warning.id)
-              errors.push(`${warning.path}: watched file is no longer available.`)
+              errors.push(`${warning.path}: incoming file is no longer available.`)
               continue
             }
             if (options.sameBytesOnly && !this.isSameByteDuplicateWarning(warning, catalog)) {
