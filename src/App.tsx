@@ -24,6 +24,7 @@ import { MarqueeOverlay } from '@/components/MarqueeOverlay'
 import { AnnouncementDialog } from '@/components/AnnouncementDialog'
 import { ConfettiBurst } from '@/components/ConfettiBurst'
 import { OnboardingDialog } from '@/components/OnboardingDialog'
+import type { Announcement } from '../shared/announcements.ts'
 import { RelinkDialog } from '@/components/RelinkDialog'
 import { RenameDialog } from '@/components/RenameDialog'
 import { ReplaceFormatDialog } from '@/components/ReplaceFormatDialog'
@@ -249,14 +250,7 @@ function AppShell() {
   } | null>(null)
   const [checkingAppUpdate, setCheckingAppUpdate] = useState(false)
   const [onboardingOpen, setOnboardingOpen] = useState(false)
-  const [announcement, setAnnouncement] = useState<{
-    id: string
-    title: string
-    body: string
-    celebrate: boolean
-    sinceVersion?: string
-    showWhen?: 'upgrade' | 'always'
-  } | null>(null)
+  const [announcement, setAnnouncement] = useState<Announcement | null>(null)
   const [confettiPlayKey, setConfettiPlayKey] = useState<number | null>(null)
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const settingsRef = useRef<AppSettings | null>(null)
@@ -850,7 +844,7 @@ function AppShell() {
         title,
         body,
         celebrate: payload.celebrate === true,
-        sinceVersion: typeof payload.sinceVersion === 'string' ? payload.sinceVersion : undefined,
+        sinceVersion: typeof payload.sinceVersion === 'string' ? payload.sinceVersion : '',
         showWhen: payload.showWhen === 'always' || payload.showWhen === 'upgrade' ? payload.showWhen : undefined,
       })
     })
