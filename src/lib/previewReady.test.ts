@@ -7,15 +7,25 @@ import {
   isPreviewFontReady,
   normalizePreviewFamily,
   notifyPreviewCssMounted,
+  PREVIEW_AUTO_URL_BUSTS,
   PREVIEW_LOAD_TIMEOUT_MS,
   previewFacesFailed,
   previewRetryGeneration,
   retryPreviewFamily,
+  setPreviewAutoRetryDelayForTests,
   setPreviewLoadTimeoutForTests,
   subscribePreviewFonts,
   subscribePreviewRetries,
   withRetryParam,
 } from './previewReady.ts'
+
+setPreviewAutoRetryDelayForTests(0)
+
+async function flushPreviewLoads(times = 2) {
+  for (let i = 0; i < times; i += 1) {
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+}
 
 type MockFace = { family: string; weight?: number | string; style?: string; status?: string }
 
@@ -258,14 +268,21 @@ test('invalidating a family lets fonts.load run again after a prune', async () =
 test('a face whose file fails to load stops waiting instead of spinning forever', async () => {
   const faces = [{ family: '"fc-gone"', status: 'error' }]
   const restore = mockFonts({ check: false, faces })
+  const stop = subscribePreviewFonts(() => {
+    void isPreviewFontReady('fc-gone')
+  })
   try {
     assert.equal(isPreviewFontReady('fc-gone'), false)
-    await new Promise((resolve) => setImmediate(resolve))
+    // First settle auto-busts the URL; the second settle marks Failed.
+    await flushPreviewLoads(4)
     assert.equal(isPreviewFontReady('fc-gone'), true)
+    assert.equal(isPreviewFontFailed('fc-gone'), true)
+    assert.equal(previewRetryGeneration('fc-gone'), PREVIEW_AUTO_URL_BUSTS)
     invalidatePreviewReadyFamilies(['fc-gone'])
     faces[0]!.status = 'loading'
     assert.equal(isPreviewFontReady('fc-gone'), false)
   } finally {
+    stop()
     restore()
   }
 })
@@ -282,15 +299,20 @@ test('an errored variable face does not leave a watch-folder preview loading for
   // The card waits on the numeric OS/2 weight. A failed file must still clear the spinner.
   const faces = [{ family: 'fc-vf-watch', weight: '1 1000', style: 'normal', status: 'error' }]
   const restore = mockFonts({ check: false, faces })
+  const stop = subscribePreviewFonts(() => {
+    void isPreviewFontReady('fc-vf-watch', 400)
+  })
   try {
     assert.equal(isPreviewFontReady('fc-vf-watch', 400), false)
-    await new Promise((resolve) => setImmediate(resolve))
+    await flushPreviewLoads(4)
     assert.equal(
       isPreviewFontReady('fc-vf-watch', 400),
       true,
       'variable font-weight range in error must not spin forever',
     )
+    assert.equal(isPreviewFontFailed('fc-vf-watch', 400), true)
   } finally {
+    stop()
     restore()
   }
 })
@@ -377,9 +399,12 @@ test('a loaded face keeps the key from failing when a sibling face at the same w
 test('one failed weight does not mark another weight as failed', async () => {
   const faces = [{ family: '"fc-mix"', weight: 700, style: 'normal', status: 'error' }]
   const restore = mockFonts({ check: false, faces })
+  const stop = subscribePreviewFonts(() => {
+    void isPreviewFontReady('fc-mix', 700)
+  })
   try {
     assert.equal(isPreviewFontReady('fc-mix', 700), false)
-    await new Promise((resolve) => setImmediate(resolve))
+    await flushPreviewLoads(4)
     assert.equal(isPreviewFontReady('fc-mix', 700), true)
     assert.equal(isPreviewFontFailed('fc-mix', 700), true)
     assert.equal(
@@ -390,6 +415,7 @@ test('one failed weight does not mark another weight as failed', async () => {
     assert.equal(isPreviewFontFailed('fc-mix-other', 400), false)
     assert.equal(isPreviewFontReady('fc-mix-other', 400), false)
   } finally {
+    stop()
     restore()
   }
 })
@@ -607,6 +633,113 @@ test('retry bumps the cache-busting generation before previews load again', () =
     stopRetry()
     stopFonts()
   } finally {
+    restore()
+  }
+})
+
+test('an errored FontFace auto-busts the URL once and recovers without Retry', async () => {
+  assert.equal(PREVIEW_AUTO_URL_BUSTS, 1)
+  const faces = [{ family: 'fc-auto', weight: 430, style: 'normal', status: 'error' }]
+  let loads = 0
+  const restore = mockFonts({
+    check: () => faces[0]!.status === 'loaded',
+    faces,
+    load: async () => {
+      loads += 1
+      if (previewRetryGeneration('fc-auto') > 0) {
+        faces[0]!.status = 'loaded'
+        return [{}]
+      }
+      return Promise.reject(new Error('NetworkError'))
+    },
+  })
+  const stop = subscribePreviewFonts(() => {
+    void isPreviewFontReady('fc-auto', 430)
+  })
+  try {
+    assert.equal(isPreviewFontReady('fc-auto', 430), false)
+    await flushPreviewLoads(4)
+    assert.ok(loads >= 2, 'auto URL bust must load again')
+    assert.equal(previewRetryGeneration('fc-auto'), 1)
+    assert.equal(isPreviewFontFailed('fc-auto', 430), false)
+    assert.equal(isPreviewFontReady('fc-auto', 430), true)
+  } finally {
+    stop()
+    restore()
+  }
+})
+
+test('a second FontFace error after the auto bust shows Failed', async () => {
+  const faces = [{ family: 'fc-auto-fail', weight: 430, style: 'normal', status: 'error' }]
+  const restore = mockFonts({
+    check: false,
+    faces,
+    load: async () => Promise.reject(new Error('NetworkError')),
+  })
+  const stop = subscribePreviewFonts(() => {
+    void isPreviewFontReady('fc-auto-fail', 430)
+  })
+  try {
+    assert.equal(isPreviewFontReady('fc-auto-fail', 430), false)
+    await flushPreviewLoads(4)
+    assert.equal(previewRetryGeneration('fc-auto-fail'), 1)
+    assert.equal(isPreviewFontFailed('fc-auto-fail', 430), true)
+    assert.equal(isPreviewFontReady('fc-auto-fail', 430), true)
+  } finally {
+    stop()
+    restore()
+  }
+})
+
+test('checking a loaded sibling during the auto-retry delay does not cancel the bust', async () => {
+  setPreviewAutoRetryDelayForTests(40)
+  const faces = [
+    { family: 'fc-sib-delay', weight: 400, style: 'normal', status: 'loaded' },
+    { family: 'fc-sib-delay', weight: 700, style: 'normal', status: 'error' },
+  ]
+  let loads700 = 0
+  const restore = mockFonts({
+    check: (spec) => {
+      if (spec.includes(' 400 ')) return faces[0]!.status === 'loaded'
+      if (spec.includes(' 700 ')) return faces[1]!.status === 'loaded'
+      return false
+    },
+    faces,
+    load: async (spec) => {
+      if (spec.includes(' 700 ')) {
+        loads700 += 1
+        if (previewRetryGeneration('fc-sib-delay') > 0) {
+          faces[1]!.status = 'loaded'
+          return [{}]
+        }
+        return Promise.reject(new Error('NetworkError'))
+      }
+      return []
+    },
+  })
+  const stop = subscribePreviewFonts(() => {
+    void isPreviewFontReady('fc-sib-delay', 700)
+  })
+  try {
+    assert.equal(isPreviewFontReady('fc-sib-delay', 400), true)
+    assert.equal(isPreviewFontReady('fc-sib-delay', 700), false)
+    await flushPreviewLoads(2)
+    // During the delay, re-check the loaded sibling (this used to cancel the bust).
+    assert.equal(isPreviewFontReady('fc-sib-delay', 400), true)
+    assert.equal(previewRetryGeneration('fc-sib-delay'), 0, 'bust not yet applied')
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    await flushPreviewLoads(4)
+    assert.equal(
+      previewRetryGeneration('fc-sib-delay'),
+      1,
+      'sibling ready must not cancel a pending auto URL bust',
+    )
+    assert.ok(loads700 >= 2, 'errored weight must load again after URL bust')
+    assert.equal(isPreviewFontFailed('fc-sib-delay', 700), false)
+    assert.equal(isPreviewFontReady('fc-sib-delay', 700), true)
+  } finally {
+    stop()
+    setPreviewAutoRetryDelayForTests(0)
     restore()
   }
 })

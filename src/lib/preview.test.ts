@@ -99,6 +99,14 @@ test('catalogFontFaceRules emit one descriptor per collection face', () => {
   assert.equal(rules[0] === rules[1], false)
 })
 
+test('catalogFontFaceRules keep non-100-step OS/2 weights for BETA static OTFs', () => {
+  const rules = catalogFontFaceRules('fc-vsans', '/api/font-file/vsans', [
+    { weight: 430, italic: false },
+  ])
+  assert.equal(rules.length, 1)
+  assert.match(rules[0]!, /font-weight:430/)
+})
+
 test('variable faces register a weight range so instance hover can interpolate', () => {
   const rules = catalogFontFaceRules('fc-vf', '/api/font-file/vf', [
     { weight: 400, italic: false, isVariable: true },

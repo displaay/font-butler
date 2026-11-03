@@ -13,6 +13,14 @@ const GENERIC_FAMILIES = new Set([
 
 /** How long one preview load may sit in document.fonts.load() before that key is failed. */
 export const PREVIEW_LOAD_TIMEOUT_MS = 10000
+/**
+ * Chrome treats a failed @font-face URL as final. After a fetch error (404 while a
+ * Dropbox placeholder materializes, a signing blip, etc.) we bust the URL this many
+ * times before the card shows Failed / Retry.
+ */
+export const PREVIEW_AUTO_URL_BUSTS = 1
+/** Pause before an automatic URL bust so a materializing cloud file can land. */
+export const PREVIEW_AUTO_RETRY_DELAY_MS = 250
 
 type PreviewFontsListener = () => void
 type PreviewRetryListener = (family: string, generation: number) => void
@@ -31,11 +39,15 @@ const readyKeys = new Set<string>()
 // of painting the unloaded family.
 const failedKeys = new Set<string>()
 const retries = new Map<string, number>()
+/** Automatic URL-bust attempts per load key after a FontFace lands in `error`. */
+const autoUrlBusts = new Map<string, number>()
+const autoRetryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const keyTimers = new Map<string, ReturnType<typeof setTimeout>>()
 let faceNames: Set<string> | null = null
 let faceNamesSource: unknown
 let listening = false
 let loadTimeoutMs = PREVIEW_LOAD_TIMEOUT_MS
+let autoRetryDelayMs = PREVIEW_AUTO_RETRY_DELAY_MS
 
 function notifyPreviewFonts() {
   faceNames = null
@@ -138,17 +150,52 @@ function clearKeyTimer(key: string) {
   keyTimers.delete(key)
 }
 
+function clearAutoRetryTimer(key: string) {
+  const timer = autoRetryTimers.get(key)
+  if (timer == null) return
+  clearTimeout(timer)
+  autoRetryTimers.delete(key)
+}
+
 function rememberReady(key: string) {
   readyKeys.add(key)
   failedKeys.delete(key)
   retries.delete(key)
   clearKeyTimer(key)
+  // Only this key — a loaded sibling must not cancel another weight's pending bust.
+  autoUrlBusts.delete(key)
+  clearAutoRetryTimer(key)
 }
 
 function rememberKeyFailure(key: string) {
   failedKeys.add(key)
   retries.delete(key)
   clearKeyTimer(key)
+}
+
+/**
+ * A FontFace in `error` will not refetch the same src. Bust the URL once (see
+ * PREVIEW_AUTO_URL_BUSTS) so a valid font that failed the first fetch can recover
+ * without a manual Retry click.
+ */
+function maybeAutoRetryBrokenFace(key: string, name: string): boolean {
+  const used = autoUrlBusts.get(key) ?? 0
+  if (used >= PREVIEW_AUTO_URL_BUSTS) return false
+  autoUrlBusts.set(key, used + 1)
+  clearAutoRetryTimer(key)
+  const delay = Math.max(0, autoRetryDelayMs)
+  if (delay === 0) {
+    retryPreviewFamily(name)
+    return true
+  }
+  const timer = setTimeout(() => {
+    if (autoRetryTimers.get(key) !== timer) return
+    autoRetryTimers.delete(key)
+    retryPreviewFamily(name)
+  }, delay)
+  ;(timer as unknown as { unref?: () => void }).unref?.()
+  autoRetryTimers.set(key, timer)
+  return true
 }
 
 function failLoadKey(key: string) {
@@ -212,6 +259,8 @@ function settleLoad(spec: string, key: string, name: string, weight: number, ita
   loadPromises.delete(key)
   loadTokens.delete(key)
   if (previewFaceStatus(name, weight, italic) === 'error') {
+    // load() again on the same URL stays in `error`; bust src before giving up.
+    if (maybeAutoRetryBrokenFace(key, name)) return
     rememberKeyFailure(key)
     notifyPreviewFonts()
     return
@@ -233,6 +282,10 @@ function settleLoad(spec: string, key: string, name: string, weight: number, ita
 
 export function setPreviewLoadTimeoutForTests(ms: number): void {
   loadTimeoutMs = ms
+}
+
+export function setPreviewAutoRetryDelayForTests(ms: number): void {
+  autoRetryDelayMs = ms
 }
 
 export function isPreviewFontFailed(family: string, weight = 400, italic = false): boolean {
@@ -261,12 +314,14 @@ export function isPreviewFontReady(family: string, weight = 400, italic = false)
   }
   if (loadPromises.has(key)) {
     if (previewFaceStatus(name, weight, italic) === 'error') {
-      rememberKeyFailure(key)
       loadPromises.delete(key)
+      if (maybeAutoRetryBrokenFace(key, name)) return false
+      rememberKeyFailure(key)
       return true
     }
     return false
   }
+  if (autoRetryTimers.has(key)) return false
   const hasFace = hasMatchingPreviewFace(name)
   if (hasFace) requestPreviewLoad(previewSpec(name, weight, italic), key, name, weight, italic)
   return false
@@ -280,6 +335,9 @@ export function invalidatePreviewReadyFamilies(families: readonly string[]): voi
   for (const family of families) {
     const name = normalizePreviewFamily(family)
     const prefix = familyPrefix(name)
+    for (const key of [...autoRetryTimers.keys()]) {
+      if (key.startsWith(prefix)) clearAutoRetryTimer(key)
+    }
     for (const key of readyKeys) {
       if (key.startsWith(prefix)) readyKeys.delete(key)
     }
