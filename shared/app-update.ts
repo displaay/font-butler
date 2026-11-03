@@ -108,6 +108,9 @@ export function isNewerVersion(latest: string, current: string): boolean {
   return compareVersions(latest, current) > 0
 }
 
+/** Pinned Displaay EULA page opened from the retail sync consent dialog. Keep in sync with `RETAIL_EULA_URL`. */
+export const RETAIL_EULA_EXTERNAL_URL = 'https://displaay.net/help/licenses#read-full-terms'
+
 export function isAllowedAppUpdateUrl(url: string): boolean {
   let parsed: URL
   try {
@@ -116,6 +119,7 @@ export function isAllowedAppUpdateUrl(url: string): boolean {
     return false
   }
   if (parsed.protocol !== 'https:') return false
+  if (url === RETAIL_EULA_EXTERNAL_URL) return true
   if (parsed.hostname !== 'github.com') return false
   const prefix = `/${APP_UPDATE_GITHUB_OWNER}/${APP_UPDATE_GITHUB_REPO}`
   return parsed.pathname === prefix || parsed.pathname.startsWith(`${prefix}/`)

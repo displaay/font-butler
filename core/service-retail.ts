@@ -54,6 +54,7 @@ import {
   normalizeDisabledGlyphsFiles,
   normalizeFamilyFormats,
   retailDriftFamilyName,
+  retailEulaConsentIsCurrent,
   retailFileFamilyName,
   retailFileFormat,
   retailFontsFromCollections,
@@ -66,6 +67,7 @@ import {
   retailListingHasLocalFile,
   retailListingOnMac,
   retailLocalManifestMode,
+  RETAIL_EULA_VERSION,
   type RetailCollectionMode,
   type RetailCollisionAction,
   type RetailDisableAction,
@@ -308,6 +310,8 @@ export function retailStatus(paths: AppPaths, settings = loadSettings(paths)): R
     collisions: cache.collisions,
     incomplete: retailSyncNeedsResume(paths, config),
     progress: cache.progress,
+    eulaConsentVersion: config.eulaConsentVersion ?? null,
+    eulaConsentAt: config.eulaConsentAt ?? null,
   }
 }
 
@@ -337,6 +341,8 @@ export async function configureRetailSync(
     disabledGlyphsFiles?: string[]
     familyFormats?: Record<string, RetailFontFormat>
     disableAction?: RetailDisableAction
+    /** Stamp the current EULA version when turning sync on. */
+    acceptEula?: boolean
   },
 ): Promise<RetailSyncStatus> {
   const settings = loadSettings(paths)
@@ -345,6 +351,17 @@ export async function configureRetailSync(
   const workerBaseUrl = (input.workerBaseUrl ?? current.workerBaseUrl).trim()
   if (workerBaseUrl && !isAllowedRetailBaseUrl(workerBaseUrl)) {
     throw new Error('The Displaay worker address must be an https URL.')
+  }
+
+  const enabling = input.enabled === true
+  let eulaConsentVersion = current.eulaConsentVersion
+  let eulaConsentAt = current.eulaConsentAt
+  if (input.acceptEula === true) {
+    eulaConsentVersion = RETAIL_EULA_VERSION
+    eulaConsentAt = new Date().toISOString()
+  }
+  if (enabling && !retailEulaConsentIsCurrent({ eulaConsentVersion, eulaConsentAt })) {
+    throw new Error('Accept the Displaay End User Licence Agreement to turn sync on.')
   }
 
   const next: RetailSyncSettings = {
@@ -367,6 +384,7 @@ export async function configureRetailSync(
         ? (current.familyFormats ?? {})
         : normalizeFamilyFormats(input.familyFormats),
     familyOptOuts: input.disabledGlyphsFiles === undefined ? current.familyOptOuts : true,
+    ...(eulaConsentVersion && eulaConsentAt ? { eulaConsentVersion, eulaConsentAt } : {}),
   }
   // Cached drift describes one server. If the address or credentials change, it is no longer a
   // statement about anything — serving it would report the old server's files as pending.

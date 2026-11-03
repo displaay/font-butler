@@ -449,6 +449,9 @@ export type {
 export {
   DEFAULT_RETAIL_AUTOCHECK_MINUTES,
   RETAIL_AUTOCHECK_CHOICES,
+  RETAIL_EULA_DATE,
+  RETAIL_EULA_URL,
+  RETAIL_EULA_VERSION,
   entryHasActiveRetailSync,
   groupRetailFontsByTypeface,
   isRetailItalicFamilyName,
@@ -458,6 +461,7 @@ export {
   matchesRetailFontQuery,
   nextDisabledRetailFamilyNames,
   nextDisabledRetailFamilyNamesForScope,
+  retailEulaConsentIsCurrent,
   retailFamilyNamesForSyncScope,
   retailSyncOffersVfCollections,
   retailDriftSummary,

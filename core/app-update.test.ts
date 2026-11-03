@@ -148,6 +148,8 @@ test('isAllowedAppUpdateUrl only allows this repo on github.com', () => {
   assert.equal(isAllowedAppUpdateUrl('https://github.com/displaay/other'), false)
   assert.equal(isAllowedAppUpdateUrl('http://github.com/displaay/font-butler'), false)
   assert.equal(isAllowedAppUpdateUrl('https://evil.example/displaay/font-butler'), false)
+  assert.equal(isAllowedAppUpdateUrl('https://displaay.net/help/licenses#read-full-terms'), true)
+  assert.equal(isAllowedAppUpdateUrl('https://displaay.net/help/licenses'), false)
 })
 
 test('checkAppUpdate uses the latest Releases API and caches the result', async () => {

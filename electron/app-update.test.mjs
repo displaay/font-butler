@@ -14,6 +14,16 @@ test('isAllowedAppUpdateUrl only allows this GitHub repo', () => {
   assert.equal(isAllowedAppUpdateUrl('not-a-url'), false)
 })
 
+test('isAllowedAppUpdateUrl pins the Displaay EULA link', () => {
+  assert.equal(
+    isAllowedAppUpdateUrl('https://displaay.net/help/licenses#read-full-terms'),
+    true,
+  )
+  assert.equal(isAllowedAppUpdateUrl('https://displaay.net/help/licenses'), false)
+  assert.equal(isAllowedAppUpdateUrl('https://displaay.net/help/other'), false)
+  assert.equal(isAllowedAppUpdateUrl('http://displaay.net/help/licenses#read-full-terms'), false)
+})
+
 test('trayTooltip keeps existing copy and names an app release', () => {
   assert.equal(trayTooltip({}), 'Font Buttler')
   assert.equal(trayTooltip({ hasUnread: true }), 'Font Buttler — unread activity')

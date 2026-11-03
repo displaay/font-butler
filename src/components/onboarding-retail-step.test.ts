@@ -108,6 +108,7 @@ const settings = {
 const retailStatus: RetailSyncStatus = {
   enabled: false,
   autoCheckMinutes: 60,
+  autoInstallUpdates: true,
   configured: false,
   hasToken: false,
   mode: null,
@@ -124,6 +125,8 @@ const retailStatus: RetailSyncStatus = {
   collisions: [],
   incomplete: false,
   progress: null,
+  eulaConsentVersion: null,
+  eulaConsentAt: null,
 }
 
 function jsonResponse(body: unknown, status = 200): Response {

@@ -51,6 +51,16 @@ export function defaultRetailSync(): RetailSyncSettings {
   }
 }
 
+function readRetailEulaConsent(row: Partial<RetailSyncSettings>): Pick<
+  RetailSyncSettings,
+  'eulaConsentVersion' | 'eulaConsentAt'
+> {
+  const version = typeof row.eulaConsentVersion === 'string' ? row.eulaConsentVersion.trim() : ''
+  const at = typeof row.eulaConsentAt === 'string' ? row.eulaConsentAt.trim() : ''
+  if (!version || !at) return {}
+  return { eulaConsentVersion: version, eulaConsentAt: at }
+}
+
 function readRetailSync(value: unknown): RetailSyncSettings {
   const defaults = defaultRetailSync()
   if (!value || typeof value !== 'object') return defaults
@@ -68,6 +78,7 @@ function readRetailSync(value: unknown): RetailSyncSettings {
     disabledGlyphsFiles: normalizeDisabledGlyphsFiles(row.disabledGlyphsFiles),
     familyFormats: normalizeFamilyFormats(row.familyFormats),
     familyOptOuts: row.familyOptOuts === true,
+    ...readRetailEulaConsent(row),
   }
 }
 

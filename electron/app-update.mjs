@@ -1,6 +1,9 @@
 const OWNER = 'displaay'
 export const APP_UPDATE_GITHUB_REPO_PATH = `/${OWNER}/font-butler`
 
+/** Pinned Displaay EULA page opened from the retail sync consent dialog. Keep in sync with `RETAIL_EULA_URL`. */
+export const RETAIL_EULA_EXTERNAL_URL = 'https://displaay.net/help/licenses#read-full-terms'
+
 export function isAllowedAppUpdateUrl(url) {
   let parsed
   try {
@@ -9,6 +12,7 @@ export function isAllowedAppUpdateUrl(url) {
     return false
   }
   if (parsed.protocol !== 'https:') return false
+  if (url === RETAIL_EULA_EXTERNAL_URL) return true
   if (parsed.hostname !== 'github.com') return false
   return (
     parsed.pathname === APP_UPDATE_GITHUB_REPO_PATH ||
