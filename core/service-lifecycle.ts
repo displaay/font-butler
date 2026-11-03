@@ -31,7 +31,9 @@ import { applyParsedFont, parseFontFile, readFileStat } from './parse.ts'
 import type { AppPaths } from './paths.ts'
 import { addManualOwner, removeManualOwner } from './projects.ts'
 import { storeRevision } from './revisions.ts'
+import { loadSettings } from './settings.ts'
 import { applyEntryFacts } from './state.ts'
+import { retailNotDownloadedInstallMessage } from '../shared/retail.ts'
 import { materialiseFeatureCopy, type MaterialiseReport } from './materialise.ts'
 import { renameFamilyCopy } from './rename.ts'
 import type { CatalogEntry, DestinationId, InstallOptions } from './types.ts'
@@ -92,6 +94,15 @@ export async function installEntry(
     options?.sourcePathOverride ? { ...entry, sourcePath } : entry,
   )
   if (!sourceFileExists(sourcePath)) {
+    // An empty retail source was never downloaded. A path that should be on
+    // disk, and is not, is the only case that reports a missing source file.
+    if (!options?.sourcePathOverride) {
+      const notDownloaded = retailNotDownloadedInstallMessage(
+        entry,
+        Boolean(loadSettings(host.paths).retailSync?.enabled),
+      )
+      if (notDownloaded) throw new Error(notDownloaded)
+    }
     applySourcePresence(entry)
     saveCatalog(host.paths, catalog)
     throw new Error('The source file is missing.')

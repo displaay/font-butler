@@ -20,6 +20,10 @@ import {
   nextDisabledRetailFamilyNames,
   retailLibraryEntryVisible,
   retailListingHasLocalFile,
+  retailNotDownloadedInstallMessage,
+  retailSourceNeverDownloaded,
+  RETAIL_NOT_DOWNLOADED_SYNC_OFF,
+  RETAIL_NOT_DOWNLOADED_SYNC_ON,
   retailSyncFamilyProgress,
   retailSyncIsOn,
   retailSyncingStatusMessage,
@@ -507,4 +511,37 @@ test('retail heading and valid-token labels follow the saved token check', () =>
   assert.equal(savedRetailTokenIsValid({ hasToken: true, mode: 'trial' }), false)
   assert.equal(savedRetailTokenIsValid({ hasToken: false, mode: 'retail' }), false)
   assert.equal(savedRetailTokenIsValid(null), false)
+})
+
+test('a retail row that was never downloaded is not a missing source file', () => {
+  const neverDownloaded = {
+    retailRelativePath: 'Bagoss Collection/BagossCollectionVF.otf',
+    retailFamilyName: 'Bagoss Collection VF',
+    sourcePath: '',
+    sourcePresent: false,
+    sourceAvailability: 'none' as const,
+    status: 'uninstalled',
+  }
+  assert.equal(retailSourceNeverDownloaded(neverDownloaded), true)
+  assert.equal(retailNotDownloadedInstallMessage(neverDownloaded, false), RETAIL_NOT_DOWNLOADED_SYNC_OFF)
+  assert.equal(retailNotDownloadedInstallMessage(neverDownloaded, true), RETAIL_NOT_DOWNLOADED_SYNC_ON)
+  assert.match(RETAIL_NOT_DOWNLOADED_SYNC_OFF, /Turn on Displaay retail sync in Settings → Watch folders/)
+  assert.match(RETAIL_NOT_DOWNLOADED_SYNC_OFF, /Nothing is downloaded until you Sync or turn the family on/)
+  assert.match(RETAIL_NOT_DOWNLOADED_SYNC_ON, /Sync or turn the family on to download it/)
+  assert.doesNotMatch(RETAIL_NOT_DOWNLOADED_SYNC_OFF, /source file is missing/)
+  assert.equal(
+    retailSourceNeverDownloaded({ ...neverDownloaded, sourceAvailability: 'missing' }),
+    false,
+  )
+  assert.equal(
+    retailNotDownloadedInstallMessage(
+      { ...neverDownloaded, sourcePath: '/Library/Fonts/BagossCollectionVF.otf', sourceAvailability: 'none' },
+      false,
+    ),
+    null,
+  )
+  assert.equal(
+    retailSourceNeverDownloaded({ ...neverDownloaded, retailRelativePath: undefined }),
+    false,
+  )
 })

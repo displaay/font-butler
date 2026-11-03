@@ -154,13 +154,15 @@ test('a corrupt unlinked list with no valid bak resets on a manual add', () => {
         peekPendingUnlinkedListResetNotice(paths)?.message,
         "Font Buttler couldn't read its list of unlinked fonts and started a new one. Fonts you unlinked earlier may reappear from watch folders. You can unlink them again.",
       )
-      acknowledgeUnlinkedListReset(paths)
+      const pendingReset = peekPendingUnlinkedListResetNotice(paths)
+      assert.equal(acknowledgeUnlinkedListReset(paths, pendingReset?.resetId ?? ''), true)
       assert.equal(peekPendingUnlinkedListResetNotice(paths), null)
       allowUnlinkedSource(paths, blocked)
       assert.equal(notices.length, 1)
     } finally {
       stop()
-      acknowledgeUnlinkedListReset(paths)
+      const leftoverReset = peekPendingUnlinkedListResetNotice(paths)
+      if (leftoverReset?.resetId) acknowledgeUnlinkedListReset(paths, leftoverReset.resetId)
     }
   })
 })

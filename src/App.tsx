@@ -640,8 +640,8 @@ function AppShell() {
               }
             : undefined,
         })
-        if (notice.source === 'unlinked-list') {
-          void api.acknowledgeUnlinkedListReset().catch(() => {})
+        if (notice.source === 'unlinked-list' && notice.resetId) {
+          void api.acknowledgeUnlinkedListReset(notice.resetId).catch(() => {})
         }
       }
       if (notice.entryId) {

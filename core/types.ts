@@ -179,6 +179,8 @@ export type Notice = {
   source?: 'watch' | 'logout' | 'logout-waiting' | 'logout-probe' | 'unlinked-list'
   /** One logout or probe flight. A joined click reuses it. */
   attemptId?: string
+  /** One unlinked-list reset. An ack names this so a stale window cannot clear a newer reset. */
+  resetId?: string
 }
 
 export type ViewLayout = 'list' | 'grid'
