@@ -19,7 +19,11 @@ import {
   peekFontAnalysis,
   type FontAnalysis,
 } from './font-analysis.ts'
-import { tryFingerprintFile } from './fingerprint.ts'
+import {
+  entryKnownFingerprints,
+  entryMatchesFingerprint,
+  tryFingerprintFile,
+} from './fingerprint.ts'
 import { isUnlinkedSource } from './unlinked-sources.ts'
 import { folderForPath, isExcluded, mostSpecificOwner } from './folders.ts'
 import {
@@ -74,9 +78,7 @@ export function importOneUnlocked(
   })()
   const sameBytes = fingerprint
     ? catalog.entries.find(
-        (item) =>
-          !isInactiveRetailListing(item) &&
-          (item.sourceFingerprint === fingerprint || item.installedFingerprint === fingerprint),
+        (item) => !isInactiveRetailListing(item) && entryMatchesFingerprint(item, fingerprint),
       )
     : undefined
   const existing = options.forceNew ? samePath : (samePath ?? sameBytes)
@@ -258,7 +260,7 @@ export async function importInboxFiles(
         notifyKey: duplicateNotifyKey(
           item.path,
           item.fingerprint,
-          occupying.map((entry) => entry.installedFingerprint ?? entry.sourceFingerprint ?? '').filter(Boolean),
+          occupying.flatMap((entry) => entryKnownFingerprints(entry)),
         ),
       })
       if (notify) notified += 1

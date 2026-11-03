@@ -4,7 +4,7 @@ import path from 'node:path'
 import { faceIdentityKey, findByInstalledPath, findBySourcePath } from './catalog.ts'
 import { isFullyUnderAnyRoot } from './containment.ts'
 import { occupyingSiblingsForIncoming, isBoundSourcePath, findAllByFaceIdentity } from './identity.ts'
-import { tryFingerprintFile } from './fingerprint.ts'
+import { entryMatchesFingerprint, tryFingerprintFile } from './fingerprint.ts'
 import { instancesOverlap, isWebFontFormat, normalizeFormat } from './formats.ts'
 import {
   analyzeFontFile,
@@ -82,9 +82,7 @@ export function classifyImportFile(
   )
   const sameBytes = fingerprint
     ? catalog.entries.find(
-        (entry) =>
-          !isInactiveRetailListing(entry) &&
-          (entry.sourceFingerprint === fingerprint || entry.installedFingerprint === fingerprint),
+        (entry) => !isInactiveRetailListing(entry) && entryMatchesFingerprint(entry, fingerprint),
       )
     : undefined
   const family = parsed.faces[0]?.familyName
@@ -159,6 +157,23 @@ export function classifyImportFile(
   }
 
   if (identityMatches.length) {
+    // Adopted FontBase (etc.) copies often lack top-level fingerprints; fall back
+    // to live install bytes so byte-identical renames stay identical, not Duplicates.
+    if (fingerprint) {
+      const liveSame = identityMatches.find((entry) =>
+        entryMatchesFingerprint(entry, fingerprint, { includeLive: true }),
+      )
+      if (liveSame) {
+        return {
+          ...item,
+          classification: 'identical',
+          entryId: liveSame.id,
+          defaultChoice: 'skip',
+          choices: ['skip', 'relink'],
+          reason: 'Identical bytes are already in the library.',
+        }
+      }
+    }
     const occupying = options.paths
       ? occupyingSiblingsForIncoming(catalog.entries, parsed.faces, parsed.format, options.paths)
       : identityMatches.filter((entry) => entry.status === 'installed' || entry.status === 'outdated')

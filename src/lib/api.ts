@@ -488,6 +488,17 @@ export const api = {
     json<{ entries: CatalogEntry[]; duplicates: DuplicateWarning[] }>(
       post('/api/duplicates/resolve', { id, choice, familyName }),
     ),
+  resolveDuplicates: (
+    ids: string[],
+    choice: 'skip' | 'replace',
+    options: { sameBytesOnly?: boolean } = {},
+  ) =>
+    json<{
+      entries: CatalogEntry[]
+      duplicates: DuplicateWarning[]
+      resolved: number
+      errors: string[]
+    }>(post('/api/duplicates/resolve-batch', { ids, choice, ...options })),
   switchTo: (id: string) => json<{ entry: CatalogEntry }>(post('/api/switch', { id })),
   activity: () => get<{ operations: Operation[] }>('/api/activity'),
   markActivityRead: () => json<{ operations: Operation[] }>(post('/api/activity/read', {})),

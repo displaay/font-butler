@@ -3007,6 +3007,32 @@ function AppShell() {
               },
             )
           }}
+          onResolveBatch={(ids, choice, options) => {
+            void run(
+              async () => {
+                const result = await api.resolveDuplicates(ids, choice, options)
+                setDuplicates(result.duplicates)
+                await refreshCatalog()
+                if (result.errors.length) {
+                  throw new Error(result.errors.slice(0, 3).join('\n'))
+                }
+              },
+              {
+                pending:
+                  choice === 'replace'
+                    ? 'Replacing same-byte duplicates…'
+                    : options?.sameBytesOnly
+                      ? 'Dismissing same-byte matches…'
+                      : 'Skipping duplicates…',
+                done:
+                  choice === 'replace'
+                    ? 'Replaced same-byte active copies'
+                    : options?.sameBytesOnly
+                      ? 'Dismissed same-byte matches'
+                      : 'Skipped duplicates',
+              },
+            )
+          }}
         />
         <RelinkDialog
           open={Boolean(relinkEntry) || finderLinkPaths.length > 0}

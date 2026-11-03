@@ -50,7 +50,10 @@ import {
   duplicateNotifyKey,
   loadDuplicates,
   pruneStaleDuplicates,
+  rememberSkippedDuplicate,
+  rememberSkippedDuplicates,
   removeDuplicateWarning,
+  removeDuplicateWarnings,
   upsertDuplicateWarning,
 } from './duplicates.ts'
 import { emitEvent } from './events.ts'
@@ -94,7 +97,12 @@ import {
   rememberFontAnalysis,
   type FontAnalysis,
 } from './font-analysis.ts'
-import { fingerprintFile, tryFingerprintFile } from './fingerprint.ts'
+import {
+  entryKnownFingerprints,
+  entryMatchesFingerprint,
+  fingerprintFile,
+  tryFingerprintFile,
+} from './fingerprint.ts'
 import {
   allowUnlinkedSource,
   isUnlinkedSource,
@@ -597,6 +605,7 @@ export class FontButlerService {
       }
       const entries: CatalogEntry[] = []
       if (choice === 'skip') {
+        rememberSkippedDuplicate(this.paths, warning.notifyKey)
         removeDuplicateWarning(this.paths, id)
       } else if (choice === 'replace') {
         allowUnlinkedSource(this.paths, warning.path)
@@ -648,6 +657,122 @@ export class FontButlerService {
       const duplicates = emitDuplicates(this.paths)
       return { entries, duplicates }
     })
+  }
+
+  /**
+   * Bulk resolve for Duplicates dialog. `sameBytesOnly` limits skip/replace to
+   * warnings whose incoming fingerprint matches an occupying catalog/live copy.
+   */
+  async resolveDuplicates(
+    ids: string[],
+    choice: 'skip' | 'replace',
+    options: { sameBytesOnly?: boolean } = {},
+  ): Promise<{
+    entries: CatalogEntry[]
+    duplicates: DuplicateWarning[]
+    resolved: number
+    errors: string[]
+  }> {
+    return runCatalogTask(async () => {
+      const uniqueIds = [...new Set(ids.filter(Boolean))]
+      if (uniqueIds.length === 0) {
+        return { entries: [], duplicates: emitDuplicates(this.paths), resolved: 0, errors: [] }
+      }
+      const catalog = loadCatalog(this.paths)
+      const pending = loadDuplicates(this.paths)
+      const targets = pending.filter((warning) => {
+        if (!uniqueIds.includes(warning.id)) return false
+        if (!options.sameBytesOnly) return true
+        return this.isSameByteDuplicateWarning(warning, catalog)
+      })
+      const errors: string[] = []
+      const entries: CatalogEntry[] = []
+      let resolved = 0
+
+      if (choice === 'skip') {
+        const skipKeys = targets
+          .filter((warning) => fs.existsSync(warning.path))
+          .map((warning) => warning.notifyKey)
+        rememberSkippedDuplicates(this.paths, skipKeys)
+        const removed = removeDuplicateWarnings(
+          this.paths,
+          targets.map((warning) => warning.id),
+        )
+        // Drop stale rows whose files vanished.
+        for (const warning of targets) {
+          if (!fs.existsSync(warning.path) && !removed.some((item) => item.id === warning.id)) {
+            removeDuplicateWarning(this.paths, warning.id)
+          }
+        }
+        resolved = targets.length
+      } else if (choice === 'replace') {
+        for (const warning of targets) {
+          try {
+            if (!fs.existsSync(warning.path)) {
+              removeDuplicateWarning(this.paths, warning.id)
+              errors.push(`${warning.path}: watched file is no longer available.`)
+              continue
+            }
+            if (options.sameBytesOnly && !this.isSameByteDuplicateWarning(warning, catalog)) {
+              continue
+            }
+            allowUnlinkedSource(this.paths, warning.path)
+            const targetId = warning.activeEntryId ?? warning.conflictingEntryIds[0]
+            if (!targetId) {
+              errors.push(`${warning.path}: there is no active copy to replace.`)
+              continue
+            }
+            const latest = findById(catalog, targetId)
+            if (!latest) {
+              errors.push(`${warning.path}: the library copy is no longer available.`)
+              continue
+            }
+            if (path.resolve(latest.sourcePath) !== path.resolve(warning.path)) {
+              latest.sourcePath = warning.path
+              const stat = readFileStat(warning.path)
+              latest.sourceMtimeMs = stat.mtimeMs
+              latest.sourceSize = stat.size
+              latest.sourceFingerprint = tryFingerprintFile(warning.path)
+              applyEntryFacts(latest)
+              touchEntry(latest)
+              saveCatalog(this.paths, catalog)
+            }
+            entries.push(await this.installEntry(targetId))
+            removeDuplicateWarning(this.paths, warning.id)
+            resolved += 1
+          } catch (error) {
+            errors.push(
+              `${warning.path}: ${error instanceof Error ? error.message : 'Could not replace.'}`,
+            )
+          }
+        }
+      } else {
+        throw new Error('Bulk resolve supports Skip or Replace active only.')
+      }
+
+      await syncWatchers(this.paths)
+      emitCatalog(this.paths)
+      const duplicates = emitDuplicates(this.paths)
+      return { entries, duplicates, resolved, errors }
+    })
+  }
+
+  private isSameByteDuplicateWarning(
+    warning: DuplicateWarning,
+    catalog: ReturnType<typeof loadCatalog>,
+  ): boolean {
+    if (!warning.fingerprint) return false
+    const conflictIds = [
+      ...warning.conflictingEntryIds,
+      ...(warning.activeEntryId ? [warning.activeEntryId] : []),
+    ]
+    for (const id of conflictIds) {
+      const entry = findById(catalog, id)
+      if (entry && entryMatchesFingerprint(entry, warning.fingerprint, { includeLive: true })) {
+        return true
+      }
+    }
+    return false
   }
 
   getSettings(): AppSettings {
@@ -4505,11 +4630,11 @@ export class FontButlerService {
       // Keep the occupying entry's labels when the neighbor cannot be parsed.
     }
     const fingerprint = tryFingerprintFile(filePath)
-    const occupyingFingerprints = [
-      entry.installedFingerprint,
-      entry.sourceFingerprint,
-      ...(entry.installations ?? []).map((copy) => copy.fingerprint),
-    ].filter((value): value is string => Boolean(value))
+    // Byte-identical renames (common under FontBase) are not Duplicates.
+    if (entryMatchesFingerprint(entry, fingerprint, { includeLive: true })) {
+      return
+    }
+    const occupyingFingerprints = entryKnownFingerprints(entry)
     const { notify } = upsertDuplicateWarning(this.paths, {
       path: filePath,
       fingerprint,
