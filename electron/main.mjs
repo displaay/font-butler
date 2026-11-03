@@ -26,7 +26,7 @@ import {
   openedUpdateDmgRecordFile,
 } from './app-update-install.mjs'
 import { createExternalFontOpenNotifier } from './external-font-open-notify.mjs'
-import { presentPendingAnnouncement } from './announcements.mjs'
+import { dismissAnnouncement, presentPendingAnnouncement } from './announcements.mjs'
 import { applyTestFeedDataIsolation } from './test-feed-data.mjs'
 import { macosDockIconPng } from './dock-icon.mjs'
 import { createLoginItemApplier } from './login-item.mjs'
@@ -298,6 +298,13 @@ const RETAIL_TICK_MS = 60 * 1000
 let retailStatus = null
 /** @type {null | (() => Promise<boolean>)} */
 let runPackagedBootstrap = null
+/** @type {null | { id: string, title: string, body: string, celebrate: boolean, sinceVersion?: string, showWhen?: string }} */
+let pendingAnnouncement = null
+
+function deliverPendingAnnouncement() {
+  if (!pendingAnnouncement || !mainWindow || mainWindow.isDestroyed()) return
+  mainWindow.webContents.send('announcement:show', pendingAnnouncement)
+}
 
 function startMainUiAfterBootstrap() {
   void listenForApiEvents()
@@ -307,11 +314,11 @@ function startMainUiAfterBootstrap() {
   void loadAppUpdate()
   void loadRetailStatus()
   try {
-    presentPendingAnnouncement({
+    pendingAnnouncement = presentPendingAnnouncement({
       userDataDir: app.getPath('userData'),
       currentVersion: app.getVersion(),
-      dirname: __dirname,
     })
+    deliverPendingAnnouncement()
   } catch (error) {
     console.error('Could not present announcement', error)
   }
@@ -2268,6 +2275,18 @@ if (!gotLock) {
 
 ipcMain.on('renderer-app-mounted', () => {
   flushWatchNotices()
+  deliverPendingAnnouncement()
+})
+
+ipcMain.on('announcement:dismiss', (_event, id) => {
+  try {
+    if (typeof id === 'string' && id.trim()) {
+      dismissAnnouncement({ userDataDir: app.getPath('userData'), id: id.trim() })
+    }
+  } catch (error) {
+    console.error('Could not dismiss announcement', error)
+  }
+  pendingAnnouncement = null
 })
 
 ipcMain.handle('quit-app', () => {

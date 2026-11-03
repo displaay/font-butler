@@ -47,6 +47,17 @@ declare global {
           }>,
         ) => void,
       ) => () => void
+      onAnnouncement?: (
+        callback: (payload: {
+          id?: string
+          title?: string
+          body?: string
+          celebrate?: boolean
+          sinceVersion?: string
+          showWhen?: 'upgrade' | 'always'
+        }) => void,
+      ) => () => void
+      dismissAnnouncement?: (id: string) => void
     }
   }
 }

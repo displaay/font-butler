@@ -9,7 +9,7 @@ export type Announcement = {
   showWhen?: AnnouncementShowWhen
 }
 
-/** Product announcements shown in their own BrowserWindow after launch. */
+/** Product announcements shown in the main window (welcome-style dialog) after launch. */
 export const ANNOUNCEMENTS: Announcement[] = [
   {
     id: 'rename-to-cuttler',
