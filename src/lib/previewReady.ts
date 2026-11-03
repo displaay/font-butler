@@ -39,7 +39,7 @@ const readyKeys = new Set<string>()
 // of painting the unloaded family.
 const failedKeys = new Set<string>()
 const retries = new Map<string, number>()
-/** Automatic URL-bust attempts per family after a FontFace lands in `error`. */
+/** Automatic URL-bust attempts per load key after a FontFace lands in `error`. */
 const autoUrlBusts = new Map<string, number>()
 const autoRetryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const keyTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -150,11 +150,11 @@ function clearKeyTimer(key: string) {
   keyTimers.delete(key)
 }
 
-function clearAutoRetryTimer(name: string) {
-  const timer = autoRetryTimers.get(name)
+function clearAutoRetryTimer(key: string) {
+  const timer = autoRetryTimers.get(key)
   if (timer == null) return
   clearTimeout(timer)
-  autoRetryTimers.delete(name)
+  autoRetryTimers.delete(key)
 }
 
 function rememberReady(key: string) {
@@ -162,11 +162,9 @@ function rememberReady(key: string) {
   failedKeys.delete(key)
   retries.delete(key)
   clearKeyTimer(key)
-  const name = key.slice(0, key.indexOf('\t'))
-  if (name) {
-    autoUrlBusts.delete(name)
-    clearAutoRetryTimer(name)
-  }
+  // Only this key — a loaded sibling must not cancel another weight's pending bust.
+  autoUrlBusts.delete(key)
+  clearAutoRetryTimer(key)
 }
 
 function rememberKeyFailure(key: string) {
@@ -180,23 +178,23 @@ function rememberKeyFailure(key: string) {
  * PREVIEW_AUTO_URL_BUSTS) so a valid font that failed the first fetch can recover
  * without a manual Retry click.
  */
-function maybeAutoRetryBrokenFace(name: string): boolean {
-  const used = autoUrlBusts.get(name) ?? 0
+function maybeAutoRetryBrokenFace(key: string, name: string): boolean {
+  const used = autoUrlBusts.get(key) ?? 0
   if (used >= PREVIEW_AUTO_URL_BUSTS) return false
-  autoUrlBusts.set(name, used + 1)
-  clearAutoRetryTimer(name)
+  autoUrlBusts.set(key, used + 1)
+  clearAutoRetryTimer(key)
   const delay = Math.max(0, autoRetryDelayMs)
   if (delay === 0) {
     retryPreviewFamily(name)
     return true
   }
   const timer = setTimeout(() => {
-    if (autoRetryTimers.get(name) !== timer) return
-    autoRetryTimers.delete(name)
+    if (autoRetryTimers.get(key) !== timer) return
+    autoRetryTimers.delete(key)
     retryPreviewFamily(name)
   }, delay)
   ;(timer as unknown as { unref?: () => void }).unref?.()
-  autoRetryTimers.set(name, timer)
+  autoRetryTimers.set(key, timer)
   return true
 }
 
@@ -262,7 +260,7 @@ function settleLoad(spec: string, key: string, name: string, weight: number, ita
   loadTokens.delete(key)
   if (previewFaceStatus(name, weight, italic) === 'error') {
     // load() again on the same URL stays in `error`; bust src before giving up.
-    if (maybeAutoRetryBrokenFace(name)) return
+    if (maybeAutoRetryBrokenFace(key, name)) return
     rememberKeyFailure(key)
     notifyPreviewFonts()
     return
@@ -317,13 +315,13 @@ export function isPreviewFontReady(family: string, weight = 400, italic = false)
   if (loadPromises.has(key)) {
     if (previewFaceStatus(name, weight, italic) === 'error') {
       loadPromises.delete(key)
-      if (maybeAutoRetryBrokenFace(name)) return false
+      if (maybeAutoRetryBrokenFace(key, name)) return false
       rememberKeyFailure(key)
       return true
     }
     return false
   }
-  if (autoRetryTimers.has(name)) return false
+  if (autoRetryTimers.has(key)) return false
   const hasFace = hasMatchingPreviewFace(name)
   if (hasFace) requestPreviewLoad(previewSpec(name, weight, italic), key, name, weight, italic)
   return false
@@ -337,7 +335,9 @@ export function invalidatePreviewReadyFamilies(families: readonly string[]): voi
   for (const family of families) {
     const name = normalizePreviewFamily(family)
     const prefix = familyPrefix(name)
-    clearAutoRetryTimer(name)
+    for (const key of [...autoRetryTimers.keys()]) {
+      if (key.startsWith(prefix)) clearAutoRetryTimer(key)
+    }
     for (const key of readyKeys) {
       if (key.startsWith(prefix)) readyKeys.delete(key)
     }

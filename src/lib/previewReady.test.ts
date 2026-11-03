@@ -690,3 +690,56 @@ test('a second FontFace error after the auto bust shows Failed', async () => {
     restore()
   }
 })
+
+test('checking a loaded sibling during the auto-retry delay does not cancel the bust', async () => {
+  setPreviewAutoRetryDelayForTests(40)
+  const faces = [
+    { family: 'fc-sib-delay', weight: 400, style: 'normal', status: 'loaded' },
+    { family: 'fc-sib-delay', weight: 700, style: 'normal', status: 'error' },
+  ]
+  let loads700 = 0
+  const restore = mockFonts({
+    check: (spec) => {
+      if (spec.includes(' 400 ')) return faces[0]!.status === 'loaded'
+      if (spec.includes(' 700 ')) return faces[1]!.status === 'loaded'
+      return false
+    },
+    faces,
+    load: async (spec) => {
+      if (spec.includes(' 700 ')) {
+        loads700 += 1
+        if (previewRetryGeneration('fc-sib-delay') > 0) {
+          faces[1]!.status = 'loaded'
+          return [{}]
+        }
+        return Promise.reject(new Error('NetworkError'))
+      }
+      return []
+    },
+  })
+  const stop = subscribePreviewFonts(() => {
+    void isPreviewFontReady('fc-sib-delay', 700)
+  })
+  try {
+    assert.equal(isPreviewFontReady('fc-sib-delay', 400), true)
+    assert.equal(isPreviewFontReady('fc-sib-delay', 700), false)
+    await flushPreviewLoads(2)
+    // During the delay, re-check the loaded sibling (this used to cancel the bust).
+    assert.equal(isPreviewFontReady('fc-sib-delay', 400), true)
+    assert.equal(previewRetryGeneration('fc-sib-delay'), 0, 'bust not yet applied')
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    await flushPreviewLoads(4)
+    assert.equal(
+      previewRetryGeneration('fc-sib-delay'),
+      1,
+      'sibling ready must not cancel a pending auto URL bust',
+    )
+    assert.ok(loads700 >= 2, 'errored weight must load again after URL bust')
+    assert.equal(isPreviewFontFailed('fc-sib-delay', 700), false)
+    assert.equal(isPreviewFontReady('fc-sib-delay', 700), true)
+  } finally {
+    stop()
+    setPreviewAutoRetryDelayForTests(0)
+    restore()
+  }
+})
