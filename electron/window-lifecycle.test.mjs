@@ -156,7 +156,7 @@ test('main process closes the window, hides the Dock, and shows it again with th
   assert.match(main, /applyWindowShown\(/)
   assert.match(main, /otherAppWindowNeedsDock\(BrowserWindow\.getAllWindows\(\), closingWindow\)/)
   assert.match(main, /shouldQuitOnWindowAllClosed\(/)
-  assert.match(main, /label: 'Show Font Buttler'/)
+  assert.match(main, /label: 'Show Cuttler'/)
   assert.match(main, /function openDebugConsole\(\) \{\n  showDockIcon\(\)\n  showDebugConsole\(/)
   assert.doesNotMatch(main, /mainWindow\?\.hide\(\)/)
   assert.doesNotMatch(main, /event\.preventDefault\(\)\s*\n\s*mainWindow\?\.hide\(\)/)

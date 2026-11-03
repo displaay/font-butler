@@ -1792,7 +1792,7 @@ export class FontButlerService {
     return runCatalogTask(async () => {
       const resolved = path.resolve(filePath)
       if (!allowedFontPath(resolved, this.paths)) {
-        throw new Error('That font is outside the font folders Font Buttler can manage.')
+        throw new Error('That font is outside the font folders Cuttler can manage.')
       }
       const catalog = loadCatalog(this.paths)
       const managed = catalog.entries.find(
@@ -1828,7 +1828,7 @@ export class FontButlerService {
     return runCatalogTask(async () => {
       const resolved = path.resolve(filePath)
       if (!allowedFontPath(resolved, this.paths)) {
-        throw new Error('That font is outside the font folders Font Buttler can manage.')
+        throw new Error('That font is outside the font folders Cuttler can manage.')
       }
       const catalog = loadCatalog(this.paths)
       const managed = catalog.entries.find(
@@ -1912,7 +1912,7 @@ export class FontButlerService {
       !allowedFontPath(resolved, this.paths) &&
       !isUnderAnyRoot(resolved, watchFolders)
     ) {
-      throw new Error('That path is outside the font folders Font Buttler can reveal.')
+      throw new Error('That path is outside the font folders Cuttler can reveal.')
     }
     if (!fs.existsSync(resolved)) {
       throw new Error('That file is no longer on disk.')
@@ -4530,7 +4530,7 @@ export class FontButlerService {
   }
 
   /**
-   * Deactivated by macOS (Font Book), not by Font Buttler: the Fonts copy is still in place and
+   * Deactivated by macOS (Font Book), not by Cuttler: the Fonts copy is still in place and
    * nothing was parked. Its Adobe-folder copy is still live and gets recorded.
    */
   private isDeactivatedOutsideApp(entry: CatalogEntry): boolean {

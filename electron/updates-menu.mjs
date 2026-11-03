@@ -106,7 +106,7 @@ export function buildTrayMenuModel({
   const unreadCount = unreadActivityCount(operations)
   const appUpdateAvailable = Boolean(appUpdate?.updateAvailable)
   const appLabel =
-    appUpdateAvailable && appUpdate?.latestVersion ? `Font Buttler ${appUpdate.latestVersion}` : ''
+    appUpdateAvailable && appUpdate?.latestVersion ? `Cuttler ${appUpdate.latestVersion}` : ''
   return {
     activityHeadline: 'Activity',
     activityRows: operations.slice(0, limit).map((operation) => ({
@@ -121,7 +121,7 @@ export function buildTrayMenuModel({
     updatesHeadline: 'Updates',
     appUpdateRow: appUpdateAvailable
       ? {
-          label: appLabel || 'Font Buttler update',
+          label: appLabel || 'Cuttler update',
           htmlUrl: appUpdate.htmlUrl ?? null,
           downloadUrl: appUpdate.preferredAsset?.url ?? null,
           downloadLabel: appUpdate.preferredAsset?.name

@@ -5,7 +5,7 @@ import { logMain } from './main-log.ts'
 import type { AppPaths } from './paths.ts'
 
 const UNLINKED_LIST_RESET_MESSAGE =
-  "Font Buttler couldn't read its list of unlinked fonts and started a new one. Fonts you unlinked earlier may reappear from watch folders. You can unlink them again."
+  "Cuttler couldn't read its list of unlinked fonts and started a new one. Fonts you unlinked earlier may reappear from watch folders. You can unlink them again."
 
 /** Toast and Activity text when an unlink cannot be recorded. */
 export const UNLINKED_LIST_READ_ERROR =

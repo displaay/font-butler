@@ -54,7 +54,7 @@ export function deliverNativeNotice({
     return { shown: false, lastKey, lastAt }
   }
   const notification = createNotification({
-    title: 'Font Buttler',
+    title: 'Cuttler',
     body: notice.message,
   })
   notification.show()

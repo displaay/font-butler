@@ -559,10 +559,11 @@ test('the publish check hashes the stapled DMG and zip and does not upload a DMG
   }
 })
 
-function writeVersionedRelease(root, version) {
+function writeVersionedRelease(root, version, { testFeed = false } = {}) {
   const releaseDir = path.join(root, 'release')
-  mkdirSync(path.join(releaseDir, 'mac-arm64', 'Font Buttler.app'), { recursive: true })
-  mkdirSync(path.join(releaseDir, 'mac', 'Font Buttler.app'), { recursive: true })
+  const appName = testFeed ? 'Font Buttler Test.app' : 'Cuttler.app'
+  mkdirSync(path.join(releaseDir, 'mac-arm64', appName), { recursive: true })
+  mkdirSync(path.join(releaseDir, 'mac', appName), { recursive: true })
   const stem = `Font-Buttler-${version}-arm64`
   for (const name of [`${stem}.dmg`, `${stem}.zip`, `${stem}.zip.blockmap`, 'latest-mac.yml']) {
     writeFileSync(path.join(releaseDir, name), name)
@@ -578,7 +579,7 @@ test('a stale archive from another version blocks publish', () => {
     const prepared = prepareMacPublish(root, '0.3.8')
     assert.equal(prepared.upload.length, 0)
     assert.ok(prepared.failures.some((failure) => failure.includes('Font-Buttler-0.3.7-arm64.dmg')))
-    assert.equal(prepared.app, path.join(releaseDir, 'mac-arm64', 'Font Buttler.app'))
+    assert.equal(prepared.app, path.join(releaseDir, 'mac-arm64', 'Cuttler.app'))
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -1065,7 +1066,7 @@ test('publish refuses a test-feed environment and a zip or app that carries the 
 
   const root = mkdtempSync(path.join(tmpdir(), 'font-butler-test-feed-zip-'))
   const src = path.join(root, 'pack')
-  const app = path.join(root, 'release', 'mac-arm64', 'Font Buttler.app')
+  const app = path.join(root, 'release', 'mac-arm64', 'Cuttler.app')
   mkdirSync(src)
   mkdirSync(path.join(app, 'Contents', 'Resources'), { recursive: true })
   writeFileSync(
@@ -1093,7 +1094,7 @@ test('publish refuses a test-feed environment and a zip or app that carries the 
 test('publish fails when the release zip app package marker cannot be read', async () => {
   const root = mkdtempSync(path.join(tmpdir(), 'font-butler-test-feed-null-'))
   const src = path.join(root, 'pack')
-  const app = path.join(root, 'release', 'mac-arm64', 'Font Buttler.app')
+  const app = path.join(root, 'release', 'mac-arm64', 'Cuttler.app')
   mkdirSync(src)
   mkdirSync(path.join(app, 'Contents', 'Resources'), { recursive: true })
   writeFileSync(path.join(src, 'package.json'), JSON.stringify({ name: 'font-butler', version: '0.3.8' }))
@@ -1130,7 +1131,7 @@ test('release asset names follow FONT_BUTLER_TEST_VERSION on a marked build', as
   )
   const root = mkdtempSync(path.join(tmpdir(), 'font-butler-test-version-'))
   try {
-    writeVersionedRelease(root, '0.9.0')
+    writeVersionedRelease(root, '0.9.0', { testFeed: true })
     const failures = await assertNotarizedMacRelease(root, '0.3.9', {
       [TEST_FEED_BUILD_ENV]: '1',
       [TEST_FEED_VERSION_ENV]: '0.9.0',
@@ -1145,8 +1146,8 @@ test('release asset names follow FONT_BUTLER_TEST_VERSION on a marked build', as
 
 test('the packaged Electron marker gate fails closed on true, null, and a dead probe', async () => {
   const root = mkdtempSync(path.join(tmpdir(), 'font-butler-marker-probe-'))
-  const app = path.join(root, 'Font Buttler.app')
-  const binary = path.join(app, 'Contents', 'MacOS', 'Font Buttler')
+  const app = path.join(root, 'Cuttler.app')
+  const binary = path.join(app, 'Contents', 'MacOS', 'Cuttler')
   mkdirSync(path.dirname(binary), { recursive: true })
   writeFileSync(binary, '')
   const probe = (stdout, status = 0, extra = {}) => () => ({ status, stdout, stderr: '', ...extra })
@@ -1168,8 +1169,8 @@ test('the packaged Electron marker gate fails closed on true, null, and a dead p
     const release = mkdtempSync(path.join(tmpdir(), 'font-butler-marker-probe-release-'))
     try {
       writeVersionedRelease(release, '0.3.8')
-      const releaseApp = path.join(release, 'release', 'mac-arm64', 'Font Buttler.app')
-      const releaseBinary = path.join(releaseApp, 'Contents', 'MacOS', 'Font Buttler')
+      const releaseApp = path.join(release, 'release', 'mac-arm64', 'Cuttler.app')
+      const releaseBinary = path.join(releaseApp, 'Contents', 'MacOS', 'Cuttler')
       mkdirSync(path.dirname(releaseBinary), { recursive: true })
       writeFileSync(releaseBinary, '')
       let calls = 0

@@ -15,7 +15,7 @@ export const APP_UPDATE_FETCH_TIMEOUT_MS = 4000
 export const APP_UPDATE_NOTES_LIMIT = 32 * 1024
 
 export const PARKED_AUTO_INSTALL_MESSAGE =
-  'Font Buttler does not download or install an update on its own. Click Update next to Settings.'
+  'Cuttler does not download or install an update on its own. Click Update next to Settings.'
 
 export const PARKED_AUTO_INSTALL_NOTICE =
   'Click Update next to Settings to download and install this version. Nothing is downloaded until you click.'
@@ -236,7 +236,7 @@ export function parseGithubRelease(
 
 export function appUpdateRowLabel(status: Pick<AppUpdateStatus, 'updateAvailable' | 'latestVersion'>): string {
   if (!status.updateAvailable || !status.latestVersion) return ''
-  return `Font Buttler ${status.latestVersion}`
+  return `Cuttler ${status.latestVersion}`
 }
 
 /**

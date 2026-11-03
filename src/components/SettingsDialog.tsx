@@ -85,7 +85,7 @@ const CATEGORIES: {
     id: 'general',
     label: 'General',
     icon: Settings,
-    description: 'Appearance, library defaults, and how Font Buttler runs on this Mac.',
+    description: 'Appearance, library defaults, and how Cuttler runs on this Mac.',
   },
   {
     id: 'folders',
@@ -103,7 +103,7 @@ const CATEGORIES: {
     id: 'destinations',
     label: 'Destinations',
     icon: Layers,
-    description: 'Where Font Buttler places installed copies, including the Adobe folder.',
+    description: 'Where Cuttler places installed copies, including the Adobe folder.',
   },
   {
     id: 'caches',
@@ -660,7 +660,7 @@ function GeneralPane({
       <SettingsSection title="App">
         <SettingsRow
           label="Icon in menu bar"
-          description="Keep Font Buttler running in the menu bar after you close the window. The Dock icon hides until you show the window again. Click the icon to show the window, reinstall updated fonts, clear caches, or quit."
+          description="Keep Cuttler running in the menu bar after you close the window. The Dock icon hides until you show the window again. Click the icon to show the window, reinstall updated fonts, clear caches, or quit."
           htmlFor="menu-bar-icon"
         >
           <input
@@ -675,7 +675,7 @@ function GeneralPane({
         {isDesktop ? (
           <SettingsRow
             label="Open at login"
-            description="Start Font Buttler when you turn on this computer."
+            description="Start Cuttler when you turn on this computer."
             htmlFor="open-at-login"
           >
             <input
@@ -690,7 +690,7 @@ function GeneralPane({
         ) : null}
         <SettingsRow
           label="Allow notifications"
-          description="Font Buttler can notify you when fonts are installed or updated."
+          description="Cuttler can notify you when fonts are installed or updated."
           htmlFor="native-notifications"
         >
           <input
@@ -735,7 +735,7 @@ function GeneralPane({
         </div>
         <SettingsRow
           label="Onboarding"
-          description="Show the setup screens from the first time you opened Font Buttler."
+          description="Show the setup screens from the first time you opened Cuttler."
         >
           <Button
             type="button"
@@ -976,7 +976,7 @@ function DestinationsPane({
   const adobeAvailable = adobeTestingFolderAvailable(destinations)
   const adobe = destinations.find((item) => item.id === 'adobe-shared')
   const adobeRemedy = adobe?.remedy
-    ?.replace(/\s*Font Buttler will not create or chmod a system Adobe folder\./g, '')
+    ?.replace(/\s*Cuttler will not create or chmod a system Adobe folder\./g, '')
     .trim()
   return (
     <SettingsSection>

@@ -70,7 +70,7 @@ export type RetailOwnedInstallContext = {
 }
 
 /**
- * Paths Font Buttler already treats as Displaay retail installs.
+ * Paths Cuttler already treats as Displaay retail installs.
  *
  * Family name is deliberately not used: an imported Azeret is not "ours" just because
  * the retail collection also has an Azeret family.

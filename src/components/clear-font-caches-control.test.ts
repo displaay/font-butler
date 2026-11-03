@@ -334,7 +334,7 @@ test('Clear font caches runs only after confirmation and logout is optional', as
   const allowed = document.body.querySelector('[role="dialog"]')
   assert.ok(allowed)
   assert.match(allowed.textContent ?? '', /Test build: logout would start now/)
-  assert.match(allowed.textContent ?? '', /Font Buttler did not log out, and it did not quit/)
+  assert.match(allowed.textContent ?? '', /Cuttler did not log out, and it did not quit/)
   assert.equal(allowed.textContent?.includes("Logging out didn't happen"), false)
   assert.equal(buttonNamed(allowed, 'Log out now'), undefined)
 

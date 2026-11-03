@@ -97,7 +97,7 @@ test('a background client does not drain the unlinked-list reset notice', async 
     kind: 'warning' as const,
     source: 'unlinked-list' as const,
     message:
-      "Font Buttler couldn't read its list of unlinked fonts and started a new one. Fonts you unlinked earlier may reappear from watch folders. You can unlink them again.",
+      "Cuttler couldn't read its list of unlinked fonts and started a new one. Fonts you unlinked earlier may reappear from watch folders. You can unlink them again.",
   }
   const app = new Hono()
   mountEventsRoutes(app, {

@@ -138,7 +138,7 @@ test('buildTrayMenuModel puts a GitHub app release above font source updates', (
   assert.equal(model.hasUpdates, true)
   assert.equal(model.reinstallAll, true)
   assert.equal(model.updatesEmpty, false)
-  assert.equal(model.appUpdateRow?.label, 'Font Buttler 0.2.0')
+  assert.equal(model.appUpdateRow?.label, 'Cuttler 0.2.0')
   assert.equal(model.appUpdateRow?.htmlUrl, 'https://github.com/displaay/font-butler/releases/tag/v0.2.0')
   assert.equal(
     model.appUpdateRow?.downloadUrl,

@@ -209,7 +209,7 @@ app.use('/api/*', async (c, next) => {
       } else {
         return c.json(
           {
-            error: 'Font Buttler is still reading fonts. Try again in a moment.',
+            error: 'Cuttler is still reading fonts. Try again in a moment.',
             ready: false,
             catalogReady: true,
             phase: initState.phase,
@@ -1199,7 +1199,7 @@ mountEventsRoutes(app, {
       initState.catalogReady = true
       initState.catalogReadyAt = Date.now()
       initState.phase = 'background'
-      console.log('Font Buttler catalog ready')
+      console.log('Cuttler catalog ready')
       emitEvent({
         type: 'init',
         catalogReady: true,
@@ -1212,7 +1212,7 @@ mountEventsRoutes(app, {
       initState.ready = true
       initState.phase = 'ready'
       initState.readyAt = Date.now()
-      console.log('Font Buttler init complete')
+      console.log('Cuttler init complete')
       emitEvent({ type: 'init', catalogReady: true, ready: true, phase: 'ready' })
       resolveBackgroundReady()
       service.startPreviewBackfill()
@@ -1220,7 +1220,7 @@ mountEventsRoutes(app, {
       const message = error instanceof Error ? error.message : String(error)
       initState.error = message
       initState.phase = 'failed'
-      console.error('Font Buttler service init failed:', message)
+      console.error('Cuttler service init failed:', message)
       if (error instanceof Error && error.stack) {
         console.error(error.stack)
       }
@@ -1231,7 +1231,7 @@ mountEventsRoutes(app, {
 
   return new Promise<{ port: number; token: string }>((resolve, reject) => {
     const server = serve({ fetch: app.fetch, port: PORT, hostname: '127.0.0.1' }, (info) => {
-      console.log(`Font Buttler API on http://127.0.0.1:${info.port}`)
+      console.log(`Cuttler API on http://127.0.0.1:${info.port}`)
       resolve({ port: info.port, token: apiToken })
       void runServiceInit()
     })

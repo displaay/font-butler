@@ -57,9 +57,9 @@ export function appUpdateRunningLine(
 }
 
 export function appUpdateBadgeLabel(version: string, phase?: AppUpdateInstallPhase): string {
-  if (phase === 'error') return `Update to Font Buttler ${version} failed`
-  if (phase && phase !== 'idle') return `Updating to Font Buttler ${version}`
-  return `Update to Font Buttler ${version}`
+  if (phase === 'error') return `Update to Cuttler ${version} failed`
+  if (phase && phase !== 'idle') return `Updating to Cuttler ${version}`
+  return `Update to Cuttler ${version}`
 }
 
 export function appUpdateClickIgnored(phase?: AppUpdateInstallPhase): boolean {

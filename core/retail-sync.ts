@@ -176,7 +176,7 @@ export function diffRetailManifest(
           relativePath: named,
           glyphsFile: typefaceName,
           familyName: familyName || typefaceName,
-          note: 'The server described this file in a way Font Buttler will not act on.',
+          note: 'The server described this file in a way Cuttler will not act on.',
         })
         continue
       }

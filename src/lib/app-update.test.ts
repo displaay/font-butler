@@ -52,7 +52,7 @@ test('the Settings version line marks a test-feed build', () => {
 })
 
 test('appUpdateRowLabel names the GitHub release version', () => {
-  assert.equal(appUpdateRowLabel(status()), 'Font Buttler 0.2.0')
+  assert.equal(appUpdateRowLabel(status()), 'Cuttler 0.2.0')
   assert.equal(appUpdateRowLabel(status({ updateAvailable: false })), '')
 })
 
@@ -139,8 +139,8 @@ test('the Update badge names the version and ignores clicks while busy', () => {
   assert.equal(appUpdateBadgeText('downloading', 40), '40%')
   assert.equal(appUpdateBadgeText('verifying'), '…')
   assert.equal(appUpdateBadgeText('error'), 'Error')
-  assert.equal(appUpdateBadgeLabel('0.4.0'), 'Update to Font Buttler 0.4.0')
-  assert.equal(appUpdateBadgeLabel('0.4.0', 'downloading'), 'Updating to Font Buttler 0.4.0')
+  assert.equal(appUpdateBadgeLabel('0.4.0'), 'Update to Cuttler 0.4.0')
+  assert.equal(appUpdateBadgeLabel('0.4.0', 'downloading'), 'Updating to Cuttler 0.4.0')
   assert.equal(appUpdateClickIgnored('downloading'), true)
   assert.equal(appUpdateClickIgnored('idle'), false)
   assert.equal(appUpdateClickIgnored('error'), false)

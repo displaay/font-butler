@@ -88,14 +88,35 @@ export function findAppBundles(dir) {
   return found
 }
 
-export function macReleaseAssetNames(version) {
+export function macReleaseAssetNames(version, { testFeed = false } = {}) {
   const stem = `Font-Buttler-${version}-arm64`
+  const cuttlerStem = `Cuttler-${version}-arm64`
+  if (testFeed) {
+    return {
+      dmg: `${stem}.dmg`,
+      zip: `${stem}.zip`,
+      zipBlockmap: `${stem}.zip.blockmap`,
+      cuttlerDmg: `${cuttlerStem}.dmg`,
+      cuttlerZip: `${cuttlerStem}.zip`,
+      feed: 'latest-mac.yml',
+      appRelative: path.join('mac-arm64', `${TEST_FEED_PRODUCT_NAME}.app`),
+      zipAppBundle: `${TEST_FEED_PRODUCT_NAME}.app`,
+      dmgAppBundle: `${TEST_FEED_PRODUCT_NAME}.app`,
+    }
+  }
   return {
     dmg: `${stem}.dmg`,
     zip: `${stem}.zip`,
     zipBlockmap: `${stem}.zip.blockmap`,
+    // Optional newer names that may also appear in latest-mac.yml.
+    cuttlerDmg: `${cuttlerStem}.dmg`,
+    cuttlerZip: `${cuttlerStem}.zip`,
     feed: 'latest-mac.yml',
-    appRelative: path.join('mac-arm64', 'Font Buttler.app'),
+    appRelative: path.join('mac-arm64', 'Cuttler.app'),
+    /** Bundle name inside the published update zip (0.3.x clients require this). */
+    zipAppBundle: 'Font Buttler.app',
+    /** Bundle name inside the DMG for new installs. */
+    dmgAppBundle: 'Cuttler.app',
   }
 }
 
@@ -159,9 +180,9 @@ export async function updateFeedFailures({ dmg, zip, feed }) {
 }
 
 /** Archives for this version only. Any other .dmg or .zip in release/ is a hard failure. */
-export function prepareMacPublish(root, version) {
+export function prepareMacPublish(root, version, { testFeed = false } = {}) {
   const releaseDir = path.join(root, 'release')
-  const expected = macReleaseAssetNames(version)
+  const expected = macReleaseAssetNames(version, { testFeed })
   let names = []
   try {
     names = readdirSync(releaseDir)
@@ -343,8 +364,13 @@ function markerFromProbeStdout(stdout) {
 /** Run the shipped reader inside the release binary. Missing binary skips; null and a dead probe fail. */
 export function packagedElectronMarkerFailures(appPath, { spawnImpl = spawnSync, env = process.env } = {}) {
   if (!appPath || !existsSync(appPath)) return []
-  const binary = path.join(appPath, 'Contents', 'MacOS', 'Font Buttler')
-  if (!existsSync(binary)) return []
+  const binary =
+    [
+      path.join(appPath, 'Contents', 'MacOS', 'Cuttler'),
+      path.join(appPath, 'Contents', 'MacOS', 'Font Buttler'),
+      path.join(appPath, 'Contents', 'MacOS', TEST_FEED_PRODUCT_NAME),
+    ].find((candidate) => existsSync(candidate)) ?? null
+  if (!binary) return []
   let result
   try {
     result = spawnImpl(binary, ['--input-type=module', '--eval', PACKAGED_MARKER_PROBE], {
@@ -628,9 +654,9 @@ export async function assertNotarizedMacRelease(
 ) {
   version = releaseAssetVersion(version, env)
   const overrideFailures = releaseFeedOverrideFailures()
-  const files = prepareMacPublish(root, version)
-  const testFeed =
-    String(env?.[TEST_FEED_BUILD_ENV] ?? '').trim() === '1' || readAppTestFeedMarker(files.app) === true
+  const testFeedEnv = String(env?.[TEST_FEED_BUILD_ENV] ?? '').trim() === '1'
+  const files = prepareMacPublish(root, version, { testFeed: testFeedEnv })
+  const testFeed = testFeedEnv || readAppTestFeedMarker(files.app) === true
   const testFeedFailures = []
   for (const message of [
     ...testFeedPublishEnvFailures(env),
@@ -664,9 +690,9 @@ export async function assertNotarizedMacRelease(
     if (!mounted.mount) {
       failures.push(`Could not mount ${path.basename(dmg)} to check the stapled app.`)
     } else {
-      const inside = findAppBundles(mounted.mount).find((bundle) => path.basename(bundle) === 'Font Buttler.app')
+      const inside = findAppBundles(mounted.mount).find((bundle) => path.basename(bundle) === files.expected.dmgAppBundle)
       dmgAppStatus = inside ? staplerStatus(inside) : 1
-      if (!inside) failures.push('The DMG does not contain Font Buttler.app.')
+      if (!inside) failures.push(`The DMG does not contain ${files.expected.dmgAppBundle}.`)
       for (const failure of unpackedReleaseAppFailures(inside, { testFeed })) {
         if (!testFeedFailures.includes(failure)) testFeedFailures.push(failure)
       }
@@ -682,9 +708,9 @@ export async function assertNotarizedMacRelease(
     if (unzipped.status !== 0) {
       failures.push('The update zip could not be unpacked.')
     } else {
-      const inside = findAppBundles(zipDir).find((bundle) => path.basename(bundle) === 'Font Buttler.app')
+      const inside = findAppBundles(zipDir).find((bundle) => path.basename(bundle) === files.expected.zipAppBundle)
       zipAppStatus = inside ? staplerStatus(inside) : 1
-      if (!inside) failures.push('The update zip does not contain Font Buttler.app.')
+      if (!inside) failures.push(`The update zip does not contain ${files.expected.zipAppBundle}.`)
       for (const failure of unpackedReleaseAppFailures(inside, { testFeed })) {
         if (!testFeedFailures.includes(failure)) testFeedFailures.push(failure)
       }

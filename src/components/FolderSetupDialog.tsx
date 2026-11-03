@@ -124,7 +124,7 @@ export function FolderSetupDialog({
           <DialogDescription>
             {deferInstall
               ? 'Choose what this folder does. Fonts are not installed until you finish setup.'
-              : 'Choose what this folder does before Font Buttler scans or installs anything. Starting watch applies only the operations shown below.'}
+              : 'Choose what this folder does before Cuttler scans or installs anything. Starting watch applies only the operations shown below.'}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">

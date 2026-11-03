@@ -107,7 +107,7 @@ test('deliverNativeNotice constructs a notification only for a hidden enabled wi
   })
   assert.equal(shown.shown, true)
   assert.equal(created.length, 1)
-  assert.equal(created[0].title, 'Font Buttler')
+  assert.equal(created[0].title, 'Cuttler')
   assert.equal(created[0].body, 'Installed Inter')
 
   const skippedHiddenOff = deliverNativeNotice({

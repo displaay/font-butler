@@ -1,7 +1,7 @@
 /** Shown when the user dismisses the System Events logout confirm (-128). */
 export const LOGOUT_CANCELLED = 'Log out was cancelled.'
 
-/** Shown when Font Buttler cannot send the logout Apple event (for example -1743). */
+/** Shown when Cuttler cannot send the logout Apple event (for example -1743). */
 export const LOGOUT_FALLBACK = 'Use Apple menu > Log Out'
 
 export const LOGOUT_FAILED_TITLE = "Logging out didn't happen"
@@ -20,4 +20,4 @@ export const LOGOUT_STILL_WAITING_MESSAGE =
 export const LOGOUT_PROBE_WOULD_START_TITLE = 'Test build'
 export const LOGOUT_PROBE_WOULD_START_NOTICE = 'Test build: logout would start now'
 export const LOGOUT_PROBE_WOULD_START_DETAIL =
-  'Font Buttler did not log out, and it did not quit.'
+  'Cuttler did not log out, and it did not quit.'

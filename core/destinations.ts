@@ -63,7 +63,7 @@ export function destinationDir(paths: AppPaths, id: DestinationId): string {
   return id === 'adobe-shared' ? adobeFontsDir(paths) : path.resolve(paths.installDir)
 }
 
-/** Folders Font Buttler can later install into. Excludes computer and system fonts. */
+/** Folders Cuttler can later install into. Excludes computer and system fonts. */
 export function installDestinationRoots(paths: AppPaths): Array<{ id: DestinationId; dir: string }> {
   const rows: Array<{ id: DestinationId; dir: string }> = []
   const seen = new Set<string>()
@@ -102,7 +102,7 @@ function dirState(dir: string): {
         canCreate: false,
         reason: 'Write permission was denied.',
         remedy:
-          'Give your user Read & Write on that folder in Finder Get Info. Font Buttler will not change permissions.',
+          'Give your user Read & Write on that folder in Finder Get Info. Cuttler will not change permissions.',
       }
     }
   }
@@ -146,7 +146,7 @@ export function inspectDestination(paths: AppPaths, id: DestinationId): Destinat
         activationVerified: false,
         canCreate: false,
         reason: 'The macOS fonts folder is not writable.',
-        remedy: 'Check that Font Buttler can write to the user Fonts folder.',
+        remedy: 'Check that Cuttler can write to the user Fonts folder.',
       }
     }
   }
@@ -221,7 +221,7 @@ export function adobeInvestigation(paths: AppPaths): DestinationInvestigationRow
       refreshWhileOpen: 'Not tested. Glyphs (2022) reports immediate refresh; this run does not claim that.',
       permissions: adobe.writable ? 'Writable in this environment' : adobe.reason || 'Not writable',
       systemConflict: 'Same-face copies in the folder or in macOS Fonts can confuse Adobe menus. Unmanaged files are left in place.',
-      cleanup: 'Only Font Buttler-managed files are removed. The destination is never emptied.',
+      cleanup: 'Only Cuttler-managed files are removed. The destination is never emptied.',
       conclusion: adobe.supported
         ? 'Supported for managed file placement only. App activation is verification-unavailable.'
         : 'Unavailable until the Glyphs-documented folder exists and is writable. No speculative writer is enabled.',
@@ -372,7 +372,7 @@ export function findUnmanagedConflicts(
       if (instancesOverlap(incoming, parsed)) {
         conflicts.push({
           path: resolved,
-          reason: 'A font with the same face is already in this destination and is not managed by Font Buttler.',
+          reason: 'A font with the same face is already in this destination and is not managed by Cuttler.',
         })
       }
     } catch {
