@@ -154,6 +154,57 @@ test('a background client does not drain the unlinked-list reset notice', async 
   }
 })
 
+test('a legacy pending reset without an id reaches a window once and clears on ack', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-reset-legacy-sse-'))
+  const paths = buildPaths({ override: root, mac: false })
+  ensureDirs(paths)
+  const notice = {
+    kind: 'warning' as const,
+    source: 'unlinked-list' as const,
+    message: 'Legacy pending reset from before reset ids.',
+  }
+  fs.writeFileSync(unlinkedListResetPendingPath(paths), JSON.stringify({ pending: true, notice }))
+  const app = new Hono()
+  mountEventsRoutes(app, {
+    paths,
+    catalogEvent: () => ({ type: 'catalog', entries: [] }),
+  })
+  const server = await listen(app)
+  const base = `http://127.0.0.1:${server.port}`
+  try {
+    const windowResponse = await fetch(`${base}/api/events?client=window`)
+    const windowEvents = await readSse(windowResponse, (events) => Boolean(unlinkedNotice(events)))
+    const delivered = unlinkedNotice(windowEvents)?.notice
+    assert.equal(delivered?.message, notice.message)
+    assert.ok(delivered?.resetId)
+    assert.equal(peekPendingUnlinkedListResetNotice(paths)?.resetId, delivered?.resetId)
+    const stored = JSON.parse(fs.readFileSync(unlinkedListResetPendingPath(paths), 'utf8')) as {
+      id?: string
+      notice?: { resetId?: string }
+    }
+    assert.equal(stored.id, delivered?.resetId)
+    assert.equal(stored.notice?.resetId, delivered?.resetId)
+
+    const ack = await fetch(`${base}/api/notices/unlinked-list-reset/ack`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resetId: delivered?.resetId }),
+    })
+    assert.equal(ack.status, 200)
+    assert.equal(peekPendingUnlinkedListResetNotice(paths), null)
+    assert.equal(fs.existsSync(unlinkedListResetPendingPath(paths)), false)
+
+    const afterAck = await fetch(`${base}/api/events?client=window`)
+    const afterAckEvents = await readSse(afterAck, hasCatalog, 250)
+    assert.equal(unlinkedNotice(afterAckEvents), undefined)
+  } finally {
+    const leftover = peekPendingUnlinkedListResetNotice(paths)
+    if (leftover?.resetId) acknowledgeUnlinkedListReset(paths, leftover.resetId)
+    await server.close()
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('a duplicate live unlinked-list event cannot produce two notices', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-reset-once-'))
   const paths = buildPaths({ override: root, mac: false })

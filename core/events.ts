@@ -51,6 +51,20 @@ export function takePendingWatchFailureNotices(): Notice[] {
   return pendingWatchFailures.splice(0, pendingWatchFailures.length)
 }
 
+function writeUnlinkedListResetPending(paths: AppPaths, stamped: Notice): void {
+  const resetId = stamped.resetId || ''
+  const file = unlinkedListResetPendingPath(paths)
+  fs.mkdirSync(paths.dataRoot, { recursive: true })
+  const temp = `${file}.${process.pid}.tmp`
+  try {
+    fs.writeFileSync(temp, JSON.stringify({ pending: true, id: resetId, notice: stamped }))
+    fs.renameSync(temp, file)
+  } catch (error) {
+    fs.rmSync(temp, { force: true })
+    throw error
+  }
+}
+
 function readStoredUnlinkedListReset(paths: AppPaths): Notice | null {
   try {
     const parsed = JSON.parse(fs.readFileSync(unlinkedListResetPendingPath(paths), 'utf8')) as {
@@ -59,8 +73,22 @@ function readStoredUnlinkedListReset(paths: AppPaths): Notice | null {
       notice?: Notice
     }
     if (parsed.pending === true && parsed.notice?.source === 'unlinked-list' && parsed.notice.message) {
-      const resetId = parsed.notice.resetId || (typeof parsed.id === 'string' ? parsed.id : '')
-      return resetId ? { ...parsed.notice, resetId } : parsed.notice
+      const existingId = parsed.notice.resetId || (typeof parsed.id === 'string' ? parsed.id : '')
+      if (existingId) {
+        return { ...parsed.notice, resetId: existingId }
+      }
+      // Pre-resetId pending files had no id. Stamp one and rewrite so a window can ack.
+      const resetId = crypto.randomUUID()
+      const stamped: Notice = { ...parsed.notice, resetId }
+      try {
+        writeUnlinkedListResetPending(paths, stamped)
+        pendingUnlinkedResets.delete(paths.dataRoot)
+      } catch (error) {
+        pendingUnlinkedResets.set(paths.dataRoot, stamped)
+        const reason = error instanceof Error ? error.message : String(error)
+        logMain('catalog', `could not migrate the unlinked-list reset notice: ${reason}`)
+      }
+      return stamped
     }
   } catch {
     return null
@@ -78,18 +106,9 @@ function readStoredUnlinkedListReset(paths: AppPaths): Notice | null {
 export function publishUnlinkedListReset(paths: AppPaths, notice: Notice): void {
   const resetId = crypto.randomUUID()
   const stamped: Notice = { ...notice, resetId }
-  const file = unlinkedListResetPendingPath(paths)
   try {
     unlinkedListResetWriteFault?.()
-    fs.mkdirSync(paths.dataRoot, { recursive: true })
-    const temp = `${file}.${process.pid}.tmp`
-    try {
-      fs.writeFileSync(temp, JSON.stringify({ pending: true, id: resetId, notice: stamped }))
-      fs.renameSync(temp, file)
-    } catch (error) {
-      fs.rmSync(temp, { force: true })
-      throw error
-    }
+    writeUnlinkedListResetPending(paths, stamped)
     pendingUnlinkedResets.delete(paths.dataRoot)
   } catch (error) {
     pendingUnlinkedResets.set(paths.dataRoot, stamped)

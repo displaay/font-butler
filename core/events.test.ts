@@ -83,6 +83,40 @@ function noticeWithoutResetId(notice: Notice | null): Omit<Notice, 'resetId'> | 
   return rest
 }
 
+test('a legacy pending file without a reset id is rewritten with a stable id', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-reset-legacy-'))
+  const paths = buildPaths({ override: root, mac: false })
+  ensureDirs(paths)
+  const notice = {
+    kind: 'warning' as const,
+    source: 'unlinked-list' as const,
+    message: 'Font Buttler could not read the unlinked list.',
+  }
+  const file = unlinkedListResetPendingPath(paths)
+  fs.writeFileSync(file, JSON.stringify({ pending: true, notice }))
+  try {
+    const first = peekPendingUnlinkedListResetNotice(paths)
+    assert.ok(first?.resetId)
+    assert.deepEqual(noticeWithoutResetId(first), notice)
+    const stored = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+      pending?: boolean
+      id?: string
+      notice?: Notice
+    }
+    assert.equal(stored.pending, true)
+    assert.equal(stored.id, first.resetId)
+    assert.equal(stored.notice?.resetId, first.resetId)
+    assert.equal(peekPendingUnlinkedListResetNotice(paths)?.resetId, first.resetId)
+    assert.equal(acknowledgeUnlinkedListReset(paths, first.resetId!), true)
+    assert.equal(peekPendingUnlinkedListResetNotice(paths), null)
+    assert.equal(fs.existsSync(file), false)
+  } finally {
+    const leftover = peekPendingUnlinkedListResetNotice(paths)
+    if (leftover?.resetId) acknowledgeUnlinkedListReset(paths, leftover.resetId)
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('a failed unlinked-list pending write keeps the notice for the next reader', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-reset-write-'))
   const paths = buildPaths({ override: root, mac: false })
