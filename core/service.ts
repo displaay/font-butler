@@ -804,6 +804,7 @@ export class FontButlerService {
     clearAdobeFontCache?: boolean
     autoReinstallOnUpdate?: boolean
     nativeNotifications?: boolean
+    watchDocumentOpens?: boolean
     onboardingCompleted?: boolean
     revisionBudgetBytes?: number
     activityRetentionDays?: number
@@ -852,6 +853,9 @@ export class FontButlerService {
     }
     if (typeof patch.nativeNotifications === 'boolean') {
       next.nativeNotifications = patch.nativeNotifications
+    }
+    if (typeof patch.watchDocumentOpens === 'boolean') {
+      next.watchDocumentOpens = patch.watchDocumentOpens
     }
     if (typeof patch.onboardingCompleted === 'boolean') {
       next.onboardingCompleted = patch.onboardingCompleted

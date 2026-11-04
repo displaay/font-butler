@@ -308,6 +308,7 @@ app.post('/api/settings', async (c) => {
     clearAdobeFontCache?: boolean
     autoReinstallOnUpdate?: boolean
     nativeNotifications?: boolean
+    watchDocumentOpens?: boolean
     onboardingCompleted?: boolean
     revisionBudgetBytes?: number
     activityRetentionDays?: number

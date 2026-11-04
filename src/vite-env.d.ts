@@ -14,6 +14,7 @@ declare global {
       requestNotifications: () => Promise<'granted' | 'denied' | 'default'>
       onOpenSettings: (callback: (payload?: { focus?: string }) => void) => () => void
       onOpenDocument?: (callback: (payload?: { path?: string }) => void) => () => void
+      onDocumentWatchNote?: (callback: (payload?: { path?: string; message?: string }) => void) => () => void
       openExternal?: (url: string) => Promise<boolean>
       installAppUpdate?: () => Promise<{
         ok: boolean

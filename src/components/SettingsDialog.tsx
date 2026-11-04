@@ -132,6 +132,7 @@ type SettingsPatch = {
   clearAdobeFontCache?: boolean
   autoReinstallOnUpdate?: boolean
   nativeNotifications?: boolean
+  watchDocumentOpens?: boolean
   onboardingCompleted?: boolean
   revisionBudgetBytes?: number
   activityRetentionDays?: number
@@ -672,6 +673,22 @@ function GeneralPane({
             className={checkboxClass}
           />
         </SettingsRow>
+        {isDesktop ? (
+          <SettingsRow
+            label="Watch documents in Adobe and Office"
+            description="When InDesign, Illustrator, Photoshop, Acrobat, Word, or PowerPoint is in front with a PDF, IDML, Word, or PowerPoint file, show its fonts. Off until you turn this on. InDesign, Illustrator, and Figma files are not parsed. This only opens the font sheet."
+            htmlFor="watch-document-opens"
+          >
+            <input
+              id="watch-document-opens"
+              type="checkbox"
+              checked={settings?.watchDocumentOpens === true}
+              disabled={busy || !settings}
+              onChange={(event) => void onSave({ watchDocumentOpens: event.target.checked })}
+              className={checkboxClass}
+            />
+          </SettingsRow>
+        ) : null}
         {isDesktop ? (
           <SettingsRow
             label="Open at login"

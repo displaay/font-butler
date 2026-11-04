@@ -126,6 +126,7 @@ const emptySettings = (): AppSettings => ({
   clearAdobeFontCache: true,
   autoReinstallOnUpdate: false,
   nativeNotifications: false,
+  watchDocumentOpens: false,
   onboardingCompleted: false,
   revisionBudgetBytes: DEFAULT_REVISION_BUDGET_BYTES,
   activityRetentionDays: DEFAULT_ACTIVITY_RETENTION_DAYS,
@@ -245,6 +246,7 @@ export function loadSettings(paths: AppPaths): AppSettings {
         typeof parsed.nativeNotifications === 'boolean'
           ? parsed.nativeNotifications
           : defaults.nativeNotifications,
+      watchDocumentOpens: parsed.watchDocumentOpens === true,
       onboardingCompleted:
         typeof parsed.onboardingCompleted === 'boolean' ? parsed.onboardingCompleted : true,
       revisionBudgetBytes: clampNumeric(

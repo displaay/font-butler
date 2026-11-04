@@ -75,6 +75,11 @@ contextBridge.exposeInMainWorld('fontButlerDesktop', {
     ipcRenderer.on('open-document', listener)
     return () => ipcRenderer.removeListener('open-document', listener)
   },
+  onDocumentWatchNote: (callback) => {
+    const listener = (_event, payload) => callback(payload)
+    ipcRenderer.on('document-watch-note', listener)
+    return () => ipcRenderer.removeListener('document-watch-note', listener)
+  },
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   installAppUpdate: () => ipcRenderer.invoke('install-app-update'),
   getAppUpdateInstallState: () => ipcRenderer.invoke('app-update-install-state'),
