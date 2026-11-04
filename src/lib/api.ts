@@ -14,6 +14,8 @@ import type {
   FolderPolicyPreset,
   FolderRelinkPreview,
   ImportPlan,
+  LibraryHealthActionKind,
+  LibraryHealthReport,
   Notice,
   OfficeFontCacheInfo,
   Operation,
@@ -502,6 +504,15 @@ export const api = {
       failedIds: string[]
     }>(post('/api/import/apply', { planId, choices, ...extra })),
   duplicates: () => get<{ duplicates: DuplicateWarning[] }>('/api/duplicates'),
+  libraryHealth: () => get<{ report: LibraryHealthReport }>('/api/library-health'),
+  applyLibraryHealthFix: (
+    action: LibraryHealthActionKind,
+    entryId: string,
+    options: { goodEntryId?: string; candidatePath?: string } = {},
+  ) =>
+    json<{ report: LibraryHealthReport; entries: CatalogEntry[] }>(
+      post('/api/library-health/fix', { action, entryId, ...options }),
+    ),
   resolveDuplicate: (
     id: string,
     choice: 'replace' | 'add-inactive' | 'skip' | 'switch' | 'install-as',

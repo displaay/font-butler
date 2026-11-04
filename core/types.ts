@@ -567,6 +567,60 @@ export type DuplicateWarning = {
   notifiedAt?: number
 }
 
+export type LibraryHealthGroup = 'installed-twice' | 'missing-source' | 'damaged'
+
+export type LibraryHealthCopyKind = 'source' | 'installed' | 'parked'
+
+export type LibraryHealthCopy = {
+  entryId: string
+  path: string
+  kind: LibraryHealthCopyKind
+  /** Live in an install destination (not parked in the vault). */
+  live: boolean
+  /** Fingerprint matches, file parses, and the copy is readable. */
+  verifiedGood: boolean
+  damaged: boolean
+  reason?: string
+  role: 'keeper' | 'extra' | 'copy'
+}
+
+export type LibraryHealthActionKind =
+  | 'park-extra'
+  | 'relink'
+  | 'park-installed'
+  | 'remove-entry'
+  | 'park-damaged'
+  | 'install-good-copy'
+
+export type LibraryHealthAction = {
+  kind: LibraryHealthActionKind
+  entryId: string
+  label: string
+  /** Entry holding the verified-good copy, for `install-good-copy`. */
+  goodEntryId?: string
+}
+
+export type LibraryHealthFinding = {
+  id: string
+  group: LibraryHealthGroup
+  faceIdentityKey: string | null
+  format: string
+  familyName: string
+  entryIds: string[]
+  copies: LibraryHealthCopy[]
+  keeperEntryId?: string
+  actions: LibraryHealthAction[]
+  /** True when no safe fix exists (e.g. no verified-good copy); never destructive. */
+  reportOnly: boolean
+  reportReason?: string
+}
+
+export type LibraryHealthReport = {
+  scannedAt: number
+  findings: LibraryHealthFinding[]
+  counts: Record<LibraryHealthGroup, number>
+}
+
 export type AppUpdateAsset = {
   name: string
   url: string

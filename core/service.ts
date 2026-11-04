@@ -227,6 +227,8 @@ import type {
   InstallOptions,
   FolderRelinkPreview,
   ImportPlan,
+  LibraryHealthActionKind,
+  LibraryHealthReport,
   ImportPlanChoice,
   OfficeFontCacheInfo,
   Operation,
@@ -331,6 +333,7 @@ import {
   removeInstalledCopy,
   touchEntry,
 } from './service-helpers.ts'
+import { assertParkKeepsVerifiedGood, scanLibraryHealth } from './library-health.ts'
 import {
   destinationForInstall,
   placeAdobeCopy,
@@ -797,6 +800,104 @@ export class FontButlerService {
       emitCatalog(this.paths)
       const duplicates = emitDuplicates(this.paths)
       return { entries, duplicates, resolved, errors }
+    })
+  }
+
+  /** Read-only Library Health scan (Stage A). Never moves or deletes files. */
+  scanLibraryHealth(): LibraryHealthReport {
+    return scanLibraryHealth(loadCatalog(this.paths).entries, this.paths)
+  }
+
+  /**
+   * Apply one confirmed Library Health fix. Every fix re-runs the scan and
+   * the keeper check first; extras are parked via `parkManagedCopies`,
+   * source files are never deleted, and a fix that would leave no
+   * verified-good copy of a face is refused.
+   */
+  async applyLibraryHealthFix(input: {
+    action: LibraryHealthActionKind
+    entryId: string
+    goodEntryId?: string
+    candidatePath?: string
+  }): Promise<{ report: LibraryHealthReport; entries: CatalogEntry[] }> {
+    return runCatalogTask(async () => {
+      const before = loadCatalog(this.paths)
+      const entry = findById(before, input.entryId)
+      if (!entry) throw new Error('Font is not in the library.')
+      const report = scanLibraryHealth(before.entries, this.paths)
+      const finding = report.findings.find(
+        (item) => item.entryIds.includes(input.entryId) && item.actions.some((a) => a.kind === input.action && a.entryId === input.entryId),
+      )
+      if (!finding) {
+        throw new Error('That fix is no longer available. Run the Library Health scan again.')
+      }
+      const faceKey = finding.faceIdentityKey
+
+      if (input.action === 'relink') {
+        if (!input.candidatePath) throw new Error('Choose the moved file to relink to.')
+        const relinked = await this.applyRelink(input.entryId, input.candidatePath)
+        return { report: this.scanLibraryHealth(), entries: [relinked] }
+      }
+
+      if (input.action === 'remove-entry') {
+        // Catalog entry only — no file is touched — and only when another
+        // verified-good copy of the same face remains.
+        assertParkKeepsVerifiedGood(before.entries, this.paths, faceKey, input.entryId, finding.keeperEntryId)
+        const catalog = loadCatalog(this.paths)
+        removeEntryById(catalog, input.entryId)
+        saveCatalog(this.paths, catalog)
+        await syncWatchers(this.paths)
+        emitCatalog(this.paths)
+        emitDuplicates(this.paths)
+        return { report: this.scanLibraryHealth(), entries: [] }
+      }
+
+      if (input.action === 'park-extra' || input.action === 'park-damaged') {
+        assertParkKeepsVerifiedGood(before.entries, this.paths, faceKey, input.entryId, finding.keeperEntryId)
+        const catalog = loadCatalog(this.paths)
+        const latest = findById(catalog, input.entryId)
+        if (!latest) throw new Error('Font is not in the library.')
+        await this.parkManagedCopies(latest)
+        touchEntry(latest)
+        saveCatalog(this.paths, catalog)
+        await syncWatchers(this.paths)
+        emitCatalog(this.paths)
+        emitDuplicates(this.paths)
+        return { report: this.scanLibraryHealth(), entries: [latest] }
+      }
+
+      if (input.action === 'park-installed') {
+        // Parking keeps the bytes in the vault, so turning the font off
+        // never loses it; the source file is never touched.
+        const catalog = loadCatalog(this.paths)
+        const latest = findById(catalog, input.entryId)
+        if (!latest) throw new Error('Font is not in the library.')
+        await this.parkManagedCopies(latest)
+        touchEntry(latest)
+        saveCatalog(this.paths, catalog)
+        await syncWatchers(this.paths)
+        emitCatalog(this.paths)
+        emitDuplicates(this.paths)
+        return { report: this.scanLibraryHealth(), entries: [latest] }
+      }
+
+      if (input.action === 'install-good-copy') {
+        const goodId = input.goodEntryId ?? finding.actions.find((a) => a.kind === 'install-good-copy')?.goodEntryId
+        if (!goodId) throw new Error('There is no verified-good copy to install.')
+        assertParkKeepsVerifiedGood(before.entries, this.paths, faceKey, input.entryId, finding.keeperEntryId)
+        const catalog = loadCatalog(this.paths)
+        const damaged = findById(catalog, input.entryId)
+        if (!damaged) throw new Error('Font is not in the library.')
+        await this.parkManagedCopies(damaged)
+        touchEntry(damaged)
+        saveCatalog(this.paths, catalog)
+        const installed = await this.installEntry(goodId)
+        emitCatalog(this.paths)
+        emitDuplicates(this.paths)
+        return { report: this.scanLibraryHealth(), entries: [installed] }
+      }
+
+      throw new Error('That Library Health fix is not supported.')
     })
   }
 

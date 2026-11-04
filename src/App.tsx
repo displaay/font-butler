@@ -409,6 +409,8 @@ function AppShell() {
   const [highlightOperation, setHighlightOperation] = useState<string | null>(null)
   const [duplicates, setDuplicates] = useState<DuplicateWarning[]>([])
   const [duplicatesOpen, setDuplicatesOpen] = useState(false)
+  const [healthReport, setHealthReport] = useState<import('@/lib/types').LibraryHealthReport | null>(null)
+  const [healthBusy, setHealthBusy] = useState(false)
   const [adobeAvailable, setAdobeAvailable] = useState(true)
 
   function applyAdobeAvailability(destinations?: DestinationCapability[]) {
@@ -3386,6 +3388,37 @@ function AppShell() {
           warnings={duplicates}
           entries={entries}
           busy={busy}
+          healthReport={healthReport}
+          healthBusy={healthBusy}
+          onScanHealth={() => {
+            setHealthBusy(true)
+            void api
+              .libraryHealth()
+              .then((result) => setHealthReport(result.report))
+              .catch(() => setHealthReport(null))
+              .finally(() => setHealthBusy(false))
+          }}
+          onHealthFix={(action) => {
+            void run(
+              async () => {
+                const result = await api.applyLibraryHealthFix(action.kind, action.entryId, {
+                  goodEntryId: action.goodEntryId,
+                })
+                setHealthReport(result.report)
+                setDuplicates(await api.duplicates().then((r) => r.duplicates).catch(() => duplicates))
+                await refreshCatalog()
+              },
+              { pending: 'Applying Library Health fix…', done: 'Library Health fix applied' },
+            )
+          }}
+          onHealthRelink={(entryId) => {
+            const target = entries.find((item) => item.id === entryId)
+            if (target) {
+              setRelinkEntry(target)
+              setRelinkMode('locate')
+              setDuplicatesOpen(false)
+            }
+          }}
           onClose={() => setDuplicatesOpen(false)}
           onResolve={(id, choice, familyName) => {
             void run(

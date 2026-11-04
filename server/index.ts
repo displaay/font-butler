@@ -366,6 +366,35 @@ app.post('/api/family-tags', async (c) => {
 
 app.get('/api/duplicates', (c) => c.json({ duplicates: service.listDuplicates() }))
 
+app.get('/api/library-health', (c) => c.json({ report: service.scanLibraryHealth() }))
+
+app.post('/api/library-health/fix', async (c) => {
+  const body = await c.req.json<{
+    action?: string
+    entryId?: string
+    goodEntryId?: string
+    candidatePath?: string
+  }>()
+  if (!body.action || !body.entryId) {
+    return c.json({ error: 'Missing action or entryId' }, 400)
+  }
+  try {
+    return c.json(
+      await service.applyLibraryHealthFix({
+        action: body.action as Parameters<FontButlerService['applyLibraryHealthFix']>[0]['action'],
+        entryId: body.entryId,
+        goodEntryId: body.goodEntryId,
+        candidatePath: body.candidatePath,
+      }),
+    )
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : 'Could not apply that Library Health fix' },
+      400,
+    )
+  }
+})
+
 app.post('/api/duplicates/resolve', async (c) => {
   const body = await c.req.json<{
     id?: string

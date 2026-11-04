@@ -165,6 +165,54 @@ export type DuplicateWarning = {
   notifiedAt?: number
 }
 
+export type LibraryHealthGroup = 'installed-twice' | 'missing-source' | 'damaged'
+
+export type LibraryHealthCopy = {
+  entryId: string
+  path: string
+  kind: 'source' | 'installed' | 'parked'
+  live: boolean
+  verifiedGood: boolean
+  damaged: boolean
+  reason?: string
+  role: 'keeper' | 'extra' | 'copy'
+}
+
+export type LibraryHealthActionKind =
+  | 'park-extra'
+  | 'relink'
+  | 'park-installed'
+  | 'remove-entry'
+  | 'park-damaged'
+  | 'install-good-copy'
+
+export type LibraryHealthAction = {
+  kind: LibraryHealthActionKind
+  entryId: string
+  label: string
+  goodEntryId?: string
+}
+
+export type LibraryHealthFinding = {
+  id: string
+  group: LibraryHealthGroup
+  faceIdentityKey: string | null
+  format: string
+  familyName: string
+  entryIds: string[]
+  copies: LibraryHealthCopy[]
+  keeperEntryId?: string
+  actions: LibraryHealthAction[]
+  reportOnly: boolean
+  reportReason?: string
+}
+
+export type LibraryHealthReport = {
+  scannedAt: number
+  findings: LibraryHealthFinding[]
+  counts: Record<LibraryHealthGroup, number>
+}
+
 export type SortMode = 'name' | 'added'
 
 export type LibraryFilter =
