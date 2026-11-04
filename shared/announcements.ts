@@ -41,6 +41,16 @@ export const WHATS_NEW_PAGES: AnnouncementPage[] = [
     title: 'Document → Project',
     body: 'Open a PDF, IDML, Word, or PowerPoint file. Cuttler groups those fonts into on, in the library but off, or missing. Activate what you have, or create a project from the document.',
   },
+  {
+    id: 'library-search',
+    title: 'Library search',
+    body: 'Type several words — each one has to match. A tag name in the query finds families with that tag.',
+  },
+  {
+    id: 'activate-until-quit',
+    title: 'Activate until quit',
+    body: 'Turn a face on for this session only. Quit the app and it turns back off — unless a project or a normal activate still wants it.',
+  },
 ]
 
 /** Product announcements shown in the main window (welcome-style dialog) after launch. */
