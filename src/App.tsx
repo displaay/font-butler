@@ -26,6 +26,7 @@ import { FolderSetupDialog } from '@/components/FolderSetupDialog'
 import { FontFaceStyles } from '@/components/FontFaceStyles'
 import { FormatDialog } from '@/components/FormatDialog'
 import { ImportPlanDialog } from '@/components/ImportPlanDialog'
+import { LibraryImportDialog } from '@/components/LibraryImportDialog'
 import { Inspector, InspectorTabList, inspectorPaneTabs, type InspectorPaneTab } from '@/components/Inspector'
 import { FamilyTagBatchButton, FamilyTagNameDialog } from '@/components/FamilyTags'
 import { LibraryCard } from '@/components/LibraryCard'
@@ -383,6 +384,8 @@ function AppShell() {
   const [gridPreviewSize, setGridPreviewSize] = useState(readGridPreviewSize)
   const [projects, setProjects] = useState<ProjectSet[]>([])
   const [documentReport, setDocumentReport] = useState<DocumentFontReport | null>(null)
+  const [libraryImportOpen, setLibraryImportOpen] = useState(false)
+  const [libraryImportSession, setLibraryImportSession] = useState(0)
   const [documentBusy, setDocumentBusy] = useState(false)
   const [operations, setOperations] = useState<Operation[]>([])
   const operationsRef = useRef<Operation[]>([])
@@ -2379,6 +2382,10 @@ function AppShell() {
             )
           }
           onOpenDocument={() => void pickAndOpenDocument()}
+          onImportLibrary={() => {
+            setLibraryImportSession((value) => value + 1)
+            setLibraryImportOpen(true)
+          }}
           projectMembershipCounts={projectMembershipCounts}
           onEditSmartProject={(id) => setSmartEditorId(id)}
           onSnapshotProject={(id) => void snapshotSmartProject(id)}
@@ -3364,6 +3371,20 @@ function AppShell() {
               started.length === 1
                 ? `Watching ${watchFolderName(started[0]!.root)}`
                 : `Watching ${started.length} folders`,
+            )
+          }}
+        />
+        <LibraryImportDialog
+          key={libraryImportSession}
+          open={libraryImportOpen}
+          onClose={() => setLibraryImportOpen(false)}
+          onApplied={(result) => {
+            void api.projects().then((next) => setProjects(next.projects)).catch(() => {})
+            void refreshCatalog()
+            toast.success(
+              result.createdProjects.length > 0
+                ? `Imported ${result.createdProjects.join(', ')}`
+                : 'Library import applied',
             )
           }}
         />

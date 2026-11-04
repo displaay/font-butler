@@ -1,4 +1,10 @@
 import type { DocumentFontReport } from '../../shared/document-project.ts'
+import type {
+  LibraryImportApplyResult,
+  LibraryImportFileInput,
+  LibraryImportPlan,
+  LibraryImportSetChoice,
+} from '../../shared/library-import.ts'
 import type { FamilyTag, FamilyTagAssignment } from '../../shared/family-tags.ts'
 import type { SmartRuleSet } from '../../shared/smart-projects.ts'
 import type {
@@ -568,6 +574,10 @@ export const api = {
   activateProject: (id: string) =>
     json<{ succeeded: number; failed: number; failedIds: string[] }>(post('/api/projects/activate', { id })),
   deactivateProject: (id: string) => json<{ ok: boolean }>(post('/api/projects/deactivate', { id })),
+  planLibraryImport: (files: LibraryImportFileInput[]) =>
+    json<{ plan: LibraryImportPlan }>(post('/api/library-import/plan', { files })),
+  applyLibraryImport: (plan: LibraryImportPlan, choices: Record<string, LibraryImportSetChoice>) =>
+    json<{ result: LibraryImportApplyResult }>(post('/api/library-import/apply', { plan, choices })),
   previewMeta: (id: string, which: 'source' | 'installed' | 'revision' = 'installed', revision?: string) =>
     get<{
       faces: CatalogEntry['faces']

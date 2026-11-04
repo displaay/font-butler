@@ -63,6 +63,15 @@ import {
   persistFamilyTagPresence,
   persistNewFamilyTag,
 } from './family-tags.ts'
+import {
+  applyLibraryImportPlan,
+  buildLibraryImportPlan,
+  parseLibraryImportFiles,
+  type LibraryImportApplyResult,
+  type LibraryImportFileInput,
+  type LibraryImportPlan,
+} from './library-import.ts'
+import type { LibraryImportSetChoice } from '../shared/library-import.ts'
 import { unregisterSessionFonts } from './session-fonts.ts'
 import {
   deleteTestInstallFiles,
@@ -3220,6 +3229,32 @@ export class FontButlerService {
     return this.createProject(documentProjectName(report.path, name), draft.memberIds, {
       pins: draft.pins,
       unresolved: draft.unresolved,
+    })
+  }
+
+  planLibraryImport(files: LibraryImportFileInput[]): LibraryImportPlan {
+    const catalog = loadCatalog(this.paths)
+    return buildLibraryImportPlan(
+      parseLibraryImportFiles(files),
+      catalog.entries,
+      loadProjects(this.paths),
+      catalog.tags ?? [],
+    )
+  }
+
+  async applyLibraryImport(
+    plan: LibraryImportPlan,
+    choices: Record<string, LibraryImportSetChoice> = {},
+  ): Promise<LibraryImportApplyResult> {
+    return runCatalogTask(async () => {
+      const result = applyLibraryImportPlan(this.paths, plan, choices)
+      const catalog = loadCatalog(this.paths)
+      emitEvent(catalogEvent(catalog.entries, {
+        tags: catalog.tags ?? [],
+        familyTags: catalog.familyTags ?? [],
+      }))
+      emitEvent({ type: 'projects', projects: loadProjects(this.paths) })
+      return result
     })
   }
 

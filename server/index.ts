@@ -1150,6 +1150,35 @@ app.post('/api/projects/snapshot', async (c) => {
   }
 })
 
+app.post('/api/library-import/plan', async (c) => {
+  const body = await c.req.json<{
+    files?: Array<{ name?: string; content?: string; contentBase64?: string }>
+  }>()
+  const files = (body.files ?? []).map((file) => ({
+    name: typeof file.name === 'string' ? file.name : 'library',
+    content: typeof file.content === 'string' ? file.content : '',
+    ...(typeof file.contentBase64 === 'string' ? { contentBase64: file.contentBase64 } : {}),
+  }))
+  try {
+    return c.json({ plan: service.planLibraryImport(files) })
+  } catch (error) {
+    return c.json(fail(error, 'Could not read that library file'), 400)
+  }
+})
+
+app.post('/api/library-import/apply', async (c) => {
+  const body = await c.req.json<{
+    plan?: Parameters<FontButlerService['applyLibraryImport']>[0]
+    choices?: Record<string, 'create' | 'merge' | 'imported-name' | 'skip'>
+  }>()
+  if (!body.plan) return c.json({ error: 'Missing import plan' }, 400)
+  try {
+    return c.json({ result: await service.applyLibraryImport(body.plan, body.choices ?? {}) })
+  } catch (error) {
+    return c.json(fail(error, 'Could not apply that import'), 400)
+  }
+})
+
 app.post('/api/projects/delete', async (c) => {
   const body = await c.req.json<{ id: string }>()
   await service.deleteProject(body.id)
