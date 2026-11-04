@@ -40,6 +40,7 @@ static const uint32_t kMaxFrame = 2 * 1024 * 1024;
 
 static BOOL g_testFeed = NO;
 static BOOL g_launchedApp = NO;
+static pid_t g_spawnedPid = 0;
 static NSString *const kMissingAppMessage =
     @"Font Buttler couldn't be found. Open it once from its new location.";
 static const off_t kPendingErrorMaxBytes = 8192;
@@ -47,6 +48,9 @@ static const NSUInteger kPendingErrorMaxEntries = 5;
 // Shorter than the XPC client's submit wait. A reply after that wait is
 // reported as "connection invalidated" because the client drops the connection.
 static const NSTimeInterval kForwardAfterSpawnSeconds = 20;
+// The client waits 35s. While the Cuttler spawned for this handoff is still
+// alive, keep trying until just before that. A dead process is not starting.
+static const NSTimeInterval kForwardWhileStartingSeconds = 32;
 
 static BOOL FinderSyncErrorCodeIsKnown(NSString *code) {
   return [code isEqualToString:@"missing-app"] || [code isEqualToString:@"not-running"] ||
@@ -359,7 +363,16 @@ static BOOL SpawnExecutable(NSString *binary) {
   int result = posix_spawn(&pid, owned, NULL, &attr, argv, environ);
   posix_spawnattr_destroy(&attr);
   free(owned);
+  if (result == 0 && pid > 0) g_spawnedPid = pid;
   return result == 0 && pid > 0;
+}
+
+// The helper ignores SIGCHLD, so a child that has exited is not a zombie.
+// kill with signal 0 only asks whether that spawned pid is still there.
+static BOOL SpawnedProcessIsAlive(void) {
+  if (g_spawnedPid <= 0) return NO;
+  if (kill(g_spawnedPid, 0) == 0) return YES;
+  return errno == EPERM;
 }
 
 // One spawn for this click. The next submit resets g_launchedApp and may try
@@ -476,18 +489,24 @@ static BOOL AncestorHasBundleIdentifier(NSString *path, NSString *expected) {
   return NO;
 }
 
+// The socket peer has to be this helper's containing app. The XPC peer is the
+// Finder Sync appex or the Mac check client, not Electron. An installed
+// Font Buttler.app with the same bundle id is a different path and does not
+// satisfy a handoff whose helper lives in release Cuttler.app.
 static BOOL ParentExecutableMatches(int fd) {
   NSString *expected = ExpectedParentBundleIdentifier();
   if (!expected.length) return NO;
-  if (AncestorHasBundleIdentifier(PeerKernelPath(fd), expected)) return YES;
+  NSURL *appURL = ContainingAppURL();
+  if (![BundleIdentifierOfApp(appURL.path) isEqualToString:expected]) return NO;
+  NSString *kernel = PeerKernelPath(fd);
+  if (PathIsInsideApp(kernel, appURL.path) && AncestorHasBundleIdentifier(kernel, expected)) return YES;
   NSString *path = nil;
   NSString *identifier = nil;
   if (!PeerSigningFacts(fd, &path, &identifier)) return NO;
+  if (!PathIsInsideApp(path, appURL.path)) return NO;
   if ([identifier isEqualToString:expected]) return YES;
   if (AncestorHasBundleIdentifier(path, expected)) return YES;
-  NSURL *appURL = ContainingAppURL();
-  if (!PathIsInsideApp(path, appURL.path)) return NO;
-  return [BundleIdentifierOfApp(appURL.path) isEqualToString:expected];
+  return YES;
 }
 
 static NSString *RunningProductName(void) {
@@ -583,6 +602,7 @@ static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL over
   NSString *request = [requestId isKindOfClass:[NSString class]] ? requestId : @"";
   dispatch_async(self.forwardQueue, ^{
     g_launchedApp = NO;
+    g_spawnedPid = 0;
     if (!known) {
       ReportFinderSyncError(reply, @"unknown-action", @"Unknown Finder Sync action.");
       return;
@@ -596,10 +616,12 @@ static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL over
       }
     }
     NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:kForwardAfterSpawnSeconds];
+    NSDate *startingDeadline = [NSDate dateWithTimeIntervalSinceNow:kForwardWhileStartingSeconds];
     BOOL launched = NO;
     while (YES) {
       if (ForwardToApp(wire, accepted, overflow, request)) {
         g_launchedApp = NO;
+        g_spawnedPid = 0;
         if (reply) reply(nil);
         return;
       }
@@ -611,7 +633,10 @@ static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL over
           return;
         }
       }
-      if ([deadline timeIntervalSinceNow] <= 0) break;
+      // A live child is still starting. A dead one, or no child, stops at
+      // the shorter deadline so the XPC client still receives a reply.
+      if ([deadline timeIntervalSinceNow] <= 0 && !SpawnedProcessIsAlive()) break;
+      if ([startingDeadline timeIntervalSinceNow] <= 0) break;
       usleep(50 * 1000);
     }
     ReportFinderSyncError(reply, @"not-running", NotRunningMessage());

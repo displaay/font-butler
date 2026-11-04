@@ -104,6 +104,9 @@ import {
   planFinderSyncAgentRegistration,
   planFinderSyncRegistration,
   prepareFinderSyncSocket,
+  claimSameExecutableInstance,
+  releaseSameExecutableInstance,
+  sameExecutableLockPath,
   readFinderSyncAgentRecord,
   readFinderSyncPendingErrorFile,
   readFinderSyncPendingErrors,
@@ -1245,9 +1248,47 @@ test('the handoff finds Cuttler.app and the zip Font Buttler.app that contain th
   assert.match(agent, /kSecCodeInfoIdentifier/)
   assert.match(agent, /CFBundleIdentifier/)
   assert.match(agent, /AncestorHasBundleIdentifier/)
+  assert.match(agent, /SpawnedProcessIsAlive/)
+  assert.match(agent, /kForwardWhileStartingSeconds = 32/)
+  const parentMatch = agent.slice(
+    agent.indexOf('static BOOL ParentExecutableMatches'),
+    agent.indexOf('static NSString *RunningProductName'),
+  )
+  assert.match(parentMatch, /PathIsInsideApp\(kernel, appURL\.path\)/)
+  assert.match(parentMatch, /ContainingAppURL\(\)/)
+  assert.doesNotMatch(parentMatch, /setCodeSigningRequirement/)
   assert.doesNotMatch(agent, /SecStaticCodeCheckValidity/)
   assert.doesNotMatch(agent, /kSecCSBasicValidateOnly/)
   assert.match(agent, /kForwardAfterSpawnSeconds = 20/)
+  const mainSource = readRepo('electron/main.mjs')
+  assert.match(mainSource, /claimSameExecutableInstance/)
+  assert.match(mainSource, /if \(!instance\.held\)/)
+  assert.doesNotMatch(mainSource.slice(mainSource.indexOf('const instance = claimSameExecutableInstance')), /if \(!gotLock\) \{\s*app\.quit\(\)/)
+  const lockDir = mkdtempSync(path.join(tmpdir(), 'font-butler-instance-'))
+  try {
+    const releaseExe = path.join(lockDir, 'release', 'Cuttler.app', 'Contents', 'MacOS', 'Cuttler')
+    const installedExe = path.join(lockDir, 'Applications', 'Font Buttler.app', 'Contents', 'MacOS', 'Font Buttler')
+    const releaseLock = sameExecutableLockPath(releaseExe, path.join(lockDir, 'locks'))
+    const installedLock = sameExecutableLockPath(installedExe, path.join(lockDir, 'locks'))
+    assert.notEqual(releaseLock, installedLock)
+    const io = { mkdirSync, writeFileSync, readFileSync, unlinkSync }
+    const first = claimSameExecutableInstance({ lockPath: releaseLock, pid: 38897, isAlive: () => true, io })
+    assert.equal(first.held, true)
+    assert.equal(first.reason, 'created')
+    const second = claimSameExecutableInstance({ lockPath: releaseLock, pid: 38899, isAlive: (pid) => pid === 38897, io })
+    assert.equal(second.held, false)
+    assert.equal(second.reason, 'running')
+    const other = claimSameExecutableInstance({ lockPath: installedLock, pid: 97188, isAlive: () => true, io })
+    assert.equal(other.held, true)
+    const replaced = claimSameExecutableInstance({ lockPath: releaseLock, pid: 40000, isAlive: () => false, io })
+    assert.equal(replaced.held, true)
+    assert.equal(replaced.reason, 'replaced')
+    assert.equal(releaseSameExecutableInstance({ lockPath: releaseLock, pid: 38899, io }), false)
+    assert.equal(releaseSameExecutableInstance({ lockPath: releaseLock, pid: 40000, io }), true)
+    assert.equal(existsSync(releaseLock), false)
+  } finally {
+    rmSync(lockDir, { recursive: true, force: true })
+  }
   assert.match(readRepo('macos/FinderSyncAgent/FinderSyncPingClient.mm'), /submit \? 35/)
   assert.match(agent, /is not running\./)
   assert.doesNotMatch(agent, /@"Font Buttler is not running\."/)

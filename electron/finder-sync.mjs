@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { closeSync, constants as fsConstants, existsSync, fstatSync, openSync, readFileSync, readSync } from 'node:fs'
+import { closeSync, constants as fsConstants, existsSync, fstatSync, openSync, readFileSync, readSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 import { FINDER_INSTALL_AS, isClaimedFontPath } from './finder-install.mjs'
 import { TEST_FEED_USER_DATA_DIR } from './test-feed-data.mjs'
@@ -337,6 +337,88 @@ export function finderSyncProductDisplayName(appPath) {
 
 export function finderSyncNotRunningMessage(appPath) {
   return `${finderSyncProductDisplayName(appPath)} is not running.`
+}
+
+/**
+ * Lock file for one executable path. Font Buttler.app and
+ * release/mac-arm64/Cuttler.app share Electron's userData lock, so that
+ * lock cannot tell them apart.
+ */
+export function sameExecutableLockPath(exePath, directory) {
+  let resolved = path.resolve(String(exePath ?? ''))
+  try {
+    resolved = realpathSync(resolved)
+  } catch {
+    // The path is not on disk yet. The unresolved path still separates two apps.
+  }
+  const digest = createHash('sha256').update(resolved).digest('hex').slice(0, 32)
+  return path.join(directory, digest)
+}
+
+/**
+ * Claim this executable. A live owner keeps the claim. A dead owner's file
+ * is replaced. A different executable has a different path and does not block.
+ */
+export function claimSameExecutableInstance({ lockPath, pid, isAlive, io } = {}) {
+  const writeFileSync = io?.writeFileSync
+  const readFileSync = io?.readFileSync
+  const unlinkSync = io?.unlinkSync
+  const mkdirSync = io?.mkdirSync
+  if (!lockPath || !writeFileSync || !readFileSync || !unlinkSync || !mkdirSync) {
+    return { held: false, reason: 'unavailable' }
+  }
+  const owner = Number(pid)
+  if (!Number.isInteger(owner) || owner <= 0) return { held: false, reason: 'pid' }
+  mkdirSync(path.dirname(lockPath), { recursive: true, mode: 0o700 })
+  const body = `${owner}\n`
+  const create = () => {
+    writeFileSync(lockPath, body, { flag: 'wx', mode: 0o600 })
+  }
+  try {
+    create()
+    return { held: true, reason: 'created' }
+  } catch (error) {
+    if (error?.code !== 'EEXIST') return { held: false, reason: 'create-failed' }
+  }
+  let recorded = 0
+  try {
+    recorded = Number.parseInt(String(readFileSync(lockPath, 'utf8')), 10)
+  } catch {
+    recorded = 0
+  }
+  if (typeof isAlive === 'function' && isAlive(recorded) === true) return { held: false, reason: 'running' }
+  try {
+    unlinkSync(lockPath)
+  } catch {
+    return { held: false, reason: 'busy' }
+  }
+  try {
+    create()
+    return { held: true, reason: 'replaced' }
+  } catch (error) {
+    if (error?.code === 'EEXIST') return { held: false, reason: 'running' }
+    return { held: false, reason: 'create-failed' }
+  }
+}
+
+/** Drop the claim only when this pid still owns the file. */
+export function releaseSameExecutableInstance({ lockPath, pid, io } = {}) {
+  const readFileSync = io?.readFileSync
+  const unlinkSync = io?.unlinkSync
+  if (!lockPath || !readFileSync || !unlinkSync) return false
+  let recorded = ''
+  try {
+    recorded = String(readFileSync(lockPath, 'utf8')).trim()
+  } catch {
+    return false
+  }
+  if (recorded !== String(pid)) return false
+  try {
+    unlinkSync(lockPath)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /** Fixed copy for a known Finder Sync error code. Anything else is empty. */

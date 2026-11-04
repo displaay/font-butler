@@ -61,6 +61,9 @@ import {
   readFinderSyncAgentRecord,
   readFinderSyncPendingErrorFile,
   finderSyncProductDisplayName,
+  claimSameExecutableInstance,
+  releaseSameExecutableInstance,
+  sameExecutableLockPath,
   routeFinderSyncError,
   refreshFinderSyncRegistration,
   revalidateFinderSyncHandles,
@@ -2341,8 +2344,32 @@ if (process.argv.includes('--finder-sync-agent-status')) {
     reportFinderSyncAgentStatus()
   })
 } else {
+// Electron's lock follows userData, which Cuttler and the installed Font
+// Buttler.app share. A Mac check against release/mac-arm64/Cuttler.app must
+// still start that binary. A second process of the same executable quits.
+const instanceLockPath = sameExecutableLockPath(process.execPath, path.join(app.getPath('temp'), 'font-butler-instance'))
+const instance = claimSameExecutableInstance({
+  lockPath: instanceLockPath,
+  pid: process.pid,
+  isAlive(pid) {
+    if (!Number.isInteger(pid) || pid <= 0) return false
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch (error) {
+      return error?.code === 'EPERM'
+    }
+  },
+  io: fs,
+})
+if (instance.held) {
+  const releaseInstance = () => {
+    releaseSameExecutableInstance({ lockPath: instanceLockPath, pid: process.pid, io: fs })
+  }
+  process.on('exit', releaseInstance)
+}
 const gotLock = app.requestSingleInstanceLock()
-if (!gotLock) {
+if (!instance.held) {
   app.quit()
 } else {
   app.on('will-finish-launching', () => {
