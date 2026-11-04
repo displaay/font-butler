@@ -54,6 +54,7 @@ napi_status napi_create_threadsafe_function(napi_env env, napi_value func, napi_
                                             napi_threadsafe_function *result);
 napi_status napi_call_threadsafe_function(napi_threadsafe_function func, void *data,
                                           napi_threadsafe_function_call_mode is_blocking);
+napi_status napi_acquire_threadsafe_function(napi_threadsafe_function func);
 napi_status napi_release_threadsafe_function(napi_threadsafe_function func, napi_threadsafe_function_release_mode mode);
 napi_status napi_unref_threadsafe_function(napi_env env, napi_threadsafe_function func);
 napi_status napi_call_function(napi_env env, napi_value recv, napi_value func, size_t argc, const napi_value *argv,
@@ -309,21 +310,27 @@ static void DispatchHandoff(NSString *action, NSArray<NSString *> *paths, bool o
   NSLock *lock = HandoffLock();
   [lock lock];
   napi_threadsafe_function tsfn = g_tsfn;
-  if (!tsfn) {
-    if (!g_queued) g_queued = [NSMutableArray array];
-    [g_queued addObject:@{
-      @"action" : action ?: @"",
-      @"paths" : overflow ? @[] : (paths ?: @[]),
-      @"overflow" : @(overflow),
-      @"requestId" : requestId ?: @"",
-      @"userError" : userError ?: @"",
-    }];
+  // Copy and acquire while the lock is held. The call below runs after
+  // unlock, so a later register cannot release this function first.
+  BOOL acquired = tsfn && napi_acquire_threadsafe_function(tsfn) == napi_ok;
+  if (!acquired) {
+    if (!tsfn) {
+      if (!g_queued) g_queued = [NSMutableArray array];
+      [g_queued addObject:@{
+        @"action" : action ?: @"",
+        @"paths" : overflow ? @[] : (paths ?: @[]),
+        @"overflow" : @(overflow),
+        @"requestId" : requestId ?: @"",
+        @"userError" : userError ?: @"",
+      }];
+    }
     [lock unlock];
     return;
   }
   [lock unlock];
   HandoffCall *call = HandoffCallCreate(action, paths, overflow, requestId, userError);
   if (call) napi_call_threadsafe_function(tsfn, call, napi_tsfn_blocking);
+  napi_release_threadsafe_function(tsfn, napi_tsfn_release);
 }
 
 static int g_listenFd = -1;
@@ -670,26 +677,37 @@ static napi_value Register(napi_env env, napi_callback_info info) {
 
   StartSocket();
 
+  // Startup calls this from the first launch, will-finish-launching, and
+  // whenReady. The first callback stays installed. Releasing g_tsfn here
+  // would race DispatchHandoff, which calls the function after unlocking.
+  NSLock *lock = HandoffLock();
+  [lock lock];
   if (g_tsfn) {
-    napi_release_threadsafe_function(g_tsfn, napi_tsfn_release);
-    g_tsfn = nullptr;
+    [lock unlock];
+    return undefined;
   }
+  [lock unlock];
 
   napi_value resource_name;
   napi_create_string_utf8(env, "FontButlerFinderSyncReceiver", NAPI_AUTO_LENGTH, &resource_name);
   napi_threadsafe_function created = nullptr;
   napi_create_threadsafe_function(env, argv[0], nullptr, resource_name, 0, 1, nullptr, nullptr, nullptr, CallJs, &created);
-  if (created) napi_unref_threadsafe_function(env, created);
+  if (!created) return undefined;
+  napi_unref_threadsafe_function(env, created);
 
-  NSLock *lock = HandoffLock();
   [lock lock];
+  if (g_tsfn) {
+    [lock unlock];
+    napi_release_threadsafe_function(created, napi_tsfn_release);
+    return undefined;
+  }
   g_tsfn = created;
   NSArray<NSDictionary *> *queued = g_queued;
   g_queued = nil;
   [lock unlock];
   for (NSDictionary *item in queued) {
     HandoffCall *call = HandoffCallCreate(item[@"action"], item[@"paths"], [item[@"overflow"] boolValue], item[@"requestId"], item[@"userError"]);
-    if (call && g_tsfn) napi_call_threadsafe_function(g_tsfn, call, napi_tsfn_blocking);
+    if (call) napi_call_threadsafe_function(created, call, napi_tsfn_blocking);
     else HandoffCallDestroy(call);
   }
   return undefined;

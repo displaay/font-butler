@@ -1,5 +1,24 @@
 import assert from 'node:assert/strict'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import {
+  closeSync,
+  constants as fsConstants,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  readSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+  writeSync,
+} from 'node:fs'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -951,6 +970,167 @@ test('Finder Sync resolves /tmp and /var, caps the selection, and rechecks the o
   assert.equal(changed.ok, false)
   assert.equal(changed.reason, FINDER_SYNC_CHANGED_BEFORE_INSTALL)
   raced.close()
+})
+
+function fontFileStat(extra) {
+  return { ...fontStat('file'), dev: 1, ino: 4, ...extra }
+}
+
+function bytesAt(body) {
+  return (fd, length, position = 0) => {
+    const start = position ?? 0
+    return body.subarray(start, start + length)
+  }
+}
+
+function descriptorIo() {
+  const fileFlags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0)
+  return {
+    lstatSync,
+    readlinkSync,
+    readdirSync,
+    openSync(filePath, directory) {
+      const flags = directory && fsConstants.O_DIRECTORY ? fileFlags | fsConstants.O_DIRECTORY : fileFlags
+      return openSync(filePath, flags)
+    },
+    closeSync,
+    fstatSync,
+    readAt(fd, length, position = 0) {
+      const buffer = Buffer.alloc(length)
+      const bytes = readSync(fd, buffer, 0, length, position ?? 0)
+      return buffer.subarray(0, bytes)
+    },
+  }
+}
+
+test('an in-place rewrite keeps the inode and is refused before install', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'font-butler-rewrite-'))
+  const io = descriptorIo()
+  let selected = null
+  try {
+    const filePath = path.join(dir, 'Sample.otf')
+    const original = Buffer.alloc(64 * 1024 + 8)
+    original.write('OTTO')
+    original[original.length - 1] = 1
+    writeFileSync(filePath, original)
+    const before = lstatSync(filePath)
+    selected = validateFinderSyncSelection([filePath], io)
+    assert.deepEqual(selected.paths, [filePath])
+    assert.equal(selected.handles.length, 1)
+    assert.equal(selected.handles[0].dev, before.dev)
+    assert.equal(selected.handles[0].ino, before.ino)
+    assert.equal(selected.handles[0].size, original.length)
+    assert.equal(selected.handles[0].fingerprint, createHash('sha256').update(original).digest('hex'))
+    assert.equal(revalidateFinderSyncHandles(selected.handles, io).ok, true)
+
+    const rewritten = Buffer.from(original)
+    rewritten[rewritten.length - 1] = 2
+    const fd = openSync(filePath, 'r+')
+    try {
+      assert.equal(writeSync(fd, rewritten, 0, rewritten.length, 0), rewritten.length)
+    } finally {
+      closeSync(fd)
+    }
+    const after = lstatSync(filePath)
+    assert.equal(after.dev, before.dev)
+    assert.equal(after.ino, before.ino)
+    assert.equal(after.size, before.size)
+    const changed = revalidateFinderSyncHandles(selected.handles, io)
+    assert.equal(changed.ok, false)
+    assert.equal(changed.reason, FINDER_SYNC_CHANGED_BEFORE_INSTALL)
+  } finally {
+    selected?.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+
+  assert.match(
+    readRepo('electron/main.mjs'),
+    /readAt\(fd, length, position = 0\) \{[\s\S]*?readSync\(fd, buffer, 0, length, position \?\? 0\)/,
+  )
+})
+
+test('a reopened font grown past 2 GB is refused when the held inode still matches', () => {
+  const original = Buffer.concat([Buffer.from('OTTO'), Buffer.from('AAAA')])
+  const rewritten = Buffer.concat([Buffer.from('OTTO'), Buffer.from('BBBB')])
+  const selected = validateFinderSyncSelection(['/Fonts/A.otf'], {
+    lstatSync: () => fontFileStat({ size: original.length }),
+    openSync: () => 4,
+    closeSync() {},
+    fstatSync: () => fontFileStat({ size: original.length }),
+    readAt: bytesAt(original),
+  })
+  assert.equal(selected.handles[0].fingerprint, createHash('sha256').update(original).digest('hex'))
+  const held = selected.handles[0].fd
+  try {
+    const sameInodeRewrite = revalidateFinderSyncHandles(selected.handles, {
+      openSync: () => 9,
+      closeSync() {},
+      fstatSync: () => fontFileStat({ size: original.length }),
+      readAt(fd, length, position = 0) {
+        return bytesAt(fd === held ? original : rewritten)(fd, length, position)
+      },
+    })
+    assert.equal(sameInodeRewrite.ok, false)
+    assert.equal(sameInodeRewrite.reason, FINDER_SYNC_CHANGED_BEFORE_INSTALL)
+
+    const grown = revalidateFinderSyncHandles(selected.handles, {
+      openSync: () => 9,
+      closeSync() {},
+      fstatSync(fd) {
+        const size = fd === held ? original.length : FINDER_SYNC_MAX_BYTES + 1
+        return fontFileStat({ size })
+      },
+      readAt: bytesAt(original),
+    })
+    assert.equal(grown.ok, false)
+    assert.equal(grown.reason, FINDER_SYNC_TOO_LARGE)
+
+    const heldGrown = revalidateFinderSyncHandles(selected.handles, {
+      openSync: () => 9,
+      closeSync() {},
+      fstatSync: () => fontFileStat({ size: FINDER_SYNC_MAX_BYTES + 1 }),
+      readAt: bytesAt(original),
+    })
+    assert.equal(heldGrown.ok, false)
+    assert.equal(heldGrown.reason, FINDER_SYNC_TOO_LARGE)
+  } finally {
+    selected.close()
+  }
+})
+
+function nativeFunction(source, signature) {
+  const start = source.indexOf(signature)
+  assert.notEqual(start, -1, signature)
+  const next = source.indexOf('\nstatic ', start + signature.length)
+  assert.notEqual(next, -1, signature)
+  return source.slice(start, next)
+}
+
+test('Finder Sync receiver registration does not release a live handoff', () => {
+  const receiver = readRepo('electron/finder-sync-receiver.mm')
+  const dispatch = nativeFunction(receiver, 'static void DispatchHandoff(')
+  const register = nativeFunction(receiver, 'static napi_value Register(')
+  const acquireAt = dispatch.indexOf('napi_acquire_threadsafe_function(tsfn)')
+  const unlockAt = dispatch.indexOf('[lock unlock]')
+  const callAt = dispatch.indexOf('napi_call_threadsafe_function(tsfn, call, napi_tsfn_blocking)')
+  const releaseAt = dispatch.indexOf('napi_release_threadsafe_function(tsfn, napi_tsfn_release)')
+  assert.ok(acquireAt !== -1 && acquireAt < unlockAt)
+  assert.ok(callAt > unlockAt)
+  assert.ok(releaseAt > callAt)
+  assert.match(dispatch, /HandoffLock\(\)/)
+  assert.doesNotMatch(dispatch, /napi_release_threadsafe_function\(g_tsfn/)
+  assert.doesNotMatch(receiver, /napi_release_threadsafe_function\(g_tsfn/)
+  assert.match(register, /if \(g_tsfn\) \{\n\s+\[lock unlock\];\n\s+return undefined;\n\s+\}/)
+  assert.match(
+    register,
+    /if \(g_tsfn\) \{\n\s+\[lock unlock\];\n\s+napi_release_threadsafe_function\(created, napi_tsfn_release\);/,
+  )
+  const installed = register.indexOf('g_tsfn = created')
+  const flush = register.indexOf('napi_call_threadsafe_function(created, call, napi_tsfn_blocking)')
+  assert.ok(installed !== -1 && flush > installed)
+  assert.doesNotMatch(register.slice(installed), /napi_call_threadsafe_function\(g_tsfn/)
+  assert.match(readRepo('electron/main.mjs'), /will-finish-launching/)
+  assert.match(readRepo('electron/main.mjs'), /registerFinderSyncReceiver\(\{ surface: true \}\)/)
 })
 
 test('a stale socket is replaced only when this user owns it, then another bind works', async () => {

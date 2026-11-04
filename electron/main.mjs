@@ -1028,9 +1028,9 @@ function finderSyncIo() {
     fstatSync(fd) {
       return fs.fstatSync(fd)
     },
-    readAt(fd, length) {
+    readAt(fd, length, position = 0) {
       const buffer = Buffer.alloc(length)
-      const bytes = fs.readSync(fd, buffer, 0, length, 0)
+      const bytes = fs.readSync(fd, buffer, 0, length, position ?? 0)
       return buffer.subarray(0, bytes)
     },
     readPrefix(filePath, length) {

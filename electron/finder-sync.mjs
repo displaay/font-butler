@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { closeSync, constants as fsConstants, fstatSync, openSync, readSync } from 'node:fs'
 import path from 'node:path'
 import { FINDER_INSTALL_AS, isClaimedFontPath } from './finder-install.mjs'
@@ -898,7 +899,7 @@ function limitMessage(limit) {
  * Font files must be regular files with font magic. Folders are accepted and
  * measured so a directory cannot skip the file and byte caps. Symlinks are
  * refused except the standard `/tmp` and `/var` links. An open descriptor is
- * held so the install can confirm the same inode.
+ * held so the install can confirm the same inode and the same bytes.
  */
 export function validateFinderSyncSelection(filePaths, io) {
   const selection = []
@@ -948,13 +949,25 @@ export function validateFinderSyncSelection(filePaths, io) {
       if (inspected.handle) handles.push(inspected.handle)
       continue
     }
+    const addedBytes = Number(inspected.size) || 0
     state.files += 1
-    state.bytes += Number(inspected.size) || 0
+    state.bytes += addedBytes
     if (state.files > FINDER_SYNC_MAX_FILES || state.bytes > FINDER_SYNC_MAX_BYTES) {
       closeHandle(io, inspected.handle)
       closeHandles(io, handles)
       const limit = state.bytes > FINDER_SYNC_MAX_BYTES && state.files <= FINDER_SYNC_MAX_FILES ? 'bytes' : 'files'
       return emptySelection(rejected, limitMessage(limit))
+    }
+    if (inspected.handle?.kind === 'file') {
+      const fingerprint = fingerprintFd(io, inspected.handle.fd, inspected.handle.size)
+      if (!fingerprint) {
+        closeHandle(io, inspected.handle)
+        state.files -= 1
+        state.bytes -= addedBytes
+        rejected.push({ path: filePath, reason: 'Not a font file.' })
+        continue
+      }
+      inspected.handle.fingerprint = fingerprint
     }
     paths.push(inspected.path)
     if (inspected.handle) handles.push(inspected.handle)
@@ -971,10 +984,55 @@ export function validateFinderSyncSelection(filePaths, io) {
   }
 }
 
+const FINGERPRINT_CHUNK = 64 * 1024
+
+function fileByteSize(value) {
+  const size = typeof value === 'number' ? value : Number(value)
+  if (!Number.isSafeInteger(size) || size < 0) return null
+  return size
+}
+
+/** SHA-256 of exactly `size` bytes from an already-open descriptor. */
+function fingerprintFd(io, fd, size) {
+  const bytes = fileByteSize(size)
+  if (fd == null || bytes == null || typeof io?.readAt !== 'function') return null
+  const hash = createHash('sha256')
+  let offset = 0
+  while (offset < bytes) {
+    const want = Math.min(FINGERPRINT_CHUNK, bytes - offset)
+    let chunk
+    try {
+      chunk = io.readAt(fd, want, offset)
+    } catch {
+      return null
+    }
+    if (!chunk || chunk.length !== want) return null
+    hash.update(chunk)
+    offset += want
+  }
+  return hash.digest('hex')
+}
+
 /**
- * Confirm each held descriptor still names the same file, then reopen that
- * path with O_NOFOLLOW and compare inodes. A swap between the check and the
- * install is refused.
+ * An in-place rewrite keeps the device and inode. Compare the recorded size
+ * and content fingerprint, and refuse a file that has grown past 2 GB.
+ * Returns a user-facing reason, or null when the descriptor still matches.
+ */
+function refuseRewrittenFile(io, fd, current, handle) {
+  const size = fileByteSize(current?.size)
+  const recorded = fileByteSize(handle?.size)
+  if (size != null && size > FINDER_SYNC_MAX_BYTES) return FINDER_SYNC_TOO_LARGE
+  if (size == null || recorded == null || size !== recorded) return FINDER_SYNC_CHANGED_BEFORE_INSTALL
+  const fingerprint = fingerprintFd(io, fd, size)
+  if (!fingerprint || fingerprint !== handle.fingerprint) return FINDER_SYNC_CHANGED_BEFORE_INSTALL
+  return null
+}
+
+/**
+ * Confirm each held descriptor still names the same file and the same bytes,
+ * then reopen that path with O_NOFOLLOW and compare the inode, size, and
+ * content fingerprint. A swap or an in-place rewrite between the check and
+ * the install is refused.
  */
 export function revalidateFinderSyncHandles(handles, io) {
   for (const handle of handles ?? []) {
@@ -994,6 +1052,10 @@ export function revalidateFinderSyncHandles(handles, io) {
     if (current.dev !== handle.dev || current.ino !== handle.ino) {
       return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL }
     }
+    if (!directory) {
+      const refused = refuseRewrittenFile(io, handle.fd, current, handle)
+      if (refused) return { ok: false, reason: refused }
+    }
     let reopened
     try {
       reopened = io.openSync(handle.path, directory)
@@ -1006,6 +1068,8 @@ export function revalidateFinderSyncHandles(handles, io) {
         return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL }
       }
       if (!directory) {
+        const refused = refuseRewrittenFile(io, reopened, again, handle)
+        if (refused) return { ok: false, reason: refused }
         const header = headerFromIo(handle.path, io, reopened)
         if (header?.error || !magicMatchesExtension(fontExtension(handle.path), fontMagicKind(header))) {
           return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL }
