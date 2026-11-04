@@ -1872,6 +1872,63 @@ export class FontButlerService {
     return result
   }
 
+  /**
+   * Combined Settings maintenance action: the confirmed user-font clear
+   * plus the Office/Adobe clears selected by their Settings toggles.
+   * Each part's result is returned, so a failure in one part is reported
+   * alongside the others instead of hiding them.
+   */
+  async clearAllFontCaches(options: { confirm?: boolean } = {}): Promise<{
+    mac: boolean
+    cleared: boolean
+    simulated?: boolean
+    confirmed: boolean
+    logoutProbe?: boolean
+    parts: Array<{
+      part: 'user' | 'office' | 'adobe'
+      status: 'cleared' | 'not-cleared' | 'skipped' | 'failed'
+      mac: boolean
+      cleared: boolean
+      simulated?: boolean
+      error?: string
+    }>
+  }> {
+    if (options.confirm !== true) {
+      throw new Error(
+        'Clearing font caches needs confirmation. Some apps may not see new or updated fonts until you log out.',
+      )
+    }
+    const settings = loadSettings(this.paths)
+    const result = await getFontNative().clearAllFontCaches({
+      confirm: true,
+      office: settings.clearOfficeFontCache,
+      adobe: settings.clearAdobeFontCache,
+    })
+    const labels: Record<string, string> = {
+      user: 'macOS user font cache',
+      office: 'Microsoft Office font cache',
+      adobe: 'Adobe font caches',
+    }
+    const failed = result.parts.filter((part) => part.status === 'failed')
+    const cleared = result.parts.filter((part) => part.status === 'cleared')
+    emitNotice({
+      kind: failed.length ? 'error' : 'info',
+      message: failed.length
+        ? `Some font caches were not cleared: ${failed
+            .map((part) => `${labels[part.part] ?? part.part}${part.error ? ` (${part.error})` : ''}`)
+            .join('; ')}. Open apps may need to be relaunched to see updated fonts.`
+        : cleared.length
+          ? `Cleared ${cleared.map((part) => labels[part.part] ?? part.part).join(', ')}. Open apps may need to be relaunched to see updated fonts.`
+          : result.mac
+            ? 'No font caches were found to clear.'
+            : 'Font cache clearing is available on macOS.',
+    })
+    if (cacheClearLogoutProbe(result, loadBuildIdentity())) {
+      return { ...result, logoutProbe: true }
+    }
+    return result
+  }
+
   async requestLogout(): Promise<{
     requested: boolean
     cancelled?: boolean

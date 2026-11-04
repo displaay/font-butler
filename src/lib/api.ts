@@ -372,6 +372,22 @@ export const api = {
     json<{ mac: boolean; cleared: boolean; simulated?: boolean; logoutProbe?: boolean }>(
       post('/api/caches/font', { confirm: true }),
     ),
+  clearAllFontCaches: () =>
+    json<{
+      mac: boolean
+      cleared: boolean
+      simulated?: boolean
+      confirmed: boolean
+      logoutProbe?: boolean
+      parts: Array<{
+        part: 'user' | 'office' | 'adobe'
+        status: 'cleared' | 'not-cleared' | 'skipped' | 'failed'
+        mac: boolean
+        cleared: boolean
+        simulated?: boolean
+        error?: string
+      }>
+    }>(post('/api/caches/all', { confirm: true })),
   requestLogout: () =>
     json<{ requested: boolean; cancelled?: boolean; message?: string; error?: string }>(
       post('/api/session/logout', {}),

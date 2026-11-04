@@ -1,9 +1,11 @@
 import path from 'node:path'
 import {
   clearAdobeFontCache as realClearAdobeFontCache,
+  clearAllFontCaches as realClearAllFontCaches,
   clearFontCaches as realClearFontCaches,
   clearOfficeFontCache as realClearOfficeFontCache,
   clearUserFontCache as realClearUserFontCache,
+  type ClearAllFontCachesResult,
   fontActivationStates as realFontActivationStates,
   registerFont as realRegisterFont,
   setFontEnabled as realSetFontEnabled,
@@ -38,6 +40,8 @@ export type FontCachesResult = {
   adobe: boolean
 }
 
+export type { ClearAllFontCachesResult, FontCachePartResult } from './caches.ts'
+
 export type FontNative = {
   registerFont(filePath: string): Promise<NativeEnableResult>
   unregisterFont(filePath: string): Promise<NativeEnableResult>
@@ -48,6 +52,11 @@ export type FontNative = {
   clearOfficeFontCache(): Promise<CacheClearResult>
   clearAdobeFontCache(): Promise<CacheClearResult>
   clearFontCaches(options?: { office?: boolean; adobe?: boolean }): Promise<FontCachesResult>
+  clearAllFontCaches(options?: {
+    confirm?: boolean
+    office?: boolean
+    adobe?: boolean
+  }): Promise<ClearAllFontCachesResult>
 }
 
 export function noopFontNative(overrides: Partial<FontNative> = {}): FontNative {
@@ -78,6 +87,29 @@ export function noopFontNative(overrides: Partial<FontNative> = {}): FontNative 
     async clearFontCaches() {
       return { mac: false, office: false, adobe: false }
     },
+    async clearAllFontCaches(options) {
+      const confirmed = options?.confirm === true
+      return {
+        mac: false,
+        cleared: false,
+        confirmed,
+        parts: [
+          { part: 'user', status: confirmed ? 'not-cleared' : 'skipped', mac: false, cleared: false },
+          {
+            part: 'office',
+            status: options?.office === false ? 'skipped' : confirmed ? 'not-cleared' : 'skipped',
+            mac: false,
+            cleared: false,
+          },
+          {
+            part: 'adobe',
+            status: options?.adobe === false ? 'skipped' : confirmed ? 'not-cleared' : 'skipped',
+            mac: false,
+            cleared: false,
+          },
+        ],
+      }
+    },
     ...overrides,
   }
 }
@@ -93,6 +125,7 @@ export function realFontNative(): FontNative {
     clearOfficeFontCache: realClearOfficeFontCache,
     clearAdobeFontCache: realClearAdobeFontCache,
     clearFontCaches: realClearFontCaches,
+    clearAllFontCaches: realClearAllFontCaches,
   }
 }
 

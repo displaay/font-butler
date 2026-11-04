@@ -510,6 +510,52 @@ test('a simulated font-cache clear does not say the cache was removed', async ()
   }
 })
 
+test('clearAllFontCaches needs confirmation and passes the Settings toggles on', async () => {
+  const paths = tempPaths()
+  fs.writeFileSync(
+    paths.settingsPath,
+    JSON.stringify({ version: 1, clearAdobeFontCache: false }),
+  )
+  const calls: unknown[] = []
+  setFontNative(
+    noopFontNative({
+      async clearAllFontCaches(options) {
+        calls.push(options ?? null)
+        return {
+          mac: true,
+          cleared: true,
+          confirmed: true,
+          parts: [
+            { part: 'user', status: 'cleared', mac: true, cleared: true },
+            { part: 'office', status: 'cleared', mac: true, cleared: true },
+            { part: 'adobe', status: 'skipped', mac: false, cleared: false },
+          ],
+        }
+      },
+    }),
+  )
+  const service = new FontButlerService(paths)
+  try {
+    await assert.rejects(
+      () => service.clearAllFontCaches(),
+      /Some apps may not see new or updated fonts until you log out/,
+    )
+    assert.deepEqual(calls, [])
+    const result = await service.clearAllFontCaches({ confirm: true })
+    assert.deepEqual(calls, [{ confirm: true, office: true, adobe: false }])
+    assert.equal(result.cleared, true)
+    assert.deepEqual(
+      result.parts.map((part) => part.status),
+      ['cleared', 'cleared', 'skipped'],
+    )
+  } finally {
+    setFontNative(null)
+    service.dispose()
+    await closeAllWatchers()
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
 test('watch folder add during onboarding does not import until setup is finished', async () => {
   const paths = tempPaths()
   const inbox = path.join(paths.dataRoot, 'inbox')
