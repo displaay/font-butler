@@ -150,11 +150,26 @@ test('document sheet helpers keep missing names out of activation', () => {
     ['NotInLibrary-Regular'],
   )
   assert.equal(isDocumentFontPath('/jobs/Brief.PDF'), true)
+  assert.equal(isDocumentFontPath('/jobs/Brief.docx'), true)
+  assert.equal(isDocumentFontPath('/jobs/Deck.pptx'), true)
   assert.equal(isDocumentFontPath('/jobs/Brief.indd'), false)
-  assert.deepEqual(documentPathsFrom(['/a/Brief.pdf', '/a/Face.otf', '/a/Brief.pdf']), ['/a/Brief.pdf'])
-  assert.deepEqual(withoutDocumentPaths(['/a/Brief.pdf', '/a/Face.otf']), ['/a/Face.otf'])
+  assert.deepEqual(
+    documentPathsFrom(['/a/Brief.pdf', '/a/Brief.docx', '/a/Face.otf', '/a/Brief.pdf']),
+    ['/a/Brief.pdf', '/a/Brief.docx'],
+  )
+  assert.deepEqual(withoutDocumentPaths(['/a/Brief.pdf', '/a/Deck.pptx', '/a/Face.otf']), ['/a/Face.otf'])
   assert.equal(documentProjectName('/jobs/Brief.pdf'), 'Brief')
+  assert.equal(documentProjectName('/jobs/Brief.docx'), 'Brief')
+  assert.equal(documentProjectName('/jobs/Deck.PPTX'), 'Deck')
   assert.equal(documentProjectName('/jobs/Brief.pdf', '  Campaign  '), 'Campaign')
+  assert.deepEqual(
+    offAssetIds([
+      { status: 'on', assetIds: ['regular'] },
+      { status: 'in-library-off', assetIds: ['bold', 'italic'] },
+      { status: 'missing', assetId: 'nope' },
+    ]),
+    ['bold', 'italic'],
+  )
 })
 
 test('creating a document project pins the installed face, stores a missing name, and reports a second fingerprint as a conflict', async () => {

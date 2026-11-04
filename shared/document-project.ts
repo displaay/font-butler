@@ -8,18 +8,22 @@ export type DocumentFontRow = {
   styleName: string
   status: DocumentFontStatus
   assetId?: string
+  /** Every asset when a family name matched several styles. None of them is pinned. */
+  assetIds?: string[]
   installedFingerprint?: string
-  matchedBy?: 'postscript' | 'family-style'
+  matchedBy?: 'postscript' | 'family-style' | 'family'
 }
 
 export type DocumentFontReport = {
   path: string
-  kind: 'pdf' | 'idml'
+  kind: 'pdf' | 'idml' | 'docx' | 'pptx'
   fonts: DocumentFontRow[]
 }
 
+const DOCUMENT_FONT_EXTENSION = /\.(pdf|idml|docx|pptx)$/i
+
 export function isDocumentFontPath(filePath: string): boolean {
-  return /\.(pdf|idml)$/i.test(filePath)
+  return DOCUMENT_FONT_EXTENSION.test(filePath)
 }
 
 export function documentPathsFrom(paths: readonly string[]): string[] {
@@ -37,12 +41,12 @@ export function withoutDocumentPaths(paths: readonly string[]): string[] {
   return paths.filter((filePath) => !isDocumentFontPath(filePath))
 }
 
-/** File name without a PDF or IDML extension, or an explicit name when one was given. */
+/** File name without a document extension, or an explicit name when one was given. */
 export function documentProjectName(filePath: string, requested = ''): string {
   const trimmed = requested.trim()
   if (trimmed) return trimmed
   const base = filePath.split(/[/\\]/).pop() ?? ''
-  const stripped = base.replace(/\.(pdf|idml)$/i, '').trim()
+  const stripped = base.replace(DOCUMENT_FONT_EXTENSION, '').trim()
   return stripped || 'Untitled project'
 }
 
@@ -76,16 +80,33 @@ export function groupDocumentFonts<T extends { status: string }>(fonts: readonly
   return { on, off, missing }
 }
 
+/** Catalog assets named by one document font row. A multi-style family lists every asset. */
+export function documentFontAssetIds(font: { assetId?: string; assetIds?: readonly string[] }): string[] {
+  const listed = (font.assetIds ?? []).map((id) => id.trim()).filter((id) => id.length > 0)
+  const source = listed.length > 0 ? listed : font.assetId?.trim() ? [font.assetId.trim()] : []
+  const ids: string[] = []
+  const seen = new Set<string>()
+  for (const id of source) {
+    if (seen.has(id)) continue
+    seen.add(id)
+    ids.push(id)
+  }
+  return ids
+}
+
 /** Library faces the sheet can activate. Missing names are never included. */
-export function offAssetIds(fonts: readonly { status: string; assetId?: string }[]): string[] {
+export function offAssetIds(
+  fonts: readonly { status: string; assetId?: string; assetIds?: readonly string[] }[],
+): string[] {
   const ids: string[] = []
   const seen = new Set<string>()
   for (const font of fonts) {
     if (font.status !== 'in-library-off') continue
-    const assetId = font.assetId?.trim()
-    if (!assetId || seen.has(assetId)) continue
-    seen.add(assetId)
-    ids.push(assetId)
+    for (const assetId of documentFontAssetIds(font)) {
+      if (seen.has(assetId)) continue
+      seen.add(assetId)
+      ids.push(assetId)
+    }
   }
   return ids
 }

@@ -758,7 +758,7 @@ function openSettings(focus) {
 const documentOpenOptions = {
   title: 'Open document',
   properties: ['openFile'],
-  filters: [{ name: 'PDF and IDML', extensions: ['pdf', 'idml'] }],
+  filters: [{ name: 'PDF, IDML, Word, and PowerPoint', extensions: ['pdf', 'idml', 'docx', 'pptx'] }],
 }
 
 async function pickDocumentPath() {
