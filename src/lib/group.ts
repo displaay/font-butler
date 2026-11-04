@@ -1,3 +1,6 @@
+import { classificationOfFace, foundryFromManufacturer } from '../../shared/font-classification.ts'
+import { CHIP_LIBRARY_FILTERS, isLibraryFilter } from '../../shared/library-filters.ts'
+import { FONT_CLASSIFICATIONS } from '../../shared/font-classification.ts'
 import { uniqueStyleCount, occupyingStyleCount, entryFormatOf } from './formats.ts'
 import { entryCopyDestinations } from './state.ts'
 import { familyTagKey } from '../../shared/family-tags.ts'
@@ -193,17 +196,7 @@ const SOURCE_FILTERS = new Set<LibraryFilter>(['source', 'no-source'])
 const DESTINATION_FILTERS = new Set<LibraryFilter>(['computer', 'adobe', 'no-destination'])
 const FORMAT_FILTERS = new Set<LibraryFilter>(['otf', 'ttf'])
 
-const LIBRARY_FILTERS = new Set<LibraryFilter>([
-  ...STATUS_FILTERS,
-  ...KIND_FILTERS,
-  ...SOURCE_FILTERS,
-  ...DESTINATION_FILTERS,
-  ...FORMAT_FILTERS,
-])
-
-export function isLibraryFilter(value: unknown): value is LibraryFilter {
-  return typeof value === 'string' && LIBRARY_FILTERS.has(value as LibraryFilter)
-}
+export { isLibraryFilter }
 
 function matchesStatusFilter(entry: CatalogEntry, filter: LibraryFilter): boolean {
   switch (filter) {
@@ -248,8 +241,8 @@ function matchesFormatFilter(entry: CatalogEntry, filter: LibraryFilter): boolea
   return false
 }
 
-export function countLibraryFilters(entries: CatalogEntry[]): Record<LibraryFilter, number> {
-  const counts = {
+export function countLibraryFilters(entries: CatalogEntry[]): Record<string, number> {
+  const counts: Record<string, number> = {
     installed: 0,
     deactivated: 0,
     uninstalled: 0,
@@ -262,12 +255,28 @@ export function countLibraryFilters(entries: CatalogEntry[]): Record<LibraryFilt
     'no-destination': 0,
     otf: 0,
     ttf: 0,
-  } satisfies Record<LibraryFilter, number>
+  }
+  for (const id of FONT_CLASSIFICATIONS) counts[`classification:${id}`] = 0
   for (const group of groupCatalog(entries)) {
-    for (const filter of LIBRARY_FILTERS) {
+    for (const filter of CHIP_LIBRARY_FILTERS) {
       if (group.entries.some((entry) => matchesLibraryFilter(entry, [filter]))) {
         counts[filter]++
       }
+    }
+    const classes = new Set<string>()
+    const foundries = new Set<string>()
+    for (const entry of group.entries) {
+      for (const face of entry.faces) {
+        const klass = classificationOfFace(face)
+        if (klass) classes.add(klass)
+        const foundry = foundryFromManufacturer(face.foundry)
+        if (foundry) foundries.add(foundry)
+      }
+    }
+    for (const klass of classes) counts[`classification:${klass}`]++
+    for (const foundry of foundries) {
+      const id = `foundry:${foundry}`
+      counts[id] = (counts[id] ?? 0) + 1
     }
   }
   return counts
@@ -285,6 +294,8 @@ export function matchesLibraryFilter(
   const sources = filters.filter((filter) => SOURCE_FILTERS.has(filter))
   const destinations = filters.filter((filter) => DESTINATION_FILTERS.has(filter))
   const formats = filters.filter((filter) => FORMAT_FILTERS.has(filter))
+  const classifications = filters.filter((filter) => filter.startsWith('classification:'))
+  const foundries = filters.filter((filter) => filter.startsWith('foundry:'))
   if (statuses.length > 0 && !statuses.some((filter) => matchesStatusFilter(entry, filter))) {
     return false
   }
@@ -303,7 +314,33 @@ export function matchesLibraryFilter(
   if (formats.length > 0 && !formats.some((filter) => matchesFormatFilter(entry, filter))) {
     return false
   }
+  if (classifications.length > 0) {
+    const have = classificationsOf(entry)
+    if (!classifications.some((filter) => have.has(filter.slice('classification:'.length)))) return false
+  }
+  if (foundries.length > 0) {
+    const have = foundriesOf(entry)
+    if (!foundries.some((filter) => have.has(filter.slice('foundry:'.length)))) return false
+  }
   return true
+}
+
+function classificationsOf(entry: CatalogEntry): Set<string> {
+  const classes = new Set<string>()
+  for (const face of entry.faces) {
+    const klass = classificationOfFace(face)
+    if (klass) classes.add(klass)
+  }
+  return classes
+}
+
+function foundriesOf(entry: CatalogEntry): Set<string> {
+  const names = new Set<string>()
+  for (const face of entry.faces) {
+    const foundry = foundryFromManufacturer(face.foundry)
+    if (foundry) names.add(foundry)
+  }
+  return names
 }
 
 export function groupSystem(faces: SystemFace[]): SystemFamilyGroup[] {

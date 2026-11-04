@@ -102,3 +102,17 @@ test('defaultSavedFilterName uses search, folder, and chips', () => {
     'Displaay retail',
   )
 })
+
+test('normalizeSavedFilters keeps classification and foundry chips', () => {
+  const saved = normalizeSavedFilters([
+    {
+      id: 'serif-foundry',
+      name: 'Displaay serif',
+      query: '',
+      libraryFilters: ['classification:serif', 'foundry:Displaay', 'nope'],
+      watchFolder: null,
+      createdAt: 1,
+    },
+  ])
+  assert.deepEqual(saved[0]?.libraryFilters, ['classification:serif', 'foundry:Displaay'])
+})

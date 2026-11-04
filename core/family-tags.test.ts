@@ -14,8 +14,10 @@ import {
   ensureSeedTags,
   entryHasFamilyTag,
   reconcileRetailTrialTags,
+  deleteFamilyTag,
   renameFamilyTag,
   setFamilyTagPresent,
+  updateFamilyTag,
   tagIdsForFamily,
   type FamilyTagAssignment,
 } from '../shared/family-tags.ts'
@@ -158,6 +160,37 @@ test('renaming the Trial seed keeps the default on that tag', () => {
   assert.equal(entryHasFamilyTag(file, file.entries[0]!, { name: 'Evaluation' }), true)
   assert.equal(entryHasFamilyTag(file, file.entries[0]!, { name: 'Trial' }), false)
   assert.equal(entryHasFamilyTag(file, file.entries[0]!, { id: 'trial' }), true)
+})
+
+test('deleting a tag clears every family, and a deleted seed is not reapplied', () => {
+  const file = catalog(
+    [
+      entry({
+        id: 'retail',
+        faces: [face('Reckless')],
+        retailRelativePath: 'Reckless/RecklessVF.otf',
+        retailFamilyName: 'Reckless',
+      }),
+    ],
+    [{ familyKey: 'Reckless', tagIds: ['trial', 'licensed'], autoTagIds: ['trial'] }],
+  )
+  deleteFamilyTag(file, 'trial')
+  assert.equal(file.tags?.some((tag) => tag.id === 'trial' || tag.seed === 'trial'), false)
+  assert.deepEqual(file.retiredTagSeeds, ['trial'])
+  assert.deepEqual(ids(file, 'Reckless'), ['licensed'])
+  assert.equal(file.familyTags?.find((row) => row.familyKey === 'Reckless')?.autoTagIds, undefined)
+  reconcileRetailTrialTags(file, { hasWorkerToken: false })
+  assert.equal(file.tags?.some((tag) => tag.seed === 'trial'), false)
+  assert.deepEqual(ids(file, 'Reckless'), ['licensed'])
+})
+
+test('editing a tag changes its name and color and keeps the id', () => {
+  const file = catalog([])
+  updateFamilyTag(file, 'licensed', { name: 'Owned', color: '#3b6fd8' })
+  const tag = file.tags?.find((item) => item.id === 'licensed')
+  assert.equal(tag?.name, 'Owned')
+  assert.equal(tag?.color, '#3b6fd8')
+  assert.equal(tag?.seed, 'licensed')
 })
 
 test('a manual tag edit stops the Trial default from owning that tag', () => {

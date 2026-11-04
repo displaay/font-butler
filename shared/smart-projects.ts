@@ -1,5 +1,5 @@
 /**
- * Smart projects: a named All/Any rule set over the same fields as library filter chips.
+ * Smart projects: a named All/Any rule set.
  *
  * Manual projects keep an explicit member list. A smart project stores rules only;
  * membership is computed from the current catalog.
@@ -7,7 +7,18 @@
  * `tag` is `tag is` / `tag is not`. This module does not decide tag membership.
  * Callers pass `predicates.tag` from `familyTagRulePredicate`. The predicate
  * reports the positive condition (the family has that tag). `isNot` is applied here.
+ *
+ * `styleCount` is the family's style count. `classification` is the class the
+ * font declares or that its name table spells out. An unclassified family
+ * matches neither `is` nor `is not`.
  */
+
+import { familyTagKey } from './family-tags.ts'
+import {
+  classificationOfFace,
+  fontClassificationId,
+  type FontClassification,
+} from './font-classification.ts'
 
 export const SMART_RETAIL_FOLDER = '__retail__'
 
@@ -20,6 +31,8 @@ export const SMART_RULE_FIELDS = [
   'folder',
   'query',
   'tag',
+  'styleCount',
+  'classification',
 ] as const
 
 export type SmartRuleField = (typeof SMART_RULE_FIELDS)[number]
@@ -33,13 +46,23 @@ export const BUILTIN_SMART_RULE_FIELDS = [
   'format',
   'folder',
   'query',
+  'styleCount',
+  'classification',
 ] as const
 
 export type BuiltinSmartRuleField = (typeof BUILTIN_SMART_RULE_FIELDS)[number]
 
 export type SmartChipField = 'status' | 'variable' | 'source' | 'destination' | 'format'
 
-export type SmartRuleOperator = 'is' | 'isNot' | 'contains' | 'notContains'
+export type SmartRuleOperator =
+  | 'is'
+  | 'isNot'
+  | 'contains'
+  | 'notContains'
+  | 'isMoreThan'
+  | 'isLessThan'
+  | 'isAtLeast'
+  | 'isAtMost'
 
 export type SmartRule = {
   id: string
@@ -63,6 +86,10 @@ export type SmartMatchFace = {
   fullName?: string
   postscriptName?: string
   isVariable?: boolean
+  instanceCount?: number
+  instanceNames?: string[]
+  /** Set when a parse already classified the face. `null` means the file said nothing. */
+  classification?: string | null
 }
 
 export type SmartMatchCopy = {
@@ -82,6 +109,7 @@ export type SmartMatchEntry = {
   sourceAvailability?: string
   retailRelativePath?: string | null
   customFamilyName?: string | null
+  retailFamilyName?: string | null
   previewOnly?: boolean
   installedPath?: string
   disabledPath?: string
@@ -110,6 +138,8 @@ export const SMART_RULE_FIELD_OPTIONS: { field: SmartRuleField; label: string }[
   { field: 'folder', label: 'Folder' },
   { field: 'query', label: 'Text' },
   { field: 'tag', label: 'Tag' },
+  { field: 'styleCount', label: 'Number of Styles' },
+  { field: 'classification', label: 'Classification' },
 ]
 
 export const SMART_RULE_CHIP_VALUES: Record<SmartChipField, { value: string; label: string }[]> = {
@@ -142,6 +172,15 @@ export const SMART_RULE_OPERATOR_LABELS: Record<SmartRuleOperator, string> = {
   isNot: 'is not',
   contains: 'contains',
   notContains: 'does not contain',
+  isMoreThan: 'is more than',
+  isLessThan: 'is less than',
+  isAtLeast: 'is at least',
+  isAtMost: 'is at most',
+}
+
+export const SMART_MATCH_LABELS: Record<SmartRuleMatch, string> = {
+  all: 'All of the rules',
+  any: 'Any of the rules',
 }
 
 const FIELD_SET = new Set<string>(SMART_RULE_FIELDS)
@@ -157,6 +196,7 @@ export function isSmartProject(project: { kind?: string | null }): boolean {
 
 export function operatorsForField(field: SmartRuleField): SmartRuleOperator[] {
   if (field === 'query') return ['contains', 'notContains']
+  if (field === 'styleCount') return ['is', 'isMoreThan', 'isLessThan', 'isAtLeast', 'isAtMost']
   return ['is', 'isNot']
 }
 
@@ -180,6 +220,8 @@ function defaultChipValue(field: SmartRuleField): string {
   ) {
     return SMART_RULE_CHIP_VALUES[field][0]!.value
   }
+  if (field === 'styleCount') return '1'
+  if (field === 'classification') return 'serif'
   return ''
 }
 
@@ -212,10 +254,8 @@ export function normalizeSmartRuleSet(value: unknown): SmartRuleSet {
       continue
     }
     if (typeof row.value !== 'string') continue
-    const ruleValue = row.value.trim()
+    const ruleValue = canonicalRuleValue(field, row.value)
     if (!ruleValue) continue
-    const chips = SMART_RULE_CHIP_VALUES[field as SmartChipField]
-    if (chips && !chips.some((chip) => chip.value === ruleValue)) continue
     rules.push({
       id: typeof row.id === 'string' && row.id.trim() ? row.id : newSmartRuleId(),
       field,
@@ -243,11 +283,7 @@ export function entryMatchesSmartRules<TEntry extends SmartMatchEntry>(
   rules: SmartRuleSet | null | undefined,
   options?: SmartMatchOptions<TEntry>,
 ): boolean {
-  const list = rules?.rules ?? []
-  if (list.length === 0) return false
-  const passes = (rule: SmartRule) => rulePasses(entry, rule, options)
-  if (rules?.match === 'any') return list.some(passes)
-  return list.every(passes)
+  return entryMatchesWithFacts(entry, rules, options, familyFactsFor([entry]))
 }
 
 export function matchingSmartEntries<TEntry extends SmartMatchEntry>(
@@ -255,7 +291,19 @@ export function matchingSmartEntries<TEntry extends SmartMatchEntry>(
   rules: SmartRuleSet | null | undefined,
   options?: SmartMatchOptions<TEntry>,
 ): TEntry[] {
-  return entries.filter((entry) => entryMatchesSmartRules(entry, rules, options))
+  const facts = familyFactsFor(entries)
+  return entries.filter((entry) => entryMatchesWithFacts(entry, rules, options, facts))
+}
+
+/** Distinct families in the current match. The sheet's live count. */
+export function matchingSmartFamilyCount<TEntry extends SmartMatchEntry>(
+  entries: readonly TEntry[],
+  rules: SmartRuleSet | null | undefined,
+  options?: SmartMatchOptions<TEntry>,
+): number {
+  const keys = new Set<string>()
+  for (const entry of matchingSmartEntries(entries, rules, options)) keys.add(familyTagKey(entry))
+  return keys.size
 }
 
 /** Current match, copied into a manual project. Rules are not part of the snapshot. */
@@ -271,16 +319,117 @@ export function smartProjectSnapshot<TEntry extends SmartMatchEntry>(
   }
 }
 
+type FamilyFacts = {
+  styleCount: number
+  classifications: Set<FontClassification>
+}
+
+function entryMatchesWithFacts<TEntry extends SmartMatchEntry>(
+  entry: TEntry,
+  rules: SmartRuleSet | null | undefined,
+  options: SmartMatchOptions<TEntry> | undefined,
+  facts: Map<string, FamilyFacts>,
+): boolean {
+  const list = rules?.rules ?? []
+  if (list.length === 0) return false
+  const family = facts.get(familyTagKey(entry)) ?? { styleCount: 0, classifications: new Set() }
+  const passes = (rule: SmartRule) => rulePasses(entry, rule, options, family)
+  if (rules?.match === 'any') return list.some(passes)
+  return list.every(passes)
+}
+
 function rulePasses<TEntry extends SmartMatchEntry>(
   entry: TEntry,
   rule: SmartRule,
-  options?: SmartMatchOptions<TEntry>,
+  options: SmartMatchOptions<TEntry> | undefined,
+  family: FamilyFacts,
 ): boolean {
+  if (rule.field === 'styleCount') return styleCountPasses(family.styleCount, rule)
+  if (rule.field === 'classification') return classificationPasses(family.classifications, rule)
   const predicate = options?.predicates?.[rule.field]
   const positive = predicate ? predicate(entry, rule) : builtinPositive(entry, rule)
   if (positive === undefined) return false
   if (rule.operator === 'isNot' || rule.operator === 'notContains') return !positive
   return positive
+}
+
+function canonicalRuleValue(field: SmartRuleField, value: string): string | null {
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  if (field === 'styleCount') {
+    if (!/^\d+$/.test(trimmed)) return null
+    const count = Number(trimmed)
+    if (!Number.isSafeInteger(count)) return null
+    return String(count)
+  }
+  if (field === 'classification') return fontClassificationId(trimmed)
+  const chips = SMART_RULE_CHIP_VALUES[field as SmartChipField]
+  if (chips && !chips.some((chip) => chip.value === trimmed)) return null
+  return trimmed
+}
+
+function styleCountPasses(count: number, rule: SmartRule): boolean {
+  if (!/^\d+$/.test(rule.value)) return false
+  const value = Number(rule.value)
+  switch (rule.operator) {
+    case 'is':
+      return count === value
+    case 'isMoreThan':
+      return count > value
+    case 'isLessThan':
+      return count < value
+    case 'isAtLeast':
+      return count >= value
+    case 'isAtMost':
+      return count <= value
+    default:
+      return false
+  }
+}
+
+function classificationPasses(classes: Set<FontClassification>, rule: SmartRule): boolean {
+  const wanted = fontClassificationId(rule.value)
+  if (!wanted || classes.size === 0) return false
+  if (rule.operator === 'isNot') return !classes.has(wanted)
+  if (rule.operator === 'is') return classes.has(wanted)
+  return false
+}
+
+function familyFactsFor<TEntry extends SmartMatchEntry>(entries: readonly TEntry[]): Map<string, FamilyFacts> {
+  const grouped = new Map<string, TEntry[]>()
+  for (const entry of entries) {
+    const key = familyTagKey(entry)
+    const list = grouped.get(key) ?? []
+    list.push(entry)
+    grouped.set(key, list)
+  }
+  const facts = new Map<string, FamilyFacts>()
+  for (const [key, group] of grouped) {
+    const styles = new Set<string>()
+    const classifications = new Set<FontClassification>()
+    for (const entry of group) {
+      for (const face of entry.faces ?? []) {
+        for (const styleKey of styleKeysForFace(face)) styles.add(styleKey)
+        const klass = classificationOfFace(face)
+        if (klass) classifications.add(klass)
+      }
+    }
+    facts.set(key, { styleCount: styles.size, classifications })
+  }
+  return facts
+}
+
+function styleKeysForFace(face: SmartMatchFace): string[] {
+  const family = (face.familyName ?? '').trim().toLowerCase()
+  if (face.isVariable && face.instanceNames && face.instanceNames.length > 0) {
+    return face.instanceNames.map((name) => `${family}::${name.trim().toLowerCase()}`)
+  }
+  if (face.isVariable) {
+    const count = Math.max(face.instanceCount ?? 1, 1)
+    const style = (face.styleName ?? 'regular').trim().toLowerCase()
+    return Array.from({ length: count }, (_, index) => `${family}::${style}#${index}`)
+  }
+  return [`${family}::${(face.styleName ?? 'regular').trim().toLowerCase() || 'regular'}`]
 }
 
 /** `undefined` means this module does not decide the field (reserved `tag`, or unknown). */

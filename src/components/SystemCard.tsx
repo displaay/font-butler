@@ -20,6 +20,7 @@ import { systemInstanceRows } from '@/lib/instances'
 import type { SystemFamilyGroup, ViewLayout } from '@/lib/types'
 import { useCardActionChrome } from '@/hooks/useCardActionChrome'
 import { pendingPreviewSample } from '@/lib/previewSample'
+import { cardPreviewFromRequest, previewRequestActive, type PreviewRequest } from '../../shared/library-search.ts'
 import { cn } from '@/lib/utils'
 
 export const SystemCard = memo(function SystemCard({
@@ -37,6 +38,7 @@ export const SystemCard = memo(function SystemCard({
   onReveal,
   onUninstall,
   onDeactivate,
+  previewRequest = null,
 }: {
   group: SystemFamilyGroup
   layout: ViewLayout
@@ -52,6 +54,7 @@ export const SystemCard = memo(function SystemCard({
   onReveal: () => void
   onUninstall: () => void
   onDeactivate: () => void
+  previewRequest?: PreviewRequest | null
 }) {
   const [expanded, setExpanded] = useState(false)
   const { hovered, actionsVisible, onContextMenuOpenChange, cardChrome } = useCardActionChrome()
@@ -71,6 +74,35 @@ export const SystemCard = memo(function SystemCard({
       })),
     [instances, previewFamily],
   )
+  const lockedPreview = useMemo(
+    () =>
+      previewRequestActive(previewRequest)
+        ? cardPreviewFromRequest(
+            instances.map((row) => ({
+              weight: row.weight,
+              italic: row.italic,
+              label: row.label,
+              variation: row.variation,
+            })),
+            previewRequest,
+          )
+        : null,
+    [instances, previewRequest],
+  )
+  const restPreview = lockedPreview
+    ? {
+        family: previewFamily,
+        weight: lockedPreview.weight,
+        italic: lockedPreview.italic,
+        variation: lockedPreview.variation,
+        label: lockedPreview.label,
+      }
+    : {
+        family: previewFamily,
+        weight: face.weight,
+        italic: face.italic,
+        label: face.styleName,
+      }
   const plan = batch ?? systemBatchPlan([group])
   const muted = group.faces.length > 0 && group.faces.every((face) => face.deactivated)
 
@@ -145,16 +177,12 @@ export const SystemCard = memo(function SystemCard({
                 className="flex w-full flex-col text-left"
               >
                 <CyclingAaPreview
-                  faces={previewFaces}
-                  rest={{
-                    family: previewFamily,
-                    weight: face.weight,
-                    italic: face.italic,
-                    label: face.styleName,
-                  }}
-                  active={hovered}
+                  faces={lockedPreview ? [restPreview] : previewFaces}
+                  rest={restPreview}
+                  active={hovered && !lockedPreview}
                   size={previewSize}
                   sample={previewSample}
+                  featureSettings={lockedPreview?.featureSettings}
                 />
                 <div className={previewSize < 3.25 ? 'p-2' : 'p-3'}>{metadata}</div>
               </button>
@@ -172,8 +200,10 @@ export const SystemCard = memo(function SystemCard({
                   >
                     <AaPreview
                       family={previewFamily}
-                      weight={face.weight}
-                      italic={face.italic}
+                      weight={lockedPreview?.weight ?? face.weight}
+                      italic={lockedPreview?.italic ?? face.italic}
+                      variation={lockedPreview?.variation}
+                      featureSettings={lockedPreview?.featureSettings}
                       sample={previewSample}
                     />
                     <div className="min-w-0 flex-1">{metadata}</div>

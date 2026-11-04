@@ -384,6 +384,7 @@ function AaGlyph({
   weight = 400,
   italic = false,
   variation,
+  featureSettings,
   pendingSize = 'md',
   wait = true,
   sample,
@@ -395,6 +396,7 @@ function AaGlyph({
   weight?: number
   italic?: boolean
   variation?: string
+  featureSettings?: string
   pendingSize?: 'sm' | 'md' | 'glyph'
   wait?: boolean
   sample?: string
@@ -475,6 +477,7 @@ function AaGlyph({
         fontStyle: italic ? 'italic' : 'normal',
         fontSynthesis: 'none',
         fontVariationSettings: variation || undefined,
+        fontFeatureSettings: featureSettings || undefined,
         ...fitStyle,
       }}
     >
@@ -496,6 +499,7 @@ export function AaPreview({
   weight = 400,
   italic = false,
   variation,
+  featureSettings,
   size = 'md',
   sample,
   wait,
@@ -504,6 +508,7 @@ export function AaPreview({
   weight?: number
   italic?: boolean
   variation?: string
+  featureSettings?: string
   size?: 'sm' | 'md'
   sample?: string
   wait?: boolean
@@ -521,6 +526,7 @@ export function AaPreview({
         weight={weight}
         italic={italic}
         variation={variation}
+        featureSettings={featureSettings}
         pendingSize={size}
         sample={sample}
         wait={wait}
@@ -535,12 +541,14 @@ export function CyclingAaPreview({
   active,
   size,
   sample,
+  featureSettings,
 }: {
   faces: PreviewFace[]
   rest: PreviewFace
   active: boolean
   size: number
   sample?: string
+  featureSettings?: string
 }) {
   const allFaces = faces.length > 0 ? faces : [rest]
   const morphFaces = facesMatchingRestCut(allFaces, rest)
@@ -579,6 +587,7 @@ export function CyclingAaPreview({
             weight={visibleFace.weight}
             italic={visibleFace.italic}
             variation={visibleFace.variation}
+            featureSettings={featureSettings}
             pendingSize="glyph"
             wait={visibleFace.wait !== false}
             sample={sample}
@@ -605,6 +614,7 @@ export function CyclingAaPreview({
                 weight={face.weight}
                 italic={face.italic}
                 variation={face.variation}
+                featureSettings={featureSettings}
                 pendingSize="glyph"
                 wait={face.wait !== false}
                 sample={sample}

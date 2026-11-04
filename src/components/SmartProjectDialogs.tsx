@@ -11,14 +11,14 @@ import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { familyTagRulePredicate, type FamilyTag, type FamilyTagCatalog } from '../../shared/family-tags.ts'
 import {
+  SMART_MATCH_LABELS,
   SMART_RULE_CHIP_VALUES,
   SMART_RULE_FIELD_OPTIONS,
   SMART_RULE_OPERATOR_LABELS,
   createSmartRule,
-  entryMatchesSmartRules,
+  matchingSmartFamilyCount,
   normalizeSmartRuleSet,
   operatorsForField,
-  smartRuleSummary,
   type SmartChipField,
   type SmartMatchEntry,
   type SmartRule,
@@ -26,6 +26,7 @@ import {
   type SmartRuleOperator,
   type SmartRuleSet,
 } from '../../shared/smart-projects.ts'
+import { FONT_CLASSIFICATION_LABELS, FONT_CLASSIFICATIONS } from '../../shared/font-classification.ts'
 
 const selectClass =
   'h-8 min-w-0 rounded-md border bg-background px-2 text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring/30'
@@ -133,7 +134,7 @@ function NewProjectForm({
             <Button type="button" variant="outline" onClick={onCancel}>
               Cancel
             </Button>
-            <Button type="submit">Create project</Button>
+            <Button type="submit">{kind === 'smart' ? 'Continue' : 'Create project'}</Button>
           </div>
         </form>
   )
@@ -168,6 +169,7 @@ function KindChoice({
 
 export function SmartRuleEditor({
   open,
+  mode = 'edit',
   projectId,
   projectName,
   rules,
@@ -175,10 +177,11 @@ export function SmartRuleEditor({
   folders,
   tags,
   onCancel,
-  onSave,
+  onSubmit,
   onSnapshot,
 }: {
   open: boolean
+  mode?: 'create' | 'edit'
   projectId: string | null
   projectName: string
   rules: SmartRuleSet
@@ -186,7 +189,7 @@ export function SmartRuleEditor({
   folders: { id: string; label: string }[]
   tags?: FamilyTagCatalog
   onCancel: () => void
-  onSave: (rules: SmartRuleSet) => void
+  onSubmit: (input: { name: string; rules: SmartRuleSet }) => void
   onSnapshot?: () => void
 }) {
   return (
@@ -196,17 +199,18 @@ export function SmartRuleEditor({
         if (!next) onCancel()
       }}
     >
-      <DialogContent className="w-[min(92vw,560px)]">
+      <DialogContent className="w-[min(92vw,640px)]">
         {open ? (
           <SmartRuleForm
-            key={projectId ?? 'smart'}
+            key={`${mode}:${projectId ?? 'smart'}:${projectName}`}
+            mode={mode}
             projectName={projectName}
             rules={rules}
             entries={entries}
             folders={folders}
             tags={tags}
             onCancel={onCancel}
-            onSave={onSave}
+            onSubmit={onSubmit}
             onSnapshot={onSnapshot}
           />
         ) : (
@@ -220,24 +224,27 @@ export function SmartRuleEditor({
 }
 
 function SmartRuleForm({
+  mode,
   projectName,
   rules,
   entries,
   folders,
   tags,
   onCancel,
-  onSave,
+  onSubmit,
   onSnapshot,
 }: {
+  mode: 'create' | 'edit'
   projectName: string
   rules: SmartRuleSet
   entries: SmartMatchEntry[]
   folders: { id: string; label: string }[]
   tags?: FamilyTagCatalog
   onCancel: () => void
-  onSave: (rules: SmartRuleSet) => void
+  onSubmit: (input: { name: string; rules: SmartRuleSet }) => void
   onSnapshot?: () => void
 }) {
+  const [name, setName] = useState(projectName)
   const [draft, setDraft] = useState<SmartRuleSet>(() => normalizeSmartRuleSet(rules))
   const tagCatalog = tags ?? EMPTY_TAG_CATALOG
   const matchOptions = useMemo(
@@ -246,7 +253,7 @@ function SmartRuleForm({
   )
 
   const matchCount = useMemo(
-    () => entries.filter((entry) => entryMatchesSmartRules(entry, draft, matchOptions)).length,
+    () => matchingSmartFamilyCount(entries, draft, matchOptions),
     [entries, draft, matchOptions],
   )
 
@@ -260,35 +267,51 @@ function SmartRuleForm({
   return (
     <>
         <DialogHeader>
-          <DialogTitle>Rules for {projectName}</DialogTitle>
+          <DialogTitle>{mode === 'create' ? 'New smart project' : 'Edit smart project'}</DialogTitle>
           <DialogDescription>
-            Same fields as the library filters. {smartRuleSummary(draft)}. {matchCount}{' '}
-            {matchCount === 1 ? 'font matches' : 'fonts match'} right now.
+            Families stay in this project while they match. An empty rule list matches nothing.
           </DialogDescription>
         </DialogHeader>
-        <div className="mb-3 flex gap-2">
-          <Button
-            type="button"
-            size="sm"
-            variant={draft.match === 'all' ? 'default' : 'outline'}
-            aria-pressed={draft.match === 'all'}
-            onClick={() => setDraft((current) => ({ ...current, match: 'all' }))}
+        <label className="mb-3 block space-y-1">
+          <span className="text-xs text-muted-foreground">Name</span>
+          <Input aria-label="Name" value={name} autoFocus onChange={(event) => setName(event.target.value)} />
+        </label>
+        <label className="mb-3 flex items-center gap-2 text-[13px]">
+          <span className="text-muted-foreground">Match</span>
+          <select
+            aria-label="Match"
+            className={cn(selectClass, 'flex-1')}
+            value={draft.match}
+            onChange={(event) =>
+              setDraft((current) => ({
+                ...current,
+                match: event.target.value === 'any' ? 'any' : 'all',
+              }))
+            }
           >
-            Match all
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant={draft.match === 'any' ? 'default' : 'outline'}
-            aria-pressed={draft.match === 'any'}
-            onClick={() => setDraft((current) => ({ ...current, match: 'any' }))}
-          >
-            Match any
-          </Button>
-        </div>
+            <option value="all">{SMART_MATCH_LABELS.all}</option>
+            <option value="any">{SMART_MATCH_LABELS.any}</option>
+          </select>
+        </label>
+        <p className="mb-2 text-xs text-muted-foreground">Rules</p>
         <div className="mb-3 max-h-72 space-y-2 overflow-y-auto">
           {draft.rules.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Add a rule. Until you do, this project is empty.</p>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm text-muted-foreground">Add a rule. Until you do, this project is empty.</p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  setDraft((current) => ({
+                    ...current,
+                    rules: [...current.rules, createSmartRule()],
+                  }))
+                }
+              >
+                Add rule
+              </Button>
+            </div>
           ) : (
             draft.rules.map((rule, index) => (
               <RuleRow
@@ -304,26 +327,23 @@ function SmartRuleForm({
                     rules: current.rules.filter((item) => item.id !== rule.id),
                   }))
                 }
+                onAdd={() =>
+                  setDraft((current) => {
+                    const next = [...current.rules]
+                    next.splice(index + 1, 0, createSmartRule())
+                    return { ...current, rules: next }
+                  })
+                }
               />
             ))
           )}
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() =>
-              setDraft((current) => ({
-                ...current,
-                rules: [...current.rules, createSmartRule()],
-              }))
-            }
-          >
-            Add rule
-          </Button>
-          <div className="flex gap-2">
-            {onSnapshot ? (
+          <p aria-live="polite" className="text-sm text-muted-foreground">
+            {matchCount} {matchCount === 1 ? 'family matches' : 'families match'}
+          </p>
+          <div className="flex flex-wrap justify-end gap-2">
+            {mode === 'edit' && onSnapshot ? (
               <Button type="button" variant="outline" onClick={onSnapshot}>
                 Save snapshot as manual project
               </Button>
@@ -331,8 +351,16 @@ function SmartRuleForm({
             <Button type="button" variant="outline" onClick={onCancel}>
               Cancel
             </Button>
-            <Button type="button" onClick={() => onSave(normalizeSmartRuleSet(draft))}>
-              Save rules
+            <Button
+              type="button"
+              onClick={() =>
+                onSubmit({
+                  name: name.trim() || projectName || 'Untitled project',
+                  rules: normalizeSmartRuleSet(draft),
+                })
+              }
+            >
+              {mode === 'create' ? 'Create' : 'Save'}
             </Button>
           </div>
         </div>
@@ -347,6 +375,7 @@ function RuleRow({
   tags,
   onChange,
   onRemove,
+  onAdd,
 }: {
   index: number
   rule: SmartRule
@@ -354,6 +383,7 @@ function RuleRow({
   tags: readonly FamilyTag[]
   onChange: (rule: SmartRule) => void
   onRemove: () => void
+  onAdd: () => void
 }) {
   const operators = operatorsForField(rule.field)
   const chips = SMART_RULE_CHIP_VALUES[rule.field as SmartChipField]
@@ -369,6 +399,8 @@ function RuleRow({
           const next = createSmartRule({ id: rule.id, field })
           if (field === 'folder') next.value = folders[0]?.id ?? ''
           if (field === 'tag') next.value = tags[0]?.id ?? ''
+          if (field === 'classification') next.value = 'serif'
+          if (field === 'styleCount') next.value = '1'
           onChange(next)
         }}
       >
@@ -392,7 +424,29 @@ function RuleRow({
           </option>
         ))}
       </select>
-      {rule.field === 'query' ? (
+      {rule.field === 'styleCount' ? (
+        <Input
+          aria-label={`Rule ${index + 1} value`}
+          type="number"
+          min={0}
+          step={1}
+          value={rule.value}
+          onChange={(event) => onChange({ ...rule, value: event.target.value })}
+        />
+      ) : rule.field === 'classification' ? (
+        <select
+          aria-label={`Rule ${index + 1} value`}
+          className={cn(selectClass, 'min-w-0 flex-1')}
+          value={rule.value}
+          onChange={(event) => onChange({ ...rule, value: event.target.value })}
+        >
+          {FONT_CLASSIFICATIONS.map((id) => (
+            <option key={id} value={id}>
+              {FONT_CLASSIFICATION_LABELS[id]}
+            </option>
+          ))}
+        </select>
+      ) : rule.field === 'query' ? (
         <Input
           aria-label={`Rule ${index + 1} text`}
           value={rule.value}
@@ -445,6 +499,9 @@ function RuleRow({
       <Button type="button" variant="ghost" size="sm" aria-label={`Remove rule ${index + 1}`} onClick={onRemove}>
         Remove
       </Button>
+      <Button type="button" variant="ghost" size="sm" aria-label={`Add rule after ${index + 1}`} onClick={onAdd}>
+        Add
+      </Button>
     </div>
   )
 }
@@ -465,7 +522,7 @@ export function SmartProjectBar({
   return (
     <div className="app-region-no-drag flex flex-wrap items-center gap-2 rounded-lg border bg-muted/40 px-3 py-2">
       <p className="min-w-0 flex-1 text-sm text-muted-foreground">
-        Smart project · {summary} · {count} {count === 1 ? 'font' : 'fonts'}
+        Smart project · {summary} · {count} {count === 1 ? 'family' : 'families'}
         {active ? ' · active' : ''}
       </p>
       <Button type="button" size="sm" variant="outline" onClick={onEdit}>

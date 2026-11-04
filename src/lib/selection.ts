@@ -207,11 +207,14 @@ export type ShortcutAction =
   | 'inspect'
   | 'collapse'
   | 'specimen'
+  | 'quickLook'
 
 function isActivateTarget(target: EventTarget | null): boolean {
-  if (typeof HTMLElement === 'undefined' || !(target instanceof HTMLElement)) return false
-  const tag = target.tagName
-  return tag === 'BUTTON' || tag === 'A' || tag === 'SUMMARY' || target.getAttribute('role') === 'button'
+  if (!target || typeof target !== 'object') return false
+  const element = target as { tagName?: string; getAttribute?: (name: string) => string | null }
+  const tag = typeof element.tagName === 'string' ? element.tagName : ''
+  if (tag === 'BUTTON' || tag === 'A' || tag === 'SUMMARY') return true
+  return typeof element.getAttribute === 'function' && element.getAttribute('role') === 'button'
 }
 
 export function shortcutAction(event: KeyboardEvent): ShortcutAction | null {
@@ -221,6 +224,7 @@ export function shortcutAction(event: KeyboardEvent): ShortcutAction | null {
     return 'selectAll'
   }
   if (event.metaKey || event.ctrlKey || event.altKey) return null
+  if (event.key === ' ' && !isActivateTarget(event.target)) return 'quickLook'
   if (event.key === 'Escape') return 'collapse'
   if (event.key === 'Enter' && !isActivateTarget(event.target)) return 'inspect'
   if (event.key === 'f' || event.key === 'F') return 'specimen'

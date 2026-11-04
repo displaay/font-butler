@@ -52,7 +52,7 @@ function hydrateCatalog(catalog: CatalogFile): CatalogFile {
       applyEntryFacts(entry)
     }
   }
-  catalog.tags = ensureSeedTags(catalog.tags)
+  catalog.tags = ensureSeedTags(catalog.tags, catalog.retiredTagSeeds)
   catalog.familyTags = normalizeFamilyTagAssignments(catalog.familyTags, catalog.tags)
   return catalog
 }

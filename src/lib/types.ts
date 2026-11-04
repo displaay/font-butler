@@ -1,4 +1,5 @@
 import type { AppIconStyle } from '../../shared/appIcon.ts'
+import type { LibraryFilter } from '../../shared/library-filters.ts'
 import type { RetailFamilyCollision } from '../../shared/retail.ts'
 import type { ProjectKind, SmartRuleSet } from '../../shared/smart-projects.ts'
 
@@ -20,6 +21,11 @@ export type FontFaceInfo = {
   namedInstances?: Array<{ name: string; coordinates: Record<string, number> }>
   weight: number
   italic: boolean
+  foundry?: string
+  designer?: string
+  classification?: string
+  widthClass?: number
+  features?: string[]
 }
 
 export type SourceAvailability = 'none' | 'present' | 'missing' | 'offline' | 'unreadable'
@@ -129,6 +135,11 @@ export type SystemFace = {
   instanceNames?: string[]
   weight?: number
   italic?: boolean
+  foundry?: string
+  designer?: string
+  classification?: string
+  widthClass?: number
+  features?: string[]
   format: string
   previewSample?: string
   protected: boolean
@@ -167,19 +178,7 @@ export type DuplicateWarning = {
 
 export type SortMode = 'name' | 'added'
 
-export type LibraryFilter =
-  | 'installed'
-  | 'deactivated'
-  | 'uninstalled'
-  | 'vf'
-  | 'static'
-  | 'source'
-  | 'no-source'
-  | 'computer'
-  | 'adobe'
-  | 'no-destination'
-  | 'otf'
-  | 'ttf'
+export type { LibraryFilter }
 
 export type SavedLibraryFilter = {
   id: string

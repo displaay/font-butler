@@ -344,6 +344,7 @@ app.post('/api/family-tags', async (c) => {
   const body = await c.req.json<{
     op?: string
     name?: string
+    color?: string
     tagId?: string
     familyKeys?: string[]
     present?: boolean
@@ -354,6 +355,12 @@ app.post('/api/family-tags', async (c) => {
     }
     if (body.op === 'rename') {
       return c.json(await service.renameFamilyTag(body.tagId ?? '', body.name ?? ''))
+    }
+    if (body.op === 'update') {
+      return c.json(await service.updateFamilyTag(body.tagId ?? '', body.name ?? '', body.color))
+    }
+    if (body.op === 'delete') {
+      return c.json(await service.deleteFamilyTag(body.tagId ?? ''))
     }
     if (body.op === 'set') {
       return c.json(await service.setFamilyTag(body.familyKeys ?? [], body.tagId ?? '', body.present === true))
