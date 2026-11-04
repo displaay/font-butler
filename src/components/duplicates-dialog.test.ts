@@ -230,3 +230,96 @@ test('Install as asks for a family name only after it is selected', async () => 
     await unmount()
   }
 })
+
+test('Library Health section shows three groups with keeper vs extra and a report-only finding', async () => {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  const fixes: string[] = []
+  const report = {
+    scannedAt: 1,
+    counts: { 'installed-twice': 1, 'missing-source': 1, damaged: 1 },
+    findings: [
+      {
+        id: 'h1',
+        group: 'installed-twice' as const,
+        faceIdentityKey: 'Pitch-Regular',
+        format: 'otf',
+        familyName: 'Pitch',
+        entryIds: ['active', 'extra'],
+        keeperEntryId: 'active',
+        copies: [
+          { entryId: 'active', path: '/Fonts/Pitch.otf', kind: 'installed' as const, live: true, verifiedGood: true, damaged: false, role: 'keeper' as const },
+          { entryId: 'extra', path: '/Fonts/Copy/Pitch.otf', kind: 'installed' as const, live: true, verifiedGood: true, damaged: false, role: 'extra' as const },
+        ],
+        actions: [{ kind: 'park-extra' as const, entryId: 'extra', label: 'Park extra copy' }],
+        reportOnly: false,
+      },
+      {
+        id: 'h2',
+        group: 'missing-source' as const,
+        faceIdentityKey: 'Pitch-Regular',
+        format: 'otf',
+        familyName: 'Pitch',
+        entryIds: ['missing'],
+        copies: [],
+        actions: [{ kind: 'relink' as const, entryId: 'missing', label: 'Relink to the moved file…' }],
+        reportOnly: false,
+      },
+      {
+        id: 'h3',
+        group: 'damaged' as const,
+        faceIdentityKey: 'Pitch-Regular',
+        format: 'otf',
+        familyName: 'Pitch',
+        entryIds: ['bad'],
+        copies: [
+          { entryId: 'bad', path: '/Fonts/Bad.otf', kind: 'source' as const, live: false, verifiedGood: false, damaged: true, reason: 'The font file is shorter than an sfnt header.', role: 'copy' as const },
+        ],
+        actions: [],
+        reportOnly: true,
+        reportReason: 'This damaged file is the only copy of this face, so it is left exactly where it is — never deleted.',
+      },
+    ],
+  }
+  await act(async () => {
+    root.render(
+      createElement(DuplicatesDialog, {
+        open: true,
+        warnings: [],
+        entries: [activeEntry()],
+        busy: false,
+        onClose: () => {},
+        onResolve: () => {},
+        onResolveBatch: () => {},
+        healthReport: report,
+        onScanHealth: () => {},
+        onHealthFix: (action: { kind: string }) => fixes.push(action.kind),
+        onHealthRelink: () => fixes.push('relink-ui'),
+      }),
+    )
+  })
+  try {
+    const dialog = document.body.querySelector('[role="dialog"]')
+    assert.ok(dialog)
+    const text = dialog.textContent ?? ''
+    assert.match(text, /Library Health/)
+    assert.match(text, /Installed twice \(1\)/)
+    assert.match(text, /Missing source file \(1\)/)
+    assert.match(text, /Damaged \/ unreadable \(1\)/)
+    assert.match(text, /Keeper · \/Fonts\/Pitch\.otf · Verified good/)
+    assert.match(text, /Extra copy · \/Fonts\/Copy\/Pitch\.otf/)
+    assert.match(text, /Report only — no safe fix/)
+    const park = buttonNamed(dialog, 'Park extra copy')
+    assert.ok(park)
+    await act(async () => {
+      park.click()
+    })
+    assert.deepEqual(fixes, ['park-extra'])
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  }
+})
