@@ -51,6 +51,11 @@ export const WHATS_NEW_PAGES: AnnouncementPage[] = [
     title: 'Activate until quit',
     body: 'Turn a face on for this session only. Quit the app and it turns back off — unless a project or a normal activate still wants it.',
   },
+  {
+    id: 'new-tag-color',
+    title: 'Tag colors',
+    body: 'Pick a color when you create a tag. The swatch shows up on family cards and in search, so tags are easy to spot.',
+  },
 ]
 
 /** Product announcements shown in the main window (welcome-style dialog) after launch. */

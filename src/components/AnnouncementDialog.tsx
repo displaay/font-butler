@@ -49,6 +49,12 @@ const PAGE_FIGURES: Record<string, PageFigure[]> = {
       alt: 'Library search matching a family tag',
     },
   ],
+  'new-tag-color': [
+    {
+      src: '/announcement/new-tag-color.png',
+      alt: 'New tag dialog with color choices',
+    },
+  ],
 }
 
 function pagesFor(item: Announcement): AnnouncementPage[] {
