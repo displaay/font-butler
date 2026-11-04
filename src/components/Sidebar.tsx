@@ -20,6 +20,7 @@ import {
   List,
   Filter,
   Heart,
+  Import,
   Monitor,
   Pencil,
   Plus,
@@ -606,6 +607,7 @@ export function Sidebar({
   onRemoveProject,
   onCreateProject,
   onOpenDocument,
+  onImportLibrary,
   projectMembershipCounts,
   onEditSmartProject,
   onSnapshotProject,
@@ -671,6 +673,7 @@ export function Sidebar({
   onRemoveProject?: (id: string) => void
   onCreateProject?: () => void
   onOpenDocument?: () => void
+  onImportLibrary?: () => void
   /** Live counts. Smart projects ignore the stored member list. */
   projectMembershipCounts?: Record<string, number>
   onEditSmartProject?: (id: string) => void
@@ -1090,6 +1093,22 @@ export function Sidebar({
                     }}
                   >
                     <FileText />
+                  </Button>
+                ) : null}
+                {onImportLibrary ? (
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className="size-6 text-muted-foreground"
+                    aria-label="Import library organisation"
+                    title="Import Font Book collections or report a FontExplorer X file"
+                    onClick={(event) => {
+                      onImportLibrary()
+                      event.currentTarget.blur()
+                    }}
+                  >
+                    <Import />
                   </Button>
                 ) : null}
                 {onCreateProject ? (

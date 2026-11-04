@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import fs from 'node:fs'
 import path from 'node:path'
+import { normalizeFamilyDetails } from '../shared/family-details.ts'
 import { ensureSeedTags, normalizeFamilyTagAssignments } from '../shared/family-tags.ts'
 import { normalizeFormat } from './formats.ts'
 import type { AppPaths } from './paths.ts'
@@ -54,6 +55,7 @@ function hydrateCatalog(catalog: CatalogFile): CatalogFile {
   }
   catalog.tags = ensureSeedTags(catalog.tags, catalog.retiredTagSeeds)
   catalog.familyTags = normalizeFamilyTagAssignments(catalog.familyTags, catalog.tags)
+  catalog.familyDetails = normalizeFamilyDetails(catalog.familyDetails)
   return catalog
 }
 

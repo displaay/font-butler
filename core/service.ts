@@ -57,6 +57,7 @@ import {
   upsertDuplicateWarning,
 } from './duplicates.ts'
 import { emitEvent } from './events.ts'
+import { persistFamilyComment, persistFamilyRating } from './family-details.ts'
 import {
   applyRetailTrialDefault,
   persistFamilyTagDelete,
@@ -65,6 +66,15 @@ import {
   persistFamilyTagUpdate,
   persistNewFamilyTag,
 } from './family-tags.ts'
+import {
+  applyLibraryImportPlan,
+  buildLibraryImportPlan,
+  parseLibraryImportFiles,
+  type LibraryImportApplyResult,
+  type LibraryImportFileInput,
+  type LibraryImportPlan,
+} from './library-import.ts'
+import type { LibraryImportSetChoice } from '../shared/library-import.ts'
 import { unregisterSessionFonts } from './session-fonts.ts'
 import {
   deleteTestInstallFiles,
@@ -217,6 +227,7 @@ import { postscriptPreview } from './rename.ts'
 import { revealInFileManager } from './reveal.ts'
 import { loadSettings, saveSettings } from './settings.ts'
 import { isAppIconStyle } from '../shared/appIcon.ts'
+import type { FamilyDetail } from '../shared/family-details.ts'
 import type { FamilyTag, FamilyTagAssignment } from '../shared/family-tags.ts'
 import { parseLatinPreview } from '../shared/latinPreview.ts'
 import { normalizeSavedFilters } from './saved-filters.ts'
@@ -604,13 +615,23 @@ export class FontButlerService {
     entries: CatalogEntry[]
     tags: FamilyTag[]
     familyTags: FamilyTagAssignment[]
+    familyDetails: FamilyDetail[]
   } {
     const catalog = loadCatalog(this.paths)
     return {
       entries: catalog.entries,
       tags: catalog.tags ?? [],
       familyTags: catalog.familyTags ?? [],
+      familyDetails: catalog.familyDetails ?? [],
     }
+  }
+
+  setFamilyRating(familyKey: string, rating: number | null) {
+    return persistFamilyRating(this.paths, familyKey, rating)
+  }
+
+  setFamilyComment(familyKey: string, comment: string) {
+    return persistFamilyComment(this.paths, familyKey, comment)
   }
 
   createFamilyTag(name: string, familyKeys: string[] = [], color?: string) {
@@ -3507,6 +3528,34 @@ export class FontButlerService {
     return this.createProject(documentProjectName(report.path, name), draft.memberIds, {
       pins: draft.pins,
       unresolved: draft.unresolved,
+    })
+  }
+
+  planLibraryImport(files: LibraryImportFileInput[]): LibraryImportPlan {
+    const catalog = loadCatalog(this.paths)
+    return buildLibraryImportPlan(
+      parseLibraryImportFiles(files),
+      catalog.entries,
+      loadProjects(this.paths),
+      catalog.tags ?? [],
+      catalog.familyDetails ?? [],
+    )
+  }
+
+  async applyLibraryImport(
+    plan: LibraryImportPlan,
+    choices: Record<string, LibraryImportSetChoice> = {},
+  ): Promise<LibraryImportApplyResult> {
+    return runCatalogTask(async () => {
+      const result = applyLibraryImportPlan(this.paths, plan, choices)
+      const catalog = loadCatalog(this.paths)
+      emitEvent(catalogEvent(catalog.entries, {
+        tags: catalog.tags ?? [],
+        familyTags: catalog.familyTags ?? [],
+        familyDetails: catalog.familyDetails ?? [],
+      }))
+      emitEvent({ type: 'projects', projects: loadProjects(this.paths) })
+      return result
     })
   }
 

@@ -12,6 +12,7 @@ import { getFontNative } from './native.ts'
 import { readFileStat } from './parse.ts'
 import type { AppPaths } from './paths.ts'
 import { moveToTrash } from './reveal.ts'
+import type { FamilyDetail } from '../shared/family-details.ts'
 import type { FamilyTag, FamilyTagAssignment } from '../shared/family-tags.ts'
 import type { CatalogEntry, DuplicateWarning, FontFaceInfo, Notice } from './types.ts'
 
@@ -98,13 +99,18 @@ export function bindEntryToInstalledFile(entry: CatalogEntry, dest: string): voi
 
 export function catalogEvent(
   entries: CatalogEntry[],
-  tags?: { tags?: FamilyTag[]; familyTags?: FamilyTagAssignment[] },
+  tags?: {
+    tags?: FamilyTag[]
+    familyTags?: FamilyTagAssignment[]
+    familyDetails?: FamilyDetail[]
+  },
 ): {
   type: 'catalog'
   entries: CatalogEntry[]
   revision: number
   tags?: FamilyTag[]
   familyTags?: FamilyTagAssignment[]
+  familyDetails?: FamilyDetail[]
 } {
   return {
     type: 'catalog',
@@ -112,12 +118,19 @@ export function catalogEvent(
     revision: currentCatalogGeneration(),
     ...(tags?.tags ? { tags: tags.tags } : {}),
     ...(tags?.familyTags ? { familyTags: tags.familyTags } : {}),
+    ...(tags?.familyDetails ? { familyDetails: tags.familyDetails } : {}),
   }
 }
 
 export function emitCatalog(paths: AppPaths): CatalogEntry[] {
   const catalog = loadCatalog(paths)
-  emitEvent(catalogEvent(catalog.entries, { tags: catalog.tags, familyTags: catalog.familyTags }))
+  emitEvent(
+    catalogEvent(catalog.entries, {
+      tags: catalog.tags,
+      familyTags: catalog.familyTags,
+      familyDetails: catalog.familyDetails,
+    }),
+  )
   return catalog.entries
 }
 

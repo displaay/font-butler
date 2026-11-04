@@ -4,6 +4,7 @@ import { CatalogBatchButtons, SystemBatchButtons } from '@/components/BatchActio
 import { DuplicateCopyBadges, SourceBadge, RetailBadge, StateBadges, FormatBadges, AdobeLogo, TrialBadge } from '@/components/Badges'
 import { Badge } from '@/components/ui/badge'
 import { systemFontFamily } from '@/components/FontFaceStyles'
+import { FamilyDetailsEditor } from '@/components/FamilyDetails'
 import { GlyphGrid } from '@/components/GlyphGrid'
 import { InstanceList, type InstanceActions } from '@/components/InstanceList'
 import { SpecimenWorkspace } from '@/components/SpecimenWorkspace'
@@ -23,6 +24,7 @@ import { entryHasTrackedSource, familyBadgeEntry, familyNameOf, hasManagedInstal
 import type { CatalogBatchPlan, SystemBatchPlan } from '@/lib/batch'
 import { entryHasActiveRetailSync, type CatalogEntry, type FamilyGroup, type PreviewPreferences, type ProjectSet, type RetailSyncView, type SystemFamilyGroup } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import type { FamilyDetail } from '../../shared/family-details.ts'
 
 const SAMPLE = 'The quick brown fox jumps over the lazy type.'
 
@@ -81,6 +83,9 @@ export function Inspector({
   onOpenWithPreview,
   onBake,
   multiSelect,
+  familyDetail,
+  onFamilyRating,
+  onFamilyComment,
   pane = 'details',
   onPaneChange,
   tablistId,
@@ -98,6 +103,9 @@ export function Inspector({
   specimen?: PreviewPreferences
   onSpecimenChange?: (next: PreviewPreferences) => void
   projects?: ProjectSet[]
+  familyDetail?: FamilyDetail
+  onFamilyRating?: (familyKey: string, rating: number | null) => void
+  onFamilyComment?: (familyKey: string, comment: string) => void
   compareEntry?: CatalogEntry | null
   onInstall: () => void
   onInstallAs: () => void
@@ -562,6 +570,14 @@ export function Inspector({
         details={
           <div className="flex flex-col gap-5">
             {notices}
+            {onFamilyRating && onFamilyComment ? (
+              <FamilyDetailsEditor
+                familyKey={group.key}
+                detail={familyDetail}
+                onRating={onFamilyRating}
+                onComment={onFamilyComment}
+              />
+            ) : null}
             {files}
             {meta}
             {versions}

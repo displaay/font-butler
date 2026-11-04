@@ -371,6 +371,28 @@ app.post('/api/family-tags', async (c) => {
   }
 })
 
+app.post('/api/family-details', async (c) => {
+  const body = await c.req.json<{
+    op?: string
+    familyKey?: string
+    rating?: number | null
+    comment?: string
+  }>()
+  try {
+    if (body.op === 'rating') {
+      return c.json(
+        await service.setFamilyRating(body.familyKey ?? '', body.rating ?? null),
+      )
+    }
+    if (body.op === 'comment') {
+      return c.json(await service.setFamilyComment(body.familyKey ?? '', body.comment ?? ''))
+    }
+    return c.json({ error: 'Unknown detail action' }, 400)
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : 'Could not update family details' }, 400)
+  }
+})
+
 app.get('/api/duplicates', (c) => c.json({ duplicates: service.listDuplicates() }))
 
 app.get('/api/library-health', (c) => c.json({ report: service.scanLibraryHealth() }))
@@ -1225,6 +1247,35 @@ app.post('/api/projects/snapshot', async (c) => {
     return c.json({ project: await service.snapshotProject(body.id) })
   } catch (error) {
     return c.json(fail(error, 'Could not save snapshot'), 400)
+  }
+})
+
+app.post('/api/library-import/plan', async (c) => {
+  const body = await c.req.json<{
+    files?: Array<{ name?: string; content?: string; contentBase64?: string }>
+  }>()
+  const files = (body.files ?? []).map((file) => ({
+    name: typeof file.name === 'string' ? file.name : 'library',
+    content: typeof file.content === 'string' ? file.content : '',
+    ...(typeof file.contentBase64 === 'string' ? { contentBase64: file.contentBase64 } : {}),
+  }))
+  try {
+    return c.json({ plan: service.planLibraryImport(files) })
+  } catch (error) {
+    return c.json(fail(error, 'Could not read that library file'), 400)
+  }
+})
+
+app.post('/api/library-import/apply', async (c) => {
+  const body = await c.req.json<{
+    plan?: Parameters<FontButlerService['applyLibraryImport']>[0]
+    choices?: Record<string, 'create' | 'merge' | 'imported-name' | 'skip'>
+  }>()
+  if (!body.plan) return c.json({ error: 'Missing import plan' }, 400)
+  try {
+    return c.json({ result: await service.applyLibraryImport(body.plan, body.choices ?? {}) })
+  } catch (error) {
+    return c.json(fail(error, 'Could not apply that import'), 400)
   }
 })
 
