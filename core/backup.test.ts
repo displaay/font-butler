@@ -218,6 +218,61 @@ test('re-packed archive with edited projects.json is refused and changes nothing
   }
 })
 
+test('archive with stripped or incomplete sidecarSha256 refuses the whole restore', () => {
+  const source = makeLibrary('backup-strip-src-')
+  try {
+    const dest = path.join(source.paths.dataRoot, 'library.cuttlerbackup')
+    createBackup(source.paths, { destinationPath: dest })
+
+    const variants: Array<{ name: string; strip: (manifest: Record<string, unknown>) => void }> = [
+      { name: 'deleted', strip: (m) => { delete m.sidecarSha256 } },
+      { name: 'empty', strip: (m) => { m.sidecarSha256 = {} } },
+      {
+        name: 'missing-key',
+        strip: (m) => {
+          const hashes = { ...(m.sidecarSha256 as Record<string, string>) }
+          delete hashes['projects.json']
+          m.sidecarSha256 = hashes
+        },
+      },
+    ]
+
+    for (const variant of variants) {
+      const target = tempPaths(`backup-strip-${variant.name}-dst-`)
+      try {
+        const zipped = readZipFile(dest)
+        const manifest = JSON.parse(zipped.get('manifest.json')!.toString('utf8')) as Record<string, unknown>
+        variant.strip(manifest)
+        zipped.set('manifest.json', Buffer.from(JSON.stringify(manifest)))
+        const projects = JSON.parse(zipped.get('projects.json')!.toString('utf8')) as { projects: Array<{ name: string }> }
+        projects.projects[0]!.name = 'TAMPERED PROJECT'
+        zipped.set('projects.json', Buffer.from(JSON.stringify(projects)))
+        const tampered = path.join(source.paths.dataRoot, `stripped-${variant.name}.cuttlerbackup`)
+        writeZipFile(tampered, [...zipped.entries()].map(([name, data]) => ({ name, data })))
+
+        // Target state that must survive completely untouched.
+        saveProjects(target, [{ id: 'keep-proj', name: 'Keep me', members: [], desiredActive: false }])
+        const targetSettings = loadSettings(target)
+        targetSettings.theme = 'light'
+        saveSettings(target, targetSettings)
+
+        assert.throws(() => restoreBackup(target, tampered), /sidecarSha256|content fingerprint/, variant.name)
+        assert.throws(() => planRestore(target, tampered), /sidecarSha256|content fingerprint/, variant.name)
+        // Fonts, projects, settings, and Backups are all untouched.
+        assert.equal(loadCatalog(target).entries.length, 0, variant.name)
+        assert.deepEqual(loadProjects(target).map((p) => p.name), ['Keep me'], variant.name)
+        assert.equal(loadSettings(target).theme, 'light', variant.name)
+        assert.equal(fs.existsSync(path.join(target.dataRoot, 'Backups')), false, variant.name)
+        assert.equal(fs.existsSync(path.join(target.dataRoot, 'Restored')), false, variant.name)
+      } finally {
+        cleanup(target)
+      }
+    }
+  } finally {
+    cleanup(source.paths)
+  }
+})
+
 test('font whose hash matches but cannot be parsed is reported and not restored', () => {
   const source = makeLibrary('backup-parse-src-')
   const target = tempPaths('backup-parse-dst-')

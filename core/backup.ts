@@ -19,6 +19,15 @@ export const BACKUP_FORMAT_VERSION = 1
 export const BACKUP_FORMAT = 'cuttlerbackup'
 export const REDACTED = '[redacted]'
 
+/** Every JSON sidecar a backup carries; the manifest must fingerprint each one. */
+export const BACKUP_SIDECAR_NAMES = [
+  'catalog.json',
+  'projects.json',
+  'family-tags.json',
+  'settings.json',
+  'saved-filters.json',
+] as const
+
 export const BACKUP_LICENSE_WARNING =
   'This backup contains your font files as well as your library organisation. It can be as large as your whole font library, and it may contain licensed fonts — keep the file private and only restore it on machines your licences cover.'
 
@@ -500,13 +509,17 @@ export function createBackup(
   const collected = collectLibrary(paths, options.appVersion ?? appVersionFromPackage(), options.includeFonts !== false)
   const { manifest, catalog, projects, settings, fontData } = collected
   const familyTagsPayload = { tags: catalog.tags ?? [], familyTags: catalog.familyTags ?? [] }
-  const sidecars: ZipEntryInput[] = [
-    { name: 'catalog.json', data: Buffer.from(JSON.stringify(catalog, null, 2)) },
-    { name: 'projects.json', data: Buffer.from(JSON.stringify({ version: 2, projects }, null, 2)) },
-    { name: 'family-tags.json', data: Buffer.from(JSON.stringify(familyTagsPayload, null, 2)) },
-    { name: 'settings.json', data: Buffer.from(JSON.stringify(settings, null, 2)) },
-    { name: 'saved-filters.json', data: Buffer.from(JSON.stringify(settings.savedFilters ?? [], null, 2)) },
-  ]
+  const sidecarData: Record<(typeof BACKUP_SIDECAR_NAMES)[number], unknown> = {
+    'catalog.json': catalog,
+    'projects.json': { version: 2, projects },
+    'family-tags.json': familyTagsPayload,
+    'settings.json': settings,
+    'saved-filters.json': settings.savedFilters ?? [],
+  }
+  const sidecars: ZipEntryInput[] = BACKUP_SIDECAR_NAMES.map((name) => ({
+    name,
+    data: Buffer.from(JSON.stringify(sidecarData[name], null, 2)),
+  }))
   manifest.sidecarSha256 = Object.fromEntries(sidecars.map((s) => [s.name, fingerprintBuffer(s.data)]))
   const entries: ZipEntryInput[] = [
     { name: 'manifest.json', data: Buffer.from(JSON.stringify(manifest, null, 2)) },
@@ -641,12 +654,28 @@ function verifyArchive(archivePath: string): VerifiedArchive {
 
     // A re-packed archive with edited organisation data is refused outright:
     // nothing — fonts or organisation — is applied from a tampered file.
-    if (manifest.sidecarSha256) {
-      for (const [name, expected] of Object.entries(manifest.sidecarSha256)) {
-        const data = entries.get(name)
-        if (!data || fingerprintBuffer(data) !== expected) {
-          throw new Error(`This backup has been changed since it was made (${name} does not match its fingerprint). Restore was refused and nothing was changed.`)
-        }
+    // The sidecar fingerprints are mandatory and must cover every sidecar:
+    // a manifest that drops them (missing field, empty, or a missing key)
+    // is itself a tampered manifest and is refused before any mutation.
+    const sidecarSha256 = manifest.sidecarSha256
+    if (!sidecarSha256 || typeof sidecarSha256 !== 'object' || Array.isArray(sidecarSha256)) {
+      throw new Error('This backup is missing its content fingerprints (sidecarSha256). Restore was refused and nothing was changed.')
+    }
+    for (const name of BACKUP_SIDECAR_NAMES) {
+      const expected = sidecarSha256[name]
+      if (typeof expected !== 'string' || !/^[a-f0-9]{64}$/.test(expected)) {
+        throw new Error(`This backup is missing its content fingerprint for ${name} (sidecarSha256). Restore was refused and nothing was changed.`)
+      }
+      const data = entries.get(name)
+      if (!data || fingerprintBuffer(data) !== expected) {
+        throw new Error(`This backup has been changed since it was made (${name} does not match its fingerprint). Restore was refused and nothing was changed.`)
+      }
+    }
+    for (const [name, expected] of Object.entries(sidecarSha256)) {
+      if ((BACKUP_SIDECAR_NAMES as readonly string[]).includes(name)) continue
+      const data = entries.get(name)
+      if (!data || fingerprintBuffer(data) !== expected) {
+        throw new Error(`This backup has been changed since it was made (${name} does not match its fingerprint). Restore was refused and nothing was changed.`)
       }
     }
 
