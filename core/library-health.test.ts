@@ -134,10 +134,13 @@ test('missing source offers relink, refuses entry removal as the only copy, and 
   await withService(async (service, paths) => {
     const source = path.join(paths.dataRoot, 'external', 'Health.ttf')
     const moved = path.join(paths.dataRoot, 'moved', 'Health.ttf')
+    const installed = path.join(paths.installDir, 'Health.ttf')
     writeTestFont(source, 'Health', 'Health-Regular')
     fs.mkdirSync(path.dirname(moved), { recursive: true })
     fs.copyFileSync(source, moved)
-    const entry = makeEntry('entry-missing', source, undefined)
+    fs.mkdirSync(paths.installDir, { recursive: true })
+    fs.copyFileSync(source, installed)
+    const entry = makeEntry('entry-missing', source, installed)
     fs.rmSync(source)
     entry.sourcePresent = false
     saveCatalog(paths, { version: 1, entries: [entry] })
@@ -151,6 +154,12 @@ test('missing source offers relink, refuses entry removal as the only copy, and 
       finding.actions.some((action) => action.kind === 'remove-entry'),
       false,
       'entry removal is not offered when it is the only copy',
+    )
+    assert.equal(finding.keeperEntryId, 'entry-missing')
+    assert.equal(
+      finding.actions.some((action) => action.kind === 'park-installed'),
+      false,
+      'the verified-good keeper installed copy is not offered for parking',
     )
     await assert.rejects(
       () => service.applyLibraryHealthFix({ action: 'remove-entry', entryId: 'entry-missing' }),
@@ -287,5 +296,137 @@ test('fix refuses to park the last verified-good copy', async () => {
       /keeper/,
     )
     assert.equal(fs.existsSync(installedA), true, 'keeper remains installed after refused fixes')
+  })
+})
+
+test('park-installed refuses to park the verified-good keeper when it is the only copy', async () => {
+  await withService(async (service, paths) => {
+    const source = path.join(paths.dataRoot, 'external', 'Health.ttf')
+    const installed = path.join(paths.installDir, 'Health.ttf')
+    writeTestFont(source, 'Health', 'Health-Regular')
+    fs.mkdirSync(paths.installDir, { recursive: true })
+    fs.copyFileSync(source, installed)
+    const entry = makeEntry('entry-only', source, installed)
+    fs.rmSync(source)
+    entry.sourcePresent = false
+    saveCatalog(paths, { version: 1, entries: [entry] })
+
+    const report = service.scanLibraryHealth()
+    const finding = report.findings.find((item) => item.group === 'missing-source')
+    assert.ok(finding)
+    assert.equal(finding.keeperEntryId, 'entry-only')
+    assert.equal(finding.actions.some((action) => action.kind === 'park-installed'), false)
+    await assert.rejects(
+      () => service.applyLibraryHealthFix({ action: 'park-installed', entryId: 'entry-only' }),
+      /no longer available|keeper|verified-good/,
+    )
+    assert.equal(fs.existsSync(installed), true, 'keeper stays installed')
+    assert.equal(loadCatalog(paths).entries[0]?.status, 'installed')
+  })
+})
+
+test('park-installed does not park the keeper while the extra stays installed', async () => {
+  await withService(async (service, paths) => {
+    const sourceA = path.join(paths.dataRoot, 'ext-a', 'Health.ttf')
+    const sourceB = path.join(paths.dataRoot, 'ext-b', 'Health.ttf')
+    const installedA = path.join(paths.installDir, 'a', 'Health.ttf')
+    const installedB = path.join(paths.installDir, 'b', 'Health.ttf')
+    writeTestFont(sourceA, 'Health', 'Health-Regular')
+    fs.mkdirSync(path.dirname(sourceB), { recursive: true })
+    fs.copyFileSync(sourceA, sourceB)
+    fs.mkdirSync(path.dirname(installedA), { recursive: true })
+    fs.mkdirSync(path.dirname(installedB), { recursive: true })
+    fs.copyFileSync(sourceA, installedA)
+    fs.copyFileSync(sourceA, installedB)
+    const keeper = makeEntry('entry-a', sourceA, installedA)
+    const extra = makeEntry('entry-b', sourceB, installedB)
+    fs.rmSync(sourceA)
+    fs.rmSync(sourceB)
+    saveCatalog(paths, { version: 1, entries: [keeper, extra] })
+
+    const report = service.scanLibraryHealth()
+    const finding = report.findings.find(
+      (item) => item.group === 'missing-source' && item.entryIds.includes('entry-a'),
+    )
+    assert.ok(finding, JSON.stringify(report.findings))
+    assert.equal(finding.keeperEntryId, 'entry-a')
+    assert.equal(finding.actions.some((action) => action.kind === 'park-installed'), false)
+    assert.equal(finding.actions.some((action) => action.kind === 'remove-entry'), false)
+    await assert.rejects(
+      () => service.applyLibraryHealthFix({ action: 'park-installed', entryId: 'entry-a' }),
+      /no longer available|keeper|verified-good/,
+    )
+    assert.equal(fs.existsSync(installedA), true, 'keeper stays installed')
+    assert.equal(fs.existsSync(installedB), true, 'extra is untouched by the refused fix')
+  })
+})
+
+test('missing source with no verified-good copy is report-only and the only damaged file is not parked', async () => {
+  await withService(async (service, paths) => {
+    const source = path.join(paths.dataRoot, 'external', 'Health.ttf')
+    const installed = path.join(paths.installDir, 'Health.ttf')
+    writeTestFont(source, 'Health', 'Health-Regular')
+    fs.mkdirSync(paths.installDir, { recursive: true })
+    fs.copyFileSync(source, installed)
+    const entry = makeEntry('entry-bad-only', source, installed)
+    fs.rmSync(source)
+    entry.sourcePresent = false
+    const bytes = fs.readFileSync(installed)
+    fs.writeFileSync(installed, bytes.subarray(0, Math.floor(bytes.length / 3)))
+    saveCatalog(paths, { version: 1, entries: [entry] })
+
+    const report = service.scanLibraryHealth()
+    const finding = report.findings.find((item) => item.group === 'missing-source')
+    assert.ok(finding, JSON.stringify(report.findings))
+    assert.equal(finding.reportOnly, true)
+    assert.deepEqual(finding.actions, [])
+    await assert.rejects(
+      () => service.applyLibraryHealthFix({ action: 'park-installed', entryId: 'entry-bad-only' }),
+      /no longer available/,
+    )
+    assert.equal(fs.existsSync(installed), true, 'the only damaged file stays exactly where it was')
+    assert.equal(loadCatalog(paths).entries[0]?.status, 'installed')
+  })
+})
+
+test('two entries sharing one installed path: parking the extra does not move the keeper file', async () => {
+  await withService(async (service, paths) => {
+    const sourceA = path.join(paths.dataRoot, 'a', 'Health.ttf')
+    const sourceB = path.join(paths.dataRoot, 'b', 'Health.ttf')
+    const shared = path.join(paths.installDir, 'Health.ttf')
+    writeTestFont(sourceA, 'Health', 'Health-Regular')
+    fs.mkdirSync(path.dirname(sourceB), { recursive: true })
+    fs.copyFileSync(sourceA, sourceB)
+    fs.mkdirSync(paths.installDir, { recursive: true })
+    fs.copyFileSync(sourceA, shared)
+    const keeper = makeEntry('entry-a', sourceA, shared)
+    const extra = makeEntry('entry-b', sourceB, shared)
+    saveCatalog(paths, { version: 1, entries: [keeper, extra] })
+
+    const report = service.scanLibraryHealth()
+    const finding = report.findings.find((item) => item.group === 'installed-twice')
+    assert.ok(finding, JSON.stringify(report.findings))
+    assert.equal(finding.keeperEntryId, 'entry-a')
+    assert.equal(
+      finding.actions.some((action) => action.kind === 'park-extra'),
+      false,
+      'no park is offered when the extra shares the keeper installed file',
+    )
+    await assert.rejects(
+      () => service.applyLibraryHealthFix({ action: 'park-extra', entryId: 'entry-b' }),
+      /no longer available|shares its installed file|verified-good/,
+    )
+    // Direct guard also refuses on the shared file, not just on entry ids.
+    const entries = loadCatalog(paths).entries
+    const key = faceIdentityKey(keeper.faces, entryFormat(keeper))
+    assert.throws(
+      () => assertParkKeepsVerifiedGood(entries, paths, key, 'entry-b', 'entry-a'),
+      /shares its installed file/,
+    )
+    assert.equal(fs.existsSync(shared), true, 'the only installed file stays at the keeper path')
+    const after = loadCatalog(paths)
+    assert.equal(after.entries.find((item) => item.id === 'entry-a')?.status, 'installed')
+    assert.equal(after.entries.find((item) => item.id === 'entry-a')?.installedPath, shared)
+    assert.equal(fs.existsSync(path.join(paths.disabledDir, 'Health.ttf')), false)
   })
 })

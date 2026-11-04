@@ -867,8 +867,10 @@ export class FontButlerService {
       }
 
       if (input.action === 'park-installed') {
-        // Parking keeps the bytes in the vault, so turning the font off
-        // never loses it; the source file is never touched.
+        // Same keeper guard as every other park: the verified-good keeper
+        // is never parked, and parking must leave a distinct verified-good
+        // file in place. Parking keeps bytes in the vault; sources untouched.
+        assertParkKeepsVerifiedGood(before.entries, this.paths, faceKey, input.entryId, finding.keeperEntryId)
         const catalog = loadCatalog(this.paths)
         const latest = findById(catalog, input.entryId)
         if (!latest) throw new Error('Font is not in the library.')

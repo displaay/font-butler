@@ -178,6 +178,27 @@ export function scanLibraryHealth(entries: CatalogEntry[], paths: AppPaths): Lib
     byFace.set(key, list)
   }
 
+  // Live-path ownership across entries: parking one entry must never move a
+  // file that another entry is installed from (one shared file on disk).
+  const livePathOwners = new Map<string, Set<string>>()
+  for (const [entryId, copies] of copiesByEntry) {
+    for (const copy of copies) {
+      if (!copy.live) continue
+      const key = path.resolve(copy.path)
+      const owners = livePathOwners.get(key) ?? new Set<string>()
+      owners.add(entryId)
+      livePathOwners.set(key, owners)
+    }
+  }
+  const hasUnsharedLiveCopy = (entryId: string): boolean =>
+    (copiesByEntry.get(entryId) ?? []).some(
+      (copy) => copy.live && (livePathOwners.get(path.resolve(copy.path))?.size ?? 0) <= 1,
+    )
+  const sharesLivePathWithOther = (entryId: string): boolean =>
+    (copiesByEntry.get(entryId) ?? []).some(
+      (copy) => copy.live && (livePathOwners.get(path.resolve(copy.path))?.size ?? 0) > 1,
+    )
+
   // (1) Installed twice: same face+format live in more than one entry.
   for (const [faceKey, group] of byFace) {
     const liveEntries = group.filter((entry) =>
@@ -189,9 +210,10 @@ export function scanLibraryHealth(entries: CatalogEntry[], paths: AppPaths): Lib
     const entryIds = liveEntries.map((entry) => entry.id)
     const actions: LibraryHealthAction[] = keeper
       ? liveEntries
-          .filter((entry) => entry.id !== keeper.entryId)
+          .filter((entry) => entry.id !== keeper.entryId && hasUnsharedLiveCopy(entry.id))
           .map((entry) => ({ kind: 'park-extra' as const, entryId: entry.id, label: 'Park extra copy' }))
       : []
+    const sharedOnly = Boolean(keeper) && actions.length === 0 && liveEntries.some((entry) => sharesLivePathWithOther(entry.id))
     findings.push({
       id: findingId('installed-twice', faceKey, entryIds),
       group: 'installed-twice',
@@ -202,8 +224,12 @@ export function scanLibraryHealth(entries: CatalogEntry[], paths: AppPaths): Lib
       copies: withRoles(groupCopies, keeper),
       ...(keeper ? { keeperEntryId: keeper.entryId } : {}),
       actions,
-      reportOnly: !keeper,
-      ...(keeper ? {} : { reportReason: 'No verified-good copy of this face was found, so nothing is parked. Check the files and re-run the scan.' }),
+      reportOnly: !keeper || sharedOnly,
+      ...(!keeper
+        ? { reportReason: 'No verified-good copy of this face was found, so nothing is parked. Check the files and re-run the scan.' }
+        : sharedOnly
+          ? { reportReason: 'These entries share one installed file, so parking an extra would move the file the keeper is installed from. Nothing is parked.' }
+          : {}),
     })
   }
 
@@ -229,20 +255,45 @@ export function scanLibraryHealth(entries: CatalogEntry[], paths: AppPaths): Lib
       })
       continue
     }
-    const actions: LibraryHealthAction[] = [
-      { kind: 'relink', entryId: entry.id, label: 'Relink to the moved file…' },
-    ]
-    if (copies.some((copy) => copy.live)) {
-      actions.push({ kind: 'park-installed', entryId: entry.id, label: 'Park the installed copy' })
-    }
-    const otherGood = faceKey
-      ? allCopies.some((copy) => {
-          if (copy.entryId === entry.id || !copy.verifiedGood) return false
+    // Keeper is face-wide (format included), not just this entry's copies.
+    const faceCopies = faceKey
+      ? allCopies.filter((copy) => {
           const owner = entries.find((item) => item.id === copy.entryId)
           return owner ? faceIdentityKey(owner.faces, entryFormat(owner)) === faceKey : false
         })
-      : false
-    if (otherGood) {
+      : copies
+    const keeper = pickKeeper(faceCopies)
+    if (!keeper) {
+      findings.push({
+        id: findingId('missing-source', faceKey, [entry.id]),
+        group: 'missing-source',
+        faceIdentityKey: faceKey,
+        format: entryFormat(entry),
+        familyName: familyOf([entry]),
+        entryIds: [entry.id],
+        copies: withRoles(copies, undefined),
+        actions: [],
+        reportOnly: true,
+        reportReason:
+          'No verified-good copy of this face was found, so nothing is parked or removed. Relink a good file or restore it from a backup.',
+      })
+      continue
+    }
+    const entryCopyPaths = new Set(copies.map((copy) => path.resolve(copy.path)))
+    const otherGoodDistinct = faceCopies.some(
+      (copy) => copy.entryId !== entry.id && copy.verifiedGood && !entryCopyPaths.has(path.resolve(copy.path)),
+    )
+    const isKeeperEntry = keeper.entryId === entry.id
+    const actions: LibraryHealthAction[] = [
+      { kind: 'relink', entryId: entry.id, label: 'Relink to the moved file…' },
+    ]
+    // The verified-good keeper is never parked — not as the only copy, and
+    // not while an extra stays installed. Parking also needs an unshared
+    // live file so it cannot move a file another entry is installed from.
+    if (copies.some((copy) => copy.live) && !isKeeperEntry && otherGoodDistinct && hasUnsharedLiveCopy(entry.id)) {
+      actions.push({ kind: 'park-installed', entryId: entry.id, label: 'Park the installed copy' })
+    }
+    if (!isKeeperEntry && otherGoodDistinct) {
       actions.push({ kind: 'remove-entry', entryId: entry.id, label: 'Remove this catalog entry only' })
     }
     findings.push({
@@ -252,7 +303,8 @@ export function scanLibraryHealth(entries: CatalogEntry[], paths: AppPaths): Lib
       format: entryFormat(entry),
       familyName: familyOf([entry]),
       entryIds: [entry.id],
-      copies: withRoles(copies, pickKeeper(copies)),
+      copies: withRoles(copies, keeper),
+      keeperEntryId: keeper.entryId,
       actions,
       reportOnly: false,
       ...(availability === 'unreadable' ? { reportReason: 'The source file is present but unreadable.' } : {}),
@@ -354,8 +406,29 @@ export function assertParkKeepsVerifiedGood(
   if (keeperEntryId && keeperEntryId === entryId) {
     throw new Error('That copy is the verified-good keeper for this face, so it will not be parked.')
   }
+  const target = entries.find((entry) => entry.id === entryId)
+  const targetCopies = target ? copiesOfEntry(target, paths) : []
+  const targetPaths = new Set(targetCopies.map((copy) => path.resolve(copy.path)))
+  const targetLivePaths = new Set(
+    targetCopies.filter((copy) => copy.live).map((copy) => path.resolve(copy.path)),
+  )
+  // One file on disk can back two catalog entries. Parking the target would
+  // rename that file out from under the other entry — refuse, whoever owns it.
+  for (const other of entries) {
+    if (other.id === entryId) continue
+    const shared = copiesOfEntry(other, paths).some(
+      (copy) => copy.live && targetLivePaths.has(path.resolve(copy.path)),
+    )
+    if (shared) {
+      throw new Error(
+        'That copy shares its installed file with another copy of this face, so parking it would move the file the other copy is installed from.',
+      )
+    }
+  }
+  // The surviving verified-good copy must be a different file, not the same
+  // path under another entry id.
   const remaining = verifiedGoodCopiesForFace(entries, paths, faceKey).some(
-    (copy) => copy.entryId !== entryId,
+    (copy) => copy.entryId !== entryId && !targetPaths.has(path.resolve(copy.path)),
   )
   if (!remaining) {
     throw new Error('Parking that copy would leave no verified-good copy of this face, so it will not be parked.')
