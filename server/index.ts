@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { contentDisposition, shouldIncludeBootstrapToken } from '../core/auth.ts'
 import { emitEvent } from '../core/events.ts'
+import { mountDocumentFontsRoute } from './document-fonts-route.ts'
 import { mountEventsRoutes } from './events-stream.ts'
 import { isFullyUnderAnyRoot } from '../core/containment.ts'
 import { MAX_UPLOAD_BATCH_BYTES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES } from '../core/constants.ts'
@@ -766,6 +767,7 @@ app.post('/api/system/deactivate', async (c) => {
 
 mountUserFontCacheRoute(app, service)
 mountSessionLogoutRoutes(app, service)
+mountDocumentFontsRoute(app, () => service.listCatalog())
 
 app.post('/api/caches/office', async (c) => {
   try {

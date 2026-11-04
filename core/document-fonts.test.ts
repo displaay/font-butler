@@ -1,0 +1,379 @@
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import zlib from 'node:zlib'
+import { test } from 'node:test'
+import { Hono } from 'hono'
+import { reportDocumentFonts, type DocumentFontReport } from './document-fonts.ts'
+import { mountDocumentFontsRoute } from '../server/document-fonts-route.ts'
+import type { CatalogEntry, FontStatus } from './types.ts'
+
+test('pdf BaseFont strips a subset prefix and classifies on, off, and missing', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-doc-pdf-'))
+  try {
+    const pdf = path.join(dir, 'Sample.pdf')
+    fs.writeFileSync(
+      pdf,
+      [
+        '%PDF-1.4',
+        '1 0 obj',
+        '<< /Type /Font /Subtype /Type1 /BaseFont /ABCDEF+Family-Bold >>',
+        'endobj',
+        '2 0 obj',
+        '<< /Type /Font /Subtype /TrueType /BaseFont /Family-Regular >>',
+        'endobj',
+        '3 0 obj',
+        '<< /Type /Font /Subtype /Type1 /BaseFont /NotInLibrary-Regular >>',
+        'endobj',
+        '4 0 obj',
+        '<< /Type /Font /Subtype /Type1 /BaseFont /ABCDEF+Family-Bold >>',
+        'endobj',
+        'trailer << >>',
+        '%%EOF',
+        '',
+      ].join('\n'),
+    )
+    const report = reportDocumentFonts(pdf, [
+      catalogEntry({
+        id: 'bold',
+        postscriptName: 'Family-Bold',
+        familyName: 'Family',
+        styleName: 'Bold',
+        status: 'installed',
+        installedFingerprint: 'fp-bold',
+      }),
+      catalogEntry({
+        id: 'regular',
+        postscriptName: 'Family-Regular',
+        familyName: 'Family',
+        styleName: 'Regular',
+        status: 'deactivated',
+        installedFingerprint: 'fp-regular',
+      }),
+    ])
+    assert.equal(report.kind, 'pdf')
+    assert.equal(report.path, path.resolve(pdf))
+    assert.deepEqual(
+      report.fonts.map((font) => font.postscriptName),
+      ['Family-Bold', 'Family-Regular', 'NotInLibrary-Regular'],
+    )
+    assert.equal(report.fonts[0]?.status, 'on')
+    assert.equal(report.fonts[0]?.assetId, 'bold')
+    assert.equal(report.fonts[0]?.installedFingerprint, 'fp-bold')
+    assert.equal(report.fonts[0]?.matchedBy, 'postscript')
+    assert.equal(report.fonts[1]?.status, 'in-library-off')
+    assert.equal(report.fonts[1]?.assetId, 'regular')
+    assert.equal(report.fonts[1]?.installedFingerprint, undefined)
+    assert.equal(report.fonts[2]?.status, 'missing')
+    assert.equal(report.fonts[2]?.assetId, undefined)
+    assert.equal(report.fonts[2]?.installedFingerprint, undefined)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('pdf reads BaseFont names from a FlateDecode stream, including a hex escape', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-doc-flate-'))
+  try {
+    const pdf = path.join(dir, 'Compressed.pdf')
+    const bytes = pdfWithFlateBaseFont('ABCDEF+Family#2DBold')
+    assert.equal(bytes.includes(Buffer.from('/BaseFont')), false)
+    fs.writeFileSync(pdf, bytes)
+    const report = reportDocumentFonts(pdf, [
+      catalogEntry({
+        id: 'bold',
+        postscriptName: 'Family-Bold',
+        familyName: 'Family',
+        styleName: 'Bold',
+        status: 'outdated',
+        installedFingerprint: 'fp-live',
+      }),
+    ])
+    assert.equal(report.fonts.length, 1)
+    assert.equal(report.fonts[0]?.postscriptName, 'Family-Bold')
+    assert.equal(report.fonts[0]?.status, 'on')
+    assert.equal(report.fonts[0]?.installedFingerprint, 'fp-live')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('idml snippet matches PostScript name, then family and style, and does not pin a different cut', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-doc-idml-'))
+  try {
+    const snippet = path.join(dir, 'Snippet.idml')
+    fs.writeFileSync(snippet, idmlFontsXml())
+    const report = reportDocumentFonts(snippet, idmlCatalog())
+    assertIdmlClassification(report)
+
+    const zipped = path.join(dir, 'Package.idml')
+    fs.writeFileSync(
+      zipped,
+      zipPackage([
+        { name: 'mimetype', data: Buffer.from('application/vnd.adobe.indesign-idml-package') },
+        { name: 'Resources/Fonts.xml', data: Buffer.from(idmlFontsXml()) },
+      ]),
+    )
+    assertIdmlClassification(reportDocumentFonts(zipped, idmlCatalog()))
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('a lowercase plus tag is not a subset prefix, and an active duplicate wins', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-doc-prefix-'))
+  try {
+    const pdf = path.join(dir, 'Prefix.pdf')
+    fs.writeFileSync(
+      pdf,
+      '%PDF-1.4\n1 0 obj\n<< /BaseFont /abcdef+Family-Bold >>\nendobj\n%%EOF\n',
+    )
+    const report = reportDocumentFonts(pdf, [
+      catalogEntry({
+        id: 'off',
+        postscriptName: 'abcdef+Family-Bold',
+        familyName: 'Family',
+        styleName: 'Bold',
+        status: 'uninstalled',
+      }),
+      catalogEntry({
+        id: 'on',
+        postscriptName: 'abcdef+Family-Bold',
+        familyName: 'Family',
+        styleName: 'Bold',
+        status: 'installed',
+        installedFingerprint: 'fp-on',
+      }),
+    ])
+    assert.equal(report.fonts.length, 1)
+    assert.equal(report.fonts[0]?.postscriptName, 'abcdef+Family-Bold')
+    assert.equal(report.fonts[0]?.assetId, 'on')
+    assert.equal(report.fonts[0]?.status, 'on')
+    assert.equal(report.fonts[0]?.installedFingerprint, 'fp-on')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('POST /api/documents/fonts reports a file and does not require a project write', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-doc-api-'))
+  try {
+    const pdf = path.join(dir, 'Note.pdf')
+    fs.writeFileSync(
+      pdf,
+      '%PDF-1.4\n1 0 obj\n<< /BaseFont /ABCDEF+Family-Bold >>\nendobj\n2 0 obj\n<< /BaseFont /Missing-Face >>\nendobj\n%%EOF\n',
+    )
+    let reads = 0
+    const app = new Hono()
+    mountDocumentFontsRoute(app, () => {
+      reads += 1
+      return [
+        catalogEntry({
+          id: 'bold',
+          postscriptName: 'Family-Bold',
+          familyName: 'Family',
+          styleName: 'Bold',
+          status: 'installed',
+          installedFingerprint: 'fp-bold',
+        }),
+      ]
+    })
+
+    const missing = await app.request('/api/documents/fonts', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+    assert.equal(missing.status, 400)
+    assert.equal(((await missing.json()) as { error?: string }).error, 'Missing path')
+
+    const office = await app.request('/api/documents/fonts', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: path.join(dir, 'Note.docx') }),
+    })
+    assert.equal(office.status, 400)
+    assert.equal(
+      ((await office.json()) as { error?: string }).error,
+      'Document fonts can be read from PDF and IDML files.',
+    )
+
+    const response = await app.request('/api/documents/fonts', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: pdf }),
+    })
+    assert.equal(response.status, 200)
+    const body = (await response.json()) as DocumentFontReport
+    assert.equal(body.kind, 'pdf')
+    assert.equal(body.fonts[0]?.status, 'on')
+    assert.equal(body.fonts[0]?.assetId, 'bold')
+    assert.equal(body.fonts[1]?.status, 'missing')
+    assert.equal(body.fonts[1]?.postscriptName, 'Missing-Face')
+    assert.equal(reads, 1)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+function assertIdmlClassification(report: DocumentFontReport): void {
+  assert.equal(report.kind, 'idml')
+  assert.deepEqual(
+    report.fonts.map((font) => ({
+      postscriptName: font.postscriptName,
+      familyName: font.familyName,
+      styleName: font.styleName,
+      status: font.status,
+      assetId: font.assetId,
+      installedFingerprint: font.installedFingerprint,
+      matchedBy: font.matchedBy,
+    })),
+    [
+      {
+        postscriptName: 'Family-Bold',
+        familyName: 'Family',
+        styleName: 'Bold',
+        status: 'on',
+        assetId: 'bold',
+        installedFingerprint: 'fp-bold',
+        matchedBy: 'postscript',
+      },
+      {
+        postscriptName: 'OtherCut-Regular',
+        familyName: 'Family',
+        styleName: 'Regular',
+        status: 'on',
+        assetId: 'regular',
+        installedFingerprint: undefined,
+        matchedBy: 'family-style',
+      },
+      {
+        postscriptName: 'Nope-Regular',
+        familyName: 'Nope',
+        styleName: 'Regular',
+        status: 'missing',
+        assetId: undefined,
+        installedFingerprint: undefined,
+        matchedBy: undefined,
+      },
+    ],
+  )
+}
+
+function idmlCatalog(): CatalogEntry[] {
+  return [
+    catalogEntry({
+      id: 'bold',
+      postscriptName: 'Family-Bold',
+      familyName: 'Family',
+      styleName: 'Bold',
+      status: 'installed',
+      installedFingerprint: 'fp-bold',
+    }),
+    catalogEntry({
+      id: 'regular',
+      postscriptName: 'Family-Regular',
+      familyName: 'Family',
+      styleName: 'Regular',
+      status: 'installed',
+      installedFingerprint: 'fp-should-not-pin',
+    }),
+  ]
+}
+
+function idmlFontsXml(): string {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<idPkg:Fonts xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging" DOMVersion="8.0">
+  <Font Self="d1" FontFamily="Family" Name="Family Bold" PostScriptName="Family-Bold" FontStyleName="Bold" />
+  <Font Self="d2" FontFamily="Family" Name="Family" PostScriptName="OtherCut-Regular" FontStyleName="Regular" />
+  <Font Self="d3" FontFamily="Nope" Name="Nope" PostScriptName="Nope-Regular" FontStyleName="Regular" />
+</idPkg:Fonts>
+`
+}
+
+function catalogEntry(options: {
+  id: string
+  postscriptName: string
+  familyName: string
+  styleName: string
+  status: FontStatus
+  installedFingerprint?: string
+}): CatalogEntry {
+  return {
+    id: options.id,
+    sourcePath: `/library/${options.postscriptName}.otf`,
+    sourceMtimeMs: 1,
+    sourceSize: 1,
+    status: options.status,
+    installedFingerprint: options.installedFingerprint,
+    faces: [
+      {
+        familyName: options.familyName,
+        styleName: options.styleName,
+        fullName: `${options.familyName} ${options.styleName}`,
+        postscriptName: options.postscriptName,
+        isVariable: false,
+        instanceCount: 0,
+        instanceNames: [],
+        weight: 400,
+        italic: false,
+      },
+    ],
+    format: 'otf',
+    addedAt: 1,
+    updatedAt: 1,
+  }
+}
+
+function pdfWithFlateBaseFont(name: string): Buffer {
+  const inner = Buffer.from(`<< /Type /Font /Subtype /Type1 /BaseFont /${name} >>`)
+  const compressed = zlib.deflateSync(inner)
+  const header = Buffer.from(
+    `%PDF-1.4\n1 0 obj\n<< /Filter /FlateDecode /Length ${compressed.length} >>\nstream\n`,
+  )
+  const footer = Buffer.from('\nendstream\nendobj\ntrailer\n<< >>\n%%EOF\n')
+  return Buffer.concat([header, compressed, footer])
+}
+
+function zipPackage(files: { name: string; data: Buffer }[]): Buffer {
+  const locals: Buffer[] = []
+  const centrals: Buffer[] = []
+  let offset = 0
+  for (const file of files) {
+    const name = Buffer.from(file.name)
+    const stored = file.name === 'mimetype'
+    const payload = stored ? file.data : zlib.deflateRawSync(file.data)
+    const crc = zlib.crc32(file.data)
+    const local = Buffer.alloc(30)
+    local.writeUInt32LE(0x04034b50, 0)
+    local.writeUInt16LE(20, 4)
+    local.writeUInt16LE(stored ? 0 : 8, 8)
+    local.writeUInt32LE(crc, 14)
+    local.writeUInt32LE(payload.length, 18)
+    local.writeUInt32LE(file.data.length, 22)
+    local.writeUInt16LE(name.length, 26)
+    const chunk = Buffer.concat([local, name, payload])
+    const central = Buffer.alloc(46)
+    central.writeUInt32LE(0x02014b50, 0)
+    central.writeUInt16LE(20, 4)
+    central.writeUInt16LE(20, 6)
+    central.writeUInt16LE(stored ? 0 : 8, 10)
+    central.writeUInt32LE(crc, 16)
+    central.writeUInt32LE(payload.length, 20)
+    central.writeUInt32LE(file.data.length, 24)
+    central.writeUInt16LE(name.length, 28)
+    central.writeUInt32LE(offset, 42)
+    centrals.push(Buffer.concat([central, name]))
+    locals.push(chunk)
+    offset += chunk.length
+  }
+  const centralDir = Buffer.concat(centrals)
+  const eocd = Buffer.alloc(22)
+  eocd.writeUInt32LE(0x06054b50, 0)
+  eocd.writeUInt16LE(files.length, 8)
+  eocd.writeUInt16LE(files.length, 10)
+  eocd.writeUInt32LE(centralDir.length, 12)
+  eocd.writeUInt32LE(offset, 16)
+  return Buffer.concat([...locals, centralDir, eocd])
+}
