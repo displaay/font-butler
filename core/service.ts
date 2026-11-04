@@ -164,12 +164,19 @@ import {
   loadProjects,
   pinConflict,
   pinnedFingerprints,
+  projectActivationMembers,
   projectActivationState,
   removeProject,
   removeProjectOwner,
   setMemberUnsatisfied,
   upsertProject,
 } from './projects.ts'
+import {
+  isSmartProject,
+  normalizeSmartRuleSet,
+  smartSnapshotName,
+  type SmartRuleSet,
+} from '../shared/smart-projects.ts'
 import { inspectFolderRelink as previewFolderRelink, inspectRelinkCandidate } from './relink.ts'
 import {
   evictUnreferencedRevisions,
@@ -3144,24 +3151,57 @@ export class FontButlerService {
     return loadProjects(this.paths)
   }
 
-  async createProject(name: string, memberIds: string[] = []): Promise<ProjectSet> {
+  async createProject(
+    name: string,
+    memberIds: string[] = [],
+    options: { kind?: 'manual' | 'smart'; rules?: SmartRuleSet } = {},
+  ): Promise<ProjectSet> {
     return runCatalogTask(async () => {
-      const project = upsertProject(this.paths, createProject(name, memberIds))
+      const project = upsertProject(this.paths, createProject(name, memberIds, options))
       emitEvent({ type: 'projects', projects: loadProjects(this.paths) })
       return project
     })
   }
 
+  async snapshotProject(id: string): Promise<ProjectSet> {
+    return runCatalogTask(async () => {
+      const project = loadProjects(this.paths).find((item) => item.id === id)
+      if (!project) throw new Error('That project was not found.')
+      if (!isSmartProject(project)) throw new Error('Save a snapshot from a smart project.')
+      const memberIds = projectActivationMembers(project, loadCatalog(this.paths).entries).map(
+        (member) => member.assetId,
+      )
+      const snapshot = upsertProject(this.paths, createProject(smartSnapshotName(project.name), memberIds))
+      emitEvent({ type: 'projects', projects: loadProjects(this.paths) })
+      return snapshot
+    })
+  }
+
   async updateProject(
     id: string,
-    patch: { name?: string; memberIds?: string[]; pin?: { assetId: string; fingerprint?: string } },
+    patch: {
+      name?: string
+      memberIds?: string[]
+      pin?: { assetId: string; fingerprint?: string }
+      rules?: SmartRuleSet
+    },
   ): Promise<ProjectSet> {
     return runCatalogTask(async () => {
       const projects = loadProjects(this.paths)
       const project = projects.find((item) => item.id === id)
       if (!project) throw new Error('That project was not found.')
+      if (isSmartProject(project)) {
+        if (patch.memberIds) throw new Error('Smart project membership comes from its rules.')
+        if (patch.pin) {
+          throw new Error("Smart projects can't pin a revision. Save a snapshot to pin fonts.")
+        }
+      }
       const previousIds = new Set(project.members.map((member) => member.assetId))
       if (patch.name !== undefined) project.name = patch.name.trim() || 'Untitled project'
+      if (patch.rules !== undefined) {
+        if (!isSmartProject(project)) throw new Error('Manual projects keep an explicit font list.')
+        project.rules = normalizeSmartRuleSet(patch.rules)
+      }
       if (patch.memberIds) {
         project.members = [...new Set(patch.memberIds)].map((assetId) => {
           return project.members.find((member) => member.assetId === assetId) ?? { assetId }
@@ -3196,7 +3236,8 @@ export class FontButlerService {
         await this.deactivateEntry(entryId)
       }
       const addedMember = [...nextIds].some((assetId) => !previousIds.has(assetId))
-      if (project.desiredActive && (addedMember || patch.pin)) {
+      const refreshSmart = isSmartProject(project) && project.desiredActive && patch.rules !== undefined
+      if (refreshSmart || (project.desiredActive && (addedMember || patch.pin))) {
         await this.activateProject(id)
       } else {
         emitCatalog(this.paths)
@@ -3210,21 +3251,7 @@ export class FontButlerService {
     return runCatalogTask(async () => {
       const project = removeProject(this.paths, id)
       if (!project) return
-      const catalog = loadCatalog(this.paths)
-      const toRelease: string[] = []
-      for (const member of project.members) {
-        const entry = findById(catalog, member.assetId)
-        if (!entry) continue
-        const wasOwned = entry.activationOwners?.some(
-          (owner) => owner.kind === 'project' && owner.projectId === id,
-        )
-        removeProjectOwner(entry, id)
-        if (wasOwned && !hasActivationDemand(entry) && (entry.status === 'installed' || entry.status === 'outdated')) {
-          toRelease.push(entry.id)
-        }
-      }
-      saveCatalog(this.paths, catalog)
-      for (const entryId of toRelease) await this.deactivateEntry(entryId)
+      await this.releaseProjectOwners(id, new Set())
       emitCatalog(this.paths)
       emitEvent({ type: 'projects', projects: loadProjects(this.paths) })
     })
@@ -3235,7 +3262,8 @@ export class FontButlerService {
     const projects = loadProjects(this.paths)
     const project = projects.find((item) => item.id === id)
     if (!project) throw new Error('That project was not found.')
-    for (const member of project.members) {
+    const members = projectActivationMembers(project, loadCatalog(this.paths).entries)
+    for (const member of members) {
       if (!member.pinFingerprint) continue
       const conflict = pinConflict(
         projects.filter((item) => item.id !== project.id),
@@ -3248,10 +3276,13 @@ export class FontButlerService {
     }
     project.desiredActive = true
     upsertProject(this.paths, project)
+    if (isSmartProject(project)) {
+      await this.releaseProjectOwners(project.id, new Set(members.map((member) => member.assetId)))
+    }
     const items: OperationItem[] = []
     const entries: CatalogEntry[] = []
     const failedIds: string[] = []
-    for (const member of project.members) {
+    for (const member of members) {
       const entry = findById(loadCatalog(this.paths), member.assetId)
       if (!entry || entry.previewOnly) {
         items.push({
@@ -3329,27 +3360,29 @@ export class FontButlerService {
     const project = loadProjects(this.paths).find((item) => item.id === id)
     if (!project) throw new Error('That project was not found.')
     project.desiredActive = false
+    upsertProject(this.paths, project)
+    await this.releaseProjectOwners(id, new Set())
+    emitCatalog(this.paths)
+    emitEvent({ type: 'projects', projects: loadProjects(this.paths) })
+    })
+  }
+
+  /** Drop this project's activation owners, except `keep`, and park fonts nothing else still wants. */
+  private async releaseProjectOwners(projectId: string, keep: ReadonlySet<string>): Promise<void> {
     const catalog = loadCatalog(this.paths)
     const toRelease: string[] = []
-    for (const member of project.members) {
-      const entry = findById(catalog, member.assetId)
-      if (!entry) continue
+    for (const entry of catalog.entries) {
       const wasOwned = entry.activationOwners?.some(
-        (owner) => owner.kind === 'project' && owner.projectId === id,
+        (owner) => owner.kind === 'project' && owner.projectId === projectId,
       )
-      removeProjectOwner(entry, id)
-      if (wasOwned && !hasActivationDemand(entry) && (entry.status === 'installed' || entry.status === 'outdated')) {
+      if (!wasOwned || keep.has(entry.id)) continue
+      removeProjectOwner(entry, projectId)
+      if (!hasActivationDemand(entry) && (entry.status === 'installed' || entry.status === 'outdated')) {
         toRelease.push(entry.id)
       }
     }
     saveCatalog(this.paths, catalog)
-    upsertProject(this.paths, project)
-    for (const entryId of toRelease) {
-      await this.deactivateEntry(entryId)
-    }
-    emitCatalog(this.paths)
-    emitEvent({ type: 'projects', projects: loadProjects(this.paths) })
-    })
+    for (const entryId of toRelease) await this.deactivateEntry(entryId)
   }
 
   private readableTestInstallPath(id: string): string | null {

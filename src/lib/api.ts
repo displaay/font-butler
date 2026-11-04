@@ -1,3 +1,4 @@
+import type { SmartRuleSet } from '../../shared/smart-projects.ts'
 import type {
   AdobeFontCacheInfo,
   AppSettings,
@@ -519,12 +520,25 @@ export const api = {
       caches: Array<{ target: string; outcome: string; reason?: string }>
     }>(post('/api/repair', { ids, caches })),
   projects: () => get<{ projects: ProjectSet[] }>('/api/projects'),
-  createProject: (name: string, memberIds?: string[]) =>
-    json<{ project: ProjectSet }>(post('/api/projects', { name, memberIds })),
+  createProject: (
+    name: string,
+    memberIds?: string[],
+    options?: { kind?: 'manual' | 'smart'; rules?: SmartRuleSet },
+  ) =>
+    json<{ project: ProjectSet }>(
+      post('/api/projects', { name, memberIds, kind: options?.kind, rules: options?.rules }),
+    ),
   updateProject: (
     id: string,
-    patch: { name?: string; memberIds?: string[]; pin?: { assetId: string; fingerprint?: string } },
+    patch: {
+      name?: string
+      memberIds?: string[]
+      pin?: { assetId: string; fingerprint?: string }
+      rules?: SmartRuleSet
+    },
   ) => json<{ project: ProjectSet }>(post('/api/projects/update', { id, ...patch })),
+  snapshotProject: (id: string) =>
+    json<{ project: ProjectSet }>(post('/api/projects/snapshot', { id })),
   deleteProject: (id: string) => json<{ ok: boolean }>(post('/api/projects/delete', { id })),
   activateProject: (id: string) =>
     json<{ succeeded: number; failed: number; failedIds: string[] }>(post('/api/projects/activate', { id })),

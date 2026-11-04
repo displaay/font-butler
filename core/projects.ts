@@ -3,6 +3,12 @@ import fs from 'node:fs'
 import { projectsPath } from './paths.ts'
 import type { AppPaths } from './paths.ts'
 import type { ActivationOwner, CatalogEntry, ProjectFile, ProjectMember, ProjectSet } from './types.ts'
+import {
+  isSmartProject,
+  matchingSmartEntries,
+  normalizeSmartRuleSet,
+  type SmartRuleSet,
+} from '../shared/smart-projects.ts'
 
 export function loadProjects(paths: AppPaths): ProjectSet[] {
   const file = projectsPath(paths)
@@ -12,9 +18,19 @@ export function loadProjects(paths: AppPaths): ProjectSet[] {
     if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.projects)) {
       return []
     }
-    return parsed.projects
+    return parsed.projects.map((project) => hydrateProject(project))
   } catch {
     return []
+  }
+}
+
+function hydrateProject(project: ProjectSet): ProjectSet {
+  if (!project || project.kind !== 'smart') return project
+  return {
+    ...project,
+    kind: 'smart',
+    members: [],
+    rules: normalizeSmartRuleSet(project.rules),
   }
 }
 
@@ -24,10 +40,25 @@ export function saveProjects(paths: AppPaths, projects: ProjectSet[]): void {
   fs.renameSync(tmp, projectsPath(paths))
 }
 
-export function createProject(name: string, memberIds: string[] = []): ProjectSet {
+export function createProject(
+  name: string,
+  memberIds: string[] = [],
+  options: { kind?: 'manual' | 'smart'; rules?: SmartRuleSet } = {},
+): ProjectSet {
+  const trimmed = name.trim() || 'Untitled project'
+  if (options.kind === 'smart') {
+    return {
+      id: crypto.randomUUID(),
+      name: trimmed,
+      kind: 'smart',
+      members: [],
+      desiredActive: false,
+      rules: normalizeSmartRuleSet(options.rules ?? { match: 'all', rules: [] }),
+    }
+  }
   return {
     id: crypto.randomUUID(),
-    name: name.trim() || 'Untitled project',
+    name: trimmed,
     members: memberIds.map((assetId) => ({ assetId })),
     desiredActive: false,
   }
@@ -105,12 +136,19 @@ export function setMemberUnsatisfied(project: ProjectSet, assetId: string, unsat
   if (member) member.unsatisfied = unsatisfied
 }
 
+/** Manual projects use their member list. Smart projects use the current rule match. */
+export function projectActivationMembers(project: ProjectSet, entries: CatalogEntry[]): ProjectMember[] {
+  if (!isSmartProject(project)) return project.members
+  return matchingSmartEntries(entries, project.rules).map((entry) => ({ assetId: entry.id }))
+}
+
 export function projectActivationState(
   project: ProjectSet,
   entries: CatalogEntry[],
 ): 'active' | 'partial' | 'inactive' | 'preview' {
-  if (project.members.length === 0) return 'inactive'
-  const members = project.members.map((member) => ({
+  const resolved = projectActivationMembers(project, entries)
+  if (resolved.length === 0) return 'inactive'
+  const members = resolved.map((member) => ({
     member,
     entry: entries.find((entry) => entry.id === member.assetId),
   }))

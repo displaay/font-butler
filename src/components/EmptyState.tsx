@@ -10,14 +10,27 @@ export function EmptyState({
   tab,
   watchFolderName,
   projectName,
+  smartProject = false,
   onPickFiles,
 }: {
   tab: Tab
   watchFolderName?: string | null
   projectName?: string | null
+  smartProject?: boolean
   onPickFiles: (files: FileList | File[]) => void
 }) {
   const folderInputRef = useRef<HTMLInputElement>(null)
+
+  if (smartProject && projectName) {
+    return (
+      <div className="flex flex-col items-center justify-center rounded-lg border border-dashed px-6 py-16 text-center">
+        <p className="text-base font-medium tracking-tight">No fonts match {projectName}</p>
+        <p className="mt-2 max-w-sm text-sm text-muted-foreground">
+          This project fills itself from its rules. Edit the rules, or save a snapshot when you need a fixed set.
+        </p>
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col items-center justify-center rounded-lg border border-dashed px-6 py-16 text-center">

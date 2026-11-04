@@ -72,6 +72,7 @@ import {
 } from '@/lib/app-update'
 import { cn } from '@/lib/utils'
 import { watchFolderLabel, RETAIL_LIBRARY_FILTER, RETAIL_LIBRARY_LABEL, TEST_INSTALL_FILTER, TEST_INSTALL_LABEL } from '@/lib/watchFolders'
+import { isSmartProject } from '../../shared/smart-projects.ts'
 
 export type Tab = 'library' | 'system' | 'updates' | 'activity'
 
@@ -499,6 +500,9 @@ export function Sidebar({
   onDropFilesOnProject,
   onRemoveProject,
   onCreateProject,
+  projectMembershipCounts,
+  onEditSmartProject,
+  onSnapshotProject,
   savedFilters,
   onSelectSavedFilter,
   onCreateSavedFilter,
@@ -550,6 +554,10 @@ export function Sidebar({
   onDropFilesOnProject?: (id: string, dataTransfer: DataTransfer) => void
   onRemoveProject?: (id: string) => void
   onCreateProject?: () => void
+  /** Live counts. Smart projects ignore the stored member list. */
+  projectMembershipCounts?: Record<string, number>
+  onEditSmartProject?: (id: string) => void
+  onSnapshotProject?: (id: string) => void
   savedFilters?: SavedLibraryFilter[]
   onSelectSavedFilter?: (filter: SavedLibraryFilter) => void
   onCreateSavedFilter?: () => void
@@ -937,6 +945,8 @@ export function Sidebar({
               <>
             {sortedProjects.map((project) => {
               const editing = editingProjectId === project.id
+              const smart = isSmartProject(project)
+              const memberCount = projectMembershipCounts?.[project.id] ?? project.members.length
               const rowClassName = navButtonClass(
                 projectFilter === project.id,
                 cn('w-full', dropTargetId === project.id && 'bg-muted text-foreground'),
@@ -979,9 +989,13 @@ export function Sidebar({
               )
               const rowBody = (
                 <>
-                  <Folder className="size-3.5 opacity-70" />
+                  {smart ? (
+                    <Filter className="size-3.5 opacity-70" />
+                  ) : (
+                    <Folder className="size-3.5 opacity-70" />
+                  )}
                   {nameField}
-                  <Badge className="ml-auto">{project.members.length}</Badge>
+                  <Badge className="ml-auto">{memberCount}</Badge>
                 </>
               )
               return (
@@ -1005,6 +1019,7 @@ export function Sidebar({
                     variant="ghost"
                     aria-current={projectFilter === project.id ? 'page' : undefined}
                     className={rowClassName}
+                    title={smart ? 'Smart project' : undefined}
                     onClick={(event) => {
                       if (event.detail > 1) return
                       if (projectFilter === project.id) {
@@ -1022,24 +1037,25 @@ export function Sidebar({
                       startRename(project)
                     }}
                     onDragEnter={(event) => {
-                      if (!canDropOnProject(event.dataTransfer)) return
+                      if (smart || !canDropOnProject(event.dataTransfer)) return
                       event.preventDefault()
                       event.stopPropagation()
                       setDropTargetId(project.id)
                     }}
                     onDragOver={(event) => {
-                      if (!canDropOnProject(event.dataTransfer)) return
+                      if (smart || !canDropOnProject(event.dataTransfer)) return
                       event.preventDefault()
                       event.stopPropagation()
                       event.dataTransfer.dropEffect = 'copy'
                       setDropTargetId(project.id)
                     }}
                     onDragLeave={(event) => {
+                      if (smart) return
                       if (event.currentTarget.contains(event.relatedTarget as Node)) return
                       setDropTargetId((current) => (current === project.id ? null : current))
                     }}
                     onDrop={(event) => {
-                      if (!canDropOnProject(event.dataTransfer)) return
+                      if (smart || !canDropOnProject(event.dataTransfer)) return
                       event.preventDefault()
                       event.stopPropagation()
                       setDropTargetId(null)
@@ -1056,6 +1072,17 @@ export function Sidebar({
                   )}
                 </ContextMenuTrigger>
                 <ContextMenuContent>
+                  {smart ? (
+                    <>
+                      <ContextMenuItem onSelect={() => onEditSmartProject?.(project.id)}>
+                        <Filter /> Edit rules
+                      </ContextMenuItem>
+                      <ContextMenuItem onSelect={() => onSnapshotProject?.(project.id)}>
+                        <Copy /> Save snapshot as manual project
+                      </ContextMenuItem>
+                      <ContextMenuSeparator />
+                    </>
+                  ) : null}
                   <ContextMenuItem
                     onSelect={() => {
                       window.setTimeout(() => startRename(project), 0)
