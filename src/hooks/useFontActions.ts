@@ -6,6 +6,7 @@ import { enqueuePrompt } from '@/lib/promptQueue'
 import { isLastQueuedFontAction, startQueuedFontAction } from '@/lib/actionQueue'
 import {
   activatableIds,
+  sessionActivatableIds,
   adobeInstallableIds,
   adobeRemovableIds,
   deactivatableIds,
@@ -189,6 +190,24 @@ export function useFontActions({
       preview: batches.reduce((sum, result) => sum + (result.preview ?? 0), 0),
       errors: batches.flatMap((result) => result.errors ?? []),
       failedIds: batches.flatMap((result) => result.failedIds ?? []),
+    }
+  }
+
+  function activateUntilQuitPrepared(ids: string[], replace?: boolean) {
+    const needsSwitch = ids.some((id) => {
+      const entry = entries.find((item) => item.id === id)
+      return entry ? canSwitchTo(entry, entries) : false
+    })
+    const options = { replace, switch: needsSwitch }
+    return ids.length > 1
+      ? api.activateUntilQuitMany(ids, options)
+      : api.activateUntilQuit(ids[0], options)
+  }
+
+  function untilQuitCopy(subject: string): { pending: string; done: string } {
+    return {
+      pending: `Activating ${subject} until quit…`,
+      done: `Activated ${subject} until quit`,
     }
   }
 
@@ -505,6 +524,42 @@ export function useFontActions({
       () => activatePrepared(prepared.ids, prepared.replace),
       actionCopy('activate', group.familyName),
     )
+  }
+
+  async function activateUntilQuitGroup(group: FamilyGroup) {
+    const ids = sessionActivatableIds(group)
+    if (ids.length === 0) return
+    const prepared = await prepareInstall(ids)
+    if (!prepared) return
+    await run(
+      () => activateUntilQuitPrepared(prepared.ids, prepared.replace),
+      untilQuitCopy(group.familyName),
+    )
+  }
+
+  async function activateUntilQuitInstance(id: string) {
+    const entry = entries.find((item) => item.id === id)
+    if (!entry || entry.previewOnly) return
+    const prepared = await prepareInstall([id])
+    if (!prepared) return
+    await run(
+      () => activateUntilQuitPrepared(prepared.ids, prepared.replace),
+      untilQuitCopy(instanceSubject(entry)),
+    )
+  }
+
+  async function activateUntilQuitSelected() {
+    const groups = selectedCatalogGroups().filter((group) => sessionActivatableIds(group).length > 0)
+    if (groups.length === 0) return
+    const prepared = await prepareInstall(groups.flatMap(sessionActivatableIds))
+    if (!prepared) return
+    const allowed = new Set(prepared.ids)
+    const subject = groups.length === 1 ? groups[0].familyName : `${groups.length} fonts`
+    await run(async () => {
+      const ids = groups.flatMap((group) => sessionActivatableIds(group).filter((id) => allowed.has(id)))
+      if (ids.length === 0) return
+      return activateUntilQuitPrepared(ids, prepared.replace)
+    }, untilQuitCopy(subject))
   }
 
   async function reinstallSelected() {
@@ -826,6 +881,9 @@ export function useFontActions({
     uninstallFromAdobeFor,
     uninstallInstanceFromAdobe,
     activateGroupGuarded,
+    activateUntilQuitGroup,
+    activateUntilQuitInstance,
+    activateUntilQuitSelected,
     reinstallSelected,
     repairSelected,
     reinstallAllUpdates,

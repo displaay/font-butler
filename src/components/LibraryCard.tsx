@@ -58,6 +58,7 @@ export const LibraryCard = memo(function LibraryCard({
   onInstallToAdobe,
   onInstallInstance,
   onActivateInstance,
+  onActivateUntilQuitInstance,
   onDeactivateInstance,
   onUninstallInstance,
   onInstallInstanceToAdobe,
@@ -73,6 +74,7 @@ export const LibraryCard = memo(function LibraryCard({
   onUninstallFromAdobe,
   onDeactivate,
   onActivate,
+  onActivateUntilQuit,
   onSwitch,
   onFormatSwap,
   onReveal,
@@ -124,6 +126,7 @@ export const LibraryCard = memo(function LibraryCard({
   onInstallToAdobe: () => void
   onInstallInstance: (entryId: string) => void
   onActivateInstance: (entryId: string) => void
+  onActivateUntilQuitInstance: (entryId: string) => void
   onDeactivateInstance: (entryId: string) => void
   onUninstallInstance: (entryId: string) => void
   onInstallInstanceToAdobe: (entryId: string) => void
@@ -139,6 +142,7 @@ export const LibraryCard = memo(function LibraryCard({
   onUninstallFromAdobe?: () => void
   onDeactivate: () => void
   onActivate: () => void
+  onActivateUntilQuit: () => void
   onSwitch?: () => void
   onFormatSwap?: () => void
   onReveal: () => void
@@ -490,6 +494,7 @@ export const LibraryCard = memo(function LibraryCard({
                   uninstallOnly,
                   onInstall: onInstallInstance,
                   onActivate: onActivateInstance,
+                  onActivateUntilQuit: onActivateUntilQuitInstance,
                   onDeactivate: onDeactivateInstance,
                   onUninstall: onUninstallInstance,
                   onInstallToAdobe: onInstallInstanceToAdobe,
@@ -527,6 +532,7 @@ export const LibraryCard = memo(function LibraryCard({
             onUninstallFormat={onUninstallFormat}
             formatUninstalls={mixedFormats}
             onActivate={onActivate}
+            onActivateUntilQuit={onActivateUntilQuit}
             onSwitch={onSwitch}
             formatSwap={swap}
             onFormatSwap={onFormatSwap}
@@ -625,6 +631,7 @@ export const LibraryCard = memo(function LibraryCard({
           onUninstallAndRemove={onUninstallAndRemove}
           onUninstallFromAdobe={onUninstallFromAdobe}
           onActivate={onActivate}
+          onActivateUntilQuit={onActivateUntilQuit}
           onSwitch={onSwitch}
           onForget={onForget}
           onDeleteFiles={onDeleteFiles}

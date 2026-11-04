@@ -176,11 +176,17 @@ import {
   pinnedFingerprints,
   projectActivationMembers,
   projectActivationState,
+  removeManualOwner,
   removeProject,
   removeProjectOwner,
   setMemberUnsatisfied,
   upsertProject,
 } from './projects.ts'
+import {
+  forgetSessionActivation,
+  rememberSessionActivation,
+  releaseRecordedSessionActivations,
+} from './session-activation.ts'
 import {
   isSmartProject,
   normalizeSmartRuleSet,
@@ -537,6 +543,7 @@ export class FontButlerService {
       emitCatalog(this.paths)
       emitEvent({ type: 'operations', operations: loadOperations(this.paths) })
     }
+    await this.releaseSessionActivationsUnlocked()
     loadCatalog(this.paths)
     await this.restoreDisabledCopies()
   }
@@ -1237,6 +1244,7 @@ export class FontButlerService {
         addManualOwner(latest)
         touchEntry(latest)
         saveCatalog(this.paths, catalog)
+        forgetSessionActivation(this.paths, [latest.id])
       }
       const item = this.operationItem(entry, 'succeeded', installWarning)
       item.previousRevision = previousRevision
@@ -1304,6 +1312,7 @@ export class FontButlerService {
             addManualOwner(latest)
             touchEntry(latest)
             saveCatalog(this.paths, catalog)
+            forgetSessionActivation(this.paths, [latest.id])
           }
           const completed = latest ?? installed
           entries.push(completed)
@@ -1595,6 +1604,7 @@ export class FontButlerService {
       const entry = options?.switch
         ? await this.switchToEntry(id)
         : await this.activateEntry(id, { ...options, owner: 'manual' })
+      forgetSessionActivation(this.paths, [entry.id])
       const destinationFailures = this.takeDestinationFailures()
       const installWarning = this.takeInstallWarning()
       const item = this.operationItem(entry, 'succeeded', installWarning)
@@ -1631,6 +1641,7 @@ export class FontButlerService {
           const next = options?.switch
             ? await this.switchToEntry(id)
             : await this.activateEntry(id, { ...options, owner: 'manual' })
+          forgetSessionActivation(this.paths, [next.id])
           const item = this.operationItem(next, 'succeeded', this.takeInstallWarning())
           if (options?.switch) item.relatedEntryId = relatedId
           entries.push(next)
@@ -1669,6 +1680,112 @@ export class FontButlerService {
       }
       return entries
     }))
+  }
+
+  async activateUntilQuit(id: string, options?: InstallOptions): Promise<CatalogEntry> {
+    const [entry] = await this.activateUntilQuitMany([id], options)
+    if (!entry) throw new Error('Could not activate that font until quit.')
+    return entry
+  }
+
+  async activateUntilQuitMany(ids: string[], options?: InstallOptions): Promise<CatalogEntry[]> {
+    return runCatalogTask(async () => {
+      const entries: CatalogEntry[] = []
+      const items: OperationItem[] = []
+      const errors: string[] = []
+      const progress = this.familyProgress('activate', ids)
+      progress.start()
+      for (const id of ids) {
+        const current = findById(loadCatalog(this.paths), id)
+        try {
+          const next = await this.turnOnUntilQuit(id, options)
+          entries.push(next)
+          items.push(this.operationItem(next, 'succeeded'))
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error)
+          errors.push(reason)
+          if (current) {
+            items.push(this.operationItem(current, 'failed', reason))
+          } else {
+            items.push({ id: crypto.randomUUID(), entryId: id, label: id, outcome: 'failed', reason })
+          }
+        }
+        await progress.mark(id)
+      }
+      const operation = this.commitOperation(
+        'activate-until-quit',
+        items,
+        entries[0] ? displayFamily(entries[0]) : undefined,
+        false,
+      )
+      emitCatalog(this.paths)
+      if (entries.length === 0 && errors.length) {
+        throw new Error(errors.join('\n'))
+      }
+      if (operation) {
+        const result = entries as CatalogEntry[] & Partial<BatchActionResult>
+        Object.assign(result, {
+          operationId: operation.id,
+          ...operationCounts(operation),
+          errors,
+          failedIds: items
+            .filter((item) => item.outcome === 'failed' && item.entryId)
+            .map((item) => item.entryId!),
+        })
+        return result
+      }
+      return entries
+    })
+  }
+
+  /** Quit, and the next launch after a crash, both call this. */
+  async releaseSessionActivations(): Promise<{ released: string[]; pending: string[] }> {
+    return runCatalogTask(() => this.releaseSessionActivationsUnlocked())
+  }
+
+  private async releaseSessionActivationsUnlocked(): Promise<{ released: string[]; pending: string[] }> {
+    const result = await releaseRecordedSessionActivations(this.paths, async (id) => {
+      await this.deactivateEntry(id, { removeManualOwner: false })
+    })
+    if (result.released.length) emitCatalog(this.paths)
+    return result
+  }
+
+  /**
+   * Turn a face on without a manual or project owner.
+   * The session list is written first so a crash still clears the face on the next launch.
+   * A face something else already demands is left out of that list.
+   */
+  private async turnOnUntilQuit(id: string, options?: InstallOptions): Promise<CatalogEntry> {
+    const before = findById(loadCatalog(this.paths), id)
+    if (!before) throw new Error('Font is not in the library.')
+    const durable = hasActivationDemand(before)
+    if (!durable) rememberSessionActivation(this.paths, [id])
+    try {
+      const siblings = options?.switch
+        ? occupyingSiblings(loadCatalog(this.paths).entries, before, this.paths)
+        : []
+      // switchToEntry claims a manual owner when nothing else is in the way.
+      // Session activation has to park a sibling without that claim.
+      const turnedOn = siblings.length
+        ? await this.switchToEntry(id)
+        : await this.activateEntry(id, options?.switch ? { ...options, switch: true } : options)
+      if (durable) {
+        return findById(loadCatalog(this.paths), turnedOn.id) ?? turnedOn
+      }
+      const catalog = loadCatalog(this.paths)
+      const latest = findById(catalog, turnedOn.id)
+      if (!latest) return turnedOn
+      if (latest.activationOwners?.some((owner) => owner.kind === 'manual')) {
+        removeManualOwner(latest)
+        touchEntry(latest)
+        saveCatalog(this.paths, catalog)
+      }
+      return latest
+    } catch (error) {
+      if (!durable) forgetSessionActivation(this.paths, [id])
+      throw error
+    }
   }
 
   async reinstall(
