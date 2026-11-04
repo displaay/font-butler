@@ -87,7 +87,7 @@ int main(int argc, const char *argv[]) {
         dispatch_semaphore_signal(done);
       }];
     }
-    dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, (submit ? 30 : 15) * NSEC_PER_SEC));
+    dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, (submit ? 35 : 15) * NSEC_PER_SEC));
     int result = status;
     [connection invalidate];
     return result;

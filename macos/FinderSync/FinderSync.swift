@@ -229,7 +229,7 @@ func deliverFinderSyncHandoff(service: String, action: String, paths: [String], 
         showFinderSyncError(finderSyncAgentDisabled)
         return
     }
-    // The helper waits kForwardAfterSpawnSeconds (30) after it spawns the app.
+    // The helper's whole forward wait is kForwardAfterSpawnSeconds (20).
     let attempt = sendFinderSyncHandoff(service: service, action: action, paths: paths, requestId: requestId, timeout: 35)
     if attempt.accepted { return }
     if attempt.message.isEmpty {

@@ -43,16 +43,16 @@ static NSString *const kMissingAppMessage =
     @"Font Buttler couldn't be found. Open it once from its new location.";
 static const off_t kPendingErrorMaxBytes = 8192;
 static const NSUInteger kPendingErrorMaxEntries = 5;
-// Cold Cuttler startup, including the on-disk signature check, can take
-// longer than a couple of seconds. The Finder appex waits slightly longer.
-static const NSTimeInterval kForwardAfterSpawnSeconds = 30;
+// Shorter than the XPC client's submit wait. A reply after that wait is
+// reported as "connection invalidated" because the client drops the connection.
+static const NSTimeInterval kForwardAfterSpawnSeconds = 20;
 
 static BOOL FinderSyncErrorCodeIsKnown(NSString *code) {
   return [code isEqualToString:@"missing-app"] || [code isEqualToString:@"not-running"] ||
          [code isEqualToString:@"login-items"] || [code isEqualToString:@"unknown-action"];
 }
 
-static BOOL GuestMeetsRequirement(audit_token_t token, NSString *requirementString) {
+static BOOL GuestMeetsRequirement(audit_token_t token, NSString *requirementString, SecCSFlags flags) {
   if (!requirementString.length) return NO;
   SecRequirementRef requirement = NULL;
   OSStatus created = SecRequirementCreateWithString((__bridge CFStringRef)requirementString, kSecCSDefaultFlags, &requirement);
@@ -77,7 +77,7 @@ static BOOL GuestMeetsRequirement(audit_token_t token, NSString *requirementStri
     CFRelease(requirement);
     return NO;
   }
-  OSStatus signatureStatus = SecCodeCheckValidity(guest, kSecCSStrictValidate, requirement);
+  OSStatus signatureStatus = SecCodeCheckValidity(guest, flags, requirement);
   CFRelease(guest);
   CFRelease(requirement);
   return signatureStatus == errSecSuccess;
@@ -407,15 +407,24 @@ static NSString *LaunchContainingAppOnce(void) {
   return nil;
 }
 
-// The running Electron process fails a dynamic strict check (the image no
-// longer matches the on-disk executable). Remember the signed main executable
-// inside this helper's app, then accept only a peer whose kernel-reported
-// executable is that file. Cuttler.app and the zip's Font Buttler.app both
-// qualify. The hash runs once, before the app is waiting on this socket.
+// Fallback when the running process fails a dynamic check. The hash stays off
+// the XPC reply path. Cuttler.app and the zip's Font Buttler.app both qualify.
 static NSString *g_trustedExecutable = nil;
 
+static NSLock *TrustLock(void) {
+  static NSLock *lock = nil;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    lock = [NSLock new];
+  });
+  return lock;
+}
+
 static BOOL TrustContainingExecutable(void) {
-  if (g_trustedExecutable.length) return YES;
+  [TrustLock() lock];
+  BOOL already = g_trustedExecutable.length > 0;
+  [TrustLock() unlock];
+  if (already) return YES;
   NSURL *appURL = ContainingAppURL();
   NSString *binary = BundleExecutable(appURL);
   if (!binary.length) return NO;
@@ -438,8 +447,12 @@ static BOOL TrustContainingExecutable(void) {
   if (!signedOk) return NO;
   char resolved[PATH_MAX];
   if (!realpath(binary.fileSystemRepresentation, resolved)) return NO;
-  g_trustedExecutable = [NSString stringWithUTF8String:resolved];
-  return g_trustedExecutable.length > 0;
+  NSString *path = [NSString stringWithUTF8String:resolved];
+  if (!path.length) return NO;
+  [TrustLock() lock];
+  if (!g_trustedExecutable.length) g_trustedExecutable = path;
+  [TrustLock() unlock];
+  return YES;
 }
 
 static NSString *PeerMainExecutablePath(int fd) {
@@ -475,10 +488,27 @@ static NSString *PeerMainExecutablePath(int fd) {
   return [NSString stringWithUTF8String:resolved];
 }
 
+static NSString *TrustedExecutable(void) {
+  [TrustLock() lock];
+  NSString *path = [g_trustedExecutable copy];
+  [TrustLock() unlock];
+  return path;
+}
+
+// Strict validation of the running Electron process reads the whole bundle
+// and does not finish before the XPC client gives up. Basic validation still
+// requires the Developer ID team and identifier app.fontbutler.desktop.
 static BOOL ParentExecutableMatches(int fd) {
-  if (!TrustContainingExecutable()) return NO;
+  audit_token_t token;
+  memset(&token, 0, sizeof(token));
+  socklen_t length = (socklen_t)sizeof(token);
+  if (getsockopt(fd, SOL_LOCAL, LOCAL_PEERTOKEN, &token, &length) != 0) return NO;
+  if (length != sizeof(token)) return NO;
+  if (GuestMeetsRequirement(token, kParentRequirement, kSecCSBasicValidateOnly)) return YES;
+  NSString *trusted = TrustedExecutable();
+  if (!trusted.length) return NO;
   NSString *peer = PeerMainExecutablePath(fd);
-  return peer.length > 0 && [peer isEqualToString:g_trustedExecutable];
+  return peer.length > 0 && [peer isEqualToString:trusted];
 }
 
 static NSString *RunningProductName(void) {
@@ -528,6 +558,10 @@ static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL over
   else return NO;
   self.requirement = g_testFeed ? kTestRequirement : kReleaseRequirement;
   self.forwardQueue = dispatch_queue_create("app.fontbutler.desktop.FinderSyncAgent.forward", DISPATCH_QUEUE_SERIAL);
+  // Off the forward queue. Submit must be able to reply before this hash ends.
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+    TrustContainingExecutable();
+  });
   NSXPCListener *listener = [[NSXPCListener alloc] initWithMachServiceName:(g_testFeed ? kTestService : kReleaseService)];
   listener.delegate = self;
   self.listener = listener;
@@ -586,10 +620,7 @@ static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL over
         [accepted addObject:item];
       }
     }
-    // Hash the on-disk executable before connecting, so the app's read
-    // timeout is not spent waiting for that check.
-    TrustContainingExecutable();
-    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:2.0];
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:kForwardAfterSpawnSeconds];
     BOOL launched = NO;
     while (YES) {
       if (ForwardToApp(wire, accepted, overflow, request)) {
@@ -604,7 +635,6 @@ static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL over
           ReportFinderSyncError(reply, @"missing-app", failure);
           return;
         }
-        deadline = [NSDate dateWithTimeIntervalSinceNow:kForwardAfterSpawnSeconds];
       }
       if ([deadline timeIntervalSinceNow] <= 0) break;
       usleep(50 * 1000);
