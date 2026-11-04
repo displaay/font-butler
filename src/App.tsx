@@ -9,6 +9,7 @@ import {
   CatalogBatchButtons,
   SystemBatchButtons,
 } from '@/components/BatchActions'
+import { DocumentFontsSheet } from '@/components/DocumentFontsSheet'
 import { DropFolderDialog } from '@/components/DropFolderDialog'
 import {
   NewProjectDialog,
@@ -119,6 +120,14 @@ import {
   removeMemberIds,
   uniqueMemberIds,
 } from '@/lib/projects'
+import {
+  documentPathsFrom,
+  documentProjectName,
+  isDocumentFontPath,
+  offAssetIds,
+  withoutDocumentPaths,
+  type DocumentFontReport,
+} from '../shared/document-project.ts'
 import {
   emptySmartRuleSet,
   isSmartProject,
@@ -321,6 +330,7 @@ function AppShell() {
   const fontDragRef = useRef(false)
   const applyMarqueeKeysRef = useRef<(keys: string[]) => void>(() => {})
   const reinstallFromMenuBarRef = useRef<(ids: string[]) => void>(() => {})
+  const openDocumentAtRef = useRef<(filePath: string) => void>(() => {})
   const syncRetailRef = useRef<(choices?: Record<string, RetailCollisionAction>) => void>(() => {})
   const libraryViewportRef = useRef<HTMLDivElement>(null)
   const libraryGridRef = useRef<HTMLDivElement>(null)
@@ -328,6 +338,8 @@ function AppShell() {
   const [libraryFilters, setLibraryFilters] = useState<LibraryFilter[]>(readLibraryFilters)
   const [gridPreviewSize, setGridPreviewSize] = useState(readGridPreviewSize)
   const [projects, setProjects] = useState<ProjectSet[]>([])
+  const [documentReport, setDocumentReport] = useState<DocumentFontReport | null>(null)
+  const [documentBusy, setDocumentBusy] = useState(false)
   const [operations, setOperations] = useState<Operation[]>([])
   const operationsRef = useRef<Operation[]>([])
   const [projectFilter, setProjectFilter] = useState<string | null>(null)
@@ -862,6 +874,11 @@ function AppShell() {
       externalFontOpenRef.current = { depth }
       syncExternalFontOpenStatus()
     })
+    const stopDocument = window.fontButlerDesktop?.onOpenDocument?.((payload) => {
+      const filePath = payload?.path
+      if (typeof filePath !== 'string' || filePath.trim() === '') return
+      openDocumentAtRef.current(filePath)
+    })
     const stopAnnouncement = window.fontButlerDesktop?.onAnnouncement?.((payload) => {
       if (!payload || typeof payload !== 'object') return
       const id = typeof payload.id === 'string' ? payload.id : ''
@@ -885,6 +902,7 @@ function AppShell() {
       stopOpenTab?.()
       stopFinderLinkTo?.()
       stopExternalFontOpen?.()
+      stopDocument?.()
       stopAnnouncement?.()
     }
   }, [])
@@ -1823,10 +1841,21 @@ function AppShell() {
 
   function handleFiles(fileList: FileList | File[]) {
     const files = Array.from(fileList)
-    const paths = files
-      .map((file) => desktopPathForFile(file))
-      .filter((value): value is string => Boolean(value))
-    queueFontWork(() => importDropped(paths, files, libraryProjectTarget()))
+    const documentPaths = documentPathsFrom(
+      files.flatMap((file) => {
+        const native = desktopPathForFile(file)
+        return native && (isDocumentFontPath(native) || isDocumentFontPath(file.name)) ? [native] : []
+      }),
+    )
+    if (documentPaths[0]) void openDocumentAt(documentPaths[0])
+    const fontFiles = files.filter((file) => !isDocumentFontPath(file.name))
+    if (fontFiles.length === 0) return
+    const paths = withoutDocumentPaths(
+      fontFiles
+        .map((file) => desktopPathForFile(file))
+        .filter((value): value is string => Boolean(value)),
+    )
+    queueFontWork(() => importDropped(paths, fontFiles, libraryProjectTarget()))
   }
 
   function libraryProjectTarget(): string | undefined {
@@ -1834,6 +1863,67 @@ function AppShell() {
     const project = projects.find((item) => item.id === projectFilter)
     if (!project || isSmartProject(project)) return undefined
     return project.id
+  }
+
+  async function openDocumentAt(filePath: string) {
+    setDocumentBusy(true)
+    try {
+      setDocumentReport(await api.documentFonts(filePath))
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not read document fonts')
+    } finally {
+      setDocumentBusy(false)
+    }
+  }
+  openDocumentAtRef.current = openDocumentAt
+
+  async function pickAndOpenDocument() {
+    const pick = window.fontButlerDesktop?.pickDocument
+    if (!pick) {
+      toast.error('Open a PDF or IDML from the Cuttler app.')
+      return
+    }
+    const filePath = await pick()
+    if (!filePath) return
+    await openDocumentAt(filePath)
+  }
+
+  async function activateAvailableDocumentFonts(assetIds: string[]) {
+    if (!documentReport) return
+    const ids = assetIds.filter((id) => offAssetIds(documentReport.fonts).includes(id))
+    if (ids.length === 0) return
+    setDocumentBusy(true)
+    try {
+      await api.activateMany(ids)
+      await refreshCatalog()
+      setDocumentReport(await api.documentFonts(documentReport.path))
+      toast.success(ids.length === 1 ? 'Activated 1 font' : `Activated ${ids.length} fonts`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not activate fonts')
+    } finally {
+      setDocumentBusy(false)
+    }
+  }
+
+  async function createDocumentProject(name: string) {
+    if (!documentReport) return
+    setDocumentBusy(true)
+    try {
+      const result = await api.createDocumentProject(
+        documentProjectName(documentReport.path, name),
+        documentReport.path,
+      )
+      setProjects((current) => [result.project, ...current.filter((item) => item.id !== result.project.id)])
+      setProjectFilter(result.project.id)
+      setTab('library')
+      setWatchFolderFilter(null)
+      setDocumentReport(null)
+      toast.success(`Created ${result.project.name}`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not create project')
+    } finally {
+      setDocumentBusy(false)
+    }
   }
 
   async function handleDrop(dataTransfer: DataTransfer, projectId?: string) {
@@ -1845,9 +1935,20 @@ function AppShell() {
     try {
       const payload = await collectDropPayload(dataTransfer)
       setDragging(false)
-      let folders = payload.folders
-      let paths = payload.paths
-      const nativePaths = [...new Set([...payload.folders, ...payload.paths])]
+      const namedDocumentPaths = payload.files.flatMap((file) => {
+        const native = desktopPathForFile(file)
+        return native && isDocumentFontPath(file.name) ? [native] : []
+      })
+      const documentPaths = documentPathsFrom([...payload.paths, ...namedDocumentPaths])
+      if (documentPaths.length > 0) {
+        void openDocumentAt(documentPaths[0]!)
+        if (documentPaths.length > 1) toast.message('Opened the first document.')
+      }
+      const fontFiles = payload.files.filter((file) => !isDocumentFontPath(file.name))
+      let folders = withoutDocumentPaths(payload.folders)
+      let paths = withoutDocumentPaths(payload.paths)
+      if (paths.length === 0 && fontFiles.length === 0 && folders.length === 0) return
+      const nativePaths = [...new Set([...folders, ...paths])]
       if (nativePaths.length > 0) {
         try {
           const inspected = await api.inspectDrop(nativePaths)
@@ -1867,17 +1968,17 @@ function AppShell() {
         queueFontWork(() =>
           importDropped(
             importPathsForProjectDrop(paths, folders),
-            payload.files,
+            fontFiles,
             targetProjectId,
           ),
         )
         return
       }
       if (folders.length > 0) {
-        setFolderDrop({ folders, paths, files: payload.files })
+        setFolderDrop({ folders, paths, files: fontFiles })
         return
       }
-      queueFontWork(() => importDropped(paths, payload.files))
+      queueFontWork(() => importDropped(paths, fontFiles))
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not add fonts')
       setDragging(false)
@@ -2205,6 +2306,7 @@ function AppShell() {
               catalogSelection.map((group) => group.familyName),
             )
           }
+          onOpenDocument={() => void pickAndOpenDocument()}
           projectMembershipCounts={projectMembershipCounts}
           onEditSmartProject={(id) => setSmartEditorId(id)}
           onSnapshotProject={(id) => void snapshotSmartProject(id)}
@@ -3072,6 +3174,15 @@ function AppShell() {
           )}
         </div>
 
+        <DocumentFontsSheet
+          report={documentReport}
+          busy={documentBusy}
+          onClose={() => {
+            if (!documentBusy) setDocumentReport(null)
+          }}
+          onActivateAvailable={(ids) => void activateAvailableDocumentFonts(ids)}
+          onCreateProject={(name) => void createDocumentProject(name)}
+        />
         <NewProjectDialog
           open={newProjectOpen}
           initialName={newProjectName}

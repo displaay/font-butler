@@ -42,6 +42,7 @@ contextBridge.exposeInMainWorld('fontButlerDesktop', {
   },
   pickFolder: () => ipcRenderer.invoke('pick-folder'),
   pickFile: () => ipcRenderer.invoke('pick-file'),
+  pickDocument: () => ipcRenderer.invoke('pick-document'),
   getApiToken: () => ipcRenderer.invoke('get-api-token'),
   quitApp: () => ipcRenderer.invoke('quit-app'),
   showDebugLogs: () => ipcRenderer.invoke('debug-console:show'),
@@ -68,6 +69,11 @@ contextBridge.exposeInMainWorld('fontButlerDesktop', {
     const listener = (_event, payload) => callback(payload)
     ipcRenderer.on('open-settings', listener)
     return () => ipcRenderer.removeListener('open-settings', listener)
+  },
+  onOpenDocument: (callback) => {
+    const listener = (_event, payload) => callback(payload)
+    ipcRenderer.on('open-document', listener)
+    return () => ipcRenderer.removeListener('open-document', listener)
   },
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   installAppUpdate: () => ipcRenderer.invoke('install-app-update'),

@@ -755,6 +755,26 @@ function openSettings(focus) {
   sendWhenReady('open-settings', typeof focus === 'string' ? { focus } : undefined)
 }
 
+const documentOpenOptions = {
+  title: 'Open document',
+  properties: ['openFile'],
+  filters: [{ name: 'PDF and IDML', extensions: ['pdf', 'idml'] }],
+}
+
+async function pickDocumentPath() {
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, documentOpenOptions)
+    : await dialog.showOpenDialog(documentOpenOptions)
+  if (result.canceled) return null
+  return result.filePaths[0] ?? null
+}
+
+async function openDocumentFromMenu() {
+  const picked = await pickDocumentPath()
+  if (!picked) return
+  sendWhenReady('open-document', { path: picked })
+}
+
 function openAppUpdate() {
   void loadAppUpdate(true)
   openSettings('app-update')
@@ -1866,6 +1886,13 @@ function buildAppMenu() {
     accelerator: 'CommandOrControl+,',
     click: openSettings,
   }
+  const openDocumentItem = {
+    label: 'Open Document…',
+    accelerator: 'CommandOrControl+O',
+    click: () => {
+      void openDocumentFromMenu()
+    },
+  }
   return Menu.buildFromTemplate([
     ...(process.platform === 'darwin'
       ? [
@@ -1900,6 +1927,8 @@ function buildAppMenu() {
           {
             label: 'File',
             submenu: [
+              openDocumentItem,
+              { type: 'separator' },
               {
                 label: 'Check for Updates…',
                 click: openAppUpdate,
@@ -1910,7 +1939,14 @@ function buildAppMenu() {
             ],
           },
         ]),
-    ...(process.platform === 'darwin' ? [{ role: 'fileMenu' }] : []),
+    ...(process.platform === 'darwin'
+      ? [
+          {
+            label: 'File',
+            submenu: [openDocumentItem, { type: 'separator' }, { role: 'close' }],
+          },
+        ]
+      : []),
     { role: 'editMenu' },
     { role: 'viewMenu' },
     {
@@ -2341,6 +2377,8 @@ ipcMain.handle('install-app-update', () => appUpdateInstaller().start())
 ipcMain.handle('app-update-install-state', () => appUpdateInstaller().status())
 
 ipcMain.handle('request-notifications', () => electronNotificationPermission(Notification))
+
+ipcMain.handle('pick-document', () => pickDocumentPath())
 
 ipcMain.handle('pick-file', async () => {
   const options = {

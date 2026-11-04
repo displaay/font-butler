@@ -156,6 +156,8 @@ import {
   rememberedDecisionKey,
   savePlan,
 } from './planner.ts'
+import { documentProjectDraft, documentProjectName } from './document-project.ts'
+import type { DocumentFontReport } from './document-fonts.ts'
 import {
   addManualOwner,
   addProjectOwner,
@@ -224,6 +226,7 @@ import type {
   OperationItem,
   OperationTrigger,
   ProjectSet,
+  ProjectUnresolvedFont,
   RelinkPreview,
   RepairItemResult,
   SortMode,
@@ -3154,12 +3157,32 @@ export class FontButlerService {
   async createProject(
     name: string,
     memberIds: string[] = [],
-    options: { kind?: 'manual' | 'smart'; rules?: SmartRuleSet } = {},
+    options: {
+      kind?: 'manual' | 'smart'
+      rules?: SmartRuleSet
+      pins?: Readonly<Record<string, string | undefined>>
+      unresolved?: ProjectUnresolvedFont[]
+    } = {},
   ): Promise<ProjectSet> {
     return runCatalogTask(async () => {
       const project = upsertProject(this.paths, createProject(name, memberIds, options))
       emitEvent({ type: 'projects', projects: loadProjects(this.paths) })
       return project
+    })
+  }
+
+  /**
+   * Create a manual project from a document font report.
+   * Pins come from `installedFingerprint` when the report set one.
+   * Missing names are stored on the project and are not members.
+   * Activation still goes through {@link activateProject}, which keeps
+   * project owners and reports a pin conflict instead of overwriting one.
+   */
+  async createProjectFromDocument(name: string, report: DocumentFontReport): Promise<ProjectSet> {
+    const draft = documentProjectDraft(report)
+    return this.createProject(documentProjectName(report.path, name), draft.memberIds, {
+      pins: draft.pins,
+      unresolved: draft.unresolved,
     })
   }
 

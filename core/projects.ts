@@ -2,7 +2,14 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import { projectsPath } from './paths.ts'
 import type { AppPaths } from './paths.ts'
-import type { ActivationOwner, CatalogEntry, ProjectFile, ProjectMember, ProjectSet } from './types.ts'
+import type {
+  ActivationOwner,
+  CatalogEntry,
+  ProjectFile,
+  ProjectMember,
+  ProjectSet,
+  ProjectUnresolvedFont,
+} from './types.ts'
 import {
   isSmartProject,
   matchingSmartEntries,
@@ -14,38 +21,67 @@ export function loadProjects(paths: AppPaths): ProjectSet[] {
   const file = projectsPath(paths)
   if (!fs.existsSync(file)) return []
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as ProjectFile
-    if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.projects)) {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+      version?: unknown
+      projects?: unknown
+    }
+    if (!parsed || (parsed.version !== 1 && parsed.version !== 2) || !Array.isArray(parsed.projects)) {
       return []
     }
-    return parsed.projects.map((project) => hydrateProject(project))
+    return (parsed.projects as ProjectSet[]).map((project) => hydrateProject(project))
   } catch {
     return []
   }
 }
 
+function unresolvedFonts(value: ProjectSet['unresolved'] | undefined): ProjectUnresolvedFont[] {
+  if (!Array.isArray(value)) return []
+  const fonts: ProjectUnresolvedFont[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const postscriptName = typeof item.postscriptName === 'string' ? item.postscriptName : ''
+    const familyName = typeof item.familyName === 'string' ? item.familyName : ''
+    const styleName = typeof item.styleName === 'string' ? item.styleName : ''
+    const sourceFile = typeof item.sourceFile === 'string' ? item.sourceFile : ''
+    if (!sourceFile.trim() || (!postscriptName.trim() && !familyName.trim())) continue
+    fonts.push({ postscriptName, familyName, styleName, sourceFile })
+  }
+  return fonts
+}
+
 function hydrateProject(project: ProjectSet): ProjectSet {
-  if (!project || project.kind !== 'smart') return project
+  if (!project || typeof project !== 'object') return project
+  const unresolved = unresolvedFonts(project.unresolved)
+  if (project.kind !== 'smart') return { ...project, unresolved }
   return {
     ...project,
     kind: 'smart',
     members: [],
     rules: normalizeSmartRuleSet(project.rules),
+    unresolved,
   }
 }
 
 export function saveProjects(paths: AppPaths, projects: ProjectSet[]): void {
   const tmp = `${projectsPath(paths)}.${process.pid}.tmp`
-  fs.writeFileSync(tmp, JSON.stringify({ version: 1, projects } satisfies ProjectFile, null, 2))
+  const file: ProjectFile = { version: 2, projects }
+  fs.writeFileSync(tmp, JSON.stringify(file, null, 2))
   fs.renameSync(tmp, projectsPath(paths))
 }
 
 export function createProject(
   name: string,
   memberIds: string[] = [],
-  options: { kind?: 'manual' | 'smart'; rules?: SmartRuleSet } = {},
+  options: {
+    kind?: 'manual' | 'smart'
+    rules?: SmartRuleSet
+    /** Installed fingerprint to pin, keyed by asset id. Empty values are left unpinned. */
+    pins?: Readonly<Record<string, string | undefined>>
+    unresolved?: ProjectUnresolvedFont[]
+  } = {},
 ): ProjectSet {
   const trimmed = name.trim() || 'Untitled project'
+  const unresolved = unresolvedFonts(options.unresolved)
   if (options.kind === 'smart') {
     return {
       id: crypto.randomUUID(),
@@ -54,13 +90,18 @@ export function createProject(
       members: [],
       desiredActive: false,
       rules: normalizeSmartRuleSet(options.rules ?? { match: 'all', rules: [] }),
+      unresolved,
     }
   }
   return {
     id: crypto.randomUUID(),
     name: trimmed,
-    members: memberIds.map((assetId) => ({ assetId })),
+    members: [...new Set(memberIds)].map((assetId) => {
+      const pin = options.pins?.[assetId]?.trim()
+      return pin ? { assetId, pinFingerprint: pin } : { assetId }
+    }),
     desiredActive: false,
+    unresolved,
   }
 }
 
