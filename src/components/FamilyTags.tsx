@@ -298,7 +298,7 @@ export function FamilyTagNameDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={mode === 'edit' ? 'w-[min(92vw,320px)]' : undefined}>
+      <DialogContent className="w-[min(92vw,320px)]">
         <DialogHeader>
           <DialogTitle>{mode === 'create' ? 'New tag' : 'Edit tag'}</DialogTitle>
           <DialogDescription>
@@ -310,7 +310,6 @@ export function FamilyTagNameDialog({
         {open ? (
           <FamilyTagNameForm
             key={`${mode}:${initialName}:${initialColor}`}
-            mode={mode}
             initialName={initialName}
             initialColor={initialColor}
             onCancel={() => onOpenChange(false)}
@@ -323,13 +322,11 @@ export function FamilyTagNameDialog({
 }
 
 function FamilyTagNameForm({
-  mode,
   initialName,
   initialColor,
   onCancel,
   onSubmit,
 }: {
-  mode: 'create' | 'edit'
   initialName: string
   initialColor: string
   onCancel: () => void
@@ -354,26 +351,24 @@ function FamilyTagNameForm({
         className="mt-2"
         onChange={(event) => setName(event.target.value)}
       />
-      {mode === 'edit' ? (
-        <fieldset className="mt-4">
-          <legend className="text-sm font-medium">Color</legend>
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {colors.map((choice) => (
-              <button
-                key={choice}
-                type="button"
-                aria-label={`Color ${choice}`}
-                aria-pressed={choice === color}
-                className="inline-flex size-6 items-center justify-center rounded-full ring-1 ring-black/10 dark:ring-white/15"
-                style={{ backgroundColor: choice }}
-                onClick={() => setColor(choice)}
-              >
-                {choice === color ? <Check className="size-3.5 text-white" /> : null}
-              </button>
-            ))}
-          </div>
-        </fieldset>
-      ) : null}
+      <fieldset className="mt-4">
+        <legend className="text-sm font-medium">Color</legend>
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {colors.map((choice) => (
+            <button
+              key={choice}
+              type="button"
+              aria-label={`Color ${choice}`}
+              aria-pressed={choice === color}
+              className="inline-flex size-6 items-center justify-center rounded-full ring-1 ring-black/10 dark:ring-white/15"
+              style={{ backgroundColor: choice }}
+              onClick={() => setColor(choice)}
+            >
+              {choice === color ? <Check className="size-3.5 text-white" /> : null}
+            </button>
+          ))}
+        </div>
+      </fieldset>
       <div className="mt-4 flex justify-end gap-2">
         <Button type="button" variant="outline" onClick={onCancel}>
           Cancel

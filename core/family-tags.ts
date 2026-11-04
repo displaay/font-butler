@@ -45,10 +45,11 @@ export async function persistNewFamilyTag(
   paths: AppPaths,
   name: string,
   familyKeys: readonly string[] = [],
+  color?: string,
 ): Promise<FamilyTagPayload> {
   return runCatalogTask(() => {
     const catalog = loadCatalog(paths)
-    const tag = addFamilyTag(catalog, name, newId())
+    const tag = addFamilyTag(catalog, name, newId(), color)
     if (familyKeys.length > 0) setFamilyTagPresent(catalog, familyKeys, tag.id, true)
     return commit(paths, catalog)
   })

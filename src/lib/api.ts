@@ -189,9 +189,14 @@ export const api = {
       tags?: FamilyTag[]
       familyTags?: FamilyTagAssignment[]
     }>('/api/catalog'),
-  createFamilyTag: (name: string, familyKeys: string[] = []) =>
+  createFamilyTag: (name: string, familyKeys: string[] = [], color?: string) =>
     json<{ tags: FamilyTag[]; familyTags: FamilyTagAssignment[] }>(
-      post('/api/family-tags', { op: 'create', name, familyKeys }),
+      post('/api/family-tags', {
+        op: 'create',
+        name,
+        familyKeys,
+        ...(color !== undefined ? { color } : {}),
+      }),
     ),
   renameFamilyTag: (tagId: string, name: string) =>
     json<{ tags: FamilyTag[]; familyTags: FamilyTagAssignment[] }>(

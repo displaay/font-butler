@@ -351,7 +351,7 @@ app.post('/api/family-tags', async (c) => {
   }>()
   try {
     if (body.op === 'create') {
-      return c.json(await service.createFamilyTag(body.name ?? '', body.familyKeys ?? []))
+      return c.json(await service.createFamilyTag(body.name ?? '', body.familyKeys ?? [], body.color))
     }
     if (body.op === 'rename') {
       return c.json(await service.renameFamilyTag(body.tagId ?? '', body.name ?? ''))
