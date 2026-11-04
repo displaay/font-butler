@@ -25,6 +25,8 @@ import {
   detectAppUpdateRuntime,
   openedUpdateDmgRecordFile,
 } from './app-update-install.mjs'
+import { createDocumentAppObserver } from './document-app-watch.mjs'
+import { createDocumentOpenWatch, documentWatchIpc } from './document-open-watch.mjs'
 import { createExternalFontOpenNotifier } from './external-font-open-notify.mjs'
 import { dismissAnnouncement, presentPendingAnnouncement } from './announcements.mjs'
 import { applyTestFeedDataIsolation } from './test-feed-data.mjs'
@@ -389,6 +391,7 @@ function applyBootstrapSettings(settings) {
   applyOfficeCacheSetting(settings.clearOfficeFontCache)
   applyAdobeCacheSetting(settings.clearAdobeFontCache)
   applyNativeNotificationSetting(settings.nativeNotifications)
+  applyDocumentOpenWatchSetting(settings.watchDocumentOpens)
   void persistDeniedNativeNotifications(settings.nativeNotifications)
 }
 
@@ -749,6 +752,69 @@ function sendWhenReady(channel, payload) {
   } else {
     send()
   }
+}
+
+let documentOpenWatchEnabled = false
+let documentOpenWatch = null
+let documentAppObserver = null
+
+function documentWatch() {
+  if (!documentOpenWatch) {
+    documentOpenWatch = createDocumentOpenWatch({
+      enabled: false,
+      // The existing sheet runs the document font report. This watch does not activate fonts.
+      parse(filePath) {
+        return { path: filePath }
+      },
+      onEffect(effect) {
+        deliverDocumentWatchEffect(effect)
+      },
+    })
+  }
+  return documentOpenWatch
+}
+
+function documentObserver() {
+  if (!documentAppObserver) {
+    documentAppObserver = createDocumentAppObserver({
+      onOpenedPath(event) {
+        documentWatch().open(event)
+      },
+    })
+  }
+  return documentAppObserver
+}
+
+function deliverDocumentWatchEffect(effect) {
+  const ipc = documentWatchIpc(effect)
+  if (!ipc) return
+  if (ipc.channel === 'open-document') {
+    sendWhenReady('open-document', ipc.payload)
+    return
+  }
+  deliverDocumentWatchNote(ipc.payload?.message)
+}
+
+function deliverDocumentWatchNote(message) {
+  const text = typeof message === 'string' ? message.trim() : ''
+  if (!text) return
+  const win = mainWindow
+  const visible =
+    win && !win.isDestroyed() && mainWindowKind === 'main' && win.isVisible() && !win.isMinimized()
+  if (!visible) {
+    sendWhenReady('document-watch-note', { message: text })
+    return
+  }
+  win.webContents.send('document-watch-note', { message: text })
+}
+
+function applyDocumentOpenWatchSetting(enabled) {
+  const next = enabled === true
+  if (documentOpenWatchEnabled === next && documentOpenWatch) return
+  documentOpenWatchEnabled = next
+  documentWatch().setEnabled(next)
+  if (next) documentObserver().start()
+  else if (documentAppObserver) documentAppObserver.stop()
 }
 
 function openSettings(focus) {
@@ -1666,6 +1732,7 @@ function handleApiEvent(event) {
     applyOfficeCacheSetting(event.settings.clearOfficeFontCache)
     applyAdobeCacheSetting(event.settings.clearAdobeFontCache)
     applyNativeNotificationSetting(event.settings.nativeNotifications)
+    applyDocumentOpenWatchSetting(event.settings.watchDocumentOpens)
   }
   if (event.type === 'notice' && event.notice) {
     if (
@@ -2032,6 +2099,7 @@ if (!gotLock) {
 
   app.on('before-quit', () => {
     isQuitting = true
+    if (documentAppObserver) documentAppObserver.stop()
     if (apiChild) {
       const child = apiChild
       apiChild = null

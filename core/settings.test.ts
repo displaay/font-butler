@@ -52,6 +52,7 @@ function sampleSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     clearAdobeFontCache: true,
     autoReinstallOnUpdate: false,
     nativeNotifications: false,
+    watchDocumentOpens: false,
     onboardingCompleted: false,
     revisionBudgetBytes: 1024 * 1024 * 1024,
     activityRetentionDays: 90,
@@ -490,6 +491,44 @@ test('loadSettings fills nativeNotifications on older settings files', () => {
       }),
     )
     assert.equal(loadSettings(paths).nativeNotifications, false)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings defaults watchDocumentOpens to false', () => {
+  const paths = tempPaths()
+  try {
+    assert.equal(loadSettings(paths).watchDocumentOpens, false)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings keeps watchDocumentOpens off on older settings files', () => {
+  const paths = tempPaths()
+  try {
+    fs.mkdirSync(paths.dataRoot, { recursive: true })
+    fs.writeFileSync(
+      paths.settingsPath,
+      JSON.stringify({
+        version: 1,
+        watchFolders: [],
+        defaultView: 'list',
+        defaultSort: 'name',
+      }),
+    )
+    assert.equal(loadSettings(paths).watchDocumentOpens, false)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadSettings keeps a stored watchDocumentOpens true', () => {
+  const paths = tempPaths()
+  try {
+    saveSettings(paths, sampleSettings({ watchDocumentOpens: true }))
+    assert.equal(loadSettings(paths).watchDocumentOpens, true)
   } finally {
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }

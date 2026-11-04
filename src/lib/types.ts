@@ -383,6 +383,7 @@ export type AppSettings = {
   clearAdobeFontCache: boolean
   autoReinstallOnUpdate: boolean
   nativeNotifications: boolean
+  watchDocumentOpens?: boolean
   onboardingCompleted: boolean
   revisionBudgetBytes?: number
   activityRetentionDays?: number

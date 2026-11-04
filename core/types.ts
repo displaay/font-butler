@@ -301,6 +301,8 @@ export type AppSettings = {
   clearAdobeFontCache: boolean
   autoReinstallOnUpdate: boolean
   nativeNotifications: boolean
+  /** When true, a front Adobe or Office document opens the font sheet. Off until the user turns it on. */
+  watchDocumentOpens: boolean
   onboardingCompleted: boolean
   revisionBudgetBytes: number
   activityRetentionDays: number

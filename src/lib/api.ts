@@ -410,6 +410,7 @@ export const api = {
     clearAdobeFontCache?: boolean
     autoReinstallOnUpdate?: boolean
     nativeNotifications?: boolean
+    watchDocumentOpens?: boolean
     onboardingCompleted?: boolean
     folders?: WatchFolder[]
     specimen?: AppSettings['specimen']

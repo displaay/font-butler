@@ -928,6 +928,13 @@ function AppShell() {
       if (typeof filePath !== 'string' || filePath.trim() === '') return
       openDocumentAtRef.current(filePath)
     })
+    const stopDocumentNote = window.fontButlerDesktop?.onDocumentWatchNote?.((payload) => {
+      const message = payload?.message
+      if (typeof message !== 'string') return
+      const text = message.trim()
+      if (!text || text.includes('\n')) return
+      toast.message(text)
+    })
     const stopAnnouncement = window.fontButlerDesktop?.onAnnouncement?.((payload) => {
       if (!payload || typeof payload !== 'object') return
       const id = typeof payload.id === 'string' ? payload.id : ''
@@ -952,6 +959,7 @@ function AppShell() {
       stopFinderLinkTo?.()
       stopExternalFontOpen?.()
       stopDocument?.()
+      stopDocumentNote?.()
       stopAnnouncement?.()
     }
   }, [])

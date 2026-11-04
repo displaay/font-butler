@@ -102,6 +102,7 @@ const settings = {
   clearAdobeFontCache: false,
   autoReinstallOnUpdate: false,
   nativeNotifications: false,
+  watchDocumentOpens: false,
   onboardingCompleted: false,
 } as AppSettings
 
