@@ -4,7 +4,7 @@
 
 export const ANNOUNCEMENTS = [
   {
-    id: 'rename-to-cuttler',
+    id: 'whats-new',
     sinceVersion: '0.4.0',
     title: 'Now called Cuttler',
     body: 'Font Buttler has a new name. Same app, same library, same fonts — just Cuttler from here on.',

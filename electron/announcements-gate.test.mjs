@@ -26,14 +26,24 @@ test('popup gate treats an existing library with no record as an upgrade', () =>
     libraryEstablished: true,
   })
   assert.equal(result.seedSeen, false)
-  assert.equal(result.announcement?.id, 'rename-to-cuttler')
+  assert.equal(result.announcement?.id, 'whats-new')
   assert.equal(result.announcement?.celebrate, true)
   assert.equal(result.state.firstRunVersion, '0.4.0')
 })
 
+test('popup gate still shows whats-new after the earlier rename popup was dismissed', () => {
+  const result = nextAnnouncementToShow({
+    state: { seenIds: ['rename-to-cuttler'], firstRunVersion: '0.4.0' },
+    currentVersion: '0.4.0',
+    libraryEstablished: true,
+  })
+  assert.equal(result.announcement?.id, 'whats-new')
+  assert.equal(result.announcement?.celebrate, true)
+})
+
 test('popup gate hides announcements already marked seen', () => {
   const result = nextAnnouncementToShow({
-    state: { seenIds: ['rename-to-cuttler'], firstRunVersion: '0.3.12' },
+    state: { seenIds: ['whats-new'], firstRunVersion: '0.3.12' },
     currentVersion: '0.4.0',
     libraryEstablished: true,
   })
@@ -42,10 +52,10 @@ test('popup gate hides announcements already marked seen', () => {
 })
 
 test('markAnnouncementSeen is idempotent', () => {
-  const once = markAnnouncementSeen({ seenIds: [], firstRunVersion: '0.4.0' }, 'rename-to-cuttler')
-  const twice = markAnnouncementSeen(once, 'rename-to-cuttler')
-  assert.deepEqual(once.seenIds, ['rename-to-cuttler'])
-  assert.deepEqual(twice.seenIds, ['rename-to-cuttler'])
+  const once = markAnnouncementSeen({ seenIds: [], firstRunVersion: '0.4.0' }, 'whats-new')
+  const twice = markAnnouncementSeen(once, 'whats-new')
+  assert.deepEqual(once.seenIds, ['whats-new'])
+  assert.deepEqual(twice.seenIds, ['whats-new'])
   assert.deepEqual(parseAnnouncementState({ seenIds: ['a', 'a', 1], firstRunVersion: '1' }).seenIds, [
     'a',
   ])

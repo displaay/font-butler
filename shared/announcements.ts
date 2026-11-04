@@ -1,5 +1,11 @@
 export type AnnouncementShowWhen = 'upgrade' | 'always'
 
+export type AnnouncementPage = {
+  id: string
+  title: string
+  body: string
+}
+
 export type Announcement = {
   id: string
   sinceVersion: string
@@ -7,17 +13,46 @@ export type Announcement = {
   body: string
   celebrate: boolean
   showWhen?: AnnouncementShowWhen
+  pages?: AnnouncementPage[]
 }
+
+/**
+ * One upgrade announcement. The dialog pages through these in order,
+ * starting with the rename (icon choice), then each shipped feature.
+ */
+export const WHATS_NEW_PAGES: AnnouncementPage[] = [
+  {
+    id: 'rename',
+    title: 'Now called Cuttler',
+    body: 'Font Buttler has a new name. Same app, same library, same fonts — just Cuttler from here on.',
+  },
+  {
+    id: 'smart-projects',
+    title: 'Smart projects',
+    body: 'Choose Smart when you create a project. Rules match status, type, source, folder, tag, or text, and the set stays live as the library changes.',
+  },
+  {
+    id: 'family-tags',
+    title: 'Family tags',
+    body: 'Tag a family from its menu or the selection bar. Licensed, Trial, Open Source, and Unlicensed are ready to use. Displaay retail starts on Trial until you save a worker token.',
+  },
+  {
+    id: 'document-font-sheet',
+    title: 'Document → Project',
+    body: 'Open a PDF, IDML, Word, or PowerPoint file. Cuttler groups those fonts into on, in the library but off, or missing. Activate what you have, or create a project from the document.',
+  },
+]
 
 /** Product announcements shown in the main window (welcome-style dialog) after launch. */
 export const ANNOUNCEMENTS: Announcement[] = [
   {
-    id: 'rename-to-cuttler',
+    id: 'whats-new',
     sinceVersion: '0.4.0',
-    title: 'Now called Cuttler',
-    body: 'Font Buttler has a new name. Same app, same library, same fonts — just Cuttler from here on.',
+    title: WHATS_NEW_PAGES[0]!.title,
+    body: WHATS_NEW_PAGES[0]!.body,
     celebrate: true,
     showWhen: 'upgrade',
+    pages: WHATS_NEW_PAGES,
   },
 ]
 
