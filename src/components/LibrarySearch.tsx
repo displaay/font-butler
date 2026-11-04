@@ -1,49 +1,126 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { Search, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import type { LibraryFilter } from '../../shared/library-filters.ts'
 import {
-  addSearchToken,
-  suggestSearchTokens,
-  textAfterTokenChoice,
+  applySearchSuggestion,
+  searchFilterSuggestions,
+  type SearchFilterCatalog,
+  type SearchSuggestion,
+  type SearchSuggestionKind,
   type SearchToken,
-  type SearchTokenGroup,
 } from '../../shared/library-search.ts'
 
-const GROUP_LABELS: Record<SearchTokenGroup, string> = {
-  weight: 'Weight',
-  style: 'Style',
-  figures: 'Figures',
-  kind: 'Kind',
+const SECTION_LABELS: Record<SearchSuggestionKind, string> = {
+  style: 'Filters',
+  classification: 'Classification',
+  tag: 'Tags',
+  foundry: 'Foundries',
 }
+
+const NO_TAGS: NonNullable<SearchFilterCatalog['tags']> = []
+const NO_FOUNDRIES: string[] = []
+const NO_FILTERS: LibraryFilter[] = []
 
 export function LibrarySearch({
   text,
   tokens,
   onTextChange,
   onTokensChange,
+  tags = NO_TAGS,
+  foundries = NO_FOUNDRIES,
+  libraryFilters = NO_FILTERS,
+  onLibraryFiltersChange,
 }: {
   text: string
   tokens: SearchToken[]
   onTextChange: (value: string) => void
   onTokensChange: (tokens: SearchToken[]) => void
+  tags?: SearchFilterCatalog['tags']
+  foundries?: readonly string[]
+  libraryFilters?: readonly LibraryFilter[]
+  onLibraryFiltersChange?: (value: LibraryFilter[]) => void
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
-  const suggestions = useMemo(() => suggestSearchTokens(text.trim().split(/\s+/).at(-1) ?? ''), [text])
-  const grouped = useMemo(() => {
-    const order: SearchTokenGroup[] = ['weight', 'style', 'figures', 'kind']
-    return order
-      .map((group) => ({
-        group,
-        tokens: suggestions.filter((token) => token.group === group),
-      }))
-      .filter((section) => section.tokens.length > 0)
-  }, [suggestions])
+  const [activeIndex, setActiveIndex] = useState(0)
+  const activeRef = useRef<HTMLButtonElement>(null)
+  const catalog = useMemo<SearchFilterCatalog>(
+    () => ({
+      tags,
+      foundries,
+      chosenTokenIds: tokens.map((token) => token.id),
+      chosenFilters: libraryFilters,
+    }),
+    [tags, foundries, tokens, libraryFilters],
+  )
+  const matches = useMemo(() => searchFilterSuggestions(text, catalog), [text, catalog])
+  const shown = useMemo(
+    () => (text.trim() ? matches : searchFilterSuggestions(text, catalog, { browse: true })),
+    [text, matches, catalog],
+  )
+  const shownKey = shown.map((item) => item.id).join('\n')
+  const [highlightKey, setHighlightKey] = useState(shownKey)
+  if (highlightKey !== shownKey) {
+    setHighlightKey(shownKey)
+    setActiveIndex(shown.length > 0 ? 0 : -1)
+  }
 
-  function choose(token: SearchToken) {
-    onTokensChange(addSearchToken(tokens, token.id))
-    onTextChange(textAfterTokenChoice(text, token))
+  useEffect(() => {
+    if (!menuOpen) return
+    const node = activeRef.current
+    if (node && typeof node.scrollIntoView === 'function') node.scrollIntoView({ block: 'nearest' })
+  }, [menuOpen, activeIndex])
+
+  function choose(suggestion: SearchSuggestion) {
+    const next = applySearchSuggestion(suggestion, tokens, libraryFilters)
+    if (next.text !== text) onTextChange(next.text)
+    if (
+      next.tokens.length !== tokens.length ||
+      next.tokens.some((token, index) => token.id !== tokens[index]?.id)
+    ) {
+      onTokensChange(next.tokens)
+    }
+    if (
+      onLibraryFiltersChange &&
+      (next.libraryFilters.length !== libraryFilters.length ||
+        next.libraryFilters.some((filter, index) => filter !== libraryFilters[index]))
+    ) {
+      onLibraryFiltersChange(next.libraryFilters)
+    }
     setMenuOpen(false)
   }
+
+  function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === 'Backspace' && text === '' && tokens.length > 0) {
+      event.preventDefault()
+      onTokensChange(tokens.slice(0, -1))
+      return
+    }
+    if (event.key === 'Escape') {
+      if (!menuOpen) return
+      event.preventDefault()
+      event.stopPropagation()
+      setMenuOpen(false)
+      return
+    }
+    if (!menuOpen || shown.length === 0) return
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      setActiveIndex((index) => Math.min(shown.length - 1, (index < 0 ? -1 : index) + 1))
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      setActiveIndex((index) => Math.max(0, index - 1))
+      return
+    }
+    if (event.key === 'Enter' && shown[activeIndex]) {
+      event.preventDefault()
+      choose(shown[activeIndex])
+    }
+  }
+
+  let lastKind: SearchSuggestionKind | null = null
 
   return (
     <div className="relative">
@@ -66,21 +143,21 @@ export function LibrarySearch({
             type="search"
             value={text}
             onChange={(event) => {
-              onTextChange(event.target.value)
-              if (event.target.value.trim()) setMenuOpen(true)
+              const value = event.target.value
+              onTextChange(value)
+              setMenuOpen(searchFilterSuggestions(value, catalog).length > 0)
             }}
-            onKeyDown={(event) => {
-              if (event.key === 'Backspace' && text === '' && tokens.length > 0) {
-                event.preventDefault()
-                onTokensChange(tokens.slice(0, -1))
-              }
-              if (event.key === 'Escape') setMenuOpen(false)
-            }}
+            onKeyDown={onKeyDown}
             onFocus={() => {
-              if (text.trim()) setMenuOpen(true)
+              if (searchFilterSuggestions(text, catalog).length > 0) setMenuOpen(true)
             }}
             placeholder={tokens.length > 0 ? '' : 'Search families'}
             aria-label="Search families"
+            aria-autocomplete="list"
+            aria-controls="library-search-filters"
+            aria-expanded={menuOpen}
+            aria-activedescendant={menuOpen && activeIndex >= 0 ? `library-search-option-${activeIndex}` : undefined}
+            role="combobox"
             className="h-6 min-w-[6rem] flex-1 bg-transparent text-[13px] outline-none placeholder:text-muted-foreground [&::-webkit-search-cancel-button]:appearance-none"
           />
         </div>
@@ -100,38 +177,45 @@ export function LibrarySearch({
       </div>
       {menuOpen ? (
         <div
+          id="library-search-filters"
           role="listbox"
-          aria-label="Preview filters"
+          aria-label="Search filters"
           className="absolute top-full right-0 left-0 z-30 mt-1 max-h-72 overflow-y-auto rounded-md border bg-popover p-1 shadow-sm"
+          onMouseDown={(event) => event.preventDefault()}
         >
-          {grouped.length === 0 ? (
+          {shown.length === 0 ? (
             <p className="px-2 py-1.5 text-xs text-muted-foreground">No matching filters</p>
           ) : (
-            grouped.map((section) => (
-              <div key={section.group} className="mb-1">
-                <p className="px-2 pt-1 text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
-                  {GROUP_LABELS[section.group]}
-                </p>
-                {section.tokens.map((token) => {
-                  const selected = tokens.some((item) => item.id === token.id)
-                  return (
-                    <button
-                      key={token.id}
-                      type="button"
-                      role="option"
-                      aria-selected={selected}
-                      className={cn(
-                        'flex w-full rounded-md px-2 py-1 text-left text-[13px] hover:bg-muted',
-                        selected && 'bg-muted',
-                      )}
-                      onClick={() => choose(token)}
-                    >
-                      {token.label}
-                    </button>
-                  )
-                })}
-              </div>
-            ))
+            shown.map((suggestion, index) => {
+              const header = suggestion.kind === lastKind ? null : SECTION_LABELS[suggestion.kind]
+              lastKind = suggestion.kind
+              const active = index === activeIndex
+              return (
+                <div key={suggestion.id}>
+                  {header ? (
+                    <p className="px-2 pt-1 text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+                      {header}
+                    </p>
+                  ) : null}
+                  <button
+                    id={`library-search-option-${index}`}
+                    ref={active ? activeRef : undefined}
+                    type="button"
+                    role="option"
+                    aria-selected={active}
+                    data-kind={suggestion.kind}
+                    className={cn(
+                      'flex w-full rounded-md px-2 py-1 text-left text-[13px] hover:bg-muted',
+                      active && 'bg-muted',
+                    )}
+                    onMouseEnter={() => setActiveIndex(index)}
+                    onClick={() => choose(suggestion)}
+                  >
+                    {suggestion.label}
+                  </button>
+                </div>
+              )
+            })
           )}
         </div>
       ) : null}
