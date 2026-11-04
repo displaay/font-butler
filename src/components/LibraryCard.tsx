@@ -18,7 +18,9 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
+import { FamilyTagDots, FamilyTagMenuItems } from '@/components/FamilyTags'
 import { familyCardPlan, type CatalogBatchPlan } from '@/lib/batch'
+import type { FamilyTag, FamilyTagAssignment } from '../../shared/family-tags.ts'
 import { testInstallMenuLabels } from '@/lib/testInstall'
 import { applyFontDragImage } from '@/lib/dragPreview'
 import { formatAddedAt } from '@/lib/dates'
@@ -88,6 +90,13 @@ export const LibraryCard = memo(function LibraryCard({
   onCreateProjectFromCard,
   onFontDragStart,
   onFontDragEnd,
+  tagDefinitions,
+  tagAssignments,
+  appliedTagIds,
+  tagFamilyKeys,
+  onSetFamilyTag,
+  onCreateFamilyTag,
+  onRenameFamilyTag,
   uninstallOnly = false,
 }: {
   group: FamilyGroup
@@ -145,6 +154,13 @@ export const LibraryCard = memo(function LibraryCard({
   onCreateProjectFromCard: (ids: string[], familyNames: string[]) => void
   onFontDragStart: () => void
   onFontDragEnd: () => void
+  tagDefinitions?: readonly FamilyTag[]
+  tagAssignments?: readonly FamilyTagAssignment[]
+  appliedTagIds?: readonly string[]
+  tagFamilyKeys?: readonly string[]
+  onSetFamilyTag?: (tagId: string, present: boolean) => void
+  onCreateFamilyTag?: () => void
+  onRenameFamilyTag?: (tagId: string) => void
   uninstallOnly?: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -260,6 +276,7 @@ export const LibraryCard = memo(function LibraryCard({
           selected={selected}
           hideFormats={hideFormats}
         />
+        <FamilyTagDots definitions={tagDefinitions ?? []} appliedIds={appliedTagIds ?? []} />
         {layout === 'list' && mixedWarning ? (
           <Badge
             tone="accent"
@@ -517,6 +534,19 @@ export const LibraryCard = memo(function LibraryCard({
           </ContextMenuItem>
         ) : null}
         <ContextMenuSeparator />
+        {tagDefinitions && tagAssignments && tagFamilyKeys && onSetFamilyTag && onCreateFamilyTag && onRenameFamilyTag ? (
+          <>
+            <FamilyTagMenuItems
+              definitions={tagDefinitions}
+              assignments={tagAssignments}
+              familyKeys={tagFamilyKeys}
+              onSet={onSetFamilyTag}
+              onCreate={onCreateFamilyTag}
+              onRename={onRenameFamilyTag}
+            />
+            <ContextMenuSeparator />
+          </>
+        ) : null}
         <ContextMenuSub>
           <ContextMenuSubTrigger>Add to a project</ContextMenuSubTrigger>
           <ContextMenuSubContent>
@@ -593,5 +623,8 @@ export const LibraryCard = memo(function LibraryCard({
   prev.batch === next.batch &&
   prev.projectFilter === next.projectFilter &&
   prev.adobeAvailable === next.adobeAvailable &&
-  prev.uninstallOnly === next.uninstallOnly
+  prev.uninstallOnly === next.uninstallOnly &&
+  prev.tagDefinitions === next.tagDefinitions &&
+  prev.tagAssignments === next.tagAssignments &&
+  prev.appliedTagIds === next.appliedTagIds
 ))

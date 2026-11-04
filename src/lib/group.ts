@@ -1,5 +1,6 @@
 import { uniqueStyleCount, occupyingStyleCount, entryFormatOf } from './formats.ts'
 import { entryCopyDestinations } from './state.ts'
+import { familyTagKey } from '../../shared/family-tags.ts'
 import { entryHasActiveRetailSync, retailListingHasLocalFile, type RetailSyncView } from '../../shared/retail.ts'
 import type {
   CatalogEntry,
@@ -20,11 +21,7 @@ const statusRank: Record<FontStatus, number> = {
 }
 
 export function familyNameOf(entry: CatalogEntry): string {
-  const custom = entry.customFamilyName?.trim()
-  if (custom) return custom
-  const retail = entry.retailFamilyName?.trim()
-  if (retail) return retail
-  return entry.faces[0]?.familyName || 'Unknown'
+  return familyTagKey(entry)
 }
 
 export function retailFamilyNameOf(entry: CatalogEntry): string {

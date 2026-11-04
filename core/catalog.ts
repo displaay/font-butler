@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import fs from 'node:fs'
 import path from 'node:path'
+import { ensureSeedTags, normalizeFamilyTagAssignments } from '../shared/family-tags.ts'
 import { normalizeFormat } from './formats.ts'
 import type { AppPaths } from './paths.ts'
 import { applyEntryFacts } from './state.ts'
@@ -51,6 +52,8 @@ function hydrateCatalog(catalog: CatalogFile): CatalogFile {
       applyEntryFacts(entry)
     }
   }
+  catalog.tags = ensureSeedTags(catalog.tags)
+  catalog.familyTags = normalizeFamilyTagAssignments(catalog.familyTags, catalog.tags)
   return catalog
 }
 
@@ -143,7 +146,7 @@ export function runCatalogTask<T>(task: () => Promise<T> | T): Promise<T> {
 
 export function loadCatalog(paths: AppPaths): CatalogFile {
   if (!fs.existsSync(paths.catalogPath)) {
-    return emptyCatalog()
+    return hydrateCatalog(emptyCatalog())
   }
   try {
     return hydrateCatalog(readCatalogFile(paths.catalogPath))

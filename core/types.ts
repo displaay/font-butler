@@ -1,5 +1,6 @@
 import type { RetailFontFormat, RetailSyncStatus } from '../shared/retail.ts'
 import type { AppIconStyle } from '../shared/appIcon.ts'
+import type { FamilyTag, FamilyTagAssignment } from '../shared/family-tags.ts'
 import type { ProjectKind, SmartRuleSet } from '../shared/smart-projects.ts'
 
 export const FONT_EXTENSIONS = ['.ttf', '.otf', '.ttc', '.otc'] as const
@@ -150,6 +151,13 @@ export type CatalogEntry = {
 export type CatalogFile = {
   version: 1
   entries: CatalogEntry[]
+  /**
+   * Tag definitions. Seed tags are filled in on load.
+   * Assignments live in `familyTags`, keyed by `familyTagKey` (the library card).
+   * A later `tag is` / `tag is not` rule reads `familyTags[].tagIds`.
+   */
+  tags?: FamilyTag[]
+  familyTags?: FamilyTagAssignment[]
 }
 
 export type SystemFace = {
@@ -580,7 +588,13 @@ export type AppUpdateStatus = {
 }
 
 export type ServiceEvent =
-  | { type: 'catalog'; entries: CatalogEntry[]; revision?: number }
+  | {
+      type: 'catalog'
+      entries: CatalogEntry[]
+      revision?: number
+      tags?: FamilyTag[]
+      familyTags?: FamilyTagAssignment[]
+    }
   | { type: 'system'; faces: SystemFace[] }
   | { type: 'notice'; notice: Notice }
   | { type: 'settings'; settings: AppSettings }

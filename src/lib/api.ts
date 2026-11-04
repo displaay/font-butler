@@ -1,4 +1,5 @@
 import type { DocumentFontReport } from '../../shared/document-project.ts'
+import type { FamilyTag, FamilyTagAssignment } from '../../shared/family-tags.ts'
 import type { SmartRuleSet } from '../../shared/smart-projects.ts'
 import type {
   AdobeFontCacheInfo,
@@ -181,7 +182,25 @@ export const api = {
     await ensureToken()
     return { settings: bootstrapSettings }
   },
-  catalog: () => get<{ entries: CatalogEntry[]; revision?: number }>('/api/catalog'),
+  catalog: () =>
+    get<{
+      entries: CatalogEntry[]
+      revision?: number
+      tags?: FamilyTag[]
+      familyTags?: FamilyTagAssignment[]
+    }>('/api/catalog'),
+  createFamilyTag: (name: string, familyKeys: string[] = []) =>
+    json<{ tags: FamilyTag[]; familyTags: FamilyTagAssignment[] }>(
+      post('/api/family-tags', { op: 'create', name, familyKeys }),
+    ),
+  renameFamilyTag: (tagId: string, name: string) =>
+    json<{ tags: FamilyTag[]; familyTags: FamilyTagAssignment[] }>(
+      post('/api/family-tags', { op: 'rename', tagId, name }),
+    ),
+  setFamilyTag: (familyKeys: string[], tagId: string, present: boolean) =>
+    json<{ tags: FamilyTag[]; familyTags: FamilyTagAssignment[] }>(
+      post('/api/family-tags', { op: 'set', familyKeys, tagId, present }),
+    ),
   appUpdate: (refresh = false) =>
     get<{ update: AppUpdateStatus }>(`/api/app-update${refresh ? '?refresh=1' : ''}`),
   system: () => get<{ faces: SystemFace[] }>('/api/system'),

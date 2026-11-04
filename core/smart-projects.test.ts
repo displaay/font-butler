@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { loadCatalog, saveCatalog } from './catalog.ts'
-import { projectActivationState } from './projects.ts'
+import { projectActivationMembers, projectActivationState } from './projects.ts'
 import { withService } from './test-util.ts'
 import type { CatalogEntry } from './types.ts'
+import { ensureSeedTags, familyTagRulePredicate } from '../shared/family-tags.ts'
 import {
   emptySmartRuleSet,
   entryMatchesSmartRules,
@@ -240,6 +241,84 @@ test('a tag rule is stored and stays unmatched until a predicate is supplied', (
       },
     }).map((entry) => entry.id),
     ['licensed'],
+  )
+})
+
+test('a tag rule matches family tags by id or current name', () => {
+  const tags = ensureSeedTags(undefined).map((tag) =>
+    tag.seed === 'trial' ? { ...tag, name: 'Evaluation' } : tag,
+  )
+  const catalog = {
+    tags,
+    familyTags: [
+      { familyKey: 'Reckless', tagIds: ['trial'] },
+      { familyKey: 'GT America', tagIds: ['open-source'] },
+    ],
+  }
+  const options = { predicates: { tag: familyTagRulePredicate(catalog) } }
+  const reckless = font({ id: 'reckless', faces: face({ familyName: 'Reckless' }) })
+  const gt = font({ id: 'gt', faces: face({ familyName: 'GT America' }) })
+  const namedLikeTrial = font({
+    id: 'filename',
+    sourcePath: '/Fonts/Matter-TRIAL-Regular.otf',
+    faces: face({ familyName: 'Matter TRIAL' }),
+  })
+  const byName = rules('all', [rule({ field: 'tag', operator: 'is', value: 'Evaluation' })])
+  const byId = rules('all', [rule({ field: 'tag', operator: 'is', value: 'open-source' })])
+  const notTrial = rules('all', [rule({ field: 'tag', operator: 'isNot', value: 'trial' })])
+  assert.deepEqual(matchingSmartEntries([reckless, gt, namedLikeTrial], byName).map((entry) => entry.id), [])
+  assert.deepEqual(
+    matchingSmartEntries([reckless, gt, namedLikeTrial], byName, options).map((entry) => entry.id),
+    ['reckless'],
+  )
+  assert.deepEqual(
+    matchingSmartEntries([reckless, gt, namedLikeTrial], byId, options).map((entry) => entry.id),
+    ['gt'],
+  )
+  assert.deepEqual(
+    matchingSmartEntries([reckless, gt, namedLikeTrial], notTrial, options).map((entry) => entry.id),
+    ['gt', 'filename'],
+  )
+  assert.deepEqual(
+    matchingSmartEntries(
+      [reckless],
+      rules('all', [rule({ field: 'tag', operator: 'is', value: 'Trial' })]),
+      options,
+    ),
+    [],
+  )
+
+  const project = {
+    id: 'smart',
+    name: 'Evaluation families',
+    kind: 'smart' as const,
+    members: [],
+    desiredActive: false,
+    rules: byName,
+  }
+  const entries = [
+    catalogEntry({
+      id: 'reckless',
+      sourcePath: '/Fonts/Reckless.otf',
+      faces: [
+        {
+          familyName: 'Reckless',
+          styleName: 'Regular',
+          fullName: 'Reckless Regular',
+          postscriptName: 'Reckless-Regular',
+          isVariable: false,
+          instanceCount: 1,
+          instanceNames: [],
+          weight: 400,
+          italic: false,
+        },
+      ],
+    }),
+  ]
+  assert.deepEqual(projectActivationMembers(project, entries), [])
+  assert.deepEqual(
+    projectActivationMembers(project, entries, catalog).map((member) => member.assetId),
+    ['reckless'],
   )
 })
 

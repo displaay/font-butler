@@ -4,10 +4,9 @@
  * Manual projects keep an explicit member list. A smart project stores rules only;
  * membership is computed from the current catalog.
  *
- * `tag` is a reserved field (`tag is` / `tag is not`). This module does not decide
- * tag membership. Pass `predicates.tag` once family tags exist — the rule object
- * stays `{ field, operator, value }` either way. A predicate reports the positive
- * condition (the font has that tag). `isNot` is applied here.
+ * `tag` is `tag is` / `tag is not`. This module does not decide tag membership.
+ * Callers pass `predicates.tag` from `familyTagRulePredicate`. The predicate
+ * reports the positive condition (the family has that tag). `isNot` is applied here.
  */
 
 export const SMART_RETAIL_FOLDER = '__retail__'
@@ -102,7 +101,7 @@ export type SmartMatchOptions<TEntry extends SmartMatchEntry = SmartMatchEntry> 
   predicates?: Partial<Record<string, SmartRulePredicate<TEntry>>>
 }
 
-export const SMART_RULE_FIELD_OPTIONS: { field: Exclude<SmartRuleField, 'tag'>; label: string }[] = [
+export const SMART_RULE_FIELD_OPTIONS: { field: SmartRuleField; label: string }[] = [
   { field: 'status', label: 'Status' },
   { field: 'variable', label: 'Type' },
   { field: 'source', label: 'Source' },
@@ -110,6 +109,7 @@ export const SMART_RULE_FIELD_OPTIONS: { field: Exclude<SmartRuleField, 'tag'>; 
   { field: 'format', label: 'Format' },
   { field: 'folder', label: 'Folder' },
   { field: 'query', label: 'Text' },
+  { field: 'tag', label: 'Tag' },
 ]
 
 export const SMART_RULE_CHIP_VALUES: Record<SmartChipField, { value: string; label: string }[]> = {
