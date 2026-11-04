@@ -1,3 +1,4 @@
+import type { LibraryFilter } from '../shared/library-filters.ts'
 import type { RetailFontFormat, RetailSyncStatus } from '../shared/retail.ts'
 import type { AppIconStyle } from '../shared/appIcon.ts'
 import type { FamilyTag, FamilyTagAssignment } from '../shared/family-tags.ts'
@@ -97,6 +98,16 @@ export type FontFaceInfo = {
   namedInstances?: NamedInstanceInfo[]
   weight: number
   italic: boolean
+  /** Name ID 8, when the font writes one. */
+  foundry?: string
+  /** Name ID 9, when the font writes one. */
+  designer?: string
+  /** Serif, sans-serif, monospaced, script, ornamental, or symbol. Absent when the font doesn't say. */
+  classification?: string
+  /** OS/2 usWidthClass. 1–4 condensed, 5 normal, 6–9 extended. */
+  widthClass?: number
+  /** Figure features the font actually contains, such as tnum or onum. */
+  features?: string[]
 }
 
 export type FontAxisInfo = {
@@ -171,6 +182,11 @@ export type SystemFace = {
   instanceNames?: string[]
   weight?: number
   italic?: boolean
+  foundry?: string
+  designer?: string
+  classification?: string
+  widthClass?: number
+  features?: string[]
   format: string
   previewSample?: string
   protected: boolean
@@ -199,19 +215,7 @@ export type SortMode = 'name' | 'added'
 export type ThemeMode = 'light' | 'dark' | 'system'
 export type { AppIconStyle }
 
-export type LibraryFilter =
-  | 'installed'
-  | 'deactivated'
-  | 'uninstalled'
-  | 'vf'
-  | 'static'
-  | 'source'
-  | 'no-source'
-  | 'computer'
-  | 'adobe'
-  | 'no-destination'
-  | 'otf'
-  | 'ttf'
+export type { LibraryFilter }
 
 export type SavedLibraryFilter = {
   id: string

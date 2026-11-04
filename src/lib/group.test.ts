@@ -148,6 +148,12 @@ test('countLibraryFilters totals families per filter and can count one family tw
     'no-destination': 2,
     otf: 3,
     ttf: 0,
+    'classification:serif': 0,
+    'classification:sans-serif': 0,
+    'classification:monospaced': 0,
+    'classification:script': 0,
+    'classification:ornamental': 0,
+    'classification:symbol': 0,
   })
 })
 
@@ -479,4 +485,17 @@ test('catalogEntriesMatch ignores array identity when revision fields are equal'
   const renamed = [entry('a', 'Able', 1), entry('z', 'Zed', 2)]
   renamed[0]!.retailFamilyName = 'Aguzzo VF'
   assert.equal(catalogEntriesMatch(a, renamed), false)
+})
+
+test('matchesLibraryFilter uses stored classification and foundry, not a guess', () => {
+  const serif = entry('s', 'Reckless', 1, 'installed')
+  serif.faces[0]!.classification = 'serif'
+  serif.faces[0]!.foundry = 'Displaay'
+  assert.equal(matchesLibraryFilter(serif, ['classification:serif']), true)
+  assert.equal(matchesLibraryFilter(serif, ['classification:sans-serif']), false)
+  assert.equal(matchesLibraryFilter(serif, ['foundry:Displaay']), true)
+  assert.equal(matchesLibraryFilter(serif, ['foundry:Other']), false)
+  const blank = entry('b', 'Plain', 2, 'installed')
+  blank.faces[0]!.classification = null
+  assert.equal(matchesLibraryFilter(blank, ['classification:serif']), false)
 })

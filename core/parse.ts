@@ -7,6 +7,7 @@ import {
   PREVIEW_PROBE_CODE_POINTS,
   previewSampleFromCoverage,
 } from '../shared/previewSample.ts'
+import { classifyFont, designerFromName, foundryFromManufacturer } from '../shared/font-classification.ts'
 import { FONT_EXTENSIONS, WEB_FONT_EXTENSIONS, type FontAxisInfo, type FontFaceInfo, type NamedInstanceInfo } from './types.ts'
 
 export function isFontFile(filePath: string): boolean {
@@ -151,6 +152,24 @@ function faceFromFont(font: Font): FontFaceInfo {
     preferredFamily: englishOrFirst(records?.preferredFamily),
     preferredSubfamily: englishOrFirst(records?.preferredSubfamily),
   })
+  const foundry = foundryFromManufacturer(englishOrFirst(records?.manufacturer))
+  const designer = designerFromName(englishOrFirst(records?.designer))
+  const classification = classifyFont({
+    sFamilyClass: typeof os2?.sFamilyClass === 'number' ? os2.sFamilyClass : null,
+    panose: Array.isArray(os2?.panose) ? os2.panose : null,
+    names: [
+      familyName,
+      styleName,
+      font.fullName,
+      font.postscriptName,
+      englishOrFirst(records?.preferredFamily),
+      englishOrFirst(records?.fontFamily),
+      englishOrFirst(records?.preferredSubfamily),
+      englishOrFirst(records?.fontSubfamily),
+    ],
+  })
+  const widthClass = typeof os2?.usWidthClass === 'number' && os2.usWidthClass > 0 ? os2.usWidthClass : undefined
+  const features = figureFeaturesOf(font)
 
   return {
     familyName,
@@ -163,6 +182,23 @@ function faceFromFont(font: Font): FontFaceInfo {
     namedInstances: isVariable ? namedInstancesOf(font) : undefined,
     weight: os2?.usWeightClass ?? 400,
     italic: Math.abs(italicAngle) > 1 || /italic|oblique/i.test(styleName),
+    ...(foundry ? { foundry } : {}),
+    ...(designer ? { designer } : {}),
+    ...(classification ? { classification } : {}),
+    ...(widthClass ? { widthClass } : {}),
+    ...(features ? { features } : {}),
+  }
+}
+
+const FIGURE_FEATURES = new Set(['tnum', 'onum', 'lnum', 'pnum'])
+
+function figureFeaturesOf(font: Font): string[] | undefined {
+  try {
+    const available = (font as Font & { availableFeatures?: string[] }).availableFeatures ?? []
+    const tags = [...new Set(available.filter((tag) => FIGURE_FEATURES.has(tag)))]
+    return tags.length > 0 ? tags : undefined
+  } catch {
+    return undefined
   }
 }
 

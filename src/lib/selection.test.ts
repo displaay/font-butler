@@ -143,6 +143,11 @@ test('shortcutAction maps keys and ignores typing', () => {
   assert.equal(shortcutAction(key({ key: 'Enter' })), 'inspect')
   assert.equal(shortcutAction(key({ key: 'Escape' })), 'collapse')
   assert.equal(shortcutAction(key({ key: 'f' })), 'specimen')
+  assert.equal(shortcutAction(key({ key: ' ' })), 'quickLook')
+  assert.equal(
+    shortcutAction(key({ key: ' ', target: { tagName: 'BUTTON' } as EventTarget })),
+    null,
+  )
   assert.equal(shortcutAction(key({ key: 'i', metaKey: true })), null)
   assert.equal(shortcutAction(key({ key: 'a', metaKey: true })), 'selectAll')
   assert.equal(shortcutAction(key({ key: 'a' })), null)

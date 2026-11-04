@@ -9,6 +9,7 @@ import {
   emptySmartRuleSet,
   entryMatchesSmartRules,
   matchingSmartEntries,
+  matchingSmartFamilyCount,
   normalizeSmartRuleSet,
   smartProjectSnapshot,
   type SmartMatchEntry,
@@ -465,4 +466,68 @@ test('snapshot and activation owners follow a smart project without storing memb
     )
     await assert.rejects(service.snapshotProject(snapshot.id), /smart project/)
   })
+})
+
+function styledFamily(
+  id: string,
+  family: string,
+  styles: string[],
+  classification: string | null,
+): SmartMatchEntry {
+  return font({
+    id,
+    faces: styles.map((style) => ({
+      familyName: family,
+      styleName: style,
+      fullName: `${family} ${style}`,
+      postscriptName: `${family}-${style}`,
+      isVariable: false,
+      classification,
+    })),
+  })
+}
+
+test('number of styles is more than 5 counts a family across its files', () => {
+  const first = styledFamily('a', 'Reckless', ['Regular', 'Bold', 'Light'], 'serif')
+  const second = styledFamily('b', 'Reckless', ['Medium', 'Black', 'Thin'], 'serif')
+  const short = styledFamily('c', 'Short', ['Regular', 'Bold', 'Light', 'Medium', 'Black'], 'serif')
+  const set = rules('all', [rule({ field: 'styleCount', operator: 'isMoreThan', value: '5' })])
+  assert.equal(matchingSmartFamilyCount([first, second, short], set), 1)
+  assert.deepEqual(
+    matchingSmartEntries([first, second, short], set).map((entry) => entry.id),
+    ['a', 'b'],
+  )
+})
+
+test('classification is Serif, and an unclassified family matches neither is nor is not', () => {
+  const serif = styledFamily('serif', 'Reckless', ['Regular'], 'serif')
+  const blank = styledFamily('blank', 'Plain', ['Regular'], null)
+  const isSerif = rules('all', [rule({ field: 'classification', operator: 'is', value: 'Serif' })])
+  const isNotSerif = rules('all', [rule({ field: 'classification', operator: 'isNot', value: 'serif' })])
+  assert.deepEqual(matchingSmartEntries([serif, blank], isSerif).map((entry) => entry.id), ['serif'])
+  assert.deepEqual(matchingSmartEntries([serif, blank], isNotSerif).map((entry) => entry.id), [])
+})
+
+test('all of the rules and any of the rules combine style count with classification', () => {
+  const wide = styledFamily('wide', 'Reckless', ['Regular', 'Bold', 'Light', 'Medium', 'Black', 'Thin'], 'serif')
+  const narrow = styledFamily('narrow', 'Chronicle', ['Regular'], 'serif')
+  const grotesk = styledFamily(
+    'grotesk',
+    'Grotesk',
+    ['Regular', 'Bold', 'Light', 'Medium', 'Black', 'Thin', 'Italic', 'Bold Italic'],
+    'sans-serif',
+  )
+  const manyStyles = rule({ field: 'styleCount', operator: 'isMoreThan', value: '5' })
+  const serif = rule({ id: 'class', field: 'classification', operator: 'is', value: 'serif' })
+  const entries = [wide, narrow, grotesk]
+  assert.deepEqual(
+    matchingSmartEntries(entries, rules('all', [manyStyles, serif])).map((entry) => entry.id),
+    ['wide'],
+  )
+  assert.deepEqual(
+    matchingSmartEntries(entries, rules('any', [manyStyles, serif])).map((entry) => entry.id).sort(),
+    ['grotesk', 'narrow', 'wide'],
+  )
+  assert.equal(matchingSmartFamilyCount(entries, rules('all', [manyStyles, serif])), 1)
+  assert.equal(matchingSmartFamilyCount(entries, rules('any', [manyStyles, serif])), 3)
 })
