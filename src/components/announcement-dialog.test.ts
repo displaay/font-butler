@@ -13,19 +13,22 @@ test('whats-new pages start with the rename, then each shipped feature', () => {
       'family-tags',
       'document-font-sheet',
       'library-search',
+      'search-filter-suggestions',
       'activate-until-quit',
       'new-tag-color',
     ],
   )
-  assert.equal(WHATS_NEW_PAGES.length, 7)
+  assert.equal(WHATS_NEW_PAGES.length, 8)
   assert.equal(WHATS_NEW_PAGES[0]?.title, 'Now called Cuttler')
   assert.equal(WHATS_NEW_PAGES[3]?.title, 'Document → Project')
   assert.equal(WHATS_NEW_PAGES[4]?.title, 'Library search')
-  assert.equal(WHATS_NEW_PAGES[5]?.title, 'Activate until quit')
-  assert.equal(WHATS_NEW_PAGES[6]?.title, 'Tag colors')
+  assert.equal(WHATS_NEW_PAGES[5]?.title, 'Search filter suggestions')
+  assert.equal(WHATS_NEW_PAGES[6]?.title, 'Activate until quit')
+  assert.equal(WHATS_NEW_PAGES[7]?.title, 'Tag colors')
   assert.match(WHATS_NEW_PAGES[4]?.body ?? '', /tag name/i)
-  assert.match(WHATS_NEW_PAGES[5]?.body ?? '', /session only/i)
-  assert.match(WHATS_NEW_PAGES[6]?.body ?? '', /color/i)
+  assert.match(WHATS_NEW_PAGES[5]?.body ?? '', /matching filters/i)
+  assert.match(WHATS_NEW_PAGES[6]?.body ?? '', /session only/i)
+  assert.match(WHATS_NEW_PAGES[7]?.body ?? '', /color/i)
   assert.equal(ANNOUNCEMENTS.length, 1)
   assert.equal(ANNOUNCEMENTS[0]?.id, 'whats-new')
   assert.equal(ANNOUNCEMENTS[0]?.celebrate, true)
@@ -33,13 +36,6 @@ test('whats-new pages start with the rename, then each shipped feature', () => {
   assert.equal(ANNOUNCEMENTS[0]?.pages, WHATS_NEW_PAGES)
   assert.equal(
     WHATS_NEW_PAGES.some((page) => /conflict/i.test(`${page.id} ${page.title} ${page.body}`)),
-    false,
-  )
-  // CUT-36 filter suggestions stay off this list until a cutout lands.
-  assert.equal(
-    WHATS_NEW_PAGES.some((page) =>
-      /filter.?suggest/i.test(`${page.id} ${page.title} ${page.body}`),
-    ),
     false,
   )
 })
@@ -64,8 +60,10 @@ test('AnnouncementDialog reuses welcome Dialog surface classes', async () => {
   assert.match(source, /\/announcement\/document-font-sheet\.png/)
   assert.match(source, /\/announcement\/library-search-typing\.png/)
   assert.match(source, /\/announcement\/library-search-tag\.png/)
+  assert.match(source, /\/announcement\/search-filter-suggestions\.png/)
   assert.match(source, /\/announcement\/new-tag-color\.png/)
   assert.match(source, /'library-search':/)
+  assert.match(source, /'search-filter-suggestions':/)
   assert.match(source, /'new-tag-color':/)
   // Activate until quit is copy-only until a cutout exists — no invented screenshot path.
   assert.doesNotMatch(source, /activate-until-quit[\s\S]{0,80}\/announcement\//)
@@ -85,6 +83,7 @@ test('whats-new announcement cutouts exist under public/announcement', async () 
     'document-font-sheet.png',
     'library-search-typing.png',
     'library-search-tag.png',
+    'search-filter-suggestions.png',
     'new-tag-color.png',
   ]) {
     await access(`${root}/${name}`)

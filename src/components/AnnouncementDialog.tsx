@@ -49,6 +49,12 @@ const PAGE_FIGURES: Record<string, PageFigure[]> = {
       alt: 'Library search matching a family tag',
     },
   ],
+  'search-filter-suggestions': [
+    {
+      src: '/announcement/search-filter-suggestions.png',
+      alt: 'Search field with matching filter suggestions',
+    },
+  ],
   'new-tag-color': [
     {
       src: '/announcement/new-tag-color.png',

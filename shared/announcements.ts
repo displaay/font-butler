@@ -47,6 +47,11 @@ export const WHATS_NEW_PAGES: AnnouncementPage[] = [
     body: 'Type several words — each one has to match. A tag name in the query finds families with that tag.',
   },
   {
+    id: 'search-filter-suggestions',
+    title: 'Search filter suggestions',
+    body: 'Start typing a filter name and matching filters appear under the search field. Choose one to narrow the library and set the preview style.',
+  },
+  {
     id: 'activate-until-quit',
     title: 'Activate until quit',
     body: 'Turn a face on for this session only. Quit the app and it turns back off — unless a project or a normal activate still wants it.',
