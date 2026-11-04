@@ -9,9 +9,11 @@ declare global {
       getPathForFile: (file: File) => string | undefined
       pickFolder: () => Promise<string | null>
       pickFile?: () => Promise<string | null>
+      pickDocument?: () => Promise<string | null>
       getApiToken?: () => Promise<string | null>
       requestNotifications: () => Promise<'granted' | 'denied' | 'default'>
       onOpenSettings: (callback: (payload?: { focus?: string }) => void) => () => void
+      onOpenDocument?: (callback: (payload?: { path?: string }) => void) => () => void
       openExternal?: (url: string) => Promise<boolean>
       installAppUpdate?: () => Promise<{
         ok: boolean

@@ -1,3 +1,4 @@
+import type { DocumentFontReport } from '../../shared/document-project.ts'
 import type { SmartRuleSet } from '../../shared/smart-projects.ts'
 import type {
   AdobeFontCacheInfo,
@@ -519,6 +520,10 @@ export const api = {
       fonts: Array<{ target: string; outcome: string; reason?: string }>
       caches: Array<{ target: string; outcome: string; reason?: string }>
     }>(post('/api/repair', { ids, caches })),
+  documentFonts: (filePath: string) =>
+    json<DocumentFontReport>(post('/api/documents/fonts', { path: filePath })),
+  createDocumentProject: (name: string, filePath: string) =>
+    json<{ project: ProjectSet }>(post('/api/documents/project', { name, path: filePath })),
   projects: () => get<{ projects: ProjectSet[] }>('/api/projects'),
   createProject: (
     name: string,

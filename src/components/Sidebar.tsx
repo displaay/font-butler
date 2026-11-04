@@ -10,6 +10,7 @@ import {
   CircleOff,
   Ellipsis,
   Copy,
+  FileText,
   FileType,
   Folder,
   FolderMinus,
@@ -500,6 +501,7 @@ export function Sidebar({
   onDropFilesOnProject,
   onRemoveProject,
   onCreateProject,
+  onOpenDocument,
   projectMembershipCounts,
   onEditSmartProject,
   onSnapshotProject,
@@ -554,6 +556,7 @@ export function Sidebar({
   onDropFilesOnProject?: (id: string, dataTransfer: DataTransfer) => void
   onRemoveProject?: (id: string) => void
   onCreateProject?: () => void
+  onOpenDocument?: () => void
   /** Live counts. Smart projects ignore the stored member list. */
   projectMembershipCounts?: Record<string, number>
   onEditSmartProject?: (id: string) => void
@@ -924,6 +927,22 @@ export function Sidebar({
                     writeProjectSort(next)
                   }}
                 />
+                {onOpenDocument ? (
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className="size-6 text-muted-foreground"
+                    aria-label="Open document"
+                    title="Open a PDF or IDML"
+                    onClick={(event) => {
+                      onOpenDocument()
+                      event.currentTarget.blur()
+                    }}
+                  >
+                    <FileText />
+                  </Button>
+                ) : null}
                 {onCreateProject ? (
                   <Button
                     type="button"

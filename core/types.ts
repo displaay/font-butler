@@ -403,6 +403,14 @@ export type ProjectMember = {
   unsatisfied?: boolean
 }
 
+/** A document font name that matched no library face. It is not a project member. */
+export type ProjectUnresolvedFont = {
+  postscriptName: string
+  familyName: string
+  styleName: string
+  sourceFile: string
+}
+
 export type ProjectSet = {
   id: string
   name: string
@@ -412,10 +420,16 @@ export type ProjectSet = {
   desiredActive: boolean
   /** Live membership rules. Set on smart projects; ignored for manual projects. */
   rules?: SmartRuleSet
+  /**
+   * Names from a document that matched nothing in the library.
+   * Omitted on version 1 files; treat a missing list as [].
+   */
+  unresolved?: ProjectUnresolvedFont[]
 }
 
 export type ProjectFile = {
-  version: 1
+  /** 2 adds unresolved document names. Version 1 files still load. */
+  version: 2
   projects: ProjectSet[]
 }
 

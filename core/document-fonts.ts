@@ -7,9 +7,9 @@ import type { CatalogEntry, FontFaceInfo } from './types.ts'
  * Read font names from a PDF or IDML file and classify each against the catalog.
  * This does not create or update projects.
  *
- * Stage 2 can consume {@link DocumentFontReport} directly: unique `assetId`s are
- * the project members, `installedFingerprint` is the pin when it is present, and
- * `missing` rows are unresolved names for `path` (never members).
+ * {@link documentProjectDraft} turns this report into project members.
+ * Unique `assetId`s are the members, `installedFingerprint` is the pin when it
+ * is present, and `missing` rows are unresolved names for `path` (never members).
  * `installedFingerprint` is set only when the matched face is the active copy and
  * the pin would be the cut named by the document's PostScript name. A family+style
  * fallback that lands on a different PostScript name stays unpinned.

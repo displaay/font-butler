@@ -767,7 +767,9 @@ app.post('/api/system/deactivate', async (c) => {
 
 mountUserFontCacheRoute(app, service)
 mountSessionLogoutRoutes(app, service)
-mountDocumentFontsRoute(app, () => service.listCatalog())
+mountDocumentFontsRoute(app, () => service.listCatalog(), {
+  createProjectFromDocument: (name, report) => service.createProjectFromDocument(name, report),
+})
 
 app.post('/api/caches/office', async (c) => {
   try {

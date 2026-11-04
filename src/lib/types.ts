@@ -310,6 +310,14 @@ export type ProjectMember = {
   unsatisfied?: boolean
 }
 
+/** A document font name that matched no library face. It is not a project member. */
+export type ProjectUnresolvedFont = {
+  postscriptName: string
+  familyName: string
+  styleName: string
+  sourceFile: string
+}
+
 export type ProjectSet = {
   id: string
   name: string
@@ -319,6 +327,8 @@ export type ProjectSet = {
   desiredActive: boolean
   /** Live membership rules. Set on smart projects; ignored for manual projects. */
   rules?: SmartRuleSet
+  /** Omitted on older projects; treat a missing list as []. */
+  unresolved?: ProjectUnresolvedFont[]
 }
 
 export type RelinkPreview = {
