@@ -5,6 +5,7 @@ import {
   AUTOMATED_CHECKS,
   FINDER_SYNC_NOT_VENDED,
   FINDER_SYNC_REJECTION,
+  MAC_CHECK_PRODUCT_APP_BUNDLES,
   clientRejectionKind,
   xpcRequirementRejectionProven,
   MANUAL_MAC_CHECKS,
@@ -18,6 +19,7 @@ import {
   parseAgentStatusOutput,
   parseMacCheckArgs,
   sameArchSet,
+  selectProductAppBundle,
   appexCoveredByAppNotarization,
   spctlNotarized,
   staplerAccepted,
@@ -148,6 +150,30 @@ test('the Mac checklist parses codesign, spctl, and agent status without a Mac',
   assert.match(command, /linuxRefusalMessage/)
   assert.match(command, /finder-sync-roundtrip-check/)
   assert.match(command, /runFinderSyncXpcRejectionTest/)
+  assert.match(command, /selectProductAppBundle/)
+  assert.doesNotMatch(command, /Font Buttler\( Test\)\?\\.app\$/)
+})
+
+test('archive app discovery accepts Cuttler and Font Buttler product names', () => {
+  assert.deepEqual(MAC_CHECK_PRODUCT_APP_BUNDLES, [
+    'Cuttler.app',
+    'Font Buttler.app',
+    'Font Buttler Test.app',
+  ])
+  assert.equal(selectProductAppBundle(['/Volumes/Cuttler/Cuttler.app']), '/Volumes/Cuttler/Cuttler.app')
+  assert.equal(selectProductAppBundle(['/tmp/zip/Font Buttler.app']), '/tmp/zip/Font Buttler.app')
+  assert.equal(
+    selectProductAppBundle(['/tmp/zip/Font Buttler Test.app']),
+    '/tmp/zip/Font Buttler Test.app',
+  )
+  assert.equal(selectProductAppBundle(['/tmp/Other.app', '/tmp/Helper.app']), '')
+  assert.equal(
+    selectProductAppBundle(['/mnt/Font Buttler.app', '/mnt/Cuttler.app']),
+    '/mnt/Cuttler.app',
+  )
+  const roundtrip = readFileSync(new URL('../scripts/finder-sync-roundtrip-check', import.meta.url), 'utf8')
+  assert.match(roundtrip, /Cuttler\.app/)
+  assert.match(roundtrip, /path\.basename\(app, '\.app'\)/)
 })
 
 test('a complete signed-app observation passes, and a missing entitlement or pending approval fails', () => {

@@ -2,6 +2,13 @@
  * Pure checks for scripts/finder-sync-mac-check.mjs.
  * Parsing and classification run on Linux. The command itself is macOS-only.
  */
+import path from 'node:path'
+import {
+  APP_PRODUCT_BUNDLE,
+  LEGACY_APP_PRODUCT_BUNDLE,
+  TEST_FEED_APP_BUNDLE,
+  isFontButlerAppBundle,
+} from '../electron/app-update-install.mjs'
 import {
   FINDER_SYNC_MAX_BYTES,
   FINDER_SYNC_MAX_FILES,
@@ -14,6 +21,26 @@ import {
   validateFinderSyncSelection,
 } from '../electron/finder-sync.mjs'
 import { DEVELOPER_ID_IDENTITY } from './mac-signing.mjs'
+
+/** DMG ships Cuttler.app; update zip keeps Font Buttler.app for 0.3.x clients. */
+export const MAC_CHECK_PRODUCT_APP_BUNDLES = [
+  APP_PRODUCT_BUNDLE,
+  LEGACY_APP_PRODUCT_BUNDLE,
+  TEST_FEED_APP_BUNDLE,
+]
+
+/**
+ * Pick the product app inside a mounted DMG or unpacked zip.
+ * Prefers Cuttler.app, then Font Buttler.app, then Font Buttler Test.app.
+ */
+export function selectProductAppBundle(bundles) {
+  const list = Array.isArray(bundles) ? bundles : []
+  for (const name of MAC_CHECK_PRODUCT_APP_BUNDLES) {
+    const hit = list.find((bundle) => path.basename(bundle) === name)
+    if (hit) return hit
+  }
+  return list.find((bundle) => isFontButlerAppBundle(bundle)) ?? ''
+}
 
 /**
  * Measured on macOS 26.6: a peer dropped by setCodeSigningRequirement reports

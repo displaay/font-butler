@@ -28,6 +28,7 @@ import {
   machoArchs,
   parseMacCheckArgs,
   parseAgentStatusOutput,
+  selectProductAppBundle,
   spctlNotarized,
   staplerAccepted,
   summarizeChecklist,
@@ -78,11 +79,16 @@ function withMountedDmg(dmg, visit) {
 }
 
 function appInTree(root) {
-  return findAppBundles(root).find((bundle) => /Font Buttler( Test)?\.app$/.test(path.basename(bundle))) ?? ''
+  return selectProductAppBundle(findAppBundles(root))
 }
 
 function artifactChecks(appPath) {
-  if (!appPath) return { provided: true, error: 'No Font Buttler.app was found inside the archive.' }
+  if (!appPath) {
+    return {
+      provided: true,
+      error: 'No Cuttler.app, Font Buttler.app, or Font Buttler Test.app was found inside the archive.',
+    }
+  }
   return {
     provided: true,
     spctl: assessSpctl(appPath),
