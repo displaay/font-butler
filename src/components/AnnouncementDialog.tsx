@@ -84,14 +84,14 @@ export function AnnouncementDialog({
         {offersIconChoice ? (
           <div className="space-y-3">
             <p className="text-sm text-foreground">
-              This is a new icon. Keep the old one, or use the new one?
+              Cuttler has a new app icon. You can keep your current one, or switch to the new mark.
             </p>
             <div className="flex items-end justify-center gap-3" role="group" aria-label="App icon">
               <Button
                 type="button"
                 variant="outline"
                 disabled={saving || currentIcon == null}
-                className="h-auto flex-col gap-1 rounded-xl px-3 pt-2 pb-2"
+                className="h-auto flex-col gap-1 rounded-xl border bg-white px-3 pt-2 pb-2 text-neutral-900 hover:bg-white dark:bg-white dark:text-neutral-900 dark:hover:bg-white"
                 onClick={() => {
                   if (currentIcon) void choose(currentIcon)
                 }}
@@ -103,14 +103,15 @@ export function AnnouncementDialog({
                     className="size-12 rounded-[0.6rem]"
                   />
                 ) : (
-                  <span className="size-12 rounded-[0.6rem] bg-muted" />
+                  <span className="size-12 rounded-[0.6rem] bg-neutral-100" />
                 )}
-                <span className="whitespace-nowrap text-[11px] leading-4">Keep the old one</span>
+                <span className="whitespace-nowrap text-[11px] leading-4">Keep current icon</span>
               </Button>
               <Button
                 type="button"
+                variant="outline"
                 disabled={saving || currentIcon == null}
-                className="h-auto flex-col gap-1 rounded-xl px-3 pt-2 pb-2"
+                className="h-auto flex-col gap-1 rounded-xl border bg-white px-3 pt-2 pb-2 text-neutral-900 hover:bg-white dark:bg-white dark:text-neutral-900 dark:hover:bg-white"
                 onClick={() => void choose(CUTTLER_ICON)}
               >
                 <img
@@ -118,7 +119,7 @@ export function AnnouncementDialog({
                   alt=""
                   className="size-12 rounded-[0.6rem]"
                 />
-                <span className="whitespace-nowrap text-[11px] leading-4">Use the new one</span>
+                <span className="whitespace-nowrap text-[11px] leading-4">Use new icon</span>
               </Button>
             </div>
           </div>

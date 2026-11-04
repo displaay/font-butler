@@ -79,6 +79,13 @@ export function setUnlinkedBackupRenameForTest(
   renameUnlinkedBackup = rename ?? ((from, to) => fs.renameSync(from, to))
 }
 
+let backupNow: () => Date = () => new Date()
+
+/** Tests freeze backup timestamps so same-millisecond naming is deterministic. */
+export function setUnlinkedBackupNowForTest(now: (() => Date) | undefined): void {
+  backupNow = now ?? (() => new Date())
+}
+
 function nativeRealpath(filePath: string): string | null {
   if (typeof fs.realpathSync.native !== 'function') return null
   try {
@@ -269,10 +276,17 @@ function cachedList(paths: AppPaths): ListCache {
 function nextBackupPath(target: string): string {
   const plain = backupPath(target)
   if (!fs.existsSync(plain)) return plain
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-  const stamped = `${target}.${stamp}.bak`
-  if (!fs.existsSync(stamped)) return stamped
-  return `${target}.${stamp}.${process.pid}.bak`
+  const stamp = backupNow().toISOString().replace(/[:.]/g, '-')
+  let candidate = `${target}.${stamp}.bak`
+  if (!fs.existsSync(candidate)) return candidate
+  candidate = `${target}.${stamp}.${process.pid}.bak`
+  if (!fs.existsSync(candidate)) return candidate
+  // Same-millisecond backups must not overwrite; keep looking for a free name.
+  let suffix = 1
+  while (fs.existsSync(`${target}.${stamp}.${process.pid}.${suffix}.bak`)) {
+    suffix += 1
+  }
+  return `${target}.${stamp}.${process.pid}.${suffix}.bak`
 }
 
 /** Timestamped copies only. The plain `.bak` stays, because that is the recovery source. */
