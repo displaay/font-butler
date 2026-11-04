@@ -48,16 +48,42 @@ export type ParsedLabelAssignment = {
   members: string[]
 }
 
+export type ParsedRating = {
+  /** Font identifier (PostScript name, path, or family) the rating was stored on. */
+  member: string
+  stars: number
+}
+
+export type ParsedComment = {
+  member: string
+  text: string
+}
+
 export type ParsedLibrary = {
   sourceApp: LibraryImportSourceApp
   sourceName: string
   sets: ParsedLibrarySet[]
   labels: ParsedLabelAssignment[]
-  /** Null means the source could not be read well enough to count. */
-  ratingsCount: number | null
-  commentsCount: number | null
+  /** Per-style ratings; the family gets its highest on import. */
+  ratings: ParsedRating[]
+  /** Per-face and per-file comments; joined into the family's comment. */
+  comments: ParsedComment[]
   unsupported: LibraryImportUnsupported[]
   warnings: string[]
+}
+
+export type LibraryImportRatingPlan = {
+  familyKey: string
+  stars: number
+  /** Stored rating, when the family already has one (which is kept). */
+  existingRating: number | null
+}
+
+export type LibraryImportCommentPlan = {
+  familyKey: string
+  text: string
+  /** Stored comment, when the family already has one (which is kept). */
+  existingComment: string | null
 }
 
 export type LibraryImportSetChoice = 'create' | 'merge' | 'imported-name' | 'skip'
@@ -105,6 +131,8 @@ export type LibraryImportPlan = {
   sourceName: string
   sets: LibraryImportSetPlan[]
   labels: LibraryImportLabelPlan[]
+  ratings: LibraryImportRatingPlan[]
+  comments: LibraryImportCommentPlan[]
   unsupported: LibraryImportUnsupported[]
   warnings: string[]
   summary: {
@@ -113,8 +141,8 @@ export type LibraryImportPlan = {
     labels: number
     reusedLabels: number
     unresolvedFonts: number
-    ratingsSkipped: number | null
-    commentsSkipped: number | null
+    ratings: number
+    comments: number
   }
 }
 
@@ -125,6 +153,8 @@ export type LibraryImportApplyResult = {
   createdTags: string[]
   reusedTags: string[]
   assignedFamilies: number
+  ratedFamilies: number
+  commentedFamilies: number
   unresolvedFonts: number
 }
 

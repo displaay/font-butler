@@ -39,8 +39,9 @@
  *   .labels` / `labelName`), collected per face and per file and applied
  *   to each matched family. An existing tag of that name is reused.
  * - Ratings (per style, 1–5) and comments (per face and per file) are
- *   counted for the report and NOT imported (locked decision 1C); no
- *   rating or comment fields are added anywhere.
+ *   imported onto the family (decision 1A): the family gets its highest
+ *   style rating and the joined comments, unless it already has a
+ *   rating/comment, which is kept (Cicero's rule).
  *
  * Apply rules follow Cicero's `LibraryImport.apply`: a set whose name
  * already exists gains members (merged, not skipped); a smart set with
@@ -57,6 +58,12 @@ import { loadCatalog, saveCatalog } from './catalog.ts'
 import type { AppPaths } from './paths.ts'
 import { createProject, loadProjects, saveProjects } from './projects.ts'
 import type { CatalogEntry, ProjectSet } from './types.ts'
+import {
+  detailForFamily,
+  setFamilyComment,
+  setFamilyRating,
+  type FamilyDetail,
+} from '../shared/family-details.ts'
 import {
   addFamilyTag,
   ensureSeedTags,
@@ -353,16 +360,6 @@ const FONT_BOOK_NO_LABELS: LibraryImportUnsupported = {
   reason: 'Font Book collections have no labels; nothing to map to family tags.',
   count: null,
 }
-const FONT_BOOK_NO_RATINGS: LibraryImportUnsupported = {
-  concept: 'ratings',
-  reason: 'Font Book collections have no ratings to import.',
-  count: null,
-}
-const FONT_BOOK_NO_COMMENTS: LibraryImportUnsupported = {
-  concept: 'comments',
-  reason: 'Font Book collections have no comments to import.',
-  count: null,
-}
 
 function nonEmptyString(value: PlistValue | undefined): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null
@@ -376,13 +373,11 @@ export function parseFontBookCollectionBuffer(fileName: string, buffer: Buffer):
     sourceName: baseName(fileName),
     sets: [],
     labels: [],
-    ratingsCount: null,
-    commentsCount: null,
+    ratings: [],
+    comments: [],
     unsupported: [
       { concept: 'file', reason },
       FONT_BOOK_NO_LABELS,
-      FONT_BOOK_NO_RATINGS,
-      FONT_BOOK_NO_COMMENTS,
     ],
     warnings: [],
   })
@@ -420,8 +415,8 @@ export function parseFontBookCollectionBuffer(fileName: string, buffer: Buffer):
       sourceName: baseName(fileName),
       sets: [],
       labels: [],
-      ratingsCount: null,
-      commentsCount: null,
+      ratings: [],
+      comments: [],
       unsupported: [
         {
           concept: 'smart-sets',
@@ -429,8 +424,6 @@ export function parseFontBookCollectionBuffer(fileName: string, buffer: Buffer):
           detail: displayName,
         },
         FONT_BOOK_NO_LABELS,
-        FONT_BOOK_NO_RATINGS,
-        FONT_BOOK_NO_COMMENTS,
       ],
       warnings: [],
     }
@@ -465,9 +458,9 @@ export function parseFontBookCollectionBuffer(fileName: string, buffer: Buffer):
       },
     ],
     labels: [],
-    ratingsCount: null,
-    commentsCount: null,
-    unsupported: [FONT_BOOK_NO_LABELS, FONT_BOOK_NO_RATINGS, FONT_BOOK_NO_COMMENTS],
+    ratings: [],
+    comments: [],
+    unsupported: [FONT_BOOK_NO_LABELS],
     warnings: [],
   }
 }
@@ -640,8 +633,8 @@ export function parseFontExplorerDatabase(sourceName: string, buffer: Buffer): P
     sourceName,
     sets: [],
     labels: [],
-    ratingsCount: null,
-    commentsCount: null,
+    ratings: [],
+    comments: [],
     unsupported: [
       {
         concept: 'file',
@@ -657,8 +650,8 @@ export function parseFontExplorerDatabase(sourceName: string, buffer: Buffer): P
       sourceName,
       sets: [],
       labels: [],
-      ratingsCount: null,
-      commentsCount: null,
+      ratings: [],
+      comments: [],
       unsupported: [
         {
           concept: 'file',
@@ -704,8 +697,8 @@ export function parseFontExplorerDatabase(sourceName: string, buffer: Buffer): P
     type Face = { psName: string | null; family: string | null }
     const facesByContainer = new Map<number, Face[]>()
     const labelled = new Map<number, string[]>()
-    let ratingsCount = 0
-    let commentsCount = 0
+    const parsedRatings: { member: string; stars: number }[] = []
+    const parsedComments: { member: string; text: string }[] = []
     const pushLabel = (color: number, identifier: string) => {
       if (!FEX_LABEL_NAMES[color]) return
       const list = labelled.get(color) ?? []
@@ -722,8 +715,9 @@ export function parseFontExplorerDatabase(sourceName: string, buffer: Buffer): P
       const identifier = face.psName ?? face.family ?? containerPath.get(containerId)!
       pushLabel(int(row, 'labelColorID'), identifier)
       const rating = int(row, 'rating')
-      if (rating >= 1 && rating <= 5) ratingsCount++
-      if (text(row, 'comment')) commentsCount++
+      if (rating >= 1 && rating <= 5) parsedRatings.push({ member: identifier, stars: rating })
+      const faceComment = text(row, 'comment')
+      if (faceComment) parsedComments.push({ member: identifier, text: faceComment })
     }
     const fontsOf = (containerId: number): string[] => {
       const faces = facesByContainer.get(containerId)
@@ -735,7 +729,8 @@ export function parseFontExplorerDatabase(sourceName: string, buffer: Buffer): P
       if (!containerPath.has(containerId)) continue
       const color = int(row, 'labelColorID')
       if (FEX_LABEL_NAMES[color]) for (const identifier of fontsOf(containerId)) pushLabel(color, identifier)
-      if (text(row, 'comment')) commentsCount++
+      const fileComment = text(row, 'comment')
+      if (fileComment) parsedComments.push({ member: containerPath.get(containerId)!, text: fileComment })
     }
 
     const byId = new Map(items.map((item) => [int(item, 'serialID'), item]))
@@ -841,20 +836,9 @@ export function parseFontExplorerDatabase(sourceName: string, buffer: Buffer): P
       sourceName,
       sets,
       labels,
-      ratingsCount,
-      commentsCount,
-      unsupported: [
-        {
-          concept: 'ratings',
-          reason: `${ratingsCount} rating${ratingsCount === 1 ? '' : 's'} in FontExplorer X were not imported (unsupported).`,
-          count: ratingsCount,
-        },
-        {
-          concept: 'comments',
-          reason: `${commentsCount} comment${commentsCount === 1 ? '' : 's'} in FontExplorer X were not imported (unsupported).`,
-          count: commentsCount,
-        },
-      ],
+      ratings: parsedRatings,
+      comments: parsedComments,
+      unsupported: [],
       warnings,
     }
   } finally {
@@ -938,8 +922,8 @@ export function parseLibraryImportBuffer(input: LibraryImportFileInput): ParsedL
       sourceName: baseName(input.name),
       sets: [],
       labels: [],
-      ratingsCount: null,
-      commentsCount: null,
+      ratings: [],
+      comments: [],
       unsupported: [
         { concept: 'file', reason: `The backup “${baseName(input.name)}” had no FontDatabase.db to read.` },
       ],
@@ -952,8 +936,8 @@ export function parseLibraryImportBuffer(input: LibraryImportFileInput): ParsedL
       sourceName: baseName(input.name),
       sets: [],
       labels: [],
-      ratingsCount: null,
-      commentsCount: null,
+      ratings: [],
+      comments: [],
       unsupported: [
         {
           concept: 'file',
@@ -972,8 +956,8 @@ export function parseLibraryImportBuffer(input: LibraryImportFileInput): ParsedL
     sourceName: baseName(input.name),
     sets: [],
     labels: [],
-    ratingsCount: null,
-    commentsCount: null,
+    ratings: [],
+    comments: [],
     unsupported: [
       {
         concept: 'file',
@@ -1080,6 +1064,7 @@ export function buildLibraryImportPlan(
   entries: readonly CatalogEntry[],
   projects: readonly ProjectSet[],
   tags: readonly FamilyTag[],
+  details: readonly FamilyDetail[] = [],
 ): LibraryImportPlan {
   const sets: LibraryImportSetPlan[] = []
   const labels: LibraryImportLabelPlan[] = []
@@ -1164,10 +1149,42 @@ export function buildLibraryImportPlan(
     }
   }
 
-  const sumOrNull = (values: (number | null)[]) =>
-    values.every((value) => value !== null)
-      ? values.reduce<number>((total, value) => total + (value ?? 0), 0)
-      : null
+  const familyKeysFor = (identifiers: readonly string[]): string[] => [
+    ...new Set(
+      resolveMembers(identifiers, entries).assetIds.flatMap((assetId) => {
+        const entry = entries.find((item) => item.id === assetId)
+        return entry ? [familyTagKey(entry)] : []
+      }),
+    ),
+  ]
+  const ratingByFamily = new Map<string, number>()
+  const commentsByFamily = new Map<string, string[]>()
+  for (const parsed of parsedList) {
+    for (const rating of parsed.ratings) {
+      for (const familyKey of familyKeysFor([rating.member])) {
+        ratingByFamily.set(familyKey, Math.max(ratingByFamily.get(familyKey) ?? 0, rating.stars))
+      }
+    }
+    for (const comment of parsed.comments) {
+      const text = comment.text.trim()
+      if (!text) continue
+      for (const familyKey of familyKeysFor([comment.member])) {
+        const list = commentsByFamily.get(familyKey) ?? []
+        if (!list.includes(text)) list.push(text)
+        commentsByFamily.set(familyKey, list)
+      }
+    }
+  }
+  const ratings = [...ratingByFamily.entries()].map(([familyKey, stars]) => ({
+    familyKey,
+    stars,
+    existingRating: detailForFamily(details, familyKey)?.rating ?? null,
+  }))
+  const comments = [...commentsByFamily.entries()].map(([familyKey, texts]) => ({
+    familyKey,
+    text: texts.join('\n'),
+    existingComment: detailForFamily(details, familyKey)?.comment ?? null,
+  }))
 
   return {
     id: crypto.randomUUID(),
@@ -1176,6 +1193,8 @@ export function buildLibraryImportPlan(
     sourceName: parsedList.map((parsed) => parsed.sourceName).join(', '),
     sets,
     labels,
+    ratings,
+    comments,
     unsupported,
     warnings,
     summary: {
@@ -1184,8 +1203,8 @@ export function buildLibraryImportPlan(
       labels: labels.length,
       reusedLabels: labels.filter((label) => label.existingTagId).length,
       unresolvedFonts: sets.reduce((total, set) => total + set.unresolved.length, 0),
-      ratingsSkipped: sumOrNull(parsedList.map((parsed) => parsed.ratingsCount)),
-      commentsSkipped: sumOrNull(parsedList.map((parsed) => parsed.commentsCount)),
+      ratings: ratings.length,
+      comments: comments.length,
     },
   }
 }
@@ -1218,6 +1237,8 @@ export function applyLibraryImportPlan(
     createdTags: [],
     reusedTags: [],
     assignedFamilies: 0,
+    ratedFamilies: 0,
+    commentedFamilies: 0,
     unresolvedFonts: 0,
   }
   const saveProject = (project: ProjectSet) => {
@@ -1270,6 +1291,22 @@ export function applyLibraryImportPlan(
     }
     setFamilyTagPresent(catalog, label.familyKeys, tag.id, true)
     result.assignedFamilies += label.familyKeys.length
+  }
+
+  // Cicero: a family keeps a rating/comment it already has. Imported ratings
+  // are the family's highest style rating; comments are joined only into an
+  // empty family comment.
+  for (const rating of plan.ratings) {
+    if (rating.existingRating !== null) continue
+    if (detailForFamily(catalog.familyDetails, rating.familyKey)?.rating) continue
+    setFamilyRating(catalog, rating.familyKey, rating.stars)
+    result.ratedFamilies++
+  }
+  for (const comment of plan.comments) {
+    if (comment.existingComment) continue
+    if (detailForFamily(catalog.familyDetails, comment.familyKey)?.comment) continue
+    setFamilyComment(catalog, comment.familyKey, comment.text)
+    result.commentedFamilies++
   }
 
   saveProjects(paths, projects)

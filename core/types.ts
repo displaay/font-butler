@@ -1,5 +1,6 @@
 import type { RetailFontFormat, RetailSyncStatus } from '../shared/retail.ts'
 import type { AppIconStyle } from '../shared/appIcon.ts'
+import type { FamilyDetail } from '../shared/family-details.ts'
 import type { FamilyTag, FamilyTagAssignment } from '../shared/family-tags.ts'
 import type { ProjectKind, SmartRuleSet } from '../shared/smart-projects.ts'
 
@@ -158,6 +159,8 @@ export type CatalogFile = {
    */
   tags?: FamilyTag[]
   familyTags?: FamilyTagAssignment[]
+  /** Per-family star rating and comment, keyed by `familyTagKey`. */
+  familyDetails?: FamilyDetail[]
 }
 
 export type SystemFace = {
@@ -596,6 +599,7 @@ export type ServiceEvent =
       revision?: number
       tags?: FamilyTag[]
       familyTags?: FamilyTagAssignment[]
+      familyDetails?: FamilyDetail[]
     }
   | { type: 'system'; faces: SystemFace[] }
   | { type: 'notice'; notice: Notice }

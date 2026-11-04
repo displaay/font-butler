@@ -118,8 +118,8 @@ test('Font Book smart collection is named in the report, not translated', () => 
     ),
   )
   assert.ok(parsed.unsupported.some((item) => item.concept === 'labels'))
-  assert.ok(parsed.unsupported.some((item) => item.concept === 'ratings'))
-  assert.ok(parsed.unsupported.some((item) => item.concept === 'comments'))
+  assert.deepEqual(parsed.ratings, [])
+  assert.deepEqual(parsed.comments, [])
 })
 
 test('Font Book plan matches faces and families, drops excluded styles, built-ins start unchecked', () => {
@@ -169,10 +169,16 @@ test('FontExplorer database parses sets, smart sets, colour labels, ratings and 
       ['Blue', ['AcmeSans-Regular']],
     ],
   )
-  assert.equal(parsed.ratingsCount, 2)
-  assert.equal(parsed.commentsCount, 2)
-  assert.ok(parsed.unsupported.some((item) => item.concept === 'ratings' && item.count === 2))
-  assert.ok(parsed.unsupported.some((item) => item.concept === 'comments' && item.count === 2))
+  assert.deepEqual(parsed.ratings, [
+    { member: 'AcmeSans-Regular', stars: 5 },
+    { member: 'AcmeSerif-Regular', stars: 3 },
+  ])
+  assert.deepEqual(parsed.comments, [
+    { member: 'AcmeSans-Regular', text: 'Hero sans' },
+    { member: '/Users/designer/Fonts/Acme/AcmeSerif-Regular.otf', text: 'File note' },
+  ])
+  assert.ok(!parsed.unsupported.some((item) => item.concept === 'ratings'))
+  assert.ok(!parsed.unsupported.some((item) => item.concept === 'comments'))
 })
 
 test('FontExplorer backup ZIP yields the same library as the database', () => {
@@ -232,8 +238,15 @@ test('plan defaults: same-named set merges, disabled smart set skips, labels reu
     const redLabel = plan.labels.find((label) => label.name === 'Red')!
     assert.equal(redLabel.existingTagId, null)
     assert.deepEqual(redLabel.familyKeys, ['Acme Serif'])
-    assert.equal(plan.summary.ratingsSkipped, 2)
-    assert.equal(plan.summary.commentsSkipped, 2)
+    assert.equal(plan.summary.ratings, 2)
+    assert.equal(plan.summary.comments, 2)
+    assert.deepEqual(
+      plan.ratings.map((rating) => [rating.familyKey, rating.stars, rating.existingRating]),
+      [
+        ['Acme Sans', 5, null],
+        ['Acme Serif', 3, null],
+      ],
+    )
 
     const result = applyLibraryImportPlan(paths, plan, {})
     assert.deepEqual(result.mergedProjects, ['Clients / Client Work'])
@@ -262,9 +275,14 @@ test('plan defaults: same-named set merges, disabled smart set skips, labels reu
       (saved.familyTags ?? []).find((row) => row.familyKey === 'Acme Serif')?.tagIds,
       [red.id],
     )
-    // No rating or comment fields were added anywhere.
-    assert.ok(!JSON.stringify(saved).includes('Hero sans'))
+    // Ratings and comments landed per family; entries themselves are untouched.
+    assert.deepEqual(saved.familyDetails, [
+      { familyKey: 'Acme Sans', rating: 5, comment: 'Hero sans' },
+      { familyKey: 'Acme Serif', comment: 'File note', rating: 3 },
+    ])
     assert.ok(!('rating' in (saved.entries[0] as unknown as Record<string, unknown>)))
+    assert.equal(result.ratedFamilies, 2)
+    assert.equal(result.commentedFamilies, 2)
   } finally {
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }
@@ -276,13 +294,46 @@ test('fingerprint identifiers win over name matches', () => {
     sourceName: 'Fingerprints.collection',
     sets: [{ name: 'Pinned', kind: 'set', members: ['fingerprint-sans-regular'] }],
     labels: [],
-    ratingsCount: 0,
-    commentsCount: 0,
+    ratings: [],
+    comments: [],
     unsupported: [],
     warnings: [],
   }
   const plan = buildLibraryImportPlan([parsed], entries, [], [])
   assert.deepEqual(plan.sets[0]?.memberAssetIds, ['sans-regular'])
+})
+
+test('import keeps a stored rating and comment instead of overwriting them', () => {
+  const paths = tempPaths('library-import-keep-details-')
+  try {
+    saveCatalog(paths, {
+      version: 1,
+      entries,
+      tags: ensureSeedTags(undefined),
+      familyTags: [],
+      familyDetails: [{ familyKey: 'Acme Sans', rating: 2, comment: 'Keep me' }],
+    })
+    saveProjects(paths, [])
+    const parsed = parseLibraryImportBuffer(fixture('FontExplorer X.fexdb'))
+    const plan = buildLibraryImportPlan(
+      [parsed],
+      entries,
+      [],
+      [],
+      loadCatalog(paths).familyDetails ?? [],
+    )
+    const sansRating = plan.ratings.find((rating) => rating.familyKey === 'Acme Sans')!
+    assert.equal(sansRating.existingRating, 2)
+    const result = applyLibraryImportPlan(paths, plan, {})
+    assert.equal(result.ratedFamilies, 1)
+    assert.equal(result.commentedFamilies, 1)
+    assert.deepEqual(loadCatalog(paths).familyDetails, [
+      { familyKey: 'Acme Sans', rating: 2, comment: 'Keep me' },
+      { familyKey: 'Acme Serif', rating: 3, comment: 'File note' },
+    ])
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
 })
 
 test('apply creates a Font Book project exactly as planned, unresolved names kept', () => {

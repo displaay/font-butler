@@ -57,6 +57,7 @@ import {
   upsertDuplicateWarning,
 } from './duplicates.ts'
 import { emitEvent } from './events.ts'
+import { persistFamilyComment, persistFamilyRating } from './family-details.ts'
 import {
   applyRetailTrialDefault,
   persistFamilyTagName,
@@ -218,6 +219,7 @@ import { postscriptPreview } from './rename.ts'
 import { revealInFileManager } from './reveal.ts'
 import { loadSettings, saveSettings } from './settings.ts'
 import { isAppIconStyle } from '../shared/appIcon.ts'
+import type { FamilyDetail } from '../shared/family-details.ts'
 import type { FamilyTag, FamilyTagAssignment } from '../shared/family-tags.ts'
 import { parseLatinPreview } from '../shared/latinPreview.ts'
 import { normalizeSavedFilters } from './saved-filters.ts'
@@ -601,13 +603,23 @@ export class FontButlerService {
     entries: CatalogEntry[]
     tags: FamilyTag[]
     familyTags: FamilyTagAssignment[]
+    familyDetails: FamilyDetail[]
   } {
     const catalog = loadCatalog(this.paths)
     return {
       entries: catalog.entries,
       tags: catalog.tags ?? [],
       familyTags: catalog.familyTags ?? [],
+      familyDetails: catalog.familyDetails ?? [],
     }
+  }
+
+  setFamilyRating(familyKey: string, rating: number | null) {
+    return persistFamilyRating(this.paths, familyKey, rating)
+  }
+
+  setFamilyComment(familyKey: string, comment: string) {
+    return persistFamilyComment(this.paths, familyKey, comment)
   }
 
   createFamilyTag(name: string, familyKeys: string[] = []) {
@@ -3239,6 +3251,7 @@ export class FontButlerService {
       catalog.entries,
       loadProjects(this.paths),
       catalog.tags ?? [],
+      catalog.familyDetails ?? [],
     )
   }
 
@@ -3252,6 +3265,7 @@ export class FontButlerService {
       emitEvent(catalogEvent(catalog.entries, {
         tags: catalog.tags ?? [],
         familyTags: catalog.familyTags ?? [],
+        familyDetails: catalog.familyDetails ?? [],
       }))
       emitEvent({ type: 'projects', projects: loadProjects(this.paths) })
       return result

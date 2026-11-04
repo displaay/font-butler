@@ -18,6 +18,7 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
+import { FamilyRatingBadge } from '@/components/FamilyDetails'
 import { FamilyTagDots, FamilyTagMenuItems } from '@/components/FamilyTags'
 import { familyCardPlan, type CatalogBatchPlan } from '@/lib/batch'
 import type { FamilyTag, FamilyTagAssignment } from '../../shared/family-tags.ts'
@@ -93,6 +94,7 @@ export const LibraryCard = memo(function LibraryCard({
   tagDefinitions,
   tagAssignments,
   appliedTagIds,
+  familyRating,
   tagFamilyKeys,
   onSetFamilyTag,
   onCreateFamilyTag,
@@ -157,6 +159,7 @@ export const LibraryCard = memo(function LibraryCard({
   tagDefinitions?: readonly FamilyTag[]
   tagAssignments?: readonly FamilyTagAssignment[]
   appliedTagIds?: readonly string[]
+  familyRating?: number | null
   tagFamilyKeys?: readonly string[]
   onSetFamilyTag?: (tagId: string, present: boolean) => void
   onCreateFamilyTag?: () => void
@@ -277,6 +280,7 @@ export const LibraryCard = memo(function LibraryCard({
           hideFormats={hideFormats}
         />
         <FamilyTagDots definitions={tagDefinitions ?? []} appliedIds={appliedTagIds ?? []} />
+        <FamilyRatingBadge rating={familyRating} />
         {layout === 'list' && mixedWarning ? (
           <Badge
             tone="accent"
@@ -626,5 +630,6 @@ export const LibraryCard = memo(function LibraryCard({
   prev.uninstallOnly === next.uninstallOnly &&
   prev.tagDefinitions === next.tagDefinitions &&
   prev.tagAssignments === next.tagAssignments &&
-  prev.appliedTagIds === next.appliedTagIds
+  prev.appliedTagIds === next.appliedTagIds &&
+  prev.familyRating === next.familyRating
 ))

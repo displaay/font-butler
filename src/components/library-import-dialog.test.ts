@@ -132,12 +132,13 @@ function plan(): LibraryImportPlan {
     labels: [
       { id: 'label-0', name: 'Client', existingTagId: 'tag-1', familyKeys: ['Acme Serif'], unresolvedCount: 0 },
     ],
+    ratings: [{ familyKey: 'Acme Sans', stars: 5, existingRating: null }],
+    comments: [{ familyKey: 'Acme Sans', text: 'Hero sans', existingComment: null }],
     unsupported: [
-      { concept: 'ratings', reason: 'Ratings were not imported (unsupported).', count: null },
       { concept: 'sets', reason: 'FontExplorer X data could not be read.', count: null, detail: 'Sets could not be read.' },
     ],
     warnings: [],
-    summary: { sets: 1, smartSets: 0, labels: 1, reusedLabels: 1, unresolvedFonts: 1, ratingsSkipped: null, commentsSkipped: null },
+    summary: { sets: 1, smartSets: 0, labels: 1, reusedLabels: 1, unresolvedFonts: 1, ratings: 1, comments: 1 },
   }
 }
 
@@ -162,6 +163,8 @@ test('library import preview shows collisions, unresolved, untranslatable rules 
     assert.match(text, /Manufacturer contains/)
     assert.match(text, /Skipped: a rule below cannot be translated/)
     assert.match(text, /reuse existing tag/)
+    assert.match(text, /Acme Sans: 5 stars/)
+    assert.match(text, /Hero sans/)
     const unsupported = host.querySelector('[data-library-import-unsupported]')
     assert.ok(unsupported)
     assert.match(unsupported.textContent ?? '', /Count could not be read/)

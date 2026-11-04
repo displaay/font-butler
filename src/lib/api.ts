@@ -1,4 +1,5 @@
 import type { DocumentFontReport } from '../../shared/document-project.ts'
+import type { FamilyDetail } from '../../shared/family-details.ts'
 import type {
   LibraryImportApplyResult,
   LibraryImportFileInput,
@@ -194,7 +195,16 @@ export const api = {
       revision?: number
       tags?: FamilyTag[]
       familyTags?: FamilyTagAssignment[]
+      familyDetails?: FamilyDetail[]
     }>('/api/catalog'),
+  setFamilyRating: (familyKey: string, rating: number | null) =>
+    json<{ familyDetails: FamilyDetail[] }>(
+      post('/api/family-details', { op: 'rating', familyKey, rating }),
+    ),
+  setFamilyComment: (familyKey: string, comment: string) =>
+    json<{ familyDetails: FamilyDetail[] }>(
+      post('/api/family-details', { op: 'comment', familyKey, comment }),
+    ),
   createFamilyTag: (name: string, familyKeys: string[] = []) =>
     json<{ tags: FamilyTag[]; familyTags: FamilyTagAssignment[] }>(
       post('/api/family-tags', { op: 'create', name, familyKeys }),

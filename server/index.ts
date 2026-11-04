@@ -364,6 +364,28 @@ app.post('/api/family-tags', async (c) => {
   }
 })
 
+app.post('/api/family-details', async (c) => {
+  const body = await c.req.json<{
+    op?: string
+    familyKey?: string
+    rating?: number | null
+    comment?: string
+  }>()
+  try {
+    if (body.op === 'rating') {
+      return c.json(
+        await service.setFamilyRating(body.familyKey ?? '', body.rating ?? null),
+      )
+    }
+    if (body.op === 'comment') {
+      return c.json(await service.setFamilyComment(body.familyKey ?? '', body.comment ?? ''))
+    }
+    return c.json({ error: 'Unknown detail action' }, 400)
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : 'Could not update family details' }, 400)
+  }
+})
+
 app.get('/api/duplicates', (c) => c.json({ duplicates: service.listDuplicates() }))
 
 app.post('/api/duplicates/resolve', async (c) => {

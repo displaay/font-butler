@@ -148,6 +148,28 @@ export function LibraryImportPlanView({
         </section>
       ) : null}
 
+      {(plan.ratings.length > 0 || plan.comments.length > 0) ? (
+        <section className="rounded-lg border px-3 py-2">
+          <h3 className="text-[13px] font-medium">Ratings &amp; comments</h3>
+          <ul className="mt-1 space-y-1 text-xs text-muted-foreground">
+            {plan.ratings.map((rating) => (
+              <li key={`rating-${rating.familyKey}`}>
+                {rating.familyKey}: {rating.stars} star{rating.stars === 1 ? '' : 's'}
+                {rating.existingRating !== null
+                  ? ` (keeps existing ${rating.existingRating})`
+                  : ''}
+              </li>
+            ))}
+            {plan.comments.map((comment) => (
+              <li key={`comment-${comment.familyKey}`}>
+                {comment.familyKey}: “{comment.text.split('\n')[0]}”
+                {comment.existingComment ? ' (keeps existing comment)' : ''}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
       {plan.unsupported.length > 0 ? (
         <section className="rounded-lg border px-3 py-2" data-library-import-unsupported>
           <h3 className="text-[13px] font-medium">Not imported</h3>
@@ -265,6 +287,12 @@ export function LibraryImportDialog({
             ) : null}
             {result.reusedTags.length > 0 ? (
               <p className="text-sm">Tags reused: {result.reusedTags.join(', ')}</p>
+            ) : null}
+            {result.ratedFamilies > 0 || result.commentedFamilies > 0 ? (
+              <p className="text-sm">
+                Rated {result.ratedFamilies} famil{result.ratedFamilies === 1 ? 'y' : 'ies'} · commented{' '}
+                {result.commentedFamilies}
+              </p>
             ) : null}
             {result.unresolvedFonts > 0 ? (
               <p className="text-sm text-muted-foreground">

@@ -35,6 +35,7 @@ import { AnnouncementDialog } from '@/components/AnnouncementDialog'
 import { ConfettiBurst } from '@/components/ConfettiBurst'
 import { OnboardingDialog } from '@/components/OnboardingDialog'
 import type { Announcement } from '../shared/announcements.ts'
+import { detailForFamily, type FamilyDetail } from '../shared/family-details.ts'
 import { familyTagRulePredicate, type FamilyTag, type FamilyTagAssignment } from '../shared/family-tags.ts'
 import { parseAppIconStyle, type AppIconStyle } from '@/lib/appIcon'
 import { RelinkDialog } from '@/components/RelinkDialog'
@@ -216,6 +217,7 @@ function AppShell() {
   const [entries, setEntries] = useState<CatalogEntry[]>([])
   const [familyTagDefs, setFamilyTagDefs] = useState<FamilyTag[]>([])
   const [familyTagAssignments, setFamilyTagAssignments] = useState<FamilyTagAssignment[]>([])
+  const [familyDetails, setFamilyDetails] = useState<FamilyDetail[]>([])
   const [tagNameRequest, setTagNameRequest] = useState<
     | null
     | { mode: 'create'; familyKeys: string[] }
@@ -269,17 +271,44 @@ function AppShell() {
     if (Array.isArray(payload.familyTags)) setFamilyTagAssignments(payload.familyTags)
   }
 
+  function applyFamilyDetailPayload(payload: { familyDetails?: FamilyDetail[] }) {
+    if (Array.isArray(payload.familyDetails)) setFamilyDetails(payload.familyDetails)
+  }
+
+  async function persistFamilyRating(familyKey: string, rating: number | null) {
+    try {
+      applyFamilyDetailPayload(await api.setFamilyRating(familyKey, rating))
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not save the rating')
+    }
+  }
+
+  async function persistFamilyComment(familyKey: string, comment: string) {
+    try {
+      applyFamilyDetailPayload(await api.setFamilyComment(familyKey, comment))
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not save the comment')
+    }
+  }
+
   function applyCatalog(
     next: CatalogEntry[],
     revision?: number,
-    tags?: { tags?: FamilyTag[]; familyTags?: FamilyTagAssignment[] },
+    tags?: {
+      tags?: FamilyTag[]
+      familyTags?: FamilyTagAssignment[]
+      familyDetails?: FamilyDetail[]
+    },
   ) {
     if (typeof revision === 'number') {
       if (revision < catalogRevisionRef.current) return
       catalogRevisionRef.current = revision
     }
     setEntries((current) => (catalogEntriesMatch(current, next) ? current : next))
-    if (tags) applyFamilyTagPayload(tags)
+    if (tags) {
+      applyFamilyTagPayload(tags)
+      applyFamilyDetailPayload(tags)
+    }
   }
 
   async function refreshCatalog() {
@@ -832,6 +861,7 @@ function AppShell() {
           revision?: number
           tags?: FamilyTag[]
           familyTags?: FamilyTagAssignment[]
+          familyDetails?: FamilyDetail[]
         }
         applyCatalog(payload.entries, payload.revision, payload)
       }
@@ -2877,6 +2907,7 @@ function AppShell() {
                           tagDefinitions={familyTagDefs}
                           tagAssignments={familyTagAssignments}
                           appliedTagIds={appliedTagIdsByFamily.get(group.key) ?? EMPTY_TAG_IDS}
+                          familyRating={detailForFamily(familyDetails, group.key)?.rating ?? null}
                           tagFamilyKeys={useBatch ? catalogSelection.map((item) => item.key) : [group.key]}
                           onSetFamilyTag={(tagId, present) =>
                             void persistFamilyTag(
@@ -3078,6 +3109,11 @@ function AppShell() {
                   : undefined
               }
               systemGroup={selectedSystemGroup}
+              familyDetail={
+                selectedGroup ? detailForFamily(familyDetails, selectedGroup.key) : undefined
+              }
+              onFamilyRating={(familyKey, rating) => void persistFamilyRating(familyKey, rating)}
+              onFamilyComment={(familyKey, comment) => void persistFamilyComment(familyKey, comment)}
               busy={busy}
               specimen={specimenFromSettings(settings?.specimen)}
               onSpecimenChange={(next) => void persistSpecimen(next)}
