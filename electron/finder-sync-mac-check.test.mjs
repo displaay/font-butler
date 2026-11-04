@@ -173,7 +173,10 @@ test('archive app discovery accepts Cuttler and Font Buttler product names', () 
   )
   const roundtrip = readFileSync(new URL('../scripts/finder-sync-roundtrip-check', import.meta.url), 'utf8')
   assert.match(roundtrip, /Cuttler\.app/)
-  assert.match(roundtrip, /path\.basename\(app, '\.app'\)/)
+  assert.match(roundtrip, /Font Buttler\.app/)
+  assert.match(roundtrip, /finderSyncMainExecutable\(app\)/)
+  const check = readFileSync(new URL('../scripts/finder-sync-mac-check.mjs', import.meta.url), 'utf8')
+  assert.match(check, /finderSyncMainExecutable\(app\)/)
 })
 
 test('a complete signed-app observation passes, and a missing entitlement or pending approval fails', () => {

@@ -124,17 +124,25 @@ private func menuTitle(key: String, fallback: String) -> String {
     return trimmed.isEmpty ? fallback : trimmed
 }
 
+/// Packed names that contain this appex. The zip keeps Font Buttler.app.
+private let finderSyncProductAppNames: Set<String> = ["Cuttler.app", "Font Buttler.app", "Font Buttler Test.app"]
+
 /// The `.app` that contains this `.appex`, from the bundle URL of this process.
 /// This is not a hardcoded `/Applications` path, so a moved app targets itself.
+/// Cuttler.app and the zip's Font Buttler.app are both the containing app.
 func parentAppURL(bundleURL: URL = Bundle.main.bundleURL) -> URL? {
     var url = bundleURL
-    for _ in 0..<8 {
-        if url.pathExtension == "app" { return url }
+    var fallback: URL?
+    for _ in 0..<12 {
+        if url.pathExtension == "app", url.lastPathComponent != "FontButtlerFinderSyncAgent.app" {
+            if finderSyncProductAppNames.contains(url.lastPathComponent) { return url }
+            if fallback == nil { fallback = url }
+        }
         let parent = url.deletingLastPathComponent()
-        if parent.path == url.path { return nil }
+        if parent.path == url.path { break }
         url = parent
     }
-    return nil
+    return fallback
 }
 
 private final class HandoffAttempt {

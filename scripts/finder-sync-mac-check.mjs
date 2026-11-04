@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readAppTestFeedMarker } from '../electron/app-update-install.mjs'
+import { finderSyncMainExecutable } from '../electron/finder-sync.mjs'
 import { finderSyncAppexPath } from './build-finder-sync.mjs'
 import { finderSyncAgentExecutablePath } from './build-finder-sync-agent.mjs'
 import { findAppBundles } from './assert-notarized-mac-release.mjs'
@@ -100,11 +101,13 @@ function collect(app, dmg, zip) {
   const testFeed = readAppTestFeedMarker(app) === true
   const appex = finderSyncAppexPath(app)
   const appexExecutable = path.join(appex, 'Contents', 'MacOS', 'FontButtlerFinderSync')
-  const mainExecutable = path.join(app, 'Contents', 'MacOS', path.basename(app, '.app'))
+  const mainExecutable = finderSyncMainExecutable(app)
   const receiver = path.join(app, 'Contents', 'Resources', 'app.asar.unpacked', 'electron', 'finder-sync-receiver.node')
   const helper = finderSyncAgentExecutablePath(app)
   const nm = existsSync(appexExecutable) ? run('nm', ['-g', appexExecutable]) : { output: '', error: 'The appex executable is missing.' }
-  const statusRun = run(path.join(app, 'Contents', 'MacOS', path.basename(app, '.app')), ['--finder-sync-agent-status'], { timeout: 60000 })
+  const statusRun = mainExecutable
+    ? run(mainExecutable, ['--finder-sync-agent-status'], { timeout: 60000 })
+    : { status: 1, output: '', error: `No Cuttler or Font Buttler executable inside ${app}.` }
   const agentStatus = parseAgentStatusOutput(statusRun.output)
   const observations = {
     testFeed,

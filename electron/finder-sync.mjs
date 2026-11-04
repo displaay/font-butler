@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { closeSync, constants as fsConstants, fstatSync, openSync, readSync } from 'node:fs'
+import { closeSync, constants as fsConstants, existsSync, fstatSync, openSync, readFileSync, readSync } from 'node:fs'
 import path from 'node:path'
 import { FINDER_INSTALL_AS, isClaimedFontPath } from './finder-install.mjs'
 import { TEST_FEED_USER_DATA_DIR } from './test-feed-data.mjs'
@@ -18,6 +18,14 @@ export const FINDER_SYNC_SOCKET_DIR = 'fontbutler-fs'
 export const FINDER_SYNC_PRINCIPAL_CLASS = 'FontButtlerFinderSync'
 export const FINDER_SYNC_EXTENSION_POINT = 'com.apple.FinderSync'
 export const FINDER_SYNC_APPEX_NAME = 'Font Buttler Finder Sync.appex'
+/**
+ * Packed product names the handoff may launch. The DMG and loose app are
+ * Cuttler.app. The 0.4.0 update zip is still Font Buttler.app so 0.3.x
+ * clients can install it. Test builds stay Font Buttler Test.app.
+ */
+export const FINDER_SYNC_PRODUCT_APP_BUNDLES = ['Cuttler.app', 'Font Buttler.app', 'Font Buttler Test.app']
+/** Inner executable names. A renamed zip keeps the Cuttler binary. */
+export const FINDER_SYNC_PRODUCT_EXECUTABLES = ['Cuttler', 'Font Buttler', 'Font Buttler Test']
 export const FINDER_SYNC_EXECUTABLE = 'FontButtlerFinderSync'
 export const FINDER_SYNC_ENTITLEMENT = 'com.apple.security.app-sandbox'
 export const FINDER_SYNC_APP_GROUP_ENTITLEMENT = 'com.apple.security.application-groups'
@@ -192,6 +200,8 @@ function absoluteBundlePath(filePath) {
  * bundle path is the one this app wrote after a successful register.
  * A different bundle path means unregister, then register. Opt-out only
  * unregisters. An enabled or approved agent at the same path stays as it is.
+ * An enabled agent with no recorded bundle is registered again so launchd
+ * follows this app, including Cuttler.app and the zip's Font Buttler.app.
  */
 export function planFinderSyncAgentRegistration({
   testFeed = false,
@@ -225,6 +235,12 @@ export function planFinderSyncAgentRegistration({
       return { ...plan, action: 'keep', reason: 'legacy-program' }
     }
     return { ...plan, action: 'register', reason: 'legacy-program' }
+  }
+  // A login item left over from another copy has no bundle path recorded
+  // by this app. Register again so the helper inside this bundle is the
+  // one launchd vends.
+  if (!recorded && !previousProgram && current && (status === 'enabled' || status === 'requires-approval')) {
+    return { ...plan, action: 'reregister', reason: 'unrecorded' }
   }
   if (status === 'enabled' || status === 'requires-approval') {
     return { ...plan, action: 'keep', reason: status }
@@ -552,6 +568,66 @@ export function finderSyncWireAction(action) {
 
 export function finderSyncAppexBundlePath(appPath) {
   return path.join(appPath, 'Contents', 'PlugIns', FINDER_SYNC_APPEX_NAME)
+}
+
+function ancestorAppBundles(execPath) {
+  if (typeof execPath !== 'string' || !execPath) return []
+  let current = path.resolve(execPath)
+  const apps = []
+  for (let hop = 0; hop < 12; hop += 1) {
+    if (current.endsWith('.app')) apps.push(current)
+    const parent = path.dirname(current)
+    if (parent === current) break
+    current = parent
+  }
+  return apps
+}
+
+/**
+ * The product .app that contains this helper or appex. The nested agent
+ * app is skipped. Cuttler.app and the zip's Font Buttler.app both qualify
+ * when the Finder Sync appex is inside them.
+ */
+export function finderSyncContainingApp(execPath, { exists = existsSync } = {}) {
+  const apps = ancestorAppBundles(execPath).filter((app) => path.basename(app) !== FINDER_SYNC_AGENT_APP_NAME)
+  const products = apps.filter((app) => FINDER_SYNC_PRODUCT_APP_BUNDLES.includes(path.basename(app)))
+  const withAppex = (candidates) => candidates.find((app) => exists(finderSyncAppexBundlePath(app))) || ''
+  return withAppex(products) || withAppex(apps) || products[0] || ''
+}
+
+/** CFBundleExecutable from an XML Info.plist. Binary plists return empty. */
+export function finderSyncPlistExecutable(plist) {
+  const match = /<key>CFBundleExecutable<\/key>\s*<string>([^<]*)<\/string>/.exec(String(plist ?? ''))
+  return match ? match[1].trim() : ''
+}
+
+/**
+ * Main binary inside a product bundle. Prefer CFBundleExecutable, then the
+ * known product names, so Font Buttler.app can still hold a Cuttler binary.
+ */
+export function finderSyncMainExecutable(appPath, { exists = existsSync, readFile = readFileSync } = {}) {
+  if (!appPath) return ''
+  const macOS = path.join(appPath, 'Contents', 'MacOS')
+  const names = []
+  const plistPath = path.join(appPath, 'Contents', 'Info.plist')
+  if (exists(plistPath)) {
+    try {
+      const preferred = finderSyncPlistExecutable(readFile(plistPath, 'utf8'))
+      if (preferred) names.push(preferred)
+    } catch {
+      // A binary plist is resolved by the fallback names below.
+    }
+  }
+  for (const name of FINDER_SYNC_PRODUCT_EXECUTABLES) {
+    if (!names.includes(name)) names.push(name)
+  }
+  const folder = path.basename(appPath, '.app')
+  if (folder && !names.includes(folder)) names.push(folder)
+  for (const name of names) {
+    const binary = path.join(macOS, name)
+    if (exists(binary)) return binary
+  }
+  return ''
 }
 
 /**

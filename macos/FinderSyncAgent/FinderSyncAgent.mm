@@ -4,12 +4,16 @@
 #include <fcntl.h>
 #include <mach-o/dyld.h>
 #include <signal.h>
+#include <spawn.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
+
+extern char **environ;
 
 #ifndef LOCAL_PEERTOKEN
 #define LOCAL_PEERTOKEN 0x006
@@ -285,6 +289,24 @@ static void ConfigureSocket(int fd) {
   setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &budget, sizeof(budget));
 }
 
+// DMG and loose builds are Cuttler.app. The 0.4.0 update zip is still named
+// Font Buttler.app. Test builds are Font Buttler Test.app. The nested helper
+// is not one of these.
+static NSArray<NSString *> *ProductAppNames(void) {
+  return @[ @"Cuttler.app", @"Font Buttler.app", @"Font Buttler Test.app" ];
+}
+
+static NSArray<NSString *> *ProductExecutableNames(void) {
+  return @[ @"Cuttler", @"Font Buttler", @"Font Buttler Test" ];
+}
+
+static NSString *AppexInsideApp(NSString *appPath) {
+  return [appPath stringByAppendingPathComponent:@"Contents/PlugIns/Font Buttler Finder Sync.appex"];
+}
+
+// The product .app that contains this helper and the Finder Sync appex.
+// Launch Services is not asked: a stale Font Buttler registration must not
+// hide Cuttler.app, and the zip's Font Buttler.app must still be found.
 static NSURL *ContainingAppURL(void) {
   char buffer[4096];
   uint32_t size = sizeof(buffer);
@@ -299,37 +321,79 @@ static NSURL *ContainingAppURL(void) {
     if (parent.length == 0 || [parent isEqualToString:current]) break;
     current = parent;
   }
-  // apps[0] is this helper. The next .app is the Font Buttler bundle that owns it.
-  if (apps.count < 2) return nil;
-  return [NSURL fileURLWithPath:apps[1]];
+  NSFileManager *files = [NSFileManager defaultManager];
+  NSString *named = nil;
+  for (NSString *app in apps) {
+    if ([[app lastPathComponent] isEqualToString:@"FontButtlerFinderSyncAgent.app"]) continue;
+    if (![ProductAppNames() containsObject:app.lastPathComponent]) continue;
+    if ([files fileExistsAtPath:AppexInsideApp(app)]) return [NSURL fileURLWithPath:app isDirectory:YES];
+    if (!named) named = app;
+  }
+  for (NSString *app in apps) {
+    if ([[app lastPathComponent] isEqualToString:@"FontButtlerFinderSyncAgent.app"]) continue;
+    if ([files fileExistsAtPath:AppexInsideApp(app)]) return [NSURL fileURLWithPath:app isDirectory:YES];
+  }
+  if (!named) return nil;
+  return [NSURL fileURLWithPath:named isDirectory:YES];
 }
 
-// One openApplication for this click. The failure string is written on the
-// main queue and read on the forward queue only after the semaphore. The
-// next submit resets g_launchedApp and may try once. There is no process-wide
-// failure flag shared across queues.
+// CFBundleExecutable first, then Cuttler / Font Buttler / Font Buttler Test.
+// The zip renames only the bundle folder, so Font Buttler.app still contains
+// Contents/MacOS/Cuttler.
+static NSString *BundleExecutable(NSURL *appURL) {
+  if (!appURL.path.length) return nil;
+  NSString *plistPath = [appURL.path stringByAppendingPathComponent:@"Contents/Info.plist"];
+  NSDictionary *plist = [NSDictionary dictionaryWithContentsOfFile:plistPath];
+  NSString *named = [plist[@"CFBundleExecutable"] isKindOfClass:[NSString class]] ? plist[@"CFBundleExecutable"] : @"";
+  NSMutableArray<NSString *> *candidates = [NSMutableArray array];
+  if (named.length) [candidates addObject:named];
+  for (NSString *name in ProductExecutableNames()) {
+    if (![candidates containsObject:name]) [candidates addObject:name];
+  }
+  NSString *folder = appURL.lastPathComponent.stringByDeletingPathExtension;
+  if (folder.length && ![candidates containsObject:folder]) [candidates addObject:folder];
+  NSFileManager *files = [NSFileManager defaultManager];
+  for (NSString *name in candidates) {
+    NSString *binary = [[appURL.path stringByAppendingPathComponent:@"Contents/MacOS"] stringByAppendingPathComponent:name];
+    if ([files fileExistsAtPath:binary]) return binary;
+  }
+  return nil;
+}
+
+// Spawn the binary inside the bundle we found. NSWorkspace open would follow
+// the bundle id back to a missing Font Buttler.app.
+static BOOL SpawnExecutable(NSString *binary) {
+  if (!binary.length) return NO;
+  const char *path = binary.fileSystemRepresentation;
+  if (!path || !path[0]) return NO;
+  char *owned = strdup(path);
+  if (!owned) return NO;
+  posix_spawnattr_t attr;
+  if (posix_spawnattr_init(&attr) != 0) {
+    free(owned);
+    return NO;
+  }
+  posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP);
+  posix_spawnattr_setpgroup(&attr, 0);
+  char *argv[] = {owned, NULL};
+  pid_t pid = 0;
+  int result = posix_spawn(&pid, owned, NULL, &attr, argv, environ);
+  posix_spawnattr_destroy(&attr);
+  free(owned);
+  return result == 0 && pid > 0;
+}
+
+// One spawn for this click. The next submit resets g_launchedApp and may try
+// once. There is no process-wide failure flag shared across queues.
 static NSString *LaunchContainingAppOnce(void) {
   if (g_launchedApp) return nil;
   NSURL *appURL = ContainingAppURL();
-  BOOL exists = appURL != nil && [[NSFileManager defaultManager] fileExistsAtPath:appURL.path];
-  if (!exists) return kMissingAppMessage;
+  NSString *binary = BundleExecutable(appURL);
+  if (!binary.length) return kMissingAppMessage;
   g_launchedApp = YES;
-  __block NSString *failure = nil;
-  dispatch_semaphore_t opened = dispatch_semaphore_create(0);
-  dispatch_async(dispatch_get_main_queue(), ^{
-    NSWorkspaceOpenConfiguration *configuration = [NSWorkspaceOpenConfiguration configuration];
-    configuration.activates = YES;
-    [[NSWorkspace sharedWorkspace] openApplicationAtURL:appURL
-                                          configuration:configuration
-                                      completionHandler:^(NSRunningApplication *app, NSError *error) {
-                                        if (error || !app) failure = kMissingAppMessage;
-                                        dispatch_semaphore_signal(opened);
-                                      }];
-  });
-  if (dispatch_semaphore_wait(opened, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC)) != 0) return nil;
-  if (failure.length) {
+  if (!SpawnExecutable(binary)) {
     g_launchedApp = NO;
-    return failure;
+    return kMissingAppMessage;
   }
   return nil;
 }
@@ -454,6 +518,7 @@ int main(int argc, const char *argv[]) {
   (void)argc;
   (void)argv;
   signal(SIGPIPE, SIG_IGN);
+  signal(SIGCHLD, SIG_IGN);
   @autoreleasepool {
     FontButtlerFinderSyncAgent *agent = [FontButtlerFinderSyncAgent new];
     if (![agent start]) {

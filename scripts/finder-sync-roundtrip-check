@@ -25,6 +25,7 @@ import { readAppTestFeedMarker } from '../electron/app-update-install.mjs'
 import {
   finderSyncBundleId,
   finderSyncMachService,
+  finderSyncMainExecutable,
   finderSyncSocketDirectoryName,
   finderSyncSocketName,
 } from '../electron/finder-sync.mjs'
@@ -112,7 +113,10 @@ function main() {
   const testFeed = readAppTestFeedMarker(app) === true
   const service = finderSyncMachService(testFeed)
   const appexId = finderSyncBundleId(testFeed)
-  const binary = path.join(app, 'Contents', 'MacOS', path.basename(app, '.app'))
+  const binary = finderSyncMainExecutable(app)
+  if (!binary) {
+    fail(`No Cuttler or Font Buttler executable inside ${app}. The zip keeps the Font Buttler.app name and the Cuttler binary.`)
+  }
   console.log(`app: ${app}`)
   console.log(`flavour: ${testFeed ? 'test' : 'release'}`)
   console.log(`service: ${service}`)

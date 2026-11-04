@@ -585,20 +585,21 @@ static NSString *AgentStatusJSON(void) {
 }
 
 // One registerAndReturnError per launch, for this flavour's plist only.
+// Call it even when status is still enabled. After a move from Font Buttler.app
+// to Cuttler.app, unregister can leave the login item enabled while launchd
+// still points at the old bundle. registerAndReturnError rebinds this app.
 static NSString *RegisterAgent(void) {
   if (@available(macOS 13.0, *)) {
     if (!g_didRegisterAgent) {
       g_didRegisterAgent = YES;
       SMAppService *service = [SMAppService agentServiceWithPlistName:CurrentAgentPlistName()];
       NSError *error = nil;
-      if (service.status != SMAppServiceStatusEnabled) {
-        BOOL registered = [service registerAndReturnError:&error];
-        if (!registered) {
-          g_lastAgentError = error.localizedDescription.length ? error.localizedDescription
-                                                               : @"SMAppService registration failed.";
-        } else {
-          g_lastAgentError = nil;
-        }
+      BOOL registered = [service registerAndReturnError:&error];
+      if (!registered) {
+        g_lastAgentError = error.localizedDescription.length ? error.localizedDescription
+                                                             : @"SMAppService registration failed.";
+      } else {
+        g_lastAgentError = nil;
       }
     }
   }

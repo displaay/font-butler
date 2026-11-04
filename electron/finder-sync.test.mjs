@@ -24,7 +24,12 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
-import { DEVELOPER_ID_TEAM } from './app-update-install.mjs'
+import {
+  APP_PRODUCT_BUNDLE,
+  DEVELOPER_ID_TEAM,
+  LEGACY_APP_PRODUCT_BUNDLE,
+  TEST_FEED_APP_BUNDLE,
+} from './app-update-install.mjs'
 import { TEST_FEED_USER_DATA_DIR } from './test-feed-data.mjs'
 import { FINDER_INSTALL, FINDER_INSTALL_AS, FINDER_LINK_TO } from './finder-install.mjs'
 import {
@@ -41,7 +46,11 @@ import {
   FINDER_SYNC_SYSTEM_FONTS_ROOT,
   FINDER_SYNC_TEAM_ID,
   FINDER_SYNC_TEST_BUNDLE_ID,
+  FINDER_SYNC_AGENT_APP_NAME,
   FINDER_SYNC_AGENT_DISABLED,
+  FINDER_SYNC_APPEX_NAME,
+  FINDER_SYNC_PRODUCT_APP_BUNDLES,
+  FINDER_SYNC_PRODUCT_EXECUTABLES,
   FINDER_SYNC_ERROR_LOGIN_ITEMS,
   FINDER_SYNC_ERROR_MISSING_APP,
   FINDER_SYNC_ERROR_NOT_RUNNING,
@@ -72,8 +81,11 @@ import {
   finderSyncBundleId,
   finderSyncClangArchArgs,
   finderSyncCodeSigningRequirement,
+  finderSyncContainingApp,
   finderSyncMachService,
+  finderSyncMainExecutable,
   finderSyncMenuTitle,
+  finderSyncPlistExecutable,
   finderSyncParentCodeSigningRequirement,
   finderSyncSocketDirectoryName,
   finderSyncSocketName,
@@ -666,7 +678,8 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.doesNotMatch(readRepo('scripts/build-finder-sync-agent.mjs'), /UserNotifications/)
   assert.doesNotMatch(readRepo('scripts/build-finder-sync.mjs'), /UserNotifications/)
   assert.ok(agent.includes(FINDER_SYNC_MISSING_APP))
-  assert.match(agent, /openApplicationAtURL/)
+  assert.match(agent, /posix_spawn/)
+  assert.doesNotMatch(agent, /openApplicationAtURL/)
   assert.doesNotMatch(agent, /strcmp|kSecCodeInfoTeamIdentifier|kSecGuestAttributePid|LOCAL_PEERPID|getpid/)
   assert.ok(receiver.includes(releaseAgentRequirement))
   assert.ok(receiver.includes(testAgentRequirement))
@@ -1196,6 +1209,107 @@ test('a stale socket is replaced only when this user owns it, then another bind 
     for (const server of servers) server.close()
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('the handoff finds Cuttler.app and the zip Font Buttler.app that contain the appex', () => {
+  assert.deepEqual(FINDER_SYNC_PRODUCT_APP_BUNDLES, [
+    APP_PRODUCT_BUNDLE,
+    LEGACY_APP_PRODUCT_BUNDLE,
+    TEST_FEED_APP_BUNDLE,
+  ])
+  assert.deepEqual(
+    FINDER_SYNC_PRODUCT_EXECUTABLES,
+    FINDER_SYNC_PRODUCT_APP_BUNDLES.map((name) => name.slice(0, -'.app'.length)),
+  )
+  const repack = readRepo('scripts/repack-legacy-update-zip.mjs')
+  assert.match(repack, /export const LEGACY_UPDATE_APP_BUNDLE = 'Font Buttler\.app'/)
+  assert.match(repack, /The DMG keeps Cuttler\.app/)
+  const agent = readRepo('macos/FinderSyncAgent/FinderSyncAgent.mm')
+  const swift = readRepo('macos/FinderSync/FinderSync.swift')
+  const receiver = readRepo('electron/finder-sync-receiver.mm')
+  for (const name of FINDER_SYNC_PRODUCT_APP_BUNDLES) {
+    assert.ok(agent.includes(`@"${name}"`), name)
+    assert.ok(swift.includes(`"${name}"`), name)
+  }
+  assert.match(agent, /Font Buttler Finder Sync\.appex/)
+  assert.match(agent, /CFBundleExecutable/)
+  assert.match(agent, /posix_spawn/)
+  assert.doesNotMatch(agent, /openApplicationAtURL/)
+  const registerAgent = receiver.slice(
+    receiver.indexOf('static NSString *RegisterAgent'),
+    receiver.indexOf('static NSString *UnregisterAgent'),
+  )
+  assert.match(registerAgent, /registerAndReturnError:&error/)
+  assert.doesNotMatch(registerAgent, /SMAppServiceStatusEnabled/)
+
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-containing-app-'))
+  try {
+    const plant = (bundleName, executableName) => {
+      const app = path.join(root, bundleName)
+      const helper = path.join(
+        app,
+        'Contents',
+        'Helpers',
+        FINDER_SYNC_AGENT_APP_NAME,
+        'Contents',
+        'MacOS',
+        'FontButtlerFinderSyncAgent',
+      )
+      mkdirSync(path.dirname(helper), { recursive: true })
+      writeFileSync(helper, '')
+      mkdirSync(path.join(app, 'Contents', 'PlugIns', FINDER_SYNC_APPEX_NAME), { recursive: true })
+      mkdirSync(path.join(app, 'Contents', 'MacOS'), { recursive: true })
+      writeFileSync(path.join(app, 'Contents', 'MacOS', executableName), '')
+      writeFileSync(
+        path.join(app, 'Contents', 'Info.plist'),
+        `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>CFBundleExecutable</key><string>${executableName}</string></dict></plist>\n`,
+      )
+      return { app, helper }
+    }
+    const cuttler = plant('Cuttler.app', 'Cuttler')
+    assert.equal(finderSyncContainingApp(cuttler.helper), cuttler.app)
+    assert.equal(finderSyncMainExecutable(cuttler.app), path.join(cuttler.app, 'Contents', 'MacOS', 'Cuttler'))
+    assert.equal(finderSyncPlistExecutable(readFileSync(path.join(cuttler.app, 'Contents', 'Info.plist'), 'utf8')), 'Cuttler')
+    rmSync(cuttler.app, { recursive: true, force: true })
+
+    const zipped = plant('Font Buttler.app', 'Cuttler')
+    assert.equal(finderSyncContainingApp(zipped.helper), zipped.app)
+    assert.equal(path.basename(zipped.app), 'Font Buttler.app')
+    assert.equal(finderSyncMainExecutable(zipped.app), path.join(zipped.app, 'Contents', 'MacOS', 'Cuttler'))
+    rmSync(zipped.app, { recursive: true, force: true })
+
+    const legacy = plant('Font Buttler.app', 'Font Buttler')
+    assert.equal(finderSyncContainingApp(legacy.helper), legacy.app)
+    assert.equal(finderSyncMainExecutable(legacy.app), path.join(legacy.app, 'Contents', 'MacOS', 'Font Buttler'))
+    rmSync(legacy.app, { recursive: true, force: true })
+
+    const testFeed = plant('Font Buttler Test.app', 'Font Buttler Test')
+    assert.equal(finderSyncContainingApp(testFeed.helper), testFeed.app)
+    assert.equal(finderSyncMainExecutable(testFeed.app), path.join(testFeed.app, 'Contents', 'MacOS', 'Font Buttler Test'))
+
+    assert.equal(finderSyncContainingApp(path.join(testFeed.app, 'Contents', 'MacOS', 'Font Buttler Test')), testFeed.app)
+    assert.equal(finderSyncContainingApp(''), '')
+    assert.equal(finderSyncMainExecutable(''), '')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+
+  const unrecorded = planFinderSyncAgentRegistration({
+    testFeed: false,
+    currentBundle: '/Users/daniel/release/mac-arm64/Cuttler.app',
+    recordedBundle: '',
+    status: 'enabled',
+  })
+  assert.equal(unrecorded.action, 'reregister')
+  assert.equal(unrecorded.reason, 'unrecorded')
+  const zipBundle = planFinderSyncAgentRegistration({
+    testFeed: false,
+    currentBundle: '/tmp/Font Buttler.app',
+    recordedBundle: '/Applications/Font Buttler.app',
+    status: 'enabled',
+  })
+  assert.equal(zipBundle.action, 'reregister')
+  assert.equal(zipBundle.reason, 'moved')
 })
 
 test('a second launch from the same bundle path does not register again', () => {
