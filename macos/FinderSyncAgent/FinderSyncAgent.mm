@@ -2,6 +2,7 @@
 #import <Security/Security.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <libproc.h>
 #include <mach-o/dyld.h>
 #include <signal.h>
 #include <spawn.h>
@@ -442,20 +443,51 @@ static BOOL PathIsInsideApp(NSString *path, NSString *appPath) {
   return [path hasPrefix:root];
 }
 
-// A running Electron process fails SecCodeCheckValidity, including the basic
-// flag, and hashing the bundle is what made submit miss its reply. The live
-// app counts when its codesign id is the bundle id, or its executable sits
-// inside this helper's app and that app's Info.plist says the same id.
+// The socket peer's audit token carries the process in val[5]. A running
+// Electron image does not yield app.fontbutler.desktop from
+// kSecCodeInfoIdentifier, and kSecCodeInfoMainExecutable is often missing, so
+// the Info.plist check never saw the spawned Cuttler. The kernel path is the
+// binary the Mac check starts: Contents/MacOS/Cuttler inside Cuttler.app.
+static NSString *PeerKernelPath(int fd) {
+  audit_token_t token;
+  memset(&token, 0, sizeof(token));
+  socklen_t length = (socklen_t)sizeof(token);
+  if (getsockopt(fd, SOL_LOCAL, LOCAL_PEERTOKEN, &token, &length) != 0 || length != sizeof(token)) return nil;
+  char buffer[PROC_PIDPATHINFO_MAXSIZE];
+  int wrote = proc_pidpath((pid_t)token.val[5], buffer, sizeof(buffer));
+  if (wrote <= 0) return nil;
+  char resolved[PATH_MAX];
+  if (realpath(buffer, resolved)) return [NSString stringWithUTF8String:resolved];
+  return [NSString stringWithUTF8String:buffer];
+}
+
+static BOOL AncestorHasBundleIdentifier(NSString *path, NSString *expected) {
+  if (!path.length || !expected.length) return NO;
+  NSString *current = path;
+  for (int hop = 0; hop < 12; hop += 1) {
+    if ([current.pathExtension isEqualToString:@"app"] &&
+        [BundleIdentifierOfApp(current) isEqualToString:expected]) {
+      return YES;
+    }
+    NSString *parent = current.stringByDeletingLastPathComponent;
+    if (parent.length == 0 || [parent isEqualToString:current]) break;
+    current = parent;
+  }
+  return NO;
+}
+
 static BOOL ParentExecutableMatches(int fd) {
+  NSString *expected = ExpectedParentBundleIdentifier();
+  if (!expected.length) return NO;
+  if (AncestorHasBundleIdentifier(PeerKernelPath(fd), expected)) return YES;
   NSString *path = nil;
   NSString *identifier = nil;
   if (!PeerSigningFacts(fd, &path, &identifier)) return NO;
-  NSString *expected = ExpectedParentBundleIdentifier();
-  if (expected.length && [identifier isEqualToString:expected]) return YES;
+  if ([identifier isEqualToString:expected]) return YES;
+  if (AncestorHasBundleIdentifier(path, expected)) return YES;
   NSURL *appURL = ContainingAppURL();
-  NSString *appPath = appURL.path;
-  if (!PathIsInsideApp(path, appPath)) return NO;
-  return [BundleIdentifierOfApp(appPath) isEqualToString:expected];
+  if (!PathIsInsideApp(path, appURL.path)) return NO;
+  return [BundleIdentifierOfApp(appURL.path) isEqualToString:expected];
 }
 
 static NSString *RunningProductName(void) {
