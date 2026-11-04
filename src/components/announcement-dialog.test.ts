@@ -9,10 +9,16 @@ test('AnnouncementDialog reuses welcome Dialog surface classes', async () => {
   assert.match(source, /w-\[min\(92vw,480px\)\]/)
   assert.match(source, /Got it/)
   assert.match(source, /rename-to-cuttler/)
-  assert.match(source, /This is a new icon\. Keep the old one, or use the new one\?/)
-  assert.match(source, /Keep the old one/)
-  assert.match(source, /Use the new one/)
+  assert.match(
+    source,
+    /Cuttler has a new app icon\. You can keep your current one, or switch to the new mark\./,
+  )
+  assert.match(source, /Keep current icon/)
+  assert.match(source, /Use new icon/)
   assert.match(source, /appIconPreviewSrc/)
+  // Both icon-choice tiles use white card fills (never primary/black).
+  assert.equal([...source.matchAll(/border bg-white px-3/g)].length, 2)
+  assert.doesNotMatch(source, /offersIconChoice[\s\S]*?bg-primary/)
   assert.doesNotMatch(source, /backdrop-filter|vibrancy|dark-glass/)
 })
 
