@@ -18,19 +18,49 @@ import {
 const RENAME_PAGE_ID = 'rename'
 const CUTTLER_ICON: AppIconStyle = 'cuttler'
 
-const PAGE_FIGURES: Record<string, { src: string; alt: string }> = {
-  'smart-projects': {
-    src: '/announcement/smart-projects.png',
-    alt: 'Manual and Smart project options',
-  },
-  'family-tags': {
-    src: '/announcement/family-tags.png',
-    alt: 'Family tag menu',
-  },
-  'document-font-sheet': {
-    src: '/announcement/document-font-sheet.png',
-    alt: 'Document font groups: On, in the library but off, and Missing',
-  },
+type PageFigure = { src: string; alt: string }
+
+const PAGE_FIGURES: Record<string, PageFigure[]> = {
+  'smart-projects': [
+    {
+      src: '/announcement/smart-projects.png',
+      alt: 'Manual and Smart project options',
+    },
+  ],
+  'family-tags': [
+    {
+      src: '/announcement/family-tags.png',
+      alt: 'New family tag dialog',
+    },
+  ],
+  'document-font-sheet': [
+    {
+      src: '/announcement/document-font-sheet.png',
+      alt: 'Document font groups: On, in the library but off, and Missing',
+    },
+  ],
+  'library-search': [
+    {
+      src: '/announcement/library-search-typing.png',
+      alt: 'Multi-word library search',
+    },
+    {
+      src: '/announcement/library-search-tag.png',
+      alt: 'Library search matching a family tag',
+    },
+  ],
+  'search-filter-suggestions': [
+    {
+      src: '/announcement/search-filter-suggestions.png',
+      alt: 'Search field with matching filter suggestions',
+    },
+  ],
+  'new-tag-color': [
+    {
+      src: '/announcement/new-tag-color.png',
+      alt: 'New tag dialog with color choices',
+    },
+  ],
 }
 
 function pagesFor(item: Announcement): AnnouncementPage[] {
@@ -73,7 +103,7 @@ export function AnnouncementDialog({
   }
   const page = pages[pageIndex] ?? null
   const offersIconChoice = page?.id === RENAME_PAGE_ID
-  const figure = page ? PAGE_FIGURES[page.id] : undefined
+  const figures = page ? PAGE_FIGURES[page.id] ?? [] : []
   const lastPage = pages.length === 0 || pageIndex >= pages.length - 1
 
   useEffect(() => {
@@ -161,8 +191,17 @@ export function AnnouncementDialog({
                 </Button>
               </div>
             </div>
-          ) : figure ? (
-            <img src={figure.src} alt={figure.alt} className="mx-auto block max-w-full rounded-md border" />
+          ) : figures.length > 0 ? (
+            <div className="space-y-3">
+              {figures.map((figure) => (
+                <img
+                  key={figure.src}
+                  src={figure.src}
+                  alt={figure.alt}
+                  className="mx-auto block max-w-full rounded-md border"
+                />
+              ))}
+            </div>
           ) : null}
         </div>
         <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">

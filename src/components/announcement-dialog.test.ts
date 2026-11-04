@@ -7,10 +7,28 @@ import { ANNOUNCEMENTS, WHATS_NEW_PAGES } from '../../shared/announcements.ts'
 test('whats-new pages start with the rename, then each shipped feature', () => {
   assert.deepEqual(
     WHATS_NEW_PAGES.map((page) => page.id),
-    ['rename', 'smart-projects', 'family-tags', 'document-font-sheet'],
+    [
+      'rename',
+      'smart-projects',
+      'family-tags',
+      'document-font-sheet',
+      'library-search',
+      'search-filter-suggestions',
+      'activate-until-quit',
+      'new-tag-color',
+    ],
   )
+  assert.equal(WHATS_NEW_PAGES.length, 8)
   assert.equal(WHATS_NEW_PAGES[0]?.title, 'Now called Cuttler')
   assert.equal(WHATS_NEW_PAGES[3]?.title, 'Document → Project')
+  assert.equal(WHATS_NEW_PAGES[4]?.title, 'Library search')
+  assert.equal(WHATS_NEW_PAGES[5]?.title, 'Search filter suggestions')
+  assert.equal(WHATS_NEW_PAGES[6]?.title, 'Activate until quit')
+  assert.equal(WHATS_NEW_PAGES[7]?.title, 'Tag colors')
+  assert.match(WHATS_NEW_PAGES[4]?.body ?? '', /tag name/i)
+  assert.match(WHATS_NEW_PAGES[5]?.body ?? '', /matching filters/i)
+  assert.match(WHATS_NEW_PAGES[6]?.body ?? '', /session only/i)
+  assert.match(WHATS_NEW_PAGES[7]?.body ?? '', /color/i)
   assert.equal(ANNOUNCEMENTS.length, 1)
   assert.equal(ANNOUNCEMENTS[0]?.id, 'whats-new')
   assert.equal(ANNOUNCEMENTS[0]?.celebrate, true)
@@ -40,11 +58,49 @@ test('AnnouncementDialog reuses welcome Dialog surface classes', async () => {
   assert.match(source, /\/announcement\/smart-projects\.png/)
   assert.match(source, /\/announcement\/family-tags\.png/)
   assert.match(source, /\/announcement\/document-font-sheet\.png/)
+  assert.match(source, /\/announcement\/library-search-typing\.png/)
+  assert.match(source, /\/announcement\/library-search-tag\.png/)
+  assert.match(source, /\/announcement\/search-filter-suggestions\.png/)
+  assert.match(source, /\/announcement\/new-tag-color\.png/)
+  assert.match(source, /'library-search':/)
+  assert.match(source, /'search-filter-suggestions':/)
+  assert.match(source, /'new-tag-color':/)
+  // Activate until quit is copy-only until a cutout exists — no invented screenshot path.
+  assert.doesNotMatch(source, /activate-until-quit[\s\S]{0,80}\/announcement\//)
   // Both icon-choice tiles use white card fills (never primary/black).
   assert.equal([...source.matchAll(/border bg-white px-3/g)].length, 2)
   assert.doesNotMatch(source, /offersIconChoice[\s\S]*?bg-primary/)
   assert.doesNotMatch(source, /backdrop-filter|vibrancy|dark-glass/)
   assert.doesNotMatch(source, /conflict/i)
+})
+
+test('whats-new announcement cutouts exist under public/announcement', async () => {
+  const root = fileURLToPath(new URL('../../public/announcement', import.meta.url))
+  const { access } = await import('node:fs/promises')
+  for (const name of [
+    'smart-projects.png',
+    'family-tags.png',
+    'document-font-sheet.png',
+    'library-search-typing.png',
+    'library-search-tag.png',
+    'search-filter-suggestions.png',
+    'new-tag-color.png',
+  ]) {
+    await access(`${root}/${name}`)
+  }
+})
+
+test('library-search cutouts are tight action crops, not wide window slices', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const root = fileURLToPath(new URL('../../public/announcement', import.meta.url))
+  for (const name of ['library-search-typing.png', 'library-search-tag.png']) {
+    const buf = await readFile(`${root}/${name}`)
+    assert.equal(buf.toString('ascii', 1, 4), 'PNG')
+    const width = buf.readUInt32BE(16)
+    const height = buf.readUInt32BE(20)
+    assert.ok(width < 1200, `${name} width ${width} still looks like a window slice`)
+    assert.ok(height < 500, `${name} height ${height} still looks like a window slice`)
+  }
 })
 
 test('ConfettiBurst is a main-window overlay, not nested in the dialog', async () => {
