@@ -56,6 +56,14 @@ import {
   removeDuplicateWarnings,
   upsertDuplicateWarning,
 } from './duplicates.ts'
+import {
+  createBackup as createBackupFn,
+  planRestore as planRestoreFn,
+  previewBackup as previewBackupFn,
+  restoreBackup as restoreBackupFn,
+  type BackupPreview,
+  type RestoreReport,
+} from './backup.ts'
 import { emitEvent } from './events.ts'
 import { persistFamilyComment, persistFamilyRating } from './family-details.ts'
 import {
@@ -3493,6 +3501,34 @@ export class FontButlerService {
 
   optOutRetailFamilies(familyNames: readonly string[]): RetailSyncStatus {
     return optOutRetailFamiliesFn(this.paths, familyNames)
+  }
+
+  backupPreview(options: { includeFonts?: boolean } = {}): BackupPreview {
+    return previewBackupFn(this.paths, options)
+  }
+
+  async createLibraryBackup(destinationPath?: string, options: { includeFonts?: boolean } = {}): Promise<{ destinationPath: string; size: number; preview: BackupPreview }> {
+    return runCatalogTask(() => {
+      const dest = destinationPath?.trim()
+        ? path.resolve(destinationPath.trim())
+        : path.join(this.paths.dataRoot, 'Backups', `Cuttler library ${new Date().toISOString().replace(/[:.]/g, '-')}.cuttlerbackup`)
+      const created = createBackupFn(this.paths, { destinationPath: dest, includeFonts: options.includeFonts !== false })
+      return { destinationPath: created.destinationPath, size: created.size, preview: created.preview }
+    })
+  }
+
+  planLibraryRestore(archivePath: string, options: { restoreFonts?: boolean; restoreOrganization?: boolean } = {}): RestoreReport {
+    return planRestoreFn(this.paths, path.resolve(archivePath), options)
+  }
+
+  async restoreLibraryBackup(archivePath: string, options: { restoreFonts?: boolean; restoreOrganization?: boolean } = {}): Promise<RestoreReport> {
+    return runCatalogTask(() => {
+      const report = restoreBackupFn(this.paths, path.resolve(archivePath), options)
+      emitCatalog(this.paths)
+      emitEvent({ type: 'projects', projects: loadProjects(this.paths) })
+      emitEvent({ type: 'settings', settings: loadSettings(this.paths) })
+      return report
+    })
   }
 
   listProjects(): ProjectSet[] {

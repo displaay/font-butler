@@ -59,7 +59,7 @@ function hydrateCatalog(catalog: CatalogFile): CatalogFile {
   return catalog
 }
 
-function writeCatalogBackup(catalogPath: string): void {
+export function writeCatalogBackup(catalogPath: string): void {
   const backupPath = catalogBackupPath(catalogPath)
   const tmp = `${backupPath}.${process.pid}.${process.hrtime.bigint()}.tmp`
   try {

@@ -186,7 +186,54 @@ async function post(url: string, body: unknown): Promise<Response> {
   })
 }
 
+export type BackupPreview = {
+  includesFonts: boolean
+  catalogEntries: number
+  fontFiles: number
+  projects: number
+  familyTags: number
+  savedFilters: number
+  uncompressedSize: number
+  missingFiles: Array<{ entryId: string; path: string; reason: string }>
+  skippedProtected: Array<{ entryId: string; path: string; reason: string }>
+  redactedSettingsKeys: string[]
+  warning: string
+}
+
+export type RestoreReport = {
+  includesFonts: boolean
+  restoreFonts: boolean
+  restoreOrganization: boolean
+  restored: Array<{ entryId: string; newEntryId: string; fingerprint: string; fileName: string; restoredPath: string; faceIdentityKey: string | null; reactivated: boolean }>
+  leftAsIs: Array<{ entryId: string; newEntryId: string; fileName: string; recordedPath: string }>
+  reactivated: Array<{ entryId: string; newEntryId: string; fileName: string }>
+  skippedIdentical: Array<{ entryId: string; existingEntryId: string; fingerprint: string; fileName: string }>
+  parkedAsExtra: Array<{ entryId: string; newEntryId: string; fingerprint: string; fileName: string; conflictingEntryId: string; faceIdentityKey: string | null }>
+  failed: Array<{ entryId?: string; fileName: string; fingerprint?: string; reason: string; message: string }>
+  watchFoldersRestoredPaused: Array<{ root: string }>
+  watchFoldersNotRestored: Array<{ root: string; reason: string }>
+  settingsKeysSkipped: string[]
+  settingsRestoredKeys: string[]
+  projectsRestored: number
+  projectsMerged: number
+  projectsSkipped: number
+  projectMembersUnresolved: Array<{ projectName: string; assetId: string }>
+  familyTagsRestored: number
+  savedFiltersRestored: number
+  catalogBackupPath: string | null
+  snapshotPath: string | null
+  warning: string
+}
+
 export const api = {
+  backupPreview: (includeFonts = true) =>
+    get<{ preview: BackupPreview }>(`/api/backup/preview?includeFonts=${includeFonts ? 'true' : 'false'}`),
+  createBackup: (destinationPath?: string, includeFonts = true) =>
+    json<{ destinationPath: string; size: number; preview: BackupPreview }>(post('/api/backup/export', { destinationPath, includeFonts })),
+  planRestore: (path: string, options: { restoreFonts?: boolean; restoreOrganization?: boolean } = {}) =>
+    json<{ report: RestoreReport }>(post('/api/backup/restore/plan', { path, ...options })),
+  restoreBackup: (path: string, options: { restoreFonts?: boolean; restoreOrganization?: boolean } = {}) =>
+    json<{ report: RestoreReport }>(post('/api/backup/restore', { path, ...options })),
   bootstrap: async () => {
     await ensureToken()
     return { settings: bootstrapSettings }
