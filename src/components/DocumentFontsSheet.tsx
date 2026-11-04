@@ -69,7 +69,7 @@ function DocumentFontsBody({
   const missingNames = missingFontLabels(report.fonts)
   const [revealed, setRevealed] = useState(false)
   const name = documentProjectName(report.path)
-  const kindLabel = report.kind === 'pdf' ? 'PDF' : 'IDML'
+  const kindLabel = documentKindLabel(report.kind)
 
   return (
     <>
@@ -185,6 +185,20 @@ function FontGroup({
   )
 }
 
+function documentKindLabel(kind: DocumentFontReport['kind']): string {
+  if (kind === 'pdf') return 'PDF'
+  if (kind === 'idml') return 'IDML'
+  if (kind === 'docx') return 'Word document'
+  return 'PowerPoint file'
+}
+
 function rowKey(font: DocumentFontRow): string {
-  return [font.status, font.assetId ?? '', font.postscriptName, font.familyName, font.styleName].join('\0')
+  return [
+    font.status,
+    font.assetId ?? '',
+    (font.assetIds ?? []).join(','),
+    font.postscriptName,
+    font.familyName,
+    font.styleName,
+  ].join('\0')
 }

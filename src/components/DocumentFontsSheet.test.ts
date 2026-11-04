@@ -126,10 +126,13 @@ const { createElement, act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { DocumentFontsSheet } = await import('./DocumentFontsSheet.tsx')
 
-async function mount(handlers?: {
-  onActivateAvailable?: (ids: string[]) => void
-  onCreateProject?: (name: string) => void
-}) {
+async function mount(
+  source: DocumentFontReport = report(),
+  handlers?: {
+    onActivateAvailable?: (ids: string[]) => void
+    onCreateProject?: (name: string) => void
+  },
+) {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
@@ -138,7 +141,7 @@ async function mount(handlers?: {
   await act(async () => {
     root.render(
       createElement(DocumentFontsSheet, {
-        report: report(),
+        report: source,
         busy: false,
         onClose: () => {},
         onActivateAvailable: (ids: string[]) => {
@@ -197,6 +200,60 @@ test('the document sheet groups on, off, and missing, and reveal stays on names'
     })
     assert.deepEqual(activated, [['regular']])
 
+    const create = buttonNamed(dialog, 'Create project')
+    assert.ok(create)
+    await act(async () => {
+      create.click()
+    })
+    assert.deepEqual(created, ['Brief'])
+  } finally {
+    await unmount()
+  }
+})
+
+test('a Word document lists a multi-style family by name and activates the off styles', async () => {
+  const { dialog, activated, created, unmount } = await mount({
+    path: '/jobs/Brief.docx',
+    kind: 'docx',
+    fonts: [
+      {
+        postscriptName: '',
+        familyName: 'Family',
+        styleName: '',
+        status: 'on',
+        assetIds: ['regular'],
+        matchedBy: 'family',
+      },
+      {
+        postscriptName: '',
+        familyName: 'Family',
+        styleName: '',
+        status: 'in-library-off',
+        assetIds: ['bold'],
+        matchedBy: 'family',
+      },
+      {
+        postscriptName: '',
+        familyName: 'Not In Library',
+        styleName: '',
+        status: 'missing',
+      },
+    ],
+  })
+  try {
+    assert.equal(dialog.textContent?.includes('Fonts used in this Word document.'), true)
+    assert.equal(dialog.querySelector('[data-document-group="on"]')?.textContent?.includes('Family'), true)
+    assert.equal(dialog.querySelector('[data-document-group="off"]')?.textContent?.includes('Family'), true)
+    assert.equal(
+      dialog.querySelector('[data-document-group="missing"]')?.textContent?.includes('Not In Library'),
+      true,
+    )
+    const activate = buttonNamed(dialog, 'Activate available')
+    assert.ok(activate)
+    await act(async () => {
+      activate.click()
+    })
+    assert.deepEqual(activated, [['bold']])
     const create = buttonNamed(dialog, 'Create project')
     assert.ok(create)
     await act(async () => {

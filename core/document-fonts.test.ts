@@ -6,6 +6,7 @@ import zlib from 'node:zlib'
 import { test } from 'node:test'
 import { Hono } from 'hono'
 import { reportDocumentFonts, type DocumentFontReport } from './document-fonts.ts'
+import { documentProjectDraft } from './document-project.ts'
 import { mountDocumentFontsRoute } from '../server/document-fonts-route.ts'
 import type { CatalogEntry, FontStatus } from './types.ts'
 
@@ -191,12 +192,12 @@ test('POST /api/documents/fonts reports a file and does not require a project wr
     const office = await app.request('/api/documents/fonts', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ path: path.join(dir, 'Note.docx') }),
+      body: JSON.stringify({ path: path.join(dir, 'Note.txt') }),
     })
     assert.equal(office.status, 400)
     assert.equal(
       ((await office.json()) as { error?: string }).error,
-      'Document fonts can be read from PDF and IDML files.',
+      'Document fonts can be read from PDF, IDML, Word, and PowerPoint files.',
     )
 
     const response = await app.request('/api/documents/fonts', {
@@ -216,6 +217,237 @@ test('POST /api/documents/fonts reports a file and does not require a project wr
     fs.rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('docx lists one installed family without pinning a style, and pptx shares that reader', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-doc-office-'))
+  try {
+    const catalog = officeCatalog()
+    const docx = path.join(dir, 'Brief.docx')
+    fs.writeFileSync(
+      docx,
+      zipPackage([{ name: 'word/document.xml', data: Buffer.from(officeDocumentXml()) }]),
+    )
+    const report = reportDocumentFonts(docx, catalog)
+    assert.equal(report.kind, 'docx')
+    assert.equal(report.path, path.resolve(docx))
+    assert.deepEqual(report.fonts.map(officeFontFields), [
+      {
+        postscriptName: '',
+        familyName: 'Family',
+        styleName: '',
+        status: 'on',
+        assetIds: ['regular'],
+        matchedBy: 'family',
+      },
+      {
+        postscriptName: '',
+        familyName: 'Family',
+        styleName: '',
+        status: 'in-library-off',
+        assetIds: ['bold'],
+        matchedBy: 'family',
+      },
+      {
+        postscriptName: '',
+        familyName: 'Not In Library',
+        styleName: '',
+        status: 'missing',
+      },
+    ])
+    const draft = documentProjectDraft(report)
+    assert.deepEqual(draft.memberIds, ['regular', 'bold'])
+    assert.deepEqual(draft.pins, {})
+    assert.deepEqual(draft.unresolved, [
+      {
+        postscriptName: '',
+        familyName: 'Not In Library',
+        styleName: '',
+        sourceFile: path.resolve(docx),
+      },
+    ])
+
+    const pptx = path.join(dir, 'Deck.pptx')
+    fs.writeFileSync(
+      pptx,
+      zipPackage([{ name: 'ppt/slides/slide1.xml', data: Buffer.from(officeSlideXml()) }]),
+    )
+    const slides = reportDocumentFonts(pptx, catalog)
+    assert.equal(slides.kind, 'pptx')
+    assert.deepEqual(slides.fonts.map(officeFontFields), report.fonts.map(officeFontFields))
+
+    const pair = path.join(dir, 'Pair.docx')
+    fs.writeFileSync(
+      pair,
+      zipPackage([
+        {
+          name: 'word/document.xml',
+          data: Buffer.from(
+            `<?xml version="1.0" encoding="UTF-8"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:rFonts w:ascii="Pair" w:hAnsi="Pair"/>
+</w:document>
+`,
+          ),
+        },
+      ]),
+    )
+    const paired = reportDocumentFonts(pair, catalog)
+    assert.deepEqual(paired.fonts.map(officeFontFields), [
+      {
+        postscriptName: '',
+        familyName: 'Pair',
+        styleName: '',
+        status: 'on',
+        assetIds: ['pair-regular', 'pair-bold'],
+        matchedBy: 'family',
+      },
+    ])
+    assert.deepEqual(documentProjectDraft(paired).pins, {})
+    assert.deepEqual(documentProjectDraft(paired).memberIds, ['pair-regular', 'pair-bold'])
+
+    const cut = path.join(dir, 'Cut.docx')
+    fs.writeFileSync(
+      cut,
+      zipPackage([
+        {
+          name: 'word/document.xml',
+          data: Buffer.from(
+            `<?xml version="1.0" encoding="UTF-8"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:rFonts w:hAnsi="Family-Bold"/>
+</w:document>
+`,
+          ),
+        },
+      ]),
+    )
+    const exact = reportDocumentFonts(cut, catalog)
+    assert.equal(exact.fonts.length, 1)
+    assert.equal(exact.fonts[0]?.postscriptName, 'Family-Bold')
+    assert.equal(exact.fonts[0]?.assetId, 'bold')
+    assert.equal(exact.fonts[0]?.status, 'in-library-off')
+    assert.equal(exact.fonts[0]?.matchedBy, 'postscript')
+    assert.equal(exact.fonts[0]?.installedFingerprint, undefined)
+    assert.equal(exact.fonts[0]?.assetIds, undefined)
+
+    const solo = path.join(dir, 'Solo.pptx')
+    fs.writeFileSync(
+      solo,
+      zipPackage([
+        {
+          name: 'ppt/slides/slide1.xml',
+          data: Buffer.from(
+            `<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <a:latin typeface="Solo"/>
+</p:sld>
+`,
+          ),
+        },
+      ]),
+    )
+    const only = reportDocumentFonts(solo, catalog)
+    assert.equal(only.kind, 'pptx')
+    assert.equal(only.fonts.length, 1)
+    assert.equal(only.fonts[0]?.familyName, 'Solo')
+    assert.equal(only.fonts[0]?.assetId, 'solo')
+    assert.equal(only.fonts[0]?.status, 'on')
+    assert.equal(only.fonts[0]?.matchedBy, 'family-style')
+    assert.equal(only.fonts[0]?.installedFingerprint, 'fp-solo')
+    assert.deepEqual(documentProjectDraft(only).pins, { solo: 'fp-solo' })
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+function officeFontFields(font: DocumentFontReport['fonts'][number]) {
+  return {
+    postscriptName: font.postscriptName,
+    familyName: font.familyName,
+    styleName: font.styleName,
+    status: font.status,
+    ...(font.assetId ? { assetId: font.assetId } : {}),
+    ...(font.assetIds ? { assetIds: font.assetIds } : {}),
+    ...(font.installedFingerprint ? { installedFingerprint: font.installedFingerprint } : {}),
+    ...(font.matchedBy ? { matchedBy: font.matchedBy } : {}),
+  }
+}
+
+function officeCatalog(): CatalogEntry[] {
+  return [
+    catalogEntry({
+      id: 'regular',
+      postscriptName: 'Family-Regular',
+      familyName: 'Family',
+      styleName: 'Regular',
+      status: 'installed',
+      installedFingerprint: 'fp-regular',
+    }),
+    catalogEntry({
+      id: 'bold',
+      postscriptName: 'Family-Bold',
+      familyName: 'Family',
+      styleName: 'Bold',
+      status: 'deactivated',
+      installedFingerprint: 'fp-bold',
+    }),
+    catalogEntry({
+      id: 'pair-regular',
+      postscriptName: 'Pair-Regular',
+      familyName: 'Pair',
+      styleName: 'Regular',
+      status: 'installed',
+      installedFingerprint: 'fp-pair-regular',
+    }),
+    catalogEntry({
+      id: 'pair-bold',
+      postscriptName: 'Pair-Bold',
+      familyName: 'Pair',
+      styleName: 'Bold',
+      status: 'installed',
+      installedFingerprint: 'fp-pair-bold',
+    }),
+    catalogEntry({
+      id: 'solo',
+      postscriptName: 'Solo-Regular',
+      familyName: 'Solo',
+      styleName: 'Regular',
+      status: 'installed',
+      installedFingerprint: 'fp-solo',
+    }),
+  ]
+}
+
+function officeDocumentXml(): string {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <w:rPr>
+    <w:rFonts w:ascii="Family" w:hAnsi="Family" w:cs="Family"/>
+  </w:rPr>
+  <w:rPr>
+    <w:rFonts w:asciiTheme="minorHAnsi" w:hAnsiTheme="minorHAnsi" w:cstheme="minorBidi"/>
+  </w:rPr>
+  <w:rPr>
+    <w:rFonts w:ascii="Not In Library" w:eastAsia="Not In Library"/>
+  </w:rPr>
+  <w:cs w:val="22"/>
+  <a:latin typeface="Family"/>
+  <a:cs typeface="+mn-cs"/>
+  <a:ea typeface=""/>
+  <a:font script="Jpan" typeface="Should Not Read"/>
+</w:document>
+`
+}
+
+function officeSlideXml(): string {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <a:latin typeface="Family"/>
+  <a:cs typeface="Not In Library"/>
+  <a:ea typeface="Family"/>
+</p:sld>
+`
+}
 
 function assertIdmlClassification(report: DocumentFontReport): void {
   assert.equal(report.kind, 'idml')

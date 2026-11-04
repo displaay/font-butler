@@ -1,6 +1,6 @@
 import type { DocumentFontReport } from './document-fonts.ts'
 import type { ProjectUnresolvedFont } from './types.ts'
-import { documentProjectName } from '../shared/document-project.ts'
+import { documentFontAssetIds, documentProjectName } from '../shared/document-project.ts'
 
 export { documentProjectName }
 
@@ -14,8 +14,9 @@ export type DocumentProjectDraft = {
 /**
  * Members are matched asset ids. A missing name is stored, never added as a member.
  * `pinFingerprint` is copied from `installedFingerprint` when that field is present.
- * The parser leaves it empty for a library face that is off, and for a family+style
- * match of a different PostScript cut, so this does not invent a pin.
+ * The parser leaves it empty for a library face that is off, for a family+style
+ * match of a different PostScript cut, and for an Office family with several
+ * styles, so this does not invent a pin.
  * Two different fingerprints for one asset are left unpinned.
  */
 export function documentProjectDraft(report: DocumentFontReport): DocumentProjectDraft {
@@ -27,8 +28,8 @@ export function documentProjectDraft(report: DocumentFontReport): DocumentProjec
   const sourceFile = report.path
 
   for (const font of report.fonts) {
-    const assetId = font.assetId?.trim()
-    if (font.status === 'missing' || !assetId) {
+    const ids = font.status === 'missing' ? [] : documentFontAssetIds(font)
+    if (ids.length === 0) {
       const postscriptName = font.postscriptName.trim()
       const familyName = font.familyName.trim()
       const styleName = font.styleName.trim()
@@ -39,16 +40,18 @@ export function documentProjectDraft(report: DocumentFontReport): DocumentProjec
       unresolved.push({ postscriptName, familyName, styleName, sourceFile })
       continue
     }
-    if (!seenMembers.has(assetId)) {
-      seenMembers.add(assetId)
-      memberIds.push(assetId)
-    }
     const fingerprint = font.installedFingerprint?.trim()
-    if (!fingerprint) continue
-    const slot = pinState.get(assetId) ?? { conflict: false }
-    if (slot.value && slot.value !== fingerprint) slot.conflict = true
-    else slot.value = fingerprint
-    pinState.set(assetId, slot)
+    for (const assetId of ids) {
+      if (!seenMembers.has(assetId)) {
+        seenMembers.add(assetId)
+        memberIds.push(assetId)
+      }
+      if (!fingerprint) continue
+      const slot = pinState.get(assetId) ?? { conflict: false }
+      if (slot.value && slot.value !== fingerprint) slot.conflict = true
+      else slot.value = fingerprint
+      pinState.set(assetId, slot)
+    }
   }
 
   const pins: Record<string, string> = {}

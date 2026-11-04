@@ -934,7 +934,7 @@ export function Sidebar({
                     variant="ghost"
                     className="size-6 text-muted-foreground"
                     aria-label="Open document"
-                    title="Open a PDF or IDML"
+                    title="Open a PDF, IDML, Word, or PowerPoint document"
                     onClick={(event) => {
                       onOpenDocument()
                       event.currentTarget.blur()

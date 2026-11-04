@@ -4,35 +4,45 @@ import zlib from 'node:zlib'
 import type { CatalogEntry, FontFaceInfo } from './types.ts'
 
 /**
- * Read font names from a PDF or IDML file and classify each against the catalog.
- * This does not create or update projects.
+ * Read font names from a PDF, IDML, Word, or PowerPoint file and classify each
+ * against the catalog. This does not create or update projects.
  *
  * {@link documentProjectDraft} turns this report into project members.
- * Unique `assetId`s are the members, `installedFingerprint` is the pin when it
+ * Unique asset ids are the members, `installedFingerprint` is the pin when it
  * is present, and `missing` rows are unresolved names for `path` (never members).
  * `installedFingerprint` is set only when the matched face is the active copy and
  * the pin would be the cut named by the document's PostScript name. A family+style
  * fallback that lands on a different PostScript name stays unpinned.
+ *
+ * `.docx` and `.pptx` are zip packages. Names come from `w:rFonts` and from
+ * `a:latin`, `a:cs`, and `a:ea` typefaces. Office usually stores a family name.
+ * An exact PostScript name still pins that cut. A family with one style pins
+ * that style. A family with several styles is listed as matched and is not pinned.
  */
 
 export type DocumentFontStatus = 'on' | 'in-library-off' | 'missing'
 
-export type DocumentFontMatchKind = 'postscript' | 'family-style'
+export type DocumentFontMatchKind = 'postscript' | 'family-style' | 'family'
 
 export type DocumentFontRequest = {
   /** Document PostScript name with a subset prefix removed. Empty when the file only named a family. */
   postscriptName: string
   /** Document family. Empty for PDF, which only stores BaseFont. */
   familyName: string
-  /** Document style. Empty for PDF. */
+  /** Document style. Empty for PDF and for an Office family name. */
   styleName: string
   status: DocumentFontStatus
-  /** Catalog entry id when a face matched. */
+  /** Catalog entry id when one face matched. */
   assetId?: string
   /**
+   * Every catalog asset when an Office family name matched several styles.
+   * No single style is chosen, and `installedFingerprint` stays empty.
+   */
+  assetIds?: string[]
+  /**
    * Installed fingerprint to pin, when the face is on and the pin is this cut.
-   * Absent for missing names, library faces that are off, and a family+style
-   * match whose PostScript name is a different cut.
+   * Absent for missing names, library faces that are off, a family+style match
+   * whose PostScript name is a different cut, and a multi-style family match.
    */
   installedFingerprint?: string
   matchedBy?: DocumentFontMatchKind
@@ -40,7 +50,7 @@ export type DocumentFontRequest = {
 
 export type DocumentFontReport = {
   path: string
-  kind: 'pdf' | 'idml'
+  kind: 'pdf' | 'idml' | 'docx' | 'pptx'
   fonts: DocumentFontRequest[]
 }
 
@@ -48,6 +58,8 @@ type ParsedFont = {
   postscriptName: string
   familyName: string
   styleName: string
+  /** Office typeface. Match the family, and do not pick a style when several exist. */
+  officeFamily?: boolean
 }
 
 type FaceRef = {
@@ -74,7 +86,12 @@ export function reportDocumentFonts(
     throw new Error('Path is not a file.')
   }
   const buffer = fs.readFileSync(resolved)
-  const requests = kind === 'pdf' ? pdfFontRequests(buffer) : idmlFontRequests(buffer)
+  const requests =
+    kind === 'pdf'
+      ? pdfFontRequests(buffer)
+      : kind === 'idml'
+        ? idmlFontRequests(buffer)
+        : officeFontRequests(buffer, kind)
   const catalog = typeof entries === 'function' ? entries() : entries
   return {
     path: resolved,
@@ -83,11 +100,13 @@ export function reportDocumentFonts(
   }
 }
 
-function documentKind(filePath: string): 'pdf' | 'idml' {
+function documentKind(filePath: string): DocumentFontReport['kind'] {
   const ext = path.extname(filePath).toLowerCase()
   if (ext === '.pdf') return 'pdf'
   if (ext === '.idml') return 'idml'
-  throw new Error('Document fonts can be read from PDF and IDML files.')
+  if (ext === '.docx') return 'docx'
+  if (ext === '.pptx') return 'pptx'
+  throw new Error('Document fonts can be read from PDF, IDML, Word, and PowerPoint files.')
 }
 
 function matchFonts(requests: readonly ParsedFont[], entries: readonly CatalogEntry[]): DocumentFontRequest[] {
@@ -98,9 +117,14 @@ function matchFonts(requests: readonly ParsedFont[], entries: readonly CatalogEn
     const key = requestKey(request)
     if (seen.has(key)) continue
     seen.add(key)
-    fonts.push(classify(request, index))
+    fonts.push(...classifyRequest(request, index))
   }
   return fonts
+}
+
+function classifyRequest(request: ParsedFont, index: CatalogIndex): DocumentFontRequest[] {
+  if (request.officeFamily) return classifyOfficeFamily(request.familyName, index)
+  return [classify(request, index)]
 }
 
 function requestKey(request: ParsedFont): string {
@@ -205,6 +229,71 @@ function pushRef(map: Map<string, FaceRef[]>, key: string, ref: FaceRef): void {
 
 function familyStyleKey(family: string, style: string): string {
   return `${family}\0${style}`
+}
+
+/**
+ * An Office typeface is usually a family name. An exact PostScript name still
+ * wins. One style in the family is that style. Several styles stay a family
+ * match: every asset is listed, and none is pinned.
+ */
+function classifyOfficeFamily(name: string, index: CatalogIndex): DocumentFontRequest[] {
+  const familyName = name.trim()
+  if (!familyName) return []
+  const byPostScript = choosePostScript(familyName, index)
+  if (byPostScript) {
+    return [toRequest({ postscriptName: familyName, familyName: '', styleName: '' }, byPostScript, 'postscript')]
+  }
+  const assets = familyAssets(familyName, index)
+  if (assets.length === 0) {
+    return [{ postscriptName: '', familyName, styleName: '', status: 'missing' }]
+  }
+  if (assets.length === 1) {
+    const only = assets[0]
+    if (!only) return [{ postscriptName: '', familyName, styleName: '', status: 'missing' }]
+    return [toRequest({ postscriptName: '', familyName, styleName: '' }, only, 'family-style')]
+  }
+  const on: string[] = []
+  const off: string[] = []
+  for (const ref of assets) {
+    const bucket = faceIsOn(ref.entry) ? on : off
+    bucket.push(ref.entry.id)
+  }
+  const rows: DocumentFontRequest[] = []
+  if (on.length > 0) {
+    rows.push({
+      postscriptName: '',
+      familyName,
+      styleName: '',
+      status: 'on',
+      assetIds: on,
+      matchedBy: 'family',
+    })
+  }
+  if (off.length > 0) {
+    rows.push({
+      postscriptName: '',
+      familyName,
+      styleName: '',
+      status: 'in-library-off',
+      assetIds: off,
+      matchedBy: 'family',
+    })
+  }
+  return rows
+}
+
+function familyAssets(family: string, index: CatalogIndex): FaceRef[] {
+  const familyKey = normalizeName(family)
+  if (!familyKey) return []
+  const refs = index.byFamily.get(familyKey) ?? []
+  const real = refs.filter((ref) => !ref.alias)
+  const pool = real.length > 0 ? real : refs
+  const byId = new Map<string, FaceRef>()
+  for (const ref of pool) {
+    const previous = byId.get(ref.entry.id)
+    if (!previous || (faceIsOn(ref.entry) && !faceIsOn(previous.entry))) byId.set(ref.entry.id, ref)
+  }
+  return [...byId.values()]
 }
 
 function choosePostScript(name: string, index: CatalogIndex): FaceRef | undefined {
@@ -410,7 +499,7 @@ function inflateZlib(data: Buffer): Buffer | null {
 
 function idmlFontRequests(buffer: Buffer): ParsedFont[] {
   if (buffer.length >= 4 && buffer.readUInt32LE(0) === 0x04034b50) {
-    return readZipXml(buffer).flatMap((xml) => fontElements(xml))
+    return readZipXml(buffer, 'IDML file').flatMap((xml) => fontElements(xml))
   }
   const text = buffer.toString('utf8').replace(/^\uFEFF/, '')
   if (text.includes('<Font')) return fontElements(text)
@@ -454,18 +543,60 @@ function decodeXml(value: string): string {
     .replace(/&amp;/g, '&')
 }
 
-function readZipXml(buffer: Buffer): string[] {
+const OFFICE_RFONTS = /<(?:[\w.-]+:)?rFonts\b([^>]*)>/g
+const OFFICE_RUN_FACE =
+  /(?:^|[\s])(?:[\w.-]+:)?(?:ascii|hAnsi|eastAsia|cs)\s*=\s*(?:"([^"]*)"|'([^']*)')/g
+const OFFICE_DRAWING = /<(?:[\w.-]+:)?(?:latin|ea|cs)\b([^>]*)>/g
+
+function officeFontRequests(buffer: Buffer, kind: 'docx' | 'pptx'): ParsedFont[] {
+  const label = kind === 'docx' ? 'Word document' : 'PowerPoint file'
+  if (!(buffer.length >= 4 && buffer.readUInt32LE(0) === 0x04034b50)) {
+    throw new Error(`Could not read that ${label}.`)
+  }
+  const fonts: ParsedFont[] = []
+  for (const xml of readZipXml(buffer, label)) {
+    for (const familyName of officeTypefaces(xml)) {
+      fonts.push({ postscriptName: '', familyName, styleName: '', officeFamily: true })
+    }
+  }
+  return fonts
+}
+
+function officeTypefaces(xml: string): string[] {
+  const names: string[] = []
+  for (const match of xml.matchAll(OFFICE_RFONTS)) {
+    const attrs = match[1] ?? ''
+    for (const attr of attrs.matchAll(OFFICE_RUN_FACE)) {
+      const name = officeFaceName(decodeXml(attr[1] ?? attr[2] ?? ''))
+      if (name) names.push(name)
+    }
+  }
+  for (const match of xml.matchAll(OFFICE_DRAWING)) {
+    const name = officeFaceName(xmlAttr(match[1] ?? '', 'typeface'))
+    if (name) names.push(name)
+  }
+  return names
+}
+
+/** Theme slots (`+mn-lt`) and blank typefaces are not font names. */
+function officeFaceName(value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed || trimmed.startsWith('+')) return ''
+  return trimmed
+}
+
+function readZipXml(buffer: Buffer, label: string): string[] {
   const eocd = findEocd(buffer)
-  if (eocd < 0) throw new Error('Could not read that IDML file.')
+  if (eocd < 0) throw new Error(`Could not read that ${label}.`)
   const count = buffer.readUInt16LE(eocd + 10)
   let cursor = buffer.readUInt32LE(eocd + 16)
   if (count === 0xffff || cursor === 0xffffffff) {
-    throw new Error('Could not read that IDML file.')
+    throw new Error(`Could not read that ${label}.`)
   }
   const texts: string[] = []
   for (let index = 0; index < count; index += 1) {
     if (cursor + 46 > buffer.length || buffer.readUInt32LE(cursor) !== 0x02014b50) {
-      throw new Error('Could not read that IDML file.')
+      throw new Error(`Could not read that ${label}.`)
     }
     const method = buffer.readUInt16LE(cursor + 10)
     const compressedSize = buffer.readUInt32LE(cursor + 20)
@@ -477,7 +608,7 @@ function readZipXml(buffer: Buffer): string[] {
     const name = buffer.toString('utf8', nameStart, nameStart + nameLength)
     cursor = nameStart + nameLength + extraLength + commentLength
     if (!name.toLowerCase().endsWith('.xml')) continue
-    texts.push(readZipEntry(buffer, localOffset, method, compressedSize).toString('utf8'))
+    texts.push(readZipEntry(buffer, localOffset, method, compressedSize, label).toString('utf8'))
   }
   return texts
 }
@@ -491,25 +622,31 @@ function findEocd(buffer: Buffer): number {
   return -1
 }
 
-function readZipEntry(buffer: Buffer, offset: number, method: number, compressedSize: number): Buffer {
+function readZipEntry(
+  buffer: Buffer,
+  offset: number,
+  method: number,
+  compressedSize: number,
+  label: string,
+): Buffer {
   if (offset + 30 > buffer.length || buffer.readUInt32LE(offset) !== 0x04034b50) {
-    throw new Error('Could not read that IDML file.')
+    throw new Error(`Could not read that ${label}.`)
   }
   const flags = buffer.readUInt16LE(offset + 6)
-  if ((flags & 0x1) !== 0) throw new Error('Could not read that IDML file.')
+  if ((flags & 0x1) !== 0) throw new Error(`Could not read that ${label}.`)
   const nameLength = buffer.readUInt16LE(offset + 26)
   const extraLength = buffer.readUInt16LE(offset + 28)
   const dataStart = offset + 30 + nameLength + extraLength
   const dataEnd = dataStart + compressedSize
-  if (dataEnd > buffer.length) throw new Error('Could not read that IDML file.')
+  if (dataEnd > buffer.length) throw new Error(`Could not read that ${label}.`)
   const compressed = buffer.subarray(dataStart, dataEnd)
   if (method === 0) return Buffer.from(compressed)
   if (method === 8) {
     try {
       return zlib.inflateRawSync(compressed, { maxOutputLength: MAX_INFLATE_BYTES })
     } catch {
-      throw new Error('Could not read that IDML file.')
+      throw new Error(`Could not read that ${label}.`)
     }
   }
-  throw new Error('Could not read that IDML file.')
+  throw new Error(`Could not read that ${label}.`)
 }
