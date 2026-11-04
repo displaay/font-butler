@@ -52,37 +52,6 @@ static BOOL FinderSyncErrorCodeIsKnown(NSString *code) {
          [code isEqualToString:@"login-items"] || [code isEqualToString:@"unknown-action"];
 }
 
-static BOOL GuestMeetsRequirement(audit_token_t token, NSString *requirementString, SecCSFlags flags) {
-  if (!requirementString.length) return NO;
-  SecRequirementRef requirement = NULL;
-  OSStatus created = SecRequirementCreateWithString((__bridge CFStringRef)requirementString, kSecCSDefaultFlags, &requirement);
-  if (created != errSecSuccess || !requirement) return NO;
-  CFDataRef auditData = CFDataCreate(kCFAllocatorDefault, (const UInt8 *)&token, (CFIndex)sizeof(token));
-  if (!auditData) {
-    CFRelease(requirement);
-    return NO;
-  }
-  const void *keys[] = {kSecGuestAttributeAudit};
-  const void *values[] = {auditData};
-  CFDictionaryRef attributes = CFDictionaryCreate(kCFAllocatorDefault, keys, values, 1, &kCFTypeDictionaryKeyCallBacks,
-                                                 &kCFTypeDictionaryValueCallBacks);
-  SecCodeRef guest = NULL;
-  OSStatus copyStatus = errSecInternalError;
-  if (attributes) {
-    copyStatus = SecCodeCopyGuestWithAttributes(NULL, attributes, kSecCSDefaultFlags, &guest);
-    CFRelease(attributes);
-  }
-  CFRelease(auditData);
-  if (copyStatus != errSecSuccess || !guest) {
-    CFRelease(requirement);
-    return NO;
-  }
-  OSStatus signatureStatus = SecCodeCheckValidity(guest, flags, requirement);
-  CFRelease(guest);
-  CFRelease(requirement);
-  return signatureStatus == errSecSuccess;
-}
-
 // sockaddr_un.sun_path holds 104 bytes. The team-prefixed group id plus
 // "~/Library/Group Containers" does not leave room for a real home directory,
 // so the forward socket lives in a private directory under the per-user
@@ -407,62 +376,18 @@ static NSString *LaunchContainingAppOnce(void) {
   return nil;
 }
 
-// Fallback when the running process fails a dynamic check. The hash stays off
-// the XPC reply path. Cuttler.app and the zip's Font Buttler.app both qualify.
-static NSString *g_trustedExecutable = nil;
-
-static NSLock *TrustLock(void) {
-  static NSLock *lock = nil;
-  static dispatch_once_t once;
-  dispatch_once(&once, ^{
-    lock = [NSLock new];
-  });
-  return lock;
-}
-
-static BOOL TrustContainingExecutable(void) {
-  [TrustLock() lock];
-  BOOL already = g_trustedExecutable.length > 0;
-  [TrustLock() unlock];
-  if (already) return YES;
-  NSURL *appURL = ContainingAppURL();
-  NSString *binary = BundleExecutable(appURL);
-  if (!binary.length) return NO;
-  SecRequirementRef requirement = NULL;
-  OSStatus created = SecRequirementCreateWithString((__bridge CFStringRef)kParentRequirement, kSecCSDefaultFlags, &requirement);
-  if (created != errSecSuccess || !requirement) return NO;
-  NSURL *binaryURL = [NSURL fileURLWithPath:binary isDirectory:NO];
-  SecStaticCodeRef staticCode = NULL;
-  OSStatus codeCreated = SecStaticCodeCreateWithPath((__bridge CFURLRef)binaryURL, kSecCSDefaultFlags, &staticCode);
-  BOOL signedOk = NO;
-  if (codeCreated == errSecSuccess && staticCode) {
-    OSStatus status = SecStaticCodeCheckValidity(staticCode, kSecCSStrictValidate, requirement);
-    if (status != errSecSuccess) {
-      status = SecStaticCodeCheckValidity(staticCode, kSecCSBasicValidateOnly, requirement);
-    }
-    signedOk = status == errSecSuccess;
-    CFRelease(staticCode);
-  }
-  CFRelease(requirement);
-  if (!signedOk) return NO;
-  char resolved[PATH_MAX];
-  if (!realpath(binary.fileSystemRepresentation, resolved)) return NO;
-  NSString *path = [NSString stringWithUTF8String:resolved];
-  if (!path.length) return NO;
-  [TrustLock() lock];
-  if (!g_trustedExecutable.length) g_trustedExecutable = path;
-  [TrustLock() unlock];
-  return YES;
-}
-
-static NSString *PeerMainExecutablePath(int fd) {
+static BOOL PeerSigningFacts(int fd, NSString **pathOut, NSString **identifierOut) {
+  if (pathOut) *pathOut = nil;
+  if (identifierOut) *identifierOut = nil;
+  NSString *path = nil;
+  NSString *identifier = nil;
+  BOOL ok = NO;
   audit_token_t token;
   memset(&token, 0, sizeof(token));
   socklen_t length = (socklen_t)sizeof(token);
-  if (getsockopt(fd, SOL_LOCAL, LOCAL_PEERTOKEN, &token, &length) != 0) return nil;
-  if (length != sizeof(token)) return nil;
+  if (getsockopt(fd, SOL_LOCAL, LOCAL_PEERTOKEN, &token, &length) != 0 || length != sizeof(token)) return NO;
   CFDataRef auditData = CFDataCreate(kCFAllocatorDefault, (const UInt8 *)&token, (CFIndex)sizeof(token));
-  if (!auditData) return nil;
+  if (!auditData) return NO;
   const void *keys[] = {kSecGuestAttributeAudit};
   const void *values[] = {auditData};
   CFDictionaryRef attributes = CFDictionaryCreate(kCFAllocatorDefault, keys, values, 1, &kCFTypeDictionaryKeyCallBacks,
@@ -474,41 +399,63 @@ static NSString *PeerMainExecutablePath(int fd) {
     CFRelease(attributes);
   }
   CFRelease(auditData);
-  if (copyStatus != errSecSuccess || !guest) return nil;
+  if (copyStatus != errSecSuccess || !guest) return NO;
   CFDictionaryRef information = NULL;
   OSStatus infoStatus = SecCodeCopySigningInformation(guest, kSecCSSigningInformation | kSecCSDynamicInformation, &information);
   CFRelease(guest);
-  if (infoStatus != errSecSuccess || !information) return nil;
+  if (infoStatus != errSecSuccess || !information) return NO;
   CFURLRef executable = (CFURLRef)CFDictionaryGetValue(information, kSecCodeInfoMainExecutable);
-  NSString *path = executable ? [(__bridge NSURL *)executable path] : nil;
+  if (executable) {
+    NSString *raw = [(__bridge NSURL *)executable path];
+    char resolved[PATH_MAX];
+    if (raw.length && realpath(raw.fileSystemRepresentation, resolved)) path = [NSString stringWithUTF8String:resolved];
+    else if (raw.length) path = raw;
+  }
+  CFStringRef identifierRef = (CFStringRef)CFDictionaryGetValue(information, kSecCodeInfoIdentifier);
+  if (identifierRef && CFGetTypeID(identifierRef) == CFStringGetTypeID()) {
+    identifier = [NSString stringWithString:(__bridge NSString *)identifierRef];
+  }
   CFRelease(information);
-  if (!path.length) return nil;
-  char resolved[PATH_MAX];
-  if (!realpath(path.fileSystemRepresentation, resolved)) return nil;
-  return [NSString stringWithUTF8String:resolved];
+  if (pathOut) *pathOut = path;
+  if (identifierOut) *identifierOut = identifier;
+  ok = path.length > 0 || identifier.length > 0;
+  return ok;
 }
 
-static NSString *TrustedExecutable(void) {
-  [TrustLock() lock];
-  NSString *path = [g_trustedExecutable copy];
-  [TrustLock() unlock];
-  return path;
+static NSString *BundleIdentifierOfApp(NSString *appPath) {
+  if (!appPath.length) return @"";
+  NSString *plistPath = [appPath stringByAppendingPathComponent:@"Contents/Info.plist"];
+  NSDictionary *plist = [NSDictionary dictionaryWithContentsOfFile:plistPath];
+  id ident = plist[@"CFBundleIdentifier"];
+  return [ident isKindOfClass:[NSString class]] ? ident : @"";
 }
 
-// Strict validation of the running Electron process reads the whole bundle
-// and does not finish before the XPC client gives up. Basic validation still
-// requires the Developer ID team and identifier app.fontbutler.desktop.
+static NSString *ExpectedParentBundleIdentifier(void) {
+  if (g_testFeed) return @"app.fontbutler.desktop.test";
+  return [kParentRequirement containsString:@"identifier \"app.fontbutler.desktop\""] ? @"app.fontbutler.desktop" : @"";
+}
+
+static BOOL PathIsInsideApp(NSString *path, NSString *appPath) {
+  if (!path.length || !appPath.length) return NO;
+  if ([path isEqualToString:appPath]) return YES;
+  NSString *root = [appPath hasSuffix:@"/"] ? appPath : [appPath stringByAppendingString:@"/"];
+  return [path hasPrefix:root];
+}
+
+// A running Electron process fails SecCodeCheckValidity, including the basic
+// flag, and hashing the bundle is what made submit miss its reply. The live
+// app counts when its codesign id is the bundle id, or its executable sits
+// inside this helper's app and that app's Info.plist says the same id.
 static BOOL ParentExecutableMatches(int fd) {
-  audit_token_t token;
-  memset(&token, 0, sizeof(token));
-  socklen_t length = (socklen_t)sizeof(token);
-  if (getsockopt(fd, SOL_LOCAL, LOCAL_PEERTOKEN, &token, &length) != 0) return NO;
-  if (length != sizeof(token)) return NO;
-  if (GuestMeetsRequirement(token, kParentRequirement, kSecCSBasicValidateOnly)) return YES;
-  NSString *trusted = TrustedExecutable();
-  if (!trusted.length) return NO;
-  NSString *peer = PeerMainExecutablePath(fd);
-  return peer.length > 0 && [peer isEqualToString:trusted];
+  NSString *path = nil;
+  NSString *identifier = nil;
+  if (!PeerSigningFacts(fd, &path, &identifier)) return NO;
+  NSString *expected = ExpectedParentBundleIdentifier();
+  if (expected.length && [identifier isEqualToString:expected]) return YES;
+  NSURL *appURL = ContainingAppURL();
+  NSString *appPath = appURL.path;
+  if (!PathIsInsideApp(path, appPath)) return NO;
+  return [BundleIdentifierOfApp(appPath) isEqualToString:expected];
 }
 
 static NSString *RunningProductName(void) {
@@ -558,10 +505,6 @@ static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL over
   else return NO;
   self.requirement = g_testFeed ? kTestRequirement : kReleaseRequirement;
   self.forwardQueue = dispatch_queue_create("app.fontbutler.desktop.FinderSyncAgent.forward", DISPATCH_QUEUE_SERIAL);
-  // Off the forward queue. Submit must be able to reply before this hash ends.
-  dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-    TrustContainingExecutable();
-  });
   NSXPCListener *listener = [[NSXPCListener alloc] initWithMachServiceName:(g_testFeed ? kTestService : kReleaseService)];
   listener.delegate = self;
   self.listener = listener;
