@@ -60,6 +60,7 @@ import {
   noteFinderSyncRequest,
   readFinderSyncAgentRecord,
   readFinderSyncPendingErrorFile,
+  finderSyncProductDisplayName,
   routeFinderSyncError,
   refreshFinderSyncRegistration,
   revalidateFinderSyncHandles,
@@ -1095,8 +1096,10 @@ const finderSyncErrorsShown = new Map()
 
 function presentFinderSyncUserError(code) {
   const now = Date.now()
+  const appPath = currentFinderSyncBundle()
   const route = routeFinderSyncError({
     code,
+    appPath,
     notificationsEnabled: nativeNotificationsEnabled,
     permission: electronNotificationPermission(Notification),
     alreadyShown: finderSyncErrorsShown,
@@ -1104,18 +1107,19 @@ function presentFinderSyncUserError(code) {
   })
   if (!route.shown) return
   finderSyncErrorsShown.set(route.code, now)
+  const title = finderSyncProductDisplayName(appPath)
   if (route.channel === 'notification') {
-    const notice = new Notification({ title: 'Font Buttler', body: route.message })
+    const notice = new Notification({ title, body: route.message })
     notice.on('click', () => showMainWindow())
     notice.show()
     return
   }
-  dialog.showErrorBox('Font Buttler', route.message)
+  dialog.showErrorBox(title, route.message)
 }
 
 function consumeFinderSyncPendingErrors() {
   const file = path.join(app.getPath('userData'), FINDER_SYNC_PENDING_ERROR_FILE)
-  const read = readFinderSyncPendingErrorFile(file)
+  const read = readFinderSyncPendingErrorFile(file, undefined, currentFinderSyncBundle())
   if (read.discard) {
     try {
       fs.unlinkSync(file)

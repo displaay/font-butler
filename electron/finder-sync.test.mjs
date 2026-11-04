@@ -86,7 +86,9 @@ import {
   finderSyncMainExecutable,
   finderSyncMenuTitle,
   finderSyncPlistExecutable,
+  finderSyncNotRunningMessage,
   finderSyncParentCodeSigningRequirement,
+  finderSyncProductDisplayName,
   finderSyncSocketDirectoryName,
   finderSyncSocketName,
   finderSyncMonitorDirectories,
@@ -752,7 +754,8 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(main, /readFinderSyncPendingErrorFile/)
   assert.match(main, /finderSyncErrorsShown = new Map\(\)/)
   assert.match(main, /FINDER_SYNC_PENDING_ERROR_FILE/)
-  assert.match(main, /dialog\.showErrorBox\('Font Buttler', route\.message\)/)
+  assert.match(main, /dialog\.showErrorBox\(title, route\.message\)/)
+  assert.match(main, /finderSyncProductDisplayName\(appPath\)/)
   assert.doesNotMatch(main, /UNUserNotificationCenter/)
   const readyHandler = main.slice(main.indexOf('app.whenReady()'))
   const bootstrapAt = readyHandler.indexOf('await bootstrapApi()')
@@ -1234,6 +1237,13 @@ test('the handoff finds Cuttler.app and the zip Font Buttler.app that contain th
   assert.match(agent, /Font Buttler Finder Sync\.appex/)
   assert.match(agent, /CFBundleExecutable/)
   assert.match(agent, /posix_spawn/)
+  assert.match(agent, /POSIX_SPAWN_SETSIGDEF/)
+  assert.match(agent, /SecStaticCodeCheckValidity/)
+  assert.match(agent, /kSecCodeInfoMainExecutable/)
+  assert.match(agent, /kForwardAfterSpawnSeconds = 30/)
+  assert.match(agent, /is not running\./)
+  assert.doesNotMatch(agent, /@"Font Buttler is not running\."/)
+  assert.match(swift, /timeout: 35/)
   assert.doesNotMatch(agent, /openApplicationAtURL/)
   const registerAgent = receiver.slice(
     receiver.indexOf('static NSString *RegisterAgent'),
@@ -1560,7 +1570,13 @@ test('Finder Sync errors use the app notification permission and a dialog when i
   })
   const kept = readFinderSyncPendingErrors(injected)
   assert.deepEqual(kept.map((item) => item.code), [FINDER_SYNC_ERROR_NOT_RUNNING])
-  assert.equal(kept[0].message, 'Font Buttler is not running.')
+  assert.equal(kept[0].message, 'Cuttler is not running.')
+  assert.equal(
+    readFinderSyncPendingErrors(injected, '/Applications/Font Buttler.app')[0].message,
+    'Font Buttler is not running.',
+  )
+  assert.equal(finderSyncNotRunningMessage('/tmp/Cuttler.app'), 'Cuttler is not running.')
+  assert.equal(finderSyncProductDisplayName('/tmp/Font Buttler Test.app'), 'Font Buttler Test')
   const repeated = {
     errors: [],
   }

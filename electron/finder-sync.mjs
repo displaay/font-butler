@@ -322,8 +322,26 @@ const FINDER_SYNC_ERROR_MESSAGES = {
   [FINDER_SYNC_ERROR_UNKNOWN_ACTION]: FINDER_SYNC_UNKNOWN_ACTION,
 }
 
+/**
+ * Folder name without `.app` when it is a product bundle. Cuttler is the
+ * current app. The update zip is still Font Buttler.app.
+ */
+export function finderSyncProductDisplayName(appPath) {
+  const base = path.basename(typeof appPath === 'string' ? appPath : '')
+  if (base.endsWith('.app')) {
+    const name = base.slice(0, -'.app'.length)
+    if (FINDER_SYNC_PRODUCT_EXECUTABLES.includes(name)) return name
+  }
+  return 'Cuttler'
+}
+
+export function finderSyncNotRunningMessage(appPath) {
+  return `${finderSyncProductDisplayName(appPath)} is not running.`
+}
+
 /** Fixed copy for a known Finder Sync error code. Anything else is empty. */
-export function finderSyncErrorMessage(code) {
+export function finderSyncErrorMessage(code, appPath) {
+  if (code === FINDER_SYNC_ERROR_NOT_RUNNING) return finderSyncNotRunningMessage(appPath)
   return Object.hasOwn(FINDER_SYNC_ERROR_MESSAGES, code) ? FINDER_SYNC_ERROR_MESSAGES[code] : ''
 }
 
@@ -336,7 +354,7 @@ function pendingErrorByteLength(text) {
  * messages, and a record over the size cap are ignored. At most
  * FINDER_SYNC_PENDING_ERROR_MAX_ENTRIES codes are kept.
  */
-export function readFinderSyncPendingErrors(text) {
+export function readFinderSyncPendingErrors(text, appPath) {
   if (!text || pendingErrorByteLength(text) > FINDER_SYNC_PENDING_ERROR_MAX_BYTES) return []
   let parsed
   try {
@@ -350,7 +368,7 @@ export function readFinderSyncPendingErrors(text) {
   for (const item of list) {
     if (errors.length >= FINDER_SYNC_PENDING_ERROR_MAX_ENTRIES) break
     const code = typeof item?.code === 'string' ? item.code : ''
-    const message = finderSyncErrorMessage(code)
+    const message = finderSyncErrorMessage(code, appPath)
     if (!message || seen.has(code)) continue
     seen.add(code)
     errors.push({ code, message, at: typeof item?.at === 'number' ? item.at : 0 })
@@ -374,7 +392,7 @@ export function addFinderSyncPendingError(text, code, now = Date.now()) {
  * Read the pending-error file without following a symlink. A regular file
  * is returned for deletion even when its contents are ignored.
  */
-export function readFinderSyncPendingErrorFile(filePath, io = { openSync, fstatSync, readSync, closeSync }) {
+export function readFinderSyncPendingErrorFile(filePath, io = { openSync, fstatSync, readSync, closeSync }, appPath) {
   if (!filePath || typeof io?.openSync !== 'function' || typeof io?.fstatSync !== 'function' || typeof io?.readSync !== 'function' || typeof io?.closeSync !== 'function') {
     return { errors: [], discard: false, reason: 'unavailable' }
   }
@@ -403,7 +421,11 @@ export function readFinderSyncPendingErrorFile(filePath, io = { openSync, fstatS
       if (count <= 0) break
       got += count
     }
-    return { errors: readFinderSyncPendingErrors(buffer.subarray(0, got).toString('utf8')), discard: true, reason: 'ok' }
+    return {
+      errors: readFinderSyncPendingErrors(buffer.subarray(0, got).toString('utf8'), appPath),
+      discard: true,
+      reason: 'ok',
+    }
   } catch {
     return { errors: [], discard: true, reason: 'unreadable' }
   } finally {
@@ -435,8 +457,9 @@ export function routeFinderSyncError({
   alreadyShown,
   now = Date.now(),
   ttl = FINDER_SYNC_ERROR_SHOWN_TTL_MS,
+  appPath,
 } = {}) {
-  const message = finderSyncErrorMessage(code)
+  const message = finderSyncErrorMessage(code, appPath)
   if (!message) return { shown: false, channel: 'none', message: '', code: '' }
   pruneFinderSyncErrorsShown(alreadyShown, now, ttl)
   if (alreadyShown?.has?.(code)) return { shown: false, channel: 'duplicate', message, code }

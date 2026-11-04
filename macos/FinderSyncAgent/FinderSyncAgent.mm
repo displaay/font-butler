@@ -43,6 +43,9 @@ static NSString *const kMissingAppMessage =
     @"Font Buttler couldn't be found. Open it once from its new location.";
 static const off_t kPendingErrorMaxBytes = 8192;
 static const NSUInteger kPendingErrorMaxEntries = 5;
+// Cold Cuttler startup, including the on-disk signature check, can take
+// longer than a couple of seconds. The Finder appex waits slightly longer.
+static const NSTimeInterval kForwardAfterSpawnSeconds = 30;
 
 static BOOL FinderSyncErrorCodeIsKnown(NSString *code) {
   return [code isEqualToString:@"missing-app"] || [code isEqualToString:@"not-running"] ||
@@ -100,7 +103,7 @@ static BOOL SocketPath(char *out, size_t outSize) {
 
 static BOOL WriteAll(int fd, const void *bytes, size_t length);
 static BOOL ReadAll(int fd, void *bytes, size_t length);
-static BOOL PeerMeets(int fd, NSString *requirement);
+static BOOL ParentExecutableMatches(int fd);
 static void ConfigureSocket(int fd);
 
 static BOOL SendPayload(NSDictionary *payload) {
@@ -120,7 +123,7 @@ static BOOL SendPayload(NSDictionary *payload) {
     close(fd);
     return NO;
   }
-  if (!PeerMeets(fd, kParentRequirement)) {
+  if (!ParentExecutableMatches(fd)) {
     close(fd);
     return NO;
   }
@@ -270,20 +273,13 @@ static BOOL ReadAll(int fd, void *bytes, size_t length) {
   return YES;
 }
 
-static BOOL PeerMeets(int fd, NSString *requirement) {
-  audit_token_t token;
-  memset(&token, 0, sizeof(token));
-  socklen_t length = (socklen_t)sizeof(token);
-  if (getsockopt(fd, SOL_LOCAL, LOCAL_PEERTOKEN, &token, &length) != 0) return NO;
-  if (length != sizeof(token)) return NO;
-  return GuestMeetsRequirement(token, requirement);
-}
+static BOOL ParentExecutableMatches(int fd);
 
 static void ConfigureSocket(int fd) {
   int yes = 1;
   setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &yes, sizeof(yes));
   struct timeval budget;
-  budget.tv_sec = 2;
+  budget.tv_sec = 10;
   budget.tv_usec = 0;
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &budget, sizeof(budget));
   setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &budget, sizeof(budget));
@@ -373,8 +369,21 @@ static BOOL SpawnExecutable(NSString *binary) {
     free(owned);
     return NO;
   }
-  posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP);
-  posix_spawnattr_setpgroup(&attr, 0);
+  // The helper ignores SIGCHLD so its own spawn does not zombie. The child
+  // must not inherit that: Electron reaps its helpers with SIGCHLD, and a
+  // spawned Cuttler otherwise never finishes starting or opens the socket.
+  sigset_t defaults;
+  sigemptyset(&defaults);
+  sigaddset(&defaults, SIGCHLD);
+  sigaddset(&defaults, SIGPIPE);
+  int flagsSet = posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGDEF);
+  int signalsSet = posix_spawnattr_setsigdefault(&attr, &defaults);
+  int groupSet = posix_spawnattr_setpgroup(&attr, 0);
+  if (flagsSet != 0 || signalsSet != 0 || groupSet != 0) {
+    posix_spawnattr_destroy(&attr);
+    free(owned);
+    return NO;
+  }
   char *argv[] = {owned, NULL};
   pid_t pid = 0;
   int result = posix_spawn(&pid, owned, NULL, &attr, argv, environ);
@@ -396,6 +405,94 @@ static NSString *LaunchContainingAppOnce(void) {
     return kMissingAppMessage;
   }
   return nil;
+}
+
+// The running Electron process fails a dynamic strict check (the image no
+// longer matches the on-disk executable). Remember the signed main executable
+// inside this helper's app, then accept only a peer whose kernel-reported
+// executable is that file. Cuttler.app and the zip's Font Buttler.app both
+// qualify. The hash runs once, before the app is waiting on this socket.
+static NSString *g_trustedExecutable = nil;
+
+static BOOL TrustContainingExecutable(void) {
+  if (g_trustedExecutable.length) return YES;
+  NSURL *appURL = ContainingAppURL();
+  NSString *binary = BundleExecutable(appURL);
+  if (!binary.length) return NO;
+  SecRequirementRef requirement = NULL;
+  OSStatus created = SecRequirementCreateWithString((__bridge CFStringRef)kParentRequirement, kSecCSDefaultFlags, &requirement);
+  if (created != errSecSuccess || !requirement) return NO;
+  NSURL *binaryURL = [NSURL fileURLWithPath:binary isDirectory:NO];
+  SecStaticCodeRef staticCode = NULL;
+  OSStatus codeCreated = SecStaticCodeCreateWithPath((__bridge CFURLRef)binaryURL, kSecCSDefaultFlags, &staticCode);
+  BOOL signedOk = NO;
+  if (codeCreated == errSecSuccess && staticCode) {
+    OSStatus status = SecStaticCodeCheckValidity(staticCode, kSecCSStrictValidate, requirement);
+    if (status != errSecSuccess) {
+      status = SecStaticCodeCheckValidity(staticCode, kSecCSBasicValidateOnly, requirement);
+    }
+    signedOk = status == errSecSuccess;
+    CFRelease(staticCode);
+  }
+  CFRelease(requirement);
+  if (!signedOk) return NO;
+  char resolved[PATH_MAX];
+  if (!realpath(binary.fileSystemRepresentation, resolved)) return NO;
+  g_trustedExecutable = [NSString stringWithUTF8String:resolved];
+  return g_trustedExecutable.length > 0;
+}
+
+static NSString *PeerMainExecutablePath(int fd) {
+  audit_token_t token;
+  memset(&token, 0, sizeof(token));
+  socklen_t length = (socklen_t)sizeof(token);
+  if (getsockopt(fd, SOL_LOCAL, LOCAL_PEERTOKEN, &token, &length) != 0) return nil;
+  if (length != sizeof(token)) return nil;
+  CFDataRef auditData = CFDataCreate(kCFAllocatorDefault, (const UInt8 *)&token, (CFIndex)sizeof(token));
+  if (!auditData) return nil;
+  const void *keys[] = {kSecGuestAttributeAudit};
+  const void *values[] = {auditData};
+  CFDictionaryRef attributes = CFDictionaryCreate(kCFAllocatorDefault, keys, values, 1, &kCFTypeDictionaryKeyCallBacks,
+                                                 &kCFTypeDictionaryValueCallBacks);
+  SecCodeRef guest = NULL;
+  OSStatus copyStatus = errSecInternalError;
+  if (attributes) {
+    copyStatus = SecCodeCopyGuestWithAttributes(NULL, attributes, kSecCSDefaultFlags, &guest);
+    CFRelease(attributes);
+  }
+  CFRelease(auditData);
+  if (copyStatus != errSecSuccess || !guest) return nil;
+  CFDictionaryRef information = NULL;
+  OSStatus infoStatus = SecCodeCopySigningInformation(guest, kSecCSSigningInformation | kSecCSDynamicInformation, &information);
+  CFRelease(guest);
+  if (infoStatus != errSecSuccess || !information) return nil;
+  CFURLRef executable = CFDictionaryGetValue(information, kSecCodeInfoMainExecutable);
+  NSString *path = executable ? [(__bridge NSURL *)executable path] : nil;
+  CFRelease(information);
+  if (!path.length) return nil;
+  char resolved[PATH_MAX];
+  if (!realpath(path.fileSystemRepresentation, resolved)) return nil;
+  return [NSString stringWithUTF8String:resolved];
+}
+
+static BOOL ParentExecutableMatches(int fd) {
+  if (!TrustContainingExecutable()) return NO;
+  NSString *peer = PeerMainExecutablePath(fd);
+  return peer.length > 0 && [peer isEqualToString:g_trustedExecutable];
+}
+
+static NSString *RunningProductName(void) {
+  NSURL *appURL = ContainingAppURL();
+  NSString *base = appURL.lastPathComponent ?: @"";
+  if ([base hasSuffix:@".app"]) {
+    NSString *name = [base substringToIndex:base.length - [@".app" length]];
+    if ([ProductExecutableNames() containsObject:name]) return name;
+  }
+  return @"Cuttler";
+}
+
+static NSString *NotRunningMessage(void) {
+  return [NSString stringWithFormat:@"%@ is not running.", RunningProductName()];
 }
 
 static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL overflow, NSString *requestId) {
@@ -489,7 +586,10 @@ static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL over
         [accepted addObject:item];
       }
     }
-    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:8.0];
+    // Hash the on-disk executable before connecting, so the app's read
+    // timeout is not spent waiting for that check.
+    TrustContainingExecutable();
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:2.0];
     BOOL launched = NO;
     while (YES) {
       if (ForwardToApp(wire, accepted, overflow, request)) {
@@ -504,11 +604,12 @@ static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL over
           ReportFinderSyncError(reply, @"missing-app", failure);
           return;
         }
+        deadline = [NSDate dateWithTimeIntervalSinceNow:kForwardAfterSpawnSeconds];
       }
       if ([deadline timeIntervalSinceNow] <= 0) break;
       usleep(50 * 1000);
     }
-    ReportFinderSyncError(reply, @"not-running", @"Font Buttler is not running.");
+    ReportFinderSyncError(reply, @"not-running", NotRunningMessage());
   });
 }
 

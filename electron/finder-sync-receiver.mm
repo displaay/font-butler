@@ -397,7 +397,7 @@ static void HandleClient(int fd) {
   int yes = 1;
   setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &yes, sizeof(yes));
   struct timeval budget;
-  budget.tv_sec = 2;
+  budget.tv_sec = 10;
   budget.tv_usec = 0;
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &budget, sizeof(budget));
   if (!PeerIsAgent(fd)) {
