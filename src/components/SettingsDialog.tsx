@@ -16,7 +16,10 @@ import {
   Type,
   X,
 } from 'lucide-react'
-import { ClearFontCachesControl } from '@/components/ClearFontCachesControl'
+import {
+  ClearAllFontCachesControl,
+  ClearFontCachesControl,
+} from '@/components/ClearFontCachesControl'
 import { FolderRelinkDialog } from '@/components/FolderRelinkDialog'
 import { FolderSetupDialog } from '@/components/FolderSetupDialog'
 import { AppUpdateCard } from '@/components/AppUpdateCard'
@@ -109,7 +112,7 @@ const CATEGORIES: {
     id: 'caches',
     label: 'Caches',
     icon: Eraser,
-    description: 'Clear Office and Adobe caches from the Font cache menu. The macOS font cache is cleared only when you choose Clear font caches.',
+    description: 'Clear Office and Adobe caches from the Font cache menu. The macOS font cache is cleared only when you choose Clear font caches or Clear all font caches.',
   },
   {
     id: 'history',
@@ -1220,6 +1223,17 @@ function CachesPane({
           <ClearFontCachesControl
             disabled={busy}
             onClear={() => api.clearFontCaches()}
+            onLogOut={() => api.requestLogout()}
+            onProbe={() => api.requestLogoutProbe()}
+          />
+        </SettingsRow>
+        <SettingsRow
+          label="Clear all font caches"
+          description="Clears the macOS user font cache and, where turned on above, the Microsoft Office and Adobe font caches. It removes cache files only — no fonts or library entries are removed, and no administrator password is needed. Open apps may need to be relaunched to see updated fonts, and some apps may not see new or updated fonts until you log out."
+        >
+          <ClearAllFontCachesControl
+            disabled={busy}
+            onClearAll={() => api.clearAllFontCaches()}
             onLogOut={() => api.requestLogout()}
             onProbe={() => api.requestLogoutProbe()}
           />

@@ -91,6 +91,105 @@ function buttonNamed(root: ParentNode, name: string): HTMLButtonElement | undefi
   return [...root.querySelectorAll('button')].find((button) => button.textContent?.trim() === name)
 }
 
+test('Clear all font caches shows every part, including a failure, and logout stays optional', async () => {
+  const { createElement, act } = await import('react')
+  const { createRoot } = await import('react-dom/client')
+  const { ClearAllFontCachesControl } = await import('./ClearFontCachesControl.tsx')
+
+  const calls: string[] = []
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  const outcome = {
+    mac: true,
+    cleared: true,
+    confirmed: true,
+    parts: [
+      { part: 'user' as const, status: 'cleared' as const, mac: true, cleared: true },
+      {
+        part: 'office' as const,
+        status: 'failed' as const,
+        mac: true,
+        cleared: false,
+        error: 'Office cache is locked',
+      },
+      { part: 'adobe' as const, status: 'cleared' as const, mac: true, cleared: true },
+    ],
+  }
+
+  await act(async () => {
+    root.render(
+      createElement(ClearAllFontCachesControl, {
+        onClearAll: async () => {
+          calls.push('clear-all')
+          return outcome
+        },
+        onLogOut: async () => {
+          calls.push('logout')
+          return { requested: true }
+        },
+      }),
+    )
+  })
+
+  // Cancelling the confirmation runs nothing.
+  const open = buttonNamed(document.body, 'Clear all font caches')
+  assert.ok(open)
+  await act(async () => {
+    open.click()
+  })
+  const confirmDialog = document.body.querySelector('[role="dialog"]')
+  assert.ok(confirmDialog)
+  assert.match(confirmDialog.textContent ?? '', /no administrator password is needed/)
+  assert.match(confirmDialog.textContent ?? '', /Open apps may need to be relaunched/)
+  assert.match(confirmDialog.textContent ?? '', /no fonts or library entries are removed/)
+  const cancel = buttonNamed(confirmDialog, 'Cancel')
+  assert.ok(cancel)
+  await act(async () => {
+    cancel.click()
+  })
+  assert.deepEqual(calls, [])
+  assert.equal(document.body.querySelector('[role="dialog"]'), null)
+
+  // Confirming runs the combined clear once and reports all three parts,
+  // so the Office failure does not hide the user or Adobe results.
+  const openAgain = buttonNamed(document.body, 'Clear all font caches')
+  assert.ok(openAgain)
+  await act(async () => {
+    openAgain.click()
+  })
+  const confirm = document.body.querySelector('[role="dialog"]')
+  assert.ok(confirm)
+  const confirmButton = buttonNamed(confirm, 'Clear all font caches')
+  assert.ok(confirmButton)
+  await act(async () => {
+    confirmButton.click()
+  })
+  assert.deepEqual(calls, ['clear-all'])
+  const done = document.body.querySelector('[role="dialog"]')
+  assert.ok(done)
+  assert.match(done.textContent ?? '', /Some font caches were not cleared/)
+  assert.match(done.textContent ?? '', /macOS user font cache: Cleared/)
+  assert.match(done.textContent ?? '', /Microsoft Office font cache: Could not be cleared — Office cache is locked/)
+  assert.match(done.textContent ?? '', /Adobe font caches: Cleared/)
+  assert.match(done.textContent ?? '', /Open apps may need to be relaunched/)
+
+  // The logout offer after a user-font clear is still there, and Later skips it.
+  const later = buttonNamed(done, 'Later')
+  assert.ok(later)
+  assert.ok(buttonNamed(done, 'Log out now'))
+  await act(async () => {
+    later.click()
+  })
+  assert.deepEqual(calls, ['clear-all'])
+  assert.equal(document.body.querySelector('[role="dialog"]'), null)
+
+  await act(async () => {
+    root.unmount()
+  })
+  host.remove()
+})
+
 test('Clear font caches runs only after confirmation and logout is optional', async () => {
   const { createElement, act } = await import('react')
   const { createRoot } = await import('react-dom/client')

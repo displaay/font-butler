@@ -722,6 +722,106 @@ export async function clearFontCaches(
   return { mac: false, office: office.cleared, adobe: adobe.cleared }
 }
 
+export type FontCachePart = 'user' | 'office' | 'adobe'
+
+export type FontCachePartStatus = 'cleared' | 'not-cleared' | 'skipped' | 'failed'
+
+export type FontCachePartResult = {
+  part: FontCachePart
+  status: FontCachePartStatus
+  mac: boolean
+  cleared: boolean
+  simulated?: boolean
+  error?: string
+}
+
+export type ClearAllFontCachesResult = {
+  mac: boolean
+  /** Mirrors the user-font part, so the existing logout offer keeps its meaning. */
+  cleared: boolean
+  simulated?: boolean
+  confirmed: boolean
+  parts: FontCachePartResult[]
+}
+
+export type ClearAllFontCachesDeps = {
+  user?: (options: { confirm: true }) => Promise<{ mac: boolean; cleared: boolean; simulated?: boolean }>
+  office?: () => Promise<{ mac: boolean; cleared: boolean; simulated?: boolean }>
+  adobe?: () => Promise<{ mac: boolean; cleared: boolean; simulated?: boolean }>
+}
+
+const FONT_CACHE_PARTS: readonly FontCachePart[] = ['user', 'office', 'adobe']
+
+function skippedPart(part: FontCachePart): FontCachePartResult {
+  return { part, status: 'skipped', mac: false, cleared: false }
+}
+
+async function runFontCachePart(
+  part: FontCachePart,
+  enabled: boolean,
+  run: () => Promise<{ mac: boolean; cleared: boolean; simulated?: boolean }>,
+): Promise<FontCachePartResult> {
+  if (!enabled) return skippedPart(part)
+  try {
+    const result = await run()
+    return {
+      part,
+      status: result.cleared ? 'cleared' : 'not-cleared',
+      mac: result.mac,
+      cleared: result.cleared,
+      ...(result.simulated ? { simulated: true } : {}),
+    }
+  } catch (error) {
+    return {
+      part,
+      status: 'failed',
+      mac: false,
+      cleared: false,
+      error: error instanceof Error ? error.message : 'Could not clear this font cache.',
+    }
+  }
+}
+
+/**
+ * One maintenance clear for every font cache. It composes the existing
+ * clears without rewriting them: the confirmed user-font clear (atsutil,
+ * user-level only) plus the Office and Adobe clears selected by their
+ * Settings toggles. No privileged helper, sudo, or SMJobBless is involved;
+ * every part touches only the current user's Library or runs `atsutil`
+ * as that user.
+ *
+ * Declining the user-font confirmation runs nothing at all. A part that
+ * throws is reported as `failed` and never hides the other parts' results.
+ */
+export async function clearAllFontCaches(
+  options: { confirm?: boolean; office?: boolean; adobe?: boolean } = {},
+  deps: ClearAllFontCachesDeps = {},
+): Promise<ClearAllFontCachesResult> {
+  if (options.confirm !== true) {
+    return {
+      mac: false,
+      cleared: false,
+      confirmed: false,
+      parts: FONT_CACHE_PARTS.map(skippedPart),
+    }
+  }
+  const user = deps.user ?? clearUserFontCache
+  const office = deps.office ?? clearOfficeFontCache
+  const adobe = deps.adobe ?? clearAdobeFontCache
+  const parts: FontCachePartResult[] = []
+  parts.push(await runFontCachePart('user', true, () => user({ confirm: true })))
+  parts.push(await runFontCachePart('office', options.office !== false, office))
+  parts.push(await runFontCachePart('adobe', options.adobe !== false, adobe))
+  const userPart = parts[0]
+  return {
+    mac: parts.some((part) => part.mac),
+    cleared: userPart?.cleared ?? false,
+    ...(userPart?.simulated ? { simulated: true } : {}),
+    confirmed: true,
+    parts,
+  }
+}
+
 export const FONT_ENABLE_SCRIPT = `ObjC.import('CoreText')
 ObjC.import('Foundation')
 function descriptorsFor(filePath) {
