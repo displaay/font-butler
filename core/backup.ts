@@ -273,26 +273,22 @@ export function backupActivationFor(entry: CatalogEntry): BackupActivation {
   return entry.status === 'installed' || entry.status === 'outdated' ? 'on' : 'off'
 }
 
-const PROTECTED_PREFIXES = [
-  '/System/',
-  '/Library/Fonts',
-  '/Library/Application Support/Adobe/Fonts',
-  '/Applications/',
-]
+const PROTECTED_PREFIXES = ['/System/', '/Library/Application Support/Apple/', '/usr/', '/private/']
 
 /**
- * Paths a backup never archives and a restore never writes to: macOS system
- * and app fonts and Adobe Fonts (mirrors Cicero's `isProtected` inventory skip).
+ * Cicero's `ActivationEngine.isProtected` inventory skip, exactly: a prefix of
+ * `/System/`, `/Library/Application Support/Apple/`, `/usr/`, or `/private/`;
+ * any path inside a `.app` bundle; or any Adobe Fonts (CoreSync) path.
+ * `/Library/Fonts` and the Adobe shared fonts folder are NOT protected and
+ * are archived like any other font location.
  */
-export function isProtectedFontPath(filePath: string, paths?: AppPaths): boolean {
+export function isProtectedFontPath(filePath: string, _paths?: AppPaths): boolean {
+  void _paths
   const resolved = path.resolve(filePath)
-  const roots = paths
-    ? [paths.systemFontsDir, paths.supplementalFontsDir, paths.computerFontsDir, paths.adobeFontsDir]
-    : []
-  for (const root of roots) {
-    if (root && (resolved === path.resolve(root) || resolved.startsWith(path.resolve(root) + path.sep))) return true
-  }
-  return PROTECTED_PREFIXES.some((prefix) => resolved === prefix.slice(0, -1) || resolved.startsWith(prefix))
+  if (PROTECTED_PREFIXES.some((prefix) => resolved.startsWith(prefix))) return true
+  if (resolved.includes('.app/')) return true
+  if (resolved.includes('/Adobe/CoreSync/')) return true
+  return false
 }
 
 export type BackupFileEntry = {
@@ -320,6 +316,8 @@ export type BackupManifest = {
   /** Protected system / app / Adobe Fonts paths deliberately left out of the archive. */
   skippedProtected: BackupMissingFile[]
   redactedSettingsKeys: string[]
+  /** SHA-256 of each JSON sidecar, so a re-packed archive with edited organisation data is refused. */
+  sidecarSha256?: Record<string, string>
 }
 
 export type BackupPreview = {
@@ -502,13 +500,17 @@ export function createBackup(
   const collected = collectLibrary(paths, options.appVersion ?? appVersionFromPackage(), options.includeFonts !== false)
   const { manifest, catalog, projects, settings, fontData } = collected
   const familyTagsPayload = { tags: catalog.tags ?? [], familyTags: catalog.familyTags ?? [] }
-  const entries: ZipEntryInput[] = [
-    { name: 'manifest.json', data: Buffer.from(JSON.stringify(manifest, null, 2)) },
+  const sidecars: ZipEntryInput[] = [
     { name: 'catalog.json', data: Buffer.from(JSON.stringify(catalog, null, 2)) },
     { name: 'projects.json', data: Buffer.from(JSON.stringify({ version: 2, projects }, null, 2)) },
     { name: 'family-tags.json', data: Buffer.from(JSON.stringify(familyTagsPayload, null, 2)) },
     { name: 'settings.json', data: Buffer.from(JSON.stringify(settings, null, 2)) },
     { name: 'saved-filters.json', data: Buffer.from(JSON.stringify(settings.savedFilters ?? [], null, 2)) },
+  ]
+  manifest.sidecarSha256 = Object.fromEntries(sidecars.map((s) => [s.name, fingerprintBuffer(s.data)]))
+  const entries: ZipEntryInput[] = [
+    { name: 'manifest.json', data: Buffer.from(JSON.stringify(manifest, null, 2)) },
+    ...sidecars,
   ]
   for (const file of manifest.files) {
     const data = fontData.get(file.fingerprint)
@@ -637,6 +639,17 @@ function verifyArchive(archivePath: string): VerifiedArchive {
     }
     if (!Array.isArray(manifest.files)) throw new Error('This backup manifest is damaged (no font list).')
 
+    // A re-packed archive with edited organisation data is refused outright:
+    // nothing — fonts or organisation — is applied from a tampered file.
+    if (manifest.sidecarSha256) {
+      for (const [name, expected] of Object.entries(manifest.sidecarSha256)) {
+        const data = entries.get(name)
+        if (!data || fingerprintBuffer(data) !== expected) {
+          throw new Error(`This backup has been changed since it was made (${name} does not match its fingerprint). Restore was refused and nothing was changed.`)
+        }
+      }
+    }
+
     const catalog = parseJsonEntry<CatalogFile>(entries, 'catalog.json', true)!
     if (!catalog || catalog.version !== 1 || !Array.isArray(catalog.entries)) {
       throw new Error('This backup contains an unreadable catalog and cannot be restored.')
@@ -710,6 +723,15 @@ function verifyArchive(archivePath: string): VerifiedArchive {
 
     // Fonts referenced by the catalog but absent from verified set are named via manifest refs.
     void entryFileNames
+    // A font that fails its hash (or is missing from the archive) means the
+    // archive contents were changed after it was made. Refuse the whole
+    // restore — no fonts, no organisation — rather than partially applying
+    // a tampered backup. Parse failures keep the per-font report path: a
+    // hash-matching file that cannot be parsed is named and skipped.
+    const tampered = failed.find((f) => f.reason === 'hash-mismatch' || f.reason === 'missing-in-archive')
+    if (tampered) {
+      throw new Error(`This backup has been changed since it was made (${tampered.message}) Restore was refused and nothing was changed.`)
+    }
     return { manifest, catalog, projects, familyTagsPayload, settings, savedFilters, verified, failed, stagingDir }
   } catch (error) {
     try { fs.rmSync(stagingDir, { recursive: true, force: true }) } catch { /* best effort */ }
@@ -818,13 +840,23 @@ function placeRestoredBytes(
   return allocateRestoredPath(paths, fingerprint, fileName, stagedPath)
 }
 
-/** Copy restored bytes into the install dir for a font that was on. Never overwrites an existing file. */
+/**
+ * Copy restored bytes into the install dir for a font that was on. Never
+ * overwrites an existing file: a different file already at
+ * `installDir/<fileName>` is left alone and the restored copy gets a new
+ * name — that other file is not the restored copy and must not be
+ * reported as a reactivation.
+ */
 function placeInstalledCopy(paths: AppPaths, sourcePath: string, fileName: string): string {
   fs.mkdirSync(paths.installDir, { recursive: true })
   const safe = sanitizeFileName(fileName)
   const dest = path.join(paths.installDir, safe)
   if (path.resolve(sourcePath) === path.resolve(dest)) return dest
-  if (fs.existsSync(dest)) return dest // already on disk there: left as-is
+  if (fs.existsSync(dest)) {
+    // Only the identical bytes count as the copy already being there.
+    const sourceFingerprint = tryFingerprintFile(sourcePath)
+    if (sourceFingerprint && tryFingerprintFile(dest) === sourceFingerprint) return dest
+  }
   const ext = path.extname(safe)
   const stem = ext ? safe.slice(0, -ext.length) : safe
   let candidate = dest
@@ -1089,9 +1121,13 @@ export function restoreBackup(paths: AppPaths, archivePath: string, options: Res
       const wantsOn = activation === 'on' && !conflict
       let installedPath: string | undefined
       if (wantsOn) {
-        installedPath = fileIsFile(backupEntry.installedPath) && !isProtectedFontPath(backupEntry.installedPath)
+        // The recorded installed copy only counts when it is the same bytes;
+        // a different file at that path is left alone, not adopted.
+        const recordedInstalled = fileIsFile(backupEntry.installedPath) && !isProtectedFontPath(backupEntry.installedPath)
+          && fingerprint && tryFingerprintFile(backupEntry.installedPath) === fingerprint
           ? backupEntry.installedPath
-          : placeInstalledCopy(paths, restoredPath, fileName)
+          : undefined
+        installedPath = recordedInstalled ?? placeInstalledCopy(paths, restoredPath, fileName)
       }
       const restored: CatalogEntry = {
         ...JSON.parse(JSON.stringify(backupEntry)) as CatalogEntry,

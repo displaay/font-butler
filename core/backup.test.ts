@@ -6,6 +6,7 @@ import test from 'node:test'
 import {
   BACKUP_LICENSE_WARNING,
   createBackup,
+  isProtectedFontPath,
   planRestore,
   previewBackup,
   readZipFile,
@@ -14,7 +15,7 @@ import {
   writeZipFile,
 } from './backup.ts'
 import { faceIdentityKey, loadCatalog, saveCatalog } from './catalog.ts'
-import { fingerprintFile } from './fingerprint.ts'
+import { fingerprintBuffer, fingerprintFile } from './fingerprint.ts'
 import { createWatchFolder } from './folders.ts'
 import { loadProjects, saveProjects } from './projects.ts'
 import { loadSettings, saveSettings } from './settings.ts'
@@ -160,7 +161,7 @@ test('round-trip export/restore preserves faces, projects, tags, filters; secret
   }
 })
 
-test('tampered font in archive is rejected by hash and named, others restore', () => {
+test('tampered font in archive refuses the whole restore — no fonts, no organisation', () => {
   const source = makeLibrary('backup-tamper-src-')
   const target = tempPaths('backup-tamper-dst-')
   try {
@@ -177,11 +178,41 @@ test('tampered font in archive is rejected by hash and named, others restore', (
     fs.rmSync(source.alphaPath)
     fs.rmSync(source.betaPath)
 
-    const report = restoreBackup(target, tampered)
-    assert.ok(report.failed.some((f) => f.reason === 'hash-mismatch' && f.fileName.includes('Alpha')), JSON.stringify(report.failed))
-    const catalog = loadCatalog(target)
-    assert.equal(catalog.entries.some((e) => e.id === 'alpha-id'), false)
-    assert.equal(catalog.entries.some((e) => e.id === 'beta-id'), true)
+    // Target organisation that must survive untouched.
+    saveProjects(target, [{ id: 'keep-proj', name: 'Keep me', members: [], desiredActive: false }])
+    const targetSettings = loadSettings(target)
+    targetSettings.theme = 'light'
+    saveSettings(target, targetSettings)
+
+    assert.throws(() => restoreBackup(target, tampered), /has been changed since it was made/)
+    assert.throws(() => planRestore(target, tampered), /has been changed since it was made/)
+    // Nothing applied: no fonts, organisation not replaced, no snapshot taken.
+    assert.equal(loadCatalog(target).entries.length, 0)
+    assert.deepEqual(loadProjects(target).map((p) => p.id), ['keep-proj'])
+    assert.equal(loadSettings(target).theme, 'light')
+    assert.equal(fs.existsSync(path.join(target.dataRoot, 'Backups')), false)
+  } finally {
+    cleanup(source.paths, target)
+  }
+})
+
+test('re-packed archive with edited projects.json is refused and changes nothing', () => {
+  const source = makeLibrary('backup-sidecar-src-')
+  const target = tempPaths('backup-sidecar-dst-')
+  try {
+    const dest = path.join(source.paths.dataRoot, 'library.cuttlerbackup')
+    createBackup(source.paths, { destinationPath: dest })
+    const zipped = readZipFile(dest)
+    const projects = JSON.parse(zipped.get('projects.json')!.toString('utf8')) as { projects: Array<{ name: string }> }
+    projects.projects[0]!.name = 'TAMPERED PROJECT'
+    zipped.set('projects.json', Buffer.from(JSON.stringify(projects)))
+    const tampered = path.join(source.paths.dataRoot, 'tampered-projects.cuttlerbackup')
+    writeZipFile(tampered, [...zipped.entries()].map(([name, data]) => ({ name, data })))
+
+    saveProjects(target, [{ id: 'keep-proj', name: 'Keep me', members: [], desiredActive: false }])
+    assert.throws(() => restoreBackup(target, tampered), /projects\.json does not match its fingerprint/)
+    assert.deepEqual(loadProjects(target).map((p) => p.name), ['Keep me'])
+    assert.equal(loadCatalog(target).entries.length, 0)
   } finally {
     cleanup(source.paths, target)
   }
@@ -211,6 +242,15 @@ test('font whose hash matches but cannot be parsed is reported and not restored'
     const catalog = JSON.parse(zipped.get('catalog.json')!.toString('utf8')) as { entries: Array<{ id: string; sourceFingerprint?: string }> }
     catalog.entries.find((e) => e.id === 'alpha-id')!.sourceFingerprint = fp
     zipped.set('catalog.json', Buffer.from(JSON.stringify(catalog)))
+    // Re-sign the sidecars: this archive is deliberately re-made, not tampered with unknowingly.
+    const manifestFull = JSON.parse(zipped.get('manifest.json')!.toString('utf8')) as { sidecarSha256?: Record<string, string> }
+    if (manifestFull.sidecarSha256) {
+      for (const name of Object.keys(manifestFull.sidecarSha256)) {
+        const data = zipped.get(name)
+        if (data) manifestFull.sidecarSha256[name] = fingerprintBuffer(data)
+      }
+      zipped.set('manifest.json', Buffer.from(JSON.stringify(manifestFull)))
+    }
     const corrupted = path.join(source.paths.dataRoot, 'corrupted.cuttlerbackup')
     writeZipFile(corrupted, [...zipped.entries()].map(([name, data]) => ({ name, data })))
     fs.rmSync(source.alphaPath)
@@ -440,23 +480,97 @@ test('a file already on disk at the recorded path is left untouched, fingerprint
   }
 })
 
-test('protected system/app fonts are not archived', () => {
+test('protected paths match Cicero isProtected exactly', () => {
+  // Skipped: protected prefixes, any .app bundle, Adobe Fonts (CoreSync).
+  for (const p of [
+    '/System/Library/Fonts/Sys.ttf',
+    '/Library/Application Support/Apple/Fonts/Apple.ttf',
+    '/usr/share/fonts/Usr.ttf',
+    '/private/var/fonts/Priv.ttf',
+    '/Applications/Demo.app/Contents/Resources/Fonts/Bundled.ttf',
+    '/tmp/somewhere/Demo.app/Contents/Resources/Fonts/Bundled.ttf',
+    '/Users/x/Library/Application Support/Adobe/CoreSync/plugins/livetype/Synced.ttf',
+    '/tmp/Adobe/CoreSync/Synced.ttf',
+  ]) {
+    assert.equal(isProtectedFontPath(p), true, p)
+  }
+  // Not skipped: all-users fonts and the Adobe shared fonts folder are archived.
+  for (const p of [
+    '/Library/Fonts/AllUsers.ttf',
+    '/Library/Application Support/Adobe/Fonts/Shared.ttf',
+    '/Users/x/Library/Fonts/User.ttf',
+    '/tmp/normal/Normal.ttf',
+  ]) {
+    assert.equal(isProtectedFontPath(p), false, p)
+  }
+})
+
+test('protected .app bundle and CoreSync fonts are not archived', () => {
   const source = makeLibrary('backup-protected-src-')
   try {
-    const protectedPath = path.join(source.paths.systemFontsDir, 'System.ttf')
-    writeTestFont(protectedPath, 'SysFam', 'SysFam-Regular')
+    const appPath = path.join(source.paths.dataRoot, 'Demo.app', 'Contents', 'Resources', 'Fonts', 'Bundled.ttf')
+    const coreSyncPath = path.join(source.paths.dataRoot, 'Adobe', 'CoreSync', 'plugins', 'livetype', 'Synced.ttf')
+    writeTestFont(appPath, 'BundledFam', 'BundledFam-Regular')
+    writeTestFont(coreSyncPath, 'SyncedFam', 'SyncedFam-Regular')
     const catalog = loadCatalog(source.paths)
-    catalog.entries.push(entryFor('sys-id', protectedPath, 'SysFam', 'SysFam-Regular'))
+    catalog.entries.push(entryFor('app-id', appPath, 'BundledFam', 'BundledFam-Regular'))
+    catalog.entries.push(entryFor('coresync-id', coreSyncPath, 'SyncedFam', 'SyncedFam-Regular'))
     saveCatalog(source.paths, catalog)
 
     const preview = previewBackup(source.paths)
-    assert.ok(preview.skippedProtected.some((s) => s.entryId === 'sys-id'), JSON.stringify(preview.skippedProtected))
+    assert.ok(preview.skippedProtected.some((s) => s.entryId === 'app-id'), JSON.stringify(preview.skippedProtected))
+    assert.ok(preview.skippedProtected.some((s) => s.entryId === 'coresync-id'), JSON.stringify(preview.skippedProtected))
     const dest = path.join(source.paths.dataRoot, 'library.cuttlerbackup')
     const created = createBackup(source.paths, { destinationPath: dest })
-    assert.equal(created.manifest.files.some((f) => f.entries.some((r) => r.entryId === 'sys-id')), false)
-    assert.ok(created.manifest.skippedProtected.some((s) => s.entryId === 'sys-id'))
+    assert.equal(created.manifest.files.some((f) => f.entries.some((r) => r.entryId === 'app-id')), false)
+    assert.equal(created.manifest.files.some((f) => f.entries.some((r) => r.entryId === 'coresync-id')), false)
+    assert.ok(created.manifest.skippedProtected.some((s) => s.entryId === 'app-id'))
+    assert.ok(created.manifest.skippedProtected.some((s) => s.entryId === 'coresync-id'))
+    // The normal library fonts are still archived.
+    assert.ok(created.manifest.files.some((f) => f.entries.some((r) => r.entryId === 'alpha-id')))
   } finally {
     cleanup(source.paths)
+  }
+})
+
+test('a font that was on is not reactivated onto a different file occupying its install name', () => {
+  const paths = tempPaths('backup-collide-src-')
+  const target = tempPaths('backup-collide-dst-')
+  try {
+    const srcDir = path.join(paths.dataRoot, 'src')
+    fs.mkdirSync(srcDir, { recursive: true })
+    const onPath = path.join(srcDir, 'On.ttf')
+    writeTestFont(onPath, 'OnFam', 'OnFam-Regular')
+    const installedCopy = path.join(paths.installDir, 'On.ttf')
+    fs.mkdirSync(paths.installDir, { recursive: true })
+    fs.copyFileSync(onPath, installedCopy)
+    saveCatalog(paths, {
+      version: 1,
+      entries: [entryFor('on-id', onPath, 'OnFam', 'OnFam-Regular', { status: 'installed', installedPath: installedCopy, installedFingerprint: fingerprintFile(onPath) })],
+    })
+    const dest = path.join(paths.dataRoot, 'on.cuttlerbackup')
+    createBackup(paths, { destinationPath: dest })
+    fs.rmSync(onPath)
+    fs.rmSync(installedCopy)
+
+    // A different font already occupies the install filename in the target.
+    const occupantPath = path.join(target.installDir, 'On.ttf')
+    writeTestFont(occupantPath, 'OtherFam', 'OtherFam-Regular')
+    const occupantBefore = fingerprintFile(occupantPath)
+
+    const report = restoreBackup(target, dest, { restoreOrganization: false })
+    // Occupant untouched and not adopted as the restored copy.
+    assert.equal(fingerprintFile(occupantPath), occupantBefore)
+    const on = loadCatalog(target).entries.find((e) => e.id === 'on-id')!
+    assert.equal(on.status, 'installed')
+    assert.ok(on.installedPath, 'installedPath set')
+    assert.notEqual(path.resolve(on.installedPath!), path.resolve(occupantPath))
+    // The reactivated copy holds the restored OnFam bytes, not the occupant's.
+    assert.equal(fingerprintFile(on.installedPath!), on.sourceFingerprint)
+    assert.notEqual(fingerprintFile(on.installedPath!), occupantBefore)
+    assert.ok(report.reactivated.some((r) => r.entryId === 'on-id'))
+  } finally {
+    cleanup(paths, target)
   }
 })
 
