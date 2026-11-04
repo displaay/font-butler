@@ -478,7 +478,7 @@ export function OnboardingDialog({
             )}
 
             {step === 'icon' && (
-              <div role="radiogroup" aria-label="App icon" className="flex items-end gap-2">
+              <div role="radiogroup" aria-label="App icon" className="flex flex-wrap items-end gap-2">
                 {APP_ICON_OPTIONS.map((option) => {
                   const selected = appIcon === option.id
                   return (

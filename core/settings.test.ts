@@ -228,6 +228,16 @@ test('loadSettings keeps a stored mono appIcon', () => {
   }
 })
 
+test('loadSettings keeps a stored cuttler appIcon', () => {
+  const paths = tempPaths()
+  try {
+    saveSettings(paths, sampleSettings({ appIcon: 'cuttler' }))
+    assert.equal(loadSettings(paths).appIcon, 'cuttler')
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
 test('loadSettings ignores junk appIcon values', () => {
   const paths = tempPaths()
   try {

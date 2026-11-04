@@ -25,6 +25,7 @@ import { AnnouncementDialog } from '@/components/AnnouncementDialog'
 import { ConfettiBurst } from '@/components/ConfettiBurst'
 import { OnboardingDialog } from '@/components/OnboardingDialog'
 import type { Announcement } from '../shared/announcements.ts'
+import { parseAppIconStyle, type AppIconStyle } from '@/lib/appIcon'
 import { RelinkDialog } from '@/components/RelinkDialog'
 import { RenameDialog } from '@/components/RenameDialog'
 import { ReplaceFormatDialog } from '@/components/ReplaceFormatDialog'
@@ -354,6 +355,16 @@ function AppShell() {
     }
     if (!current || current.theme !== next.theme) {
       applyTheme(next.theme)
+    }
+  }
+
+  async function chooseAnnouncementIcon(style: AppIconStyle) {
+    try {
+      const result = await api.updateSettings({ appIcon: style })
+      applySettings(result.settings)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not save the icon')
+      throw error
     }
   }
 
@@ -3172,6 +3183,8 @@ function AppShell() {
         <AnnouncementDialog
           announcement={announcement}
           open={Boolean(announcement) && !onboardingOpen}
+          currentIcon={settings ? parseAppIconStyle(settings.appIcon) : null}
+          onSelectIcon={chooseAnnouncementIcon}
           onDismiss={(item) => {
             setAnnouncement(null)
             window.fontButlerDesktop?.dismissAnnouncement?.(item.id)

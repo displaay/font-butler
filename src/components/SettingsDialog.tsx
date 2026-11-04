@@ -584,7 +584,7 @@ function GeneralPane({
           label="App icon"
           description="Dock and menu bar. A packaged app’s Finder icon updates when you install a new build."
         >
-          <div role="radiogroup" aria-label="App icon" className="flex items-end gap-2">
+          <div role="radiogroup" aria-label="App icon" className="flex max-w-full flex-wrap items-end justify-end gap-2">
             {APP_ICON_OPTIONS.map((option) => {
               const selected = parseAppIconStyle(settings?.appIcon) === option.id
               return (

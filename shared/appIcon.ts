@@ -1,4 +1,4 @@
-export const APP_ICON_STYLES = ['classic', 'bright', 'mono'] as const
+export const APP_ICON_STYLES = ['classic', 'bright', 'mono', 'cuttler'] as const
 
 export type AppIconStyle = (typeof APP_ICON_STYLES)[number]
 
@@ -8,10 +8,11 @@ export const APP_ICON_OPTIONS: { id: AppIconStyle; label: string }[] = [
   { id: 'classic', label: 'Butt' },
   { id: 'bright', label: 'Suit' },
   { id: 'mono', label: 'Dark' },
+  { id: 'cuttler', label: 'Cuttler' },
 ]
 
 export function isAppIconStyle(value: unknown): value is AppIconStyle {
-  return value === 'classic' || value === 'bright' || value === 'mono'
+  return typeof value === 'string' && (APP_ICON_STYLES as readonly string[]).includes(value)
 }
 
 export function parseAppIconStyle(value: unknown): AppIconStyle {

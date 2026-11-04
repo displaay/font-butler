@@ -8,25 +8,29 @@ import {
   parseAppIconStyle,
 } from './appIcon.ts'
 
-test('parseAppIconStyle keeps classic, bright and mono, otherwise defaults to classic', () => {
+test('parseAppIconStyle keeps classic, bright, mono and cuttler, otherwise defaults to classic', () => {
   assert.equal(parseAppIconStyle('classic'), 'classic')
   assert.equal(parseAppIconStyle('bright'), 'bright')
   assert.equal(parseAppIconStyle('mono'), 'mono')
+  assert.equal(parseAppIconStyle('cuttler'), 'cuttler')
   assert.equal(parseAppIconStyle(undefined), DEFAULT_APP_ICON_STYLE)
   assert.equal(parseAppIconStyle('neon'), 'classic')
   assert.equal(isAppIconStyle('mono'), true)
+  assert.equal(isAppIconStyle('cuttler'), true)
   assert.equal(isAppIconStyle('neon'), false)
 })
 
 test('app icon options and preview paths cover all packages', () => {
   assert.deepEqual(
     APP_ICON_OPTIONS.map((option) => option.id),
-    ['classic', 'bright', 'mono'],
+    ['classic', 'bright', 'mono', 'cuttler'],
   )
   assert.equal(APP_ICON_OPTIONS[0]?.label, 'Butt')
   assert.equal(APP_ICON_OPTIONS[1]?.label, 'Suit')
   assert.equal(APP_ICON_OPTIONS[2]?.label, 'Dark')
+  assert.equal(APP_ICON_OPTIONS[3]?.label, 'Cuttler')
   assert.equal(appIconPreviewSrc('classic'), '/app-icons/classic.png')
   assert.equal(appIconPreviewSrc('bright'), '/app-icons/bright.png')
   assert.equal(appIconPreviewSrc('mono'), '/app-icons/mono.png')
+  assert.equal(appIconPreviewSrc('cuttler'), '/app-icons/cuttler.png')
 })

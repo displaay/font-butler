@@ -190,7 +190,8 @@ function applyThemeSetting(theme) {
 }
 
 function parseAppIconStyle(value) {
-  return value === 'bright' || value === 'mono' ? value : 'classic'
+  // Keep in sync with shared/appIcon.ts. classic stays the default.
+  return value === 'bright' || value === 'mono' || value === 'cuttler' ? value : 'classic'
 }
 
 function iconPackDir(style) {
