@@ -39,6 +39,39 @@ test('search words combine across name, foundry, designer, traits, and tags', ()
   assert.equal(familyMatchesLibrarySearch(variableSans, 'review bold'), true)
 })
 
+const tags = ['Trial', 'Licensed', 'Unlicensed', 'Open Source']
+
+function tagged(name: string, tagNames: string[], classification: string): SearchFamily {
+  return {
+    familyName: name,
+    tagNames,
+    faces: [
+      {
+        familyName: name,
+        styleName: 'Regular',
+        classification,
+      },
+    ],
+  }
+}
+
+test('a tag word matches that tag, and tag is not a trait', () => {
+  const trialSans = tagged('Reckless', ['Trial'], 'sans-serif')
+  const licensed = tagged('Chronicle', ['Licensed'], 'serif')
+  const unlicensed = tagged('Unlicensed Sans', ['Unlicensed'], 'sans-serif')
+  const open = tagged('Reckless', ['Open Source'], 'serif')
+  assert.equal(familyMatchesLibrarySearch(trialSans, 'Trial', [], tags), true)
+  assert.equal(familyMatchesLibrarySearch(trialSans, 'trial sans', [], tags), true)
+  assert.equal(familyMatchesLibrarySearch(trialSans, 'trial serif', [], tags), false)
+  assert.equal(familyMatchesLibrarySearch(licensed, 'Licensed', [], tags), true)
+  assert.equal(familyMatchesLibrarySearch(unlicensed, 'Licensed', [], tags), false)
+  assert.equal(familyMatchesLibrarySearch(unlicensed, 'Unlicensed', [], tags), true)
+  assert.equal(familyMatchesLibrarySearch(trialSans, 'tag', [], tags), false)
+  assert.equal(familyMatchesLibrarySearch(open, 'open source', [], tags), true)
+  assert.equal(familyMatchesLibrarySearch(open, 'open', [], tags), false)
+  assert.equal(familyMatchesLibrarySearch(tagged('Trial Sans', [], 'sans-serif'), 'trial sans', [], tags), false)
+})
+
 test('a preview token filters and restyles, and a second weight replaces the first', () => {
   const bold = searchTokenById('bold')!
   const tabular = searchTokenById('tabular')!

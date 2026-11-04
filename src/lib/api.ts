@@ -197,6 +197,14 @@ export const api = {
     json<{ tags: FamilyTag[]; familyTags: FamilyTagAssignment[] }>(
       post('/api/family-tags', { op: 'rename', tagId, name }),
     ),
+  updateFamilyTag: (tagId: string, name: string, color: string) =>
+    json<{ tags: FamilyTag[]; familyTags: FamilyTagAssignment[] }>(
+      post('/api/family-tags', { op: 'update', tagId, name, color }),
+    ),
+  deleteFamilyTag: (tagId: string) =>
+    json<{ tags: FamilyTag[]; familyTags: FamilyTagAssignment[] }>(
+      post('/api/family-tags', { op: 'delete', tagId }),
+    ),
   setFamilyTag: (familyKeys: string[], tagId: string, present: boolean) =>
     json<{ tags: FamilyTag[]; familyTags: FamilyTagAssignment[] }>(
       post('/api/family-tags', { op: 'set', familyKeys, tagId, present }),

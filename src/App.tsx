@@ -34,7 +34,7 @@ import { AnnouncementDialog } from '@/components/AnnouncementDialog'
 import { ConfettiBurst } from '@/components/ConfettiBurst'
 import { OnboardingDialog } from '@/components/OnboardingDialog'
 import type { Announcement } from '../shared/announcements.ts'
-import { familyTagRulePredicate, type FamilyTag, type FamilyTagAssignment } from '../shared/family-tags.ts'
+import { familyTagKey, familyTagRulePredicate, type FamilyTag, type FamilyTagAssignment } from '../shared/family-tags.ts'
 import { catalogGroupMatchesSearch, systemGroupMatchesSearch } from '@/lib/librarySearch'
 import { previewRequestFromTokens, type SearchToken } from '../shared/library-search.ts'
 import { parseAppIconStyle, type AppIconStyle } from '@/lib/appIcon'
@@ -221,7 +221,7 @@ function AppShell() {
   const [tagNameRequest, setTagNameRequest] = useState<
     | null
     | { mode: 'create'; familyKeys: string[] }
-    | { mode: 'rename'; tagId: string; name: string }
+    | { mode: 'edit'; tagId: string; name: string; color: string }
   >(null)
   const [systemFaces, setSystemFaces] = useState<SystemFace[]>([])
   const [tab, setTab] = useState<Tab>('library')
@@ -268,7 +268,7 @@ function AppShell() {
   }
 
   function applyFamilyTagPayload(payload: { tags?: FamilyTag[]; familyTags?: FamilyTagAssignment[] }) {
-    if (Array.isArray(payload.tags) && payload.tags.length > 0) setFamilyTagDefs(payload.tags)
+    if (Array.isArray(payload.tags)) setFamilyTagDefs(payload.tags)
     if (Array.isArray(payload.familyTags)) setFamilyTagAssignments(payload.familyTags)
   }
 
@@ -298,19 +298,51 @@ function AppShell() {
     }
   }
 
-  async function submitTagName(name: string) {
+  function editFamilyTag(tagId: string) {
+    const tag = familyTagDefs.find((item) => item.id === tagId)
+    if (!tag) return
+    setTagNameRequest({ mode: 'edit', tagId, name: tag.name, color: tag.color })
+  }
+
+  async function submitTagName(name: string, color: string) {
     const request = tagNameRequest
     if (!request) return
     try {
       if (request.mode === 'create') {
         applyFamilyTagPayload(await api.createFamilyTag(name, request.familyKeys))
       } else {
-        applyFamilyTagPayload(await api.renameFamilyTag(request.tagId, name))
+        applyFamilyTagPayload(await api.updateFamilyTag(request.tagId, name, color))
       }
       setTagNameRequest(null)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not save that tag')
     }
+  }
+
+  async function deleteFamilyTag(tagId: string) {
+    const tag = familyTagDefs.find((item) => item.id === tagId)
+    if (!tag) return
+    const used = familyTagAssignments.filter((row) => row.tagIds.includes(tagId)).length
+    if (used > 0) {
+      const families = used === 1 ? '1 family' : `${used} families`
+      const confirmed = window.confirm(
+        `${tag.name} is on ${families}. Delete this tag and remove it from those families?`,
+      )
+      if (!confirmed) return
+    }
+    try {
+      applyFamilyTagPayload(await api.deleteFamilyTag(tagId))
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not delete that tag')
+    }
+  }
+
+  function tagFamilies(keys: string[], tagId: string) {
+    if (keys.length === 0) {
+      toast.message('No families to tag')
+      return
+    }
+    void persistFamilyTag(keys, tagId, true)
   }
   const [syncCollisions, setSyncCollisions] = useState<RetailFamilyCollision[]>([])
   const [dropRetailPrompt, setDropRetailPrompt] = useState<{
@@ -1001,6 +1033,32 @@ function AppShell() {
     }
     return counts
   }, [projects, projectScopeEntries, smartMatchOptions])
+  const watchFolderFamilyKeys = useMemo(() => {
+    const map: Record<string, string[]> = {}
+    for (const folder of watchFolders) {
+      const keys = new Set<string>()
+      for (const entry of entries) {
+        if (!isWatchFolderEntry(entry, folder)) continue
+        keys.add(familyNameOf(entry))
+      }
+      map[folder] = [...keys]
+    }
+    return map
+  }, [entries, watchFolders])
+  const projectFamilyKeys = useMemo(() => {
+    const byId = new Map(entries.map((entry) => [entry.id, entry]))
+    const map: Record<string, string[]> = {}
+    for (const project of projects) {
+      const matched = isSmartProject(project)
+        ? matchingSmartEntries(projectScopeEntries, project.rules, smartMatchOptions)
+        : project.members.flatMap((member) => {
+            const entry = byId.get(member.assetId)
+            return entry ? [entry] : []
+          })
+      map[project.id] = [...new Set(matched.map((entry) => familyTagKey(entry)))]
+    }
+    return map
+  }, [projects, entries, projectScopeEntries, smartMatchOptions])
   const smartRuleFolders = useMemo(() => {
     const folders = watchFolders.map((folder) => ({
       id: folder,
@@ -2419,6 +2477,23 @@ function AppShell() {
           projectMembershipCounts={projectMembershipCounts}
           onEditSmartProject={(id) => setSmartEditorId(id)}
           onSnapshotProject={(id) => void snapshotSmartProject(id)}
+          tagDefinitions={familyTagDefs}
+          tagAssignments={familyTagAssignments}
+          watchFolderFamilyKeys={watchFolderFamilyKeys}
+          projectFamilyKeys={projectFamilyKeys}
+          onSetFamilyTag={(keys, tagId, present) => {
+            if (present) tagFamilies(keys, tagId)
+            else void persistFamilyTag(keys, tagId, false)
+          }}
+          onCreateFamilyTag={(keys) => {
+            if (keys.length === 0) {
+              toast.message('No families to tag')
+              return
+            }
+            setTagNameRequest({ mode: 'create', familyKeys: keys })
+          }}
+          onEditFamilyTag={editFamilyTag}
+          onDeleteFamilyTag={(tagId) => void deleteFamilyTag(tagId)}
           savedFilters={savedFilters}
           onSelectSavedFilter={applySavedFilter}
           onCreateSavedFilter={createSavedFilterFromView}
@@ -2923,11 +2998,8 @@ function AppShell() {
                               familyKeys: useBatch ? catalogSelection.map((item) => item.key) : [group.key],
                             })
                           }
-                          onRenameFamilyTag={(tagId) => {
-                            const tag = familyTagDefs.find((item) => item.id === tagId)
-                            if (!tag) return
-                            setTagNameRequest({ mode: 'rename', tagId, name: tag.name })
-                          }}
+                          onEditFamilyTag={editFamilyTag}
+                          onDeleteFamilyTag={(tagId) => void deleteFamilyTag(tagId)}
                         />
                         )
                       })}
@@ -2981,11 +3053,8 @@ function AppShell() {
                       familyKeys: catalogSelection.map((item) => item.key),
                     })
                   }
-                  onRename={(tagId) => {
-                    const tag = familyTagDefs.find((item) => item.id === tagId)
-                    if (!tag) return
-                    setTagNameRequest({ mode: 'rename', tagId, name: tag.name })
-                  }}
+                  onEdit={editFamilyTag}
+                  onDelete={(tagId) => void deleteFamilyTag(tagId)}
                 />
                 <CatalogBatchButtons
                   plan={catalogPlan}
@@ -3545,11 +3614,12 @@ function AppShell() {
         <FamilyTagNameDialog
           open={tagNameRequest !== null}
           mode={tagNameRequest?.mode ?? 'create'}
-          initialName={tagNameRequest?.mode === 'rename' ? tagNameRequest.name : ''}
+          initialName={tagNameRequest?.mode === 'edit' ? tagNameRequest.name : ''}
+          initialColor={tagNameRequest?.mode === 'edit' ? tagNameRequest.color : undefined}
           onOpenChange={(open) => {
             if (!open) setTagNameRequest(null)
           }}
-          onSubmit={(name) => void submitTagName(name)}
+          onSubmit={(name, color) => void submitTagName(name, color)}
         />
         <RenameDialog
           entry={renameEntry}

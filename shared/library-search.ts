@@ -1,6 +1,8 @@
 /**
  * Library search in the Cicero sense: words combine, and a Filters token
  * both narrows the list and asks every preview to show that style.
+ * A word that is a family tag matches that tag by name. "Trial" is the Trial
+ * tag, not a generic "has a tag" trait, and "tag" itself is not a trait.
  * Traits come from face metadata already on the family. Foundry and designer
  * are the name-table strings, not a guess.
  */
@@ -175,13 +177,11 @@ export function familyMatchesLibrarySearch(
   family: SearchFamily,
   text: string,
   tokens: readonly SearchToken[] = [],
+  knownTagNames: readonly string[] = [],
 ): boolean {
-  const words = text
-    .trim()
-    .split(/\s+/)
-    .map((word) => word.trim())
-    .filter(Boolean)
-  if (words.length === 0 && tokens.length === 0) return true
+  const { tagPhrases, words } = splitSearchWords(text, knownTagNames)
+  if (tagPhrases.length === 0 && words.length === 0 && tokens.length === 0) return true
+  if (!tagPhrases.every((phrase) => familyHasExactTag(family, phrase))) return false
   if (!words.every((word) => wordMatches(word, family))) return false
   return tokens.every((token) => tokenMatches(token, family))
 }
@@ -242,12 +242,47 @@ export function cardPreviewFromRequest(
   }
 }
 
+/**
+ * Pull known tag names out of the query as whole phrases, longest first.
+ * "Licensed" is not found inside "Unlicensed". Whatever is left is a normal word.
+ */
+export function splitSearchWords(
+  text: string,
+  knownTagNames: readonly string[] = [],
+): { tagPhrases: string[]; words: string[] } {
+  let remaining = ` ${normalizeTagName(text)} `
+  const tagPhrases: string[] = []
+  const known = [...new Set(knownTagNames.map((name) => normalizeTagName(name)).filter(Boolean))].sort(
+    (left, right) => right.length - left.length,
+  )
+  for (const tag of known) {
+    const needle = ` ${tag} `
+    if (!remaining.includes(needle)) continue
+    tagPhrases.push(tag)
+    remaining = remaining.split(needle).join(' ')
+  }
+  return {
+    tagPhrases,
+    words: remaining.trim().split(/\s+/).filter(Boolean),
+  }
+}
+
 function wordMatches(word: string, family: SearchFamily): boolean {
   const token = word.toLowerCase()
+  if (familyHasExactTag(family, token)) return true
   const trait = TRAIT_WORDS[token]
   if (trait?.(family)) return true
-  if (tagMatches(token, family.tagNames)) return true
   return textMatchesWord(haystack(family), token)
+}
+
+function normalizeTagName(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function familyHasExactTag(family: SearchFamily, name: string): boolean {
+  const wanted = normalizeTagName(name)
+  if (!wanted) return false
+  return (family.tagNames ?? []).some((tag) => normalizeTagName(tag) === wanted)
 }
 
 function tokenMatches(token: SearchToken, family: SearchFamily): boolean {
@@ -270,11 +305,6 @@ function hasClass(family: SearchFamily, id: FontClassification): boolean {
 function nameHasToken(family: SearchFamily, tokens: readonly string[]): boolean {
   const have = fontNameTokens(haystack(family))
   return have.some((token) => tokens.includes(token))
-}
-
-function tagMatches(word: string, tags: readonly string[] | undefined): boolean {
-  if (!tags || tags.length === 0) return false
-  return tags.some((tag) => fontNameTokens(tag).includes(word) || tag.trim().toLowerCase() === word)
 }
 
 function textMatchesWord(text: string, word: string): boolean {

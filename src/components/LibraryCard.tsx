@@ -97,7 +97,8 @@ export const LibraryCard = memo(function LibraryCard({
   tagFamilyKeys,
   onSetFamilyTag,
   onCreateFamilyTag,
-  onRenameFamilyTag,
+  onEditFamilyTag,
+  onDeleteFamilyTag,
   uninstallOnly = false,
   previewRequest = null,
 }: {
@@ -162,7 +163,8 @@ export const LibraryCard = memo(function LibraryCard({
   tagFamilyKeys?: readonly string[]
   onSetFamilyTag?: (tagId: string, present: boolean) => void
   onCreateFamilyTag?: () => void
-  onRenameFamilyTag?: (tagId: string) => void
+  onEditFamilyTag?: (tagId: string) => void
+  onDeleteFamilyTag?: (tagId: string) => void
   uninstallOnly?: boolean
   previewRequest?: PreviewRequest | null
 }) {
@@ -562,7 +564,7 @@ export const LibraryCard = memo(function LibraryCard({
           </ContextMenuItem>
         ) : null}
         <ContextMenuSeparator />
-        {tagDefinitions && tagAssignments && tagFamilyKeys && onSetFamilyTag && onCreateFamilyTag && onRenameFamilyTag ? (
+        {tagDefinitions && tagAssignments && tagFamilyKeys && onSetFamilyTag && onCreateFamilyTag ? (
           <>
             <FamilyTagMenuItems
               definitions={tagDefinitions}
@@ -570,7 +572,8 @@ export const LibraryCard = memo(function LibraryCard({
               familyKeys={tagFamilyKeys}
               onSet={onSetFamilyTag}
               onCreate={onCreateFamilyTag}
-              onRename={onRenameFamilyTag}
+              onEdit={onEditFamilyTag}
+              onDelete={onDeleteFamilyTag}
             />
             <ContextMenuSeparator />
           </>

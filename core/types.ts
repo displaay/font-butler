@@ -1,7 +1,7 @@
 import type { LibraryFilter } from '../shared/library-filters.ts'
 import type { RetailFontFormat, RetailSyncStatus } from '../shared/retail.ts'
 import type { AppIconStyle } from '../shared/appIcon.ts'
-import type { FamilyTag, FamilyTagAssignment } from '../shared/family-tags.ts'
+import type { FamilyTag, FamilyTagAssignment, FamilyTagSeed } from '../shared/family-tags.ts'
 import type { ProjectKind, SmartRuleSet } from '../shared/smart-projects.ts'
 
 export const FONT_EXTENSIONS = ['.ttf', '.otf', '.ttc', '.otc'] as const
@@ -169,6 +169,8 @@ export type CatalogFile = {
    */
   tags?: FamilyTag[]
   familyTags?: FamilyTagAssignment[]
+  /** Seed tags removed by the user. Hydration does not recreate them. */
+  retiredTagSeeds?: FamilyTagSeed[]
 }
 
 export type SystemFace = {

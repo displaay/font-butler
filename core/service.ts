@@ -59,8 +59,10 @@ import {
 import { emitEvent } from './events.ts'
 import {
   applyRetailTrialDefault,
+  persistFamilyTagDelete,
   persistFamilyTagName,
   persistFamilyTagPresence,
+  persistFamilyTagUpdate,
   persistNewFamilyTag,
 } from './family-tags.ts'
 import { unregisterSessionFonts } from './session-fonts.ts'
@@ -607,6 +609,14 @@ export class FontButlerService {
 
   renameFamilyTag(tagId: string, name: string) {
     return persistFamilyTagName(this.paths, tagId, name)
+  }
+
+  updateFamilyTag(tagId: string, name: string, color?: string) {
+    return persistFamilyTagUpdate(this.paths, tagId, { name, color })
+  }
+
+  deleteFamilyTag(tagId: string) {
+    return persistFamilyTagDelete(this.paths, tagId)
   }
 
   setFamilyTag(familyKeys: string[], tagId: string, present: boolean) {

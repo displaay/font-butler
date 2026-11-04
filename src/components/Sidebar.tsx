@@ -73,7 +73,9 @@ import {
 import { cn } from '@/lib/utils'
 import { watchFolderLabel, RETAIL_LIBRARY_FILTER, RETAIL_LIBRARY_LABEL, TEST_INSTALL_FILTER, TEST_INSTALL_LABEL } from '@/lib/watchFolders'
 import { isSmartProject } from '../../shared/smart-projects.ts'
+import type { FamilyTag, FamilyTagAssignment } from '../../shared/family-tags.ts'
 import { EditFiltersDialog } from '@/components/EditFiltersDialog'
+import { FamilyTagMenuItems } from '@/components/FamilyTags'
 import { LibrarySearch } from '@/components/LibrarySearch'
 import {
   FONT_CLASSIFICATION_LABELS,
@@ -438,6 +440,7 @@ export function SidebarItem({
   onOpenWatchFoldersSettings,
   expanded,
   onToggleExpand,
+  menuExtra,
 }: {
   active: boolean
   icon: ComponentType<{ className?: string }>
@@ -459,6 +462,7 @@ export function SidebarItem({
   onOpenWatchFoldersSettings?: () => void
   expanded?: boolean
   onToggleExpand?: () => void
+  menuExtra?: ReactNode
 }) {
   const showCount = unreadCount > 0 || lockTotal || showTotal
   const button = (
@@ -537,7 +541,7 @@ export function SidebarItem({
       ) : null}
     </Button>
   )
-  if (lockTotal && !onReveal && !onRemove && !onOpenWatchFoldersSettings) {
+  if (lockTotal && !onReveal && !onRemove && !onOpenWatchFoldersSettings && !menuExtra) {
     return button
   }
   return (
@@ -564,6 +568,7 @@ export function SidebarItem({
             <ContextMenuSeparator />
           </>
         ) : null}
+        {menuExtra}
         <ContextMenuCheckboxItem
           checked={showTotal}
           aria-label="Show total"
@@ -604,6 +609,14 @@ export function Sidebar({
   projectMembershipCounts,
   onEditSmartProject,
   onSnapshotProject,
+  tagDefinitions,
+  tagAssignments,
+  watchFolderFamilyKeys,
+  projectFamilyKeys,
+  onSetFamilyTag,
+  onCreateFamilyTag,
+  onEditFamilyTag,
+  onDeleteFamilyTag,
   savedFilters,
   onSelectSavedFilter,
   onCreateSavedFilter,
@@ -662,6 +675,14 @@ export function Sidebar({
   projectMembershipCounts?: Record<string, number>
   onEditSmartProject?: (id: string) => void
   onSnapshotProject?: (id: string) => void
+  tagDefinitions?: readonly FamilyTag[]
+  tagAssignments?: readonly FamilyTagAssignment[]
+  watchFolderFamilyKeys?: Record<string, string[]>
+  projectFamilyKeys?: Record<string, string[]>
+  onSetFamilyTag?: (familyKeys: string[], tagId: string, present: boolean) => void
+  onCreateFamilyTag?: (familyKeys: string[]) => void
+  onEditFamilyTag?: (tagId: string) => void
+  onDeleteFamilyTag?: (tagId: string) => void
   savedFilters?: SavedLibraryFilter[]
   onSelectSavedFilter?: (filter: SavedLibraryFilter) => void
   onCreateSavedFilter?: () => void
@@ -835,6 +856,25 @@ export function Sidebar({
     writeShowTotals(next)
   }
 
+  function addTagMenu(familyKeys: string[]) {
+    if (!tagDefinitions || !tagAssignments || !onSetFamilyTag || !onCreateFamilyTag) return null
+    return (
+      <>
+        <FamilyTagMenuItems
+          definitions={tagDefinitions}
+          assignments={tagAssignments}
+          familyKeys={familyKeys}
+          addOnly
+          onSet={(tagId, present) => onSetFamilyTag(familyKeys, tagId, present)}
+          onCreate={() => onCreateFamilyTag(familyKeys)}
+          onEdit={onEditFamilyTag}
+          onDelete={onDeleteFamilyTag}
+        />
+        <ContextMenuSeparator />
+      </>
+    )
+  }
+
   return (
     <aside className="sidebar-column flex h-auto w-full shrink-0 flex-col border-b bg-sidebar text-sidebar-foreground md:h-full md:max-h-full md:w-56 md:border-r md:border-b-0">
       {insetTrafficLights ? (
@@ -895,6 +935,7 @@ export function Sidebar({
                         }
                         onReveal={() => onRevealWatchFolder(folder)}
                         onRemove={() => onRemoveWatchFolder(folder)}
+                        menuExtra={addTagMenu(watchFolderFamilyKeys?.[folder] ?? [])}
                       />
                     )
                   })}
@@ -1187,6 +1228,7 @@ export function Sidebar({
                   )}
                 </ContextMenuTrigger>
                 <ContextMenuContent>
+                  {addTagMenu(projectFamilyKeys?.[project.id] ?? [])}
                   {smart ? (
                     <>
                       <ContextMenuItem onSelect={() => onEditSmartProject?.(project.id)}>

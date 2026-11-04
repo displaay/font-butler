@@ -33,13 +33,14 @@ export function catalogGroupMatchesSearch(
   assignments: readonly FamilyTagAssignment[] | undefined,
 ): boolean {
   const ids = tagIdsForFamily(assignments, group.familyName)
+  const knownTagNames = (tags ?? []).map((tag) => tag.name)
   const tagNames = (tags ?? []).filter((tag) => ids.includes(tag.id)).map((tag) => tag.name)
   const family: SearchFamily = {
     familyName: group.familyName,
     tagNames,
     faces: facesOf(group.faces),
   }
-  return familyMatchesLibrarySearch(family, text, tokens)
+  return familyMatchesLibrarySearch(family, text, tokens, knownTagNames)
 }
 
 export function systemGroupMatchesSearch(
