@@ -12,6 +12,7 @@ import { getFontNative } from './native.ts'
 import { readFileStat } from './parse.ts'
 import type { AppPaths } from './paths.ts'
 import { moveToTrash } from './reveal.ts'
+import type { FamilyTag, FamilyTagAssignment } from '../shared/family-tags.ts'
 import type { CatalogEntry, DuplicateWarning, FontFaceInfo, Notice } from './types.ts'
 
 export function now(): number {
@@ -95,21 +96,28 @@ export function bindEntryToInstalledFile(entry: CatalogEntry, dest: string): voi
   entry.status = 'installed'
 }
 
-export function catalogEvent(entries: CatalogEntry[]): {
+export function catalogEvent(
+  entries: CatalogEntry[],
+  tags?: { tags?: FamilyTag[]; familyTags?: FamilyTagAssignment[] },
+): {
   type: 'catalog'
   entries: CatalogEntry[]
   revision: number
+  tags?: FamilyTag[]
+  familyTags?: FamilyTagAssignment[]
 } {
   return {
     type: 'catalog',
     entries,
     revision: currentCatalogGeneration(),
+    ...(tags?.tags ? { tags: tags.tags } : {}),
+    ...(tags?.familyTags ? { familyTags: tags.familyTags } : {}),
   }
 }
 
 export function emitCatalog(paths: AppPaths): CatalogEntry[] {
   const catalog = loadCatalog(paths)
-  emitEvent(catalogEvent(catalog.entries))
+  emitEvent(catalogEvent(catalog.entries, { tags: catalog.tags, familyTags: catalog.familyTags }))
   return catalog.entries
 }
 

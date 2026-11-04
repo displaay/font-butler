@@ -1,4 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
+
+const EMPTY_TAG_IDS: readonly string[] = []
 import { toast } from 'sonner'
 import { enqueuePrompt } from '@/lib/promptQueue'
 import { ArrowLeft, RefreshCw } from 'lucide-react'
@@ -25,12 +27,14 @@ import { FontFaceStyles } from '@/components/FontFaceStyles'
 import { FormatDialog } from '@/components/FormatDialog'
 import { ImportPlanDialog } from '@/components/ImportPlanDialog'
 import { Inspector, InspectorTabList, inspectorPaneTabs, type InspectorPaneTab } from '@/components/Inspector'
+import { FamilyTagBatchButton, FamilyTagNameDialog } from '@/components/FamilyTags'
 import { LibraryCard } from '@/components/LibraryCard'
 import { MarqueeOverlay } from '@/components/MarqueeOverlay'
 import { AnnouncementDialog } from '@/components/AnnouncementDialog'
 import { ConfettiBurst } from '@/components/ConfettiBurst'
 import { OnboardingDialog } from '@/components/OnboardingDialog'
 import type { Announcement } from '../shared/announcements.ts'
+import type { FamilyTag, FamilyTagAssignment } from '../shared/family-tags.ts'
 import { parseAppIconStyle, type AppIconStyle } from '@/lib/appIcon'
 import { RelinkDialog } from '@/components/RelinkDialog'
 import { RenameDialog } from '@/components/RenameDialog'
@@ -209,6 +213,13 @@ function AppShell() {
   const setActionStatus = useSetActionStatus()
   const clearActionStatusIf = useClearActionStatusIf()
   const [entries, setEntries] = useState<CatalogEntry[]>([])
+  const [familyTagDefs, setFamilyTagDefs] = useState<FamilyTag[]>([])
+  const [familyTagAssignments, setFamilyTagAssignments] = useState<FamilyTagAssignment[]>([])
+  const [tagNameRequest, setTagNameRequest] = useState<
+    | null
+    | { mode: 'create'; familyKeys: string[] }
+    | { mode: 'rename'; tagId: string; name: string }
+  >(null)
   const [systemFaces, setSystemFaces] = useState<SystemFace[]>([])
   const [tab, setTab] = useState<Tab>('library')
   const [query, setQuery] = useState('')
@@ -252,17 +263,50 @@ function AppShell() {
     setSettingsFocusWatchFolders(closed.focusWatchFolders)
   }
 
-  function applyCatalog(next: CatalogEntry[], revision?: number) {
+  function applyFamilyTagPayload(payload: { tags?: FamilyTag[]; familyTags?: FamilyTagAssignment[] }) {
+    if (Array.isArray(payload.tags) && payload.tags.length > 0) setFamilyTagDefs(payload.tags)
+    if (Array.isArray(payload.familyTags)) setFamilyTagAssignments(payload.familyTags)
+  }
+
+  function applyCatalog(
+    next: CatalogEntry[],
+    revision?: number,
+    tags?: { tags?: FamilyTag[]; familyTags?: FamilyTagAssignment[] },
+  ) {
     if (typeof revision === 'number') {
       if (revision < catalogRevisionRef.current) return
       catalogRevisionRef.current = revision
     }
     setEntries((current) => (catalogEntriesMatch(current, next) ? current : next))
+    if (tags) applyFamilyTagPayload(tags)
   }
 
   async function refreshCatalog() {
     const result = await api.catalog()
-    applyCatalog(result.entries, result.revision)
+    applyCatalog(result.entries, result.revision, result)
+  }
+
+  async function persistFamilyTag(familyKeys: string[], tagId: string, present: boolean) {
+    try {
+      applyFamilyTagPayload(await api.setFamilyTag(familyKeys, tagId, present))
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not update tags')
+    }
+  }
+
+  async function submitTagName(name: string) {
+    const request = tagNameRequest
+    if (!request) return
+    try {
+      if (request.mode === 'create') {
+        applyFamilyTagPayload(await api.createFamilyTag(name, request.familyKeys))
+      } else {
+        applyFamilyTagPayload(await api.renameFamilyTag(request.tagId, name))
+      }
+      setTagNameRequest(null)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not save that tag')
+    }
   }
   const [syncCollisions, setSyncCollisions] = useState<RetailFamilyCollision[]>([])
   const [dropRetailPrompt, setDropRetailPrompt] = useState<{
@@ -637,7 +681,7 @@ function AppShell() {
               // Incomplete retail sync resumes on the server during background init.
             }
           }
-          applyCatalog(catalog.entries, catalog.revision)
+          applyCatalog(catalog.entries, catalog.revision, catalog)
           const focus = openPath
             ? catalog.entries.find((entry) => entry.sourcePath === openPath)
             : undefined
@@ -780,8 +824,13 @@ function AppShell() {
         return
       }
       if (event && typeof event === 'object' && (event as { type?: string }).type === 'catalog') {
-        const payload = event as { entries: CatalogEntry[]; revision?: number }
-        applyCatalog(payload.entries, payload.revision)
+        const payload = event as {
+          entries: CatalogEntry[]
+          revision?: number
+          tags?: FamilyTag[]
+          familyTags?: FamilyTagAssignment[]
+        }
+        applyCatalog(payload.entries, payload.revision, payload)
       }
       if (event && typeof event === 'object' && (event as { type?: string }).type === 'system') {
         setSystemFaces((event as { faces: SystemFace[] }).faces)
@@ -1217,6 +1266,11 @@ function AppShell() {
     return shownSystemGroups.filter((group) => keys.has(group.familyName))
   }
 
+  const appliedTagIdsByFamily = useMemo(() => {
+    const map = new Map<string, readonly string[]>()
+    for (const row of familyTagAssignments) map.set(row.familyKey, row.tagIds)
+    return map
+  }, [familyTagAssignments])
   const catalogSelection = selectedCatalogGroups()
   const systemSelection = selectedSystemList()
   const catalogPlan = catalogBatchPlan(catalogSelection, adobeAvailable)
@@ -2795,6 +2849,28 @@ function AppShell() {
                           onCreateProjectFromCard={(ids, familyNames) => openNewProject(ids, familyNames)}
                           onFontDragStart={beginFontDrag}
                           onFontDragEnd={endFontDrag}
+                          tagDefinitions={familyTagDefs}
+                          tagAssignments={familyTagAssignments}
+                          appliedTagIds={appliedTagIdsByFamily.get(group.key) ?? EMPTY_TAG_IDS}
+                          tagFamilyKeys={useBatch ? catalogSelection.map((item) => item.key) : [group.key]}
+                          onSetFamilyTag={(tagId, present) =>
+                            void persistFamilyTag(
+                              useBatch ? catalogSelection.map((item) => item.key) : [group.key],
+                              tagId,
+                              present,
+                            )
+                          }
+                          onCreateFamilyTag={() =>
+                            setTagNameRequest({
+                              mode: 'create',
+                              familyKeys: useBatch ? catalogSelection.map((item) => item.key) : [group.key],
+                            })
+                          }
+                          onRenameFamilyTag={(tagId) => {
+                            const tag = familyTagDefs.find((item) => item.id === tagId)
+                            if (!tag) return
+                            setTagNameRequest({ mode: 'rename', tagId, name: tag.name })
+                          }}
                         />
                         )
                       })}
@@ -2833,6 +2909,27 @@ function AppShell() {
                 }))}
                 onFilter={(id) => keepCatalogSelectionByStatus(id as FontStatus)}
               >
+                <div className="flex flex-wrap items-center gap-2">
+                <FamilyTagBatchButton
+                  definitions={familyTagDefs}
+                  assignments={familyTagAssignments}
+                  familyKeys={catalogSelection.map((item) => item.key)}
+                  disabled={busy}
+                  onSet={(tagId, present) =>
+                    void persistFamilyTag(catalogSelection.map((item) => item.key), tagId, present)
+                  }
+                  onCreate={() =>
+                    setTagNameRequest({
+                      mode: 'create',
+                      familyKeys: catalogSelection.map((item) => item.key),
+                    })
+                  }
+                  onRename={(tagId) => {
+                    const tag = familyTagDefs.find((item) => item.id === tagId)
+                    if (!tag) return
+                    setTagNameRequest({ mode: 'rename', tagId, name: tag.name })
+                  }}
+                />
                 <CatalogBatchButtons
                   plan={catalogPlan}
                   busy={busy}
@@ -2864,6 +2961,7 @@ function AppShell() {
                   }}
                   splitMenuPlacement="up"
                 />
+                </div>
               </BatchActionBar>
             )}
           </BatchActionBarContainer>
@@ -3383,6 +3481,15 @@ function AppShell() {
             replacePrompt?.resolve('replace')
             setReplacePrompt(null)
           }}
+        />
+        <FamilyTagNameDialog
+          open={tagNameRequest !== null}
+          mode={tagNameRequest?.mode ?? 'create'}
+          initialName={tagNameRequest?.mode === 'rename' ? tagNameRequest.name : ''}
+          onOpenChange={(open) => {
+            if (!open) setTagNameRequest(null)
+          }}
+          onSubmit={(name) => void submitTagName(name)}
         />
         <RenameDialog
           entry={renameEntry}

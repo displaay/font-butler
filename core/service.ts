@@ -57,6 +57,12 @@ import {
   upsertDuplicateWarning,
 } from './duplicates.ts'
 import { emitEvent } from './events.ts'
+import {
+  applyRetailTrialDefault,
+  persistFamilyTagName,
+  persistFamilyTagPresence,
+  persistNewFamilyTag,
+} from './family-tags.ts'
 import { unregisterSessionFonts } from './session-fonts.ts'
 import {
   deleteTestInstallFiles,
@@ -203,6 +209,7 @@ import { postscriptPreview } from './rename.ts'
 import { revealInFileManager } from './reveal.ts'
 import { loadSettings, saveSettings } from './settings.ts'
 import { isAppIconStyle } from '../shared/appIcon.ts'
+import type { FamilyTag, FamilyTagAssignment } from '../shared/family-tags.ts'
 import { parseLatinPreview } from '../shared/latinPreview.ts'
 import { normalizeSavedFilters } from './saved-filters.ts'
 import { allowedFontPath, scanSystemFonts } from './system.ts'
@@ -540,6 +547,7 @@ export class FontButlerService {
     await this.seedIfEmpty()
     await this.refreshSourceStatuses(true, { fingerprintOnly: true })
     await dropOrphanRetailListingsFn(this.paths)
+    await applyRetailTrialDefault(this.paths)
     await this.reinstallCurrentlyOutdated('startup')
     await syncWatchers(this.paths)
     await reconcileWatchedSources(this.paths)
@@ -578,6 +586,31 @@ export class FontButlerService {
 
   listCatalog(): CatalogEntry[] {
     return loadCatalog(this.paths).entries
+  }
+
+  catalogView(): {
+    entries: CatalogEntry[]
+    tags: FamilyTag[]
+    familyTags: FamilyTagAssignment[]
+  } {
+    const catalog = loadCatalog(this.paths)
+    return {
+      entries: catalog.entries,
+      tags: catalog.tags ?? [],
+      familyTags: catalog.familyTags ?? [],
+    }
+  }
+
+  createFamilyTag(name: string, familyKeys: string[] = []) {
+    return persistNewFamilyTag(this.paths, name, familyKeys)
+  }
+
+  renameFamilyTag(tagId: string, name: string) {
+    return persistFamilyTagName(this.paths, tagId, name)
+  }
+
+  setFamilyTag(familyKeys: string[], tagId: string, present: boolean) {
+    return persistFamilyTagPresence(this.paths, familyKeys, tagId, present)
   }
 
   listDuplicates(): DuplicateWarning[] {

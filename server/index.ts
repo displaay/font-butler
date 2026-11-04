@@ -334,9 +334,34 @@ app.post('/api/settings', async (c) => {
   }
 })
 
-app.get('/api/catalog', (c) =>
-  c.json({ entries: service.listCatalog(), revision: currentCatalogGeneration() }),
-)
+app.get('/api/catalog', (c) => {
+  const catalog = service.catalogView()
+  return c.json({ ...catalog, revision: currentCatalogGeneration() })
+})
+
+app.post('/api/family-tags', async (c) => {
+  const body = await c.req.json<{
+    op?: string
+    name?: string
+    tagId?: string
+    familyKeys?: string[]
+    present?: boolean
+  }>()
+  try {
+    if (body.op === 'create') {
+      return c.json(await service.createFamilyTag(body.name ?? '', body.familyKeys ?? []))
+    }
+    if (body.op === 'rename') {
+      return c.json(await service.renameFamilyTag(body.tagId ?? '', body.name ?? ''))
+    }
+    if (body.op === 'set') {
+      return c.json(await service.setFamilyTag(body.familyKeys ?? [], body.tagId ?? '', body.present === true))
+    }
+    return c.json({ error: 'Unknown tag action' }, 400)
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : 'Could not update tags' }, 400)
+  }
+})
 
 app.get('/api/duplicates', (c) => c.json({ duplicates: service.listDuplicates() }))
 

@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { readRetailToken, readRetailTokenStrict, writeRetailToken } from './auth.ts'
+import { applyRetailTrialDefault } from './family-tags.ts'
 import { assignActivationWarning } from './caches.ts'
 import { loadCatalog, occupantsAtPath, removeEntryById, runCatalogTask, saveCatalog, upsertEntry } from './catalog.ts'
 import { copyAt, upsertCopy } from './destinations.ts'
@@ -27,6 +28,7 @@ import {
 } from './retail-sync.ts'
 import { createOperation, finishOperation, loadOperations, upsertOperation } from './operations.ts'
 import { catalogEvent, displayEntry, displayFamily, newId, now, removeInstalledCopy, touchEntry } from './service-helpers.ts'
+import { reconcileRetailTrialTags } from '../shared/family-tags.ts'
 import {
   DEFAULT_RETAIL_TRIAL_TOKEN,
   DEFAULT_RETAIL_WORKER_BASE_URL,
@@ -396,8 +398,13 @@ export async function configureRetailSync(
   }
   settings.retailSync = next
   saveSettings(paths, settings)
+  // Reset before the first await. Callers that do not await this function still need an in-flight
+  // sync aborted before they start the next one; waiting on the catalog here would abort that next sync.
   if (invalidates) {
     resetRetailCache()
+  }
+  if (input.token !== undefined) {
+    await applyRetailTrialDefault(paths)
   }
 
   emitEvent({ type: 'settings', settings })
@@ -831,9 +838,11 @@ async function ensureRetailListings(paths: AppPaths, manifest: RetailManifest): 
         changed = true
       }
     }
+    const hasWorkerToken = readRetailToken(retailTokenPath(paths)).length > 0
+    if (reconcileRetailTrialTags(catalog, { hasWorkerToken })) changed = true
     if (changed) {
       saveCatalog(paths, catalog)
-      emitEvent(catalogEvent(catalog.entries))
+      emitEvent(catalogEvent(catalog.entries, { tags: catalog.tags, familyTags: catalog.familyTags }))
     }
     return changed
   })
