@@ -466,7 +466,7 @@ static NSString *PeerMainExecutablePath(int fd) {
   OSStatus infoStatus = SecCodeCopySigningInformation(guest, kSecCSSigningInformation | kSecCSDynamicInformation, &information);
   CFRelease(guest);
   if (infoStatus != errSecSuccess || !information) return nil;
-  CFURLRef executable = CFDictionaryGetValue(information, kSecCodeInfoMainExecutable);
+  CFURLRef executable = (CFURLRef)CFDictionaryGetValue(information, kSecCodeInfoMainExecutable);
   NSString *path = executable ? [(__bridge NSURL *)executable path] : nil;
   CFRelease(information);
   if (!path.length) return nil;
