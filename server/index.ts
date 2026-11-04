@@ -16,7 +16,7 @@ import { mountUserFontCacheRoute } from './user-font-cache-route.ts'
 import { catalogEvent } from '../core/service-helpers.ts'
 import { closeFontAnalysisWorker } from '../core/font-analysis.ts'
 import { closeAllWatchers } from '../core/watch.ts'
-import type { AppSettings } from '../core/types.ts'
+import type { AppSettings, ProjectSet } from '../core/types.ts'
 
 function mimeForStatic(filePath: string): string {
   switch (path.extname(filePath).toLowerCase()) {
@@ -1082,8 +1082,18 @@ app.post('/api/repair', async (c) => {
 app.get('/api/projects', (c) => c.json({ projects: service.listProjects() }))
 
 app.post('/api/projects', async (c) => {
-  const body = await c.req.json<{ name?: string; memberIds?: string[] }>()
-  return c.json({ project: await service.createProject(body.name ?? 'Untitled project', body.memberIds) })
+  const body = await c.req.json<{
+    name?: string
+    memberIds?: string[]
+    kind?: string
+    rules?: ProjectSet['rules']
+  }>()
+  return c.json({
+    project: await service.createProject(body.name ?? 'Untitled project', body.memberIds, {
+      kind: body.kind === 'smart' ? 'smart' : 'manual',
+      rules: body.rules,
+    }),
+  })
 })
 
 app.post('/api/projects/update', async (c) => {
@@ -1092,11 +1102,21 @@ app.post('/api/projects/update', async (c) => {
     name?: string
     memberIds?: string[]
     pin?: { assetId: string; fingerprint?: string }
+    rules?: ProjectSet['rules']
   }>()
   try {
     return c.json({ project: await service.updateProject(body.id, body) })
   } catch (error) {
     return c.json(fail(error, 'Could not update project'), 400)
+  }
+})
+
+app.post('/api/projects/snapshot', async (c) => {
+  const body = await c.req.json<{ id: string }>()
+  try {
+    return c.json({ project: await service.snapshotProject(body.id) })
+  } catch (error) {
+    return c.json(fail(error, 'Could not save snapshot'), 400)
   }
 })
 

@@ -10,6 +10,11 @@ import {
   SystemBatchButtons,
 } from '@/components/BatchActions'
 import { DropFolderDialog } from '@/components/DropFolderDialog'
+import {
+  NewProjectDialog,
+  SmartProjectBar,
+  SmartRuleEditor,
+} from '@/components/SmartProjectDialogs'
 import { DuplicatesDialog } from '@/components/DuplicatesDialog'
 import { EmptyState } from '@/components/EmptyState'
 import { RetailUpdateCard } from '@/components/RetailUpdateCard'
@@ -114,6 +119,13 @@ import {
   removeMemberIds,
   uniqueMemberIds,
 } from '@/lib/projects'
+import {
+  emptySmartRuleSet,
+  isSmartProject,
+  matchingSmartEntries,
+  smartRuleSummary,
+  type SmartRuleSet,
+} from '../shared/smart-projects.ts'
 import { latinPreviewText } from '@/lib/latinPreview'
 import { specimenFromSettings } from '@/lib/specimen'
 import { bakeReportWarnings } from '@/lib/otFeatures'
@@ -168,7 +180,7 @@ import type { AppSettings, AppUpdateStatus, CatalogEntry, DestinationCapability,
 import { testInstallToCatalog, type TestInstallFont } from '@/lib/testInstall'
 import { isRetailSyncingStatusMessage, retailFamilyNameOf, retailHasLiveUpdates, retailLibraryEntryVisible, retailListingOnMac, retailSyncInProgress, retailSyncIsOn, retailSyncingStatusMessage, retailUpdateCount } from '@/lib/types'
 import { cn } from '@/lib/utils'
-import { isPathUnderFolder, isRetailLibraryFilter, isTestInstallFilter, isWatchFolderEntry, libraryFolderFilterLabel, matchesLibraryFolderFilter, RETAIL_LIBRARY_FILTER, TEST_INSTALL_FILTER, watchFolderName } from '@/lib/watchFolders'
+import { isPathUnderFolder, isRetailLibraryFilter, isTestInstallFilter, isWatchFolderEntry, libraryFolderFilterLabel, matchesLibraryFolderFilter, RETAIL_LIBRARY_FILTER, RETAIL_LIBRARY_LABEL, TEST_INSTALL_FILTER, watchFolderName } from '@/lib/watchFolders'
 
 const EMPTY_WATCH_FOLDERS: string[] = []
 const EMPTY_SYSTEM_FACES: SystemFace[] = []
@@ -319,6 +331,12 @@ function AppShell() {
   const [operations, setOperations] = useState<Operation[]>([])
   const operationsRef = useRef<Operation[]>([])
   const [projectFilter, setProjectFilter] = useState<string | null>(null)
+  const [newProjectOpen, setNewProjectOpen] = useState(false)
+  const [newProjectSeed, setNewProjectSeed] = useState<{ ids: string[]; names: string[] }>({
+    ids: [],
+    names: [],
+  })
+  const [smartEditorId, setSmartEditorId] = useState<string | null>(null)
   const [importPlan, setImportPlan] = useState<ImportPlan | null>(null)
   type ImportPlanDecision = {
     choices: Record<string, ImportPlanItem['defaultChoice']>
@@ -872,10 +890,35 @@ function AppShell() {
   }, [])
 
   const watchFolders = settings?.watchFolders ?? EMPTY_WATCH_FOLDERS
+  const projectScopeEntries = useMemo(
+    () => entries.filter((entry) => retailLibraryEntryVisible(entry, retail?.fonts ?? [], retailSyncIsOn(retail))),
+    [entries, retail],
+  )
   const projectMemberIds = useMemo(() => {
     const project = projects.find((item) => item.id === projectFilter)
-    return new Set(project?.members.map((member) => member.assetId) ?? [])
-  }, [projects, projectFilter])
+    if (!project) return new Set<string>()
+    if (isSmartProject(project)) {
+      return new Set(matchingSmartEntries(projectScopeEntries, project.rules).map((entry) => entry.id))
+    }
+    return new Set(project.members.map((member) => member.assetId))
+  }, [projects, projectFilter, projectScopeEntries])
+  const projectMembershipCounts = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const project of projects) {
+      counts[project.id] = isSmartProject(project)
+        ? matchingSmartEntries(projectScopeEntries, project.rules).length
+        : project.members.length
+    }
+    return counts
+  }, [projects, projectScopeEntries])
+  const smartRuleFolders = useMemo(() => {
+    const folders = watchFolders.map((folder) => ({
+      id: folder,
+      label: libraryFolderFilterLabel(folder, watchFolders),
+    }))
+    if (retail?.enabled) folders.unshift({ id: RETAIL_LIBRARY_FILTER, label: RETAIL_LIBRARY_LABEL })
+    return folders
+  }, [watchFolders, retail?.enabled])
   const searching = Boolean(query.trim())
   const testInstallActive = isTestInstallFilter(watchFolderFilter)
   const testInstallEntries = useMemo(() => testInstallToCatalog(testInstallFonts), [testInstallFonts])
@@ -1556,14 +1599,63 @@ function AppShell() {
     }
   }
 
-  async function createProjectFromSelection() {
-    const groups = selectedCatalogGroups()
-    await createProjectWith(groups.flatMap(entryIds), groups.map((group) => group.familyName))
+  function openNewProject(ids: string[], names: string[]) {
+    setNewProjectSeed({ ids, names })
+    setNewProjectOpen(true)
+  }
+
+  async function createProjectOfKind(name: string, kind: 'manual' | 'smart') {
+    try {
+      const ids = kind === 'manual' ? newProjectSeed.ids : []
+      const result = await api.createProject(
+        name,
+        ids,
+        kind === 'smart' ? { kind: 'smart', rules: emptySmartRuleSet() } : undefined,
+      )
+      setProjects((current) => [result.project, ...current.filter((item) => item.id !== result.project.id)])
+      setProjectFilter(result.project.id)
+      setTab('library')
+      setWatchFolderFilter(null)
+      setNewProjectOpen(false)
+      if (kind === 'smart') setSmartEditorId(result.project.id)
+      toast.success(`Created ${result.project.name}`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not create project')
+    }
+  }
+
+  async function saveSmartRules(id: string, rules: SmartRuleSet) {
+    try {
+      const result = await api.updateProject(id, { rules })
+      setProjects((current) => current.map((item) => (item.id === result.project.id ? result.project : item)))
+      setSmartEditorId(null)
+      toast.success(`Updated rules for ${result.project.name}`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not save rules')
+    }
+  }
+
+  async function snapshotSmartProject(id: string) {
+    try {
+      const result = await api.snapshotProject(id)
+      setProjects((current) => [result.project, ...current.filter((item) => item.id !== result.project.id)])
+      setProjectFilter(result.project.id)
+      setTab('library')
+      setWatchFolderFilter(null)
+      setSmartEditorId(null)
+      toast.success(`Saved ${result.project.name}`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not save snapshot')
+    }
   }
 
   async function addFontsToProject(projectId: string, ids: string[]) {
     const project = projects.find((item) => item.id === projectId)
     if (!project || ids.length === 0) return
+    if (isSmartProject(project)) {
+      toast.message(`${project.name} fills itself from rules`)
+      return
+    }
     const next = uniqueMemberIds(
       project.members.map((member) => member.assetId),
       ids,
@@ -1583,7 +1675,7 @@ function AppShell() {
 
   async function removeFontsFromProject(projectId: string, ids: string[]) {
     const project = projects.find((item) => item.id === projectId)
-    if (!project || ids.length === 0) return
+    if (!project || ids.length === 0 || isSmartProject(project)) return
     const next = removeMemberIds(
       project.members.map((member) => member.assetId),
       ids,
@@ -1738,7 +1830,10 @@ function AppShell() {
   }
 
   function libraryProjectTarget(): string | undefined {
-    return tab === 'library' ? projectFilter ?? undefined : undefined
+    if (tab !== 'library' || !projectFilter) return undefined
+    const project = projects.find((item) => item.id === projectFilter)
+    if (!project || isSmartProject(project)) return undefined
+    return project.id
   }
 
   async function handleDrop(dataTransfer: DataTransfer, projectId?: string) {
@@ -2044,6 +2139,11 @@ function AppShell() {
     }
   }
 
+  const selectedProject = projects.find((item) => item.id === projectFilter) ?? null
+  const selectedSmartProject = selectedProject && isSmartProject(selectedProject) ? selectedProject : null
+  const editingSmartProject = projects.find((item) => item.id === smartEditorId) ?? null
+  const newProjectName = defaultProjectName(newProjectSeed.names)
+
   return (
     <LatinPreviewProvider text={latinPreviewText(settings?.latinPreview)}>
       <FileDropSurface
@@ -2051,10 +2151,8 @@ function AppShell() {
         dragging={dragging}
         ignoreRef={fontDragRef}
         label={
-          tab === 'library' && projectFilter
-            ? `Drop fonts or folders to add them to ${
-                projects.find((item) => item.id === projectFilter)?.name ?? 'this project'
-              }`
+          tab === 'library' && selectedProject && !selectedSmartProject
+            ? `Drop fonts or folders to add them to ${selectedProject.name}`
             : 'Drop fonts or folders to add them'
         }
         onDraggingChange={setDragging}
@@ -2101,7 +2199,15 @@ function AppShell() {
           onAddFontsToProject={(id, ids) => void addFontsToProject(id, ids)}
           onDropFilesOnProject={(id, dataTransfer) => void handleDrop(dataTransfer, id)}
           onRemoveProject={(id) => void removeProject(id)}
-          onCreateProject={() => void createProjectFromSelection()}
+          onCreateProject={() =>
+            openNewProject(
+              catalogSelection.flatMap(entryIds),
+              catalogSelection.map((group) => group.familyName),
+            )
+          }
+          projectMembershipCounts={projectMembershipCounts}
+          onEditSmartProject={(id) => setSmartEditorId(id)}
+          onSnapshotProject={(id) => void snapshotSmartProject(id)}
           savedFilters={savedFilters}
           onSelectSavedFilter={applySavedFilter}
           onCreateSavedFilter={createSavedFilterFromView}
@@ -2248,6 +2354,15 @@ function AppShell() {
                     the rest.
                   </p>
                 )}
+                {tab === 'library' && selectedSmartProject ? (
+                  <SmartProjectBar
+                    summary={smartRuleSummary(selectedSmartProject.rules)}
+                    count={projectMembershipCounts[selectedSmartProject.id] ?? 0}
+                    active={selectedSmartProject.desiredActive}
+                    onEdit={() => setSmartEditorId(selectedSmartProject.id)}
+                    onSnapshot={() => void snapshotSmartProject(selectedSmartProject.id)}
+                  />
+                ) : null}
               </div>
             )}
             <ScrollArea className="min-h-0 flex-1" viewportRef={libraryViewportRef}>
@@ -2303,11 +2418,8 @@ function AppShell() {
                           ? libraryFolderFilterLabel(watchFolderFilter, watchFolders)
                           : null
                       }
-                      projectName={
-                        tab === 'library' && projectFilter
-                          ? projects.find((item) => item.id === projectFilter)?.name
-                          : null
-                      }
+                      projectName={tab === 'library' ? selectedProject?.name : null}
+                      smartProject={tab === 'library' && Boolean(selectedSmartProject)}
                       onPickFiles={(files) => void handleFiles(files)}
                     />
                   )
@@ -2568,7 +2680,7 @@ function AppShell() {
                           onRevealInstance={(entryId, which) =>
                             revealCatalogInstance(entryId, which, group.entries)
                           }
-                          projects={projects}
+                          projects={projects.filter((project) => !isSmartProject(project))}
                           projectFilter={projectFilter}
                           dragIds={useBatch ? catalogSelection.flatMap(entryIds) : entryIds(group)}
                           projectFamilyNames={
@@ -2578,7 +2690,7 @@ function AppShell() {
                           }
                           onAddToProject={(id, ids) => void addFontsToProject(id, ids)}
                           onRemoveFromProject={(id, ids) => void removeFontsFromProject(id, ids)}
-                          onCreateProjectFromCard={(ids, familyNames) => void createProjectWith(ids, familyNames)}
+                          onCreateProjectFromCard={(ids, familyNames) => openNewProject(ids, familyNames)}
                           onFontDragStart={beginFontDrag}
                           onFontDragEnd={endFontDrag}
                         />
@@ -2889,7 +3001,13 @@ function AppShell() {
                 if (!selectedEntry) return
                 void (async () => {
                   try {
-                    let project = projects.find((item) => item.id === projectFilter) ?? projects[0]
+                    if (selectedSmartProject) {
+                      toast.error("Smart projects can't pin a revision. Save a snapshot to pin fonts.")
+                      return
+                    }
+                    let project =
+                      (selectedProject && !isSmartProject(selectedProject) ? selectedProject : null) ??
+                      projects.find((item) => !isSmartProject(item))
                     if (!project) {
                       project = (await api.createProject(familyNameOf(selectedEntry), [selectedEntry.id])).project
                     }
@@ -2954,6 +3072,30 @@ function AppShell() {
           )}
         </div>
 
+        <NewProjectDialog
+          open={newProjectOpen}
+          initialName={newProjectName}
+          seedCount={newProjectSeed.ids.length}
+          onCancel={() => setNewProjectOpen(false)}
+          onCreate={(input) => void createProjectOfKind(input.name, input.kind)}
+        />
+        <SmartRuleEditor
+          open={Boolean(editingSmartProject)}
+          projectId={editingSmartProject?.id ?? null}
+          projectName={editingSmartProject?.name ?? 'Smart project'}
+          rules={editingSmartProject?.rules ?? emptySmartRuleSet()}
+          entries={projectScopeEntries}
+          folders={smartRuleFolders}
+          onCancel={() => setSmartEditorId(null)}
+          onSave={(rules) => {
+            if (editingSmartProject) void saveSmartRules(editingSmartProject.id, rules)
+          }}
+          onSnapshot={
+            editingSmartProject
+              ? () => void snapshotSmartProject(editingSmartProject.id)
+              : undefined
+          }
+        />
         <DropFolderDialog
           open={Boolean(folderDrop)}
           folders={folderDrop?.folders ?? []}

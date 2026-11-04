@@ -1,5 +1,6 @@
 import type { RetailFontFormat, RetailSyncStatus } from '../shared/retail.ts'
 import type { AppIconStyle } from '../shared/appIcon.ts'
+import type { ProjectKind, SmartRuleSet } from '../shared/smart-projects.ts'
 
 export const FONT_EXTENSIONS = ['.ttf', '.otf', '.ttc', '.otc'] as const
 export const WEB_FONT_EXTENSIONS = ['.woff', '.woff2'] as const
@@ -405,8 +406,12 @@ export type ProjectMember = {
 export type ProjectSet = {
   id: string
   name: string
+  /** Absent on older files. Treated as manual. */
+  kind?: ProjectKind
   members: ProjectMember[]
   desiredActive: boolean
+  /** Live membership rules. Set on smart projects; ignored for manual projects. */
+  rules?: SmartRuleSet
 }
 
 export type ProjectFile = {

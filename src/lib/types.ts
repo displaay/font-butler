@@ -1,5 +1,6 @@
 import type { AppIconStyle } from '../../shared/appIcon.ts'
 import type { RetailFamilyCollision } from '../../shared/retail.ts'
+import type { ProjectKind, SmartRuleSet } from '../../shared/smart-projects.ts'
 
 export type FontStatus =
   | 'installed'
@@ -312,8 +313,12 @@ export type ProjectMember = {
 export type ProjectSet = {
   id: string
   name: string
+  /** Absent on older files. Treated as manual. */
+  kind?: ProjectKind
   members: ProjectMember[]
   desiredActive: boolean
+  /** Live membership rules. Set on smart projects; ignored for manual projects. */
+  rules?: SmartRuleSet
 }
 
 export type RelinkPreview = {
