@@ -716,6 +716,14 @@ export function Sidebar({
   appUpdateInstall?: { phase?: AppUpdateInstallPhase; percent?: number; error?: string } | null
   onInstallAppUpdate?: () => void
 }) {
+  const searchTags = useMemo(
+    () => (tagDefinitions ?? []).map((tag) => ({ id: tag.id, name: tag.name })),
+    [tagDefinitions],
+  )
+  const searchFoundries = useMemo(
+    () => foundryFilterRows(libraryFilterCounts, libraryFilters).map((row) => row.label),
+    [libraryFilterCounts, libraryFilters],
+  )
   const insetTrafficLights = hasInsetTrafficLights()
   const [fontsOpen, setFontsOpen] = useState(true)
   const [projectsOpen, setProjectsOpen] = useState(true)
@@ -886,6 +894,10 @@ export function Sidebar({
           tokens={searchTokens ?? []}
           onTextChange={onQueryChange}
           onTokensChange={onSearchTokensChange ?? (() => {})}
+          tags={searchTags}
+          foundries={searchFoundries}
+          libraryFilters={libraryFilters}
+          onLibraryFiltersChange={onLibraryFiltersChange}
         />
       </div>
       <ScrollArea className="overlay-scroll-hover min-h-0 flex-1" overlay>

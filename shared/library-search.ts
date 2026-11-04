@@ -8,11 +8,19 @@
  */
 
 import {
+  FONT_CLASSIFICATION_LABELS,
+  FONT_CLASSIFICATIONS,
   classificationOfFace,
   fontNameTokens,
   type ClassifiableFace,
   type FontClassification,
 } from './font-classification.ts'
+import {
+  classificationFilterId,
+  foundryFilterId,
+  isLibraryFilter,
+  type LibraryFilter,
+} from './library-filters.ts'
 
 export const SEARCH_TOKEN_IDS = [
   'thin',
@@ -117,34 +125,26 @@ const TRAIT_WORDS: Record<string, (family: SearchFamily) => boolean> = {
 export function addSearchToken(current: readonly SearchToken[], id: SearchTokenId): SearchToken[] {
   const token = TOKEN_BY_ID.get(id)
   if (!token) return [...current]
-  const without = token.group === 'weight' ? current.filter((item) => item.group !== 'weight') : current.filter((item) => item.id !== id)
-  if (without.some((item) => item.id === id)) return without
+  const without = current.filter((item) => !tokenReplaces(item, token))
   return [...without, token]
 }
 
-export function suggestSearchTokens(typed: string): SearchToken[] {
-  const needle = typed.trim().toLowerCase()
-  if (!needle) return [...SEARCH_TOKENS]
-  return SEARCH_TOKENS.filter((token) => {
-    const label = token.label.toLowerCase()
-    return (
-      label.startsWith(needle) ||
-      token.id.startsWith(needle) ||
-      label.split(/\s+/).some((word) => word.startsWith(needle))
-    )
-  })
+/** A second weight or width takes the place of the first. Italic and the two figure tokens stay together. */
+function tokenReplaces(current: SearchToken, incoming: SearchToken): boolean {
+  if (incoming.group === 'weight' && current.group === 'weight') return true
+  if (
+    (incoming.id === 'condensed' || incoming.id === 'extended') &&
+    (current.id === 'condensed' || current.id === 'extended')
+  ) {
+    return true
+  }
+  return current.id === incoming.id
 }
 
-/** Drop a trailing word that was only there to pick the filter. */
+/** Drop the trailing words a chosen style token stood for. */
 export function textAfterTokenChoice(text: string, token: SearchToken): string {
-  const parts = text.trim().split(/\s+/).filter(Boolean)
-  if (parts.length === 0) return ''
-  const last = parts[parts.length - 1]!.toLowerCase()
-  const label = token.label.toLowerCase()
-  if (label.startsWith(last) || token.id.startsWith(last) || label.split(/\s+/).some((word) => word.startsWith(last))) {
-    return parts.slice(0, -1).join(' ')
-  }
-  return text
+  const match = searchFilterSuggestions(text).find((item) => item.tokenId === token.id)
+  return match ? match.query : text
 }
 
 export function previewRequestFromTokens(tokens: readonly SearchToken[]): PreviewRequest {
@@ -277,6 +277,245 @@ function wordMatches(word: string, family: SearchFamily): boolean {
 
 function normalizeTagName(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+export type SearchSuggestionKind = 'style' | 'classification' | 'tag' | 'foundry'
+
+export type SearchSuggestion = {
+  id: string
+  kind: SearchSuggestionKind
+  label: string
+  /** Field text after this row is chosen. The words the filter stood for are gone. */
+  query: string
+  tokenId?: SearchTokenId
+  filterId?: LibraryFilter
+}
+
+export type SearchFilterCatalog = {
+  tags?: readonly { id: string; name: string }[]
+  foundries?: readonly string[]
+  chosenTokenIds?: readonly string[]
+  chosenFilters?: readonly string[]
+}
+
+/**
+ * Cicero lists Italic, then the weights, then width, figures, and Variable
+ * (`SearchToken.all` in Sources/CiceroCore/Library/SearchToken.swift).
+ */
+const STYLE_SUGGESTION_ORDER: readonly SearchTokenId[] = [
+  'italic',
+  'thin',
+  'extralight',
+  'light',
+  'regular',
+  'medium',
+  'semibold',
+  'bold',
+  'extrabold',
+  'black',
+  'condensed',
+  'extended',
+  'tabular',
+  'oldstyle',
+  'variable',
+]
+
+/** Names `SearchToken.words` matches, including the title and the kind word ("weight", "width", "numbers"). */
+const STYLE_WORDS: Record<SearchTokenId, readonly string[]> = {
+  italic: ['italic', 'italics', 'oblique'],
+  thin: ['thin', 'hairline', 'weight'],
+  extralight: ['extra light', 'extralight', 'ultra light', 'ultralight', 'weight'],
+  light: ['light', 'weight'],
+  regular: ['regular', 'weight'],
+  medium: ['medium', 'weight'],
+  semibold: ['semibold', 'semi bold', 'demibold', 'demi bold', 'weight'],
+  bold: ['bold', 'weight'],
+  extrabold: ['extra bold', 'extrabold', 'ultra bold', 'ultrabold', 'weight'],
+  black: ['black', 'heavy', 'weight'],
+  condensed: ['condensed', 'compressed', 'narrow', 'width'],
+  extended: ['extended', 'expanded', 'wide', 'width'],
+  tabular: ['tabular figures', 'tnum', 'numbers', 'numerals'],
+  oldstyle: ['old-style figures', 'oldstyle figures', 'old style figures', 'onum', 'numbers', 'numerals'],
+  variable: ['variable'],
+}
+
+/** `Classification.searchTerms` in Sources/CiceroCore/Library/SearchQuery.swift. */
+const CLASSIFICATION_TERMS: Record<FontClassification, readonly string[]> = {
+  serif: ['serif'],
+  'sans-serif': ['sans serif', 'sans-serif', 'sans'],
+  monospaced: ['monospaced', 'mono'],
+  script: ['script', 'handwriting', 'cursive'],
+  ornamental: ['ornamental', 'decorative', 'display'],
+  symbol: ['symbol', 'dingbats'],
+}
+
+type SuggestionCandidate = {
+  id: string
+  kind: SearchSuggestionKind
+  label: string
+  tokenId?: SearchTokenId
+  filterId?: LibraryFilter
+  /** Style phrases use beginsWord. Classification and tags must start with the run. Foundry names use beginsWord. */
+  match: (run: string) => boolean
+  tagName?: string
+}
+
+/**
+ * Filters offered as the query is typed.
+ * The match is Cicero's `SearchToken.suggestions(for:besides:)`: the trailing
+ * words, two letters at least, and the words before them stay. A style phrase
+ * matches when the run begins one of its words (`SearchQuery.beginsWord`).
+ * A classification or tag matches when one of its terms starts with the run,
+ * so "serif" does not offer Sans Serif. A foundry matches when the run begins
+ * a word of its name.
+ */
+export function searchFilterSuggestions(
+  typed: string,
+  catalog: SearchFilterCatalog = {},
+  options?: { browse?: boolean },
+): SearchSuggestion[] {
+  const candidates = suggestionCandidates(typed, catalog)
+  if (options?.browse) {
+    const remainder = typed.trim()
+    return candidates.map((candidate) => toSuggestion(candidate, remainder))
+  }
+  const parts = typed.trim().split(/\s+/).filter(Boolean)
+  const lower = parts.map((part) => part.toLowerCase())
+  const found: SearchSuggestion[] = []
+  for (const candidate of candidates) {
+    for (let start = 0; start < lower.length; start++) {
+      const run = lower.slice(start).join(' ')
+      if (run.length < 2 || !candidate.match(run)) continue
+      found.push(toSuggestion(candidate, parts.slice(0, start).join(' ')))
+      break
+    }
+  }
+  return found
+}
+
+export function applySearchSuggestion(
+  suggestion: SearchSuggestion,
+  tokens: readonly SearchToken[],
+  libraryFilters: readonly LibraryFilter[],
+): { text: string; tokens: SearchToken[]; libraryFilters: LibraryFilter[] } {
+  if (suggestion.kind === 'style' && suggestion.tokenId) {
+    return {
+      text: suggestion.query,
+      tokens: addSearchToken(tokens, suggestion.tokenId),
+      libraryFilters: [...libraryFilters],
+    }
+  }
+  if (suggestion.filterId && !libraryFilters.includes(suggestion.filterId)) {
+    return {
+      text: suggestion.query,
+      tokens: [...tokens],
+      libraryFilters: [...libraryFilters, suggestion.filterId],
+    }
+  }
+  return {
+    text: suggestion.query,
+    tokens: [...tokens],
+    libraryFilters: [...libraryFilters],
+  }
+}
+
+function toSuggestion(candidate: SuggestionCandidate, remainder: string): SearchSuggestion {
+  const query = candidate.tagName ? [remainder, candidate.tagName].filter(Boolean).join(' ') : remainder
+  return {
+    id: candidate.id,
+    kind: candidate.kind,
+    label: candidate.label,
+    query,
+    tokenId: candidate.tokenId,
+    filterId: candidate.filterId,
+  }
+}
+
+function suggestionCandidates(typed: string, catalog: SearchFilterCatalog): SuggestionCandidate[] {
+  const chosenTokens = new Set(catalog.chosenTokenIds ?? [])
+  const chosenFilters = new Set(catalog.chosenFilters ?? [])
+  const tags = [...(catalog.tags ?? [])].filter((tag) => tag.name.trim())
+  const takenTags = new Set(splitSearchWords(typed, tags.map((tag) => tag.name)).tagPhrases)
+  const candidates: SuggestionCandidate[] = []
+
+  for (const id of STYLE_SUGGESTION_ORDER) {
+    if (chosenTokens.has(id)) continue
+    const token = TOKEN_BY_ID.get(id)
+    if (!token) continue
+    const words = STYLE_WORDS[id]
+    candidates.push({
+      id: `style:${id}`,
+      kind: 'style',
+      label: token.label,
+      tokenId: id,
+      match: (run) => words.some((word) => beginsWord(run, word)),
+    })
+  }
+
+  for (const id of FONT_CLASSIFICATIONS) {
+    const filterId = classificationFilterId(id)
+    if (chosenFilters.has(filterId)) continue
+    const terms = CLASSIFICATION_TERMS[id]
+    candidates.push({
+      id: filterId,
+      kind: 'classification',
+      label: FONT_CLASSIFICATION_LABELS[id],
+      filterId,
+      match: (run) => terms.some((term) => term.startsWith(run)),
+    })
+  }
+
+  const sortedTags = [...tags].sort((left, right) => left.name.localeCompare(right.name))
+  for (const tag of sortedTags) {
+    const phrase = normalizeTagName(tag.name)
+    if (!phrase || takenTags.has(phrase)) continue
+    candidates.push({
+      id: `tag:${tag.id}`,
+      kind: 'tag',
+      label: tag.name,
+      tagName: tag.name.trim(),
+      match: (run) => phrase.startsWith(run),
+    })
+  }
+
+  const foundries = [...new Set((catalog.foundries ?? []).map((name) => name.trim()).filter(Boolean))].sort((a, b) =>
+    a.localeCompare(b),
+  )
+  for (const name of foundries) {
+    const filterId = foundryFilterId(name)
+    if (!isLibraryFilter(filterId) || chosenFilters.has(filterId)) continue
+    const phrase = name.toLowerCase()
+    candidates.push({
+      id: filterId,
+      kind: 'foundry',
+      label: name,
+      filterId,
+      match: (run) => beginsWord(run, phrase),
+    })
+  }
+
+  return candidates
+}
+
+/** `SearchQuery.beginsWord`: `run` sits where a word starts, or anywhere when it does not itself start with a letter or digit. */
+function beginsWord(run: string, text: string): boolean {
+  if (!run || run.length > text.length) return false
+  const first = run[0] ?? ''
+  const anchored = isWordChar(first)
+  let from = 0
+  while (from <= text.length - run.length) {
+    const index = text.indexOf(run, from)
+    if (index < 0) return false
+    if (!anchored || index === 0) return true
+    const before = text[index - 1] ?? ''
+    if (!isWordChar(before)) return true
+    from = index + 1
+  }
+  return false
+}
+
+function isWordChar(char: string): boolean {
+  return /[\p{L}\p{N}]/u.test(char)
 }
 
 function familyHasExactTag(family: SearchFamily, name: string): boolean {
