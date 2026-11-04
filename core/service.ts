@@ -610,8 +610,8 @@ export class FontButlerService {
     }
   }
 
-  createFamilyTag(name: string, familyKeys: string[] = []) {
-    return persistNewFamilyTag(this.paths, name, familyKeys)
+  createFamilyTag(name: string, familyKeys: string[] = [], color?: string) {
+    return persistNewFamilyTag(this.paths, name, familyKeys, color)
   }
 
   renameFamilyTag(tagId: string, name: string) {

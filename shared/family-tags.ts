@@ -52,7 +52,7 @@ export const SEED_FAMILY_TAGS: readonly FamilyTag[] = [
 
 const CUSTOM_TAG_COLORS = ['#7c5cbf', '#c45c8a', '#2a9d8f', '#c47b3a', '#4c7c8a', '#8a6232']
 
-/** Colors offered when editing a tag. Seed colors first, then the custom palette. */
+/** Colors offered when creating or editing a tag. Seed colors first, then the custom palette. */
 export const TAG_COLOR_CHOICES: readonly string[] = [
   ...SEED_FAMILY_TAGS.map((tag) => tag.color),
   ...CUSTOM_TAG_COLORS,
@@ -317,11 +317,20 @@ export function nextCustomTagColor(tags: readonly FamilyTag[]): string {
   return CUSTOM_TAG_COLORS[tags.length % CUSTOM_TAG_COLORS.length]!
 }
 
-export function addFamilyTag(catalog: FamilyTagCatalog, name: string, id: string): FamilyTag {
+export function addFamilyTag(
+  catalog: FamilyTagCatalog,
+  name: string,
+  id: string,
+  color?: string,
+): FamilyTag {
   const tags = ensureSeedTags(catalog.tags, catalog.retiredTagSeeds)
   const clean = cleanTagName(name)
   assertUniqueName(tags, clean)
-  const tag: FamilyTag = { id, name: clean, color: nextCustomTagColor(tags) }
+  const tag: FamilyTag = {
+    id,
+    name: clean,
+    color: color === undefined ? nextCustomTagColor(tags) : cleanTagColor(color),
+  }
   catalog.tags = [...tags, tag]
   catalog.familyTags = normalizeFamilyTagAssignments(catalog.familyTags, catalog.tags)
   return tag

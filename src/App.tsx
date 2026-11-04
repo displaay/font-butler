@@ -309,7 +309,7 @@ function AppShell() {
     if (!request) return
     try {
       if (request.mode === 'create') {
-        applyFamilyTagPayload(await api.createFamilyTag(name, request.familyKeys))
+        applyFamilyTagPayload(await api.createFamilyTag(name, request.familyKeys, color))
       } else {
         applyFamilyTagPayload(await api.updateFamilyTag(request.tagId, name, color))
       }
