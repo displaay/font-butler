@@ -9,6 +9,7 @@ import {
   allowUnlinkedSource,
   isUnlinkedSource,
   rememberUnlinkedSource,
+  setUnlinkedBackupNowForTest,
   setUnlinkedBackupRenameForTest,
   setUnlinkedCaseModeForTest,
   setUnlinkedListReadForTest,
@@ -256,9 +257,15 @@ test('timestamped unlinked backups keep the newest three', () => {
     const target = listFile(paths)
     fs.mkdirSync(paths.dataRoot, { recursive: true })
     fs.writeFileSync(`${target}.bak`, JSON.stringify({ version: 1, paths: [] }))
-    for (let index = 0; index < 5; index += 1) {
-      fs.writeFileSync(target, `{bad ${index}`)
-      rememberUnlinkedSource(paths, path.join(paths.dataRoot, `Font${index}.otf`))
+    // Same millisecond for every stamp — must not overwrite; prune still keeps 3.
+    setUnlinkedBackupNowForTest(() => new Date('2026-11-04T10:12:42.123Z'))
+    try {
+      for (let index = 0; index < 5; index += 1) {
+        fs.writeFileSync(target, `{bad ${index}`)
+        rememberUnlinkedSource(paths, path.join(paths.dataRoot, `Font${index}.otf`))
+      }
+    } finally {
+      setUnlinkedBackupNowForTest(undefined)
     }
     const stamped = fs
       .readdirSync(paths.dataRoot)
