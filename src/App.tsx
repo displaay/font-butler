@@ -34,7 +34,7 @@ import { AnnouncementDialog } from '@/components/AnnouncementDialog'
 import { ConfettiBurst } from '@/components/ConfettiBurst'
 import { OnboardingDialog } from '@/components/OnboardingDialog'
 import type { Announcement } from '../shared/announcements.ts'
-import type { FamilyTag, FamilyTagAssignment } from '../shared/family-tags.ts'
+import { familyTagRulePredicate, type FamilyTag, type FamilyTagAssignment } from '../shared/family-tags.ts'
 import { parseAppIconStyle, type AppIconStyle } from '@/lib/appIcon'
 import { RelinkDialog } from '@/components/RelinkDialog'
 import { RenameDialog } from '@/components/RenameDialog'
@@ -961,23 +961,33 @@ function AppShell() {
     () => entries.filter((entry) => retailLibraryEntryVisible(entry, retail?.fonts ?? [], retailSyncIsOn(retail))),
     [entries, retail],
   )
+  const familyTagCatalog = useMemo(
+    () => ({ tags: familyTagDefs, familyTags: familyTagAssignments }),
+    [familyTagDefs, familyTagAssignments],
+  )
+  const smartMatchOptions = useMemo(
+    () => ({ predicates: { tag: familyTagRulePredicate(familyTagCatalog) } }),
+    [familyTagCatalog],
+  )
   const projectMemberIds = useMemo(() => {
     const project = projects.find((item) => item.id === projectFilter)
     if (!project) return new Set<string>()
     if (isSmartProject(project)) {
-      return new Set(matchingSmartEntries(projectScopeEntries, project.rules).map((entry) => entry.id))
+      return new Set(
+        matchingSmartEntries(projectScopeEntries, project.rules, smartMatchOptions).map((entry) => entry.id),
+      )
     }
     return new Set(project.members.map((member) => member.assetId))
-  }, [projects, projectFilter, projectScopeEntries])
+  }, [projects, projectFilter, projectScopeEntries, smartMatchOptions])
   const projectMembershipCounts = useMemo(() => {
     const counts: Record<string, number> = {}
     for (const project of projects) {
       counts[project.id] = isSmartProject(project)
-        ? matchingSmartEntries(projectScopeEntries, project.rules).length
+        ? matchingSmartEntries(projectScopeEntries, project.rules, smartMatchOptions).length
         : project.members.length
     }
     return counts
-  }, [projects, projectScopeEntries])
+  }, [projects, projectScopeEntries, smartMatchOptions])
   const smartRuleFolders = useMemo(() => {
     const folders = watchFolders.map((folder) => ({
       id: folder,
@@ -3295,6 +3305,7 @@ function AppShell() {
           rules={editingSmartProject?.rules ?? emptySmartRuleSet()}
           entries={projectScopeEntries}
           folders={smartRuleFolders}
+          tags={familyTagCatalog}
           onCancel={() => setSmartEditorId(null)}
           onSave={(rules) => {
             if (editingSmartProject) void saveSmartRules(editingSmartProject.id, rules)

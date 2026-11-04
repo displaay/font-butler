@@ -9,6 +9,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
+import { familyTagRulePredicate, type FamilyTag, type FamilyTagCatalog } from '../../shared/family-tags.ts'
 import {
   SMART_RULE_CHIP_VALUES,
   SMART_RULE_FIELD_OPTIONS,
@@ -28,6 +29,8 @@ import {
 
 const selectClass =
   'h-8 min-w-0 rounded-md border bg-background px-2 text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring/30'
+
+const EMPTY_TAG_CATALOG: FamilyTagCatalog = { tags: [], familyTags: [] }
 
 export function NewProjectDialog({
   open,
@@ -170,6 +173,7 @@ export function SmartRuleEditor({
   rules,
   entries,
   folders,
+  tags,
   onCancel,
   onSave,
   onSnapshot,
@@ -180,6 +184,7 @@ export function SmartRuleEditor({
   rules: SmartRuleSet
   entries: SmartMatchEntry[]
   folders: { id: string; label: string }[]
+  tags?: FamilyTagCatalog
   onCancel: () => void
   onSave: (rules: SmartRuleSet) => void
   onSnapshot?: () => void
@@ -199,6 +204,7 @@ export function SmartRuleEditor({
             rules={rules}
             entries={entries}
             folders={folders}
+            tags={tags}
             onCancel={onCancel}
             onSave={onSave}
             onSnapshot={onSnapshot}
@@ -218,6 +224,7 @@ function SmartRuleForm({
   rules,
   entries,
   folders,
+  tags,
   onCancel,
   onSave,
   onSnapshot,
@@ -226,15 +233,21 @@ function SmartRuleForm({
   rules: SmartRuleSet
   entries: SmartMatchEntry[]
   folders: { id: string; label: string }[]
+  tags?: FamilyTagCatalog
   onCancel: () => void
   onSave: (rules: SmartRuleSet) => void
   onSnapshot?: () => void
 }) {
   const [draft, setDraft] = useState<SmartRuleSet>(() => normalizeSmartRuleSet(rules))
+  const tagCatalog = tags ?? EMPTY_TAG_CATALOG
+  const matchOptions = useMemo(
+    () => ({ predicates: { tag: familyTagRulePredicate(tagCatalog) } }),
+    [tagCatalog],
+  )
 
   const matchCount = useMemo(
-    () => entries.filter((entry) => entryMatchesSmartRules(entry, draft)).length,
-    [entries, draft],
+    () => entries.filter((entry) => entryMatchesSmartRules(entry, draft, matchOptions)).length,
+    [entries, draft, matchOptions],
   )
 
   function updateRule(id: string, next: SmartRule) {
@@ -274,15 +287,16 @@ function SmartRuleForm({
           </Button>
         </div>
         <div className="mb-3 max-h-72 space-y-2 overflow-y-auto">
-          {draft.rules.every((rule) => rule.field === 'tag') ? (
+          {draft.rules.length === 0 ? (
             <p className="text-sm text-muted-foreground">Add a rule. Until you do, this project is empty.</p>
           ) : (
-            draft.rules.map((rule, index) => rule.field === 'tag' ? null : (
+            draft.rules.map((rule, index) => (
               <RuleRow
                 key={rule.id}
                 index={index}
                 rule={rule}
                 folders={folders}
+                tags={tagCatalog.tags ?? []}
                 onChange={(next) => updateRule(rule.id, next)}
                 onRemove={() =>
                   setDraft((current) => ({
@@ -330,17 +344,20 @@ function RuleRow({
   index,
   rule,
   folders,
+  tags,
   onChange,
   onRemove,
 }: {
   index: number
   rule: SmartRule
   folders: { id: string; label: string }[]
+  tags: readonly FamilyTag[]
   onChange: (rule: SmartRule) => void
   onRemove: () => void
 }) {
   const operators = operatorsForField(rule.field)
   const chips = SMART_RULE_CHIP_VALUES[rule.field as SmartChipField]
+  const knownTag = tags.some((tag) => tag.id === rule.value)
   return (
     <div className="flex items-center gap-1.5" role="group" aria-label={`Rule ${index + 1}`}>
       <select
@@ -348,9 +365,10 @@ function RuleRow({
         className={cn(selectClass, 'w-[8.5rem]')}
         value={rule.field}
         onChange={(event) => {
-          const field = event.target.value as Exclude<SmartRuleField, 'tag'>
+          const field = event.target.value as SmartRuleField
           const next = createSmartRule({ id: rule.id, field })
           if (field === 'folder') next.value = folders[0]?.id ?? ''
+          if (field === 'tag') next.value = tags[0]?.id ?? ''
           onChange(next)
         }}
       >
@@ -381,6 +399,21 @@ function RuleRow({
           placeholder="Family or style"
           onChange={(event) => onChange({ ...rule, value: event.target.value })}
         />
+      ) : rule.field === 'tag' ? (
+        <select
+          aria-label={`Rule ${index + 1} tag`}
+          className={cn(selectClass, 'min-w-0 flex-1')}
+          value={rule.value}
+          onChange={(event) => onChange({ ...rule, value: event.target.value })}
+        >
+          {tags.length === 0 ? <option value="">No tags yet</option> : null}
+          {tags.map((tag) => (
+            <option key={tag.id} value={tag.id}>
+              {tag.name}
+            </option>
+          ))}
+          {rule.value && !knownTag ? <option value={rule.value}>{rule.value}</option> : null}
+        </select>
       ) : rule.field === 'folder' ? (
         <select
           aria-label={`Rule ${index + 1} folder`}

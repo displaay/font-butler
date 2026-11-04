@@ -77,7 +77,8 @@ export function tagIdsForFamily(
 
 /**
  * `tag is` when this returns true, `tag is not` when it returns false.
- * Match a tag by id, seed, or current name.
+ * Match a tag by id, seed, or current name. The smart-project predicate is
+ * `familyTagRulePredicate`; `isNot` is applied by the rule matcher.
  */
 export function entryHasFamilyTag(
   catalog: FamilyTagCatalog,
@@ -96,6 +97,25 @@ export function entryHasFamilyTag(
     return Boolean(tag && ids.includes(tag.id))
   }
   return false
+}
+
+/** Positive `tag is <value>` check. Value may be a tag id, seed, or current name. */
+export function entryMatchesFamilyTagValue(
+  catalog: FamilyTagCatalog,
+  entry: FamilyTagEntry,
+  value: string,
+): boolean {
+  const wanted = value.trim()
+  if (!wanted) return false
+  if (entryHasFamilyTag(catalog, entry, { id: wanted })) return true
+  if (isSeed(wanted) && entryHasFamilyTag(catalog, entry, { seed: wanted })) return true
+  return entryHasFamilyTag(catalog, entry, { name: wanted })
+}
+
+/** `predicates.tag` for `matchingSmartEntries`. Does not read font bytes. */
+export function familyTagRulePredicate<TEntry extends FamilyTagEntry>(catalog: FamilyTagCatalog) {
+  return (entry: TEntry, rule: { value: string }): boolean =>
+    entryMatchesFamilyTagValue(catalog, entry, rule.value)
 }
 
 function isSeed(value: unknown): value is FamilyTagSeed {

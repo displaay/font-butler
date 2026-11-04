@@ -10,10 +10,12 @@ import type {
   ProjectSet,
   ProjectUnresolvedFont,
 } from './types.ts'
+import { familyTagRulePredicate, type FamilyTagCatalog } from '../shared/family-tags.ts'
 import {
   isSmartProject,
   matchingSmartEntries,
   normalizeSmartRuleSet,
+  type SmartMatchOptions,
   type SmartRuleSet,
 } from '../shared/smart-projects.ts'
 
@@ -177,17 +179,27 @@ export function setMemberUnsatisfied(project: ProjectSet, assetId: string, unsat
   if (member) member.unsatisfied = unsatisfied
 }
 
+function smartTagOptions(tags?: FamilyTagCatalog): SmartMatchOptions<CatalogEntry> | undefined {
+  if (!tags) return undefined
+  return { predicates: { tag: familyTagRulePredicate(tags) } }
+}
+
 /** Manual projects use their member list. Smart projects use the current rule match. */
-export function projectActivationMembers(project: ProjectSet, entries: CatalogEntry[]): ProjectMember[] {
+export function projectActivationMembers(
+  project: ProjectSet,
+  entries: CatalogEntry[],
+  tags?: FamilyTagCatalog,
+): ProjectMember[] {
   if (!isSmartProject(project)) return project.members
-  return matchingSmartEntries(entries, project.rules).map((entry) => ({ assetId: entry.id }))
+  return matchingSmartEntries(entries, project.rules, smartTagOptions(tags)).map((entry) => ({ assetId: entry.id }))
 }
 
 export function projectActivationState(
   project: ProjectSet,
   entries: CatalogEntry[],
+  tags?: FamilyTagCatalog,
 ): 'active' | 'partial' | 'inactive' | 'preview' {
-  const resolved = projectActivationMembers(project, entries)
+  const resolved = projectActivationMembers(project, entries, tags)
   if (resolved.length === 0) return 'inactive'
   const members = resolved.map((member) => ({
     member,

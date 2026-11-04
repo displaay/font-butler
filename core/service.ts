@@ -3224,7 +3224,8 @@ export class FontButlerService {
       const project = loadProjects(this.paths).find((item) => item.id === id)
       if (!project) throw new Error('That project was not found.')
       if (!isSmartProject(project)) throw new Error('Save a snapshot from a smart project.')
-      const memberIds = projectActivationMembers(project, loadCatalog(this.paths).entries).map(
+      const catalog = loadCatalog(this.paths)
+      const memberIds = projectActivationMembers(project, catalog.entries, catalog).map(
         (member) => member.assetId,
       )
       const snapshot = upsertProject(this.paths, createProject(smartSnapshotName(project.name), memberIds))
@@ -3318,7 +3319,8 @@ export class FontButlerService {
     const projects = loadProjects(this.paths)
     const project = projects.find((item) => item.id === id)
     if (!project) throw new Error('That project was not found.')
-    const members = projectActivationMembers(project, loadCatalog(this.paths).entries)
+    const catalog = loadCatalog(this.paths)
+    const members = projectActivationMembers(project, catalog.entries, catalog)
     for (const member of members) {
       if (!member.pinFingerprint) continue
       const conflict = pinConflict(
@@ -3582,7 +3584,8 @@ export class FontButlerService {
   projectState(id: string) {
     const project = loadProjects(this.paths).find((item) => item.id === id)
     if (!project) throw new Error('That project was not found.')
-    return projectActivationState(project, loadCatalog(this.paths).entries)
+    const catalog = loadCatalog(this.paths)
+    return projectActivationState(project, catalog.entries, catalog)
   }
 
   private batchFromOperation(operation: Operation): BatchActionResult {
