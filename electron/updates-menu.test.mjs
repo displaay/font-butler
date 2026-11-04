@@ -198,6 +198,7 @@ test('packaged app includes switchable dock and menu-bar icon packs', () => {
   assert.match(main, /macosDockIconPng/)
   assert.match(main, /app\.dock\.setIcon/)
   assert.match(main, /function applyAppIconSetting/)
+  assert.match(main, /value === 'bright' \|\| value === 'mono' \|\| value === 'cuttler'/)
 })
 
 test('unreadOperationIdsToMark badges hidden-window ops and skips visible foreground', () => {
