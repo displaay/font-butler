@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { ArrowLeftRight, ChevronDown, CircleMinus, CirclePlus, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
+import { ArrowLeftRight, ChevronDown, CircleMinus, CirclePlus, Clock, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { CatalogBatchPlan } from '@/lib/batch'
-import { actionLabel, activateActionLabel, deactivateActionLabel, forgetSourcesLabel, installActionLabel } from '@/lib/batch'
+import { ACTIVATE_UNTIL_QUIT_LABEL, actionLabel, activateActionLabel, deactivateActionLabel, forgetSourcesLabel, installActionLabel } from '@/lib/batch'
 import { formatSwapLabel } from '@/lib/formats'
 import { cn } from '@/lib/utils'
 
@@ -14,6 +14,7 @@ type CatalogCardActionHandlers = {
   onDeactivate: () => void
   onUninstall: () => void
   onActivate: () => void
+  onActivateUntilQuit?: () => void
   /** Passed only when a same-format occupying sibling exists (`canSwitchTo`). */
   onSwitch?: () => void
   formatSwap?: { from: string; to: string; occupying?: boolean } | null
@@ -35,6 +36,7 @@ export function CatalogCardActions({
   onDeactivate,
   onUninstall,
   onActivate,
+  onActivateUntilQuit,
   onSwitch,
   formatSwap,
   onFormatSwap,
@@ -83,6 +85,11 @@ export function CatalogCardActions({
           <Power />
         </IconAction>
       )}
+      {(plan.activate > 0 || plan.install > 0) && onActivateUntilQuit ? (
+        <IconAction label={ACTIVATE_UNTIL_QUIT_LABEL} disabled={busy} onClick={onActivateUntilQuit}>
+          <Clock />
+        </IconAction>
+      ) : null}
       {formatSwap && onFormatSwap && (
         <IconAction label={formatSwapLabel(formatSwap)} disabled={busy} onClick={onFormatSwap}>
           <ArrowLeftRight />

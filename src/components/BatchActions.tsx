@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowLeftRight, CircleMinus, CirclePlus, FolderOpen, ListX, Power, PowerOff, RefreshCw, Trash2, Unlink } from 'lucide-react'
+import { ArrowLeftRight, CircleMinus, CirclePlus, Clock, FolderOpen, ListX, Power, PowerOff, RefreshCw, Trash2, Unlink } from 'lucide-react'
 import { AdobeLogo } from '@/components/Badges'
 import { Button } from '@/components/ui/button'
 import { SplitInstallButton, SplitUninstallButton, type SplitUninstallExtra } from '@/components/SplitUninstallButton'
@@ -11,6 +11,7 @@ import {
   ContextMenuSubTrigger,
 } from '@/components/ui/context-menu'
 import {
+  ACTIVATE_UNTIL_QUIT_LABEL,
   actionLabel,
   activateActionLabel,
   deactivateActionLabel,
@@ -321,6 +322,7 @@ export function CatalogMenuItems({
   onUninstallAndRemove,
   onUninstallFromAdobe,
   onActivate,
+  onActivateUntilQuit,
   onSwitch,
   onForget,
   onDeleteFiles,
@@ -343,6 +345,7 @@ export function CatalogMenuItems({
   onUninstallAndRemove?: () => void
   onUninstallFromAdobe?: () => void
   onActivate: () => void
+  onActivateUntilQuit?: () => void
   /** Passed only when a same-format occupying sibling exists (`canSwitchTo`). */
   onSwitch?: () => void
   onForget: () => void
@@ -393,6 +396,11 @@ export function CatalogMenuItems({
           <Power /> {activateActionLabel(plan, multi)}
         </ContextMenuItem>
       )}
+      {(plan.activate > 0 || plan.install > 0) && onActivateUntilQuit ? (
+        <ContextMenuItem disabled={busy} onSelect={onActivateUntilQuit}>
+          <Clock /> {ACTIVATE_UNTIL_QUIT_LABEL}
+        </ContextMenuItem>
+      ) : null}
       {formatSwap && onFormatSwap ? (
         <ContextMenuItem disabled={busy} onSelect={onFormatSwap}>
           <ArrowLeftRight /> {formatSwapLabel(formatSwap)}
@@ -528,6 +536,7 @@ export function InstanceMenuItems({
   onRevealSource,
   onInstall,
   onActivate,
+  onActivateUntilQuit,
   onDeactivate,
   onUninstall,
   onInstallToAdobe,
@@ -542,6 +551,7 @@ export function InstanceMenuItems({
   onRevealSource: () => void
   onInstall: () => void
   onActivate: () => void
+  onActivateUntilQuit?: () => void
   onDeactivate: () => void
   onUninstall: () => void
   onInstallToAdobe: () => void
@@ -573,6 +583,11 @@ export function InstanceMenuItems({
       {plan.activate ? (
         <ContextMenuItem disabled={busy} onSelect={onActivate}>
           <Power /> Activate instance
+        </ContextMenuItem>
+      ) : null}
+      {(plan.activate || plan.install) && onActivateUntilQuit ? (
+        <ContextMenuItem disabled={busy} onSelect={onActivateUntilQuit}>
+          <Clock /> {ACTIVATE_UNTIL_QUIT_LABEL}
         </ContextMenuItem>
       ) : null}
       {plan.formatSwap && onFormatSwap ? (

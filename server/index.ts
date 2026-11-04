@@ -630,6 +630,48 @@ app.post('/api/deactivate', async (c) => {
   }
 })
 
+app.post('/api/activate-until-quit', async (c) => {
+  const body = await c.req.json<{
+    id?: string
+    ids?: string[]
+    replace?: boolean
+    switch?: boolean
+    destinationIds?: Array<'macos' | 'adobe-shared'>
+  }>()
+  const options = {
+    replace: body.replace === true,
+    switch: body.switch === true,
+    destinationIds: body.destinationIds,
+  }
+  try {
+    if (body.ids?.length) {
+      const entries = await service.activateUntilQuitMany(body.ids, options)
+      return c.json({ entries })
+    }
+    if (!body.id) {
+      return c.json({ error: 'Missing id or ids' }, 400)
+    }
+    const entry = await service.activateUntilQuit(body.id, options)
+    return c.json({ entry })
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : 'Could not activate that font until quit' },
+      400,
+    )
+  }
+})
+
+app.post('/api/session/release', async (c) => {
+  try {
+    return c.json(await service.releaseSessionActivations())
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : 'Could not release session fonts' },
+      400,
+    )
+  }
+})
+
 app.post('/api/activate', async (c) => {
   const body = await c.req.json<{
     id?: string
@@ -1318,9 +1360,14 @@ mountEventsRoutes(app, {
       shuttingDown = true
       for (const close of sseClosers) close()
       sseClosers.clear()
-      const force = setTimeout(() => process.exit(0), 2_000)
-      force.unref?.()
       void (async () => {
+        try {
+          await service.releaseSessionActivations()
+        } catch (error) {
+          console.error('Could not release session fonts', error)
+        }
+        const force = setTimeout(() => process.exit(0), 2_000)
+        force.unref?.()
         try {
           await closeFontAnalysisWorker()
           await closeAllWatchers()

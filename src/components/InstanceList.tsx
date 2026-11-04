@@ -23,6 +23,7 @@ export type InstanceActions = {
   busy: boolean
   onInstall: (entryId: string) => void
   onActivate: (entryId: string) => void
+  onActivateUntilQuit?: (entryId: string) => void
   onDeactivate: (entryId: string) => void
   onUninstall: (entryId: string) => void
   onInstallToAdobe: (entryId: string) => void
@@ -47,6 +48,7 @@ function InstanceRowMenu({
   children,
   onInstall,
   onActivate,
+  onActivateUntilQuit,
   onDeactivate,
   onUninstall,
   onInstallToAdobe,
@@ -66,6 +68,7 @@ function InstanceRowMenu({
   children: ReactNode
   onInstall: (entryId: string) => void
   onActivate: (entryId: string) => void
+  onActivateUntilQuit?: (entryId: string) => void
   onDeactivate: (entryId: string) => void
   onUninstall: (entryId: string) => void
   onInstallToAdobe: (entryId: string) => void
@@ -121,6 +124,7 @@ function InstanceRowMenu({
           onRevealSource={() => onRevealSource?.(entry.id)}
           onInstall={() => onInstall(entry.id)}
           onActivate={() => onActivate(entry.id)}
+          onActivateUntilQuit={onActivateUntilQuit ? () => onActivateUntilQuit(entry.id) : undefined}
           onDeactivate={() => onDeactivate(entry.id)}
           onUninstall={() => onUninstall(entry.id)}
           onInstallToAdobe={() => onInstallToAdobe(entry.id)}
@@ -216,6 +220,7 @@ export function InstanceList({
                   busy={instanceActions.busy}
                   onInstall={instanceActions.onInstall}
                   onActivate={instanceActions.onActivate}
+                  onActivateUntilQuit={instanceActions.onActivateUntilQuit}
                   onDeactivate={instanceActions.onDeactivate}
                   onUninstall={instanceActions.onUninstall}
                   onInstallToAdobe={instanceActions.onInstallToAdobe}

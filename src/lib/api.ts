@@ -328,6 +328,30 @@ export const api = {
         destinationIds: options?.destinationIds,
       }),
     ),
+  activateUntilQuit: (
+    id: string,
+    options?: { replace?: boolean; switch?: boolean; destinationIds?: DestinationId[] },
+  ) =>
+    json<{ entry: CatalogEntry }>(
+      post('/api/activate-until-quit', {
+        id,
+        replace: options?.replace,
+        switch: options?.switch,
+        destinationIds: options?.destinationIds,
+      }),
+    ),
+  activateUntilQuitMany: (
+    ids: string[],
+    options?: { replace?: boolean; switch?: boolean; destinationIds?: DestinationId[] },
+  ) =>
+    json<{ entries: CatalogEntry[] }>(
+      post('/api/activate-until-quit', {
+        ids,
+        replace: options?.replace,
+        switch: options?.switch,
+        destinationIds: options?.destinationIds,
+      }),
+    ),
   reinstall: (id: string, options?: { expectedSourceFingerprint?: string }) =>
     json<{ entry: CatalogEntry }>(
       post('/api/reinstall', { id, expectedSourceFingerprint: options?.expectedSourceFingerprint }),

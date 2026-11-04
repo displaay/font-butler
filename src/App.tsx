@@ -1605,6 +1605,9 @@ function AppShell() {
     uninstallInstance,
     installInstanceToAdobe,
     activateGroupGuarded,
+    activateUntilQuitGroup,
+    activateUntilQuitInstance,
+    activateUntilQuitSelected,
     reinstallSelected,
     repairSelected,
     reinstallAllUpdates,
@@ -2718,6 +2721,7 @@ function AppShell() {
                           }
                           onInstallInstance={(entryId) => void installInstanceGuarded(entryId)}
                           onActivateInstance={(entryId) => void activateInstanceGuarded(entryId)}
+                          onActivateUntilQuitInstance={(entryId) => void activateUntilQuitInstance(entryId)}
                           onDeactivateInstance={(entryId) => void deactivateInstance(entryId)}
                           onUninstallInstance={(entryId) => {
                             if (testInstallActive) {
@@ -2788,6 +2792,9 @@ function AppShell() {
                           }
                           onActivate={() =>
                             useBatch ? void activateSelected() : void activateGroupGuarded(group)
+                          }
+                          onActivateUntilQuit={() =>
+                            useBatch ? void activateUntilQuitSelected() : void activateUntilQuitGroup(group)
                           }
                           onSwitch={
                             familyHasSwitch(group, entries)
@@ -3041,6 +3048,7 @@ function AppShell() {
                       busy,
                       onInstall: (entryId) => void installInstanceGuarded(entryId),
                       onActivate: (entryId) => void activateInstanceGuarded(entryId),
+                      onActivateUntilQuit: (entryId) => void activateUntilQuitInstance(entryId),
                       onDeactivate: (entryId) => void deactivateInstance(entryId),
                       uninstallOnly: testInstallActive,
                       onUninstall: (entryId) => {
