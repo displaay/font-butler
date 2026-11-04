@@ -138,6 +138,8 @@ export type CatalogEntry = {
   installedPath?: string
   disabledPath?: string
   customFamilyName?: string
+  /** Session-scoped activation (e.g. a test install). A restore keeps these off. */
+  temporaryActivation?: boolean
   faces: FontFaceInfo[]
   format: string
   /** Font Book-style library-card glyph(s), derived from cmap coverage. */

@@ -114,6 +114,7 @@ const CATALOG_READ_PATHS = new Set([
   '/api/test-installs',
   '/api/events',
   '/api/app-update',
+  '/api/backup/preview',
 ])
 
 function isFontFileReadPath(pathname: string): boolean {
@@ -1106,6 +1107,43 @@ app.post('/api/repair', async (c) => {
     return c.json(await service.repair(body.ids ?? [], { caches: body.caches === true }))
   } catch (error) {
     return c.json(fail(error, 'Repair failed'), 400)
+  }
+})
+
+app.get('/api/backup/preview', (c) => {
+  try {
+    return c.json({ preview: service.backupPreview({ includeFonts: c.req.query('includeFonts') !== 'false' }) })
+  } catch (error) {
+    return c.json(fail(error, 'Could not inspect the library for backup'), 400)
+  }
+})
+
+app.post('/api/backup/export', async (c) => {
+  const body = await c.req.json<{ destinationPath?: string; includeFonts?: boolean }>().catch(() => ({} as { destinationPath?: string; includeFonts?: boolean }))
+  try {
+    return c.json(await service.createLibraryBackup(body.destinationPath, { includeFonts: body.includeFonts !== false }))
+  } catch (error) {
+    return c.json(fail(error, 'Could not create the backup'), 400)
+  }
+})
+
+app.post('/api/backup/restore/plan', async (c) => {
+  const body = await c.req.json<{ path?: string; restoreFonts?: boolean; restoreOrganization?: boolean }>()
+  if (!body.path?.trim()) return c.json({ error: 'Choose a backup file' }, 400)
+  try {
+    return c.json({ report: service.planLibraryRestore(body.path, { restoreFonts: body.restoreFonts !== false, restoreOrganization: body.restoreOrganization !== false }) })
+  } catch (error) {
+    return c.json(fail(error, 'Could not read that backup'), 400)
+  }
+})
+
+app.post('/api/backup/restore', async (c) => {
+  const body = await c.req.json<{ path?: string; restoreFonts?: boolean; restoreOrganization?: boolean }>()
+  if (!body.path?.trim()) return c.json({ error: 'Choose a backup file' }, 400)
+  try {
+    return c.json({ report: await service.restoreLibraryBackup(body.path, { restoreFonts: body.restoreFonts !== false, restoreOrganization: body.restoreOrganization !== false }) })
+  } catch (error) {
+    return c.json(fail(error, 'Could not restore that backup'), 400)
   }
 })
 

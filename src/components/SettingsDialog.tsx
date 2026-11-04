@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type ComponentType, type KeyboardEvent } from 'react'
 import { toast } from 'sonner'
 import {
+  Archive,
   Eraser,
   Folder,
   FolderOpen,
@@ -33,7 +34,8 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { useSetActionStatus } from '@/components/NotifyProvider'
-import { api } from '@/lib/api'
+import { api, type BackupPreview, type RestoreReport } from '@/lib/api'
+import { BACKUP_LICENSE_WARNING, BACKUP_RESTORE_WARNING, formatBackupBytes } from '@/lib/backup'
 import { startQueuedFontAction } from '@/lib/actionQueue'
 import {
   LATIN_PREVIEW_MAX_LENGTH,
@@ -73,6 +75,7 @@ type SettingsCategoryId =
   | 'fonts'
   | 'destinations'
   | 'caches'
+  | 'backup'
   | 'history'
 
 const CATEGORIES: {
@@ -110,6 +113,12 @@ const CATEGORIES: {
     label: 'Caches',
     icon: Eraser,
     description: 'Clear Office and Adobe caches from the Font cache menu. The macOS font cache is cleared only when you choose Clear font caches.',
+  },
+  {
+    id: 'backup',
+    label: 'Backup',
+    icon: Archive,
+    description: 'Export the whole library — fonts included — to one file, or restore from a backup. Restoring organisation replaces projects, tags, and settings after saving a snapshot.',
   },
   {
     id: 'history',
@@ -465,6 +474,7 @@ export function SettingsDialog({
                   onSave={save}
                 />
               )}
+              {category === 'backup' && <BackupPane />}
               {category === 'history' && (
                 <HistoryPane settings={settings} busy={busy} onSave={save} />
               )}
@@ -1079,6 +1089,214 @@ function DestinationsPane({
         ) : null}
       </SettingsRow>
     </SettingsSection>
+  )
+}
+
+function BackupPane() {
+  const [preview, setPreview] = useState<BackupPreview | null>(null)
+  const [includeFonts, setIncludeFonts] = useState(true)
+  const [restoreFonts, setRestoreFonts] = useState(true)
+  const [restoreOrganization, setRestoreOrganization] = useState(true)
+  const [destination, setDestination] = useState('')
+  const [created, setCreated] = useState<{ destinationPath: string; size: number } | null>(null)
+  const [restorePath, setRestorePath] = useState('')
+  const [report, setReport] = useState<RestoreReport | null>(null)
+  const [planned, setPlanned] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    void api
+      .backupPreview(includeFonts)
+      .then((result) => {
+        if (!cancelled) setPreview(result.preview)
+      })
+      .catch(() => {
+        if (!cancelled) setPreview(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [includeFonts])
+
+  async function createBackup() {
+    setBusy(true)
+    try {
+      const result = await api.createBackup(destination.trim() || undefined, includeFonts)
+      setCreated(result)
+      setPreview(result.preview)
+      toast.success(`Backup saved (${formatBackupBytes(result.size)})`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not create the backup')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function planRestore() {
+    setBusy(true)
+    try {
+      const result = await api.planRestore(restorePath.trim(), { restoreFonts, restoreOrganization })
+      setReport(result.report)
+      setPlanned(true)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not read that backup')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function applyRestore() {
+    setBusy(true)
+    try {
+      const result = await api.restoreBackup(restorePath.trim(), { restoreFonts, restoreOrganization })
+      setReport(result.report)
+      setPlanned(false)
+      toast.success('Backup restored — fonts that were on are on again.')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not restore that backup')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div>
+      <SettingsSection title="Export library backup">
+        <div className="py-3.5">
+          <p className="text-[13px] leading-5 text-muted-foreground">{BACKUP_LICENSE_WARNING}</p>
+          {preview ? (
+            <p className="mt-2 text-sm">
+              {preview.fontFiles} font files · {preview.catalogEntries} library entries ·{' '}
+              {formatBackupBytes(preview.uncompressedSize)} uncompressed. The backup file (.cuttlerbackup)
+              will be about this size.
+            </p>
+          ) : (
+            <p className="mt-2 text-sm text-muted-foreground">Reading library size…</p>
+          )}
+          {preview && preview.missingFiles.length > 0 ? (
+            <p className="mt-1 text-[13px] text-muted-foreground">
+              {preview.missingFiles.length} file(s) are missing on disk and cannot be included; they will be
+              named in the backup report.
+            </p>
+          ) : null}
+          {preview && preview.skippedProtected.length > 0 ? (
+            <p className="mt-1 text-[13px] text-muted-foreground">
+              {preview.skippedProtected.length} protected system, app, or Adobe Fonts file(s) are not included
+              in backups.
+            </p>
+          ) : null}
+          <label className="mt-3 flex cursor-pointer items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={includeFonts}
+              onChange={(event) => setIncludeFonts(event.target.checked)}
+              className={checkboxClass}
+            />
+            Include font files (turn off for a smaller, organisation-only backup)
+          </label>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Input
+              aria-label="Backup destination path"
+              placeholder="Destination .cuttlerbackup path (optional)"
+              value={destination}
+              onChange={(event) => setDestination(event.target.value)}
+              className="min-w-[16rem] flex-1"
+            />
+            <Button type="button" disabled={busy} onClick={() => void createBackup()}>
+              Create backup
+            </Button>
+          </div>
+          {created ? (
+            <p className="mt-2 break-all text-[13px] text-muted-foreground">
+              Saved to {created.destinationPath} ({formatBackupBytes(created.size)})
+            </p>
+          ) : null}
+        </div>
+      </SettingsSection>
+
+      <SettingsSection title="Restore from backup">
+        <div className="py-3.5">
+          <p className="text-[13px] leading-5 text-muted-foreground">
+            {BACKUP_RESTORE_WARNING} Restoring organisation replaces your current projects, smart projects,
+            tags, and settings — a snapshot of your current library is saved first. Fonts already on disk are
+            left as they are, fonts that were on come back on, and nothing deletes or parks your only copy of
+            a font.
+          </p>
+          <div className="mt-3 space-y-2">
+            <label className="flex cursor-pointer items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={restoreFonts}
+                onChange={(event) => setRestoreFonts(event.target.checked)}
+                className={checkboxClass}
+              />
+              Restore fonts
+            </label>
+            <label className="flex cursor-pointer items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={restoreOrganization}
+                onChange={(event) => setRestoreOrganization(event.target.checked)}
+                className={checkboxClass}
+              />
+              Restore organisation — replaces projects, smart projects, tags, and settings (snapshot saved first)
+            </label>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Input
+              aria-label="Backup file path"
+              placeholder="Path to a .cuttlerbackup file"
+              value={restorePath}
+              onChange={(event) => {
+                setRestorePath(event.target.value)
+                setPlanned(false)
+              }}
+              className="min-w-[16rem] flex-1"
+            />
+            <Button type="button" variant="outline" disabled={busy || !restorePath.trim()} onClick={() => void planRestore()}>
+              Preview restore
+            </Button>
+            <Button type="button" disabled={busy || !restorePath.trim()} onClick={() => void applyRestore()}>
+              Restore
+            </Button>
+          </div>
+          {report ? (
+            <div className="mt-3 space-y-1 text-[13px] leading-5">
+              <p>
+                {planned ? 'Would restore' : 'Restored'} {report.restored.length} · back on{' '}
+                {report.reactivated.length} · already on disk, left as-is {report.leftAsIs.length} · skipped
+                (already present) {report.skippedIdentical.length} · parked as extra{' '}
+                {report.parkedAsExtra.length} · could not restore {report.failed.length}
+              </p>
+              {report.snapshotPath ? (
+                <p className="text-muted-foreground">Snapshot of your previous library saved to {report.snapshotPath}.</p>
+              ) : null}
+              {report.failed.map((item) => (
+                <p key={`${item.fileName}-${item.message}`} className="text-muted-foreground">
+                  Not restored: {item.message}
+                </p>
+              ))}
+              {report.watchFoldersNotRestored.map((item) => (
+                <p key={item.root} className="text-muted-foreground">
+                  Watch folder {item.root}: {item.reason}.
+                </p>
+              ))}
+              {report.watchFoldersRestoredPaused.map((item) => (
+                <p key={item.root} className="text-muted-foreground">
+                  Watch folder {item.root} restored paused — resume it when you are ready.
+                </p>
+              ))}
+              {report.settingsKeysSkipped.length > 0 ? (
+                <p className="text-muted-foreground">
+                  Settings secrets were not restored: {report.settingsKeysSkipped.join(', ')}.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      </SettingsSection>
+    </div>
   )
 }
 
