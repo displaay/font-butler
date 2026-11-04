@@ -15,24 +15,24 @@ test('presentPendingAnnouncement seeds fresh installs and returns null', () => {
     const result = presentPendingAnnouncement({ userDataDir: dir, currentVersion: '0.4.0' })
     assert.equal(result, null)
     const state = JSON.parse(fs.readFileSync(path.join(dir, 'announcements.json'), 'utf8'))
-    assert.deepEqual(state.seenIds, ['rename-to-cuttler'])
+    assert.deepEqual(state.seenIds, ['whats-new'])
     assert.equal(state.firstRunVersion, '0.4.0')
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }
 })
 
-test('presentPendingAnnouncement returns rename for established library upgrades', () => {
+test('presentPendingAnnouncement returns the paged announcement for an established library', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-ann-'))
   try {
     fs.writeFileSync(path.join(dir, 'settings.json'), '{}\n')
     const result = presentPendingAnnouncement({ userDataDir: dir, currentVersion: '0.4.0' })
-    assert.equal(result?.id, 'rename-to-cuttler')
+    assert.equal(result?.id, 'whats-new')
     assert.equal(result?.celebrate, true)
     assert.equal(fs.existsSync(path.join(dir, 'announcements.json')), false)
     dismissAnnouncement({ userDataDir: dir, id: result.id })
     const state = JSON.parse(fs.readFileSync(path.join(dir, 'announcements.json'), 'utf8'))
-    assert.deepEqual(state.seenIds, ['rename-to-cuttler'])
+    assert.deepEqual(state.seenIds, ['whats-new'])
     assert.equal(
       presentPendingAnnouncement({ userDataDir: dir, currentVersion: '0.4.0' }),
       null,
