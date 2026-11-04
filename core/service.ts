@@ -60,8 +60,10 @@ import { emitEvent } from './events.ts'
 import { persistFamilyComment, persistFamilyRating } from './family-details.ts'
 import {
   applyRetailTrialDefault,
+  persistFamilyTagDelete,
   persistFamilyTagName,
   persistFamilyTagPresence,
+  persistFamilyTagUpdate,
   persistNewFamilyTag,
 } from './family-tags.ts'
 import {
@@ -184,11 +186,17 @@ import {
   pinnedFingerprints,
   projectActivationMembers,
   projectActivationState,
+  removeManualOwner,
   removeProject,
   removeProjectOwner,
   setMemberUnsatisfied,
   upsertProject,
 } from './projects.ts'
+import {
+  forgetSessionActivation,
+  rememberSessionActivation,
+  releaseRecordedSessionActivations,
+} from './session-activation.ts'
 import {
   isSmartProject,
   normalizeSmartRuleSet,
@@ -238,6 +246,8 @@ import type {
   InstallOptions,
   FolderRelinkPreview,
   ImportPlan,
+  LibraryHealthActionKind,
+  LibraryHealthReport,
   ImportPlanChoice,
   OfficeFontCacheInfo,
   Operation,
@@ -342,6 +352,7 @@ import {
   removeInstalledCopy,
   touchEntry,
 } from './service-helpers.ts'
+import { assertParkKeepsVerifiedGood, scanLibraryHealth } from './library-health.ts'
 import {
   destinationForInstall,
   placeAdobeCopy,
@@ -546,6 +557,7 @@ export class FontButlerService {
       emitCatalog(this.paths)
       emitEvent({ type: 'operations', operations: loadOperations(this.paths) })
     }
+    await this.releaseSessionActivationsUnlocked()
     loadCatalog(this.paths)
     await this.restoreDisabledCopies()
   }
@@ -622,12 +634,20 @@ export class FontButlerService {
     return persistFamilyComment(this.paths, familyKey, comment)
   }
 
-  createFamilyTag(name: string, familyKeys: string[] = []) {
-    return persistNewFamilyTag(this.paths, name, familyKeys)
+  createFamilyTag(name: string, familyKeys: string[] = [], color?: string) {
+    return persistNewFamilyTag(this.paths, name, familyKeys, color)
   }
 
   renameFamilyTag(tagId: string, name: string) {
     return persistFamilyTagName(this.paths, tagId, name)
+  }
+
+  updateFamilyTag(tagId: string, name: string, color?: string) {
+    return persistFamilyTagUpdate(this.paths, tagId, { name, color })
+  }
+
+  deleteFamilyTag(tagId: string) {
+    return persistFamilyTagDelete(this.paths, tagId)
   }
 
   setFamilyTag(familyKeys: string[], tagId: string, present: boolean) {
@@ -818,6 +838,106 @@ export class FontButlerService {
       emitCatalog(this.paths)
       const duplicates = emitDuplicates(this.paths)
       return { entries, duplicates, resolved, errors }
+    })
+  }
+
+  /** Read-only Library Health scan (Stage A). Never moves or deletes files. */
+  scanLibraryHealth(): LibraryHealthReport {
+    return scanLibraryHealth(loadCatalog(this.paths).entries, this.paths)
+  }
+
+  /**
+   * Apply one confirmed Library Health fix. Every fix re-runs the scan and
+   * the keeper check first; extras are parked via `parkManagedCopies`,
+   * source files are never deleted, and a fix that would leave no
+   * verified-good copy of a face is refused.
+   */
+  async applyLibraryHealthFix(input: {
+    action: LibraryHealthActionKind
+    entryId: string
+    goodEntryId?: string
+    candidatePath?: string
+  }): Promise<{ report: LibraryHealthReport; entries: CatalogEntry[] }> {
+    return runCatalogTask(async () => {
+      const before = loadCatalog(this.paths)
+      const entry = findById(before, input.entryId)
+      if (!entry) throw new Error('Font is not in the library.')
+      const report = scanLibraryHealth(before.entries, this.paths)
+      const finding = report.findings.find(
+        (item) => item.entryIds.includes(input.entryId) && item.actions.some((a) => a.kind === input.action && a.entryId === input.entryId),
+      )
+      if (!finding) {
+        throw new Error('That fix is no longer available. Run the Library Health scan again.')
+      }
+      const faceKey = finding.faceIdentityKey
+
+      if (input.action === 'relink') {
+        if (!input.candidatePath) throw new Error('Choose the moved file to relink to.')
+        const relinked = await this.applyRelink(input.entryId, input.candidatePath)
+        return { report: this.scanLibraryHealth(), entries: [relinked] }
+      }
+
+      if (input.action === 'remove-entry') {
+        // Catalog entry only — no file is touched — and only when another
+        // verified-good copy of the same face remains.
+        assertParkKeepsVerifiedGood(before.entries, this.paths, faceKey, input.entryId, finding.keeperEntryId)
+        const catalog = loadCatalog(this.paths)
+        removeEntryById(catalog, input.entryId)
+        saveCatalog(this.paths, catalog)
+        await syncWatchers(this.paths)
+        emitCatalog(this.paths)
+        emitDuplicates(this.paths)
+        return { report: this.scanLibraryHealth(), entries: [] }
+      }
+
+      if (input.action === 'park-extra' || input.action === 'park-damaged') {
+        assertParkKeepsVerifiedGood(before.entries, this.paths, faceKey, input.entryId, finding.keeperEntryId)
+        const catalog = loadCatalog(this.paths)
+        const latest = findById(catalog, input.entryId)
+        if (!latest) throw new Error('Font is not in the library.')
+        await this.parkManagedCopies(latest)
+        touchEntry(latest)
+        saveCatalog(this.paths, catalog)
+        await syncWatchers(this.paths)
+        emitCatalog(this.paths)
+        emitDuplicates(this.paths)
+        return { report: this.scanLibraryHealth(), entries: [latest] }
+      }
+
+      if (input.action === 'park-installed') {
+        // Same keeper guard as every other park: the verified-good keeper
+        // is never parked, and parking must leave a distinct verified-good
+        // file in place. Parking keeps bytes in the vault; sources untouched.
+        assertParkKeepsVerifiedGood(before.entries, this.paths, faceKey, input.entryId, finding.keeperEntryId)
+        const catalog = loadCatalog(this.paths)
+        const latest = findById(catalog, input.entryId)
+        if (!latest) throw new Error('Font is not in the library.')
+        await this.parkManagedCopies(latest)
+        touchEntry(latest)
+        saveCatalog(this.paths, catalog)
+        await syncWatchers(this.paths)
+        emitCatalog(this.paths)
+        emitDuplicates(this.paths)
+        return { report: this.scanLibraryHealth(), entries: [latest] }
+      }
+
+      if (input.action === 'install-good-copy') {
+        const goodId = input.goodEntryId ?? finding.actions.find((a) => a.kind === 'install-good-copy')?.goodEntryId
+        if (!goodId) throw new Error('There is no verified-good copy to install.')
+        assertParkKeepsVerifiedGood(before.entries, this.paths, faceKey, input.entryId, finding.keeperEntryId)
+        const catalog = loadCatalog(this.paths)
+        const damaged = findById(catalog, input.entryId)
+        if (!damaged) throw new Error('Font is not in the library.')
+        await this.parkManagedCopies(damaged)
+        touchEntry(damaged)
+        saveCatalog(this.paths, catalog)
+        const installed = await this.installEntry(goodId)
+        emitCatalog(this.paths)
+        emitDuplicates(this.paths)
+        return { report: this.scanLibraryHealth(), entries: [installed] }
+      }
+
+      throw new Error('That Library Health fix is not supported.')
     })
   }
 
@@ -1248,6 +1368,7 @@ export class FontButlerService {
         addManualOwner(latest)
         touchEntry(latest)
         saveCatalog(this.paths, catalog)
+        forgetSessionActivation(this.paths, [latest.id])
       }
       const item = this.operationItem(entry, 'succeeded', installWarning)
       item.previousRevision = previousRevision
@@ -1315,6 +1436,7 @@ export class FontButlerService {
             addManualOwner(latest)
             touchEntry(latest)
             saveCatalog(this.paths, catalog)
+            forgetSessionActivation(this.paths, [latest.id])
           }
           const completed = latest ?? installed
           entries.push(completed)
@@ -1606,6 +1728,7 @@ export class FontButlerService {
       const entry = options?.switch
         ? await this.switchToEntry(id)
         : await this.activateEntry(id, { ...options, owner: 'manual' })
+      forgetSessionActivation(this.paths, [entry.id])
       const destinationFailures = this.takeDestinationFailures()
       const installWarning = this.takeInstallWarning()
       const item = this.operationItem(entry, 'succeeded', installWarning)
@@ -1642,6 +1765,7 @@ export class FontButlerService {
           const next = options?.switch
             ? await this.switchToEntry(id)
             : await this.activateEntry(id, { ...options, owner: 'manual' })
+          forgetSessionActivation(this.paths, [next.id])
           const item = this.operationItem(next, 'succeeded', this.takeInstallWarning())
           if (options?.switch) item.relatedEntryId = relatedId
           entries.push(next)
@@ -1680,6 +1804,112 @@ export class FontButlerService {
       }
       return entries
     }))
+  }
+
+  async activateUntilQuit(id: string, options?: InstallOptions): Promise<CatalogEntry> {
+    const [entry] = await this.activateUntilQuitMany([id], options)
+    if (!entry) throw new Error('Could not activate that font until quit.')
+    return entry
+  }
+
+  async activateUntilQuitMany(ids: string[], options?: InstallOptions): Promise<CatalogEntry[]> {
+    return runCatalogTask(async () => {
+      const entries: CatalogEntry[] = []
+      const items: OperationItem[] = []
+      const errors: string[] = []
+      const progress = this.familyProgress('activate', ids)
+      progress.start()
+      for (const id of ids) {
+        const current = findById(loadCatalog(this.paths), id)
+        try {
+          const next = await this.turnOnUntilQuit(id, options)
+          entries.push(next)
+          items.push(this.operationItem(next, 'succeeded'))
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error)
+          errors.push(reason)
+          if (current) {
+            items.push(this.operationItem(current, 'failed', reason))
+          } else {
+            items.push({ id: crypto.randomUUID(), entryId: id, label: id, outcome: 'failed', reason })
+          }
+        }
+        await progress.mark(id)
+      }
+      const operation = this.commitOperation(
+        'activate-until-quit',
+        items,
+        entries[0] ? displayFamily(entries[0]) : undefined,
+        false,
+      )
+      emitCatalog(this.paths)
+      if (entries.length === 0 && errors.length) {
+        throw new Error(errors.join('\n'))
+      }
+      if (operation) {
+        const result = entries as CatalogEntry[] & Partial<BatchActionResult>
+        Object.assign(result, {
+          operationId: operation.id,
+          ...operationCounts(operation),
+          errors,
+          failedIds: items
+            .filter((item) => item.outcome === 'failed' && item.entryId)
+            .map((item) => item.entryId!),
+        })
+        return result
+      }
+      return entries
+    })
+  }
+
+  /** Quit, and the next launch after a crash, both call this. */
+  async releaseSessionActivations(): Promise<{ released: string[]; pending: string[] }> {
+    return runCatalogTask(() => this.releaseSessionActivationsUnlocked())
+  }
+
+  private async releaseSessionActivationsUnlocked(): Promise<{ released: string[]; pending: string[] }> {
+    const result = await releaseRecordedSessionActivations(this.paths, async (id) => {
+      await this.deactivateEntry(id, { removeManualOwner: false })
+    })
+    if (result.released.length) emitCatalog(this.paths)
+    return result
+  }
+
+  /**
+   * Turn a face on without a manual or project owner.
+   * The session list is written first so a crash still clears the face on the next launch.
+   * A face something else already demands is left out of that list.
+   */
+  private async turnOnUntilQuit(id: string, options?: InstallOptions): Promise<CatalogEntry> {
+    const before = findById(loadCatalog(this.paths), id)
+    if (!before) throw new Error('Font is not in the library.')
+    const durable = hasActivationDemand(before)
+    if (!durable) rememberSessionActivation(this.paths, [id])
+    try {
+      const siblings = options?.switch
+        ? occupyingSiblings(loadCatalog(this.paths).entries, before, this.paths)
+        : []
+      // switchToEntry claims a manual owner when nothing else is in the way.
+      // Session activation has to park a sibling without that claim.
+      const turnedOn = siblings.length
+        ? await this.switchToEntry(id)
+        : await this.activateEntry(id, options?.switch ? { ...options, switch: true } : options)
+      if (durable) {
+        return findById(loadCatalog(this.paths), turnedOn.id) ?? turnedOn
+      }
+      const catalog = loadCatalog(this.paths)
+      const latest = findById(catalog, turnedOn.id)
+      if (!latest) return turnedOn
+      if (latest.activationOwners?.some((owner) => owner.kind === 'manual')) {
+        removeManualOwner(latest)
+        touchEntry(latest)
+        saveCatalog(this.paths, catalog)
+      }
+      return latest
+    } catch (error) {
+      if (!durable) forgetSessionActivation(this.paths, [id])
+      throw error
+    }
   }
 
   async reinstall(
@@ -1886,6 +2116,63 @@ export class FontButlerService {
         : result.mac
           ? 'Font caches were not cleared.'
           : 'Font cache clearing is available on macOS.',
+    })
+    if (cacheClearLogoutProbe(result, loadBuildIdentity())) {
+      return { ...result, logoutProbe: true }
+    }
+    return result
+  }
+
+  /**
+   * Combined Settings maintenance action: the confirmed user-font clear
+   * plus the Office/Adobe clears selected by their Settings toggles.
+   * Each part's result is returned, so a failure in one part is reported
+   * alongside the others instead of hiding them.
+   */
+  async clearAllFontCaches(options: { confirm?: boolean } = {}): Promise<{
+    mac: boolean
+    cleared: boolean
+    simulated?: boolean
+    confirmed: boolean
+    logoutProbe?: boolean
+    parts: Array<{
+      part: 'user' | 'office' | 'adobe'
+      status: 'cleared' | 'not-cleared' | 'skipped' | 'failed'
+      mac: boolean
+      cleared: boolean
+      simulated?: boolean
+      error?: string
+    }>
+  }> {
+    if (options.confirm !== true) {
+      throw new Error(
+        'Clearing font caches needs confirmation. Some apps may not see new or updated fonts until you log out.',
+      )
+    }
+    const settings = loadSettings(this.paths)
+    const result = await getFontNative().clearAllFontCaches({
+      confirm: true,
+      office: settings.clearOfficeFontCache,
+      adobe: settings.clearAdobeFontCache,
+    })
+    const labels: Record<string, string> = {
+      user: 'macOS user font cache',
+      office: 'Microsoft Office font cache',
+      adobe: 'Adobe font caches',
+    }
+    const failed = result.parts.filter((part) => part.status === 'failed')
+    const cleared = result.parts.filter((part) => part.status === 'cleared')
+    emitNotice({
+      kind: failed.length ? 'error' : 'info',
+      message: failed.length
+        ? `Some font caches were not cleared: ${failed
+            .map((part) => `${labels[part.part] ?? part.part}${part.error ? ` (${part.error})` : ''}`)
+            .join('; ')}. Open apps may need to be relaunched to see updated fonts.`
+        : cleared.length
+          ? `Cleared ${cleared.map((part) => labels[part.part] ?? part.part).join(', ')}. Open apps may need to be relaunched to see updated fonts.`
+          : result.mac
+            ? 'No font caches were found to clear.'
+            : 'Font cache clearing is available on macOS.',
     })
     if (cacheClearLogoutProbe(result, loadBuildIdentity())) {
       return { ...result, logoutProbe: true }

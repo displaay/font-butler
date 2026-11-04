@@ -1,28 +1,10 @@
 import type { LibraryFilter, SavedLibraryFilter } from './types.ts'
-
-const LIBRARY_FILTER_IDS = new Set<LibraryFilter>([
-  'installed',
-  'deactivated',
-  'uninstalled',
-  'vf',
-  'static',
-  'source',
-  'no-source',
-  'computer',
-  'adobe',
-  'no-destination',
-  'otf',
-  'ttf',
-])
+import { isLibraryFilter } from '../shared/library-filters.ts'
 
 export type SavedFilterCriteria = {
   query: string
   libraryFilters: readonly LibraryFilter[]
   watchFolder: string | null
-}
-
-function isLibraryFilter(value: unknown): value is LibraryFilter {
-  return typeof value === 'string' && LIBRARY_FILTER_IDS.has(value as LibraryFilter)
 }
 
 export function normalizeSavedFilters(value: unknown): SavedLibraryFilter[] {

@@ -33,6 +33,7 @@ import { displayStateParts, familyCopyDestinations, isNotInstalledLabel, needsLo
 import type { FamilyGroup, ProjectSet, RetailSyncView, ViewLayout } from '@/lib/types'
 import { useCardActionChrome } from '@/hooks/useCardActionChrome'
 import { cardPreviewSample } from '@/lib/previewSample'
+import { cardPreviewFromRequest, previewRequestActive, type PreviewRequest } from '../../shared/library-search.ts'
 import { cn } from '@/lib/utils'
 
 export const LibraryCard = memo(function LibraryCard({
@@ -58,6 +59,7 @@ export const LibraryCard = memo(function LibraryCard({
   onInstallToAdobe,
   onInstallInstance,
   onActivateInstance,
+  onActivateUntilQuitInstance,
   onDeactivateInstance,
   onUninstallInstance,
   onInstallInstanceToAdobe,
@@ -73,6 +75,7 @@ export const LibraryCard = memo(function LibraryCard({
   onUninstallFromAdobe,
   onDeactivate,
   onActivate,
+  onActivateUntilQuit,
   onSwitch,
   onFormatSwap,
   onReveal,
@@ -98,8 +101,10 @@ export const LibraryCard = memo(function LibraryCard({
   tagFamilyKeys,
   onSetFamilyTag,
   onCreateFamilyTag,
-  onRenameFamilyTag,
+  onEditFamilyTag,
+  onDeleteFamilyTag,
   uninstallOnly = false,
+  previewRequest = null,
 }: {
   group: FamilyGroup
   retail?: RetailSyncView | null
@@ -123,6 +128,7 @@ export const LibraryCard = memo(function LibraryCard({
   onInstallToAdobe: () => void
   onInstallInstance: (entryId: string) => void
   onActivateInstance: (entryId: string) => void
+  onActivateUntilQuitInstance: (entryId: string) => void
   onDeactivateInstance: (entryId: string) => void
   onUninstallInstance: (entryId: string) => void
   onInstallInstanceToAdobe: (entryId: string) => void
@@ -138,6 +144,7 @@ export const LibraryCard = memo(function LibraryCard({
   onUninstallFromAdobe?: () => void
   onDeactivate: () => void
   onActivate: () => void
+  onActivateUntilQuit: () => void
   onSwitch?: () => void
   onFormatSwap?: () => void
   onReveal: () => void
@@ -163,8 +170,10 @@ export const LibraryCard = memo(function LibraryCard({
   tagFamilyKeys?: readonly string[]
   onSetFamilyTag?: (tagId: string, present: boolean) => void
   onCreateFamilyTag?: () => void
-  onRenameFamilyTag?: (tagId: string) => void
+  onEditFamilyTag?: (tagId: string) => void
+  onDeleteFamilyTag?: (tagId: string) => void
   uninstallOnly?: boolean
+  previewRequest?: PreviewRequest | null
 }) {
   const [expanded, setExpanded] = useState(false)
   const { hovered, actionsVisible, onContextMenuOpenChange, cardChrome } = useCardActionChrome()
@@ -203,6 +212,36 @@ export const LibraryCard = memo(function LibraryCard({
       }),
     [hoverInstances, previewFamily, group.entries, preview],
   )
+  const lockedPreview = useMemo(
+    () =>
+      previewRequestActive(previewRequest)
+        ? cardPreviewFromRequest(
+            hoverInstances.map((row) => ({
+              weight: row.weight,
+              italic: row.italic,
+              label: row.label,
+              variation: row.variation,
+            })),
+            previewRequest,
+          )
+        : null,
+    [hoverInstances, previewRequest],
+  )
+  const restPreview = lockedPreview
+    ? {
+        family: previewFamily,
+        weight: lockedPreview.weight,
+        italic: lockedPreview.italic,
+        variation: lockedPreview.variation,
+        label: lockedPreview.label,
+      }
+    : previewFaces.find((face) => face.family === previewFamily && !face.italic) ??
+      previewFaces.find((face) => face.family === previewFamily) ?? {
+        family: previewFamily,
+        weight: previewWeight,
+        italic: previewItalic,
+        label: preview.faces[0]?.styleName ?? 'Regular',
+      }
   const plan = batch ?? familyCardPlan(group, adobeAvailable)
   const inCurrentProject = Boolean(
     projectFilter && group.entries.some((entry) =>
@@ -384,19 +423,12 @@ export const LibraryCard = memo(function LibraryCard({
                 className="flex w-full flex-col text-left"
               >
                 <CyclingAaPreview
-                  faces={previewFaces}
-                  rest={
-                    previewFaces.find((face) => face.family === previewFamily && !face.italic) ??
-                    previewFaces.find((face) => face.family === previewFamily) ?? {
-                      family: previewFamily,
-                      weight: previewWeight,
-                      italic: previewItalic,
-                      label: preview.faces[0]?.styleName ?? 'Regular',
-                    }
-                  }
-                  active={hovered}
+                  faces={lockedPreview ? [restPreview] : previewFaces}
+                  rest={restPreview}
+                  active={hovered && !lockedPreview}
                   size={previewSize}
                   sample={previewSample}
+                  featureSettings={lockedPreview?.featureSettings}
                 />
                 <div className={previewSize < 3.25 ? 'p-2' : 'p-3'}>{identity}</div>
               </button>
@@ -416,8 +448,10 @@ export const LibraryCard = memo(function LibraryCard({
                   >
                     <AaPreview
                       family={previewFamily}
-                      weight={previewWeight}
-                      italic={previewItalic}
+                      weight={lockedPreview?.weight ?? previewWeight}
+                      italic={lockedPreview?.italic ?? previewItalic}
+                      variation={lockedPreview?.variation}
+                      featureSettings={lockedPreview?.featureSettings}
                       sample={previewSample}
                       wait={entryHasPreviewFile(preview)}
                     />
@@ -464,6 +498,7 @@ export const LibraryCard = memo(function LibraryCard({
                   uninstallOnly,
                   onInstall: onInstallInstance,
                   onActivate: onActivateInstance,
+                  onActivateUntilQuit: onActivateUntilQuitInstance,
                   onDeactivate: onDeactivateInstance,
                   onUninstall: onUninstallInstance,
                   onInstallToAdobe: onInstallInstanceToAdobe,
@@ -501,6 +536,7 @@ export const LibraryCard = memo(function LibraryCard({
             onUninstallFormat={onUninstallFormat}
             formatUninstalls={mixedFormats}
             onActivate={onActivate}
+            onActivateUntilQuit={onActivateUntilQuit}
             onSwitch={onSwitch}
             formatSwap={swap}
             onFormatSwap={onFormatSwap}
@@ -538,7 +574,7 @@ export const LibraryCard = memo(function LibraryCard({
           </ContextMenuItem>
         ) : null}
         <ContextMenuSeparator />
-        {tagDefinitions && tagAssignments && tagFamilyKeys && onSetFamilyTag && onCreateFamilyTag && onRenameFamilyTag ? (
+        {tagDefinitions && tagAssignments && tagFamilyKeys && onSetFamilyTag && onCreateFamilyTag ? (
           <>
             <FamilyTagMenuItems
               definitions={tagDefinitions}
@@ -546,7 +582,8 @@ export const LibraryCard = memo(function LibraryCard({
               familyKeys={tagFamilyKeys}
               onSet={onSetFamilyTag}
               onCreate={onCreateFamilyTag}
-              onRename={onRenameFamilyTag}
+              onEdit={onEditFamilyTag}
+              onDelete={onDeleteFamilyTag}
             />
             <ContextMenuSeparator />
           </>
@@ -598,6 +635,7 @@ export const LibraryCard = memo(function LibraryCard({
           onUninstallAndRemove={onUninstallAndRemove}
           onUninstallFromAdobe={onUninstallFromAdobe}
           onActivate={onActivate}
+          onActivateUntilQuit={onActivateUntilQuit}
           onSwitch={onSwitch}
           onForget={onForget}
           onDeleteFiles={onDeleteFiles}

@@ -4,18 +4,23 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { loadCatalog, saveCatalog } from './catalog.ts'
-import { applyRetailTrialDefault, persistFamilyTagPresence } from './family-tags.ts'
+import { applyRetailTrialDefault, persistFamilyTagPresence, persistNewFamilyTag } from './family-tags.ts'
 import { noopFontNative, setFontNative } from './native.ts'
 import { buildPaths } from './paths.ts'
 import type { AppPaths } from './paths.ts'
 import { checkRetail, configureRetailSync, resetRetailCache } from './service-retail.ts'
 import type { CatalogEntry, CatalogFile } from './types.ts'
 import {
+  addFamilyTag,
   ensureSeedTags,
   entryHasFamilyTag,
+  nextCustomTagColor,
   reconcileRetailTrialTags,
+  deleteFamilyTag,
   renameFamilyTag,
   setFamilyTagPresent,
+  TAG_COLOR_CHOICES,
+  updateFamilyTag,
   tagIdsForFamily,
   type FamilyTagAssignment,
 } from '../shared/family-tags.ts'
@@ -160,6 +165,52 @@ test('renaming the Trial seed keeps the default on that tag', () => {
   assert.equal(entryHasFamilyTag(file, file.entries[0]!, { id: 'trial' }), true)
 })
 
+test('deleting a tag clears every family, and a deleted seed is not reapplied', () => {
+  const file = catalog(
+    [
+      entry({
+        id: 'retail',
+        faces: [face('Reckless')],
+        retailRelativePath: 'Reckless/RecklessVF.otf',
+        retailFamilyName: 'Reckless',
+      }),
+    ],
+    [{ familyKey: 'Reckless', tagIds: ['trial', 'licensed'], autoTagIds: ['trial'] }],
+  )
+  deleteFamilyTag(file, 'trial')
+  assert.equal(file.tags?.some((tag) => tag.id === 'trial' || tag.seed === 'trial'), false)
+  assert.deepEqual(file.retiredTagSeeds, ['trial'])
+  assert.deepEqual(ids(file, 'Reckless'), ['licensed'])
+  assert.equal(file.familyTags?.find((row) => row.familyKey === 'Reckless')?.autoTagIds, undefined)
+  reconcileRetailTrialTags(file, { hasWorkerToken: false })
+  assert.equal(file.tags?.some((tag) => tag.seed === 'trial'), false)
+  assert.deepEqual(ids(file, 'Reckless'), ['licensed'])
+})
+
+test('creating a tag stores the chosen color', () => {
+  const file = catalog([])
+  const chosen = '#c45c8a'
+  const tag = addFamilyTag(file, 'Client', 'client', chosen)
+  assert.equal(tag.color, chosen)
+  assert.equal(file.tags?.find((item) => item.id === 'client')?.color, chosen)
+})
+
+test('creating a tag without a color uses the next custom color', () => {
+  const file = catalog([])
+  const tag = addFamilyTag(file, 'Client', 'client')
+  assert.equal(tag.color, nextCustomTagColor(ensureSeedTags(undefined)))
+  assert.equal(tag.color, '#7c5cbf')
+})
+
+test('editing a tag changes its name and color and keeps the id', () => {
+  const file = catalog([])
+  updateFamilyTag(file, 'licensed', { name: 'Owned', color: '#3b6fd8' })
+  const tag = file.tags?.find((item) => item.id === 'licensed')
+  assert.equal(tag?.name, 'Owned')
+  assert.equal(tag?.color, '#3b6fd8')
+  assert.equal(tag?.seed, 'licensed')
+})
+
 test('a manual tag edit stops the Trial default from owning that tag', () => {
   const file = catalog([
     entry({
@@ -282,6 +333,26 @@ test('removing a worker token applies Trial again and keeps unrelated tags', asy
     assert.deepEqual(ids(saved, 'Reckless'), ['trial'])
     assert.deepEqual(ids(saved, 'GT America'), ['unlicensed'])
     assert.equal(await applyRetailTrialDefault(paths), false)
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
+test('creating a tag saves the chosen color on the catalog', async () => {
+  const paths = setup()
+  try {
+    saveCatalog(paths, catalog([]))
+    const chosen = '#C45C8A'
+    await persistNewFamilyTag(paths, 'Client', ['GT America'], chosen)
+    const saved = loadCatalog(paths)
+    const tag = saved.tags?.find((item) => item.name === 'Client')
+    assert.ok(tag)
+    assert.equal(tag.color, chosen.toLowerCase())
+    assert.deepEqual(ids(saved, 'GT America'), [tag.id])
+
+    await persistNewFamilyTag(paths, 'Studio', [], TAG_COLOR_CHOICES[0])
+    const again = loadCatalog(paths)
+    assert.equal(again.tags?.find((item) => item.name === 'Studio')?.color, TAG_COLOR_CHOICES[0])
   } finally {
     fs.rmSync(paths.dataRoot, { recursive: true, force: true })
   }

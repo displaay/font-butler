@@ -40,6 +40,9 @@ export type TestFontFaceSpec = {
   format?: 'ttf' | 'otf'
   version?: string
   weight?: number
+  manufacturer?: string
+  designer?: string
+  sFamilyClass?: number
 }
 
 export function writeTestFont(
@@ -52,6 +55,9 @@ export function writeTestFont(
     version?: string
     weight?: number
     codePoints?: number[]
+    manufacturer?: string
+    designer?: string
+    sFamilyClass?: number
   } = {},
 ): void {
   fs.mkdirSync(path.dirname(dest), { recursive: true })
@@ -60,6 +66,11 @@ export function writeTestFont(
   const version = options.version ?? 'Version 1.000'
   const weight = options.weight ?? (/bold/i.test(style) ? 700 : 400)
   const codePoints = options.codePoints ?? [65]
+  const nameExtras = [
+    options.manufacturer ? `"manufacturer": ${JSON.stringify(options.manufacturer)},` : '',
+    options.designer ? `"designer": ${JSON.stringify(options.designer)},` : '',
+  ].join('')
+  const os2Extras = options.sFamilyClass != null ? `, sFamilyClass=${options.sFamilyClass}` : ''
   const isTtf = format === 'ttf'
   const script = isTtf
     ? `
@@ -93,8 +104,9 @@ fb.setupNameTable({
     "fullName": ${JSON.stringify(`${family} ${style}`)},
     "psName": ${JSON.stringify(psName)},
     "version": ${JSON.stringify(version)},
+    ${nameExtras}
 })
-fb.setupOS2(usWeightClass=${weight})
+fb.setupOS2(usWeightClass=${weight}${os2Extras})
 fb.setupPost()
 fb.save(${JSON.stringify(dest)})
 `
@@ -130,8 +142,9 @@ fb.setupNameTable({
     "fullName": ${JSON.stringify(`${family} ${style}`)},
     "psName": ${JSON.stringify(psName)},
     "version": ${JSON.stringify(version)},
+    ${nameExtras}
 })
-fb.setupOS2(usWeightClass=${weight})
+fb.setupOS2(usWeightClass=${weight}${os2Extras})
 fb.setupPost()
 fb.save(${JSON.stringify(dest)})
 `

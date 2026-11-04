@@ -4,6 +4,7 @@ import type { CatalogEntry, FontFaceInfo, Operation } from './types'
 export const ACTIVITY_ACTION_LABELS: Record<string, string> = {
   deactivate: 'deactivated',
   activate: 'activated',
+  'activate-until-quit': 'activated until quit',
   install: 'installed',
   'install-update': 'update installed',
   uninstall: 'uninstalled',

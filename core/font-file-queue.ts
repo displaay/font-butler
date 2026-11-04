@@ -53,5 +53,6 @@ export function serializeFontNative(native: FontNative): FontNative {
     clearOfficeFontCache: () => runFontFileTask(() => native.clearOfficeFontCache()),
     clearAdobeFontCache: () => runFontFileTask(() => native.clearAdobeFontCache()),
     clearFontCaches: (options) => runFontFileTask(() => native.clearFontCaches(options)),
+    clearAllFontCaches: (options) => runFontFileTask(() => native.clearAllFontCaches(options)),
   }
 }

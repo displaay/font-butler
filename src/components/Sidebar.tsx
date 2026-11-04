@@ -27,7 +27,7 @@ import {
   Power,
   PowerOff,
   RefreshCw,
-  Search,
+  Building2,
   Settings,
   SlidersHorizontal,
   Type,
@@ -36,7 +36,6 @@ import {
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   ContextMenu,
@@ -75,10 +74,29 @@ import {
 import { cn } from '@/lib/utils'
 import { watchFolderLabel, RETAIL_LIBRARY_FILTER, RETAIL_LIBRARY_LABEL, TEST_INSTALL_FILTER, TEST_INSTALL_LABEL } from '@/lib/watchFolders'
 import { isSmartProject } from '../../shared/smart-projects.ts'
+import type { FamilyTag, FamilyTagAssignment } from '../../shared/family-tags.ts'
+import { EditFiltersDialog } from '@/components/EditFiltersDialog'
+import { FamilyTagMenuItems } from '@/components/FamilyTags'
+import { LibrarySearch } from '@/components/LibrarySearch'
+import {
+  FONT_CLASSIFICATION_LABELS,
+  FONT_CLASSIFICATIONS,
+} from '../../shared/font-classification.ts'
+import {
+  LIBRARY_FILTER_GROUPS_KEY,
+  LIBRARY_FILTER_GROUP_LABELS,
+  defaultLibraryFilterGroups,
+  readLibraryFilterGroups,
+  withoutGroupFilters,
+  type LibraryFilterGroupId,
+  type LibraryFilterGroupPref,
+} from '../../shared/library-filter-groups.ts'
+import type { SearchToken } from '../../shared/library-search.ts'
 
 export type Tab = 'library' | 'system' | 'updates' | 'activity'
 
 const LIBRARY_FILTER_GROUPS: {
+  id: LibraryFilterGroupId
   heading: string
   filters: {
     id: LibraryFilter
@@ -87,6 +105,7 @@ const LIBRARY_FILTER_GROUPS: {
   }[]
 }[] = [
   {
+    id: 'status',
     heading: 'Status',
     filters: [
       { id: 'installed', label: 'Installed', icon: CircleCheck },
@@ -95,6 +114,7 @@ const LIBRARY_FILTER_GROUPS: {
     ],
   },
   {
+    id: 'type',
     heading: 'Type',
     filters: [
       { id: 'vf', label: 'VF', icon: SlidersHorizontal },
@@ -102,6 +122,7 @@ const LIBRARY_FILTER_GROUPS: {
     ],
   },
   {
+    id: 'source',
     heading: 'Source',
     filters: [
       { id: 'source', label: 'Source', icon: Link2 },
@@ -109,6 +130,7 @@ const LIBRARY_FILTER_GROUPS: {
     ],
   },
   {
+    id: 'destination',
     heading: 'Destination',
     filters: [
       { id: 'computer', label: 'Computer', icon: Monitor },
@@ -117,6 +139,7 @@ const LIBRARY_FILTER_GROUPS: {
     ],
   },
   {
+    id: 'format',
     heading: 'Format',
     filters: [
       { id: 'otf', label: 'OTF', icon: FileType },
@@ -131,6 +154,23 @@ const TABS: { id: Tab; label: string; icon: typeof Type }[] = [
   { id: 'activity', label: 'Activity', icon: List },
   { id: 'updates', label: 'Updates', icon: RefreshCw },
 ]
+
+function foundryFilterRows(
+  counts: Record<string, number>,
+  selected: readonly string[],
+): { id: string; label: string }[] {
+  const names = new Set<string>()
+  for (const [key, count] of Object.entries(counts)) {
+    if (key.startsWith('foundry:') && count > 0) names.add(key.slice('foundry:'.length))
+  }
+  for (const id of selected) {
+    if (id.startsWith('foundry:')) names.add(id.slice('foundry:'.length))
+  }
+  return [...names]
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b))
+    .map((name) => ({ id: `foundry:${name}`, label: name }))
+}
 
 function navButtonClass(active: boolean, extra?: string) {
   return cn(
@@ -152,7 +192,7 @@ export function LibraryFiltersPanel({
   hasActiveLibraryCriteria = false,
 }: {
   libraryFilters: LibraryFilter[]
-  libraryFilterCounts: Record<LibraryFilter, number>
+  libraryFilterCounts: Record<string, number>
   onLibraryFiltersChange: (value: LibraryFilter[]) => void
   filterGroupsOpen: Record<string, boolean>
   onFilterGroupsOpenChange: (value: Record<string, boolean>) => void
@@ -161,8 +201,21 @@ export function LibraryFiltersPanel({
   onCreateSavedFilter?: () => void
   hasActiveLibraryCriteria?: boolean
 }) {
+  const [filterGroups, setFilterGroups] = useState<LibraryFilterGroupPref[]>(() =>
+    readLibraryFilterGroups(localStorage),
+  )
+  const [editFiltersOpen, setEditFiltersOpen] = useState(false)
   const showClear = libraryFilters.length > 0
   const showSave = Boolean(onCreateSavedFilter && hasActiveLibraryCriteria)
+
+  function persistFilterGroups(next: LibraryFilterGroupPref[]) {
+    setFilterGroups(next)
+    localStorage.setItem(LIBRARY_FILTER_GROUPS_KEY, JSON.stringify(next))
+    const hidden = next.filter((group) => !group.visible).map((group) => group.id)
+    if (hidden.length === 0) return
+    const cleared = hidden.reduce((filters, group) => withoutGroupFilters(filters, group), libraryFilters)
+    if (cleared.length !== libraryFilters.length) onLibraryFiltersChange(cleared)
+  }
 
   return (
     <div className="flex w-full flex-col gap-0.5 md:mt-2 md:border-t md:pt-2">
@@ -230,27 +283,48 @@ export function LibraryFiltersPanel({
         </div>
       </div>
       {filtersPanelOpen ? (
-        <LibraryFilterGroups
-          libraryFilters={libraryFilters}
-          libraryFilterCounts={libraryFilterCounts}
-          onLibraryFiltersChange={onLibraryFiltersChange}
-          filterGroupsOpen={filterGroupsOpen}
-          onFilterGroupsOpenChange={onFilterGroupsOpenChange}
-        />
+        <>
+          <LibraryFilterGroups
+            groups={filterGroups}
+            libraryFilters={libraryFilters}
+            libraryFilterCounts={libraryFilterCounts}
+            onLibraryFiltersChange={onLibraryFiltersChange}
+            filterGroupsOpen={filterGroupsOpen}
+            onFilterGroupsOpenChange={onFilterGroupsOpenChange}
+          />
+          <Button
+            type="button"
+            size="default"
+            variant="ghost"
+            className={navButtonClass(false, 'w-full')}
+            onClick={() => setEditFiltersOpen(true)}
+          >
+            <SlidersHorizontal className="size-3.5 opacity-70" />
+            <span className="min-w-0 truncate">Edit filters</span>
+          </Button>
+          <EditFiltersDialog
+            open={editFiltersOpen}
+            groups={filterGroups}
+            onClose={() => setEditFiltersOpen(false)}
+            onChange={persistFilterGroups}
+          />
+        </>
       ) : null}
     </div>
   )
 }
 
 export function LibraryFilterGroups({
+  groups = defaultLibraryFilterGroups(),
   libraryFilters,
   libraryFilterCounts,
   onLibraryFiltersChange,
   filterGroupsOpen,
   onFilterGroupsOpenChange,
 }: {
+  groups?: LibraryFilterGroupPref[]
   libraryFilters: LibraryFilter[]
-  libraryFilterCounts: Record<LibraryFilter, number>
+  libraryFilterCounts: Record<string, number>
   onLibraryFiltersChange: (value: LibraryFilter[]) => void
   filterGroupsOpen: Record<string, boolean>
   onFilterGroupsOpenChange: (value: Record<string, boolean>) => void
@@ -263,13 +337,35 @@ export function LibraryFilterGroups({
     )
   }
 
+  const visibleGroups = groups.filter((group) => group.visible)
+  const foundryRows = foundryFilterRows(libraryFilterCounts, libraryFilters)
+
   return (
     <div className="flex w-full flex-wrap gap-3 md:flex-col md:gap-2">
-      {LIBRARY_FILTER_GROUPS.map((group) => {
-        const groupOpen = filterGroupsOpen[group.heading] ?? true
-        const heading = group.heading.toLowerCase()
+      {visibleGroups.map((pref) => {
+        const defined = LIBRARY_FILTER_GROUPS.find((group) => group.id === pref.id)
+        const headingText = defined?.heading ?? LIBRARY_FILTER_GROUP_LABELS[pref.id]
+        const groupOpen = filterGroupsOpen[headingText] ?? true
+        const heading = headingText.toLowerCase()
+        const rows = defined
+          ? defined.filters.map((filter) => ({
+              id: filter.id,
+              label: filter.label,
+              icon: filter.icon,
+            }))
+          : pref.id === 'classification'
+            ? FONT_CLASSIFICATIONS.map((id) => ({
+                id: `classification:${id}` as LibraryFilter,
+                label: FONT_CLASSIFICATION_LABELS[id],
+                icon: Type,
+              }))
+            : foundryRows.map((row) => ({
+                id: row.id as LibraryFilter,
+                label: row.label,
+                icon: Building2,
+              }))
         return (
-          <div key={group.heading} className="flex w-full flex-col gap-0.5">
+          <div key={pref.id} className="flex w-full flex-col gap-0.5">
             <div className="group/filter-section flex w-full items-center gap-0.5 px-1 pt-1">
               <button
                 type="button"
@@ -279,12 +375,12 @@ export function LibraryFilterGroups({
                 onClick={() =>
                   onFilterGroupsOpenChange({
                     ...filterGroupsOpen,
-                    [group.heading]: !groupOpen,
+                    [headingText]: !groupOpen,
                   })
                 }
               >
                 <span className="text-[10px] font-medium capitalize tracking-wide text-muted-foreground">
-                  {group.heading}
+                  {headingText}
                 </span>
                 {groupOpen ? (
                   <ChevronDown className="size-3 opacity-0 transition-opacity group-hover/filter-section:opacity-70" />
@@ -293,8 +389,11 @@ export function LibraryFilterGroups({
                 )}
               </button>
             </div>
+            {groupOpen && pref.id === 'foundry' && rows.length === 0 ? (
+              <p className="px-2.5 py-1 text-xs text-muted-foreground">No foundry in the name tables</p>
+            ) : null}
             {groupOpen
-              ? group.filters.map((filter) => {
+              ? rows.map((filter) => {
                   const active = libraryFilters.includes(filter.id)
                   const Icon = filter.icon
                   return (
@@ -342,6 +441,7 @@ export function SidebarItem({
   onOpenWatchFoldersSettings,
   expanded,
   onToggleExpand,
+  menuExtra,
 }: {
   active: boolean
   icon: ComponentType<{ className?: string }>
@@ -363,6 +463,7 @@ export function SidebarItem({
   onOpenWatchFoldersSettings?: () => void
   expanded?: boolean
   onToggleExpand?: () => void
+  menuExtra?: ReactNode
 }) {
   const showCount = unreadCount > 0 || lockTotal || showTotal
   const button = (
@@ -441,7 +542,7 @@ export function SidebarItem({
       ) : null}
     </Button>
   )
-  if (lockTotal && !onReveal && !onRemove && !onOpenWatchFoldersSettings) {
+  if (lockTotal && !onReveal && !onRemove && !onOpenWatchFoldersSettings && !menuExtra) {
     return button
   }
   return (
@@ -468,6 +569,7 @@ export function SidebarItem({
             <ContextMenuSeparator />
           </>
         ) : null}
+        {menuExtra}
         <ContextMenuCheckboxItem
           checked={showTotal}
           aria-label="Show total"
@@ -483,6 +585,8 @@ export function SidebarItem({
 export function Sidebar({
   query,
   onQueryChange,
+  searchTokens,
+  onSearchTokensChange,
   tab,
   onTabChange,
   watchFolders,
@@ -507,6 +611,14 @@ export function Sidebar({
   projectMembershipCounts,
   onEditSmartProject,
   onSnapshotProject,
+  tagDefinitions,
+  tagAssignments,
+  watchFolderFamilyKeys,
+  projectFamilyKeys,
+  onSetFamilyTag,
+  onCreateFamilyTag,
+  onEditFamilyTag,
+  onDeleteFamilyTag,
   savedFilters,
   onSelectSavedFilter,
   onCreateSavedFilter,
@@ -539,6 +651,8 @@ export function Sidebar({
 }: {
   query: string
   onQueryChange: (value: string) => void
+  searchTokens?: SearchToken[]
+  onSearchTokensChange?: (tokens: SearchToken[]) => void
   tab: Tab
   onTabChange: (tab: Tab) => void
   watchFolders: string[]
@@ -564,13 +678,21 @@ export function Sidebar({
   projectMembershipCounts?: Record<string, number>
   onEditSmartProject?: (id: string) => void
   onSnapshotProject?: (id: string) => void
+  tagDefinitions?: readonly FamilyTag[]
+  tagAssignments?: readonly FamilyTagAssignment[]
+  watchFolderFamilyKeys?: Record<string, string[]>
+  projectFamilyKeys?: Record<string, string[]>
+  onSetFamilyTag?: (familyKeys: string[], tagId: string, present: boolean) => void
+  onCreateFamilyTag?: (familyKeys: string[]) => void
+  onEditFamilyTag?: (tagId: string) => void
+  onDeleteFamilyTag?: (tagId: string) => void
   savedFilters?: SavedLibraryFilter[]
   onSelectSavedFilter?: (filter: SavedLibraryFilter) => void
   onCreateSavedFilter?: () => void
   onRenameSavedFilter?: (id: string, name: string) => void
   onRemoveSavedFilter?: (id: string) => void
   libraryFilters: LibraryFilter[]
-  libraryFilterCounts: Record<LibraryFilter, number>
+  libraryFilterCounts: Record<string, number>
   onLibraryFiltersChange: (value: LibraryFilter[]) => void
   duplicatesCount?: number
   onOpenDuplicates?: () => void
@@ -597,6 +719,14 @@ export function Sidebar({
   appUpdateInstall?: { phase?: AppUpdateInstallPhase; percent?: number; error?: string } | null
   onInstallAppUpdate?: () => void
 }) {
+  const searchTags = useMemo(
+    () => (tagDefinitions ?? []).map((tag) => ({ id: tag.id, name: tag.name })),
+    [tagDefinitions],
+  )
+  const searchFoundries = useMemo(
+    () => foundryFilterRows(libraryFilterCounts, libraryFilters).map((row) => row.label),
+    [libraryFilterCounts, libraryFilters],
+  )
   const insetTrafficLights = hasInsetTrafficLights()
   const [fontsOpen, setFontsOpen] = useState(true)
   const [projectsOpen, setProjectsOpen] = useState(true)
@@ -737,23 +867,41 @@ export function Sidebar({
     writeShowTotals(next)
   }
 
+  function addTagMenu(familyKeys: string[]) {
+    if (!tagDefinitions || !tagAssignments || !onSetFamilyTag || !onCreateFamilyTag) return null
+    return (
+      <>
+        <FamilyTagMenuItems
+          definitions={tagDefinitions}
+          assignments={tagAssignments}
+          familyKeys={familyKeys}
+          addOnly
+          onSet={(tagId, present) => onSetFamilyTag(familyKeys, tagId, present)}
+          onCreate={() => onCreateFamilyTag(familyKeys)}
+          onEdit={onEditFamilyTag}
+          onDelete={onDeleteFamilyTag}
+        />
+        <ContextMenuSeparator />
+      </>
+    )
+  }
+
   return (
     <aside className="sidebar-column flex h-auto w-full shrink-0 flex-col border-b bg-sidebar text-sidebar-foreground md:h-full md:max-h-full md:w-56 md:border-r md:border-b-0">
       {insetTrafficLights ? (
         <div className="app-region-drag hidden h-10 shrink-0 md:block" aria-hidden />
       ) : null}
       <div className="flex flex-col gap-3 px-3 pt-3 pb-2">
-        <div className="relative">
-          <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            type="search"
-            value={query}
-            onChange={(event) => onQueryChange(event.target.value)}
-            placeholder="Search families"
-            aria-label="Search families"
-            className="pl-8 [&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none"
-          />
-        </div>
+        <LibrarySearch
+          text={query}
+          tokens={searchTokens ?? []}
+          onTextChange={onQueryChange}
+          onTokensChange={onSearchTokensChange ?? (() => {})}
+          tags={searchTags}
+          foundries={searchFoundries}
+          libraryFilters={libraryFilters}
+          onLibraryFiltersChange={onLibraryFiltersChange}
+        />
       </div>
       <ScrollArea className="overlay-scroll-hover min-h-0 flex-1" overlay>
         <nav className="flex flex-row flex-wrap gap-0.5 px-3 pb-2 md:flex-col md:flex-nowrap">
@@ -802,6 +950,7 @@ export function Sidebar({
                         }
                         onReveal={() => onRevealWatchFolder(folder)}
                         onRemove={() => onRemoveWatchFolder(folder)}
+                        menuExtra={addTagMenu(watchFolderFamilyKeys?.[folder] ?? [])}
                       />
                     )
                   })}
@@ -1110,6 +1259,7 @@ export function Sidebar({
                   )}
                 </ContextMenuTrigger>
                 <ContextMenuContent>
+                  {addTagMenu(projectFamilyKeys?.[project.id] ?? [])}
                   {smart ? (
                     <>
                       <ContextMenuItem onSelect={() => onEditSmartProject?.(project.id)}>

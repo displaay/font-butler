@@ -21,6 +21,8 @@ import type {
   FolderPolicyPreset,
   FolderRelinkPreview,
   ImportPlan,
+  LibraryHealthActionKind,
+  LibraryHealthReport,
   Notice,
   OfficeFontCacheInfo,
   Operation,
@@ -205,13 +207,26 @@ export const api = {
     json<{ familyDetails: FamilyDetail[] }>(
       post('/api/family-details', { op: 'comment', familyKey, comment }),
     ),
-  createFamilyTag: (name: string, familyKeys: string[] = []) =>
+  createFamilyTag: (name: string, familyKeys: string[] = [], color?: string) =>
     json<{ tags: FamilyTag[]; familyTags: FamilyTagAssignment[] }>(
-      post('/api/family-tags', { op: 'create', name, familyKeys }),
+      post('/api/family-tags', {
+        op: 'create',
+        name,
+        familyKeys,
+        ...(color !== undefined ? { color } : {}),
+      }),
     ),
   renameFamilyTag: (tagId: string, name: string) =>
     json<{ tags: FamilyTag[]; familyTags: FamilyTagAssignment[] }>(
       post('/api/family-tags', { op: 'rename', tagId, name }),
+    ),
+  updateFamilyTag: (tagId: string, name: string, color: string) =>
+    json<{ tags: FamilyTag[]; familyTags: FamilyTagAssignment[] }>(
+      post('/api/family-tags', { op: 'update', tagId, name, color }),
+    ),
+  deleteFamilyTag: (tagId: string) =>
+    json<{ tags: FamilyTag[]; familyTags: FamilyTagAssignment[] }>(
+      post('/api/family-tags', { op: 'delete', tagId }),
     ),
   setFamilyTag: (familyKeys: string[], tagId: string, present: boolean) =>
     json<{ tags: FamilyTag[]; familyTags: FamilyTagAssignment[] }>(
@@ -344,6 +359,30 @@ export const api = {
         destinationIds: options?.destinationIds,
       }),
     ),
+  activateUntilQuit: (
+    id: string,
+    options?: { replace?: boolean; switch?: boolean; destinationIds?: DestinationId[] },
+  ) =>
+    json<{ entry: CatalogEntry }>(
+      post('/api/activate-until-quit', {
+        id,
+        replace: options?.replace,
+        switch: options?.switch,
+        destinationIds: options?.destinationIds,
+      }),
+    ),
+  activateUntilQuitMany: (
+    ids: string[],
+    options?: { replace?: boolean; switch?: boolean; destinationIds?: DestinationId[] },
+  ) =>
+    json<{ entries: CatalogEntry[] }>(
+      post('/api/activate-until-quit', {
+        ids,
+        replace: options?.replace,
+        switch: options?.switch,
+        destinationIds: options?.destinationIds,
+      }),
+    ),
   reinstall: (id: string, options?: { expectedSourceFingerprint?: string }) =>
     json<{ entry: CatalogEntry }>(
       post('/api/reinstall', { id, expectedSourceFingerprint: options?.expectedSourceFingerprint }),
@@ -388,6 +427,22 @@ export const api = {
     json<{ mac: boolean; cleared: boolean; simulated?: boolean; logoutProbe?: boolean }>(
       post('/api/caches/font', { confirm: true }),
     ),
+  clearAllFontCaches: () =>
+    json<{
+      mac: boolean
+      cleared: boolean
+      simulated?: boolean
+      confirmed: boolean
+      logoutProbe?: boolean
+      parts: Array<{
+        part: 'user' | 'office' | 'adobe'
+        status: 'cleared' | 'not-cleared' | 'skipped' | 'failed'
+        mac: boolean
+        cleared: boolean
+        simulated?: boolean
+        error?: string
+      }>
+    }>(post('/api/caches/all', { confirm: true })),
   requestLogout: () =>
     json<{ requested: boolean; cancelled?: boolean; message?: string; error?: string }>(
       post('/api/session/logout', {}),
@@ -518,6 +573,15 @@ export const api = {
       failedIds: string[]
     }>(post('/api/import/apply', { planId, choices, ...extra })),
   duplicates: () => get<{ duplicates: DuplicateWarning[] }>('/api/duplicates'),
+  libraryHealth: () => get<{ report: LibraryHealthReport }>('/api/library-health'),
+  applyLibraryHealthFix: (
+    action: LibraryHealthActionKind,
+    entryId: string,
+    options: { goodEntryId?: string; candidatePath?: string } = {},
+  ) =>
+    json<{ report: LibraryHealthReport; entries: CatalogEntry[] }>(
+      post('/api/library-health/fix', { action, entryId, ...options }),
+    ),
   resolveDuplicate: (
     id: string,
     choice: 'replace' | 'add-inactive' | 'skip' | 'switch' | 'install-as',

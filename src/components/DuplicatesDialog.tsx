@@ -9,7 +9,21 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { canSwitchToConflicts } from '@/lib/identity'
-import type { CatalogEntry, DuplicateWarning } from '@/lib/types'
+import type {
+  CatalogEntry,
+  DuplicateWarning,
+  LibraryHealthAction,
+  LibraryHealthGroup,
+  LibraryHealthReport,
+} from '@/lib/types'
+
+const HEALTH_GROUP_TITLES: Record<LibraryHealthGroup, string> = {
+  'installed-twice': 'Installed twice',
+  'missing-source': 'Missing source file',
+  damaged: 'Damaged / unreadable',
+}
+
+const HEALTH_GROUP_ORDER: LibraryHealthGroup[] = ['installed-twice', 'missing-source', 'damaged']
 
 export type DuplicateChoice = 'replace' | 'add-inactive' | 'skip' | 'switch' | 'install-as'
 
@@ -70,6 +84,11 @@ export function DuplicatesDialog({
   onResolve,
   onResolveBatch,
   busy,
+  healthReport,
+  healthBusy,
+  onScanHealth,
+  onHealthFix,
+  onHealthRelink,
 }: {
   open: boolean
   warnings: DuplicateWarning[]
@@ -82,6 +101,11 @@ export function DuplicatesDialog({
     options?: { sameBytesOnly?: boolean },
   ) => void
   busy: boolean
+  healthReport?: LibraryHealthReport | null
+  healthBusy?: boolean
+  onScanHealth?: () => void
+  onHealthFix?: (action: LibraryHealthAction) => void
+  onHealthRelink?: (entryId: string) => void
 }) {
   const [names, setNames] = useState<Record<string, string>>({})
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -134,9 +158,10 @@ export function DuplicatesDialog({
     >
       <DialogContent className="flex max-h-[min(90vh,720px)] w-[min(94vw,720px)] flex-col overflow-hidden">
         <DialogHeader>
-          <DialogTitle>Duplicates</DialogTitle>
+          <DialogTitle>Duplicates &amp; Library Health</DialogTitle>
           <DialogDescription>
-            Incoming files that match an already active font. Nothing is installed until you choose.
+            Incoming files that match an already active font, plus a read-only Library Health scan.
+            Nothing is installed or moved until you choose.
           </DialogDescription>
         </DialogHeader>
         {warnings.length > 0 ? (
@@ -341,6 +366,90 @@ export function DuplicatesDialog({
               )
             })
           )}
+          {onScanHealth ? (
+            <div className="space-y-3 rounded-lg border px-3 py-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium">Library Health</div>
+                  <div className="text-xs text-muted-foreground">
+                    Read-only scan for copies installed twice, missing source files, and damaged
+                    files. Fixes park extra copies — source files are never deleted, and the only
+                    verified-good copy of a face is never parked.
+                  </div>
+                </div>
+                <Button size="sm" variant="outline" disabled={busy || healthBusy} onClick={onScanHealth}>
+                  {healthReport ? 'Re-run scan' : 'Run Library Health scan'}
+                </Button>
+              </div>
+              {healthReport ? (
+                healthReport.findings.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No Library Health findings.</p>
+                ) : (
+                  HEALTH_GROUP_ORDER.map((group) => {
+                    const groupFindings = healthReport.findings.filter((f) => f.group === group)
+                    if (groupFindings.length === 0) return null
+                    return (
+                      <div key={group} className="space-y-2">
+                        <div className="text-xs font-medium text-muted-foreground">
+                          {HEALTH_GROUP_TITLES[group]} ({groupFindings.length})
+                        </div>
+                        {groupFindings.map((finding) => (
+                          <div key={finding.id} className="space-y-2 rounded-md bg-muted/50 px-2 py-2">
+                            <div className="text-sm font-medium">
+                              {finding.familyName} · {finding.format.toUpperCase()}
+                            </div>
+                            {finding.copies.map((copy) => (
+                              <div
+                                key={`${copy.entryId}-${copy.path}`}
+                                className="truncate font-mono text-[11px] text-muted-foreground"
+                                title={copy.path}
+                              >
+                                {copy.role === 'keeper'
+                                  ? 'Keeper'
+                                  : copy.role === 'extra'
+                                    ? 'Extra copy'
+                                    : 'Copy'}
+                                {' · '}
+                                {copy.path}
+                                {copy.verifiedGood ? ' · Verified good' : ''}
+                                {copy.damaged ? ` · Damaged${copy.reason ? `: ${copy.reason}` : ''}` : ''}
+                              </div>
+                            ))}
+                            {finding.reportReason ? (
+                              <div className="text-xs text-muted-foreground">{finding.reportReason}</div>
+                            ) : null}
+                            {finding.reportOnly ? (
+                              <div className="text-xs text-muted-foreground">
+                                Report only — no safe fix, so nothing will be moved or deleted.
+                              </div>
+                            ) : (
+                              <div className="flex flex-wrap gap-1.5">
+                                {finding.actions.map((action) => (
+                                  <Button
+                                    key={`${action.kind}-${action.entryId}`}
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={busy || healthBusy}
+                                    onClick={() =>
+                                      action.kind === 'relink' && onHealthRelink
+                                        ? onHealthRelink(action.entryId)
+                                        : onHealthFix?.(action)
+                                    }
+                                  >
+                                    {action.label}
+                                  </Button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  })
+                )
+              ) : null}
+            </div>
+          ) : null}
         </div>
         <div className="flex justify-end pt-2">
           <Button variant="outline" onClick={resetAndClose}>

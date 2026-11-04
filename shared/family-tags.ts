@@ -32,6 +32,8 @@ export type FamilyTagAssignment = {
 export type FamilyTagCatalog = {
   tags?: FamilyTag[]
   familyTags?: FamilyTagAssignment[]
+  /** Seed tags the user deleted. They are not recreated on the next load. */
+  retiredTagSeeds?: FamilyTagSeed[]
 }
 
 export type FamilyTagEntry = {
@@ -49,6 +51,12 @@ export const SEED_FAMILY_TAGS: readonly FamilyTag[] = [
 ]
 
 const CUSTOM_TAG_COLORS = ['#7c5cbf', '#c45c8a', '#2a9d8f', '#c47b3a', '#4c7c8a', '#8a6232']
+
+/** Colors offered when creating or editing a tag. Seed colors first, then the custom palette. */
+export const TAG_COLOR_CHOICES: readonly string[] = [
+  ...SEED_FAMILY_TAGS.map((tag) => tag.color),
+  ...CUSTOM_TAG_COLORS,
+]
 
 const SEED_KEYS = new Set<FamilyTagSeed>(SEED_FAMILY_TAGS.map((tag) => tag.seed!))
 
@@ -137,13 +145,18 @@ function readTag(value: unknown): FamilyTag | null {
   }
 }
 
-export function ensureSeedTags(tags: readonly FamilyTag[] | undefined): FamilyTag[] {
+export function ensureSeedTags(
+  tags: readonly FamilyTag[] | undefined,
+  retired: readonly FamilyTagSeed[] | undefined = [],
+): FamilyTag[] {
+  const retiredSet = new Set(retired)
   const stored = (tags ?? []).flatMap((tag) => {
     const read = readTag(tag)
     return read ? [read] : []
   })
   const seeds: FamilyTag[] = []
   for (const seed of SEED_FAMILY_TAGS) {
+    if (seed.seed && retiredSet.has(seed.seed)) continue
     const existing = stored.find((tag) => tag.seed === seed.seed || tag.id === seed.id)
     seeds.push(
       existing
@@ -241,7 +254,7 @@ export function reconcileRetailTrialTags(
   catalog: FamilyTagCatalog & { entries: readonly FamilyTagEntry[] },
   options: { hasWorkerToken: boolean },
 ): boolean {
-  const tags = ensureSeedTags(catalog.tags)
+  const tags = ensureSeedTags(catalog.tags, catalog.retiredTagSeeds)
   const tagsChanged = !sameTagList(catalog.tags ?? [], tags)
   catalog.tags = tags
   const trial = tags.find((tag) => tag.seed === 'trial')
@@ -274,6 +287,14 @@ export function reconcileRetailTrialTags(
   return tagsChanged || !sameAssignments(before, familyTags)
 }
 
+const TAG_COLOR_RE = /^#(?:[0-9a-fA-F]{6})$/
+
+export function cleanTagColor(color: string): string {
+  const trimmed = color.trim().toLowerCase()
+  if (!TAG_COLOR_RE.test(trimmed)) throw new Error('Pick a tag color.')
+  return trimmed
+}
+
 export function cleanTagName(name: string): string {
   const trimmed = name.trim().replace(/\s+/g, ' ')
   if (!trimmed) throw new Error('Enter a tag name.')
@@ -296,26 +317,64 @@ export function nextCustomTagColor(tags: readonly FamilyTag[]): string {
   return CUSTOM_TAG_COLORS[tags.length % CUSTOM_TAG_COLORS.length]!
 }
 
-export function addFamilyTag(catalog: FamilyTagCatalog, name: string, id: string): FamilyTag {
-  const tags = ensureSeedTags(catalog.tags)
+export function addFamilyTag(
+  catalog: FamilyTagCatalog,
+  name: string,
+  id: string,
+  color?: string,
+): FamilyTag {
+  const tags = ensureSeedTags(catalog.tags, catalog.retiredTagSeeds)
   const clean = cleanTagName(name)
   assertUniqueName(tags, clean)
-  const tag: FamilyTag = { id, name: clean, color: nextCustomTagColor(tags) }
+  const tag: FamilyTag = {
+    id,
+    name: clean,
+    color: color === undefined ? nextCustomTagColor(tags) : cleanTagColor(color),
+  }
   catalog.tags = [...tags, tag]
   catalog.familyTags = normalizeFamilyTagAssignments(catalog.familyTags, catalog.tags)
   return tag
 }
 
 export function renameFamilyTag(catalog: FamilyTagCatalog, tagId: string, name: string): FamilyTag {
-  const tags = ensureSeedTags(catalog.tags)
+  return updateFamilyTag(catalog, tagId, { name })
+}
+
+export function updateFamilyTag(
+  catalog: FamilyTagCatalog,
+  tagId: string,
+  input: { name: string; color?: string },
+): FamilyTag {
+  const tags = ensureSeedTags(catalog.tags, catalog.retiredTagSeeds)
   const tag = tags.find((item) => item.id === tagId)
   if (!tag) throw new Error('That tag does not exist.')
-  const clean = cleanTagName(name)
+  const clean = cleanTagName(input.name)
   assertUniqueName(tags, clean, tagId)
   tag.name = clean
+  if (input.color !== undefined) tag.color = cleanTagColor(input.color)
   catalog.tags = tags
   catalog.familyTags = normalizeFamilyTagAssignments(catalog.familyTags, tags)
   return tag
+}
+
+/** Remove the tag and take it off every family. A deleted seed stays deleted. */
+export function deleteFamilyTag(catalog: FamilyTagCatalog, tagId: string): void {
+  const tags = ensureSeedTags(catalog.tags, catalog.retiredTagSeeds)
+  const tag = tags.find((item) => item.id === tagId)
+  if (!tag) throw new Error('That tag does not exist.')
+  if (tag.seed) {
+    const retired = new Set(catalog.retiredTagSeeds ?? [])
+    retired.add(tag.seed)
+    catalog.retiredTagSeeds = [...retired]
+  }
+  const nextTags = tags.filter((item) => item.id !== tagId)
+  catalog.tags = nextTags
+  const stripped = normalizeFamilyTagAssignments(catalog.familyTags, tags).map((row) => ({
+    familyKey: row.familyKey,
+    tagIds: row.tagIds.filter((id) => id !== tagId),
+    autoTagIds: (row.autoTagIds ?? []).filter((id) => id !== tagId),
+  }))
+  catalog.familyTags = normalizeFamilyTagAssignments(stripped, nextTags)
 }
 
 export function setFamilyTagPresent(
@@ -324,7 +383,7 @@ export function setFamilyTagPresent(
   tagId: string,
   present: boolean,
 ): void {
-  const tags = ensureSeedTags(catalog.tags)
+  const tags = ensureSeedTags(catalog.tags, catalog.retiredTagSeeds)
   catalog.tags = tags
   if (!tags.some((tag) => tag.id === tagId)) throw new Error('That tag does not exist.')
   const keys = [...new Set(familyKeys.map((key) => key.trim()).filter(Boolean))]

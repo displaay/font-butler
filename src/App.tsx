@@ -36,7 +36,9 @@ import { ConfettiBurst } from '@/components/ConfettiBurst'
 import { OnboardingDialog } from '@/components/OnboardingDialog'
 import type { Announcement } from '../shared/announcements.ts'
 import { detailForFamily, type FamilyDetail } from '../shared/family-details.ts'
-import { familyTagRulePredicate, type FamilyTag, type FamilyTagAssignment } from '../shared/family-tags.ts'
+import { familyTagKey, familyTagRulePredicate, type FamilyTag, type FamilyTagAssignment } from '../shared/family-tags.ts'
+import { catalogGroupMatchesSearch, systemGroupMatchesSearch } from '@/lib/librarySearch'
+import { previewRequestFromTokens, type SearchToken } from '../shared/library-search.ts'
 import { parseAppIconStyle, type AppIconStyle } from '@/lib/appIcon'
 import { RelinkDialog } from '@/components/RelinkDialog'
 import { RenameDialog } from '@/components/RenameDialog'
@@ -102,7 +104,7 @@ import {
   renameSavedFilter,
   savedFilterMatches,
 } from '@/lib/savedFilters'
-import { familyNameOf, catalogEntriesMatch, catalogRevealEntry, countFamilyNames, countLibraryFilters, entryHasTrackedSource, entryIds, familyStatusSummary, groupCatalog, groupSystem, hasManagedInstall, matchesLibraryFilter, matchesQuery, retailFamiliesToOptOut, sortFamilyGroups, uniquePaths } from '@/lib/group'
+import { familyNameOf, catalogEntriesMatch, catalogRevealEntry, countFamilyNames, countLibraryFilters, entryHasTrackedSource, entryIds, familyStatusSummary, groupCatalog, groupSystem, hasManagedInstall, matchesLibraryFilter, retailFamiliesToOptOut, sortFamilyGroups, uniquePaths } from '@/lib/group'
 import {
   LIBRARY_FILTERS_KEY,
   readLibraryFilters,
@@ -138,6 +140,7 @@ import {
   emptySmartRuleSet,
   isSmartProject,
   matchingSmartEntries,
+  matchingSmartFamilyCount,
   smartRuleSummary,
   type SmartRuleSet,
 } from '../shared/smart-projects.ts'
@@ -221,11 +224,12 @@ function AppShell() {
   const [tagNameRequest, setTagNameRequest] = useState<
     | null
     | { mode: 'create'; familyKeys: string[] }
-    | { mode: 'rename'; tagId: string; name: string }
+    | { mode: 'edit'; tagId: string; name: string; color: string }
   >(null)
   const [systemFaces, setSystemFaces] = useState<SystemFace[]>([])
   const [tab, setTab] = useState<Tab>('library')
   const [query, setQuery] = useState('')
+  const [searchTokens, setSearchTokens] = useState<SearchToken[]>([])
   const [selectedFamily, setSelectedFamily] = useState<string | null>(null)
   const [selectedSystem, setSelectedSystem] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
@@ -267,7 +271,7 @@ function AppShell() {
   }
 
   function applyFamilyTagPayload(payload: { tags?: FamilyTag[]; familyTags?: FamilyTagAssignment[] }) {
-    if (Array.isArray(payload.tags) && payload.tags.length > 0) setFamilyTagDefs(payload.tags)
+    if (Array.isArray(payload.tags)) setFamilyTagDefs(payload.tags)
     if (Array.isArray(payload.familyTags)) setFamilyTagAssignments(payload.familyTags)
   }
 
@@ -324,19 +328,51 @@ function AppShell() {
     }
   }
 
-  async function submitTagName(name: string) {
+  function editFamilyTag(tagId: string) {
+    const tag = familyTagDefs.find((item) => item.id === tagId)
+    if (!tag) return
+    setTagNameRequest({ mode: 'edit', tagId, name: tag.name, color: tag.color })
+  }
+
+  async function submitTagName(name: string, color: string) {
     const request = tagNameRequest
     if (!request) return
     try {
       if (request.mode === 'create') {
-        applyFamilyTagPayload(await api.createFamilyTag(name, request.familyKeys))
+        applyFamilyTagPayload(await api.createFamilyTag(name, request.familyKeys, color))
       } else {
-        applyFamilyTagPayload(await api.renameFamilyTag(request.tagId, name))
+        applyFamilyTagPayload(await api.updateFamilyTag(request.tagId, name, color))
       }
       setTagNameRequest(null)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not save that tag')
     }
+  }
+
+  async function deleteFamilyTag(tagId: string) {
+    const tag = familyTagDefs.find((item) => item.id === tagId)
+    if (!tag) return
+    const used = familyTagAssignments.filter((row) => row.tagIds.includes(tagId)).length
+    if (used > 0) {
+      const families = used === 1 ? '1 family' : `${used} families`
+      const confirmed = window.confirm(
+        `${tag.name} is on ${families}. Delete this tag and remove it from those families?`,
+      )
+      if (!confirmed) return
+    }
+    try {
+      applyFamilyTagPayload(await api.deleteFamilyTag(tagId))
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not delete that tag')
+    }
+  }
+
+  function tagFamilies(keys: string[], tagId: string) {
+    if (keys.length === 0) {
+      toast.message('No families to tag')
+      return
+    }
+    void persistFamilyTag(keys, tagId, true)
   }
   const [syncCollisions, setSyncCollisions] = useState<RetailFamilyCollision[]>([])
   const [dropRetailPrompt, setDropRetailPrompt] = useState<{
@@ -425,6 +461,7 @@ function AppShell() {
     names: [],
   })
   const [smartEditorId, setSmartEditorId] = useState<string | null>(null)
+  const [smartCreate, setSmartCreate] = useState<{ name: string } | null>(null)
   const [importPlan, setImportPlan] = useState<ImportPlan | null>(null)
   type ImportPlanDecision = {
     choices: Record<string, ImportPlanItem['defaultChoice']>
@@ -441,6 +478,8 @@ function AppShell() {
   const [highlightOperation, setHighlightOperation] = useState<string | null>(null)
   const [duplicates, setDuplicates] = useState<DuplicateWarning[]>([])
   const [duplicatesOpen, setDuplicatesOpen] = useState(false)
+  const [healthReport, setHealthReport] = useState<import('@/lib/types').LibraryHealthReport | null>(null)
+  const [healthBusy, setHealthBusy] = useState(false)
   const [adobeAvailable, setAdobeAvailable] = useState(true)
 
   function applyAdobeAvailability(destinations?: DestinationCapability[]) {
@@ -1024,11 +1063,37 @@ function AppShell() {
     const counts: Record<string, number> = {}
     for (const project of projects) {
       counts[project.id] = isSmartProject(project)
-        ? matchingSmartEntries(projectScopeEntries, project.rules, smartMatchOptions).length
+        ? matchingSmartFamilyCount(projectScopeEntries, project.rules, smartMatchOptions)
         : project.members.length
     }
     return counts
   }, [projects, projectScopeEntries, smartMatchOptions])
+  const watchFolderFamilyKeys = useMemo(() => {
+    const map: Record<string, string[]> = {}
+    for (const folder of watchFolders) {
+      const keys = new Set<string>()
+      for (const entry of entries) {
+        if (!isWatchFolderEntry(entry, folder)) continue
+        keys.add(familyNameOf(entry))
+      }
+      map[folder] = [...keys]
+    }
+    return map
+  }, [entries, watchFolders])
+  const projectFamilyKeys = useMemo(() => {
+    const byId = new Map(entries.map((entry) => [entry.id, entry]))
+    const map: Record<string, string[]> = {}
+    for (const project of projects) {
+      const matched = isSmartProject(project)
+        ? matchingSmartEntries(projectScopeEntries, project.rules, smartMatchOptions)
+        : project.members.flatMap((member) => {
+            const entry = byId.get(member.assetId)
+            return entry ? [entry] : []
+          })
+      map[project.id] = [...new Set(matched.map((entry) => familyTagKey(entry)))]
+    }
+    return map
+  }, [projects, entries, projectScopeEntries, smartMatchOptions])
   const smartRuleFolders = useMemo(() => {
     const folders = watchFolders.map((folder) => ({
       id: folder,
@@ -1037,7 +1102,8 @@ function AppShell() {
     if (retail?.enabled) folders.unshift({ id: RETAIL_LIBRARY_FILTER, label: RETAIL_LIBRARY_LABEL })
     return folders
   }, [watchFolders, retail?.enabled])
-  const searching = Boolean(query.trim())
+  const searching = Boolean(query.trim()) || searchTokens.length > 0
+  const previewRequest = useMemo(() => previewRequestFromTokens(searchTokens), [searchTokens])
   const testInstallActive = isTestInstallFilter(watchFolderFilter)
   const testInstallEntries = useMemo(() => testInstallToCatalog(testInstallFonts), [testInstallFonts])
   const librarySourceEntries = useMemo(
@@ -1059,11 +1125,11 @@ function AppShell() {
         groupCatalog(
           librarySourceEntries.filter((entry) => matchesLibraryFilter(entry, libraryFilters)),
         ).filter((group) =>
-          matchesQuery(`${group.familyName} ${group.faces.map((face) => face.styleName).join(' ')}`, query),
+          catalogGroupMatchesSearch(group, query, searchTokens, familyTagDefs, familyTagAssignments),
         ),
         sortMode,
       ),
-    [librarySourceEntries, query, sortMode, libraryFilters],
+    [librarySourceEntries, query, searchTokens, sortMode, libraryFilters, familyTagDefs, familyTagAssignments],
   )
   const libraryGroupsUnfiltered = useMemo(
     () => groupCatalog(librarySourceEntries),
@@ -1101,10 +1167,8 @@ function AppShell() {
   const updateGroups = useMemo(() => visibleUpdateGroups(allUpdates, query), [allUpdates, query])
   const systemGroups = useMemo(
     () =>
-      groupSystem(systemFaces).filter((group) =>
-        matchesQuery(`${group.familyName} ${group.faces.map((face) => face.styleName).join(' ')}`, query),
-      ),
-    [systemFaces, query],
+      groupSystem(systemFaces).filter((group) => systemGroupMatchesSearch(group, query, searchTokens)),
+    [systemFaces, query, searchTokens],
   )
   const shownSystemGroups = useMemo(
     () => (query.trim() ? systemGroups : systemGroups.slice(0, 80)),
@@ -1638,6 +1702,9 @@ function AppShell() {
     uninstallInstance,
     installInstanceToAdobe,
     activateGroupGuarded,
+    activateUntilQuitGroup,
+    activateUntilQuitInstance,
+    activateUntilQuitSelected,
     reinstallSelected,
     repairSelected,
     reinstallAllUpdates,
@@ -1728,33 +1795,47 @@ function AppShell() {
   }
 
   async function createProjectOfKind(name: string, kind: 'manual' | 'smart') {
+    if (kind === 'smart') {
+      setNewProjectOpen(false)
+      setSmartEditorId(null)
+      setSmartCreate({ name })
+      return
+    }
     try {
-      const ids = kind === 'manual' ? newProjectSeed.ids : []
-      const result = await api.createProject(
-        name,
-        ids,
-        kind === 'smart' ? { kind: 'smart', rules: emptySmartRuleSet() } : undefined,
-      )
+      const result = await api.createProject(name, newProjectSeed.ids)
       setProjects((current) => [result.project, ...current.filter((item) => item.id !== result.project.id)])
       setProjectFilter(result.project.id)
       setTab('library')
       setWatchFolderFilter(null)
       setNewProjectOpen(false)
-      if (kind === 'smart') setSmartEditorId(result.project.id)
       toast.success(`Created ${result.project.name}`)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not create project')
     }
   }
 
-  async function saveSmartRules(id: string, rules: SmartRuleSet) {
+  async function submitSmartProject(input: { name: string; rules: SmartRuleSet }) {
     try {
-      const result = await api.updateProject(id, { rules })
+      if (smartCreate) {
+        const result = await api.createProject(input.name, [], { kind: 'smart', rules: input.rules })
+        setProjects((current) => [result.project, ...current.filter((item) => item.id !== result.project.id)])
+        setProjectFilter(result.project.id)
+        setTab('library')
+        setWatchFolderFilter(null)
+        setSmartCreate(null)
+        toast.success(`Created ${result.project.name}`)
+        return
+      }
+      if (!editingSmartProject) return
+      const result = await api.updateProject(editingSmartProject.id, {
+        name: input.name,
+        rules: input.rules,
+      })
       setProjects((current) => current.map((item) => (item.id === result.project.id ? result.project : item)))
       setSmartEditorId(null)
-      toast.success(`Updated rules for ${result.project.name}`)
+      toast.success(`Updated ${result.project.name}`)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Could not save rules')
+      toast.error(error instanceof Error ? error.message : 'Could not save the smart project')
     }
   }
 
@@ -1931,6 +2012,23 @@ function AppShell() {
       if (action === 'specimen') {
         if (!inspectSelection) return
         event.preventDefault()
+        setInspectorPane('tester')
+        return
+      }
+      if (action === 'quickLook') {
+        const hasFamily =
+          (tab === 'library' && selectedFamilyKeys.length > 0) ||
+          (tab === 'system' && selectedSystemKeys.length > 0)
+        if (!hasFamily) return
+        event.preventDefault()
+        if (inspectSelection && inspectorPane === 'tester') {
+          closeInspector()
+          return
+        }
+        if (!inspectSelection) {
+          setInspectorDensity(DEFAULT_INSPECTOR_DENSITY)
+          setInspectSelection(true)
+        }
         setInspectorPane('tester')
         return
       }
@@ -2375,6 +2473,8 @@ function AppShell() {
         <Sidebar
           query={query}
           onQueryChange={setQuery}
+          searchTokens={searchTokens}
+          onSearchTokensChange={setSearchTokens}
           tab={tab}
           onTabChange={(next) => {
             setTab(next)
@@ -2419,6 +2519,23 @@ function AppShell() {
           projectMembershipCounts={projectMembershipCounts}
           onEditSmartProject={(id) => setSmartEditorId(id)}
           onSnapshotProject={(id) => void snapshotSmartProject(id)}
+          tagDefinitions={familyTagDefs}
+          tagAssignments={familyTagAssignments}
+          watchFolderFamilyKeys={watchFolderFamilyKeys}
+          projectFamilyKeys={projectFamilyKeys}
+          onSetFamilyTag={(keys, tagId, present) => {
+            if (present) tagFamilies(keys, tagId)
+            else void persistFamilyTag(keys, tagId, false)
+          }}
+          onCreateFamilyTag={(keys) => {
+            if (keys.length === 0) {
+              toast.message('No families to tag')
+              return
+            }
+            setTagNameRequest({ mode: 'create', familyKeys: keys })
+          }}
+          onEditFamilyTag={editFamilyTag}
+          onDeleteFamilyTag={(tagId) => void deleteFamilyTag(tagId)}
           savedFilters={savedFilters}
           onSelectSavedFilter={applySavedFilter}
           onCreateSavedFilter={createSavedFilterFromView}
@@ -2671,6 +2788,7 @@ function AppShell() {
                         return (
                         <SystemCard
                           key={group.key}
+                          previewRequest={previewRequest}
                           layout={viewLayout}
                           previewSize={gridPreviewSize}
                           group={group}
@@ -2715,6 +2833,7 @@ function AppShell() {
                         return (
                         <LibraryCard
                           key={group.key}
+                          previewRequest={previewRequest}
                           layout={viewLayout}
                           previewSize={gridPreviewSize}
                           group={group}
@@ -2755,6 +2874,7 @@ function AppShell() {
                           }
                           onInstallInstance={(entryId) => void installInstanceGuarded(entryId)}
                           onActivateInstance={(entryId) => void activateInstanceGuarded(entryId)}
+                          onActivateUntilQuitInstance={(entryId) => void activateUntilQuitInstance(entryId)}
                           onDeactivateInstance={(entryId) => void deactivateInstance(entryId)}
                           onUninstallInstance={(entryId) => {
                             if (testInstallActive) {
@@ -2825,6 +2945,9 @@ function AppShell() {
                           }
                           onActivate={() =>
                             useBatch ? void activateSelected() : void activateGroupGuarded(group)
+                          }
+                          onActivateUntilQuit={() =>
+                            useBatch ? void activateUntilQuitSelected() : void activateUntilQuitGroup(group)
                           }
                           onSwitch={
                             familyHasSwitch(group, entries)
@@ -2922,11 +3045,8 @@ function AppShell() {
                               familyKeys: useBatch ? catalogSelection.map((item) => item.key) : [group.key],
                             })
                           }
-                          onRenameFamilyTag={(tagId) => {
-                            const tag = familyTagDefs.find((item) => item.id === tagId)
-                            if (!tag) return
-                            setTagNameRequest({ mode: 'rename', tagId, name: tag.name })
-                          }}
+                          onEditFamilyTag={editFamilyTag}
+                          onDeleteFamilyTag={(tagId) => void deleteFamilyTag(tagId)}
                         />
                         )
                       })}
@@ -2980,11 +3100,8 @@ function AppShell() {
                       familyKeys: catalogSelection.map((item) => item.key),
                     })
                   }
-                  onRename={(tagId) => {
-                    const tag = familyTagDefs.find((item) => item.id === tagId)
-                    if (!tag) return
-                    setTagNameRequest({ mode: 'rename', tagId, name: tag.name })
-                  }}
+                  onEdit={editFamilyTag}
+                  onDelete={(tagId) => void deleteFamilyTag(tagId)}
                 />
                 <CatalogBatchButtons
                   plan={catalogPlan}
@@ -3079,6 +3196,7 @@ function AppShell() {
                       busy,
                       onInstall: (entryId) => void installInstanceGuarded(entryId),
                       onActivate: (entryId) => void activateInstanceGuarded(entryId),
+                      onActivateUntilQuit: (entryId) => void activateUntilQuitInstance(entryId),
                       onDeactivate: (entryId) => void deactivateInstance(entryId),
                       uninstallOnly: testInstallActive,
                       onUninstall: (entryId) => {
@@ -3350,19 +3468,21 @@ function AppShell() {
           onCreate={(input) => void createProjectOfKind(input.name, input.kind)}
         />
         <SmartRuleEditor
-          open={Boolean(editingSmartProject)}
+          open={Boolean(editingSmartProject) || smartCreate != null}
+          mode={smartCreate ? 'create' : 'edit'}
           projectId={editingSmartProject?.id ?? null}
-          projectName={editingSmartProject?.name ?? 'Smart project'}
-          rules={editingSmartProject?.rules ?? emptySmartRuleSet()}
+          projectName={smartCreate?.name ?? editingSmartProject?.name ?? 'Smart project'}
+          rules={smartCreate ? emptySmartRuleSet() : editingSmartProject?.rules ?? emptySmartRuleSet()}
           entries={projectScopeEntries}
           folders={smartRuleFolders}
           tags={familyTagCatalog}
-          onCancel={() => setSmartEditorId(null)}
-          onSave={(rules) => {
-            if (editingSmartProject) void saveSmartRules(editingSmartProject.id, rules)
+          onCancel={() => {
+            setSmartEditorId(null)
+            setSmartCreate(null)
           }}
+          onSubmit={(input) => void submitSmartProject(input)}
           onSnapshot={
-            editingSmartProject
+            editingSmartProject && !smartCreate
               ? () => void snapshotSmartProject(editingSmartProject.id)
               : undefined
           }
@@ -3443,6 +3563,37 @@ function AppShell() {
           warnings={duplicates}
           entries={entries}
           busy={busy}
+          healthReport={healthReport}
+          healthBusy={healthBusy}
+          onScanHealth={() => {
+            setHealthBusy(true)
+            void api
+              .libraryHealth()
+              .then((result) => setHealthReport(result.report))
+              .catch(() => setHealthReport(null))
+              .finally(() => setHealthBusy(false))
+          }}
+          onHealthFix={(action) => {
+            void run(
+              async () => {
+                const result = await api.applyLibraryHealthFix(action.kind, action.entryId, {
+                  goodEntryId: action.goodEntryId,
+                })
+                setHealthReport(result.report)
+                setDuplicates(await api.duplicates().then((r) => r.duplicates).catch(() => duplicates))
+                await refreshCatalog()
+              },
+              { pending: 'Applying Library Health fix…', done: 'Library Health fix applied' },
+            )
+          }}
+          onHealthRelink={(entryId) => {
+            const target = entries.find((item) => item.id === entryId)
+            if (target) {
+              setRelinkEntry(target)
+              setRelinkMode('locate')
+              setDuplicatesOpen(false)
+            }
+          }}
           onClose={() => setDuplicatesOpen(false)}
           onResolve={(id, choice, familyName) => {
             void run(
@@ -3561,11 +3712,12 @@ function AppShell() {
         <FamilyTagNameDialog
           open={tagNameRequest !== null}
           mode={tagNameRequest?.mode ?? 'create'}
-          initialName={tagNameRequest?.mode === 'rename' ? tagNameRequest.name : ''}
+          initialName={tagNameRequest?.mode === 'edit' ? tagNameRequest.name : ''}
+          initialColor={tagNameRequest?.mode === 'edit' ? tagNameRequest.color : undefined}
           onOpenChange={(open) => {
             if (!open) setTagNameRequest(null)
           }}
-          onSubmit={(name) => void submitTagName(name)}
+          onSubmit={(name, color) => void submitTagName(name, color)}
         />
         <RenameDialog
           entry={renameEntry}

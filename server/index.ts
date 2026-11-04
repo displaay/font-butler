@@ -344,16 +344,23 @@ app.post('/api/family-tags', async (c) => {
   const body = await c.req.json<{
     op?: string
     name?: string
+    color?: string
     tagId?: string
     familyKeys?: string[]
     present?: boolean
   }>()
   try {
     if (body.op === 'create') {
-      return c.json(await service.createFamilyTag(body.name ?? '', body.familyKeys ?? []))
+      return c.json(await service.createFamilyTag(body.name ?? '', body.familyKeys ?? [], body.color))
     }
     if (body.op === 'rename') {
       return c.json(await service.renameFamilyTag(body.tagId ?? '', body.name ?? ''))
+    }
+    if (body.op === 'update') {
+      return c.json(await service.updateFamilyTag(body.tagId ?? '', body.name ?? '', body.color))
+    }
+    if (body.op === 'delete') {
+      return c.json(await service.deleteFamilyTag(body.tagId ?? ''))
     }
     if (body.op === 'set') {
       return c.json(await service.setFamilyTag(body.familyKeys ?? [], body.tagId ?? '', body.present === true))
@@ -387,6 +394,35 @@ app.post('/api/family-details', async (c) => {
 })
 
 app.get('/api/duplicates', (c) => c.json({ duplicates: service.listDuplicates() }))
+
+app.get('/api/library-health', (c) => c.json({ report: service.scanLibraryHealth() }))
+
+app.post('/api/library-health/fix', async (c) => {
+  const body = await c.req.json<{
+    action?: string
+    entryId?: string
+    goodEntryId?: string
+    candidatePath?: string
+  }>()
+  if (!body.action || !body.entryId) {
+    return c.json({ error: 'Missing action or entryId' }, 400)
+  }
+  try {
+    return c.json(
+      await service.applyLibraryHealthFix({
+        action: body.action as Parameters<FontButlerService['applyLibraryHealthFix']>[0]['action'],
+        entryId: body.entryId,
+        goodEntryId: body.goodEntryId,
+        candidatePath: body.candidatePath,
+      }),
+    )
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : 'Could not apply that Library Health fix' },
+      400,
+    )
+  }
+})
 
 app.post('/api/duplicates/resolve', async (c) => {
   const body = await c.req.json<{
@@ -647,6 +683,48 @@ app.post('/api/deactivate', async (c) => {
   } catch (error) {
     return c.json(
       { error: error instanceof Error ? error.message : 'Deactivate failed' },
+      400,
+    )
+  }
+})
+
+app.post('/api/activate-until-quit', async (c) => {
+  const body = await c.req.json<{
+    id?: string
+    ids?: string[]
+    replace?: boolean
+    switch?: boolean
+    destinationIds?: Array<'macos' | 'adobe-shared'>
+  }>()
+  const options = {
+    replace: body.replace === true,
+    switch: body.switch === true,
+    destinationIds: body.destinationIds,
+  }
+  try {
+    if (body.ids?.length) {
+      const entries = await service.activateUntilQuitMany(body.ids, options)
+      return c.json({ entries })
+    }
+    if (!body.id) {
+      return c.json({ error: 'Missing id or ids' }, 400)
+    }
+    const entry = await service.activateUntilQuit(body.id, options)
+    return c.json({ entry })
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : 'Could not activate that font until quit' },
+      400,
+    )
+  }
+})
+
+app.post('/api/session/release', async (c) => {
+  try {
+    return c.json(await service.releaseSessionActivations())
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : 'Could not release session fonts' },
       400,
     )
   }
@@ -1369,9 +1447,14 @@ mountEventsRoutes(app, {
       shuttingDown = true
       for (const close of sseClosers) close()
       sseClosers.clear()
-      const force = setTimeout(() => process.exit(0), 2_000)
-      force.unref?.()
       void (async () => {
+        try {
+          await service.releaseSessionActivations()
+        } catch (error) {
+          console.error('Could not release session fonts', error)
+        }
+        const force = setTimeout(() => process.exit(0), 2_000)
+        force.unref?.()
         try {
           await closeFontAnalysisWorker()
           await closeAllWatchers()

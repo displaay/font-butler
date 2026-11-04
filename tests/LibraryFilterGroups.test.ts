@@ -315,6 +315,24 @@ test('filter group headings use capitalize styling', async () => {
     root.unmount()
   })
 })
+
+test('classification stays hidden until Edit filters turns that group on', async () => {
+  const host = document.createElement('div')
+  document.body.append(host)
+  const root = createRoot(host)
+
+  await React.act(async () => {
+    root.render(React.createElement(Harness, { initial: [] }))
+  })
+  assert.equal(buttonByLabel('Serif'), undefined)
+  assert.equal(buttonByLabel('Foundries') ?? buttonByLabel('Displaay'), undefined)
+  assert.ok(buttonByLabel('Edit filters'), 'expected Edit filters under the filter groups')
+  assert.ok(buttonByLabel('Installed'), 'expected the default groups to stay visible')
+
+  await React.act(async () => {
+    root.unmount()
+  })
+})
 })
 
 after(() => {

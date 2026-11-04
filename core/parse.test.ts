@@ -376,3 +376,27 @@ test('sfntTablesFit rejects tables past the end of the file and a zero-filled he
     fs.rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('parseFontFile stores manufacturer, designer, and IBM family class', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-class-'))
+  try {
+    const sans = path.join(dir, 'Reckless.ttf')
+    writeTestFont(sans, 'Reckless', 'Reckless-Regular', {
+      manufacturer: 'Displaay',
+      designer: 'Daniel Quisek',
+      sFamilyClass: 0x0800,
+    })
+    const sansFace = parseFontFile(sans).faces[0]
+    assert.equal(sansFace?.foundry, 'Displaay')
+    assert.equal(sansFace?.designer, 'Daniel Quisek')
+    assert.equal(sansFace?.classification, 'sans-serif')
+
+    const mono = path.join(dir, 'OfficeMono.ttf')
+    writeTestFont(mono, 'Office Mono', 'OfficeMono-Regular')
+    const monoFace = parseFontFile(mono).faces[0]
+    assert.equal(monoFace?.foundry, undefined)
+    assert.equal(monoFace?.classification, 'monospaced')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})

@@ -30,6 +30,7 @@ import { isMacUserFontFile } from './user-fonts.ts'
 import { applyParsedFont, parseFontFile, readFileStat } from './parse.ts'
 import type { AppPaths } from './paths.ts'
 import { addManualOwner, removeManualOwner } from './projects.ts'
+import { forgetSessionActivation } from './session-activation.ts'
 import { storeRevision } from './revisions.ts'
 import { loadSettings } from './settings.ts'
 import { applyEntryFacts } from './state.ts'
@@ -478,7 +479,7 @@ export async function uninstallEntry(
     throw new Error('Font is not in the library.')
   }
   host.assertPinnedInstall(entry)
-  return withMutationJournal(
+  const removed = await withMutationJournal(
     host.paths,
     { kind: 'uninstall', entries: [entry] },
     async () => {
@@ -530,6 +531,8 @@ export async function uninstallEntry(
   return latest
     },
   )
+  forgetSessionActivation(host.paths, [id])
+  return removed
 }
 
 export async function deactivateEntry(
@@ -553,7 +556,7 @@ export async function deactivateEntry(
   if (!live) {
     throw new Error('This font is not installed.')
   }
-  return withMutationJournal(host.paths, { kind: 'park', entries: [entry] }, async () => {
+  const parked = await withMutationJournal(host.paths, { kind: 'park', entries: [entry] }, async () => {
   await host.parkManagedCopies(entry)
   if (options.removeManualOwner) {
     entry.activationOwners = (entry.activationOwners ?? []).filter(
@@ -564,6 +567,8 @@ export async function deactivateEntry(
   saveCatalog(host.paths, catalog)
   return entry
   })
+  forgetSessionActivation(host.paths, [id])
+  return parked
 }
 
 export async function activateEntry(

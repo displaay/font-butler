@@ -290,6 +290,7 @@ let lastNoticeKey = ''
 let lastNoticeAt = 0
 const watchNoticeBuffer = createWatchNoticeBuffer()
 let isQuitting = false
+let sessionReleaseOnQuitStarted = false
 const queuedFiles = []
 const finderJobs = createFinderJobQueue((action, filePaths) => runFinderJob(action, filePaths))
 /** @type {null | { updateAvailable?: boolean, latestVersion?: string, htmlUrl?: string | null, releaseNotes?: string | null }} */
@@ -2097,9 +2098,27 @@ if (!gotLock) {
     if (finder) enqueueFinderJob(finder.action, finder.paths)
   })
 
-  app.on('before-quit', () => {
+  app.on('before-quit', (event) => {
     isQuitting = true
     if (documentAppObserver) documentAppObserver.stop()
+    if (!sessionReleaseOnQuitStarted) {
+      sessionReleaseOnQuitStarted = true
+      event.preventDefault()
+      void (async () => {
+        try {
+          if (!apiToken) apiToken = readApiTokenFile()
+          await fetch(`${API}/api/session/release`, {
+            method: 'POST',
+            headers: apiHeaders(),
+            signal: AbortSignal.timeout(8_000),
+          })
+        } catch {
+          // SIGTERM still asks the API worker to release faces left on for this session.
+        }
+        app.quit()
+      })()
+      return
+    }
     if (apiChild) {
       const child = apiChild
       apiChild = null
@@ -2110,7 +2129,7 @@ if (!gotLock) {
         } catch {
           // Already exited.
         }
-      }, 1500).unref?.()
+      }, 8_000).unref?.()
     }
   })
 

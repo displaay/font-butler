@@ -330,6 +330,8 @@ export function installActionLabel(
   return actionLabel('Install', fonts, fonts > 1 || multi)
 }
 
+export const ACTIVATE_UNTIL_QUIT_LABEL = 'Activate until quit'
+
 export function activateActionLabel(
   plan: Pick<CatalogBatchPlan, 'activate' | 'activateFormat' | 'partialActiveStyles'>,
   multi = false,

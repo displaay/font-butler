@@ -8,6 +8,7 @@ import {
   allowRealCacheMutation,
   applyAdobeFontCacheClear,
   ATSUTIL_SKIPPED_LOG,
+  clearAllFontCaches,
   clearUserFontCache,
   locateAdobeFontCache,
   locateOfficeFontCache,
@@ -187,6 +188,130 @@ test('allowRealCacheMutation refuses a stamped test build with no data root', ()
     else process.env.FONT_BUTLER_NATIVE_CACHES = previousCaches
     fs.rmSync(identityDir, { recursive: true, force: true })
   }
+})
+
+test('clearAllFontCaches runs the user, Office, and Adobe clears and reports each part', async () => {
+  const calls: string[] = []
+  const result = await clearAllFontCaches(
+    { confirm: true },
+    {
+      user: async () => {
+        calls.push('user')
+        return { mac: true, cleared: true }
+      },
+      office: async () => {
+        calls.push('office')
+        return { mac: true, cleared: true }
+      },
+      adobe: async () => {
+        calls.push('adobe')
+        return { mac: true, cleared: false }
+      },
+    },
+  )
+  assert.deepEqual(calls, ['user', 'office', 'adobe'])
+  assert.equal(result.confirmed, true)
+  assert.equal(result.mac, true)
+  assert.equal(result.cleared, true)
+  assert.deepEqual(
+    result.parts.map((part) => [part.part, part.status]),
+    [
+      ['user', 'cleared'],
+      ['office', 'cleared'],
+      ['adobe', 'not-cleared'],
+    ],
+  )
+})
+
+test('clearAllFontCaches keeps the other results when one part fails', async () => {
+  const calls: string[] = []
+  const result = await clearAllFontCaches(
+    { confirm: true },
+    {
+      user: async () => {
+        calls.push('user')
+        return { mac: true, cleared: true }
+      },
+      office: async () => {
+        calls.push('office')
+        throw new Error('Office cache is locked')
+      },
+      adobe: async () => {
+        calls.push('adobe')
+        return { mac: true, cleared: true }
+      },
+    },
+  )
+  assert.deepEqual(calls, ['user', 'office', 'adobe'])
+  assert.deepEqual(
+    result.parts.map((part) => part.status),
+    ['cleared', 'failed', 'cleared'],
+  )
+  assert.match(result.parts[1]?.error ?? '', /Office cache is locked/)
+  assert.equal(result.parts[0]?.cleared, true)
+  assert.equal(result.parts[2]?.cleared, true)
+})
+
+test('clearAllFontCaches runs nothing when the user clear is not confirmed', async () => {
+  const calls: string[] = []
+  const deps = {
+    user: async () => {
+      calls.push('user')
+      return { mac: true, cleared: true }
+    },
+    office: async () => {
+      calls.push('office')
+      return { mac: true, cleared: true }
+    },
+    adobe: async () => {
+      calls.push('adobe')
+      return { mac: true, cleared: true }
+    },
+  }
+  for (const options of [{}, { confirm: false }]) {
+    const result = await clearAllFontCaches(options, deps)
+    assert.equal(result.confirmed, false)
+    assert.equal(result.cleared, false)
+    assert.deepEqual(
+      result.parts.map((part) => part.status),
+      ['skipped', 'skipped', 'skipped'],
+    )
+  }
+  assert.deepEqual(calls, [])
+})
+
+test('clearAllFontCaches skips toggled-off parts and keeps a simulated user result visible', async () => {
+  const calls: string[] = []
+  const result = await clearAllFontCaches(
+    { confirm: true, office: false },
+    {
+      user: async () => {
+        calls.push('user')
+        return { mac: true, cleared: false, simulated: true }
+      },
+      office: async () => {
+        calls.push('office')
+        return { mac: true, cleared: true }
+      },
+      adobe: async () => {
+        calls.push('adobe')
+        return { mac: true, cleared: true }
+      },
+    },
+  )
+  assert.deepEqual(calls, ['user', 'adobe'])
+  assert.equal(result.simulated, true)
+  assert.deepEqual(
+    result.parts.map((part) => [part.part, part.status]),
+    [
+      ['user', 'not-cleared'],
+      ['office', 'skipped'],
+      ['adobe', 'cleared'],
+    ],
+  )
+  assert.equal(result.parts[0]?.simulated, true)
+  // The combined action must stay user-level: no privileged helper in its path.
+  assert.doesNotMatch(clearAllFontCaches.toString(), /sudo|SMJobBless|AuthorizationExecuteWithPrivileges/)
 })
 
 test('logout stays a dry run when the native prompt is not available', async () => {

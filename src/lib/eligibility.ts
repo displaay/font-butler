@@ -114,6 +114,11 @@ export function activatableIds(group: { entries: CatalogEntry[] }): string[] {
   return activatableEntries(group).map((entry) => entry.id)
 }
 
+/** Faces that are off and can be turned on for this app session only. */
+export function sessionActivatableIds(group: { entries: CatalogEntry[] }): string[] {
+  return [...new Set([...activatableIds(group), ...installableIds(group)])]
+}
+
 export function deactivatableIds(group: { entries: CatalogEntry[] }): string[] {
   return deactivatableEntries(group).map((entry) => entry.id)
 }

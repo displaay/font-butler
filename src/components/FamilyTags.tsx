@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { Check, Plus, Tag } from 'lucide-react'
+import { Check, Pencil, Plus, Tag, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
-  ContextMenuCheckboxItem,
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuSub,
@@ -18,7 +17,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { tagIdsForFamily, type FamilyTag, type FamilyTagAssignment } from '../../shared/family-tags.ts'
+import { TAG_COLOR_CHOICES, tagIdsForFamily, type FamilyTag, type FamilyTagAssignment } from '../../shared/family-tags.ts'
 
 export function FamilyTagDots({
   definitions,
@@ -69,51 +68,50 @@ export function FamilyTagMenuItems({
   familyKeys,
   onSet,
   onCreate,
-  onRename,
+  onEdit,
+  onDelete,
+  addOnly = false,
 }: {
   definitions: readonly FamilyTag[]
   assignments: readonly FamilyTagAssignment[]
   familyKeys: readonly string[]
   onSet: (tagId: string, present: boolean) => void
   onCreate: () => void
-  onRename: (tagId: string) => void
+  onEdit?: (tagId: string) => void
+  onDelete?: (tagId: string) => void
+  /** Folder and project menus only add. A font menu can still clear a tag that is on every selected family. */
+  addOnly?: boolean
 }) {
-  if (definitions.length === 0) return null
   return (
     <ContextMenuSub>
       <ContextMenuSubTrigger>
-        <Tag /> Tags
+        <Tag /> Add tag
       </ContextMenuSubTrigger>
-      <ContextMenuSubContent className="min-w-48">
+      <ContextMenuSubContent className="min-w-52">
         {definitions.map((tag) => {
           const state = presence(tag.id, familyKeys, assignments)
           return (
-            <ContextMenuCheckboxItem
+            <ContextMenuItem
               key={tag.id}
-              checked={state === 'all'}
+              className="group/tag pr-1"
               onSelect={(event) => {
+                if ((event.target as HTMLElement | null)?.closest?.('[data-tag-action]')) return
                 event.preventDefault()
-                onSet(tag.id, state !== 'all')
+                onSet(tag.id, addOnly ? true : state !== 'all')
               }}
             >
+              <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden>
+                {state === 'all' ? <Check className="size-3.5" /> : state === 'some' ? '–' : null}
+              </span>
               <TagSwatch color={tag.color} name={tag.name} />
-            </ContextMenuCheckboxItem>
+              <TagHoverActions name={tag.name} onEdit={onEdit ? () => onEdit(tag.id) : undefined} onDelete={onDelete ? () => onDelete(tag.id) : undefined} />
+            </ContextMenuItem>
           )
         })}
-        <ContextMenuSeparator />
+        {definitions.length > 0 ? <ContextMenuSeparator /> : null}
         <ContextMenuItem onSelect={onCreate}>
           <Plus /> New tag…
         </ContextMenuItem>
-        <ContextMenuSub>
-          <ContextMenuSubTrigger>Rename tag</ContextMenuSubTrigger>
-          <ContextMenuSubContent>
-            {definitions.map((tag) => (
-              <ContextMenuItem key={tag.id} onSelect={() => onRename(tag.id)}>
-                <TagSwatch color={tag.color} name={tag.name} />
-              </ContextMenuItem>
-            ))}
-          </ContextMenuSubContent>
-        </ContextMenuSub>
       </ContextMenuSubContent>
     </ContextMenuSub>
   )
@@ -126,7 +124,8 @@ export function FamilyTagBatchButton({
   disabled,
   onSet,
   onCreate,
-  onRename,
+  onEdit,
+  onDelete,
 }: {
   definitions: readonly FamilyTag[]
   assignments: readonly FamilyTagAssignment[]
@@ -134,7 +133,8 @@ export function FamilyTagBatchButton({
   disabled?: boolean
   onSet: (tagId: string, present: boolean) => void
   onCreate: () => void
-  onRename: (tagId: string) => void
+  onEdit?: (tagId: string) => void
+  onDelete?: (tagId: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -174,19 +174,42 @@ export function FamilyTagBatchButton({
           {definitions.map((tag) => {
             const state = presence(tag.id, familyKeys, assignments)
             return (
-              <button
+              <div
                 key={tag.id}
-                type="button"
                 role="menuitemcheckbox"
                 aria-checked={state === 'all'}
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted"
-                onClick={() => onSet(tag.id, state !== 'all')}
+                className="group/tag flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted"
               >
+                <button
+                  type="button"
+                  className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                  onClick={() => onSet(tag.id, state !== 'all')}
+                >
                 <span className="flex size-4 items-center justify-center" aria-hidden>
                   {state === 'all' ? <Check className="size-3.5" /> : state === 'some' ? '–' : null}
                 </span>
                 <TagSwatch color={tag.color} name={tag.name} />
-              </button>
+                </button>
+                <TagHoverActions
+                  name={tag.name}
+                  onEdit={
+                    onEdit
+                      ? () => {
+                          setOpen(false)
+                          onEdit(tag.id)
+                        }
+                      : undefined
+                  }
+                  onDelete={
+                    onDelete
+                      ? () => {
+                          setOpen(false)
+                          onDelete(tag.id)
+                        }
+                      : undefined
+                  }
+                />
+              </div>
             )
           })}
           <div className="my-1 h-px bg-border" />
@@ -201,24 +224,47 @@ export function FamilyTagBatchButton({
           >
             <Plus className="size-4" /> New tag…
           </button>
-          <p className="px-2 pt-1 pb-0.5 text-[11px] text-muted-foreground">Rename</p>
-          {definitions.map((tag) => (
-            <button
-              key={`rename-${tag.id}`}
-              type="button"
-              role="menuitem"
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted"
-              onClick={() => {
-                setOpen(false)
-                onRename(tag.id)
-              }}
-            >
-              <TagSwatch color={tag.color} name={tag.name} />
-            </button>
-          ))}
         </div>
       ) : null}
     </div>
+  )
+}
+
+function TagHoverActions({
+  name,
+  onEdit,
+  onDelete,
+}: {
+  name: string
+  onEdit?: () => void
+  onDelete?: () => void
+}) {
+  if (!onEdit && !onDelete) return null
+  return (
+    <span className="ml-auto flex shrink-0 items-center opacity-0 group-hover/tag:opacity-100 group-focus-within/tag:opacity-100">
+      {onEdit ? (
+        <button
+          type="button"
+          data-tag-action="edit"
+          aria-label={`Edit ${name}`}
+          className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-black/[0.06] hover:text-foreground dark:hover:bg-white/[0.08] [&_svg]:pointer-events-none"
+          onClick={() => onEdit()}
+        >
+          <Pencil className="size-3.5" />
+        </button>
+      ) : null}
+      {onDelete ? (
+        <button
+          type="button"
+          data-tag-action="delete"
+          aria-label={`Delete ${name}`}
+          className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-black/[0.06] hover:text-foreground dark:hover:bg-white/[0.08] [&_svg]:pointer-events-none"
+          onClick={() => onDelete()}
+        >
+          <Trash2 className="size-3.5" />
+        </button>
+      ) : null}
+    </span>
   )
 }
 
@@ -239,20 +285,22 @@ export function FamilyTagNameDialog({
   open,
   mode,
   initialName,
+  initialColor = TAG_COLOR_CHOICES[0] ?? '#1f8a4c',
   onOpenChange,
   onSubmit,
 }: {
   open: boolean
-  mode: 'create' | 'rename'
+  mode: 'create' | 'edit'
   initialName: string
+  initialColor?: string
   onOpenChange: (open: boolean) => void
-  onSubmit: (name: string) => void
+  onSubmit: (name: string, color: string) => void
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="w-[min(92vw,320px)]">
         <DialogHeader>
-          <DialogTitle>{mode === 'create' ? 'New tag' : 'Rename tag'}</DialogTitle>
+          <DialogTitle>{mode === 'create' ? 'New tag' : 'Edit tag'}</DialogTitle>
           <DialogDescription>
             {mode === 'create'
               ? 'The tag is added to the selected families.'
@@ -261,8 +309,9 @@ export function FamilyTagNameDialog({
         </DialogHeader>
         {open ? (
           <FamilyTagNameForm
-            key={`${mode}:${initialName}`}
+            key={`${mode}:${initialName}:${initialColor}`}
             initialName={initialName}
+            initialColor={initialColor}
             onCancel={() => onOpenChange(false)}
             onSubmit={onSubmit}
           />
@@ -274,18 +323,22 @@ export function FamilyTagNameDialog({
 
 function FamilyTagNameForm({
   initialName,
+  initialColor,
   onCancel,
   onSubmit,
 }: {
   initialName: string
+  initialColor: string
   onCancel: () => void
-  onSubmit: (name: string) => void
+  onSubmit: (name: string, color: string) => void
 }) {
   const [name, setName] = useState(initialName)
+  const [color, setColor] = useState(initialColor)
+  const colors = color && !TAG_COLOR_CHOICES.includes(color) ? [color, ...TAG_COLOR_CHOICES] : TAG_COLOR_CHOICES
   function submit(event: FormEvent) {
     event.preventDefault()
     if (!name.trim()) return
-    onSubmit(name)
+    onSubmit(name, color)
   }
   return (
     <form onSubmit={submit}>
@@ -298,6 +351,24 @@ function FamilyTagNameForm({
         className="mt-2"
         onChange={(event) => setName(event.target.value)}
       />
+      <fieldset className="mt-4">
+        <legend className="text-sm font-medium">Color</legend>
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {colors.map((choice) => (
+            <button
+              key={choice}
+              type="button"
+              aria-label={`Color ${choice}`}
+              aria-pressed={choice === color}
+              className="inline-flex size-6 items-center justify-center rounded-full ring-1 ring-black/10 dark:ring-white/15"
+              style={{ backgroundColor: choice }}
+              onClick={() => setColor(choice)}
+            >
+              {choice === color ? <Check className="size-3.5 text-white" /> : null}
+            </button>
+          ))}
+        </div>
+      </fieldset>
       <div className="mt-4 flex justify-end gap-2">
         <Button type="button" variant="outline" onClick={onCancel}>
           Cancel
