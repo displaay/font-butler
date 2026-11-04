@@ -33,8 +33,10 @@ export function FamilyDetailsEditor({
 }) {
   const rating = detail?.rating ?? null
   const storedComment = detail?.comment ?? ''
-  const [draft, setDraft] = useState<string | null>(null)
-  const comment = draft ?? storedComment
+  // The draft belongs to one family only: switching families discards it, so
+  // an unsaved comment can never be saved onto the next family.
+  const [draft, setDraft] = useState<{ familyKey: string; text: string } | null>(null)
+  const comment = draft && draft.familyKey === familyKey ? draft.text : storedComment
 
   return (
     <div className="space-y-3" data-family-details>
@@ -76,14 +78,14 @@ export function FamilyDetailsEditor({
           aria-label="Family comment"
           placeholder="Add a comment for this family…"
           className="mt-1 min-h-16 w-full rounded-md border bg-transparent px-2 py-1.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => setDraft({ familyKey, text: event.target.value })}
         />
         <div className="mt-1 flex justify-end">
           <Button
             type="button"
             size="sm"
             variant="outline"
-            disabled={draft === null || comment === storedComment}
+            disabled={!draft || draft.familyKey !== familyKey || comment === storedComment}
             onClick={() => {
               onComment(familyKey, comment)
               setDraft(null)

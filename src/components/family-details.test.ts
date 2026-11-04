@@ -140,3 +140,44 @@ test('family details editor views and edits rating and comment', async () => {
     host.remove()
   }
 })
+
+test('an unsaved comment draft is discarded when the family changes', async () => {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  const comments: Array<[string, string]> = []
+  const render = (familyKey: string, comment: string, rating: number) =>
+    createElement(FamilyDetailsEditor, {
+      familyKey,
+      detail: { familyKey, rating, comment },
+      onRating: () => {},
+      onComment: (key: string, text: string) => comments.push([key, text]),
+    })
+  await act(async () => {
+    root.render(render('Acme Sans', 'Sans note', 5))
+  })
+  try {
+    const textarea = host.querySelector('textarea') as HTMLTextAreaElement
+    assert.equal(textarea.value, 'Sans note')
+    const setter = Object.getOwnPropertyDescriptor(view.HTMLTextAreaElement.prototype, 'value')?.set
+    setter?.call(textarea, 'Unsaved draft for Sans')
+    textarea.dispatchEvent(new view.Event('input', { bubbles: true }))
+    const save = buttonNamed(host, 'Save comment')
+    assert.ok(save)
+    assert.equal(save.disabled, false)
+
+    // Switch families without saving, as the Inspector does.
+    await act(async () => {
+      root.render(render('Acme Serif', 'Serif note', 2))
+    })
+    assert.equal(textarea.value, 'Serif note')
+    assert.equal(save.disabled, true)
+    await act(async () => save.click())
+    assert.deepEqual(comments, [])
+    assert.equal(host.querySelector('[aria-label="2 stars"]')?.getAttribute('aria-checked'), 'true')
+    assert.equal(host.querySelector('[aria-label="5 stars"]')?.getAttribute('aria-checked'), 'false')
+  } finally {
+    await act(async () => root.unmount())
+    host.remove()
+  }
+})
