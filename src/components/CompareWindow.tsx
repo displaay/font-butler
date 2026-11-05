@@ -307,6 +307,7 @@ export function CompareWindow({
                     event.dataTransfer.setData('text/plain', entry.id)
                     setDragId(entry.id)
                   }}
+                  onDragEnd={() => setDragId(null)}
                   onDragOver={(event) => {
                     if (!dragId) return
                     event.preventDefault()
@@ -522,6 +523,7 @@ function OverlaySamples({
               event.dataTransfer.setData('text/plain', entry.id)
               onDrag(entry.id)
             }}
+            onDragEnd={() => onDrag(null)}
             onDragOver={(event) => {
               if (!dragId) return
               event.preventDefault()

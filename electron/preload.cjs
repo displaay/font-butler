@@ -6,6 +6,9 @@ const watchNoticeListeners = new Set()
 const queuedFinderCompare = []
 const finderCompareListeners = new Set()
 
+let queuedOpenCompare = false
+const openCompareListeners = new Set()
+
 let externalFontOpenDepth = 0
 const externalFontOpenListeners = new Set()
 
@@ -38,6 +41,13 @@ ipcRenderer.on('finder-compare', (_event, payload) => {
     return
   }
   for (const listener of finderCompareListeners) listener(payload)
+})
+ipcRenderer.on('open-compare', () => {
+  if (openCompareListeners.size === 0) {
+    queuedOpenCompare = true
+    return
+  }
+  for (const listener of openCompareListeners) listener()
 })
 
 contextBridge.exposeInMainWorld('fontButlerDesktop', {
@@ -119,8 +129,12 @@ contextBridge.exposeInMainWorld('fontButlerDesktop', {
   },
   onOpenCompare: (callback) => {
     const listener = () => callback()
-    ipcRenderer.on('open-compare', listener)
-    return () => ipcRenderer.removeListener('open-compare', listener)
+    openCompareListeners.add(listener)
+    if (queuedOpenCompare) {
+      queuedOpenCompare = false
+      callback()
+    }
+    return () => openCompareListeners.delete(listener)
   },
   onFinderCompare: (callback) => {
     const listener = (payload) => callback(payload)

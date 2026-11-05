@@ -375,6 +375,8 @@ test('Electron main handles Finder services through the existing install APIs', 
   assert.match(preload, /onFinderLinkTo/)
   assert.match(preload, /onFinderCompare/)
   assert.match(preload, /queuedFinderCompare/)
+  assert.match(preload, /onOpenCompare/)
+  assert.match(preload, /queuedOpenCompare/)
   assert.match(preload, /onExternalFontOpen/)
   assert.match(preload, /external-font-open/)
   assert.match(main, /external-font-open/)
