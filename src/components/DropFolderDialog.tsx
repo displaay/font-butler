@@ -37,7 +37,7 @@ export function DropFolderDialog({
         if (!next) onCancel()
       }}
     >
-      <DialogContent>
+      <DialogContent className="overflow-visible">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
@@ -51,17 +51,19 @@ export function DropFolderDialog({
             ))}
           </ul>
         )}
-        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-          <Button variant="outline" onClick={onCancel}>
-            Cancel
+        <div className="flex flex-col gap-2">
+          <Button className="w-full whitespace-normal" onClick={onWatch}>
+            {many ? 'Add as watch folders' : 'Add as watch folder'}
           </Button>
-          <Button variant="outline" onClick={onAddFonts}>
-            Install fonts
-          </Button>
-          <Button variant="outline" onClick={onAddAsProject}>
+          <Button variant="outline" className="w-full whitespace-normal" onClick={onAddAsProject}>
             Install fonts and create a project
           </Button>
-          <Button onClick={onWatch}>{many ? 'Add as watch folders' : 'Add as watch folder'}</Button>
+          <Button variant="outline" className="w-full whitespace-normal" onClick={onAddFonts}>
+            Install fonts
+          </Button>
+          <Button variant="outline" className="w-full" onClick={onCancel}>
+            Cancel
+          </Button>
         </div>
       </DialogContent>
     </Dialog>
