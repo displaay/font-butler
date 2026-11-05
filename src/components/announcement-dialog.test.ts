@@ -17,9 +17,10 @@ test('whats-new pages start with the rename, then each shipped feature', () => {
       'adobe-document-watch',
       'finder-extension',
       'compare',
+      'family-ratings',
     ],
   )
-  assert.equal(WHATS_NEW_PAGES.length, 9)
+  assert.equal(WHATS_NEW_PAGES.length, 10)
   assert.equal(WHATS_NEW_PAGES[0]?.title, 'Now called Cuttler')
   assert.equal(WHATS_NEW_PAGES[2]?.title, 'Family tags')
   assert.match(WHATS_NEW_PAGES[2]?.body ?? '', /color/i)
@@ -36,6 +37,10 @@ test('whats-new pages start with the rename, then each shipped feature', () => {
   assert.match(WHATS_NEW_PAGES[7]?.body ?? '', /Finder/i)
   assert.equal(WHATS_NEW_PAGES[8]?.title, 'Compare')
   assert.match(WHATS_NEW_PAGES[8]?.body ?? '', /Compare/)
+  assert.equal(WHATS_NEW_PAGES[9]?.title, 'Star ratings & comments')
+  assert.match(WHATS_NEW_PAGES[9]?.body ?? '', /stars/i)
+  assert.match(WHATS_NEW_PAGES[9]?.body ?? '', /comment/i)
+  assert.match(WHATS_NEW_PAGES[9]?.body ?? '', /Font Book|FontExplorer/i)
   assert.equal(
     WHATS_NEW_PAGES.some((page) => page.id === 'library-search' || page.id === 'search-filter-suggestions'),
     false,
@@ -81,6 +86,8 @@ test('AnnouncementDialog reuses welcome Dialog surface classes', async () => {
   assert.match(source, /\/announcement\/adobe-document-watch\.png/)
   assert.match(source, /\/announcement\/finder-extension-settings\.png/)
   assert.match(source, /\/announcement\/compare-window\.png/)
+  assert.match(source, /\/announcement\/star-rating\.png/)
+  assert.match(source, /\/announcement\/family-comment\.png/)
   assert.match(source, /'advanced-search':/)
   assert.match(source, /'activate-until-quit':/)
   assert.match(source, /'adobe-document-watch':/)
@@ -89,6 +96,7 @@ test('AnnouncementDialog reuses welcome Dialog surface classes', async () => {
   assert.match(source, /Open Settings/)
   assert.match(source, /onOpenFinderSettings\?\.\(\)/)
   assert.match(source, /compare:\s*\[/)
+  assert.match(source, /'family-ratings':/)
   assert.doesNotMatch(source, /'library-search':/)
   assert.doesNotMatch(source, /'search-filter-suggestions':/)
   assert.doesNotMatch(source, /'new-tag-color':/)
@@ -114,6 +122,8 @@ test('whats-new announcement cutouts exist under public/announcement', async () 
     'adobe-document-watch.png',
     'finder-extension-settings.png',
     'compare-window.png',
+    'star-rating.png',
+    'family-comment.png',
   ]) {
     await access(`${root}/${name}`)
   }
@@ -129,6 +139,8 @@ test('library-search cutouts are tight action crops, not wide window slices', as
     'adobe-document-watch.png',
     'finder-extension-settings.png',
     'compare-window.png',
+    'star-rating.png',
+    'family-comment.png',
   ]) {
     const buf = await readFile(`${root}/${name}`)
     assert.equal(buf.toString('ascii', 1, 4), 'PNG')

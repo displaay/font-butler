@@ -66,6 +66,11 @@ export const WHATS_NEW_PAGES: AnnouncementPage[] = [
     title: 'Compare',
     body: 'Open Compare to stack or overlay faces side by side — including fonts you drop in from Finder. Pick styles, flip between stacked and overlay, and judge them in one place.',
   },
+  {
+    id: 'family-ratings',
+    title: 'Star ratings & comments',
+    body: 'Rate a family with up to five stars — the badge shows on the library card. Add a comment in the inspector for notes that stay with the family. Font Book and FontExplorer imports can bring ratings and comments along.',
+  },
 ]
 
 /** Product announcements shown in the main window (welcome-style dialog) after launch. */

@@ -82,6 +82,16 @@ const PAGE_FIGURES: Record<string, PageFigure[]> = {
       alt: 'Compare window with Stacked and Overlay, showing two faces',
     },
   ],
+  'family-ratings': [
+    {
+      src: '/announcement/star-rating.png',
+      alt: 'Family card showing a star rating badge',
+    },
+    {
+      src: '/announcement/family-comment.png',
+      alt: 'Inspector comment field for a family',
+    },
+  ],
 }
 
 function pagesFor(item: Announcement): AnnouncementPage[] {
