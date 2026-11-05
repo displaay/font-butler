@@ -7,10 +7,14 @@ import { fileURLToPath } from 'node:url'
  * document font report; the sheet is the only result.
  *
  * Supported extensions match shared/document-project.ts.
+ * An open InDesign, Illustrator, or Photoshop file is parsed from the file
+ * Cicero reads (XMP, PDF plus XMP, or Photoshop text layers). The open-file
+ * signal stays the macOS observer: lsof plus the app's recent-document list.
+ * Figma is not parsed.
  */
 
-const SUPPORTED = new Set(['.pdf', '.idml', '.docx', '.pptx'])
-const UNSUPPORTED = new Set(['.indd', '.ai', '.fig'])
+const SUPPORTED = new Set(['.pdf', '.idml', '.docx', '.pptx', '.indd', '.indt', '.ai', '.psd', '.psb'])
+const UNSUPPORTED = new Set(['.fig'])
 
 const WATCHED_BUNDLE_PREFIXES = [
   'com.adobe.indesign',
@@ -25,8 +29,6 @@ const WATCHED_BUNDLE_PREFIXES = [
 ]
 
 const NOTE_BY_EXTENSION = {
-  '.indd': 'Open in the app, then export IDML or PDF to read fonts.',
-  '.ai': 'Open in the app, then export IDML or PDF to read fonts.',
   '.fig': 'This Figma file is not read here. Export a PDF to see its fonts.',
 }
 
@@ -117,7 +119,7 @@ export function pickOpenedDocumentPath({
   return null
 }
 
-const DOCUMENT_EXT = 'pdf|idml|docx|pptx|indd|ai|fig'
+const DOCUMENT_EXT = 'pdf|idml|docx|pptx|indd|indt|ai|psd|psb|fig'
 const ABSOLUTE_PATH = new RegExp(
   `(?:/(?:[\\w .@()&+',\\-]|%[0-9A-Fa-f]{2})+)+\\.(?:${DOCUMENT_EXT})(?![A-Za-z0-9])`,
   'gi',

@@ -2083,7 +2083,9 @@ function AppShell() {
   async function pickAndOpenDocument() {
     const pick = window.fontButlerDesktop?.pickDocument
     if (!pick) {
-      toast.error('Open a PDF, IDML, Word, or PowerPoint document from the Cuttler app.')
+      toast.error(
+        'Open a PDF, IDML, InDesign, Illustrator, Photoshop, Word, or PowerPoint document from the Cuttler app.',
+      )
       return
     }
     const filePath = await pick()

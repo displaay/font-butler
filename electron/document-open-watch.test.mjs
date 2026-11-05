@@ -25,6 +25,25 @@ function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-doc-watch-'))
 }
 
+function inddWithFonts() {
+  return Buffer.from(
+    `<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description xmlns:xmpTPg="http://ns.adobe.com/xap/1.0/t/pg/" xmlns:stFnt="http://ns.adobe.com/xap/1.0/sType/Font#">
+      <xmpTPg:Fonts>
+        <rdf:Bag>
+          <rdf:li stFnt:fontName="Family-Regular" stFnt:fontFamily="Family" stFnt:fontFace="Regular"/>
+        </rdf:Bag>
+      </xmpTPg:Fonts>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>`,
+    'utf8',
+  )
+}
+
 function writePdf(dir, name = 'Note.pdf') {
   const filePath = path.join(dir, name)
   fs.writeFileSync(
@@ -63,12 +82,14 @@ function catalog() {
   ]
 }
 
-test('a fake opened path runs the parser for a supported file and not for indd', () => {
+test('a fake opened path parses pdf, indd, and ai, and only notes figma', () => {
   const dir = tempDir()
   try {
     const pdf = writePdf(dir)
     const indd = path.join(dir, 'Book.indd')
-    fs.writeFileSync(indd, 'not parsed')
+    fs.writeFileSync(indd, inddWithFonts())
+    const ai = path.join(dir, 'Mark.ai')
+    fs.writeFileSync(ai, inddWithFonts())
     const parsed = []
     const effects = []
     const watch = createDocumentOpenWatch({
@@ -85,10 +106,10 @@ test('a fake opened path runs the parser for a supported file and not for indd',
 
     watch.open({ bundleId: INDESIGN, path: pdf })
     watch.open({ bundleId: INDESIGN, path: indd })
-    watch.open({ bundleId: 'com.adobe.illustrator', path: path.join(dir, 'Mark.ai') })
+    watch.open({ bundleId: 'com.adobe.illustrator', path: ai })
     watch.open({ bundleId: 'com.figma.Desktop', path: path.join(dir, 'Board.fig') })
 
-    assert.deepEqual(parsed, [pdf])
+    assert.deepEqual(parsed, [pdf, indd, ai])
     assert.equal(effects.length, 4)
     assert.equal(effects[0].action, 'sheet')
     assert.equal(effects[0].report.kind, 'pdf')
@@ -100,15 +121,20 @@ test('a fake opened path runs the parser for a supported file and not for indd',
       channel: 'open-document',
       payload: { path: pdf },
     })
-    for (const effect of effects.slice(1)) {
-      assert.equal(effect.action, 'note')
-      assert.equal(effect.message.includes('\n'), false)
-      assert.equal(documentWatchIpc(effect).channel, 'document-watch-note')
-    }
-    assert.match(unsupportedDocumentNote(indd), /export IDML or PDF/i)
+    assert.equal(effects[1].action, 'sheet')
+    assert.equal(effects[1].report.kind, 'indd')
+    assert.equal(effects[1].report.fonts[0].postscriptName, 'Family-Regular')
+    assert.equal(effects[1].report.fonts[0].familyName, 'Family')
+    assert.equal(effects[2].action, 'sheet')
+    assert.equal(effects[2].report.kind, 'ai')
+    assert.equal(effects[3].action, 'note')
+    assert.equal(effects[3].message.includes('\n'), false)
+    assert.equal(documentWatchIpc(effects[3]).channel, 'document-watch-note')
+    assert.equal(unsupportedDocumentNote(indd), '')
+    assert.match(unsupportedDocumentNote(path.join(dir, 'Board.fig')), /Export a PDF/i)
 
     watch.open({ bundleId: INDESIGN, path: pdf })
-    assert.deepEqual(parsed, [pdf])
+    assert.deepEqual(parsed, [pdf, indd, ai])
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }
@@ -190,19 +216,31 @@ test('supported Office and IDML paths are parsed and other extensions are ignore
       return { path: filePath }
     },
   })
-  for (const name of ['Notes.docx', 'Deck.pptx', 'Story.idml', 'Notes.txt', 'Photo.psd']) {
+  for (const name of [
+    'Notes.docx',
+    'Deck.pptx',
+    'Story.idml',
+    'Book.indd',
+    'Book.indt',
+    'Mark.ai',
+    'Photo.psd',
+    'Photo.psb',
+    'Notes.txt',
+    'Board.fig',
+  ]) {
     watch.open({ bundleId: WORD, path: path.join('/docs', name) })
   }
-  assert.deepEqual(seen, ['.docx', '.pptx', '.idml'])
+  assert.deepEqual(seen, ['.docx', '.pptx', '.idml', '.indd', '.indt', '.ai', '.psd', '.psb'])
   assert.equal(classifyOpenedDocument('/docs/Notes.txt'), 'ignore')
-  assert.equal(classifyOpenedDocument('/docs/Book.INDD'), 'note')
+  assert.equal(classifyOpenedDocument('/docs/Book.INDD'), 'parse')
+  assert.equal(classifyOpenedDocument('/docs/Board.fig'), 'note')
 })
 
 test('an unsupported front document does not parse, and a quiet watch does not note it', () => {
   const dir = tempDir()
   try {
-    const indd = path.join(dir, 'Book.indd')
-    fs.writeFileSync(indd, 'binary')
+    const fig = path.join(dir, 'Board.fig')
+    fs.writeFileSync(fig, 'binary')
     const parsed = []
     const notes = []
     const watch = createDocumentOpenWatch({
@@ -216,13 +254,13 @@ test('an unsupported front document does not parse, and a quiet watch does not n
         if (effect.action === 'note') notes.push(effect.message)
       },
     })
-    watch.open({ bundleId: INDESIGN, path: indd })
+    watch.open({ bundleId: 'com.figma.Desktop', path: fig })
     assert.deepEqual(parsed, [])
     assert.deepEqual(notes, [])
     watch.setEnabled(true)
-    watch.open({ bundleId: INDESIGN, path: indd })
+    watch.open({ bundleId: 'com.figma.Desktop', path: fig })
     assert.deepEqual(parsed, [])
-    assert.deepEqual(notes, ['Open in the app, then export IDML or PDF to read fonts.'])
+    assert.deepEqual(notes, ['This Figma file is not read here. Export a PDF to see its fonts.'])
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }
@@ -293,7 +331,7 @@ test('front app text, lsof, and recent bytes yield one opened path', async () =>
   try {
     inddObserver.start()
     await inddObserver.whenIdle()
-    assert.deepEqual(parsed, [])
+    assert.deepEqual(parsed, [inddPath])
   } finally {
     inddObserver.stop()
     fs.rmSync(inddDir, { recursive: true, force: true })

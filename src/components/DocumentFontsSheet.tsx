@@ -189,7 +189,10 @@ function documentKindLabel(kind: DocumentFontReport['kind']): string {
   if (kind === 'pdf') return 'PDF'
   if (kind === 'idml') return 'IDML'
   if (kind === 'docx') return 'Word document'
-  return 'PowerPoint file'
+  if (kind === 'pptx') return 'PowerPoint file'
+  if (kind === 'indd') return 'InDesign document'
+  if (kind === 'ai') return 'Illustrator file'
+  return 'Photoshop file'
 }
 
 function rowKey(font: DocumentFontRow): string {

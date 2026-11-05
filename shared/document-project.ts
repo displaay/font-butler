@@ -16,11 +16,11 @@ export type DocumentFontRow = {
 
 export type DocumentFontReport = {
   path: string
-  kind: 'pdf' | 'idml' | 'docx' | 'pptx'
+  kind: 'pdf' | 'idml' | 'docx' | 'pptx' | 'indd' | 'ai' | 'psd'
   fonts: DocumentFontRow[]
 }
 
-const DOCUMENT_FONT_EXTENSION = /\.(pdf|idml|docx|pptx)$/i
+const DOCUMENT_FONT_EXTENSION = /\.(pdf|idml|docx|pptx|indd|indt|ai|psd|psb)$/i
 
 export function isDocumentFontPath(filePath: string): boolean {
   return DOCUMENT_FONT_EXTENSION.test(filePath)

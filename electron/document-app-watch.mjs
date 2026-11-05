@@ -16,7 +16,8 @@ import {
  * macOS-only observer for Adobe, Office, and Figma coming frontmost.
  * Front app identity comes from lsappinfo. Open files come from lsof and the
  * app's recent-document list. No Accessibility, no Apple Events to those apps,
- * and no activation of them.
+ * and no activation of them. InDesign, Illustrator, and Photoshop fonts are
+ * read from the open file, which is the same signal this observer already has.
  */
 
 const FRONT_POLL_MS = 1000
