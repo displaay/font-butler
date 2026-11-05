@@ -359,7 +359,14 @@ export function sameExecutableLockPath(exePath, directory) {
  * Claim this executable. A live owner keeps the claim. A dead owner's file
  * is replaced. A different executable has a different path and does not block.
  */
-export function claimSameExecutableInstance({ lockPath, pid, isAlive, io } = {}) {
+export function claimSameExecutableInstance({
+  lockPath,
+  pid,
+  inode = 0,
+  legacyLiveIsCurrent = true,
+  isAlive,
+  io,
+} = {}) {
   const writeFileSync = io?.writeFileSync
   const readFileSync = io?.readFileSync
   const unlinkSync = io?.unlinkSync
@@ -369,10 +376,19 @@ export function claimSameExecutableInstance({ lockPath, pid, isAlive, io } = {})
   }
   const owner = Number(pid)
   if (!Number.isInteger(owner) || owner <= 0) return { held: false, reason: 'pid' }
+  const currentInode = Number(inode)
+  const hasInode = Number.isInteger(currentInode) && currentInode > 0
   mkdirSync(path.dirname(lockPath), { recursive: true, mode: 0o700 })
-  const body = `${owner}\n`
+  const body = hasInode ? `${owner}\n${currentInode}\n` : `${owner}\n`
   const create = () => {
     writeFileSync(lockPath, body, { flag: 'wx', mode: 0o600 })
+  }
+  const readClaim = () => {
+    const lines = String(readFileSync(lockPath, 'utf8')).split('\n')
+    return {
+      pid: Number.parseInt(lines[0], 10),
+      inode: Number.parseInt(lines[1], 10),
+    }
   }
   try {
     create()
@@ -380,13 +396,18 @@ export function claimSameExecutableInstance({ lockPath, pid, isAlive, io } = {})
   } catch (error) {
     if (error?.code !== 'EEXIST') return { held: false, reason: 'create-failed' }
   }
-  let recorded = 0
+  let recorded = { pid: 0, inode: Number.NaN }
   try {
-    recorded = Number.parseInt(String(readFileSync(lockPath, 'utf8')), 10)
+    recorded = readClaim()
   } catch {
-    recorded = 0
+    recorded = { pid: 0, inode: Number.NaN }
   }
-  if (typeof isAlive === 'function' && isAlive(recorded) === true) return { held: false, reason: 'running' }
+  if (typeof isAlive === 'function' && isAlive(recorded.pid) === true) {
+    const recordedInode = recorded.inode
+    const sameBinary = hasInode && recordedInode === currentInode
+    const legacy = !(Number.isInteger(recordedInode) && recordedInode > 0)
+    if (sameBinary || (legacy && legacyLiveIsCurrent !== false)) return { held: false, reason: 'running' }
+  }
   try {
     unlinkSync(lockPath)
   } catch {
@@ -402,13 +423,16 @@ export function claimSameExecutableInstance({ lockPath, pid, isAlive, io } = {})
 }
 
 /**
- * `quit`: this executable is already running, or another install holds the
- * shared userData lock. A second copy must not start the catalog and must
- * not bind the Finder Sync socket the primary app is using.
- * `app`: this process owns the library and may listen.
+ * `quit`: this exact binary is already running. A second copy must not start
+ * the catalog or bind the Finder Sync socket.
+ * `receiver`: another install holds the shared library. This binary still
+ * listens, because the helper inside this bundle has to reach this executable.
+ * It handles the handoff and does not start a second catalog.
+ * `app`: this process owns the library.
  */
 export function sharedLibraryLaunchMode({ sameExecutableHeld = false, sharedLockHeld = false } = {}) {
-  if (!sameExecutableHeld || sharedLockHeld) return 'quit'
+  if (!sameExecutableHeld) return 'quit'
+  if (sharedLockHeld) return 'receiver'
   return 'app'
 }
 
@@ -419,7 +443,7 @@ export function releaseSameExecutableInstance({ lockPath, pid, io } = {}) {
   if (!lockPath || !readFileSync || !unlinkSync) return false
   let recorded = ''
   try {
-    recorded = String(readFileSync(lockPath, 'utf8')).trim()
+    recorded = String(readFileSync(lockPath, 'utf8')).split('\n')[0].trim()
   } catch {
     return false
   }

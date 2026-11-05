@@ -2346,12 +2346,24 @@ if (process.argv.includes('--finder-sync-agent-status')) {
   })
 } else {
 // Electron's lock follows userData, which Cuttler and the installed Font
-// Buttler.app share. A second copy quits. It does not bind the Finder Sync
-// socket or register the login item, so the running app keeps both.
+// Buttler.app share. A second copy of this exact binary quits. A newer binary
+// at this path still listens: the helper in this bundle has to reach it, and
+// the handoff is performed rather than acknowledged and dropped. The shared
+// catalog stays with the process that already owns it.
 const instanceLockPath = sameExecutableLockPath(process.execPath, path.join(app.getPath('temp'), 'font-butler-instance'))
+let executableInode = 0
+try {
+  const ino = fs.statSync(process.execPath).ino
+  const value = typeof ino === 'bigint' ? Number(ino) : Number(ino)
+  if (Number.isSafeInteger(value) && value > 0) executableInode = value
+} catch {
+  executableInode = 0
+}
 const instance = claimSameExecutableInstance({
   lockPath: instanceLockPath,
   pid: process.pid,
+  inode: executableInode,
+  legacyLiveIsCurrent: false,
   isAlive(pid) {
     if (!Number.isInteger(pid) || pid <= 0) return false
     try {
@@ -2374,6 +2386,7 @@ const launchMode = sharedLibraryLaunchMode({
   sameExecutableHeld: instance.held,
   sharedLockHeld: !gotLock,
 })
+const receiverOnly = launchMode === 'receiver'
 if (launchMode === 'quit') {
   app.quit()
 } else {
@@ -2668,6 +2681,10 @@ if (launchMode === 'quit') {
     })
     registerNativeFinderServices()
     registerFinderSyncReceiver({ surface: true })
+    if (receiverOnly) {
+      await finderJobs.start()
+      return
+    }
     const bootstrapOk = await bootstrapApi()
     consumeFinderSyncPendingErrors()
     ensureTray()

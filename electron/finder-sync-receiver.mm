@@ -80,6 +80,7 @@ extern "C" void napi_module_register(napi_module *mod);
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <signal.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -500,6 +501,103 @@ static BOOL EnsurePrivateSocketDir(const char *temp, char *dirOut, size_t dirOut
   return DirectoryIsUserPrivate(dirOut);
 }
 
+static NSData *ExecutableCodeHash(NSString *binary) {
+  if (!binary.length) return nil;
+  SecStaticCodeRef disk = NULL;
+  OSStatus created = SecStaticCodeCreateWithPath((__bridge CFURLRef)[NSURL fileURLWithPath:binary], kSecCSDefaultFlags, &disk);
+  if (created != errSecSuccess || !disk) return nil;
+  CFDictionaryRef information = NULL;
+  OSStatus status = SecCodeCopySigningInformation(disk, kSecCSSigningInformation, &information);
+  CFRelease(disk);
+  if (status != errSecSuccess || !information) return nil;
+  NSData *hash = nil;
+  CFTypeRef unique = CFDictionaryGetValue(information, kSecCodeInfoUnique);
+  if (unique && CFGetTypeID(unique) == CFDataGetTypeID() && CFDataGetLength((CFDataRef)unique) > 0) {
+    hash = [NSData dataWithBytes:CFDataGetBytePtr((CFDataRef)unique) length:(NSUInteger)CFDataGetLength((CFDataRef)unique)];
+  }
+  CFRelease(information);
+  return hash;
+}
+
+static NSData *CurrentProcessCodeHash(void) {
+  static NSData *cached = nil;
+  static BOOL ready = NO;
+  if (ready) return cached;
+  ready = YES;
+  char buffer[PATH_MAX];
+  uint32_t size = sizeof(buffer);
+  if (_NSGetExecutablePath(buffer, &size) != 0) return nil;
+  char resolved[PATH_MAX];
+  if (!realpath(buffer, resolved)) return nil;
+  cached = ExecutableCodeHash([NSString stringWithUTF8String:resolved]);
+  return cached;
+}
+
+static NSData *ConnectedPeerCodeHash(int fd) {
+  audit_token_t token;
+  memset(&token, 0, sizeof(token));
+  socklen_t length = (socklen_t)sizeof(token);
+  if (getsockopt(fd, SOL_LOCAL, LOCAL_PEERTOKEN, &token, &length) != 0 || length != sizeof(token)) return nil;
+  CFDataRef auditData = CFDataCreate(kCFAllocatorDefault, (const UInt8 *)&token, (CFIndex)sizeof(token));
+  if (!auditData) return nil;
+  const void *keys[] = {kSecGuestAttributeAudit};
+  const void *values[] = {auditData};
+  CFDictionaryRef attributes = CFDictionaryCreate(kCFAllocatorDefault, keys, values, 1, &kCFTypeDictionaryKeyCallBacks,
+                                                 &kCFTypeDictionaryValueCallBacks);
+  SecCodeRef guest = NULL;
+  OSStatus copyStatus = errSecInternalError;
+  if (attributes) {
+    copyStatus = SecCodeCopyGuestWithAttributes(NULL, attributes, kSecCSDefaultFlags, &guest);
+    CFRelease(attributes);
+  }
+  CFRelease(auditData);
+  if (copyStatus != errSecSuccess || !guest) return nil;
+  SecStaticCodeRef disk = NULL;
+  OSStatus staticStatus = SecCodeCopyStaticCode(guest, kSecCSDefaultFlags, &disk);
+  CFRelease(guest);
+  if (staticStatus != errSecSuccess || !disk) return nil;
+  NSData *hash = nil;
+  CFDictionaryRef information = NULL;
+  if (SecCodeCopySigningInformation(disk, kSecCSSigningInformation, &information) == errSecSuccess && information) {
+    CFTypeRef unique = CFDictionaryGetValue(information, kSecCodeInfoUnique);
+    if (unique && CFGetTypeID(unique) == CFDataGetTypeID() && CFDataGetLength((CFDataRef)unique) > 0) {
+      hash = [NSData dataWithBytes:CFDataGetBytePtr((CFDataRef)unique) length:(NSUInteger)CFDataGetLength((CFDataRef)unique)];
+    }
+    CFRelease(information);
+  }
+  CFRelease(disk);
+  return hash;
+}
+
+// The listener is this pack's binary when its on-disk code directory matches.
+// A Cuttler started before this file was replaced, or Font Buttler.app, does not.
+static BOOL ListenerIsCurrentExecutable(const char *socketPath) {
+  if (!socketPath || !socketPath[0]) return YES;
+  NSData *mine = CurrentProcessCodeHash();
+  if (!mine.length) return YES;
+  int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+  if (fd < 0) return YES;
+  struct timeval budget;
+  budget.tv_sec = 2;
+  budget.tv_usec = 0;
+  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &budget, sizeof(budget));
+  setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &budget, sizeof(budget));
+  struct sockaddr_un address;
+  memset(&address, 0, sizeof(address));
+  address.sun_family = AF_UNIX;
+  if (strlcpy(address.sun_path, socketPath, sizeof(address.sun_path)) >= sizeof(address.sun_path)) {
+    close(fd);
+    return YES;
+  }
+  if (connect(fd, (struct sockaddr *)&address, (socklen_t)sizeof(address)) != 0) {
+    close(fd);
+    return YES;
+  }
+  NSData *peer = ConnectedPeerCodeHash(fd);
+  close(fd);
+  return peer.length > 0 && [peer isEqualToData:mine];
+}
+
 // A connect that is accepted, or that would block, means a live listener.
 // A stale socket file refuses the connect. Only the stale file is replaced.
 static BOOL SocketHasListener(const char *socketPath) {
@@ -539,7 +637,7 @@ static void StartSocket(void) {
   struct stat existing;
   if (lstat(socketPath, &existing) == 0) {
     if (S_ISLNK(existing.st_mode) || !S_ISSOCK(existing.st_mode) || existing.st_uid != getuid()) return;
-    if (SocketHasListener(socketPath)) return;
+    if (SocketHasListener(socketPath) && ListenerIsCurrentExecutable(socketPath)) return;
     unlink(socketPath);
   }
   int fd = socket(AF_UNIX, SOCK_STREAM, 0);

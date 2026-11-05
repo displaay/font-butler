@@ -657,9 +657,11 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(agent, /pingWithReply/)
   assert.match(agent, /SecRequirementCreateWithString/)
   assert.match(agent, /CFBundleIdentifier/)
-  assert.doesNotMatch(agent, /SecStaticCodeCheckValidity/)
-  assert.match(agent, /SecCodeCheckValidity/)
+  assert.match(agent, /SecCodeCopyStaticCode/)
+  assert.match(agent, /SecStaticCodeCheckValidity/)
+  assert.doesNotMatch(agent, /SecCodeCheckValidity\(/)
   assert.match(agent, /kSecCSStrictValidate/)
+  assert.match(agent, /kSecCodeInfoUnique/)
   assert.match(agent, /PeerMeetsParentRequirement/)
   assert.match(agent, /LOCAL_PEERTOKEN/)
   assert.match(agent, /SecCodeCopyGuestWithAttributes/)
@@ -718,10 +720,11 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(receiver, /S_ISSOCK/)
   assert.match(receiver, /SocketHasListener/)
   const startSocket = receiver.slice(receiver.indexOf('static void StartSocket'), receiver.indexOf('static NSString *g_lastAgentError'))
-  assert.match(startSocket, /if \(SocketHasListener\(socketPath\)\) return/)
+  assert.match(startSocket, /SocketHasListener\(socketPath\) && ListenerIsCurrentExecutable\(socketPath\)\) return/)
   const listenerCheck = startSocket.indexOf('SocketHasListener(socketPath)')
   const unlinkSocket = startSocket.indexOf('unlink(socketPath)')
   assert.ok(listenerCheck >= 0 && unlinkSocket > listenerCheck)
+  assert.match(receiver, /SecCodeCopyStaticCode/)
   assert.match(receiver, /st_uid != getuid/)
   assert.match(receiver, /agentServiceWithPlistName:CurrentAgentPlistName\(\)/)
   assert.doesNotMatch(receiver, /agentServiceWithPlistName:kRelease/)
@@ -1270,7 +1273,7 @@ test('the handoff finds Cuttler.app and the zip Font Buttler.app that contain th
   assert.match(parentMatch, /PathIsInsideApp\(kernel, appURL\.path\)/)
   assert.match(parentMatch, /ContainingAppURL\(\)/)
   assert.doesNotMatch(parentMatch, /setCodeSigningRequirement/)
-  assert.doesNotMatch(agent, /SecStaticCodeCheckValidity/)
+  assert.match(agent, /SecStaticCodeCheckValidity/)
   assert.doesNotMatch(agent, /kSecCSBasicValidateOnly/)
   assert.match(agent, /kForwardAfterSpawnSeconds = 20/)
   const mainSource = readRepo('electron/main.mjs')
@@ -1278,18 +1281,24 @@ test('the handoff finds Cuttler.app and the zip Font Buttler.app that contain th
   assert.match(mainSource, /claimSameExecutableInstance/)
   assert.match(mainSource, /sharedLibraryLaunchMode/)
   assert.match(mainSource, /launchMode === 'quit'/)
+  assert.match(mainSource, /launchMode === 'receiver'/)
+  assert.match(mainSource, /legacyLiveIsCurrent: false/)
   assert.doesNotMatch(mainSource, /launchMode === 'socket'/)
   assert.doesNotMatch(mainSource, /acceptInstalls/)
-  const quitBranch = mainSource.slice(
-    mainSource.indexOf("launchMode === 'quit'"),
-    mainSource.indexOf('app.on(\'will-finish-launching\''),
-  )
+  const quitAt = mainSource.indexOf("if (launchMode === 'quit')")
+  const quitBranch = mainSource.slice(quitAt, mainSource.indexOf('} else {', quitAt))
   assert.match(quitBranch, /app\.quit\(\)/)
   assert.doesNotMatch(quitBranch, /registerFinderSyncReceiver/)
   assert.doesNotMatch(quitBranch, /bootstrapApi/)
+  const ready = mainSource.slice(mainSource.indexOf('app.whenReady().then'))
+  const receiverReturn = ready.indexOf('if (receiverOnly)')
+  const bootstrapAt = ready.indexOf('bootstrapApi()')
+  assert.ok(receiverReturn >= 0 && bootstrapAt > receiverReturn)
+  assert.match(ready.slice(receiverReturn, bootstrapAt), /finderJobs\.start\(\)/)
+  assert.match(ready.slice(receiverReturn, bootstrapAt), /return/)
   assert.doesNotMatch(mainSource.slice(mainSource.indexOf('const instance = claimSameExecutableInstance')), /if \(!gotLock\) \{\s*app\.quit\(\)/)
   assert.equal(sharedLibraryLaunchMode({ sameExecutableHeld: false, sharedLockHeld: true }), 'quit')
-  assert.equal(sharedLibraryLaunchMode({ sameExecutableHeld: true, sharedLockHeld: true }), 'quit')
+  assert.equal(sharedLibraryLaunchMode({ sameExecutableHeld: true, sharedLockHeld: true }), 'receiver')
   assert.equal(sharedLibraryLaunchMode({ sameExecutableHeld: true, sharedLockHeld: false }), 'app')
   const lockDir = mkdtempSync(path.join(tmpdir(), 'font-butler-instance-'))
   try {
@@ -1310,8 +1319,37 @@ test('the handoff finds Cuttler.app and the zip Font Buttler.app that contain th
     const replaced = claimSameExecutableInstance({ lockPath: releaseLock, pid: 40000, isAlive: () => false, io })
     assert.equal(replaced.held, true)
     assert.equal(replaced.reason, 'replaced')
+    const stale = claimSameExecutableInstance({
+      lockPath: releaseLock,
+      pid: 46937,
+      inode: 106724383,
+      legacyLiveIsCurrent: false,
+      isAlive: () => true,
+      io,
+    })
+    assert.equal(stale.held, true)
+    assert.equal(stale.reason, 'replaced')
+    const sameBinary = claimSameExecutableInstance({
+      lockPath: releaseLock,
+      pid: 50001,
+      inode: 106724383,
+      isAlive: (pid) => pid === 46937,
+      io,
+    })
+    assert.equal(sameBinary.held, false)
+    assert.equal(sameBinary.reason, 'running')
+    const newer = claimSameExecutableInstance({
+      lockPath: releaseLock,
+      pid: 50002,
+      inode: 106889749,
+      legacyLiveIsCurrent: false,
+      isAlive: (pid) => pid === 46937,
+      io,
+    })
+    assert.equal(newer.held, true)
+    assert.equal(newer.reason, 'replaced')
     assert.equal(releaseSameExecutableInstance({ lockPath: releaseLock, pid: 38899, io }), false)
-    assert.equal(releaseSameExecutableInstance({ lockPath: releaseLock, pid: 40000, io }), true)
+    assert.equal(releaseSameExecutableInstance({ lockPath: releaseLock, pid: 50002, io }), true)
     assert.equal(existsSync(releaseLock), false)
   } finally {
     rmSync(lockDir, { recursive: true, force: true })

@@ -489,21 +489,49 @@ static BOOL AncestorHasBundleIdentifier(NSString *path, NSString *expected) {
   return NO;
 }
 
-// Path and Info.plist are not enough: a user-writable .app can contain an
-// unsigned binary whose ancestor plist still says app.fontbutler.desktop.
-// The audit token must satisfy the team and identifier requirement.
-static BOOL PeerMeetsParentRequirement(int fd) {
-  NSString *expected = ExpectedParentBundleIdentifier();
-  if (!expected.length) return NO;
-  NSString *requirementText =
-      [NSString stringWithFormat:@"anchor apple generic and certificate leaf[subject.OU] = \"A7WWML89LQ\" and identifier \"%@\"",
-                                 expected];
+// SecCodeCheckValidity on the live guest rejects a running Electron image.
+// The audit token still selects the peer. Strict validity runs on the static
+// code that guest was loaded from, so an unsigned binary in a user-writable
+// app cannot pass on its path and Info.plist. The code directory must also
+// be the binary now on disk: a Cuttler started before this pack was written
+// is a different file.
+static NSData *CodeDirectoryHash(SecStaticCodeRef code) {
+  if (!code) return nil;
+  CFDictionaryRef information = NULL;
+  OSStatus status = SecCodeCopySigningInformation(code, kSecCSSigningInformation, &information);
+  if (status != errSecSuccess || !information) return nil;
+  NSData *hash = nil;
+  CFTypeRef unique = CFDictionaryGetValue(information, kSecCodeInfoUnique);
+  if (unique && CFGetTypeID(unique) == CFDataGetTypeID() && CFDataGetLength((CFDataRef)unique) > 0) {
+    hash = [NSData dataWithBytes:CFDataGetBytePtr((CFDataRef)unique) length:(NSUInteger)CFDataGetLength((CFDataRef)unique)];
+  }
+  CFRelease(information);
+  return hash;
+}
+
+static NSData *CurrentExecutableHash(void) {
+  static NSData *cached = nil;
+  static BOOL ready = NO;
+  if (ready) return cached;
+  ready = YES;
+  NSString *binary = BundleExecutable(ContainingAppURL());
+  if (!binary.length) return nil;
+  NSURL *url = [NSURL fileURLWithPath:binary];
+  SecStaticCodeRef disk = NULL;
+  OSStatus created = SecStaticCodeCreateWithPath((__bridge CFURLRef)url, kSecCSDefaultFlags, &disk);
+  if (created != errSecSuccess || !disk) return nil;
+  cached = CodeDirectoryHash(disk);
+  CFRelease(disk);
+  return cached;
+}
+
+static SecStaticCodeRef PeerStaticCode(int fd) {
   audit_token_t token;
   memset(&token, 0, sizeof(token));
   socklen_t length = (socklen_t)sizeof(token);
-  if (getsockopt(fd, SOL_LOCAL, LOCAL_PEERTOKEN, &token, &length) != 0 || length != sizeof(token)) return NO;
+  if (getsockopt(fd, SOL_LOCAL, LOCAL_PEERTOKEN, &token, &length) != 0 || length != sizeof(token)) return NULL;
   CFDataRef auditData = CFDataCreate(kCFAllocatorDefault, (const UInt8 *)&token, (CFIndex)sizeof(token));
-  if (!auditData) return NO;
+  if (!auditData) return NULL;
   const void *keys[] = {kSecGuestAttributeAudit};
   const void *values[] = {auditData};
   CFDictionaryRef attributes = CFDictionaryCreate(kCFAllocatorDefault, keys, values, 1, &kCFTypeDictionaryKeyCallBacks,
@@ -515,17 +543,48 @@ static BOOL PeerMeetsParentRequirement(int fd) {
     CFRelease(attributes);
   }
   CFRelease(auditData);
-  if (copyStatus != errSecSuccess || !guest) return NO;
+  if (copyStatus != errSecSuccess || !guest) return NULL;
+  SecStaticCodeRef disk = NULL;
+  OSStatus staticStatus = SecCodeCopyStaticCode(guest, kSecCSDefaultFlags, &disk);
+  CFRelease(guest);
+  if (staticStatus != errSecSuccess || !disk) return NULL;
+  return disk;
+}
+
+static BOOL PeerMeetsParentRequirement(int fd) {
+  NSString *expected = ExpectedParentBundleIdentifier();
+  if (!expected.length) return NO;
+  NSURL *appURL = ContainingAppURL();
+  if (!PathIsInsideApp(PeerKernelPath(fd), appURL.path)) return NO;
+  NSData *expectedHash = CurrentExecutableHash();
+  SecStaticCodeRef peer = PeerStaticCode(fd);
+  if (!peer) return NO;
+  NSData *peerHash = CodeDirectoryHash(peer);
+  if (!expectedHash.length || !peerHash.length || ![peerHash isEqualToData:expectedHash]) {
+    CFRelease(peer);
+    return NO;
+  }
+  static NSData *checkedHash = nil;
+  static BOOL checkedOk = NO;
+  if (checkedHash && [checkedHash isEqualToData:peerHash]) {
+    CFRelease(peer);
+    return checkedOk;
+  }
+  NSString *requirementText =
+      [NSString stringWithFormat:@"anchor apple generic and certificate leaf[subject.OU] = \"A7WWML89LQ\" and identifier \"%@\"",
+                                 expected];
   SecRequirementRef requirement = NULL;
   OSStatus created = SecRequirementCreateWithString((__bridge CFStringRef)requirementText, kSecCSDefaultFlags, &requirement);
   if (created != errSecSuccess || !requirement) {
-    CFRelease(guest);
+    CFRelease(peer);
     return NO;
   }
-  OSStatus valid = SecCodeCheckValidity(guest, kSecCSStrictValidate, requirement);
+  OSStatus valid = SecStaticCodeCheckValidity(peer, kSecCSStrictValidate, requirement);
   CFRelease(requirement);
-  CFRelease(guest);
-  return valid == errSecSuccess;
+  CFRelease(peer);
+  checkedHash = [peerHash copy];
+  checkedOk = valid == errSecSuccess;
+  return checkedOk;
 }
 
 // The socket peer has to be this helper's containing app. The XPC peer is the
