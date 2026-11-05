@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Plus, X } from 'lucide-react'
 import { getApiToken } from '@/lib/api'
 import { FONT_ACCESS_TTL_MS, signFontAccess, withFontAccessQuery } from '@/lib/font-access'
@@ -11,7 +11,6 @@ import {
   compareCandidates,
   compareCssFamily,
   compareSizeStep,
-  familyIdForName,
   isCompareFull,
   resolvedCompareFace,
   shownCompareFamilyIds,
@@ -26,7 +25,15 @@ import { cn } from '@/lib/utils'
 
 export type CompareLibraryFamily = {
   name: string
+  /** Family id inspection assigns from the font name, not a custom display name. */
+  familyId: string
   paths: string[]
+}
+
+const COMPARE_FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])'
+
+function focusableIn(node: HTMLElement): HTMLElement[] {
+  return Array.from(node.querySelectorAll<HTMLElement>(COMPARE_FOCUSABLE)).filter((el) => el.tabIndex !== -1)
 }
 
 export function CompareWindow({
@@ -70,9 +77,63 @@ export function CompareWindow({
   const [optionsOpen, setOptionsOpen] = useState(false)
   const [dragId, setDragId] = useState<string | null>(null)
   const [fontAccessEpoch, setFontAccessEpoch] = useState(0)
+  const dialogRef = useRef<HTMLDivElement>(null)
   const sample = text.trim() ? text : COMPARE_PLACEHOLDER
   const full = isCompareFull(model)
   const shownFamilies = shownCompareFamilyIds(model)
+
+  useEffect(() => {
+    const node = dialogRef.current
+    if (!node) return
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const parent = node.parentElement
+    const madeInert: HTMLElement[] = []
+    if (parent) {
+      for (const child of Array.from(parent.children)) {
+        if (child === node || !(child instanceof HTMLElement) || child.inert) continue
+        child.inert = true
+        madeInert.push(child)
+      }
+    }
+    const moveIn = () => {
+      const items = focusableIn(node)
+      ;(items[0] ?? node).focus()
+    }
+    moveIn()
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return
+      const items = focusableIn(node)
+      if (items.length === 0) {
+        event.preventDefault()
+        node.focus()
+        return
+      }
+      const first = items[0]
+      const last = items[items.length - 1]
+      const active = document.activeElement
+      const inside = active instanceof Node && node.contains(active)
+      if (event.shiftKey && (!inside || active === first)) {
+        event.preventDefault()
+        last?.focus()
+      } else if (!event.shiftKey && (!inside || active === last)) {
+        event.preventDefault()
+        first?.focus()
+      }
+    }
+    const onFocusIn = (event: FocusEvent) => {
+      const target = event.target
+      if (!(target instanceof Node) || node.contains(target)) return
+      moveIn()
+    }
+    document.addEventListener('keydown', onKeyDown, true)
+    document.addEventListener('focusin', onFocusIn)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown, true)
+      document.removeEventListener('focusin', onFocusIn)
+      for (const el of madeInert) el.inert = false
+      if (previous?.isConnected) previous.focus()
+    }
+  }, [])
 
   useEffect(() => {
     const refreshIn = Math.max(1_000, FONT_ACCESS_TTL_MS - 5 * 60 * 1000)
@@ -122,7 +183,14 @@ export function CompareWindow({
   }, [model.families, model.entries, fontAccessEpoch])
 
   return (
-    <div className="fixed inset-0 z-30 flex flex-col bg-background text-foreground">
+    <div
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Compare"
+      tabIndex={-1}
+      className="fixed inset-0 z-30 flex flex-col bg-background text-foreground outline-none"
+    >
       <header className="app-region-drag flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2 pt-8">
         <div className="app-region-no-drag relative">
           <Button type="button" size="sm" variant="outline" onClick={() => setAdding((open) => !open)}>
@@ -222,9 +290,15 @@ export function CompareWindow({
                 <div
                   key={entry.id}
                   draggable
-                  onDragStart={() => setDragId(entry.id)}
+                  onDragStart={(event) => {
+                    event.dataTransfer.effectAllowed = 'move'
+                    event.dataTransfer.setData('text/plain', entry.id)
+                    setDragId(entry.id)
+                  }}
                   onDragOver={(event) => event.preventDefault()}
-                  onDrop={() => {
+                  onDrop={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
                     if (dragId) onMove(dragId, entry.id)
                     setDragId(null)
                   }}
@@ -401,13 +475,13 @@ function OverlaySamples({
   })
   return (
     <div>
-      <div className="relative" style={{ minHeight: size * 1.4 }}>
-        {rows.map(({ entry, family }, index) => {
+      <div data-compare-overlay="" className="grid justify-items-start" style={{ minHeight: size * 1.4 }}>
+        {rows.map(({ entry, family }) => {
           const tint = COMPARE_TINTS[entry.tint] ?? COMPARE_TINTS[0]
           return (
             <div
               key={entry.id}
-              className={cn('compare-overlay-ink pointer-events-none', index === 0 ? 'relative' : 'absolute inset-0')}
+              className="compare-overlay-ink pointer-events-none col-start-1 row-start-1 justify-self-start self-baseline"
             >
               <Sample
                 family={family}
@@ -427,9 +501,15 @@ function OverlaySamples({
             key={entry.id}
             className="rounded-full bg-muted px-2.5 py-1"
             draggable
-            onDragStart={() => onDrag(entry.id)}
+            onDragStart={(event) => {
+              event.dataTransfer.effectAllowed = 'move'
+              event.dataTransfer.setData('text/plain', entry.id)
+              onDrag(entry.id)
+            }}
             onDragOver={(event) => event.preventDefault()}
-            onDrop={() => {
+            onDrop={(event) => {
+              event.preventDefault()
+              event.stopPropagation()
               if (dragId) onMove(dragId, entry.id)
               onDrag(null)
             }}
@@ -482,16 +562,16 @@ function AddFamilies({
           <p className="px-3 py-6 text-center text-sm text-muted-foreground">No Families Found</p>
         ) : (
           listed.map((family) => {
-            const present = shownFamilies.has(familyIdForName(family.name))
+            const present = shownFamilies.has(family.familyId)
             const disabled = full && !present
             return (
               <button
-                key={family.name}
+                key={family.familyId}
                 type="button"
                 disabled={disabled}
                 className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-muted disabled:opacity-40"
                 onClick={() => {
-                  if (present) onRemove(familyIdForName(family.name))
+                  if (present) onRemove(family.familyId)
                   else onAdd(family.paths)
                 }}
               >

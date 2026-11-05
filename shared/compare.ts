@@ -66,6 +66,15 @@ export function familyIdForName(name: string): string {
   return `family:${name.trim().toLocaleLowerCase()}`
 }
 
+/** The id inspection will assign. A custom library name is only a label. */
+export function libraryCompareFamilyId(
+  fontFamilyNames: readonly (string | undefined)[],
+  displayName: string,
+): string {
+  const inspected = fontFamilyNames.find((name) => name?.trim())
+  return familyIdForName(inspected?.trim() || displayName)
+}
+
 export function emptyCompare(): CompareModel {
   return { entries: [], families: [] }
 }

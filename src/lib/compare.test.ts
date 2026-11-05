@@ -6,6 +6,7 @@ import {
   automaticFace,
   emptyCompare,
   familyIdForName,
+  libraryCompareFamilyId,
   replaceCompareFamilies,
   moveCompareEntry,
   removeCompareEntry,
@@ -136,6 +137,14 @@ test('a family checkmark follows visible rows', () => {
   assert.equal(shownCompareFamilyIds(added).has(familyIdForName('Acme')), true)
 })
 
+test('a custom library name uses the inspected family id', () => {
+  const id = libraryCompareFamilyId(['Acme'], 'My Acme')
+  assert.equal(id, familyIdForName('Acme'))
+  assert.notEqual(id, familyIdForName('My Acme'))
+  const added = addCompareFamilies(emptyCompare(), [family('Acme', [face('/Fonts/Acme.ttf', 'Regular', 400)])])
+  assert.equal(shownCompareFamilyIds(added).has(id), true)
+})
+
 test('compare uses an Adobe copy when the source is missing', () => {
   const entry = {
     status: 'installed',
@@ -150,6 +159,30 @@ test('compare uses an Adobe copy when the source is missing', () => {
     ],
   } as CatalogEntry
   assert.equal(comparePathForEntry(entry), '/Adobe/Fonts/Acme.otf')
+  assert.equal(
+    comparePathForEntry({
+      status: 'installed',
+      installedPath: '/Library/Fonts/Acme.otf',
+      sourcePath: '/Fonts/Missing.otf',
+      sourcePresent: false,
+      installations: [
+        { destinationId: 'macos', path: '/Library/Fonts/Acme.otf', verification: 'unavailable' },
+        { destinationId: 'adobe-shared', path: '/Adobe/Fonts/Acme.otf', verification: 'file-present' },
+      ],
+    } as CatalogEntry),
+    '/Adobe/Fonts/Acme.otf',
+  )
+  assert.equal(
+    comparePathForEntry({
+      status: 'installed',
+      installedPath: '/Library/Fonts/Acme.otf',
+      installations: [
+        { destinationId: 'macos', path: '/Library/Fonts/Acme.otf', verification: 'file-present' },
+        { destinationId: 'adobe-shared', path: '/Adobe/Fonts/Acme.otf', verification: 'file-present' },
+      ],
+    } as CatalogEntry),
+    '/Library/Fonts/Acme.otf',
+  )
   const parked = {
     status: 'deactivated',
     sourcePath: '/Fonts/Missing.otf',

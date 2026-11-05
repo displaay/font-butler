@@ -335,6 +335,61 @@ test('the drop overlay stays while the pointer pauses mid-drag', async () => {
   }
 })
 
+test('reordering a row inside the window does not show the file drop overlay', async () => {
+  const { createElement, useState, act } = await import('react')
+  const { createRoot } = await import('react-dom/client')
+  const { FileDropSurface } = await import('./FileDropSurface.tsx')
+  const dropped: DataTransfer[] = []
+
+  function Harness() {
+    const [dragging, setDragging] = useState(false)
+    return createElement(
+      FileDropSurface,
+      {
+        dragging,
+        label: 'Drop font files to compare them',
+        onDraggingChange: setDragging,
+        onDrop: (dataTransfer: DataTransfer) => {
+          dropped.push(dataTransfer)
+        },
+      },
+      createElement('div', { draggable: true, 'data-row': '' }, 'Compare row'),
+    )
+  }
+
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  const overlay = () => host.querySelector('[data-file-drop-overlay]')
+  try {
+    await act(async () => {
+      root.render(createElement(Harness))
+    })
+    const row = host.querySelector('[data-row]')
+    const surface = host.firstElementChild
+    assert.ok(row)
+    assert.ok(surface)
+    await act(async () => {
+      drag(row, 'dragstart', ['Files'])
+      drag(surface, 'dragenter', ['Files'])
+      drag(surface, 'drop', ['Files'])
+    })
+    assert.equal(overlay(), null)
+    assert.equal(dropped.length, 0)
+    await act(async () => {
+      drag(row, 'dragend', ['Files'])
+      drag(surface, 'dragenter', ['Files'])
+      drag(surface, 'drop', ['Files'])
+    })
+    assert.equal(dropped.length, 1)
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  }
+})
+
 test('dragging an image inside the window does not show the file drop overlay', async () => {
   const { createElement, useState, act } = await import('react')
   const { createRoot } = await import('react-dom/client')

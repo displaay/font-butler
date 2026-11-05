@@ -176,9 +176,25 @@ function isLikelyLaunchArg(arg) {
 
 /** Compare argv or a compare URL. Install flags and install URLs are not compare launches. */
 export function finderCompareArgv(argv) {
+  return compareLaunchArgv(argv)?.paths ?? null
+}
+
+/**
+ * A compare launch, including the raw URL argument. That URL often ends in a
+ * font extension, so startup must skip it instead of importing it.
+ */
+export function compareLaunchArgv(argv) {
   const parsed = parseFinderLaunch(argv)
   if (!parsed || parsed.action !== FINDER_COMPARE) return null
-  return parsed.paths
+  const claimed = new Set(parsed.paths)
+  for (const arg of Array.isArray(argv) ? argv : []) {
+    if (typeof arg !== 'string') continue
+    if (arg === FINDER_COMPARE_FLAG) claimed.add(arg)
+    if (!arg.startsWith(`${FINDER_PROTOCOL}:`) && !arg.startsWith(`${FINDER_TEST_PROTOCOL}:`)) continue
+    const fromUrl = parseFinderInstallUrl(arg)
+    if (fromUrl?.action === FINDER_COMPARE) claimed.add(arg)
+  }
+  return { paths: parsed.paths, claimed }
 }
 
 export function parseFinderLaunch(argv) {

@@ -40,6 +40,7 @@ import {
   destinationChoices,
   familyNamePromptScript,
   finderInstallIssues,
+  compareLaunchArgv,
   finderCompareArgv,
   FINDER_COMPARE,
   FINDER_INSTALL_AS,
@@ -2601,12 +2602,13 @@ if (launchMode === 'quit') {
   })
 
   // A font-butler URL is not an install. Any page could open one.
-  // Compare is the only URL this process accepts.
+  // Compare is the only URL this process accepts. It waits on the Finder
+  // job queue so a URL that arrives before bootstrap is not dropped.
   app.on('open-url', (event, url) => {
     event.preventDefault()
     const comparePaths = typeof url === 'string' ? finderCompareArgv([url]) : null
     if (!comparePaths) return
-    sendWhenReady('finder-compare', { paths: comparePaths })
+    enqueueFinderJob(FINDER_COMPARE, comparePaths)
     showMainWindow()
   })
 
@@ -2922,17 +2924,17 @@ if (launchMode === 'quit') {
     } catch (error) {
       console.error('Finder Sync registration was not refreshed', error)
     }
-    const comparePaths = finderCompareArgv(process.argv)
-    const compareFiles = new Set(comparePaths ?? [])
-    if (comparePaths) {
-      sendWhenReady('finder-compare', { paths: comparePaths })
+    const compareLaunch = compareLaunchArgv(process.argv)
+    if (compareLaunch) {
+      enqueueFinderJob(FINDER_COMPARE, compareLaunch.paths)
       showMainWindow()
     }
+    const claimedByCompare = compareLaunch?.claimed ?? new Set()
     const fromArgv = process.argv.filter(
-      (arg) => /\.(ttf|otf|ttc|otc|woff2?)$/i.test(arg) && !compareFiles.has(arg),
+      (arg) => /\.(ttf|otf|ttc|otc|woff2?)$/i.test(arg) && !claimedByCompare.has(arg),
     )
     for (const filePath of [...queuedFiles, ...fromArgv]) {
-      if (compareFiles.has(filePath)) continue
+      if (claimedByCompare.has(filePath)) continue
       await openFont(filePath)
     }
     queuedFiles.length = 0

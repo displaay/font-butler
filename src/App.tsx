@@ -102,6 +102,7 @@ import {
   COMPARE_DEFAULT_SIZE,
   clampCompareSize,
   emptyCompare,
+  libraryCompareFamilyId,
   removeCompareEntry,
   removeCompareFamily,
   replaceCompareFamilies,
@@ -1486,6 +1487,10 @@ function AppShell() {
       groupCatalog(entries)
         .map((group) => ({
           name: group.familyName,
+          familyId: libraryCompareFamilyId(
+            group.entries.map((entry) => entry.faces[0]?.familyName),
+            group.familyName,
+          ),
           paths: [
             ...new Set(
               group.entries

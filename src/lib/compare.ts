@@ -18,6 +18,7 @@ export {
   compareSizeStep,
   emptyCompare,
   familyIdForName,
+  libraryCompareFamilyId,
   isCompareFull,
   moveCompareEntry,
   removeCompareEntry,
@@ -31,20 +32,36 @@ export {
 } from '../../shared/compare.ts'
 export type { CompareEntry, CompareFace, CompareFamily, CompareLayout, CompareModel } from '../../shared/compare.ts'
 
+/**
+ * An install path is readable when a copy confirms the file is there.
+ * With no installation records, the path is used as given.
+ */
+function copyConfirmsPath(entry: CatalogEntry, filePath: string): boolean {
+  if (!filePath) return false
+  const copies = entry.installations ?? []
+  if (copies.length === 0) return true
+  return copies.some((copy) => {
+    if (copy.parkedPath?.trim() === filePath) return true
+    return copy.path?.trim() === filePath && copy.verification === 'file-present'
+  })
+}
+
 /** The file Compare should read for a library font. A missing source is not used when a copy exists. */
 export function comparePathForEntry(entry: CatalogEntry): string | null {
   const installed = entry.installedPath?.trim() || ''
   const disabled = entry.disabledPath?.trim() || ''
   const source = entry.sourcePath?.trim() || ''
-  if (entry.status === 'deactivated' && disabled) return disabled
-  if ((entry.status === 'installed' || entry.status === 'outdated') && installed) return installed
+  if (entry.status === 'deactivated' && copyConfirmsPath(entry, disabled)) return disabled
+  if ((entry.status === 'installed' || entry.status === 'outdated') && copyConfirmsPath(entry, installed)) {
+    return installed
+  }
   if (source && entry.sourcePresent !== false) return source
   const copies = entry.installations ?? []
   const live = copies.find((copy) => copy.verification === 'file-present' && copy.path?.trim() && !copy.parkedPath)
   if (live?.path) return live.path.trim()
   const parked = copies.find((copy) => copy.parkedPath?.trim())
   if (parked?.parkedPath) return parked.parkedPath.trim()
-  if (disabled) return disabled
+  if (copyConfirmsPath(entry, disabled)) return disabled
   return null
 }
 

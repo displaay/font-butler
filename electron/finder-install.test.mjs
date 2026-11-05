@@ -32,6 +32,7 @@ import {
   groupIdsByFormat,
   idsEligibleForFinderInstall,
   isInstallableFontPath,
+  compareLaunchArgv,
   finderCompareArgv,
   parseFinderInstallUrl,
   parseFinderLaunch,
@@ -309,7 +310,18 @@ test('compare launch flags and URLs do not fall through to install', () => {
   const openUrl = main.slice(main.indexOf("app.on('open-url'"), main.indexOf("app.on('before-quit'"))
   assert.match(openUrl, /preventDefault/)
   assert.match(openUrl, /finderCompareArgv/)
-  assert.doesNotMatch(openUrl, /openFont|enqueueFinderJob/)
+  assert.match(openUrl, /enqueueFinderJob\(FINDER_COMPARE/)
+  assert.doesNotMatch(openUrl, /openFont|sendWhenReady/)
+  const ready = main.slice(main.indexOf('compareLaunchArgv(process.argv)'), main.indexOf('queuedFiles.length = 0'))
+  assert.match(ready, /enqueueFinderJob\(FINDER_COMPARE/)
+  assert.match(ready, /claimedByCompare\.has\(arg\)/)
+  assert.match(ready, /claimedByCompare\.has\(filePath\)/)
+  const compareUrl = finderInstallUrl(FINDER_COMPARE, ['/Fonts/Loose.otf'])
+  const launch = compareLaunchArgv(['Cuttler', compareUrl])
+  assert.ok(launch)
+  assert.equal(launch.claimed.has(compareUrl), true)
+  assert.equal(launch.claimed.has('/Fonts/Loose.otf'), true)
+  assert.equal(compareLaunchArgv(['Cuttler', finderInstallUrl(FINDER_INSTALL, ['/Fonts/A.otf'])]), null)
   const second = main.slice(main.indexOf("app.on('second-instance'"), main.indexOf("app.on('open-file'"))
   assert.match(second, /finderCompareArgv/)
   assert.ok(second.indexOf('finder-compare') < second.indexOf('openFont'))
