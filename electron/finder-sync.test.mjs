@@ -768,6 +768,10 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(main, /\/api\/import-finder/)
   assert.match(main, /expectedSourceFingerprint/)
   assert.match(main, /sourcePaths/)
+  assert.match(main, /sourceMtimes/)
+  assert.match(main, /publishApiEndpoint/)
+  assert.match(main, /adoptPublishedApiEndpoint/)
+  assert.match(main, /receiverOwnerWatchTimer/)
   const enqueueValidated = main.slice(
     main.indexOf('async function enqueueValidatedFinderInstall'),
     main.indexOf('function runningTestFeed'),
@@ -1506,6 +1510,9 @@ test('the handoff finds Cuttler.app and the zip Font Buttler.app that contain th
   const bootstrapAt = ready.indexOf('bootstrapApi()')
   assert.ok(receiverReturn >= 0 && bootstrapAt > receiverReturn)
   assert.match(ready.slice(receiverReturn, bootstrapAt), /finderJobs\.start\(\)/)
+  assert.match(ready.slice(receiverReturn, bootstrapAt), /adoptPublishedApiEndpoint/)
+  assert.match(ready.slice(receiverReturn, bootstrapAt), /\/api\/health/)
+  assert.match(ready.slice(receiverReturn, bootstrapAt), /app\.quit\(\)/)
   assert.match(ready.slice(receiverReturn, bootstrapAt), /return/)
   assert.doesNotMatch(mainSource.slice(mainSource.indexOf('const instance = claimSameExecutableInstance')), /if \(!gotLock\) \{\s*app\.quit\(\)/)
   assert.equal(sharedLibraryLaunchMode({ sameExecutableHeld: false, sharedLockHeld: true }), 'quit')

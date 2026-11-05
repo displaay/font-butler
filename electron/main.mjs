@@ -194,6 +194,48 @@ let UI =
   process.env.FONT_BUTLER_UI ??
   process.env.FONTCASE_UI ??
   (app.isPackaged ? API : 'http://127.0.0.1:43181')
+
+const API_ENDPOINT_FILE = 'api-endpoint.json'
+let receiverOwnerWatchTimer = null
+
+function apiEndpointFilePath() {
+  try {
+    return path.join(app.getPath('userData'), API_ENDPOINT_FILE)
+  } catch {
+    return ''
+  }
+}
+
+function publishApiEndpoint(url = API) {
+  const file = apiEndpointFilePath()
+  if (!file || typeof url !== 'string' || !url.startsWith('http')) return
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, JSON.stringify({ url, updatedAt: Date.now() }))
+  } catch (error) {
+    console.error('Could not publish API endpoint for Finder Sync receivers', error)
+  }
+}
+
+function readPublishedApiEndpoint() {
+  const file = apiEndpointFilePath()
+  if (!file) return null
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'))
+    const url = typeof parsed?.url === 'string' ? parsed.url.trim() : ''
+    return url.startsWith('http') ? url : null
+  } catch {
+    return null
+  }
+}
+
+function adoptPublishedApiEndpoint() {
+  const published = readPublishedApiEndpoint()
+  if (!published || published === API) return Boolean(published)
+  API = published
+  if (!process.env.FONT_BUTLER_UI && !process.env.FONTCASE_UI) UI = API
+  return true
+}
 const ICON_PATH = path.join(__dirname, '../build/icon.png')
 const MENUBAR_ICON_PATH = path.join(__dirname, '../build/menubarTemplate.png')
 const MENUBAR_ATTENTION_ICON_PATH = path.join(__dirname, '../build/menubarNotificationTemplate.svg')
@@ -939,13 +981,16 @@ async function postImportFiles(files) {
   const token = await ensureApiToken()
   const body = new FormData()
   const sourcePaths = []
+  const sourceMtimes = []
   for (const file of files ?? []) {
     const data = file?.data
     if (!data || !file.sourcePath) continue
     body.append('files', new Blob([data]), file.filename || 'font')
     sourcePaths.push(file.sourcePath)
+    sourceMtimes.push(typeof file.mtimeMs === 'number' && Number.isFinite(file.mtimeMs) ? file.mtimeMs : null)
   }
   body.append('sourcePaths', JSON.stringify(sourcePaths))
+  body.append('sourceMtimes', JSON.stringify(sourceMtimes))
   const response = await fetch(`${API}/api/import-finder`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
@@ -2486,12 +2531,13 @@ if (launchMode === 'quit') {
   app.quit()
 } else {
   const finderSyncRegisterOptions = { surface: !receiverOnly, registerAgent: !receiverOnly }
+  // Register once early for handoffs; Register() in the native addon is
+  // idempotent, so whenReady may call it again safely as a fallback.
   app.on('will-finish-launching', () => {
     if (!receiverOnly) registerNativeFinderServices()
     registerFinderSyncReceiver(finderSyncRegisterOptions)
   })
   if (!receiverOnly) registerNativeFinderServices()
-  registerFinderSyncReceiver(finderSyncRegisterOptions)
 
   app.on('second-instance', (_event, argv) => {
     if (app.isPackaged && !apiBootstrapReady && lastBootstrapError) {
@@ -2521,6 +2567,10 @@ if (launchMode === 'quit') {
 
   app.on('before-quit', (event) => {
     isQuitting = true
+    if (receiverOwnerWatchTimer) {
+      clearInterval(receiverOwnerWatchTimer)
+      receiverOwnerWatchTimer = null
+    }
     if (documentAppObserver) documentAppObserver.stop()
     if (receiverOnly) return
     if (!sessionReleaseOnQuitStarted) {
@@ -2665,6 +2715,7 @@ if (launchMode === 'quit') {
       try {
         const info = await spawnApiWorker({ serverPath, staticDir, port })
         API = `http://127.0.0.1:${info.port}`
+        publishApiEndpoint(API)
         if (info.token) {
           apiToken = info.token
         }
@@ -2690,6 +2741,7 @@ if (launchMode === 'quit') {
       } catch (error) {
         console.error('Could not connect to Cuttler API (dev)', error)
       }
+      publishApiEndpoint(API)
       apiBootstrapReady = true
       return true
     }
@@ -2701,6 +2753,7 @@ if (launchMode === 'quit') {
       await waitForWorkerCatalogOrFailure()
       apiBootstrapReady = true
       lastBootstrapError = null
+      publishApiEndpoint(API)
       if (mainWindow && !mainWindow.isDestroyed() && mainWindowKind !== 'main') {
         createWindow()
       }
@@ -2780,7 +2833,25 @@ if (launchMode === 'quit') {
     if (!receiverOnly) registerNativeFinderServices()
     registerFinderSyncReceiver(finderSyncRegisterOptions)
     if (receiverOnly) {
+      adoptPublishedApiEndpoint()
       await finderJobs.start()
+      // Owner may be on a non-default port; keep rediscovering, and exit when
+      // the library owner is gone so a relaunch can take ownership.
+      receiverOwnerWatchTimer = setInterval(() => {
+        if (isQuitting) return
+        adoptPublishedApiEndpoint()
+        void fetch(`${API}/api/health`, { signal: AbortSignal.timeout(2_000) })
+          .then((response) => {
+            if (response.ok) return
+            throw new Error(`owner health ${response.status}`)
+          })
+          .catch(() => {
+            if (isQuitting) return
+            console.error('Finder Sync receiver: library owner is gone; exiting so a relaunch can own the library.')
+            app.quit()
+          })
+      }, 5_000)
+      if (typeof receiverOwnerWatchTimer.unref === 'function') receiverOwnerWatchTimer.unref()
       return
     }
     const bootstrapOk = await bootstrapApi()

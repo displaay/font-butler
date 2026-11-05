@@ -561,13 +561,25 @@ app.post('/api/import-finder', async (c) => {
       (item): item is File => item instanceof File,
     )
     let sourcePaths: string[] = []
+    let sourceMtimes: Array<number | null> = []
     try {
       const parsed = JSON.parse(typeof body.sourcePaths === 'string' ? body.sourcePaths : '')
       sourcePaths = Array.isArray(parsed) ? parsed.map((item) => String(item ?? '')) : []
     } catch {
       sourcePaths = []
     }
+    try {
+      const parsed = JSON.parse(typeof body.sourceMtimes === 'string' ? body.sourceMtimes : '')
+      sourceMtimes = Array.isArray(parsed)
+        ? parsed.map((item) => (typeof item === 'number' && Number.isFinite(item) ? item : null))
+        : []
+    } catch {
+      sourceMtimes = []
+    }
     if (files.length !== sourcePaths.length) {
+      return c.json({ error: 'Finder Sync did not keep that file path.' }, 400)
+    }
+    if (sourceMtimes.length > 0 && sourceMtimes.length !== files.length) {
       return c.json({ error: 'Finder Sync did not keep that file path.' }, 400)
     }
     if (files.length > FINDER_SYNC_MAX_FILES) {
@@ -590,10 +602,12 @@ app.post('/api/import-finder', async (c) => {
           413,
         )
       }
+      const mtimeMs = sourceMtimes[index]
       uploads.push({
         filename: file.name,
         data: Buffer.from(await file.arrayBuffer()),
         sourcePath: sourcePaths[index] ?? '',
+        ...(typeof mtimeMs === 'number' ? { mtimeMs } : {}),
       })
     }
     return c.json(await service.importFinderFiles(uploads))
