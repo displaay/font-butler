@@ -26,6 +26,10 @@ export type FontFaceInfo = {
   classification?: string
   widthClass?: number
   features?: string[]
+  /** ISO 639-3 languages this face can set. Absent until the file is read. */
+  languages?: string[]
+  /** Scripts of the orthographies that passed, such as Latin or Cyrillic. */
+  scripts?: string[]
 }
 
 export type SourceAvailability = 'none' | 'present' | 'missing' | 'offline' | 'unreadable'
@@ -140,6 +144,8 @@ export type SystemFace = {
   classification?: string
   widthClass?: number
   features?: string[]
+  /** ISO 639-3 languages this face can set. Absent until the file is read. */
+  languages?: string[]
   format: string
   previewSample?: string
   protected: boolean

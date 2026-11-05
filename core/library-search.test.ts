@@ -116,13 +116,16 @@ test('search suggestions keep filters whose names the trailing letters begin', (
   const labels = (typed: string) => searchFilterSuggestions(typed, filterCatalog).map((item) => item.label)
 
   assert.deepEqual(labels('b'), [])
-  assert.deepEqual(labels('bo'), ['Semibold', 'Bold', 'Extra Bold'])
+  const bo = labels('bo')
+  assert.deepEqual(bo.slice(0, 3), ['Semibold', 'Bold', 'Extra Bold'])
+  assert.equal(bo.length, 11)
+  assert.equal(bo.includes('Bosnian'), true)
   assert.ok(labels('bold').includes('Bold'))
   assert.ok(labels('bold').includes('Extra Bold'))
   assert.deepEqual(labels('fig'), ['Tabular Figures', 'Old-Style Figures'])
-  assert.deepEqual(labels('ital'), ['Italic'])
+  assert.deepEqual(labels('ital'), ['Italic', 'Italian'])
   assert.deepEqual(labels('old style'), ['Old-Style Figures'])
-  assert.deepEqual(labels('sans'), ['Sans Serif'])
+  assert.deepEqual(labels('sans'), ['Sans Serif', 'Sanskrit'])
   assert.deepEqual(labels('serif'), ['Serif'])
   assert.equal(labels('serif').includes('Sans Serif'), false)
   assert.deepEqual(labels('mono'), ['Monospaced'])
@@ -183,4 +186,33 @@ test('choosing a suggestion applies that filter and keeps the rest of the query'
 
   const again = applySearchSuggestion(sans, [], classified.libraryFilters)
   assert.deepEqual(again.libraryFilters, ['classification:sans-serif'])
+})
+
+test('language and script suggestions follow the same filter tokens as classification', () => {
+  const czech = searchFilterSuggestions('cze').find((item) => item.kind === 'language')
+  assert.equal(czech?.label, 'Czech')
+  assert.equal(czech?.filterId, 'language:ces')
+  const chosen = applySearchSuggestion(czech!, [], [])
+  assert.equal(chosen.text, '')
+  assert.deepEqual(chosen.libraryFilters, ['language:ces'])
+  const hidden = searchFilterSuggestions('czech', { chosenFilters: ['language:ces'] })
+  assert.equal(hidden.some((item) => item.filterId === 'language:ces'), false)
+
+  const german = searchFilterSuggestions('deutsch').find((item) => item.label === 'German')
+  assert.equal(german?.filterId, 'language:deu')
+  const cyrillic = searchFilterSuggestions('cyrillic').find((item) => item.kind === 'script')
+  assert.equal(cyrillic?.label, 'Cyrillic')
+  assert.equal(cyrillic?.filterId, 'script:Cyrillic')
+
+  const many = searchFilterSuggestions('ch').filter((item) => item.kind === 'language')
+  assert.ok(many.length >= 1)
+  assert.ok(many.length <= 8)
+
+  const covered: SearchFamily = {
+    familyName: 'Reckless',
+    faces: [{ familyName: 'Reckless', styleName: 'Regular', languages: ['ces'] }],
+  }
+  assert.equal(familyMatchesLibrarySearch(covered, 'czech'), true)
+  assert.equal(familyMatchesLibrarySearch(covered, 'german'), false)
+  assert.equal(familyMatchesLibrarySearch({ familyName: 'Czech Grotesk', faces: [] }, 'czech'), true)
 })

@@ -157,7 +157,8 @@ function parseUncachedFile(
 ): SystemFace[] {
   const faces: SystemFace[] = []
   try {
-    const parsed = parseFontFile(filePath)
+    // Coverage is stored on catalog faces. This scan only lists what is installed.
+    const parsed = parseFontFile(filePath, { coverage: false })
     for (const face of parsed.faces) {
       if (isHiddenSystemFamily(face.familyName)) continue
       faces.push({

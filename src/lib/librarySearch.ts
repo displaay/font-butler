@@ -22,6 +22,7 @@ function facesOf(faces: readonly SearchFace[]): SearchFace[] {
     features: face.features,
     widthClass: face.widthClass,
     instanceNames: face.instanceNames,
+    languages: face.languages,
   }))
 }
 

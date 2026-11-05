@@ -8,6 +8,7 @@ import {
   previewSampleFromCoverage,
 } from '../shared/previewSample.ts'
 import { classifyFont, designerFromName, foundryFromManufacturer } from '../shared/font-classification.ts'
+import { coverageIgnoresOutline, hyperglotCodePointSet, supportedCoverage } from '../shared/language-coverage.ts'
 import { FONT_EXTENSIONS, WEB_FONT_EXTENSIONS, type FontAxisInfo, type FontFaceInfo, type NamedInstanceInfo } from './types.ts'
 
 export function isFontFile(filePath: string): boolean {
@@ -220,6 +221,11 @@ export type ParseFontOptions = {
    * `previewSample` in a second pass without reopening the file.
    */
   previewSample?: boolean
+  /**
+   * When false, skip language coverage. The system-font scan does not store it.
+   * Catalog parses keep the default, which records supported languages on each face.
+   */
+  coverage?: boolean
 }
 
 export type FontParseSession = {
@@ -243,6 +249,7 @@ export function beginParseFontFile(filePath: string, options?: ParseFontOptions)
       const font = isCollection(opened) ? opened.fonts[0] : opened
       parsed.previewSample = previewSampleFromFont(font)
       if (options?.previewMeta) Object.assign(parsed, previewMetaFromFont(font))
+      if (options?.coverage !== false) attachLanguageCoverage(parsed, opened)
       return parsed
     },
   }
@@ -308,25 +315,81 @@ export function applyParsedFont(
   if (parsed.previewSample) target.previewSample = parsed.previewSample
 }
 
+function glyphDraws(font: Font, code: number): boolean {
+  const glyph = font.glyphForCodePoint(code)
+  if (!glyph || glyph.id === 0 || glyph.name === '.notdef') return false
+  // cbox includes the advance of an empty trial glyph. Only a real outline counts.
+  const commands = glyph.path.commands
+  return commands.some(
+    (command) =>
+      command.command === 'lineTo' ||
+      command.command === 'quadraticCurveTo' ||
+      command.command === 'bezierCurveTo',
+  )
+}
+
+/**
+ * Code points Hyperglot asks about that this font covers. Letters need an
+ * outline. A space, joiner, virama, or other non-drawing character counts
+ * when the font maps it, matching Cicero's `EmptyGlyphs.drawn`.
+ */
+function drawingCodePoints(font: Font): Set<number> {
+  const universe = hyperglotCodePointSet()
+  const present = new Set<number>()
+  const cmap = font.characterSet
+  if (!Array.isArray(cmap)) return present
+  for (const code of cmap) {
+    if (!Number.isInteger(code) || !universe.has(code)) continue
+    if (coverageIgnoresOutline(code)) {
+      present.add(code)
+      continue
+    }
+    try {
+      if (glyphDraws(font, code)) present.add(code)
+    } catch {
+      // A glyph that cannot be read does not count as covered.
+    }
+  }
+  return present
+}
+
+function attachLanguageCoverage(parsed: ParsedFont, opened: Font | FontCollection): void {
+  const fonts = isCollection(opened) ? opened.fonts : [opened]
+  parsed.faces.forEach((face, index) => {
+    const font = fonts[index]
+    if (!font) {
+      face.languages = []
+      face.scripts = []
+      return
+    }
+    const coverage = supportedCoverage(drawingCodePoints(font))
+    face.languages = coverage.languages
+    face.scripts = coverage.scripts
+  })
+}
+
 function parseOpened(opened: Font | FontCollection, format: string, options?: ParseFontOptions): ParsedFont {
   const preview = options?.previewMeta
   const wantSample = options?.previewSample !== false
-  if (isCollection(opened)) {
-    const first = opened.fonts[0]
-    return {
-      format: format || 'ttc',
-      faces: opened.fonts.map((font) => faceFromFont(font)),
-      ...(wantSample ? { previewSample: previewSampleFromFont(first) } : {}),
-      ...(preview && wantSample ? previewMetaFromFont(first) : {}),
-    }
-  }
-  const detected = opened.type?.toLowerCase()
-  return {
-    format: detected === 'woff' || detected === 'woff2' ? detected : format || 'ttf',
-    faces: [faceFromFont(opened)],
-    ...(wantSample ? { previewSample: previewSampleFromFont(opened) } : {}),
-    ...(preview && wantSample ? previewMetaFromFont(opened) : {}),
-  }
+  const wantCoverage = wantSample && options?.coverage !== false
+  const parsed: ParsedFont = isCollection(opened)
+    ? {
+        format: format || 'ttc',
+        faces: opened.fonts.map((font) => faceFromFont(font)),
+        ...(wantSample ? { previewSample: previewSampleFromFont(opened.fonts[0]) } : {}),
+        ...(preview && wantSample ? previewMetaFromFont(opened.fonts[0]) : {}),
+      }
+    : {
+        format:
+          opened.type?.toLowerCase() === 'woff' || opened.type?.toLowerCase() === 'woff2'
+            ? opened.type.toLowerCase()
+            : format || 'ttf',
+        faces: [faceFromFont(opened)],
+        ...(wantSample ? { previewSample: previewSampleFromFont(opened) } : {}),
+        ...(preview && wantSample ? previewMetaFromFont(opened) : {}),
+      }
+  if (wantCoverage) attachLanguageCoverage(parsed, opened)
+  return parsed
 }
 
 function previewMetaFromFont(font?: Font): Pick<ParsedFont, 'axes' | 'namedInstances' | 'features' | 'characterSet'> {

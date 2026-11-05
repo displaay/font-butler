@@ -58,6 +58,8 @@ test('readLibraryFilters keeps valid chips and ignores junk', () => {
   assert.deepEqual(readLibraryFilters(), [])
   stored.set(LIBRARY_FILTERS_KEY, JSON.stringify(['installed', 'nope', 'source']))
   assert.deepEqual(readLibraryFilters(), ['installed', 'source'])
+  stored.set(LIBRARY_FILTERS_KEY, JSON.stringify(['language:ces', 'language:nope', 'script:Cyrillic']))
+  assert.deepEqual(readLibraryFilters(), ['language:ces', 'script:Cyrillic'])
   stored.set(LIBRARY_FILTERS_KEY, '{')
   assert.deepEqual(readLibraryFilters(), [])
   stored.set(LIBRARY_FILTERS_KEY, JSON.stringify({ installed: true }))
