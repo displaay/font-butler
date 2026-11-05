@@ -37,7 +37,7 @@ function ShowSwitch({
         event.stopPropagation()
       }}
       onClick={() => onCheckedChange(!checked)}
-      className="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md text-xs text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="shrink-0 cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <span
         aria-hidden
@@ -53,7 +53,6 @@ function ShowSwitch({
           )}
         />
       </span>
-      Show
     </button>
   )
 }

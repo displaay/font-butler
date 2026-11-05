@@ -127,7 +127,7 @@ test('Edit filters show controls are switches that hide and show a group', async
   assert.equal(switches().length, initial.length)
   assert.equal(status!.getAttribute('aria-checked'), 'true')
   assert.equal(classification!.getAttribute('aria-checked'), 'false')
-  assert.match(status!.textContent ?? '', /Show/)
+  assert.equal((status!.textContent ?? '').trim(), '')
 
   await React.act(async () => {
     status!.click()
