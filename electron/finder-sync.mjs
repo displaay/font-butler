@@ -401,6 +401,19 @@ export function claimSameExecutableInstance({ lockPath, pid, isAlive, io } = {})
   }
 }
 
+/**
+ * `quit`: this executable is already running.
+ * `socket`: another install holds the shared userData lock. Open this
+ * bundle's Finder Sync socket and do not start the backend that writes
+ * the catalog.
+ * `app`: this process owns the library.
+ */
+export function sharedLibraryLaunchMode({ sameExecutableHeld = false, sharedLockHeld = false } = {}) {
+  if (!sameExecutableHeld) return 'quit'
+  if (sharedLockHeld) return 'socket'
+  return 'app'
+}
+
 /** Drop the claim only when this pid still owns the file. */
 export function releaseSameExecutableInstance({ lockPath, pid, io } = {}) {
   const readFileSync = io?.readFileSync

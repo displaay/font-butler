@@ -1,4 +1,5 @@
 import Cocoa
+import Darwin
 import FinderSync
 
 /// Finder Sync extension for Font Buttler.
@@ -26,16 +27,30 @@ private let fontExtensions: Set<String> = ["otf", "ttf", "ttc", "otc", "woff", "
 private let finderSyncMissingApp = "Font Buttler couldn't be found. Open it once from its new location."
 private let finderSyncAgentDisabled = "Turn on Font Buttler in Login Items. Until then, use Services (right-click > Services > Install)."
 
+/// In this sandboxed appex, FileManager's current-user home is the container
+/// (`~/Library/Containers/<appex-id>/Data`), so Desktop, Documents, and
+/// Downloads would sit outside the menu. `pw_dir` is the real home.
+/// A container path is ignored. Shared and /Volumes stay absolute.
+private func finderSyncHomeDirectory() -> URL? {
+    guard let entry = getpwuid(getuid()), let dir = entry.pointee.pw_dir else { return nil }
+    let path = String(cString: dir)
+    if path.isEmpty || path.contains("/Library/Containers/") { return nil }
+    return URL(fileURLWithPath: path, isDirectory: true)
+}
+
 @objc(FontButtlerFinderSync)
 final class FontButtlerFinderSync: FIFinderSync {
     private let handoffQueue = DispatchQueue(label: "app.fontbutler.desktop.FinderSync.handoff")
 
     override init() {
         super.init()
-        let home = FileManager.default.homeDirectoryForCurrentUser
         let shared = URL(fileURLWithPath: "/Users/Shared", isDirectory: true)
         let volumes = URL(fileURLWithPath: "/Volumes", isDirectory: true)
-        FIFinderSyncController.default().directoryURLs = [home, shared, volumes]
+        var monitored = [shared, volumes]
+        if let home = finderSyncHomeDirectory() {
+            monitored.insert(home, at: 0)
+        }
+        FIFinderSyncController.default().directoryURLs = Set(monitored)
     }
 
     override func menu(for menuKind: FIMenuKind) -> NSMenu? {

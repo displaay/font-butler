@@ -107,6 +107,7 @@ import {
   claimSameExecutableInstance,
   releaseSameExecutableInstance,
   sameExecutableLockPath,
+  sharedLibraryLaunchMode,
   readFinderSyncAgentRecord,
   readFinderSyncPendingErrorFile,
   readFinderSyncPendingErrors,
@@ -604,7 +605,10 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   const validator = readRepo('electron/finder-sync.mjs')
   assert.match(swift, /fileURLWithPath: "\/Volumes"/)
   assert.match(swift, /fileURLWithPath: "\/Users\/Shared"/)
-  assert.match(swift, /homeDirectoryForCurrentUser/)
+  assert.match(swift, /getpwuid\(getuid\(\)\)/)
+  assert.match(swift, /pw_dir/)
+  assert.match(swift, /Library\/Containers/)
+  assert.doesNotMatch(swift, /homeDirectoryForCurrentUser/)
   assert.doesNotMatch(swift, /fileURLWithPath: "\/Library\/Fonts"/)
   assert.doesNotMatch(swift, /Group Containers/)
   assert.match(swift, /contextualMenuForItems/)
@@ -1262,8 +1266,20 @@ test('the handoff finds Cuttler.app and the zip Font Buttler.app that contain th
   assert.match(agent, /kForwardAfterSpawnSeconds = 20/)
   const mainSource = readRepo('electron/main.mjs')
   assert.match(mainSource, /claimSameExecutableInstance/)
-  assert.match(mainSource, /if \(!instance\.held\)/)
+  assert.match(mainSource, /sharedLibraryLaunchMode/)
+  assert.match(mainSource, /launchMode === 'quit'/)
+  assert.match(mainSource, /launchMode === 'socket'/)
+  assert.match(mainSource, /acceptInstalls: false/)
+  const socketBranch = mainSource.slice(
+    mainSource.indexOf("launchMode === 'socket'"),
+    mainSource.indexOf('app.on(\'will-finish-launching\''),
+  )
+  assert.match(socketBranch, /registerFinderSyncReceiver/)
+  assert.doesNotMatch(socketBranch, /bootstrapApi/)
   assert.doesNotMatch(mainSource.slice(mainSource.indexOf('const instance = claimSameExecutableInstance')), /if \(!gotLock\) \{\s*app\.quit\(\)/)
+  assert.equal(sharedLibraryLaunchMode({ sameExecutableHeld: false, sharedLockHeld: true }), 'quit')
+  assert.equal(sharedLibraryLaunchMode({ sameExecutableHeld: true, sharedLockHeld: true }), 'socket')
+  assert.equal(sharedLibraryLaunchMode({ sameExecutableHeld: true, sharedLockHeld: false }), 'app')
   const lockDir = mkdtempSync(path.join(tmpdir(), 'font-butler-instance-'))
   try {
     const releaseExe = path.join(lockDir, 'release', 'Cuttler.app', 'Contents', 'MacOS', 'Cuttler')

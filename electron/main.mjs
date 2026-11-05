@@ -64,6 +64,7 @@ import {
   claimSameExecutableInstance,
   releaseSameExecutableInstance,
   sameExecutableLockPath,
+  sharedLibraryLaunchMode,
   routeFinderSyncError,
   refreshFinderSyncRegistration,
   revalidateFinderSyncHandles,
@@ -1240,12 +1241,15 @@ function reportFinderSyncAgentStatus() {
   app.exit(line.includes('"status":"enabled"') ? 0 : 1)
 }
 
-function registerFinderSyncReceiver({ surface = false } = {}) {
+function registerFinderSyncReceiver({ surface = false, acceptInstalls = true } = {}) {
   if (process.platform !== 'darwin') return false
   const addon = loadFinderSyncReceiver()
   if (!addon) return false
   try {
     addon.register((payload) => {
+      // The other install owns userData. The socket still answers so the
+      // Mac check can hand off, and this process does not import or save.
+      if (!acceptInstalls) return
       const userError = typeof payload?.error === 'string' ? payload.error.trim() : ''
       if (userError) {
         presentFinderSyncUserError(userError)
@@ -2345,8 +2349,9 @@ if (process.argv.includes('--finder-sync-agent-status')) {
   })
 } else {
 // Electron's lock follows userData, which Cuttler and the installed Font
-// Buttler.app share. A Mac check against release/mac-arm64/Cuttler.app must
-// still start that binary. A second process of the same executable quits.
+// Buttler.app share. A second copy of the same executable quits. A different
+// path keeps the Finder Sync socket up for this bundle and does not start
+// the backend, so the two processes do not both call saveCatalog.
 const instanceLockPath = sameExecutableLockPath(process.execPath, path.join(app.getPath('temp'), 'font-butler-instance'))
 const instance = claimSameExecutableInstance({
   lockPath: instanceLockPath,
@@ -2369,8 +2374,14 @@ if (instance.held) {
   process.on('exit', releaseInstance)
 }
 const gotLock = app.requestSingleInstanceLock()
-if (!instance.held) {
+const launchMode = sharedLibraryLaunchMode({
+  sameExecutableHeld: instance.held,
+  sharedLockHeld: !gotLock,
+})
+if (launchMode === 'quit') {
   app.quit()
+} else if (launchMode === 'socket') {
+  registerFinderSyncReceiver({ surface: false, acceptInstalls: false })
 } else {
   app.on('will-finish-launching', () => {
     registerNativeFinderServices()
