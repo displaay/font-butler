@@ -69,15 +69,29 @@ export function libraryListRowHeightPx(rootFontSize: number, extraLines = 0): nu
   return Math.ceil(Math.max(preview, text) + padY + 2)
 }
 
+export function libraryTextRowHeightPx(
+  previewSize: number,
+  rootFontSize: number,
+  extraLines = 0,
+  sampleLines = 1,
+): number {
+  const headerPad = 0.625 * 2 * rootFontSize
+  const headerText = (1.25 + extraLines * 1.225) * rootFontSize
+  const samplePad = 0.75 * 2 * rootFontSize
+  const sample = Math.max(1, sampleLines) * previewSize * 1.2 * rootFontSize
+  return Math.ceil(headerPad + headerText + samplePad + sample + 3)
+}
+
 export function libraryRowHeightPx(
   layout: ViewLayout,
   previewSize: number,
   rootFontSize: number,
   extraLines = 0,
+  sampleLines = 1,
 ): number {
-  return layout === 'grid'
-    ? libraryGridRowHeightPx(previewSize, rootFontSize, extraLines)
-    : libraryListRowHeightPx(rootFontSize, extraLines)
+  if (layout === 'grid') return libraryGridRowHeightPx(previewSize, rootFontSize, extraLines)
+  if (layout === 'text') return libraryTextRowHeightPx(previewSize, rootFontSize, extraLines, sampleLines)
+  return libraryListRowHeightPx(rootFontSize, extraLines)
 }
 
 export function libraryRowStride(rowHeight: number, gap: number): number {
@@ -243,6 +257,7 @@ export function libraryWindowMetrics(options: {
   previewSize: number
   rootFontSize: number
   extraLines?: number
+  sampleLines?: number
   scrollTop: number
   viewportHeight: number
   overscanRows?: number
@@ -250,12 +265,15 @@ export function libraryWindowMetrics(options: {
 }): LibraryWindowMetrics {
   const gap = libraryGapPx(options.layout, options.rootFontSize)
   const columns =
-    options.layout === 'list' ? 1 : libraryGridColumns(options.width, options.minCardWidth, gap)
+    options.layout === 'grid'
+      ? libraryGridColumns(options.width, options.minCardWidth, gap)
+      : 1
   const rowHeight = libraryRowHeightPx(
     options.layout,
     options.previewSize,
     options.rootFontSize,
     options.extraLines ?? 0,
+    options.sampleLines ?? 1,
   )
   const columnWidth =
     columns <= 1 ? Math.max(0, options.width) : (Math.max(0, options.width) - gap * (columns - 1)) / columns

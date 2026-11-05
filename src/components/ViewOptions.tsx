@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowDownAZ, CalendarPlus, Ellipsis, LayoutGrid, List } from 'lucide-react'
+import { ArrowDownAZ, CalendarPlus, Ellipsis, LayoutGrid, List, Type } from 'lucide-react'
+import { SampleLanguageMenu } from '@/components/SampleLanguageMenu'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import type { SortMode, ViewLayout } from '@/lib/types'
@@ -13,6 +14,12 @@ export const GRID_PREVIEW_SIZE_DEFAULT = 4.25
 export const GRID_PREVIEW_SIZE_STEP = 0.25
 
 export { gridCardMinWidthRem }
+
+export function readStoredViewLayout(): ViewLayout {
+  const stored = localStorage.getItem('font-butler-view-layout')
+  if (stored === 'grid' || stored === 'list' || stored === 'text') return stored
+  return 'list'
+}
 
 export function readGridPreviewSize(): number {
   const raw = localStorage.getItem(GRID_PREVIEW_SIZE_KEY)
@@ -41,6 +48,8 @@ export function ViewOptions({
   onHideFormatsChange,
   previewSize,
   onPreviewSizeChange,
+  sampleLanguage,
+  onSampleLanguageChange,
   className,
 }: {
   layout: ViewLayout
@@ -60,6 +69,8 @@ export function ViewOptions({
   onHideFormatsChange: (value: boolean) => void
   previewSize: number
   onPreviewSizeChange: (size: number) => void
+  sampleLanguage: string
+  onSampleLanguageChange: (id: string) => void
   className?: string
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -108,8 +119,19 @@ export function ViewOptions({
           >
             <List className="size-3.5 text-muted-foreground" />
           </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className={cn('h-7 w-7 px-0', layout === 'text' && 'bg-muted')}
+            onClick={() => onLayoutChange('text')}
+            aria-label="Text view"
+            aria-pressed={layout === 'text'}
+          >
+            <Type className="size-3.5 text-muted-foreground" />
+          </Button>
         </div>
-        {layout === 'grid' && (
+        {(layout === 'grid' || layout === 'text') && (
           <label className={cn('flex items-center gap-2 rounded-md border bg-background px-2.5', CONTROL_H)}>
             <span className="select-none text-[10px] leading-none text-muted-foreground" aria-hidden>
               A
@@ -128,6 +150,9 @@ export function ViewOptions({
               A
             </span>
           </label>
+        )}
+        {layout === 'text' && (
+          <SampleLanguageMenu languageId={sampleLanguage} onLanguageChange={onSampleLanguageChange} />
         )}
       </div>
       <div data-keep-selection="" className="flex flex-wrap items-center gap-2">

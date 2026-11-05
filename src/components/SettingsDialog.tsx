@@ -656,7 +656,7 @@ function GeneralPane({
         </SettingsRow>
         <SettingsRow
           label="Default view"
-          description="List or grid when you open the library."
+          description="List, grid, or text when you open the library."
           htmlFor="default-view"
         >
           <select
@@ -670,6 +670,7 @@ function GeneralPane({
           >
             <option value="list">List</option>
             <option value="grid">Grid</option>
+            <option value="text">Text</option>
           </select>
         </SettingsRow>
         <SettingsRow

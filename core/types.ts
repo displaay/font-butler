@@ -215,7 +215,7 @@ export type Notice = {
   resetId?: string
 }
 
-export type ViewLayout = 'list' | 'grid'
+export type ViewLayout = 'list' | 'grid' | 'text'
 
 export type SortMode = 'name' | 'added'
 

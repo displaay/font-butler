@@ -46,6 +46,7 @@ function fallbackWindow(
   layout: ViewLayout,
   previewSize: number,
   extraLines: number,
+  sampleLines: number,
 ): LibraryWindowMetrics {
   return libraryWindowMetrics({
     count,
@@ -55,6 +56,7 @@ function fallbackWindow(
     previewSize,
     rootFontSize: 16,
     extraLines,
+    sampleLines,
     scrollTop: 0,
     viewportHeight: LIBRARY_WINDOW_FALLBACK_HEIGHT,
   })
@@ -66,6 +68,7 @@ export function useLibraryWindow(options: {
   layout: ViewLayout
   previewSize: number
   extraLines?: number
+  sampleLines?: number
   viewportRef: RefObject<HTMLElement | null>
   gridRef: RefObject<HTMLElement | null>
   enabled?: boolean
@@ -81,13 +84,14 @@ export function useLibraryWindow(options: {
     layout,
     previewSize,
     extraLines = 0,
+    sampleLines = 1,
     viewportRef,
     gridRef,
     enabled = true,
     frozen = false,
   } = options
   const [measured, setMeasured] = useState<LibraryWindowMetrics>(() =>
-    fallbackWindow(count, layout, previewSize, extraLines),
+    fallbackWindow(count, layout, previewSize, extraLines, sampleLines),
   )
   const metrics = enabled ? measured : EMPTY_WINDOW
   const layoutRef = useRef<LibraryWindowLayout>({
@@ -126,7 +130,7 @@ export function useLibraryWindow(options: {
       const rootFontSize = readRootFontSize(refreshRoot)
       const minCardWidth = gridCardMinWidthRem(previewSize) * rootFontSize
       const gridOffsetTop = contentOffsetTop(gridNode, viewportNode)
-      const estimatedRowHeight = libraryRowHeightPx(layout, previewSize, rootFontSize, extraLines)
+      const estimatedRowHeight = libraryRowHeightPx(layout, previewSize, rootFontSize, extraLines, sampleLines)
       let itemHeights: number[] | undefined
       if (itemKeys && itemKeys.length === count) {
         const measuredHeights = new Map<string, number>()
@@ -147,6 +151,7 @@ export function useLibraryWindow(options: {
         previewSize,
         rootFontSize,
         extraLines,
+        sampleLines,
         scrollTop: Math.max(0, viewportNode.scrollTop - gridOffsetTop),
         viewportHeight: height,
         overscanRows: LIBRARY_OVERSCAN_ROWS,
@@ -187,7 +192,7 @@ export function useLibraryWindow(options: {
       observer.disconnect()
       viewport.removeEventListener('scroll', onScroll)
     }
-  }, [count, enabled, extraLines, frozen, itemKeys, layout, previewSize, gridRef, viewportRef])
+  }, [count, enabled, extraLines, sampleLines, frozen, itemKeys, layout, previewSize, gridRef, viewportRef])
 
   const gridStyle = useMemo<CSSProperties>(() => {
     const columns =

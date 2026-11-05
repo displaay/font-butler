@@ -139,6 +139,32 @@ test('libraryWindowMetrics pads off-screen rows instead of mounting them', () =>
   })
   assert.equal(list.columns, 1)
   assert.ok(list.end < 200)
+  const text = libraryWindowMetrics({
+    count: 40,
+    layout: 'text',
+    width: 960,
+    minCardWidth: 180,
+    previewSize: 4.25,
+    rootFontSize: 16,
+    sampleLines: 2,
+    scrollTop: 0,
+    viewportHeight: 640,
+    overscanRows: 2,
+  })
+  assert.equal(text.columns, 1)
+  assert.equal(text.columnWidth, 960)
+  const larger = libraryWindowMetrics({
+    count: 40,
+    layout: 'text',
+    width: 960,
+    minCardWidth: 180,
+    previewSize: 6.5,
+    rootFontSize: 16,
+    sampleLines: 4,
+    scrollTop: 0,
+    viewportHeight: 640,
+  })
+  assert.ok(larger.rowHeight > text.rowHeight)
 })
 
 test('catalogEntriesForPreviewCss is bounded by the mounted window, not catalog size', () => {

@@ -5,6 +5,7 @@ import { NameWithFormatTags } from '@/components/Badges'
 import { SystemMenuItems } from '@/components/BatchActions'
 import { SystemCardActions } from '@/components/FontCardActions'
 import { systemFontFamily } from '@/components/FontFaceStyles'
+import { TextSampleField } from '@/components/TextSampleField'
 import { InstanceList } from '@/components/InstanceList'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -20,6 +21,7 @@ import { systemInstanceRows } from '@/lib/instances'
 import type { SystemFamilyGroup, ViewLayout } from '@/lib/types'
 import { useCardActionChrome } from '@/hooks/useCardActionChrome'
 import { pendingPreviewSample } from '@/lib/previewSample'
+import { DEFAULT_TEXT_PREVIEW } from '@/lib/textPreview'
 import { cardPreviewFromRequest, previewRequestActive, type PreviewRequest } from '../../shared/library-search.ts'
 import { cn } from '@/lib/utils'
 
@@ -27,6 +29,9 @@ export const SystemCard = memo(function SystemCard({
   group,
   layout,
   previewSize,
+  sampleText = DEFAULT_TEXT_PREVIEW,
+  sampleLanguage = 'en',
+  onSampleTextChange,
   showSourcePath,
   showInstanceCounts = false,
   hideFormats = false,
@@ -43,6 +48,9 @@ export const SystemCard = memo(function SystemCard({
   group: SystemFamilyGroup
   layout: ViewLayout
   previewSize: number
+  sampleText?: string
+  sampleLanguage?: string
+  onSampleTextChange?: (value: string) => void
   showSourcePath?: boolean
   showInstanceCounts?: boolean
   hideFormats?: boolean
@@ -61,7 +69,7 @@ export const SystemCard = memo(function SystemCard({
   const skipNextClick = useRef(false)
   const face = group.faces[0]
   const instances = useMemo(() => systemInstanceRows(group), [group])
-  const showInstances = instances.length > 0 && layout === 'list'
+  const showInstances = instances.length > 0 && layout !== 'grid'
   const previewFamily = systemFontFamily(face.path)
   const previewSample = pendingPreviewSample(face.previewSample)
   const previewFaces = useMemo(
@@ -167,7 +175,53 @@ export const SystemCard = memo(function SystemCard({
           )}
           {...cardChrome}
         >
-          {layout === 'grid' ? (
+          {layout === 'text' ? (
+            <>
+              <div className="flex items-stretch border-b border-border/80">
+                <button
+                  type="button"
+                  onClick={handleCardClick}
+                  onContextMenu={skipClickAfterContextMenu}
+                  onDoubleClick={onInspect}
+                  className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left"
+                >
+                  <div className="min-w-0 flex-1">{metadata}</div>
+                </button>
+                {showInstances && (
+                  <button
+                    type="button"
+                    data-no-marquee=""
+                    aria-expanded={expanded}
+                    aria-label={expanded ? 'Hide instances' : 'Show instances'}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      setExpanded((value) => !value)
+                    }}
+                    className="flex w-10 shrink-0 items-center justify-center text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                  >
+                    <ChevronDown
+                      className={cn('size-4 transition-transform', expanded && 'rotate-180')}
+                    />
+                  </button>
+                )}
+              </div>
+              <div className="min-w-0">
+                <TextSampleField
+                  label={group.familyName}
+                  lang={sampleLanguage}
+                  family={previewFamily}
+                  weight={lockedPreview?.weight ?? face.weight}
+                  italic={lockedPreview?.italic ?? face.italic}
+                  variation={lockedPreview?.variation}
+                  featureSettings={lockedPreview?.featureSettings}
+                  size={previewSize}
+                  value={sampleText}
+                  onChange={(value) => onSampleTextChange?.(value)}
+                />
+              </div>
+              {expanded && showInstances && <InstanceList rows={instances} />}
+            </>
+          ) : layout === 'grid' ? (
             <PreviewRetryBoundary>
               <button
                 type="button"
@@ -235,7 +289,7 @@ export const SystemCard = memo(function SystemCard({
               writable={group.writable}
               busy={busy}
               visible={selected || actionsVisible}
-              offset={layout === 'list' && showInstances}
+              offset={showInstances}
               onDeactivate={onDeactivate}
               onUninstall={onUninstall}
             />
@@ -262,6 +316,8 @@ export const SystemCard = memo(function SystemCard({
   prev.busy === next.busy &&
   prev.layout === next.layout &&
   prev.previewSize === next.previewSize &&
+  prev.sampleText === next.sampleText &&
+  prev.sampleLanguage === next.sampleLanguage &&
   prev.showSourcePath === next.showSourcePath &&
   prev.showInstanceCounts === next.showInstanceCounts &&
   prev.hideFormats === next.hideFormats &&

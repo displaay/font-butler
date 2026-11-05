@@ -136,6 +136,16 @@ test('loadSettings keeps a stored installAfterUpload false', () => {
   }
 })
 
+test('loadSettings keeps the text library view', () => {
+  const paths = tempPaths()
+  try {
+    saveSettings(paths, sampleSettings({ defaultView: 'text' }))
+    assert.equal(loadSettings(paths).defaultView, 'text')
+  } finally {
+    fs.rmSync(paths.dataRoot, { recursive: true, force: true })
+  }
+})
+
 test('loadSettings fills installAfterUpload on older settings files', () => {
   const paths = tempPaths()
   try {

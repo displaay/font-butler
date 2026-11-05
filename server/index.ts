@@ -297,7 +297,7 @@ app.post('/api/destinations/adobe', async (c) => {
 app.post('/api/settings', async (c) => {
   const body = await c.req.json<{
     watchFolders?: string[]
-    defaultView?: 'list' | 'grid'
+    defaultView?: 'list' | 'grid' | 'text'
     defaultSort?: 'name' | 'added' | 'installed'
     installAfterUpload?: boolean
     installWatchFolderFonts?: boolean
