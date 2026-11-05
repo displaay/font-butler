@@ -40,6 +40,8 @@ export const SystemCard = memo(function SystemCard({
   onReveal,
   onUninstall,
   onDeactivate,
+  onActivateFamily,
+  onDeactivateFamily,
   previewRequest = null,
 }: {
   group: SystemFamilyGroup
@@ -56,6 +58,9 @@ export const SystemCard = memo(function SystemCard({
   onReveal: () => void
   onUninstall: () => void
   onDeactivate: () => void
+  /** This family only. The context menu keeps the selection-wide onDeactivate. */
+  onActivateFamily: () => void
+  onDeactivateFamily: () => void
   previewRequest?: PreviewRequest | null
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -110,7 +115,8 @@ export const SystemCard = memo(function SystemCard({
   const muted = group.faces.length > 0 && group.faces.every((face) => face.deactivated)
   function toggleActivation() {
     if (!activation.enabled || busy) return
-    onDeactivate()
+    if (activation.position === 'on') onDeactivateFamily()
+    else onActivateFamily()
   }
 
   function handleCardClick(event: MouseEvent) {
@@ -170,12 +176,12 @@ export const SystemCard = memo(function SystemCard({
           className={cn(
             'group relative overflow-clip rounded-lg border transition-colors',
             selected ? '!border-foreground/20 bg-muted/60' : 'border-border/80 hover:bg-muted/40',
-            muted && '[&>:not([data-no-marquee])]:opacity-50',
+            muted && '[&>:not([data-no-marquee]):not([data-undimmed])]:opacity-50',
           )}
           {...cardChrome}
         >
           {layout === 'grid' ? (
-            <div data-no-marquee="">
+            <div data-undimmed="">
               <div className="flex items-start justify-end px-2.5 pt-3.5 pb-1.5">
                 <ActivationSwitch
                   position={activation.position}
@@ -207,7 +213,7 @@ export const SystemCard = memo(function SystemCard({
             </div>
           ) : (
             <>
-              <div data-no-marquee="" className="flex items-stretch">
+              <div data-undimmed="" className="flex items-stretch">
                 <div className={cn('flex min-w-0 flex-1 items-stretch', muted && 'opacity-50')}>
                   <PreviewRetryBoundary>
                     <button
@@ -246,7 +252,7 @@ export const SystemCard = memo(function SystemCard({
                     </button>
                   )}
                 </div>
-                <div className="flex items-center pr-2.5">
+                <div data-no-marquee="" className="flex items-center pr-2.5">
                   <ActivationSwitch
                     position={activation.position}
                     enabled={activation.enabled}

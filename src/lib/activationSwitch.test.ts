@@ -96,3 +96,29 @@ test('a writable Mac font switch can turn off', () => {
   assert.equal(model.enabled, true)
   assert.equal(model.help, 'Deactivate')
 })
+
+test('a parked writable Mac family can turn back on', () => {
+  const model = systemActivationSwitch({
+    protected: false,
+    writable: true,
+    faces: [
+      { deactivated: true, managedId: 'parked-regular' },
+      { deactivated: true, managedId: 'parked-bold' },
+    ],
+  })
+  assert.equal(model.position, 'off')
+  assert.equal(model.enabled, true)
+  assert.equal(model.help, 'Activate 2 styles')
+  assert.equal(model.accessibilityValue, 'Off')
+})
+
+test('a deactivated Mac family with no parked catalog id stays locked', () => {
+  const model = systemActivationSwitch({
+    protected: false,
+    writable: true,
+    faces: [{ deactivated: true }],
+  })
+  assert.equal(model.position, 'off')
+  assert.equal(model.enabled, false)
+  assert.equal(model.help, 'Deactivated')
+})

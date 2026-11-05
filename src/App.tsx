@@ -2824,6 +2824,29 @@ function AppShell() {
                                   setSystemFaces((await api.system()).faces)
                                 }, actionCopy('deactivate', group.familyName))
                           }
+                          onActivateFamily={() => {
+                            const ids = [
+                              ...new Set(
+                                group.faces.flatMap((face) =>
+                                  face.deactivated && face.managedId ? [face.managedId] : [],
+                                ),
+                              ),
+                            ]
+                            if (ids.length === 0) return
+                            void run(async () => {
+                              if (ids.length === 1) await api.activate(ids[0]!)
+                              else await api.activateMany(ids)
+                              setSystemFaces((await api.system()).faces)
+                            }, actionCopy('activate', group.familyName))
+                          }}
+                          onDeactivateFamily={() =>
+                            void run(async () => {
+                              for (const face of uniquePaths(group.faces.filter((item) => !item.deactivated))) {
+                                await api.deactivateSystem(face)
+                              }
+                              setSystemFaces((await api.system()).faces)
+                            }, actionCopy('deactivate', group.familyName))
+                          }
                         />
                         )
                       })
@@ -2945,6 +2968,10 @@ function AppShell() {
                           }
                           onActivate={() =>
                             useBatch ? void activateSelected() : void activateGroupGuarded(group)
+                          }
+                          onActivateFamily={() => void activateGroupGuarded(group)}
+                          onDeactivateFamily={() =>
+                            void run(() => deactivateGroup(group), actionCopy('deactivate', group.familyName))
                           }
                           onActivateUntilQuit={() =>
                             useBatch ? void activateUntilQuitSelected() : void activateUntilQuitGroup(group)

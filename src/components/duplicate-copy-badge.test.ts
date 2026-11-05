@@ -119,6 +119,8 @@ function libraryProps(group: FamilyGroup, layout: 'grid' | 'list') {
     onUninstallAndRemove: noop,
     onDeactivate: noop,
     onActivate: noop,
+    onActivateFamily: noop,
+    onDeactivateFamily: noop,
     onReveal: noop,
     onRevealSource: noop,
     onForget: noop,

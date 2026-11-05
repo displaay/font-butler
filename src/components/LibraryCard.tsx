@@ -77,6 +77,8 @@ export const LibraryCard = memo(function LibraryCard({
   onUninstallFromAdobe,
   onDeactivate,
   onActivate,
+  onActivateFamily,
+  onDeactivateFamily,
   onActivateUntilQuit,
   onSwitch,
   onFormatSwap,
@@ -146,6 +148,9 @@ export const LibraryCard = memo(function LibraryCard({
   onUninstallFromAdobe?: () => void
   onDeactivate: () => void
   onActivate: () => void
+  /** This family only. Menus keep the selection-wide onActivate / onDeactivate. */
+  onActivateFamily: () => void
+  onDeactivateFamily: () => void
   onActivateUntilQuit: () => void
   onSwitch?: () => void
   onFormatSwap?: () => void
@@ -249,8 +254,8 @@ export const LibraryCard = memo(function LibraryCard({
   const activation = catalogActivationSwitch(group, cardPlan)
   function toggleActivation() {
     if (!activation.enabled || busy) return
-    if (activation.position === 'on') onDeactivate()
-    else onActivate()
+    if (activation.position === 'on') onDeactivateFamily()
+    else onActivateFamily()
   }
   const inCurrentProject = Boolean(
     projectFilter && group.entries.some((entry) =>
@@ -385,13 +390,13 @@ export const LibraryCard = memo(function LibraryCard({
         className={cn(
           'group relative overflow-clip rounded-lg border transition-colors',
             selected ? '!border-foreground/20 bg-muted/60' : 'border-border/80 hover:bg-muted/40',
-          muted && '[&>:not([data-no-marquee])]:opacity-50',
+          muted && '[&>:not([data-no-marquee]):not([data-undimmed])]:opacity-50',
         )}
         {...cardChrome}
       >
         {layout === 'grid' ? (
           <ContextMenuTrigger asChild>
-            <div data-no-marquee="">
+            <div data-undimmed="">
               <div className="flex items-start gap-1 px-2.5 pt-3.5 pb-1.5">
                 <button
                   type="button"
@@ -460,7 +465,7 @@ export const LibraryCard = memo(function LibraryCard({
         ) : (
           <>
             <ContextMenuTrigger asChild>
-              <div data-no-marquee="" className="flex items-stretch">
+              <div data-undimmed="" className="flex items-stretch">
                 <div className={cn('flex min-w-0 flex-1 items-stretch', muted && 'opacity-50')}>
                   <PreviewRetryBoundary>
                     <button
@@ -511,7 +516,7 @@ export const LibraryCard = memo(function LibraryCard({
                   )}
                 </div>
                 {!uninstallOnly ? (
-                  <div className="flex items-center pr-2.5">
+                  <div data-no-marquee="" className="flex items-center pr-2.5">
                     <ActivationSwitch
                       position={activation.position}
                       enabled={activation.enabled}

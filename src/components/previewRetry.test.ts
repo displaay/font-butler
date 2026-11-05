@@ -247,6 +247,8 @@ function libraryProps(group: FamilyGroup, layout: 'grid' | 'list', onSelect: () 
     onUninstallAndRemove: noop,
     onDeactivate: noop,
     onActivate: noop,
+    onActivateFamily: noop,
+    onDeactivateFamily: noop,
     onReveal: noop,
     onRevealSource: noop,
     onForget: noop,
@@ -317,6 +319,8 @@ test('failed library, system, and instance cards keep Retry outside the card but
         onReveal: () => {},
         onUninstall: () => {},
         onDeactivate: () => {},
+        onActivateFamily: () => {},
+        onDeactivateFamily: () => {},
       }),
       createElement(SystemCard, {
         group: system,
@@ -330,6 +334,8 @@ test('failed library, system, and instance cards keep Retry outside the card but
         onReveal: () => {},
         onUninstall: () => {},
         onDeactivate: () => {},
+        onActivateFamily: () => {},
+        onDeactivateFamily: () => {},
       }),
       createElement(InstanceList, {
         rows: [

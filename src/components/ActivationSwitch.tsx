@@ -35,7 +35,7 @@ export function ActivationSwitch({
           data-position={position}
           disabled={!interactive}
           className={cn(
-            'cuttler-activation-switch relative shrink-0 rounded-full p-[1.5px] outline-none',
+            'cuttler-activation-switch relative shrink-0 rounded-full p-[1.5px]',
             'transition-opacity duration-150 ease-out',
             !interactive && 'cursor-default opacity-45',
           )}

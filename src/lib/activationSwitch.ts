@@ -50,7 +50,7 @@ export function catalogActivationSwitch(
 export function systemActivationSwitch(group: {
   protected: boolean
   writable: boolean
-  faces: ReadonlyArray<{ deactivated?: boolean }>
+  faces: ReadonlyArray<{ deactivated?: boolean; managedId?: string }>
 }): ActivationSwitchModel {
   const position: ActivationSwitchPosition = group.faces.some((face) => !face.deactivated) ? 'on' : 'off'
   if (group.protected || !group.writable) {
@@ -63,6 +63,17 @@ export function systemActivationSwitch(group: {
   }
   if (position === 'on') {
     return { position, enabled: true, help: 'Deactivate', accessibilityValue: 'On' }
+  }
+  const restorable = new Set(
+    group.faces.flatMap((face) => (face.deactivated && face.managedId ? [face.managedId] : [])),
+  )
+  if (restorable.size > 0) {
+    return {
+      position,
+      enabled: true,
+      help: restorable.size === 1 ? 'Activate' : `Activate ${restorable.size} styles`,
+      accessibilityValue: 'Off',
+    }
   }
   return { position, enabled: false, help: 'Deactivated', accessibilityValue: 'Off' }
 }
