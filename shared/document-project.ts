@@ -17,6 +17,8 @@ export type DocumentFontRow = {
 export type DocumentFontReport = {
   path: string
   kind: 'pdf' | 'idml' | 'docx' | 'pptx' | 'indd' | 'ai' | 'psd'
+  /** Names came from InDesign, not from a file on disk. */
+  live?: boolean
   fonts: DocumentFontRow[]
 }
 

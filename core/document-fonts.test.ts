@@ -279,6 +279,38 @@ test('photoshop text layers name the fonts a run uses, including a large documen
   }
 })
 
+test('a live InDesign font list is classified without a file', async () => {
+  const app = new Hono()
+  mountDocumentFontsRoute(app, () => [
+    catalogEntry({
+      id: 'regular',
+      postscriptName: 'Family-Regular',
+      familyName: 'Family',
+      styleName: 'Regular',
+      status: 'deactivated',
+    }),
+  ])
+  const response = await app.request('/api/documents/fonts', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      fonts: [
+        { postscriptName: 'Family-Regular', familyName: 'Family', styleName: '' },
+        { postscriptName: 'Missing-Face', familyName: 'Missing', styleName: 'Regular' },
+      ],
+    }),
+  })
+  assert.equal(response.status, 200)
+  const body = (await response.json()) as DocumentFontReport
+  assert.equal(body.kind, 'indd')
+  assert.equal(body.live, true)
+  assert.equal(body.path, 'InDesign')
+  assert.equal(body.fonts[0]?.status, 'in-library-off')
+  assert.equal(body.fonts[0]?.assetId, 'regular')
+  assert.equal(body.fonts[0]?.styleName, '')
+  assert.equal(body.fonts[1]?.status, 'missing')
+})
+
 test('a lowercase plus tag is not a subset prefix, and an active duplicate wins', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-doc-prefix-'))
   try {

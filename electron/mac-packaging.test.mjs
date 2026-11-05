@@ -925,6 +925,7 @@ test('publish requires the remote tag commit to equal HEAD and a clean tree', as
     'electron/font-analysis-worker.mjs',
     'electron/finder-services.node',
     'electron/session-fonts.node',
+    'electron/indesign-fonts.node',
     'electron/favicon-16.png',
     'electron/app-icons/classic.png',
     'vendor/python/bin/python3',

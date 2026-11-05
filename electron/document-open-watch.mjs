@@ -7,9 +7,9 @@ import { fileURLToPath } from 'node:url'
  * document font report; the sheet is the only result.
  *
  * Supported extensions match shared/document-project.ts.
- * An open InDesign, Illustrator, or Photoshop file is parsed from the file
- * Cicero reads (XMP, PDF plus XMP, or Photoshop text layers). The open-file
- * signal stays the macOS observer: lsof plus the app's recent-document list.
+ * An open Illustrator or Photoshop file is parsed from the file Cicero reads
+ * (PDF plus XMP, or Photoshop text layers). While InDesign is frontmost, the
+ * observer asks it for the fonts instead of reading the saved file.
  * Figma is not parsed.
  */
 
@@ -36,6 +36,11 @@ export function isWatchedDocumentBundle(bundleId) {
   const id = String(bundleId ?? '').trim().toLowerCase()
   if (!id) return false
   return WATCHED_BUNDLE_PREFIXES.some((prefix) => id === prefix || id.startsWith(`${prefix}.`))
+}
+
+export function isInDesignBundle(bundleId) {
+  const id = String(bundleId ?? '').trim().toLowerCase()
+  return id === 'com.adobe.indesign' || id.startsWith('com.adobe.indesign.')
 }
 
 export function normalizeOpenedPath(value) {
@@ -200,7 +205,7 @@ export function createDocumentOpenWatch({
   let active = enabled === true
   /** @type {Set<string>} */
   const presented = new Set()
-  /** @type {{ path: string, kind: 'parse' | 'note' } | null} */
+  /** @type {{ path: string, kind: 'parse' | 'note' | 'live', fonts?: { postscriptName: string, familyName: string, styleName: string }[] } | null} */
   let pending = null
   let cancelTimer = () => {}
 
@@ -209,6 +214,12 @@ export function createDocumentOpenWatch({
     pending = null
     cancelTimer = () => {}
     if (!active || !current) return
+    if (current.kind === 'live') {
+      const fonts = current.fonts ?? []
+      if (fonts.length === 0) return
+      onEffect?.({ action: 'live', fonts })
+      return
+    }
     if (presented.has(current.path)) return
     if (current.kind === 'note') {
       const message = unsupportedDocumentNote(current.path)
@@ -266,6 +277,18 @@ export function createDocumentOpenWatch({
       pending = { path: filePath, kind }
       arm()
     },
+    /**
+     * Fonts InDesign just named. The observer already skips an unchanged list.
+     * Coming back to the front sends the list again.
+     */
+    live(event) {
+      if (!active) return
+      if (!isInDesignBundle(event?.bundleId)) return
+      const fonts = Array.isArray(event?.fonts) ? event.fonts : []
+      if (fonts.length === 0) return
+      pending = { path: '', kind: 'live', fonts }
+      arm()
+    },
   }
 }
 
@@ -274,6 +297,11 @@ export function documentWatchIpc(effect) {
   if (!effect || effect.action === 'ignore') return null
   if (effect.action === 'sheet') {
     return { channel: 'open-document', payload: { path: effect.path } }
+  }
+  if (effect.action === 'live') {
+    const fonts = Array.isArray(effect.fonts) ? effect.fonts : []
+    if (fonts.length === 0) return null
+    return { channel: 'open-document', payload: { liveFonts: fonts, name: 'InDesign' } }
   }
   if (effect.action === 'note') {
     const message = typeof effect.message === 'string' ? effect.message.trim() : ''

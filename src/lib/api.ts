@@ -669,8 +669,15 @@ export const api = {
     }>(post('/api/repair', { ids, caches })),
   documentFonts: (filePath: string) =>
     json<DocumentFontReport>(post('/api/documents/fonts', { path: filePath })),
+  documentLiveFonts: (
+    fonts: readonly { postscriptName?: string; familyName?: string; styleName?: string }[],
+  ) => json<DocumentFontReport>(post('/api/documents/fonts', { fonts })),
   createDocumentProject: (name: string, filePath: string) =>
     json<{ project: ProjectSet }>(post('/api/documents/project', { name, path: filePath })),
+  createLiveDocumentProject: (
+    name: string,
+    fonts: readonly { postscriptName?: string; familyName?: string; styleName?: string }[],
+  ) => json<{ project: ProjectSet }>(post('/api/documents/project', { name, fonts })),
   projects: () => get<{ projects: ProjectSet[] }>('/api/projects'),
   createProject: (
     name: string,

@@ -781,6 +781,9 @@ function documentObserver() {
       onOpenedPath(event) {
         documentWatch().open(event)
       },
+      onInDesignFonts(event) {
+        documentWatch().live(event)
+      },
     })
   }
   return documentAppObserver

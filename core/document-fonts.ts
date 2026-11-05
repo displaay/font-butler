@@ -59,6 +59,8 @@ export type DocumentFontRequest = {
 export type DocumentFontReport = {
   path: string
   kind: 'pdf' | 'idml' | 'docx' | 'pptx' | 'indd' | 'ai' | 'psd'
+  /** Names came from InDesign, not from a file on disk. */
+  live?: boolean
   fonts: DocumentFontRequest[]
 }
 
@@ -99,6 +101,28 @@ export function reportDocumentFonts(
   return {
     path: resolved,
     kind,
+    fonts: matchFonts(requests, catalog),
+  }
+}
+
+/** Classify font names InDesign reported. There is no file to read. */
+export function reportNamedDocumentFonts(
+  fonts: readonly { postscriptName?: string; familyName?: string; styleName?: string }[],
+  entries: readonly CatalogEntry[] | (() => readonly CatalogEntry[]),
+): DocumentFontReport {
+  const requests: ParsedFont[] = []
+  for (const font of fonts) {
+    const postscriptName = String(font?.postscriptName ?? '').trim()
+    const familyName = String(font?.familyName ?? '').trim()
+    const styleName = String(font?.styleName ?? '').trim()
+    if (!postscriptName && !familyName) continue
+    requests.push({ postscriptName, familyName, styleName })
+  }
+  const catalog = typeof entries === 'function' ? entries() : entries
+  return {
+    path: 'InDesign',
+    kind: 'indd',
+    live: true,
     fonts: matchFonts(requests, catalog),
   }
 }

@@ -22,6 +22,12 @@ export async function afterPack(context) {
     if (!session.ok && !session.skipped) {
       console.warn('Session font addon was not compiled:', session.reason)
     }
+    const { compileIndesignFontsAddon } = await import('./build-indesign-fonts.mjs')
+    const indesignOut = path.join(appBundle, 'Contents/Resources/app.asar.unpacked/electron/indesign-fonts.node')
+    const indesign = compileIndesignFontsAddon({ out: indesignOut })
+    if (!indesign.ok && !indesign.skipped) {
+      console.warn('InDesign font addon was not compiled:', indesign.reason)
+    }
   }
   stripMacXattrs(appBundle)
 }

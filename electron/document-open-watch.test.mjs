@@ -6,7 +6,13 @@ import { test } from 'node:test'
 import { reportDocumentFonts } from '../core/document-fonts.ts'
 import { loadSettings } from '../core/settings.ts'
 import { withService } from '../core/test-util.ts'
-import { createDocumentAppObserver, recentDocumentPaths, recentFileMatchesBundle } from './document-app-watch.mjs'
+import {
+  INDESIGN_FONT_POLL_MS,
+  createDocumentAppObserver,
+  recentDocumentPaths,
+  recentFileMatchesBundle,
+} from './document-app-watch.mjs'
+import { fontsFromInDesignReply } from './indesign-fonts.mjs'
 import {
   classifyOpenedDocument,
   createDocumentOpenWatch,
@@ -382,6 +388,232 @@ test('versioned Adobe bundle ids still find the shared recent-document file', ()
 test('the macOS observer does not use Accessibility or activate other apps', () => {
   const source = fs.readFileSync(new URL('./document-app-watch.mjs', import.meta.url), 'utf8')
   assert.equal(/System Events|AXUIElement|osascript|tell application|NSAppleScript/.test(source), false)
+  const ask = fs.readFileSync(new URL('./indesign-fonts.mm', import.meta.url), 'utf8')
+  assert.equal(/osascript|NSAppleScript|tell application/.test(ask), false)
+  assert.match(ask, /descriptorWithProcessIdentifier/)
+  assert.match(ask, /PropertyOf\("fPSN"/)
+  assert.match(ask, /PropertyOf\("fFam"/)
+  assert.match(ask, /PropertyOf\("fSty"/)
+  assert.match(ask, /Every\("docu"/)
+  assert.match(ask, /Every\("FonT"/)
+  assert.equal(INDESIGN_FONT_POLL_MS, 500)
+})
+
+test('InDesign live reply lines up names and drops a row with no name', () => {
+  const lined = fontsFromInDesignReply({
+    postscriptNames: ['Family-Regular', '  ', 'Family-Bold'],
+    families: ['Family', '', 'Family'],
+    styles: ['', 'Regular', 'Bold'],
+  })
+  assert.equal(lined.refused, false)
+  assert.deepEqual(lined.fonts, [
+    { postscriptName: 'Family-Regular', familyName: 'Family', styleName: '' },
+    { postscriptName: 'Family-Bold', familyName: 'Family', styleName: 'Bold' },
+  ])
+  const uneven = fontsFromInDesignReply({
+    postscriptNames: ['Family-Regular'],
+    families: ['Family', 'Family'],
+    styles: ['Regular'],
+  })
+  assert.deepEqual(uneven.fonts, [])
+  assert.equal(fontsFromInDesignReply({ refused: true }).refused, true)
+  assert.equal(fontsFromInDesignReply({ unavailable: true }).unavailable, true)
+})
+
+test('frontmost InDesign is asked for fonts and the open file is not read', async () => {
+  const asked = []
+  const opened = []
+  const live = []
+  let openCalls = 0
+  const delays = []
+  let tick = () => {}
+  let reply = {
+    postscriptNames: ['Family-Regular', 'Family-Bold'],
+    families: ['Family', 'Family'],
+    styles: ['', 'Bold'],
+  }
+  let front = { bundleId: INDESIGN, pid: 42 }
+  const observer = createDocumentAppObserver({
+    platform: 'darwin',
+    pollMs: 60_000,
+    openFilePollMs: 0,
+    readFront: async () => front,
+    askInDesign: async (pid) => {
+      asked.push(pid)
+      return reply
+    },
+    listOpenPaths: async () => {
+      openCalls += 1
+      return ['/tmp/Book.indd']
+    },
+    listRecentPaths: async () => ['/tmp/Book.indd'],
+    onOpenedPath(event) {
+      opened.push(event)
+    },
+    onInDesignFonts(event) {
+      live.push(event)
+    },
+    scheduleInterval(fn, ms) {
+      delays.push(ms)
+      tick = fn
+      return () => {
+        tick = () => {}
+      }
+    },
+  })
+  try {
+    observer.start()
+    await observer.whenIdle()
+    assert.deepEqual(asked, [42])
+    assert.equal(openCalls, 0)
+    assert.deepEqual(opened, [])
+    assert.equal(live.length, 1)
+    assert.equal(live[0].fonts[0].styleName, '')
+    assert.equal(live[0].fonts[1].postscriptName, 'Family-Bold')
+    assert.deepEqual(delays, [500])
+
+    tick()
+    await observer.whenIdle()
+    assert.deepEqual(asked, [42, 42])
+    assert.equal(live.length, 1)
+
+    reply = {
+      postscriptNames: ['Family-Bold'],
+      families: ['Family'],
+      styles: ['Bold'],
+    }
+    tick()
+    await observer.whenIdle()
+    assert.equal(live.length, 2)
+    assert.equal(live[1].fonts.length, 1)
+
+    front = { bundleId: 'com.adobe.illustrator', pid: 9 }
+    await observer.poll()
+    assert.equal(openCalls, 1)
+    assert.equal(asked.length, 3)
+
+    front = { bundleId: INDESIGN, pid: 42 }
+    reply = {
+      postscriptNames: ['Family-Bold'],
+      families: ['Family'],
+      styles: ['Bold'],
+    }
+    await observer.poll()
+    assert.equal(live.length, 3)
+    assert.equal(openCalls, 1)
+  } finally {
+    observer.stop()
+  }
+})
+
+test('an empty InDesign reply does not read the open file', async () => {
+  let openCalls = 0
+  let live = 0
+  const observer = createDocumentAppObserver({
+    platform: 'darwin',
+    pollMs: 60_000,
+    readFront: async () => ({ bundleId: INDESIGN, pid: 7 }),
+    askInDesign: async () => ({ postscriptNames: [], families: [], styles: [] }),
+    listOpenPaths: async () => {
+      openCalls += 1
+      return ['/tmp/Book.indd']
+    },
+    onOpenedPath() {
+      throw new Error('opened a path')
+    },
+    onInDesignFonts() {
+      live += 1
+    },
+    scheduleInterval() {
+      return () => {}
+    },
+  })
+  try {
+    observer.start()
+    await observer.whenIdle()
+    assert.equal(openCalls, 0)
+    assert.equal(live, 0)
+  } finally {
+    observer.stop()
+  }
+})
+
+test('a refused InDesign is asked once, and a missing ask reads the file', async () => {
+  let calls = 0
+  const refused = createDocumentAppObserver({
+    platform: 'darwin',
+    pollMs: 60_000,
+    readFront: async () => ({ bundleId: INDESIGN, pid: 5 }),
+    askInDesign: async () => {
+      calls += 1
+      return { refused: true }
+    },
+    listOpenPaths: async () => {
+      throw new Error('file path')
+    },
+    onOpenedPath() {
+      throw new Error('opened a path')
+    },
+    onInDesignFonts() {
+      throw new Error('fonts')
+    },
+  })
+  try {
+    refused.start()
+    await refused.whenIdle()
+    await refused.poll()
+    assert.equal(calls, 1)
+  } finally {
+    refused.stop()
+  }
+
+  const opened = []
+  const fallback = createDocumentAppObserver({
+    platform: 'darwin',
+    pollMs: 60_000,
+    openFilePollMs: 0,
+    readFront: async () => ({ bundleId: INDESIGN, pid: 5 }),
+    askInDesign: async () => ({ unavailable: true }),
+    listOpenPaths: async () => ['/tmp/Book.indd'],
+    listRecentPaths: async () => [],
+    onOpenedPath(event) {
+      opened.push(event.path)
+    },
+  })
+  try {
+    fallback.start()
+    await fallback.whenIdle()
+    assert.deepEqual(opened, ['/tmp/Book.indd'])
+  } finally {
+    fallback.stop()
+  }
+})
+
+test('a live InDesign list opens the sheet without reading a file', () => {
+  const parsed = []
+  const effects = []
+  const watch = createDocumentOpenWatch({
+    enabled: true,
+    debounceMs: 0,
+    parse(filePath) {
+      parsed.push(filePath)
+      return { path: filePath }
+    },
+    onEffect(effect) {
+      effects.push(effect)
+    },
+  })
+  const fonts = [{ postscriptName: 'Family-Regular', familyName: 'Family', styleName: 'Regular' }]
+  watch.live({ bundleId: INDESIGN, fonts })
+  watch.live({ bundleId: 'com.adobe.illustrator', fonts })
+  assert.deepEqual(parsed, [])
+  assert.equal(effects.length, 1)
+  assert.equal(effects[0].action, 'live')
+  assert.deepEqual(documentWatchIpc(effects[0]), {
+    channel: 'open-document',
+    payload: { liveFonts: fonts, name: 'InDesign' },
+  })
+  assert.equal(documentWatchIpc({ action: 'live', fonts: [] }), null)
 })
 
 test('the observer does not start away from macOS', async () => {
