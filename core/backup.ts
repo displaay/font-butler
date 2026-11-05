@@ -12,10 +12,11 @@ import { folderForPath } from './folders.ts'
 import { inspectSfntTables, parseFontFile } from './parse.ts'
 import type { AppPaths } from './paths.ts'
 import { projectsPath } from './paths.ts'
-import { loadProjects, saveProjects } from './projects.ts'
+import { hasActivationDemand, loadProjects, saveProjects } from './projects.ts'
 import { normalizeSavedFilters } from './saved-filters.ts'
 import { loadSessionActivationIds } from './session-activation.ts'
 import { loadSettings, saveSettings } from './settings.ts'
+import { applyEntryFacts } from './state.ts'
 import type { AppSettings, CatalogEntry, CatalogFile, ProjectSet } from './types.ts'
 
 export const BACKUP_FORMAT_VERSION = 1
@@ -283,13 +284,14 @@ const FAMILY_TAG_SEEDS = new Set<FamilyTagSeed>(
   SEED_FAMILY_TAGS.flatMap((tag) => (tag.seed ? [tag.seed] : [])),
 )
 
-/** Was-on state recorded in the archive. Activate-until-quit never comes back on. */
+/** Was-on state recorded in the archive. Activate-until-quit stays off unless something else still owns the face. */
 export function backupActivationFor(
   entry: CatalogEntry,
   sessionActivationIds?: ReadonlySet<string>,
 ): BackupActivation {
-  // Activate until quit lives in session-activations.json. `temporaryActivation` is unused by that path.
-  if (sessionActivationIds?.has(entry.id)) return 'temporary'
+  // Session ids with no activation owner are activate-until-quit. A project or manual
+  // install still owns the face, so it stays on — same rule as releaseRecordedSessionActivations.
+  if (sessionActivationIds?.has(entry.id) && !hasActivationDemand(entry)) return 'temporary'
   if (entry.temporaryActivation) return 'temporary'
   return entry.status === 'installed' || entry.status === 'outdated' ? 'on' : 'off'
 }
@@ -1232,13 +1234,13 @@ export function restoreBackup(paths: AppPaths, archivePath: string, options: Res
         status: wantsOn ? 'installed' : 'deactivated',
         sourceFingerprint: fingerprint || backupEntry.sourceFingerprint,
         installedFingerprint: installedPath ? (tryFingerprintFile(installedPath) ?? (fingerprint || undefined)) : undefined,
-        sourcePresent: true,
-        sourceAvailability: 'none',
         ownerFolderId: backupEntry.ownerFolderId ?? null,
         updatedAt: now,
       }
       delete restored.temporaryActivation
       if (restoredPath !== backupEntry.sourcePath) delete (restored as { sourceRoot?: unknown }).sourceRoot
+      // Clearing disabledPath makes the source external. Recompute availability or previews treat a present file as unlinked.
+      applyEntryFacts(restored)
       current.entries.push(restored)
       if (fingerprint) byFingerprint.set(fingerprint, restored)
       if (recordedExisting) {

@@ -680,6 +680,10 @@ test('restored off fonts do not use the source file as the parked copy', async (
       assertDisabledIsNotSource(acme, target.disabledDir)
       assertDisabledIsNotSource(bold, target.disabledDir)
       assertDisabledIsNotSource(vault, target.disabledDir)
+      assert.equal(acme.sourceAvailability, 'present')
+      assert.equal(acme.sourcePresent, true)
+      assert.equal(bold.sourceAvailability, 'present')
+      assert.equal(vault.sourceAvailability, 'present')
       assert.equal(fs.existsSync(acmePath), true)
       assert.equal(fs.existsSync(boldPath), true)
       const acmeIno = fs.statSync(acmePath).ino
@@ -762,6 +766,65 @@ test('activate-until-quit fonts stay off after restore', () => {
     assert.ok(on.installedPath && fs.existsSync(on.installedPath))
   } finally {
     cleanup(paths, target, planPaths)
+  }
+})
+
+test('activate-until-quit stays on when a project still owns the face', () => {
+  const paths = tempPaths('backup-session-owned-src-')
+  const target = tempPaths('backup-session-owned-dst-')
+  try {
+    const srcDir = path.join(paths.dataRoot, 'src')
+    fs.mkdirSync(srcDir, { recursive: true })
+    const sessionPath = path.join(srcDir, 'Session.ttf')
+    const ownedPath = path.join(srcDir, 'Owned.ttf')
+    writeTestFont(sessionPath, 'SessionFam', 'SessionFam-Regular')
+    writeTestFont(ownedPath, 'OwnedFam', 'OwnedFam-Regular')
+    fs.mkdirSync(paths.installDir, { recursive: true })
+    const sessionInstalled = path.join(paths.installDir, 'Session.ttf')
+    const ownedInstalled = path.join(paths.installDir, 'Owned.ttf')
+    fs.copyFileSync(sessionPath, sessionInstalled)
+    fs.copyFileSync(ownedPath, ownedInstalled)
+    saveCatalog(paths, {
+      version: 1,
+      entries: [
+        entryFor('session-id', sessionPath, 'SessionFam', 'SessionFam-Regular', {
+          status: 'installed',
+          installedPath: sessionInstalled,
+          installedFingerprint: fingerprintFile(sessionPath),
+        }),
+        entryFor('owned-id', ownedPath, 'OwnedFam', 'OwnedFam-Regular', {
+          status: 'installed',
+          installedPath: ownedInstalled,
+          installedFingerprint: fingerprintFile(ownedPath),
+          activationOwners: [{ kind: 'project', projectId: 'proj-live' }],
+        }),
+      ],
+    })
+    saveSessionActivationIds(paths, ['session-id', 'owned-id'])
+    const dest = path.join(paths.dataRoot, 'owned.cuttlerbackup')
+    const created = createBackup(paths, { destinationPath: dest })
+    const activationFor = (id: string) => created.manifest.files.flatMap((file) => file.entries).filter((ref) => ref.entryId === id).map((ref) => ref.activation)
+    assert.ok(activationFor('session-id').every((activation) => activation === 'temporary'))
+    assert.ok(activationFor('owned-id').every((activation) => activation === 'on'))
+
+    fs.rmSync(sessionPath)
+    fs.rmSync(ownedPath)
+    fs.rmSync(sessionInstalled)
+    fs.rmSync(ownedInstalled)
+    const report = restoreBackup(target, dest, { restoreOrganization: false })
+    assert.equal(report.reactivated.some((row) => row.entryId === 'session-id'), false)
+    assert.ok(report.reactivated.some((row) => row.entryId === 'owned-id'))
+    const catalog = loadCatalog(target)
+    const session = catalog.entries.find((entry) => entry.id === 'session-id')!
+    const owned = catalog.entries.find((entry) => entry.id === 'owned-id')!
+    assert.equal(session.status, 'deactivated')
+    assert.equal(session.installedPath, undefined)
+    assert.equal(owned.status, 'installed')
+    assert.ok(owned.installedPath && fs.existsSync(owned.installedPath))
+    assert.equal(owned.sourceAvailability, 'present')
+    assert.equal(session.sourceAvailability, 'present')
+  } finally {
+    cleanup(paths, target)
   }
 })
 
