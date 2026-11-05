@@ -139,12 +139,25 @@ export function CompareWindow({
     const refreshIn = Math.max(1_000, FONT_ACCESS_TTL_MS - 5 * 60 * 1000)
     const timer = window.setTimeout(() => setFontAccessEpoch((epoch) => epoch + 1), refreshIn)
     return () => window.clearTimeout(timer)
-  }, [fontAccessEpoch, model.families, model.entries])
+  }, [fontAccessEpoch, model.families])
 
   useEffect(() => {
-    const style = document.createElement('style')
-    style.dataset.compareFonts = 'true'
-    document.head.appendChild(style)
+    return () => {
+      document.head.querySelector('style[data-compare-fonts="true"]')?.remove()
+    }
+  }, [])
+
+  useEffect(() => {
+    const existing = document.head.querySelector('style[data-compare-fonts="true"]')
+    const style =
+      existing instanceof HTMLElement && existing.tagName === 'STYLE'
+        ? (existing as HTMLStyleElement)
+        : document.createElement('style')
+    if (style !== existing) {
+      style.dataset.compareFonts = 'true'
+      document.head.appendChild(style)
+    }
+    const node = style
     let cancelled = false
     void (async () => {
       try {
@@ -171,16 +184,15 @@ export function CompareWindow({
             )
           }
         }
-        if (!cancelled) style.textContent = rules.join('\n')
+        if (!cancelled) node.textContent = rules.join('\n')
       } catch {
-        if (!cancelled) style.textContent = ''
+        if (!cancelled) node.textContent = ''
       }
     })()
     return () => {
       cancelled = true
-      style.remove()
     }
-  }, [model.families, model.entries, fontAccessEpoch])
+  }, [model.families, fontAccessEpoch])
 
   return (
     <div
@@ -566,7 +578,7 @@ function AddFamilies({
             const disabled = full && !present
             return (
               <button
-                key={family.familyId}
+                key={`${family.familyId}:${family.name}`}
                 type="button"
                 disabled={disabled}
                 className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-muted disabled:opacity-40"

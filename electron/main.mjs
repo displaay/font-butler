@@ -2581,7 +2581,7 @@ if (launchMode === 'quit') {
     }
     const comparePaths = finderCompareArgv(argv)
     if (comparePaths) {
-      sendWhenReady('finder-compare', { paths: comparePaths })
+      enqueueFinderJob(FINDER_COMPARE, comparePaths)
       showMainWindow()
       return
     }

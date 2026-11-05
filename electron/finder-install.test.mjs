@@ -324,7 +324,9 @@ test('compare launch flags and URLs do not fall through to install', () => {
   assert.equal(compareLaunchArgv(['Cuttler', finderInstallUrl(FINDER_INSTALL, ['/Fonts/A.otf'])]), null)
   const second = main.slice(main.indexOf("app.on('second-instance'"), main.indexOf("app.on('open-file'"))
   assert.match(second, /finderCompareArgv/)
-  assert.ok(second.indexOf('finder-compare') < second.indexOf('openFont'))
+  assert.match(second, /enqueueFinderJob\(FINDER_COMPARE/)
+  assert.doesNotMatch(second, /sendWhenReady/)
+  assert.ok(second.indexOf('enqueueFinderJob(FINDER_COMPARE') < second.indexOf('openFont'))
 })
 
 test('canceling Compare Fonts does not apply the library selection', () => {

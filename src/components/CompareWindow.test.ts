@@ -206,3 +206,81 @@ test('add families removes a custom name by the inspected family id', async () =
     host.remove()
   }
 })
+
+test('reordering a row keeps the compare font rules', async () => {
+  const { createElement, act } = await import('react')
+  const { createRoot } = await import('react-dom/client')
+  const { CompareWindow } = await import('./CompareWindow.tsx')
+  const model = addCompareFamilies(emptyCompare(), [family('Acme', [face('/Fonts/Acme.ttf', 'Regular')])])
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  const props = {
+    ...handlers,
+    layout: 'stacked' as const,
+    text: '',
+    size: 72,
+    libraryFamilies: [],
+  }
+  try {
+    await act(async () => {
+      root.render(createElement(CompareWindow, { ...props, model }))
+    })
+    const node = document.head.querySelector('style[data-compare-fonts="true"]')
+    assert.ok(node)
+    const tinted = {
+      ...model,
+      entries: model.entries.map((entry) => ({ ...entry, tint: entry.tint + 1 })),
+    }
+    await act(async () => {
+      root.render(createElement(CompareWindow, { ...props, model: tinted }))
+    })
+    assert.equal(document.head.querySelector('style[data-compare-fonts="true"]'), node)
+    assert.equal(document.head.querySelectorAll('style[data-compare-fonts="true"]').length, 1)
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  }
+})
+
+test('add families keeps two custom names that share a font family', async () => {
+  const { createElement, act } = await import('react')
+  const { createRoot } = await import('react-dom/client')
+  const { CompareWindow } = await import('./CompareWindow.tsx')
+  const libraryFamilies: CompareLibraryFamily[] = [
+    { name: 'My Acme', familyId: familyIdForName('Acme'), paths: ['/Fonts/A.ttf'] },
+    { name: 'Other Acme', familyId: familyIdForName('Acme'), paths: ['/Fonts/B.ttf'] },
+  ]
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  try {
+    await act(async () => {
+      root.render(
+        createElement(CompareWindow, {
+          ...handlers,
+          model: emptyCompare(),
+          layout: 'stacked',
+          text: '',
+          size: 72,
+          libraryFamilies,
+        }),
+      )
+    })
+    const add = Array.from(host.querySelectorAll('button')).find((button) => button.textContent?.includes('Add Families'))
+    assert.ok(add)
+    await act(async () => {
+      add.dispatchEvent(new view.MouseEvent('click', { bubbles: true }))
+    })
+    const names = Array.from(host.querySelectorAll('button')).map((button) => button.textContent ?? '')
+    assert.equal(names.some((name) => name.includes('My Acme')), true)
+    assert.equal(names.some((name) => name.includes('Other Acme')), true)
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  }
+})
