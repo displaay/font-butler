@@ -499,3 +499,21 @@ test('matchesLibraryFilter uses stored classification and foundry, not a guess',
   blank.faces[0]!.classification = null
   assert.equal(matchesLibraryFilter(blank, ['classification:serif']), false)
 })
+
+test('matchesLibraryFilter matches a stored language or its script', () => {
+  const czech = entry('c', 'Reckless', 1, 'installed')
+  czech.faces[0]!.languages = ['ces']
+  czech.faces[0]!.scripts = ['Latin']
+  const english = entry('e', 'English', 2, 'installed')
+  english.faces[0]!.languages = ['eng']
+  english.faces[0]!.scripts = ['Latin']
+  assert.equal(matchesLibraryFilter(czech, ['language:ces']), true)
+  assert.equal(matchesLibraryFilter(czech, ['language:deu']), false)
+  assert.equal(matchesLibraryFilter(english, ['language:ces', 'language:eng']), true)
+  assert.equal(matchesLibraryFilter(czech, ['script:Latin']), true)
+  assert.equal(matchesLibraryFilter(czech, ['script:Cyrillic']), false)
+  assert.equal(matchesLibraryFilter(czech, ['installed', 'language:ces']), true)
+  assert.equal(matchesLibraryFilter(czech, ['uninstalled', 'language:ces']), false)
+  const unread = entry('u', 'Unread', 3, 'installed')
+  assert.equal(matchesLibraryFilter(unread, ['language:ces']), false)
+})

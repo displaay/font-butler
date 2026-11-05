@@ -195,3 +195,28 @@ test('classification and foundry filters are tags in the field, status chips are
   })
   host.remove()
 })
+
+test('a language suggestion becomes a removable filter tag', async () => {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  await act(async () => {
+    root.render(createElement(Harness))
+  })
+  await act(async () => {
+    await type('czech')
+  })
+  const czech = [...document.querySelectorAll('[role="option"]')].find((node) => node.textContent?.trim() === 'Czech')
+  assert.ok(czech instanceof view.HTMLElement)
+  assert.equal(czech.getAttribute('data-kind'), 'language')
+  await act(async () => {
+    czech.click()
+  })
+  assert.equal(document.querySelector('[data-filters]')?.getAttribute('data-filters'), 'language:ces')
+  const tag = document.querySelector('button[aria-label="Remove Czech"]')
+  assert.equal(tag?.textContent, 'Czech')
+  await act(async () => {
+    root.unmount()
+  })
+  host.remove()
+})

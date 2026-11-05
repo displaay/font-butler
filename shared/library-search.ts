@@ -16,6 +16,15 @@ import {
   type FontClassification,
 } from './font-classification.ts'
 import {
+  COVERAGE_LANGUAGES_BY_SPEAKERS,
+  COVERAGE_SCRIPTS,
+  LANGUAGE_SUGGESTION_LIMIT,
+  languageFilterId,
+  languageIdForSearchTerm,
+  languageSearchTerms,
+  scriptFilterId,
+} from './language-coverage.ts'
+import {
   classificationFilterId,
   foundryFilterId,
   isLibraryFilter,
@@ -84,6 +93,7 @@ export type SearchFace = ClassifiableFace & {
   features?: readonly string[] | null
   widthClass?: number | null
   instanceNames?: readonly string[] | null
+  languages?: readonly string[] | null
 }
 
 export type SearchFamily = {
@@ -272,6 +282,8 @@ function wordMatches(word: string, family: SearchFamily): boolean {
   if (familyHasExactTag(family, token)) return true
   const trait = TRAIT_WORDS[token]
   if (trait?.(family)) return true
+  const languageId = languageIdForSearchTerm(token)
+  if (languageId && family.faces.some((face) => (face.languages ?? []).includes(languageId))) return true
   return textMatchesWord(haystack(family), token)
 }
 
@@ -279,7 +291,7 @@ function normalizeTagName(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
-export type SearchSuggestionKind = 'style' | 'classification' | 'tag' | 'foundry'
+export type SearchSuggestionKind = 'style' | 'classification' | 'language' | 'script' | 'tag' | 'foundry'
 
 export type SearchSuggestion = {
   id: string
@@ -377,15 +389,25 @@ export function searchFilterSuggestions(
   const candidates = suggestionCandidates(typed, catalog)
   if (options?.browse) {
     const remainder = typed.trim()
-    return candidates.map((candidate) => toSuggestion(candidate, remainder))
+    let languages = 0
+    const shown: SearchSuggestion[] = []
+    for (const candidate of candidates) {
+      if (candidate.kind === 'language' && languages >= LANGUAGE_SUGGESTION_LIMIT) continue
+      if (candidate.kind === 'language') languages += 1
+      shown.push(toSuggestion(candidate, remainder))
+    }
+    return shown
   }
   const parts = typed.trim().split(/\s+/).filter(Boolean)
   const lower = parts.map((part) => part.toLowerCase())
   const found: SearchSuggestion[] = []
+  let languages = 0
   for (const candidate of candidates) {
+    if (candidate.kind === 'language' && languages >= LANGUAGE_SUGGESTION_LIMIT) continue
     for (let start = 0; start < lower.length; start++) {
       const run = lower.slice(start).join(' ')
       if (run.length < 2 || !candidate.match(run)) continue
+      if (candidate.kind === 'language') languages += 1
       found.push(toSuggestion(candidate, parts.slice(0, start).join(' ')))
       break
     }
@@ -491,6 +513,32 @@ function suggestionCandidates(typed: string, catalog: SearchFilterCatalog): Sugg
       label: name,
       filterId,
       match: (run) => beginsWord(run, phrase),
+    })
+  }
+
+  for (const script of COVERAGE_SCRIPTS) {
+    const filterId = scriptFilterId(script)
+    if (chosenFilters.has(filterId)) continue
+    const phrase = script.toLowerCase()
+    candidates.push({
+      id: filterId,
+      kind: 'script',
+      label: script,
+      filterId,
+      match: (run) => phrase.startsWith(run),
+    })
+  }
+
+  for (const language of COVERAGE_LANGUAGES_BY_SPEAKERS) {
+    const filterId = languageFilterId(language.id)
+    if (chosenFilters.has(filterId)) continue
+    const terms = languageSearchTerms(language.id)
+    candidates.push({
+      id: filterId,
+      kind: 'language',
+      label: language.name,
+      filterId,
+      match: (run) => terms.some((term) => term.startsWith(run)),
     })
   }
 

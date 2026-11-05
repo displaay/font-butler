@@ -12,6 +12,7 @@ import {
   sfntTablesFit,
 } from './parse.ts'
 import { loadCatalog, saveCatalog } from './catalog.ts'
+import { orthographyRequirements } from '../shared/language-coverage.ts'
 import { writeTestCollection, writeTestFont, withService } from './test-util.ts'
 
 test('resolveFamilyNames prefers typographic family and style', () => {
@@ -374,6 +375,33 @@ test('sfntTablesFit rejects tables past the end of the file and a zero-filled he
     if (!blankCheck.ok) assert.match(blankCheck.reason, /head table is still zero-filled/)
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('parseFontFile records Cicero language coverage from glyphs that draw', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-coverage-'))
+  try {
+    const [english] = orthographyRequirements('eng')
+    assert.ok(english)
+    const covered = path.join(dir, 'English.ttf')
+    writeTestFont(covered, 'English', 'English-Regular', { codePoints: [...english] })
+    const coveredFace = parseFontFile(covered).faces[0]
+    assert.equal(coveredFace?.languages?.includes('eng'), true)
+    assert.equal(coveredFace?.languages?.includes('ces'), false)
+    assert.equal(coveredFace?.scripts?.includes('Latin'), true)
+
+    const hollow = path.join(dir, 'Hollow.ttf')
+    writeTestFont(hollow, 'Hollow', 'Hollow-Regular', {
+      codePoints: [...english],
+      emptyCodePoints: [65],
+    })
+    assert.equal(parseFontFile(hollow).faces[0]?.languages?.includes('eng'), false)
+
+    const skipped = parseFontFile(covered, { coverage: false }).faces[0]
+    assert.equal(skipped?.languages, undefined)
+    assert.equal(parseFontFile(covered, { previewSample: false }).faces[0]?.languages, undefined)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
   }
 })
 

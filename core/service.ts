@@ -174,6 +174,7 @@ import {
   previewUsesInstalledBytes,
   readFileStat,
 } from './parse.ts'
+import { mergeFaceLanguages } from '../shared/language-coverage.ts'
 import { isUnderAnyRoot } from './containment.ts'
 import {
   buildImportPlan,
@@ -4684,9 +4685,9 @@ export class FontButlerService {
     let index = this.previewBackfillIndex
     for (; index < catalog.entries.length && processed < batchSize; index += 1) {
       const entry = catalog.entries[index]!
-      if (entry.previewSample) {
-        continue
-      }
+      const needsPreview = !entry.previewSample
+      const needsLanguages = entry.faces?.some((face) => !Array.isArray(face.languages))
+      if (!needsPreview && !needsLanguages) continue
       processed += 1
       const file = existingFontPath(entry, catalog.entries)
       if (!file) continue
@@ -4699,6 +4700,11 @@ export class FontButlerService {
           changed = true
           emitAfterBatch = true
         } else if (fillEntryPreviewSample(entry, { sample: analysis.parsed.previewSample })) {
+          touchEntry(entry)
+          changed = true
+          emitAfterBatch = true
+        }
+        if (mergeFaceLanguages(entry.faces, analysis.parsed.faces)) {
           touchEntry(entry)
           changed = true
           emitAfterBatch = true

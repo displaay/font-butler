@@ -1,4 +1,5 @@
 import { FONT_CLASSIFICATIONS, type FontClassification, isFontClassification } from './font-classification.ts'
+import { isCoverageLanguageId, isCoverageScript } from './language-coverage.ts'
 
 export const CHIP_LIBRARY_FILTERS = [
   'installed',
@@ -18,7 +19,14 @@ export const CHIP_LIBRARY_FILTERS = [
 export type ChipLibraryFilter = (typeof CHIP_LIBRARY_FILTERS)[number]
 export type ClassificationFilter = `classification:${FontClassification}`
 export type FoundryFilter = `foundry:${string}`
-export type LibraryFilter = ChipLibraryFilter | ClassificationFilter | FoundryFilter
+export type LanguageFilter = `language:${string}`
+export type ScriptFilter = `script:${string}`
+export type LibraryFilter =
+  | ChipLibraryFilter
+  | ClassificationFilter
+  | FoundryFilter
+  | LanguageFilter
+  | ScriptFilter
 
 const CHIP_SET = new Set<string>(CHIP_LIBRARY_FILTERS)
 
@@ -40,6 +48,8 @@ export function isLibraryFilter(value: unknown): value is LibraryFilter {
     const name = value.slice('foundry:'.length).trim()
     return name.length > 0 && name.length <= 200 && !/[\r\n]/.test(name)
   }
+  if (value.startsWith('language:')) return isCoverageLanguageId(value.slice('language:'.length))
+  if (value.startsWith('script:')) return isCoverageScript(value.slice('script:'.length))
   return false
 }
 
