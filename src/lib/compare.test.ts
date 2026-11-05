@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  addCompareFamilies,
   addDroppedFiles,
   automaticFace,
   emptyCompare,
   familyIdForName,
   replaceCompareFamilies,
+  resolvedCompareFace,
   type CompareFace,
   type CompareFamily,
 } from '../../shared/compare.ts'
@@ -42,6 +44,35 @@ test('a drop adds a font file to the comparison', () => {
     [regular.filePath, bold.filePath],
   )
   assert.equal(again.entries[1]?.styleId, bold.id)
+})
+
+test('a library family is one Automatic row, even with twelve styles', () => {
+  const faces = Array.from({ length: 12 }, (_, index) =>
+    face(`/Fonts/Acme/Style-${index}.ttf`, `Style ${index}`, 100 + index * 80),
+  )
+  const added = addCompareFamilies(emptyCompare(), [family('Acme', faces)])
+  assert.equal(added.entries.length, 1)
+  assert.equal(added.entries[0]?.styleId, null)
+  const second = addCompareFamilies(added, [family('Other', [face('/Fonts/Other/Regular.ttf', 'Regular', 400)])])
+  assert.equal(second.entries.length, 2)
+  assert.equal(second.entries[1]?.styleId, null)
+})
+
+test('dropping Regular after an Automatic Bold row keeps Bold', () => {
+  const bold = face('/Fonts/Outside/Acme-Bold.ttf', 'Bold', 700)
+  const regular = face('/Fonts/Outside/Acme-Regular.ttf', 'Regular', 400)
+  const dropped = addDroppedFiles(emptyCompare(), [family('Acme', [bold])])
+  assert.equal(dropped.entries.length, 1)
+  assert.equal(dropped.entries[0]?.styleId, null)
+  assert.equal(resolvedCompareFace(dropped.entries[0]!, dropped.families[0]!)?.styleName, 'Bold')
+
+  const again = addDroppedFiles(dropped, [family('Acme', [regular])])
+  assert.equal(again.entries.length, 2)
+  const familyAfter = again.families[0]!
+  assert.deepEqual(
+    again.entries.map((entry) => resolvedCompareFace(entry, familyAfter)?.styleName),
+    ['Bold', 'Regular'],
+  )
 })
 
 test('two files that are not catalog entries become two comparison rows', () => {

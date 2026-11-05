@@ -294,6 +294,22 @@ test('finder services addon compile is skipped off macOS', () => {
   assert.equal(result.skipped, true)
 })
 
+test('canceling Compare Fonts does not apply the library selection', () => {
+  const main = readRepo('electron/main.mjs')
+  const start = main.indexOf("label: 'Compare Fonts…'")
+  const end = main.indexOf('return Menu.buildFromTemplate', start)
+  assert.ok(start > 0 && end > start)
+  const item = main.slice(start, end)
+  assert.match(item, /if \(!paths \|\| paths\.length === 0\) return/)
+  assert.match(item, /finder-compare/)
+  assert.doesNotMatch(item, /open-compare/)
+  const app = readRepo('src/App.tsx')
+  assert.match(app, /addCompareFamilies/)
+  assert.match(app, /mode === 'family'\) return addCompareFamilies/)
+  assert.doesNotMatch(app, /applyComparePaths\(paths, 'add'\)/)
+  assert.doesNotMatch(app, /applyComparePaths\(paths, groups\.length > 1 \? 'replace' : 'add'\)/)
+})
+
 test('Electron main handles Finder services through the existing install APIs', () => {
   const main = readRepo('electron/main.mjs')
   const preload = readRepo('electron/preload.cjs')

@@ -95,6 +95,7 @@ import {
 } from '@/lib/activityInbox'
 import { appUpdateInstallFromMain } from '@/lib/app-update'
 import {
+  addCompareFamilies,
   addDroppedFiles,
   compareDropPaths,
   comparePathForEntry,
@@ -1506,13 +1507,13 @@ function AppShell() {
           ),
         ),
       ]
-      void applyComparePaths(paths, catalogSelection.length > 1 ? 'replace' : 'add')
+      void applyComparePaths(paths, catalogSelection.length > 1 ? 'replace' : 'family')
       return
     }
     setCompareOpen(true)
   }
   openComparePathsRef.current = (paths) => {
-    void applyComparePaths(paths, paths.length > 1 ? 'replace' : 'add')
+    void applyComparePaths(paths, paths.length > 1 ? 'replace' : 'drop')
   }
   const systemSelection = selectedSystemList()
   const catalogPlan = catalogBatchPlan(catalogSelection, adobeAvailable)
@@ -2277,7 +2278,7 @@ function AppShell() {
     }
   }
 
-  async function applyComparePaths(paths: string[], mode: 'add' | 'replace') {
+  async function applyComparePaths(paths: string[], mode: 'drop' | 'family' | 'replace') {
     const unique = [...new Set(paths.map((item) => item.trim()).filter(Boolean))]
     if (unique.length === 0) {
       setCompareOpen(true)
@@ -2286,9 +2287,11 @@ function AppShell() {
     try {
       const result = await api.inspectCompare(unique)
       if (result.errors.length > 0) toast.error(result.errors.slice(0, 3).join('\n'))
-      setCompareModel((current) =>
-        mode === 'replace' ? replaceCompareFamilies(result.families) : addDroppedFiles(current, result.families),
-      )
+      setCompareModel((current) => {
+        if (mode === 'replace') return replaceCompareFamilies(result.families)
+        if (mode === 'family') return addCompareFamilies(current, result.families)
+        return addDroppedFiles(current, result.families)
+      })
       setCompareOpen(true)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not compare those fonts')
@@ -2307,7 +2310,7 @@ function AppShell() {
       setCompareOpen(true)
       return
     }
-    await applyComparePaths(picked, picked.length > 1 ? 'replace' : 'add')
+    await applyComparePaths(picked, picked.length > 1 ? 'replace' : 'drop')
   }
 
   async function handleDrop(dataTransfer: DataTransfer, projectId?: string) {
@@ -2328,7 +2331,7 @@ function AppShell() {
           toast.message('Drop font files to compare them.')
           return
         }
-        await applyComparePaths(paths, 'add')
+        await applyComparePaths(paths, 'drop')
       } catch (error) {
         setDragging(false)
         toast.error(error instanceof Error ? error.message : 'Could not compare those fonts')
@@ -3251,7 +3254,7 @@ function AppShell() {
                                 ),
                               ),
                             ]
-                            void applyComparePaths(paths, groups.length > 1 ? 'replace' : 'add')
+                            void applyComparePaths(paths, groups.length > 1 ? 'replace' : 'family')
                           }}
                           onFontDragStart={beginFontDrag}
                           onFontDragEnd={endFontDrag}
@@ -4063,7 +4066,7 @@ function AppShell() {
               setCompareOpen(false)
               setCompareModel(emptyCompare())
             }}
-            onAddFamilies={(paths) => void applyComparePaths(paths, 'add')}
+            onAddFamilies={(paths) => void applyComparePaths(paths, 'family')}
             onRemoveFamily={(familyId) => setCompareModel((current) => removeCompareFamily(current, familyId))}
             onRemoveEntry={(entryId) => setCompareModel((current) => removeCompareEntry(current, entryId))}
             onStyle={(entryId, styleId) => setCompareModel((current) => setCompareStyle(current, entryId, styleId))}

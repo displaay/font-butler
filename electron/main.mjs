@@ -2399,10 +2399,7 @@ function buildAppMenu() {
     label: 'Compare Fonts…',
     click: () => {
       void pickCompareFonts().then((paths) => {
-        if (!paths || paths.length === 0) {
-          sendWhenReady('open-compare')
-          return
-        }
+        if (!paths || paths.length === 0) return
         sendWhenReady('finder-compare', { paths })
       })
     },

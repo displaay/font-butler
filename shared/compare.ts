@@ -141,6 +141,24 @@ function mergeFamilies(current: CompareFamily[], incoming: CompareFamily[]): Com
   return families
 }
 
+/**
+ * An Automatic row follows the upright face nearest Regular. Merging a closer
+ * face would retarget that row and hide the style it was showing. Pin it to
+ * the face it resolved to before the merge.
+ */
+function pinShiftedAutomaticRows(model: CompareModel, families: CompareFamily[]): CompareEntry[] {
+  return model.entries.map((entry) => {
+    if (entry.styleId) return entry
+    const previous = model.families.find((item) => item.id === entry.familyId)
+    const next = families.find((item) => item.id === entry.familyId)
+    if (!previous || !next) return entry
+    const previousId = automaticFace(previous)?.id
+    const nextId = automaticFace(next)?.id
+    if (!previousId || !nextId || previousId === nextId) return entry
+    return { ...entry, styleId: previousId }
+  })
+}
+
 function withEntry(model: CompareModel, familyId: string, styleId: string | null): CompareModel {
   if (model.entries.length >= COMPARE_LIMIT) return model
   const family = model.families.find((item) => item.id === familyId)
@@ -166,9 +184,10 @@ function withEntry(model: CompareModel, familyId: string, styleId: string | null
   }
 }
 
-/** Several families start a comparison over. One family joins what is already there. */
+/** Several families start a comparison over. One family joins what is already there as a single Automatic row. */
 export function addCompareFamilies(model: CompareModel, incoming: CompareFamily[]): CompareModel {
-  let next: CompareModel = { ...model, families: mergeFamilies(model.families, incoming) }
+  const families = mergeFamilies(model.families, incoming)
+  let next: CompareModel = { families, entries: pinShiftedAutomaticRows(model, families) }
   for (const family of incoming) {
     if (next.entries.some((entry) => entry.familyId === family.id)) continue
     next = withEntry(next, family.id, null)
@@ -185,7 +204,8 @@ export function replaceCompareFamilies(incoming: CompareFamily[]): CompareModel 
  * A second file of a family already shown is added in that style.
  */
 export function addDroppedFiles(model: CompareModel, incoming: CompareFamily[]): CompareModel {
-  let next: CompareModel = { ...model, families: mergeFamilies(model.families, incoming) }
+  const families = mergeFamilies(model.families, incoming)
+  let next: CompareModel = { families, entries: pinShiftedAutomaticRows(model, families) }
   for (const family of incoming) {
     const stored = next.families.find((item) => item.id === family.id)
     if (!stored) continue
