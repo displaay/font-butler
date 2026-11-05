@@ -249,6 +249,8 @@ function AppShell() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsFocusAppUpdate, setSettingsFocusAppUpdate] = useState(false)
   const [settingsFocusWatchFolders, setSettingsFocusWatchFolders] = useState(false)
+  const [settingsFocusFinderSync, setSettingsFocusFinderSync] = useState(false)
+  const [announcementSuspended, setAnnouncementSuspended] = useState(false)
   const [appUpdate, setAppUpdate] = useState<AppUpdateStatus | null>(null)
   const [appUpdateInstall, setAppUpdateInstall] = useState<{
     phase: 'idle' | 'downloading' | 'verifying' | 'installing' | 'opening' | 'error'
@@ -268,6 +270,16 @@ function AppShell() {
     setSettingsOpen(closed.settingsOpen)
     setSettingsFocusAppUpdate(closed.focusAppUpdate)
     setSettingsFocusWatchFolders(closed.focusWatchFolders)
+    setSettingsFocusFinderSync(closed.focusFinderSync)
+    setAnnouncementSuspended(false)
+  }
+
+  function openFinderSyncSettings() {
+    setSettingsFocusAppUpdate(false)
+    setSettingsFocusWatchFolders(false)
+    setSettingsFocusFinderSync(true)
+    setAnnouncementSuspended(true)
+    setSettingsOpen(true)
   }
 
   function applyFamilyTagPayload(payload: { tags?: FamilyTag[]; familyTags?: FamilyTagAssignment[] }) {
@@ -943,6 +955,7 @@ function AppShell() {
     function onKeyDown(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key === ',') {
         event.preventDefault()
+        setSettingsFocusFinderSync(false)
         setSettingsOpen(true)
       }
     }
@@ -964,6 +977,8 @@ function AppShell() {
     })
     const stopDesktop = window.fontButlerDesktop?.onOpenSettings((payload) => {
       setSettingsFocusAppUpdate(payload?.focus === 'app-update')
+      setSettingsFocusWatchFolders(false)
+      setSettingsFocusFinderSync(false)
       setSettingsOpen(true)
     })
     const stopReinstall = window.fontButlerDesktop?.onReinstallFonts?.((payload) => {
@@ -2602,11 +2617,13 @@ function AppShell() {
           onOpenSettings={() => {
             setSettingsFocusAppUpdate(Boolean(appUpdate?.updateAvailable))
             setSettingsFocusWatchFolders(false)
+            setSettingsFocusFinderSync(false)
             setSettingsOpen(true)
           }}
           onOpenWatchFoldersSettings={() => {
             setSettingsFocusAppUpdate(false)
             setSettingsFocusWatchFolders(true)
+            setSettingsFocusFinderSync(false)
             setSettingsOpen(true)
           }}
         />
@@ -2731,6 +2748,7 @@ function AppShell() {
                       onOpenSettings={() => {
                         setSettingsFocusAppUpdate(false)
                         setSettingsFocusWatchFolders(true)
+                        setSettingsFocusFinderSync(false)
                         setSettingsOpen(true)
                       }}
                     />
@@ -3779,6 +3797,7 @@ function AppShell() {
           onCheckAppUpdate={(refresh) => void loadAppUpdate(refresh)}
           highlightAppUpdate={settingsFocusAppUpdate}
           highlightWatchFolders={settingsFocusWatchFolders}
+          highlightFinderSync={settingsFocusFinderSync}
           onStartOnboarding={() => {
             closeSettings()
             setOnboardingOpen(startOnboardingFromSettings().onboardingOpen)
@@ -3797,9 +3816,10 @@ function AppShell() {
         />
         <AnnouncementDialog
           announcement={announcement}
-          open={Boolean(announcement) && !onboardingOpen}
+          open={Boolean(announcement) && !onboardingOpen && !announcementSuspended}
           currentIcon={settings ? parseAppIconStyle(settings.appIcon) : null}
           onSelectIcon={chooseAnnouncementIcon}
+          onOpenFinderSettings={openFinderSyncSettings}
           onDismiss={(item) => {
             setAnnouncement(null)
             window.fontButlerDesktop?.dismissAnnouncement?.(item.id)

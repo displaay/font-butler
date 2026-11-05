@@ -44,7 +44,7 @@ export const WHATS_NEW_PAGES: AnnouncementPage[] = [
   {
     id: 'advanced-search',
     title: 'Advanced search',
-    body: 'Type several words — each one has to match. A tag name finds families with that tag. Start typing a filter name and matching filters appear under the search field; choose one to narrow the library and set the preview style.',
+    body: 'Type several words — each one has to match. A tag name finds families with that tag. Start typing a filter name and matching filters appear under the search field; choose one and it stays in the field, narrowing the library and the preview style.',
   },
   {
     id: 'activate-until-quit',
@@ -54,7 +54,7 @@ export const WHATS_NEW_PAGES: AnnouncementPage[] = [
   {
     id: 'adobe-document-watch',
     title: 'Adobe document watch',
-    body: 'In Settings, turn on Watch documents in Adobe and Office. When InDesign, Illustrator, Photoshop, Acrobat, Word, or PowerPoint is in front with a supported file, Cuttler opens the font sheet for that document.',
+    body: 'In Settings, turn on Watch documents in Adobe and Office. When InDesign is in front, Cuttler asks it for the fonts in its open documents, including while Missing Fonts is open. Illustrator, Photoshop, Acrobat, Word, and PowerPoint are read from the open file.',
   },
   {
     id: 'finder-extension',

@@ -2467,6 +2467,15 @@ ipcMain.handle('open-external', async (_event, url) => {
   return openExternalUrl(url)
 })
 
+const FINDER_LOGIN_ITEMS_URL =
+  'x-apple.systempreferences:com.apple.LoginItems-Settings.extension'
+
+ipcMain.handle('open-finder-login-items', async () => {
+  if (process.platform !== 'darwin') return false
+  await shell.openExternal(FINDER_LOGIN_ITEMS_URL)
+  return true
+})
+
 ipcMain.handle('install-app-update', () => appUpdateInstaller().start())
 
 ipcMain.handle('app-update-install-state', () => appUpdateInstaller().status())
