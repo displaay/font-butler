@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
 
 const EMPTY_TAG_IDS: readonly string[] = []
 import { toast } from 'sonner'
@@ -55,7 +55,16 @@ import {
   GRID_PREVIEW_SIZE_KEY,
   ViewOptions,
   readGridPreviewSize,
+  readStoredViewLayout,
 } from '@/components/ViewOptions'
+import {
+  TEXT_PREVIEW_LANGUAGE_KEY,
+  TEXT_PREVIEW_SAMPLE_KEY,
+  applyTextPreviewLanguage,
+  estimateTextPreviewLines,
+  readTextPreviewLanguage,
+  readTextPreviewSample,
+} from '@/lib/textPreview'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { NotifyProvider, useClearActionStatusIf, useSetActionStatus } from '@/components/NotifyProvider'
@@ -422,9 +431,28 @@ function AppShell() {
   const [hideFormats, setHideFormats] = useState(
     () => localStorage.getItem('font-butler-hide-formats') === 'true',
   )
-  const [viewLayout, setViewLayout] = useState<ViewLayout>(() =>
-    localStorage.getItem('font-butler-view-layout') === 'grid' ? 'grid' : 'list',
-  )
+  const [viewLayout, setViewLayout] = useState<ViewLayout>(readStoredViewLayout)
+  const [sampleLanguage, setSampleLanguage] = useState(readTextPreviewLanguage)
+  const [sampleText, setSampleText] = useState(readTextPreviewSample)
+  const editSampleText = useCallback((text: string) => {
+    setSampleText(text)
+    try {
+      localStorage.setItem(TEXT_PREVIEW_SAMPLE_KEY, text)
+    } catch {
+      // The shared sample still updates in this session when storage is blocked.
+    }
+  }, [])
+  const chooseSampleLanguage = useCallback((id: string) => {
+    const next = applyTextPreviewLanguage(id)
+    setSampleLanguage(next.id)
+    setSampleText(next.text)
+    try {
+      localStorage.setItem(TEXT_PREVIEW_LANGUAGE_KEY, next.id)
+      localStorage.setItem(TEXT_PREVIEW_SAMPLE_KEY, next.text)
+    } catch {
+      // The shared sample still updates in this session when storage is blocked.
+    }
+  }, [])
   const [sortMode, setSortMode] = useState<SortMode>(readSortMode)
   const [selectedFamilyKeys, setSelectedFamilyKeys] = useState<string[]>([])
   const [selectedSystemKeys, setSelectedSystemKeys] = useState<string[]>([])
@@ -1455,6 +1483,7 @@ function AppShell() {
     layout: viewLayout,
     previewSize: gridPreviewSize,
     extraLines: (showSources ? 1 : 0) + (browseSubtitleShown ? 1 : 0),
+    sampleLines: viewLayout === 'text' ? estimateTextPreviewLines(sampleText, gridPreviewSize) : 1,
     viewportRef: libraryViewportRef,
     gridRef: libraryGridRef,
     enabled: tab !== 'activity',
@@ -2719,6 +2748,8 @@ function AppShell() {
                       setGridPreviewSize(next)
                       localStorage.setItem(GRID_PREVIEW_SIZE_KEY, String(next))
                     }}
+                    sampleLanguage={sampleLanguage}
+                    onSampleLanguageChange={chooseSampleLanguage}
                   />
                 {tab === 'system' && !query.trim() && systemGroups.length > shownSystemGroups.length && (
                   <p className="text-sm text-muted-foreground">
@@ -2836,6 +2867,9 @@ function AppShell() {
                           previewRequest={previewRequest}
                           layout={viewLayout}
                           previewSize={gridPreviewSize}
+                          sampleText={sampleText}
+                          sampleLanguage={sampleLanguage}
+                          onSampleTextChange={editSampleText}
                           group={group}
                           showSourcePath={showSources}
                           showInstanceCounts={showInstanceCounts}
@@ -2881,6 +2915,9 @@ function AppShell() {
                           previewRequest={previewRequest}
                           layout={viewLayout}
                           previewSize={gridPreviewSize}
+                          sampleText={sampleText}
+                          sampleLanguage={sampleLanguage}
+                          onSampleTextChange={editSampleText}
                           group={group}
                           retail={retail}
                           showSourcePath={showSources}
