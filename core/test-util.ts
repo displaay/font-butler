@@ -55,6 +55,8 @@ export function writeTestFont(
     version?: string
     weight?: number
     codePoints?: number[]
+    /** Mapped code points whose glyphs have no outline. A letter must not count as covered. */
+    emptyCodePoints?: number[]
     manufacturer?: string
     designer?: string
     sFamilyClass?: number
@@ -66,6 +68,7 @@ export function writeTestFont(
   const version = options.version ?? 'Version 1.000'
   const weight = options.weight ?? (/bold/i.test(style) ? 700 : 400)
   const codePoints = options.codePoints ?? [65]
+  const emptyCodePoints = options.emptyCodePoints ?? []
   const nameExtras = [
     options.manufacturer ? `"manufacturer": ${JSON.stringify(options.manufacturer)},` : '',
     options.designer ? `"designer": ${JSON.stringify(options.designer)},` : '',
@@ -83,6 +86,7 @@ def glyph_name(cp):
     return "uni%04X" % cp
 
 codepoints = ${JSON.stringify(codePoints)}
+empty_cps = set(${JSON.stringify(emptyCodePoints)})
 names = [glyph_name(cp) for cp in codepoints]
 fb = FontBuilder(1000, isTTF=True)
 fb.setupGlyphOrder([".notdef"] + names)
@@ -94,7 +98,10 @@ pen.lineTo((500, 0))
 pen.lineTo((250, 700))
 pen.closePath()
 triangle = pen.glyph()
-fb.setupGlyf({".notdef": empty, **{name: triangle for name in names}})
+glyphs = {".notdef": empty}
+for cp, name in zip(codepoints, names):
+    glyphs[name] = empty if cp in empty_cps else triangle
+fb.setupGlyf(glyphs)
 fb.setupHorizontalMetrics({".notdef": (500, 0), **{name: (600, 0) for name in names}})
 fb.setupHorizontalHeader(ascent=800, descent=-200)
 fb.setupNameTable({
@@ -120,6 +127,7 @@ def glyph_name(cp):
     return "uni%04X" % cp
 
 codepoints = ${JSON.stringify(codePoints)}
+empty_cps = set(${JSON.stringify(emptyCodePoints)})
 names = [glyph_name(cp) for cp in codepoints]
 fb = FontBuilder(1000, isTTF=False)
 fb.setupGlyphOrder([".notdef"] + names)
@@ -132,7 +140,10 @@ pen.lineTo((500, 0))
 pen.lineTo((250, 700))
 pen.closePath()
 charstring = pen.getCharString()
-fb.setupCFF(${JSON.stringify(psName)}, {"FullName": ${JSON.stringify(`${family} ${style}`)}}, {".notdef": empty, **{name: charstring for name in names}}, {})
+glyphs = {".notdef": empty}
+for cp, name in zip(codepoints, names):
+    glyphs[name] = empty if cp in empty_cps else charstring
+fb.setupCFF(${JSON.stringify(psName)}, {"FullName": ${JSON.stringify(`${family} ${style}`)}}, glyphs, {})
 fb.setupHorizontalMetrics({".notdef": (500, 0), **{name: (600, 0) for name in names}})
 fb.setupHorizontalHeader(ascent=800, descent=-200)
 fb.setupNameTable({

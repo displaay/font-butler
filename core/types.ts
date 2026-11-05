@@ -109,6 +109,13 @@ export type FontFaceInfo = {
   widthClass?: number
   /** Figure features the font actually contains, such as tnum or onum. */
   features?: string[]
+  /**
+   * ISO 639-3 languages this face can set. Absent until the file is read.
+   * Empty means the cmap was read and no language is supported.
+   */
+  languages?: string[]
+  /** Scripts of the orthographies that passed, such as Latin or Cyrillic. */
+  scripts?: string[]
 }
 
 export type FontAxisInfo = {

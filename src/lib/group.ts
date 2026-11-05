@@ -296,6 +296,7 @@ export function matchesLibraryFilter(
   const formats = filters.filter((filter) => FORMAT_FILTERS.has(filter))
   const classifications = filters.filter((filter) => filter.startsWith('classification:'))
   const foundries = filters.filter((filter) => filter.startsWith('foundry:'))
+  const coverage = filters.filter((filter) => filter.startsWith('language:') || filter.startsWith('script:'))
   if (statuses.length > 0 && !statuses.some((filter) => matchesStatusFilter(entry, filter))) {
     return false
   }
@@ -322,7 +323,26 @@ export function matchesLibraryFilter(
     const have = foundriesOf(entry)
     if (!foundries.some((filter) => have.has(filter.slice('foundry:'.length)))) return false
   }
+  if (coverage.length > 0) {
+    const have = coverageOf(entry)
+    const matches = coverage.some((filter) =>
+      filter.startsWith('language:')
+        ? have.languages.has(filter.slice('language:'.length))
+        : have.scripts.has(filter.slice('script:'.length)),
+    )
+    if (!matches) return false
+  }
   return true
+}
+
+function coverageOf(entry: CatalogEntry): { languages: Set<string>; scripts: Set<string> } {
+  const languages = new Set<string>()
+  const scripts = new Set<string>()
+  for (const face of entry.faces) {
+    for (const id of face.languages ?? []) languages.add(id)
+    for (const script of face.scripts ?? []) scripts.add(script)
+  }
+  return { languages, scripts }
 }
 
 function classificationsOf(entry: CatalogEntry): Set<string> {

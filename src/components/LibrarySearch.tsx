@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { FONT_CLASSIFICATION_LABELS, isFontClassification } from '../../shared/font-classification.ts'
+import { coverageFilterLabel } from '../../shared/language-coverage.ts'
 import type { LibraryFilter } from '../../shared/library-filters.ts'
 import {
   applySearchSuggestion,
@@ -15,6 +16,8 @@ import {
 const SECTION_LABELS: Record<SearchSuggestionKind, string> = {
   style: 'Filters',
   classification: 'Classification',
+  language: 'Languages',
+  script: 'Scripts',
   tag: 'Tags',
   foundry: 'Foundries',
 }
@@ -37,7 +40,7 @@ function searchFilterTagLabel(filter: string): string | null {
     const name = filter.slice('foundry:'.length).trim()
     return name || null
   }
-  return null
+  return coverageFilterLabel(filter)
 }
 
 function searchBarTags(tokens: readonly SearchToken[], libraryFilters: readonly LibraryFilter[]): SearchBarTag[] {
