@@ -714,6 +714,12 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(receiver, /DirectoryIsUserPrivate/)
   assert.match(receiver, /TempDirIsUserPrivate/)
   assert.match(receiver, /S_ISSOCK/)
+  assert.match(receiver, /SocketHasListener/)
+  const startSocket = receiver.slice(receiver.indexOf('static void StartSocket'), receiver.indexOf('static NSString *g_lastAgentError'))
+  assert.match(startSocket, /if \(SocketHasListener\(socketPath\)\) return/)
+  const listenerCheck = startSocket.indexOf('SocketHasListener(socketPath)')
+  const unlinkSocket = startSocket.indexOf('unlink(socketPath)')
+  assert.ok(listenerCheck >= 0 && unlinkSocket > listenerCheck)
   assert.match(receiver, /st_uid != getuid/)
   assert.match(receiver, /agentServiceWithPlistName:CurrentAgentPlistName\(\)/)
   assert.doesNotMatch(receiver, /agentServiceWithPlistName:kRelease/)
@@ -1268,17 +1274,18 @@ test('the handoff finds Cuttler.app and the zip Font Buttler.app that contain th
   assert.match(mainSource, /claimSameExecutableInstance/)
   assert.match(mainSource, /sharedLibraryLaunchMode/)
   assert.match(mainSource, /launchMode === 'quit'/)
-  assert.match(mainSource, /launchMode === 'socket'/)
-  assert.match(mainSource, /acceptInstalls: false/)
-  const socketBranch = mainSource.slice(
-    mainSource.indexOf("launchMode === 'socket'"),
+  assert.doesNotMatch(mainSource, /launchMode === 'socket'/)
+  assert.doesNotMatch(mainSource, /acceptInstalls/)
+  const quitBranch = mainSource.slice(
+    mainSource.indexOf("launchMode === 'quit'"),
     mainSource.indexOf('app.on(\'will-finish-launching\''),
   )
-  assert.match(socketBranch, /registerFinderSyncReceiver/)
-  assert.doesNotMatch(socketBranch, /bootstrapApi/)
+  assert.match(quitBranch, /app\.quit\(\)/)
+  assert.doesNotMatch(quitBranch, /registerFinderSyncReceiver/)
+  assert.doesNotMatch(quitBranch, /bootstrapApi/)
   assert.doesNotMatch(mainSource.slice(mainSource.indexOf('const instance = claimSameExecutableInstance')), /if \(!gotLock\) \{\s*app\.quit\(\)/)
   assert.equal(sharedLibraryLaunchMode({ sameExecutableHeld: false, sharedLockHeld: true }), 'quit')
-  assert.equal(sharedLibraryLaunchMode({ sameExecutableHeld: true, sharedLockHeld: true }), 'socket')
+  assert.equal(sharedLibraryLaunchMode({ sameExecutableHeld: true, sharedLockHeld: true }), 'quit')
   assert.equal(sharedLibraryLaunchMode({ sameExecutableHeld: true, sharedLockHeld: false }), 'app')
   const lockDir = mkdtempSync(path.join(tmpdir(), 'font-butler-instance-'))
   try {

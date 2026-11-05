@@ -500,6 +500,32 @@ static BOOL EnsurePrivateSocketDir(const char *temp, char *dirOut, size_t dirOut
   return DirectoryIsUserPrivate(dirOut);
 }
 
+// A connect that is accepted, or that would block, means a live listener.
+// A stale socket file refuses the connect. Only the stale file is replaced.
+static BOOL SocketHasListener(const char *socketPath) {
+  if (!socketPath || !socketPath[0]) return YES;
+  int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+  if (fd < 0) return YES;
+  int flags = fcntl(fd, F_GETFL, 0);
+  if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) {
+    close(fd);
+    return YES;
+  }
+  struct sockaddr_un address;
+  memset(&address, 0, sizeof(address));
+  address.sun_family = AF_UNIX;
+  if (strlcpy(address.sun_path, socketPath, sizeof(address.sun_path)) >= sizeof(address.sun_path)) {
+    close(fd);
+    return YES;
+  }
+  int connected = connect(fd, (struct sockaddr *)&address, (socklen_t)sizeof(address));
+  int error = errno;
+  close(fd);
+  if (connected == 0) return YES;
+  if (error == EINPROGRESS || error == EAGAIN || error == EWOULDBLOCK) return YES;
+  return NO;
+}
+
 static void StartSocket(void) {
   if (g_listenFd >= 0) return;
   signal(SIGPIPE, SIG_IGN);
@@ -513,6 +539,7 @@ static void StartSocket(void) {
   struct stat existing;
   if (lstat(socketPath, &existing) == 0) {
     if (S_ISLNK(existing.st_mode) || !S_ISSOCK(existing.st_mode) || existing.st_uid != getuid()) return;
+    if (SocketHasListener(socketPath)) return;
     unlink(socketPath);
   }
   int fd = socket(AF_UNIX, SOCK_STREAM, 0);

@@ -402,15 +402,13 @@ export function claimSameExecutableInstance({ lockPath, pid, isAlive, io } = {})
 }
 
 /**
- * `quit`: this executable is already running.
- * `socket`: another install holds the shared userData lock. Open this
- * bundle's Finder Sync socket and do not start the backend that writes
- * the catalog.
- * `app`: this process owns the library.
+ * `quit`: this executable is already running, or another install holds the
+ * shared userData lock. A second copy must not start the catalog and must
+ * not bind the Finder Sync socket the primary app is using.
+ * `app`: this process owns the library and may listen.
  */
 export function sharedLibraryLaunchMode({ sameExecutableHeld = false, sharedLockHeld = false } = {}) {
-  if (!sameExecutableHeld) return 'quit'
-  if (sharedLockHeld) return 'socket'
+  if (!sameExecutableHeld || sharedLockHeld) return 'quit'
   return 'app'
 }
 
