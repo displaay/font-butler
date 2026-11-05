@@ -169,7 +169,12 @@ export function AnnouncementDialog({
         )}
       >
         <DialogHeader className="pr-6">
-          <DialogTitle>{page?.title ?? item?.title ?? ''}</DialogTitle>
+          <DialogTitle>What&apos;s new</DialogTitle>
+          {page?.title || item?.title ? (
+            <p className="text-sm font-semibold tracking-tight text-foreground">
+              {page?.title ?? item?.title}
+            </p>
+          ) : null}
           <DialogDescription>{page?.body ?? item?.body ?? ''}</DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto">
