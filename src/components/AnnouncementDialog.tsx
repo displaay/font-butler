@@ -75,7 +75,12 @@ const PAGE_FIGURES: Record<string, PageFigure[]> = {
       alt: 'Settings row for the Finder menu extension',
     },
   ],
-  // Compare cutout lands with Font compare (CUT-41). Do not invent one.
+  compare: [
+    {
+      src: '/announcement/compare-window.png',
+      alt: 'Compare window with Stacked and Overlay, showing two faces',
+    },
+  ],
 }
 
 function pagesFor(item: Announcement): AnnouncementPage[] {

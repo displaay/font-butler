@@ -80,12 +80,12 @@ test('AnnouncementDialog reuses welcome Dialog surface classes', async () => {
   assert.match(source, /\/announcement\/activate-until-quit-menu\.png/)
   assert.match(source, /\/announcement\/adobe-document-watch\.png/)
   assert.match(source, /\/announcement\/finder-extension-settings\.png/)
+  assert.match(source, /\/announcement\/compare-window\.png/)
   assert.match(source, /'advanced-search':/)
   assert.match(source, /'activate-until-quit':/)
   assert.match(source, /'adobe-document-watch':/)
   assert.match(source, /'finder-extension':/)
-  assert.match(source, /Compare cutout lands with Font compare/)
-  assert.doesNotMatch(source, /'compare':\s*\[[\s\S]*?\/announcement\//)
+  assert.match(source, /compare:\s*\[/)
   assert.doesNotMatch(source, /'library-search':/)
   assert.doesNotMatch(source, /'search-filter-suggestions':/)
   assert.doesNotMatch(source, /'new-tag-color':/)
@@ -110,6 +110,7 @@ test('whats-new announcement cutouts exist under public/announcement', async () 
     'activate-until-quit-menu.png',
     'adobe-document-watch.png',
     'finder-extension-settings.png',
+    'compare-window.png',
   ]) {
     await access(`${root}/${name}`)
   }
@@ -124,6 +125,7 @@ test('library-search cutouts are tight action crops, not wide window slices', as
     'activate-until-quit-menu.png',
     'adobe-document-watch.png',
     'finder-extension-settings.png',
+    'compare-window.png',
   ]) {
     const buf = await readFile(`${root}/${name}`)
     assert.equal(buf.toString('ascii', 1, 4), 'PNG')
