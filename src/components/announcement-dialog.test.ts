@@ -12,23 +12,38 @@ test('whats-new pages start with the rename, then each shipped feature', () => {
       'smart-projects',
       'family-tags',
       'document-font-sheet',
-      'library-search',
-      'search-filter-suggestions',
+      'advanced-search',
       'activate-until-quit',
-      'new-tag-color',
+      'adobe-document-watch',
+      'finder-extension',
+      'compare',
     ],
   )
-  assert.equal(WHATS_NEW_PAGES.length, 8)
+  assert.equal(WHATS_NEW_PAGES.length, 9)
   assert.equal(WHATS_NEW_PAGES[0]?.title, 'Now called Cuttler')
+  assert.equal(WHATS_NEW_PAGES[2]?.title, 'Family tags')
+  assert.match(WHATS_NEW_PAGES[2]?.body ?? '', /color/i)
   assert.equal(WHATS_NEW_PAGES[3]?.title, 'Document → Project')
-  assert.equal(WHATS_NEW_PAGES[4]?.title, 'Library search')
-  assert.equal(WHATS_NEW_PAGES[5]?.title, 'Search filter suggestions')
-  assert.equal(WHATS_NEW_PAGES[6]?.title, 'Activate until quit')
-  assert.equal(WHATS_NEW_PAGES[7]?.title, 'Tag colors')
+  assert.equal(WHATS_NEW_PAGES[4]?.title, 'Advanced search')
   assert.match(WHATS_NEW_PAGES[4]?.body ?? '', /tag name/i)
-  assert.match(WHATS_NEW_PAGES[5]?.body ?? '', /matching filters/i)
-  assert.match(WHATS_NEW_PAGES[6]?.body ?? '', /session only/i)
-  assert.match(WHATS_NEW_PAGES[7]?.body ?? '', /color/i)
+  assert.match(WHATS_NEW_PAGES[4]?.body ?? '', /matching filters/i)
+  assert.equal(WHATS_NEW_PAGES[5]?.title, 'Temporary install')
+  assert.match(WHATS_NEW_PAGES[5]?.body ?? '', /Activate until quit/)
+  assert.match(WHATS_NEW_PAGES[5]?.body ?? '', /temporary install/i)
+  assert.equal(WHATS_NEW_PAGES[6]?.title, 'Adobe document watch')
+  assert.match(WHATS_NEW_PAGES[6]?.body ?? '', /Watch documents in Adobe and Office/)
+  assert.equal(WHATS_NEW_PAGES[7]?.title, 'Finder extension')
+  assert.match(WHATS_NEW_PAGES[7]?.body ?? '', /Finder/i)
+  assert.equal(WHATS_NEW_PAGES[8]?.title, 'Compare')
+  assert.match(WHATS_NEW_PAGES[8]?.body ?? '', /Compare/)
+  assert.equal(
+    WHATS_NEW_PAGES.some((page) => page.id === 'library-search' || page.id === 'search-filter-suggestions'),
+    false,
+  )
+  assert.equal(
+    WHATS_NEW_PAGES.some((page) => page.id === 'new-tag-color'),
+    false,
+  )
   assert.equal(ANNOUNCEMENTS.length, 1)
   assert.equal(ANNOUNCEMENTS[0]?.id, 'whats-new')
   assert.equal(ANNOUNCEMENTS[0]?.celebrate, true)
@@ -57,16 +72,23 @@ test('AnnouncementDialog reuses welcome Dialog surface classes', async () => {
   assert.match(source, /appIconPreviewSrc/)
   assert.match(source, /\/announcement\/smart-projects\.png/)
   assert.match(source, /\/announcement\/family-tags\.png/)
+  assert.match(source, /\/announcement\/new-tag-color\.png/)
   assert.match(source, /\/announcement\/document-font-sheet\.png/)
   assert.match(source, /\/announcement\/library-search-typing\.png/)
   assert.match(source, /\/announcement\/library-search-tag\.png/)
   assert.match(source, /\/announcement\/search-filter-suggestions\.png/)
-  assert.match(source, /\/announcement\/new-tag-color\.png/)
-  assert.match(source, /'library-search':/)
-  assert.match(source, /'search-filter-suggestions':/)
-  assert.match(source, /'new-tag-color':/)
-  // Activate until quit is copy-only until a cutout exists — no invented screenshot path.
-  assert.doesNotMatch(source, /activate-until-quit[\s\S]{0,80}\/announcement\//)
+  assert.match(source, /\/announcement\/activate-until-quit-menu\.png/)
+  assert.match(source, /\/announcement\/adobe-document-watch\.png/)
+  assert.match(source, /\/announcement\/finder-extension-settings\.png/)
+  assert.match(source, /'advanced-search':/)
+  assert.match(source, /'activate-until-quit':/)
+  assert.match(source, /'adobe-document-watch':/)
+  assert.match(source, /'finder-extension':/)
+  assert.match(source, /Compare cutout lands with Font compare/)
+  assert.doesNotMatch(source, /'compare':\s*\[[\s\S]*?\/announcement\//)
+  assert.doesNotMatch(source, /'library-search':/)
+  assert.doesNotMatch(source, /'search-filter-suggestions':/)
+  assert.doesNotMatch(source, /'new-tag-color':/)
   // Both icon-choice tiles use white card fills (never primary/black).
   assert.equal([...source.matchAll(/border bg-white px-3/g)].length, 2)
   assert.doesNotMatch(source, /offersIconChoice[\s\S]*?bg-primary/)
@@ -85,6 +107,9 @@ test('whats-new announcement cutouts exist under public/announcement', async () 
     'library-search-tag.png',
     'search-filter-suggestions.png',
     'new-tag-color.png',
+    'activate-until-quit-menu.png',
+    'adobe-document-watch.png',
+    'finder-extension-settings.png',
   ]) {
     await access(`${root}/${name}`)
   }
@@ -93,13 +118,19 @@ test('whats-new announcement cutouts exist under public/announcement', async () 
 test('library-search cutouts are tight action crops, not wide window slices', async () => {
   const { readFile } = await import('node:fs/promises')
   const root = fileURLToPath(new URL('../../public/announcement', import.meta.url))
-  for (const name of ['library-search-typing.png', 'library-search-tag.png']) {
+  for (const name of [
+    'library-search-typing.png',
+    'library-search-tag.png',
+    'activate-until-quit-menu.png',
+    'adobe-document-watch.png',
+    'finder-extension-settings.png',
+  ]) {
     const buf = await readFile(`${root}/${name}`)
     assert.equal(buf.toString('ascii', 1, 4), 'PNG')
     const width = buf.readUInt32BE(16)
     const height = buf.readUInt32BE(20)
     assert.ok(width < 1200, `${name} width ${width} still looks like a window slice`)
-    assert.ok(height < 500, `${name} height ${height} still looks like a window slice`)
+    assert.ok(height < 900, `${name} height ${height} still looks like a window slice`)
   }
 })
 

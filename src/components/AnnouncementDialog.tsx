@@ -32,6 +32,10 @@ const PAGE_FIGURES: Record<string, PageFigure[]> = {
       src: '/announcement/family-tags.png',
       alt: 'New family tag dialog',
     },
+    {
+      src: '/announcement/new-tag-color.png',
+      alt: 'New tag dialog with color choices',
+    },
   ],
   'document-font-sheet': [
     {
@@ -39,7 +43,7 @@ const PAGE_FIGURES: Record<string, PageFigure[]> = {
       alt: 'Document font groups: On, in the library but off, and Missing',
     },
   ],
-  'library-search': [
+  'advanced-search': [
     {
       src: '/announcement/library-search-typing.png',
       alt: 'Multi-word library search',
@@ -48,19 +52,30 @@ const PAGE_FIGURES: Record<string, PageFigure[]> = {
       src: '/announcement/library-search-tag.png',
       alt: 'Library search matching a family tag',
     },
-  ],
-  'search-filter-suggestions': [
     {
       src: '/announcement/search-filter-suggestions.png',
       alt: 'Search field with matching filter suggestions',
     },
   ],
-  'new-tag-color': [
+  'activate-until-quit': [
     {
-      src: '/announcement/new-tag-color.png',
-      alt: 'New tag dialog with color choices',
+      src: '/announcement/activate-until-quit-menu.png',
+      alt: 'Right-click menu showing Activate until quit',
     },
   ],
+  'adobe-document-watch': [
+    {
+      src: '/announcement/adobe-document-watch.png',
+      alt: 'Settings toggle for Watch documents in Adobe and Office',
+    },
+  ],
+  'finder-extension': [
+    {
+      src: '/announcement/finder-extension-settings.png',
+      alt: 'Settings row for the Finder menu extension',
+    },
+  ],
+  // Compare cutout lands with Font compare (CUT-41). Do not invent one.
 }
 
 function pagesFor(item: Announcement): AnnouncementPage[] {
