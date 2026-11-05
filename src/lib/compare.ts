@@ -23,6 +23,7 @@ export {
   removeCompareEntry,
   removeCompareFamily,
   replaceCompareFamilies,
+  replaceCompareFiles,
   resolvedCompareFace,
   setCompareStyle,
   setCompareTint,

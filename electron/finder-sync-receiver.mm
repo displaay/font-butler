@@ -440,7 +440,7 @@ static void HandleClient(int fd) {
     return;
   }
   NSString *action = [json[@"action"] isKindOfClass:[NSString class]] ? json[@"action"] : @"";
-  BOOL known = [action isEqualToString:@"install"] || [action isEqualToString:@"installAs"];
+  BOOL known = [action isEqualToString:@"install"] || [action isEqualToString:@"installAs"] || [action isEqualToString:@"compare"];
   if (!known) {
     ReplyOk(fd, NO);
     close(fd);

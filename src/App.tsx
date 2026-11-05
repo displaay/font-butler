@@ -105,6 +105,7 @@ import {
   removeCompareEntry,
   removeCompareFamily,
   replaceCompareFamilies,
+  replaceCompareFiles,
   setCompareStyle,
   setCompareTint,
   compareAnotherStyle,
@@ -1513,7 +1514,7 @@ function AppShell() {
     setCompareOpen(true)
   }
   openComparePathsRef.current = (paths) => {
-    void applyComparePaths(paths, paths.length > 1 ? 'replace' : 'drop')
+    void applyComparePaths(paths, paths.length > 1 ? 'files' : 'drop')
   }
   const systemSelection = selectedSystemList()
   const catalogPlan = catalogBatchPlan(catalogSelection, adobeAvailable)
@@ -2278,7 +2279,7 @@ function AppShell() {
     }
   }
 
-  async function applyComparePaths(paths: string[], mode: 'drop' | 'family' | 'replace') {
+  async function applyComparePaths(paths: string[], mode: 'drop' | 'family' | 'replace' | 'files') {
     const unique = [...new Set(paths.map((item) => item.trim()).filter(Boolean))]
     if (unique.length === 0) {
       setCompareOpen(true)
@@ -2290,6 +2291,7 @@ function AppShell() {
       setCompareModel((current) => {
         if (mode === 'replace') return replaceCompareFamilies(result.families)
         if (mode === 'family') return addCompareFamilies(current, result.families)
+        if (mode === 'files') return replaceCompareFiles(result.families)
         return addDroppedFiles(current, result.families)
       })
       setCompareOpen(true)
@@ -2310,7 +2312,7 @@ function AppShell() {
       setCompareOpen(true)
       return
     }
-    await applyComparePaths(picked, picked.length > 1 ? 'replace' : 'drop')
+    await applyComparePaths(picked, picked.length > 1 ? 'files' : 'drop')
   }
 
   async function handleDrop(dataTransfer: DataTransfer, projectId?: string) {

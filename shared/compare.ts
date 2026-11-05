@@ -199,6 +199,11 @@ export function replaceCompareFamilies(incoming: CompareFamily[]): CompareModel 
   return addCompareFamilies(emptyCompare(), incoming)
 }
 
+/** A file selection replaces the comparison with one row per file, including two files of one family. */
+export function replaceCompareFiles(incoming: CompareFamily[]): CompareModel {
+  return addDroppedFiles(emptyCompare(), incoming)
+}
+
 /**
  * A dropped file joins the comparison as its own row.
  * A second file of a family already shown is added in that style.

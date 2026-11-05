@@ -637,6 +637,7 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(swift, /"compare"/)
   assert.match(swift, /FontButtlerCompareTitle/)
   assert.match(agent, /@"compare"/)
+  assert.match(receiver, /isEqualToString:@"compare"/)
   assert.match(swift, /#available\(macOS 13\.0, \*\)/)
   assert.match(swift, /finderSyncMissingApp/)
   assert.match(swift, /finderSyncAgentDisabled/)

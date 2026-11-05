@@ -7,6 +7,7 @@ import {
   emptyCompare,
   familyIdForName,
   replaceCompareFamilies,
+  replaceCompareFiles,
   resolvedCompareFace,
   type CompareFace,
   type CompareFamily,
@@ -73,6 +74,24 @@ test('dropping Regular after an Automatic Bold row keeps Bold', () => {
     again.entries.map((entry) => resolvedCompareFace(entry, familyAfter)?.styleName),
     ['Bold', 'Regular'],
   )
+})
+
+test('opening two files of one family keeps one row per file', () => {
+  const first = face('/Fonts/v1/Acme-Regular.ttf', 'Regular', 400)
+  const second = face('/Fonts/v2/Acme-Regular.ttf', 'Regular', 400)
+  const bold = face('/Fonts/v1/Acme-Bold.ttf', 'Bold', 700)
+  const opened = replaceCompareFiles([family('Acme', [first, second])])
+  assert.equal(opened.entries.length, 2)
+  const openedFamily = opened.families[0]!
+  assert.deepEqual(
+    opened.entries.map((entry) => resolvedCompareFace(entry, openedFamily)?.filePath),
+    [first.filePath, second.filePath],
+  )
+  const styles = replaceCompareFiles([family('Acme', [bold, first])])
+  assert.equal(styles.entries.length, 2)
+  const library = replaceCompareFamilies([family('Acme', [first, second, bold])])
+  assert.equal(library.entries.length, 1)
+  assert.equal(library.entries[0]?.styleId, null)
 })
 
 test('two files that are not catalog entries become two comparison rows', () => {
