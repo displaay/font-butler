@@ -15,11 +15,13 @@ import {
   writeZipFile,
 } from './backup.ts'
 import { faceIdentityKey, loadCatalog, saveCatalog } from './catalog.ts'
+import { isUnderAnyRoot } from './containment.ts'
 import { fingerprintBuffer, fingerprintFile } from './fingerprint.ts'
 import { createWatchFolder } from './folders.ts'
 import { loadProjects, saveProjects } from './projects.ts'
 import { loadSettings, saveSettings } from './settings.ts'
-import { tempPaths, writeTestFont } from './test-util.ts'
+import { saveSessionActivationIds } from './session-activation.ts'
+import { tempPaths, withService, writeTestFont } from './test-util.ts'
 import type { AppPaths } from './paths.ts'
 import type { CatalogEntry } from './types.ts'
 
@@ -626,6 +628,200 @@ test('a font that was on is not reactivated onto a different file occupying its 
     assert.ok(report.reactivated.some((r) => r.entryId === 'on-id'))
   } finally {
     cleanup(paths, target)
+  }
+})
+
+function assertDisabledIsNotSource(entry: CatalogEntry, disabledDir: string): void {
+  assert.notEqual(path.resolve(entry.disabledPath ?? 'disabled-unset'), path.resolve(entry.sourcePath))
+  if (entry.disabledPath) assert.equal(isUnderAnyRoot(entry.disabledPath, [disabledDir]), true)
+}
+
+test('restored off fonts do not use the source file as the parked copy', async () => {
+  const source = tempPaths('backup-source-safe-src-')
+  try {
+    const srcDir = path.join(source.dataRoot, 'library-src')
+    const goneDir = path.join(source.dataRoot, 'gone')
+    fs.mkdirSync(srcDir, { recursive: true })
+    fs.mkdirSync(goneDir, { recursive: true })
+    const acmePath = path.join(srcDir, 'Acme.ttf')
+    const boldPath = path.join(srcDir, 'Acme-Bold.ttf')
+    const vaultPath = path.join(goneDir, 'Vault.ttf')
+    writeTestFont(acmePath, 'Acme', 'Acme-Regular')
+    writeTestFont(boldPath, 'Acme', 'Acme-Bold', { style: 'Bold' })
+    writeTestFont(vaultPath, 'Vault', 'Vault-Regular')
+    saveCatalog(source, {
+      version: 1,
+      entries: [
+        entryFor('acme-id', acmePath, 'Acme', 'Acme-Regular', { status: 'deactivated', disabledPath: acmePath }),
+        entryFor('bold-id', boldPath, 'Acme', 'Acme-Bold', {
+          status: 'deactivated',
+          disabledPath: boldPath,
+          faces: [{ familyName: 'Acme', styleName: 'Bold', fullName: 'Acme Bold', postscriptName: 'Acme-Bold', isVariable: false, instanceCount: 1, instanceNames: [], weight: 700, italic: false }],
+        }),
+        entryFor('vault-id', vaultPath, 'Vault', 'Vault-Regular'),
+      ],
+    })
+    const dest = path.join(source.dataRoot, 'library.cuttlerbackup')
+    createBackup(source, { destinationPath: dest })
+    fs.rmSync(acmePath)
+    fs.rmSync(boldPath)
+    fs.rmSync(goneDir, { recursive: true, force: true })
+
+    await withService(async (service, target) => {
+      const report = restoreBackup(target, dest, { restoreOrganization: false })
+      assert.equal(report.failed.length, 0, JSON.stringify(report.failed))
+      const catalog = loadCatalog(target)
+      const acme = catalog.entries.find((entry) => entry.id === 'acme-id')!
+      const bold = catalog.entries.find((entry) => entry.id === 'bold-id')!
+      const vault = catalog.entries.find((entry) => entry.id === 'vault-id')!
+      assert.equal(acme.sourcePath, acmePath)
+      assert.equal(bold.sourcePath, boldPath)
+      assert.ok(vault.sourcePath.includes(`${path.sep}Restored${path.sep}`), vault.sourcePath)
+      assertDisabledIsNotSource(acme, target.disabledDir)
+      assertDisabledIsNotSource(bold, target.disabledDir)
+      assertDisabledIsNotSource(vault, target.disabledDir)
+      assert.equal(fs.existsSync(acmePath), true)
+      assert.equal(fs.existsSync(boldPath), true)
+      const acmeIno = fs.statSync(acmePath).ino
+      const boldIno = fs.statSync(boldPath).ino
+      const vaultFile = vault.sourcePath
+      const vaultIno = fs.statSync(vaultFile).ino
+
+      await service.uninstall('acme-id', { deleteSource: false })
+      assert.equal(fs.existsSync(acmePath), true)
+      assert.equal(fs.statSync(acmePath).ino, acmeIno)
+      await service.uninstall('vault-id', { deleteSource: false })
+      assert.equal(fs.existsSync(vaultFile), true)
+      assert.equal(fs.statSync(vaultFile).ino, vaultIno)
+
+      const activated = await service.activate('bold-id')
+      assert.equal(fs.existsSync(boldPath), true)
+      assert.equal(fs.statSync(boldPath).ino, boldIno)
+      assert.equal(path.resolve(activated.sourcePath), path.resolve(boldPath))
+      assert.ok(activated.installedPath)
+      assert.notEqual(path.resolve(activated.installedPath), path.resolve(boldPath))
+      assert.equal(fs.existsSync(activated.installedPath), true)
+      assert.equal(isUnderAnyRoot(activated.installedPath, [target.installDir, target.userFontsDir]), true)
+    }, { prefix: 'backup-source-safe-dst-' })
+  } finally {
+    cleanup(source)
+  }
+})
+
+test('activate-until-quit fonts stay off after restore', () => {
+  const paths = tempPaths('backup-session-src-')
+  const target = tempPaths('backup-session-dst-')
+  const planPaths = tempPaths('backup-session-plan-')
+  try {
+    const srcDir = path.join(paths.dataRoot, 'src')
+    fs.mkdirSync(srcDir, { recursive: true })
+    const onPath = path.join(srcDir, 'On.ttf')
+    const sessionPath = path.join(srcDir, 'Session.ttf')
+    writeTestFont(onPath, 'OnFam', 'OnFam-Regular')
+    writeTestFont(sessionPath, 'SessionFam', 'SessionFam-Regular')
+    const installedCopy = path.join(paths.installDir, 'On.ttf')
+    fs.mkdirSync(paths.installDir, { recursive: true })
+    fs.copyFileSync(onPath, installedCopy)
+    fs.copyFileSync(sessionPath, path.join(paths.installDir, 'Session.ttf'))
+    saveCatalog(paths, {
+      version: 1,
+      entries: [
+        entryFor('on-id', onPath, 'OnFam', 'OnFam-Regular', { status: 'installed', installedPath: installedCopy, installedFingerprint: fingerprintFile(onPath) }),
+        entryFor('session-id', sessionPath, 'SessionFam', 'SessionFam-Regular', {
+          status: 'installed',
+          installedPath: path.join(paths.installDir, 'Session.ttf'),
+          installedFingerprint: fingerprintFile(sessionPath),
+        }),
+      ],
+    })
+    saveSessionActivationIds(paths, ['session-id'])
+    const dest = path.join(paths.dataRoot, 'session.cuttlerbackup')
+    const created = createBackup(paths, { destinationPath: dest })
+    const sessionRefs = created.manifest.files.flatMap((file) => file.entries).filter((ref) => ref.entryId === 'session-id')
+    assert.ok(sessionRefs.length > 0)
+    assert.ok(sessionRefs.every((ref) => ref.activation === 'temporary'))
+    const plan = planRestore(planPaths, dest, { restoreOrganization: false })
+    assert.equal(plan.reactivated.some((row) => row.entryId === 'session-id'), false)
+    assert.ok(plan.reactivated.some((row) => row.entryId === 'on-id'))
+
+    fs.rmSync(onPath)
+    fs.rmSync(sessionPath)
+    fs.rmSync(installedCopy)
+    fs.rmSync(path.join(paths.installDir, 'Session.ttf'))
+    const report = restoreBackup(target, dest, { restoreOrganization: false })
+    assert.equal(report.reactivated.some((row) => row.entryId === 'session-id'), false)
+    assert.ok(report.reactivated.some((row) => row.entryId === 'on-id'))
+    const catalog = loadCatalog(target)
+    const session = catalog.entries.find((entry) => entry.id === 'session-id')!
+    assert.equal(session.status, 'deactivated')
+    assert.equal(session.installedPath, undefined)
+    assert.equal(session.temporaryActivation, undefined)
+    assertDisabledIsNotSource(session, target.disabledDir)
+    const on = catalog.entries.find((entry) => entry.id === 'on-id')!
+    assert.equal(on.status, 'installed')
+    assert.ok(on.installedPath && fs.existsSync(on.installedPath))
+  } finally {
+    cleanup(paths, target, planPaths)
+  }
+})
+
+test('restore puts back family ratings, comments, and retired tag seeds', () => {
+  const source = tempPaths('backup-details-src-')
+  const target = tempPaths('backup-details-dst-')
+  const fontsOnly = tempPaths('backup-details-fonts-')
+  try {
+    const srcDir = path.join(source.dataRoot, 'src')
+    fs.mkdirSync(srcDir, { recursive: true })
+    const fontPath = path.join(srcDir, 'Alpha.ttf')
+    writeTestFont(fontPath, 'Alpha', 'Alpha-Regular')
+    saveCatalog(source, {
+      version: 1,
+      entries: [entryFor('alpha-id', fontPath, 'Alpha', 'Alpha-Regular')],
+      tags: [
+        { id: 'licensed', name: 'Licensed', color: '#1f8a4c', seed: 'licensed' },
+        { id: 'custom-1', name: 'Client work', color: '#7c5cbf' },
+      ],
+      familyTags: [{ familyKey: 'Alpha', tagIds: ['custom-1'] }],
+      familyDetails: [
+        { familyKey: 'Alpha', rating: 4, comment: 'Hero face' },
+        { familyKey: 'Beta', rating: 2 },
+      ],
+      retiredTagSeeds: ['trial'],
+    })
+    const dest = path.join(source.dataRoot, 'details.cuttlerbackup')
+    createBackup(source, { destinationPath: dest })
+    saveCatalog(target, {
+      version: 1,
+      entries: [],
+      familyDetails: [{ familyKey: 'Keep', rating: 1, comment: 'old' }],
+      retiredTagSeeds: ['licensed'],
+    })
+    saveCatalog(fontsOnly, {
+      version: 1,
+      entries: [],
+      familyDetails: [{ familyKey: 'Keep', rating: 5, comment: 'stay' }],
+      retiredTagSeeds: ['open-source'],
+    })
+
+    const report = restoreBackup(target, dest)
+    assert.equal(report.failed.length, 0, JSON.stringify(report.failed))
+    const restored = loadCatalog(target)
+    assert.deepEqual(restored.familyDetails, [
+      { familyKey: 'Alpha', rating: 4, comment: 'Hero face' },
+      { familyKey: 'Beta', rating: 2 },
+    ])
+    assert.deepEqual(restored.retiredTagSeeds, ['trial'])
+    assert.equal(restored.tags?.some((tag) => tag.seed === 'trial'), false)
+    assert.equal(restored.tags?.some((tag) => tag.seed === 'licensed'), true)
+    assert.ok(restored.familyTags?.some((row) => row.familyKey === 'Alpha' && row.tagIds.includes('custom-1')))
+
+    const fontsReport = restoreBackup(fontsOnly, dest, { restoreOrganization: false })
+    assert.equal(fontsReport.restoreOrganization, false)
+    const kept = loadCatalog(fontsOnly)
+    assert.deepEqual(kept.familyDetails, [{ familyKey: 'Keep', rating: 5, comment: 'stay' }])
+    assert.deepEqual(kept.retiredTagSeeds, ['open-source'])
+  } finally {
+    cleanup(source, target, fontsOnly)
   }
 })
 
