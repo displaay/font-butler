@@ -5,6 +5,7 @@ import { DuplicateCopyBadges, NameWithFormatTags, RetailBadge, SourceBadge, Stat
 import { Badge } from '@/components/ui/badge'
 import { CatalogMenuItems } from '@/components/BatchActions'
 import { DisplaayMark } from '@/components/DisplaayMark'
+import { ActivationSwitch } from '@/components/ActivationSwitch'
 import { CatalogCardActions } from '@/components/FontCardActions'
 import { catalogFontFamily } from '@/components/FontFaceStyles'
 import { InstanceList } from '@/components/InstanceList'
@@ -20,6 +21,7 @@ import {
 } from '@/components/ui/context-menu'
 import { FamilyRatingBadge } from '@/components/FamilyDetails'
 import { FamilyTagDots, FamilyTagMenuItems } from '@/components/FamilyTags'
+import { catalogActivationSwitch } from '@/lib/activationSwitch'
 import { familyCardPlan, type CatalogBatchPlan } from '@/lib/batch'
 import type { FamilyTag, FamilyTagAssignment } from '../../shared/family-tags.ts'
 import { testInstallMenuLabels } from '@/lib/testInstall'
@@ -242,7 +244,14 @@ export const LibraryCard = memo(function LibraryCard({
         italic: previewItalic,
         label: preview.faces[0]?.styleName ?? 'Regular',
       }
-  const plan = batch ?? familyCardPlan(group, adobeAvailable)
+  const cardPlan = familyCardPlan(group, adobeAvailable)
+  const plan = batch ?? cardPlan
+  const activation = catalogActivationSwitch(group, cardPlan)
+  function toggleActivation() {
+    if (!activation.enabled || busy) return
+    if (activation.position === 'on') onDeactivate()
+    else onActivate()
+  }
   const inCurrentProject = Boolean(
     projectFilter && group.entries.some((entry) =>
       projects.find((item) => item.id === projectFilter)?.members.some((member) => member.assetId === entry.id),
@@ -288,7 +297,6 @@ export const LibraryCard = memo(function LibraryCard({
   const overlayMixed = layout === 'grid' && Boolean(mixedWarning)
   const showOverlayIcons =
     layout === 'grid' && (showDestIcons || showSourceIcon || showRetailIcon || notInstalled)
-  const showCorner = showOverlayIcons || overlayDeactivated || overlayMixed
   const locationBadges =
     showDestIcons || showSourceIcon || showRetailIcon ? (
       <>
@@ -381,110 +389,138 @@ export const LibraryCard = memo(function LibraryCard({
         )}
         {...cardChrome}
       >
-        {showCorner ? (
-          <div
-            data-no-marquee=""
-            className="pointer-events-none absolute top-1.5 left-1.5 z-10 flex max-w-[calc(100%-0.75rem)] flex-col items-start gap-1 [transform:translateZ(0)]"
-          >
-            {showOverlayIcons || overlayDeactivated ? (
-              <div className="flex items-center gap-1">
-                {locationBadges}
-                {overlayDeactivated ? (
-                  <Badge tone="muted" title="Deactivated">
-                    Deactivated
-                  </Badge>
-                ) : null}
-                {layout === 'grid' && notInstalled ? (
-                  <Badge tone="muted" title="Not installed">
-                    Not installed
-                  </Badge>
+        {layout === 'grid' ? (
+          <ContextMenuTrigger asChild>
+            <div data-no-marquee="">
+              <div className="flex items-start gap-1 px-2.5 pt-3.5 pb-1.5">
+                <button
+                  type="button"
+                  onClick={handleCardClick}
+                  onContextMenu={skipClickAfterContextMenu}
+                  onDoubleClick={onInspect}
+                  aria-label={group.familyName}
+                  className="flex min-w-0 flex-1 flex-col items-start gap-1 text-left"
+                >
+                  {showOverlayIcons || overlayDeactivated ? (
+                    <span className="pointer-events-none flex max-w-full flex-wrap items-center gap-1">
+                      {locationBadges}
+                      {overlayDeactivated ? (
+                        <Badge tone="muted" title="Deactivated">
+                          Deactivated
+                        </Badge>
+                      ) : null}
+                      {notInstalled ? (
+                        <Badge tone="muted" title="Not installed">
+                          Not installed
+                        </Badge>
+                      ) : null}
+                    </span>
+                  ) : null}
+                  {overlayMixed ? (
+                    <Badge
+                      tone="accent"
+                      className="pointer-events-none max-w-full truncate"
+                      title="OpenType and TrueType copies of this family are installed. Uninstall one format."
+                    >
+                      {mixedWarning}
+                    </Badge>
+                  ) : null}
+                </button>
+                {!uninstallOnly ? (
+                  <ActivationSwitch
+                    position={activation.position}
+                    enabled={activation.enabled}
+                    busy={busy}
+                    help={activation.help}
+                    onToggle={toggleActivation}
+                  />
                 ) : null}
               </div>
-            ) : null}
-            {overlayMixed ? (
-              <Badge
-                tone="accent"
-                className="max-w-full truncate"
-                title="OpenType and TrueType copies of this family are installed. Uninstall one format."
-              >
-                {mixedWarning}
-              </Badge>
-            ) : null}
-          </div>
-        ) : null}
-        {layout === 'grid' ? (
-          <PreviewRetryBoundary>
-            <ContextMenuTrigger asChild>
-              <button
-                type="button"
-                onClick={handleCardClick}
-                onContextMenu={skipClickAfterContextMenu}
-                onDoubleClick={onInspect}
-                className="flex w-full flex-col text-left"
-              >
-                <CyclingAaPreview
-                  faces={lockedPreview ? [restPreview] : previewFaces}
-                  rest={restPreview}
-                  active={hovered && !lockedPreview}
-                  size={previewSize}
-                  sample={previewSample}
-                  featureSettings={lockedPreview?.featureSettings}
-                />
-                <div className={previewSize < 3.25 ? 'p-2' : 'p-3'}>{identity}</div>
-              </button>
-            </ContextMenuTrigger>
-          </PreviewRetryBoundary>
+              <PreviewRetryBoundary>
+                <button
+                  type="button"
+                  onClick={handleCardClick}
+                  onContextMenu={skipClickAfterContextMenu}
+                  onDoubleClick={onInspect}
+                  className={cn('flex w-full flex-col text-left', muted && 'opacity-50')}
+                >
+                  <CyclingAaPreview
+                    faces={lockedPreview ? [restPreview] : previewFaces}
+                    rest={restPreview}
+                    active={hovered && !lockedPreview}
+                    size={previewSize}
+                    sample={previewSample}
+                    featureSettings={lockedPreview?.featureSettings}
+                  />
+                  <div className={previewSize < 3.25 ? 'p-2' : 'p-3'}>{identity}</div>
+                </button>
+              </PreviewRetryBoundary>
+            </div>
+          </ContextMenuTrigger>
         ) : (
           <>
             <ContextMenuTrigger asChild>
-              <div className="flex items-stretch">
-                <PreviewRetryBoundary>
-                  <button
-                    type="button"
-                    onClick={handleCardClick}
-                    onContextMenu={skipClickAfterContextMenu}
-                    onDoubleClick={onInspect}
-                    className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left"
-                  >
-                    <AaPreview
-                      family={previewFamily}
-                      weight={lockedPreview?.weight ?? previewWeight}
-                      italic={lockedPreview?.italic ?? previewItalic}
-                      variation={lockedPreview?.variation}
-                      featureSettings={lockedPreview?.featureSettings}
-                      sample={previewSample}
-                      wait={entryHasPreviewFile(preview)}
+              <div data-no-marquee="" className="flex items-stretch">
+                <div className={cn('flex min-w-0 flex-1 items-stretch', muted && 'opacity-50')}>
+                  <PreviewRetryBoundary>
+                    <button
+                      type="button"
+                      onClick={handleCardClick}
+                      onContextMenu={skipClickAfterContextMenu}
+                      onDoubleClick={onInspect}
+                      className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left"
+                    >
+                      <AaPreview
+                        family={previewFamily}
+                        weight={lockedPreview?.weight ?? previewWeight}
+                        italic={lockedPreview?.italic ?? previewItalic}
+                        variation={lockedPreview?.variation}
+                        featureSettings={lockedPreview?.featureSettings}
+                        sample={previewSample}
+                        wait={entryHasPreviewFile(preview)}
+                      />
+                      <div className="min-w-0 flex-1">{identity}</div>
+                      {locationBadges ? (
+                        <span
+                          className={cn(
+                            'ml-auto flex shrink-0 items-center gap-1',
+                            !batch && (selected || actionsVisible) && 'invisible',
+                          )}
+                        >
+                          {locationBadges}
+                        </span>
+                      ) : null}
+                    </button>
+                  </PreviewRetryBoundary>
+                  {showInstances && (
+                    <button
+                      type="button"
+                      data-no-marquee=""
+                      aria-expanded={expanded}
+                      aria-label={expanded ? 'Hide instances' : 'Show instances'}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        setExpanded((value) => !value)
+                      }}
+                      className="flex w-10 shrink-0 items-center justify-center text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                    >
+                      <ChevronDown
+                        className={cn('size-4 transition-transform', expanded && 'rotate-180')}
+                      />
+                    </button>
+                  )}
+                </div>
+                {!uninstallOnly ? (
+                  <div className="flex items-center pr-2.5">
+                    <ActivationSwitch
+                      position={activation.position}
+                      enabled={activation.enabled}
+                      busy={busy}
+                      help={activation.help}
+                      onToggle={toggleActivation}
                     />
-                    <div className="min-w-0 flex-1">{identity}</div>
-                    {locationBadges ? (
-                      <span
-                        className={cn(
-                          'ml-auto flex shrink-0 items-center gap-1',
-                          !batch && (selected || actionsVisible) && 'invisible',
-                        )}
-                      >
-                        {locationBadges}
-                      </span>
-                    ) : null}
-                  </button>
-                </PreviewRetryBoundary>
-                {showInstances && (
-                  <button
-                    type="button"
-                    data-no-marquee=""
-                    aria-expanded={expanded}
-                    aria-label={expanded ? 'Hide instances' : 'Show instances'}
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      setExpanded((value) => !value)
-                    }}
-                    className="flex w-10 shrink-0 items-center justify-center text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-                  >
-                    <ChevronDown
-                      className={cn('size-4 transition-transform', expanded && 'rotate-180')}
-                    />
-                  </button>
-                )}
+                  </div>
+                ) : null}
               </div>
             </ContextMenuTrigger>
             {expanded && showInstances && (
@@ -528,14 +564,14 @@ export const LibraryCard = memo(function LibraryCard({
             missingSource={missingSource}
             busy={busy}
             visible={selected || actionsVisible}
+            layout={layout}
+            switchInset={!uninstallOnly}
             offset={layout === 'list' && showInstances}
             onInstall={onInstall}
             onReinstall={onReinstall}
-            onDeactivate={onDeactivate}
             onUninstall={onUninstall}
             onUninstallFormat={onUninstallFormat}
             formatUninstalls={mixedFormats}
-            onActivate={onActivate}
             onActivateUntilQuit={onActivateUntilQuit}
             onSwitch={onSwitch}
             formatSwap={swap}

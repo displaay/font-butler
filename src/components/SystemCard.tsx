@@ -3,6 +3,7 @@ import { ChevronDown, FolderOpen } from 'lucide-react'
 import { AaPreview, CyclingAaPreview, PreviewRetryBoundary } from '@/components/AaPreview'
 import { NameWithFormatTags } from '@/components/Badges'
 import { SystemMenuItems } from '@/components/BatchActions'
+import { ActivationSwitch } from '@/components/ActivationSwitch'
 import { SystemCardActions } from '@/components/FontCardActions'
 import { systemFontFamily } from '@/components/FontFaceStyles'
 import { InstanceList } from '@/components/InstanceList'
@@ -14,6 +15,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
+import { systemActivationSwitch } from '@/lib/activationSwitch'
 import { systemBatchPlan, type SystemBatchPlan } from '@/lib/batch'
 import { countFormats } from '@/lib/formats'
 import { systemInstanceRows } from '@/lib/instances'
@@ -104,7 +106,12 @@ export const SystemCard = memo(function SystemCard({
         label: face.styleName,
       }
   const plan = batch ?? systemBatchPlan([group])
+  const activation = systemActivationSwitch(group)
   const muted = group.faces.length > 0 && group.faces.every((face) => face.deactivated)
+  function toggleActivation() {
+    if (!activation.enabled || busy) return
+    onDeactivate()
+  }
 
   function handleCardClick(event: MouseEvent) {
     if (skipNextClick.current) {
@@ -168,64 +175,86 @@ export const SystemCard = memo(function SystemCard({
           {...cardChrome}
         >
           {layout === 'grid' ? (
-            <PreviewRetryBoundary>
-              <button
-                type="button"
-                onClick={handleCardClick}
-                onContextMenu={skipClickAfterContextMenu}
-                onDoubleClick={onInspect}
-                className="flex w-full flex-col text-left"
-              >
-                <CyclingAaPreview
-                  faces={lockedPreview ? [restPreview] : previewFaces}
-                  rest={restPreview}
-                  active={hovered && !lockedPreview}
-                  size={previewSize}
-                  sample={previewSample}
-                  featureSettings={lockedPreview?.featureSettings}
+            <div data-no-marquee="">
+              <div className="flex items-start justify-end px-2.5 pt-3.5 pb-1.5">
+                <ActivationSwitch
+                  position={activation.position}
+                  enabled={activation.enabled}
+                  busy={busy}
+                  help={activation.help}
+                  onToggle={toggleActivation}
                 />
-                <div className={previewSize < 3.25 ? 'p-2' : 'p-3'}>{metadata}</div>
-              </button>
-            </PreviewRetryBoundary>
+              </div>
+              <PreviewRetryBoundary>
+                <button
+                  type="button"
+                  onClick={handleCardClick}
+                  onContextMenu={skipClickAfterContextMenu}
+                  onDoubleClick={onInspect}
+                  className={cn('flex w-full flex-col text-left', muted && 'opacity-50')}
+                >
+                  <CyclingAaPreview
+                    faces={lockedPreview ? [restPreview] : previewFaces}
+                    rest={restPreview}
+                    active={hovered && !lockedPreview}
+                    size={previewSize}
+                    sample={previewSample}
+                    featureSettings={lockedPreview?.featureSettings}
+                  />
+                  <div className={previewSize < 3.25 ? 'p-2' : 'p-3'}>{metadata}</div>
+                </button>
+              </PreviewRetryBoundary>
+            </div>
           ) : (
             <>
-              <div className="flex items-stretch">
-                <PreviewRetryBoundary>
-                  <button
-                    type="button"
-                    onClick={handleCardClick}
-                    onContextMenu={skipClickAfterContextMenu}
-                    onDoubleClick={onInspect}
-                    className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left"
-                  >
-                    <AaPreview
-                      family={previewFamily}
-                      weight={lockedPreview?.weight ?? face.weight}
-                      italic={lockedPreview?.italic ?? face.italic}
-                      variation={lockedPreview?.variation}
-                      featureSettings={lockedPreview?.featureSettings}
-                      sample={previewSample}
-                    />
-                    <div className="min-w-0 flex-1">{metadata}</div>
-                  </button>
-                </PreviewRetryBoundary>
-                {showInstances && (
-                  <button
-                    type="button"
-                    data-no-marquee=""
-                    aria-expanded={expanded}
-                    aria-label={expanded ? 'Hide instances' : 'Show instances'}
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      setExpanded((value) => !value)
-                    }}
-                    className="flex w-10 shrink-0 items-center justify-center text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-                  >
-                    <ChevronDown
-                      className={cn('size-4 transition-transform', expanded && 'rotate-180')}
-                    />
-                  </button>
-                )}
+              <div data-no-marquee="" className="flex items-stretch">
+                <div className={cn('flex min-w-0 flex-1 items-stretch', muted && 'opacity-50')}>
+                  <PreviewRetryBoundary>
+                    <button
+                      type="button"
+                      onClick={handleCardClick}
+                      onContextMenu={skipClickAfterContextMenu}
+                      onDoubleClick={onInspect}
+                      className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left"
+                    >
+                      <AaPreview
+                        family={previewFamily}
+                        weight={lockedPreview?.weight ?? face.weight}
+                        italic={lockedPreview?.italic ?? face.italic}
+                        variation={lockedPreview?.variation}
+                        featureSettings={lockedPreview?.featureSettings}
+                        sample={previewSample}
+                      />
+                      <div className="min-w-0 flex-1">{metadata}</div>
+                    </button>
+                  </PreviewRetryBoundary>
+                  {showInstances && (
+                    <button
+                      type="button"
+                      data-no-marquee=""
+                      aria-expanded={expanded}
+                      aria-label={expanded ? 'Hide instances' : 'Show instances'}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        setExpanded((value) => !value)
+                      }}
+                      className="flex w-10 shrink-0 items-center justify-center text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                    >
+                      <ChevronDown
+                        className={cn('size-4 transition-transform', expanded && 'rotate-180')}
+                      />
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center pr-2.5">
+                  <ActivationSwitch
+                    position={activation.position}
+                    enabled={activation.enabled}
+                    busy={busy}
+                    help={activation.help}
+                    onToggle={toggleActivation}
+                  />
+                </div>
               </div>
               {expanded && showInstances && <InstanceList rows={instances} />}
             </>
@@ -235,8 +264,9 @@ export const SystemCard = memo(function SystemCard({
               writable={group.writable}
               busy={busy}
               visible={selected || actionsVisible}
+              layout={layout}
+              switchInset
               offset={layout === 'list' && showInstances}
-              onDeactivate={onDeactivate}
               onUninstall={onUninstall}
             />
           )}

@@ -107,6 +107,27 @@ body {
   text-rendering: geometricPrecision;
 }
 
+/* Cicero MiniSwitch: 26×15 capsule, 1.5pt knob inset, tint when on, quaternary when off. */
+.cuttler-activation-switch {
+  width: 26px;
+  height: 15px;
+  background: rgba(60, 60, 67, 0.18);
+}
+
+.dark .cuttler-activation-switch[data-position='off'] {
+  background: rgba(235, 235, 245, 0.16);
+}
+
+.cuttler-activation-switch[data-position='on'] {
+  background: #007aff;
+  background: AccentColor;
+}
+
+.cuttler-activation-switch[data-position='app'] {
+  background: color-mix(in srgb, #007aff 45%, transparent);
+  background: color-mix(in srgb, AccentColor 45%, transparent);
+}
+
 .app-region-drag {
   -webkit-app-region: drag;
 }

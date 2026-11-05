@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { ArrowLeftRight, ChevronDown, CircleMinus, CirclePlus, Clock, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
+import { ArrowLeftRight, ChevronDown, CircleMinus, CirclePlus, Clock, RefreshCw, Trash2 } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { CatalogBatchPlan } from '@/lib/batch'
-import { ACTIVATE_UNTIL_QUIT_LABEL, actionLabel, activateActionLabel, deactivateActionLabel, forgetSourcesLabel, installActionLabel } from '@/lib/batch'
+import { ACTIVATE_UNTIL_QUIT_LABEL, actionLabel, forgetSourcesLabel, installActionLabel } from '@/lib/batch'
+import type { ViewLayout } from '@/lib/types'
 import { formatSwapLabel } from '@/lib/formats'
 import { cn } from '@/lib/utils'
 
@@ -11,9 +12,7 @@ type CatalogCardActionHandlers = {
   busy: boolean
   onInstall: () => void
   onReinstall: () => void
-  onDeactivate: () => void
   onUninstall: () => void
-  onActivate: () => void
   onActivateUntilQuit?: () => void
   /** Passed only when a same-format occupying sibling exists (`canSwitchTo`). */
   onSwitch?: () => void
@@ -31,11 +30,11 @@ export function CatalogCardActions({
   busy,
   offset,
   visible,
+  layout = 'grid',
+  switchInset = false,
   onInstall,
   onReinstall,
-  onDeactivate,
   onUninstall,
-  onActivate,
   onActivateUntilQuit,
   onSwitch,
   formatSwap,
@@ -49,11 +48,14 @@ export function CatalogCardActions({
   missingSource: boolean
   offset?: boolean
   visible?: boolean
+  layout?: ViewLayout
+  /** Leave the card's trailing edge for the always-visible activation switch. */
+  switchInset?: boolean
 }) {
   const [formatMenuOpen, setFormatMenuOpen] = useState(false)
   if (previewOnly) {
     return (
-      <ActionDock offset={offset} visible={visible}>
+      <ActionDock offset={offset} visible={visible} layout={layout} switchInset={switchInset}>
         {missingSource && (
           <IconAction label={forgetSourcesLabel(1, false)} disabled={busy} destructive onClick={onForget}>
             <Trash2 />
@@ -64,7 +66,7 @@ export function CatalogCardActions({
   }
   const installLabel = installActionLabel(plan)
   return (
-    <ActionDock offset={offset} visible={visible || formatMenuOpen}>
+    <ActionDock offset={offset} visible={visible || formatMenuOpen} layout={layout} switchInset={switchInset}>
       {plan.reinstall > 0 && (
         <IconAction
           label={actionLabel('Install update', plan.reinstall, plan.reinstall > 1)}
@@ -80,11 +82,6 @@ export function CatalogCardActions({
           <CirclePlus />
         </IconAction>
       )}
-      {plan.activate > 0 && (
-        <IconAction label={activateActionLabel(plan)} disabled={busy} onClick={onActivate}>
-          <Power />
-        </IconAction>
-      )}
       {(plan.activate > 0 || plan.install > 0) && onActivateUntilQuit ? (
         <IconAction label={ACTIVATE_UNTIL_QUIT_LABEL} disabled={busy} onClick={onActivateUntilQuit}>
           <Clock />
@@ -98,11 +95,6 @@ export function CatalogCardActions({
       {onSwitch && (
         <IconAction label="Switch" disabled={busy} onClick={onSwitch}>
           <ArrowLeftRight />
-        </IconAction>
-      )}
-      {plan.deactivate > 0 && (
-        <IconAction label={deactivateActionLabel(plan)} disabled={busy} onClick={onDeactivate}>
-          <PowerOff />
         </IconAction>
       )}
       {plan.uninstall > 0 &&
@@ -133,22 +125,21 @@ export function SystemCardActions({
   busy,
   offset,
   visible,
-  onDeactivate,
+  layout = 'grid',
+  switchInset = false,
   onUninstall,
 }: {
   writable: boolean
   busy: boolean
   offset?: boolean
   visible?: boolean
-  onDeactivate: () => void
+  layout?: ViewLayout
+  switchInset?: boolean
   onUninstall: () => void
 }) {
   if (!writable) return null
   return (
-    <ActionDock offset={offset} visible={visible}>
-      <IconAction label="Deactivate" disabled={busy} onClick={onDeactivate}>
-        <PowerOff />
-      </IconAction>
+    <ActionDock offset={offset} visible={visible} layout={layout} switchInset={switchInset}>
       <IconAction label="Uninstall" disabled={busy} destructive onClick={onUninstall}>
         <CircleMinus />
       </IconAction>
@@ -303,17 +294,29 @@ function ActionDock({
   children,
   offset,
   visible,
+  layout = 'grid',
+  switchInset = false,
 }: {
   children: ReactNode
   offset?: boolean
   visible?: boolean
+  layout?: ViewLayout
+  switchInset?: boolean
 }) {
+  // Cicero's switch owns the trailing edge. Hover actions sit just to its left.
+  const place = switchInset
+    ? layout === 'grid'
+      ? 'top-3.5 right-[42px]'
+      : offset
+        ? 'top-2 right-[84px]'
+        : 'top-2 right-10'
+    : cn('top-1.5', offset ? 'right-11' : 'right-1.5')
   return (
     <div
       data-no-marquee=""
       className={cn(
-        'absolute top-1.5 z-10 flex gap-0.5 transition-opacity [transform:translateZ(0)]',
-        offset ? 'right-11' : 'right-1.5',
+        'absolute z-10 flex gap-0.5 transition-opacity [transform:translateZ(0)]',
+        place,
         visible
           ? 'opacity-100'
           : 'pointer-events-none opacity-0',
