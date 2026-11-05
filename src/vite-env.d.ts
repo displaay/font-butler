@@ -22,8 +22,10 @@ declare global {
       ) => () => void
       onDocumentWatchNote?: (callback: (payload?: { path?: string; message?: string }) => void) => () => void
       openExternal?: (url: string) => Promise<boolean>
-      /** Opens System Settings → General → Login Items & Extensions. */
-      openFinderLoginItems?: () => Promise<boolean>
+      openFinderExtensions?: () => Promise<boolean>
+      openFinderSyncLoginItems?: () => Promise<boolean>
+      getFinderSyncAgentStatus?: () => Promise<{ status?: string; error?: string; enabled?: boolean } | null>
+      setFinderSyncAgentEnabled?: (enabled: boolean) => Promise<boolean>
       installAppUpdate?: () => Promise<{
         ok: boolean
         ignored?: boolean

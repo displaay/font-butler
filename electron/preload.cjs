@@ -81,7 +81,10 @@ contextBridge.exposeInMainWorld('fontButlerDesktop', {
     return () => ipcRenderer.removeListener('document-watch-note', listener)
   },
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
-  openFinderLoginItems: () => ipcRenderer.invoke('open-finder-login-items'),
+  openFinderExtensions: () => ipcRenderer.invoke('open-finder-extensions'),
+  openFinderSyncLoginItems: () => ipcRenderer.invoke('open-finder-sync-login-items'),
+  getFinderSyncAgentStatus: () => ipcRenderer.invoke('get-finder-sync-agent-status'),
+  setFinderSyncAgentEnabled: (enabled) => ipcRenderer.invoke('set-finder-sync-agent-enabled', enabled),
   installAppUpdate: () => ipcRenderer.invoke('install-app-update'),
   getAppUpdateInstallState: () => ipcRenderer.invoke('app-update-install-state'),
   onAppUpdateInstall: (callback) => {

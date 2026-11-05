@@ -40,8 +40,10 @@ import {
   DEVELOPER_ID_IDENTITY,
   NOTARY_KEYCHAIN_PROFILE,
   PRODUCTION_APP_ID,
+  TEST_FEED_ADHOC_ENTITLEMENTS,
   TEST_FEED_APP_ID,
   TEST_FEED_BUILD_ENV,
+  TEST_FEED_ENTITLEMENTS,
   TEST_FEED_PRODUCT_NAME,
   TEST_FEED_VERSION_ENV,
   applyBuildIdentityResource,
@@ -73,11 +75,12 @@ test('mac release config signs with the Developer ID identity and notarizes via 
   assert.equal(parsed.build.mac.hardenedRuntime, true)
   assert.equal(parsed.build.mac.notarize, true)
   assert.equal(parsed.build.mac.type, undefined)
-  assert.equal(parsed.build.mac.signIgnore, undefined)
+  assert.deepEqual(parsed.build.mac.signIgnore, ['FontButtlerFinderSyncAgent\\.app'])
   assert.equal(parsed.build.mac.entitlements, 'build/entitlements.mac.plist')
   assert.equal(parsed.build.mac.entitlementsInherit, 'build/entitlements.mac.plist')
   assert.equal(parsed.build.dmg, undefined)
   assert.equal(parsed.build.afterPack, './scripts/strip-mac-xattrs.mjs')
+  assert.equal(parsed.build.afterSign, './scripts/verify-finder-sync-appex.mjs')
   assert.equal(parsed.build.afterAllArtifactBuild, './scripts/strip-mac-xattrs.mjs')
   assert.match(parsed.scripts.dist, /COPYFILE_DISABLE=1/)
   assert.match(parsed.scripts.dist, /node scripts\/mac-pack\.mjs/)
@@ -88,6 +91,8 @@ test('mac release config signs with the Developer ID identity and notarizes via 
   assert.doesNotMatch(parsed.scripts.dist, /CSC_IDENTITY_AUTO_DISCOVERY=false/)
   assert.doesNotMatch(parsed.scripts['release:mac'], /CSC_IDENTITY_AUTO_DISCOVERY=false/)
   assert.match(readRepo('scripts/strip-mac-xattrs.mjs'), /compileFinderServicesAddon/)
+  assert.match(readRepo('scripts/strip-mac-xattrs.mjs'), /prepareFinderSyncAppex/)
+  assert.match(readRepo('scripts/strip-mac-xattrs.mjs'), /signFinderSyncAppex/)
   assert.match(readRepo('scripts/strip-mac-xattrs.mjs'), /stapleSignedDmgs/)
   assert.match(readRepo('scripts/mac-pack.mjs'), /find-identity/)
   const macPack = readRepo('scripts/mac-pack.mjs')
@@ -143,10 +148,15 @@ test('electron-builder 26 accepts the mac signing config and the notarized DMG s
   ])
 })
 
-test('Developer ID entitlements allow JIT and Apple Events', () => {
+test('Developer ID entitlements allow JIT, Apple Events, and the release app group', () => {
   const entitlements = readRepo('build/entitlements.mac.plist')
   const adhoc = readRepo('build/entitlements.mac.adhoc.plist')
+  const testFeed = readRepo('build/entitlements.mac.test-feed.plist')
+  const testAdhoc = readRepo('build/entitlements.mac.adhoc.test-feed.plist')
   assert.match(entitlements, /com\.apple\.security\.cs\.allow-jit/)
+  assert.match(entitlements, /com\.apple\.security\.application-groups/)
+  assert.match(entitlements, /A7WWML89LQ\.group\.app\.fontbutler\.desktop\.FinderSync</)
+  assert.doesNotMatch(entitlements, /FinderSync\.Test/)
   assert.match(entitlements, /com\.apple\.security\.automation\.apple-events/)
   assert.doesNotMatch(entitlements, /allow-unsigned-executable-memory/)
   assert.doesNotMatch(entitlements, /disable-library-validation/)
@@ -155,9 +165,18 @@ test('Developer ID entitlements allow JIT and Apple Events', () => {
   assert.match(adhoc, /com\.apple\.security\.cs\.allow-jit/)
   assert.match(adhoc, /com\.apple\.security\.automation\.apple-events/)
   assert.match(adhoc, /com\.apple\.security\.cs\.disable-library-validation/)
+  assert.match(adhoc, /A7WWML89LQ\.group\.app\.fontbutler\.desktop\.FinderSync</)
   assert.doesNotMatch(adhoc, /allow-unsigned-executable-memory/)
   assert.doesNotMatch(adhoc, /get-task-allow/)
+  assert.match(testFeed, /A7WWML89LQ\.group\.app\.fontbutler\.desktop\.FinderSync\.Test</)
+  assert.match(testFeed, /com\.apple\.security\.automation\.apple-events/)
+  assert.doesNotMatch(testFeed, /disable-library-validation/)
+  assert.match(testAdhoc, /com\.apple\.security\.automation\.apple-events/)
+  assert.match(testAdhoc, /disable-library-validation/)
+  assert.match(testAdhoc, /FinderSync\.Test</)
   assert.equal(ADHOC_ENTITLEMENTS, 'build/entitlements.mac.adhoc.plist')
+  assert.equal(TEST_FEED_ENTITLEMENTS, 'build/entitlements.mac.test-feed.plist')
+  assert.equal(TEST_FEED_ADHOC_ENTITLEMENTS, 'build/entitlements.mac.adhoc.test-feed.plist')
 })
 
 test('tag release workflow packages on macOS and refuses an un-notarized publish', () => {
@@ -256,6 +275,13 @@ test('dist without a profile ad-hoc signs when the certificate is missing', () =
   assert.equal(plan.signDmg, false)
   assert.equal(plan.keychainProfile, null)
   assert.equal(plan.adhocEntitlements, ADHOC_ENTITLEMENTS)
+  const testPlan = planMacPack({
+    platform: 'darwin',
+    release: false,
+    env: { [TEST_FEED_BUILD_ENV]: '1' },
+    developerIdPresent: false,
+  })
+  assert.equal(testPlan.adhocEntitlements, TEST_FEED_ADHOC_ENTITLEMENTS)
   const env = applyNotaryEnv({ APPLE_ID: 'person@example.com', APPLE_TEAM_ID: 'A7WWML89LQ' }, plan)
   assert.equal(env.APPLE_ID, undefined)
   assert.equal(env.APPLE_KEYCHAIN_PROFILE, undefined)
@@ -343,15 +369,30 @@ test('publish evidence fails closed for an ad-hoc or unstapled build', () => {
   const accepted = notarizationFailures({
     codesignDisplay: `Authority=Developer ID Application: ${DEVELOPER_ID_IDENTITY}\nTeamIdentifier=A7WWML89LQ`,
     codesignVerifyStatus: 0,
-    entitlements: 'com.apple.security.cs.allow-jit',
+    entitlements:
+      'com.apple.security.cs.allow-jit\n<string>A7WWML89LQ.group.app.fontbutler.desktop.FinderSync</string>',
     staplerAppStatus: 0,
     staplerDmgStatus: 0,
     staplerZipAppStatus: 0,
     staplerDmgAppStatus: 0,
     spctlOutput: 'source=Notarized Developer ID',
     spctlStatus: 0,
+    expectedAppGroup: 'A7WWML89LQ.group.app.fontbutler.desktop.FinderSync',
   })
   assert.deepEqual(accepted, [])
+  const otherGroup = notarizationFailures({
+    codesignDisplay: `Authority=Developer ID Application: ${DEVELOPER_ID_IDENTITY}\nTeamIdentifier=A7WWML89LQ`,
+    codesignVerifyStatus: 0,
+    entitlements: '<string>A7WWML89LQ.group.app.fontbutler.desktop.FinderSync.Test</string>',
+    staplerAppStatus: 0,
+    staplerDmgStatus: 0,
+    staplerZipAppStatus: 0,
+    staplerDmgAppStatus: 0,
+    spctlOutput: 'source=Notarized Developer ID',
+    spctlStatus: 0,
+    expectedAppGroup: 'A7WWML89LQ.group.app.fontbutler.desktop.FinderSync',
+  })
+  assert.ok(otherGroup.some((failure) => /application group/.test(failure)))
 
   const adHoc = notarizationFailures({
     codesignDisplay: 'Signature=adhoc',
@@ -924,6 +965,7 @@ test('publish requires the remote tag commit to equal HEAD and a clean tree', as
     'electron/server.bundle.mjs',
     'electron/font-analysis-worker.mjs',
     'electron/finder-services.node',
+    'electron/finder-sync-receiver.node',
     'electron/session-fonts.node',
     'electron/indesign-fonts.node',
     'electron/favicon-16.png',
@@ -943,6 +985,9 @@ test('a test-feed pack stamps extraMetadata and does not change a normal pack', 
   assert.equal(marked.error, null)
   assert.equal(marked.build.extraMetadata.fontButlerTestFeed, true)
   assert.equal(marked.build.extraMetadata.version, undefined)
+  assert.equal(marked.build.mac.entitlements, TEST_FEED_ENTITLEMENTS)
+  assert.equal(marked.build.mac.entitlementsInherit, TEST_FEED_ENTITLEMENTS)
+  assert.equal(build.mac.entitlements, 'build/entitlements.mac.plist')
   assert.equal(marked.build.appId, TEST_FEED_APP_ID)
   assert.equal(marked.build.productName, TEST_FEED_PRODUCT_NAME)
   assert.equal(plain.build.appId, build.appId)
@@ -956,6 +1001,10 @@ test('a test-feed pack stamps extraMetadata and does not change a normal pack', 
   assert.equal(higher.build.extraMetadata.fontButlerTestFeed, true)
   const stray = applyTestFeedMetadata(build, { [TEST_FEED_VERSION_ENV]: '0.9.0' })
   assert.equal(stray.build.extraMetadata, undefined)
+  assert.deepEqual(build.mac.extendInfo.CFBundleURLTypes[0].CFBundleURLSchemes, ['font-butler'])
+  assert.deepEqual(marked.build.mac.extendInfo.CFBundleURLTypes[0].CFBundleURLSchemes, ['font-butler'])
+  assert.deepEqual(build.mac.extendInfo.CFBundleURLTypes[0].CFBundleURLSchemes, ['font-butler'])
+  assert.deepEqual(marked.build.mac.extendInfo.NSServices, build.mac.extendInfo.NSServices)
   const bad = applyTestFeedMetadata(build, { [TEST_FEED_BUILD_ENV]: '1', [TEST_FEED_VERSION_ENV]: 'latest' })
   assert.match(bad.error, /FONT_BUTLER_TEST_VERSION/)
   assert.match(readRepo('scripts/mac-pack.mjs'), /applyTestFeedMetadata/)

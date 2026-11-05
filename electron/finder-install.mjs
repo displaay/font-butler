@@ -1,4 +1,6 @@
 export const FINDER_PROTOCOL = 'font-butler'
+export const FINDER_TEST_PROTOCOL = 'font-butler-test'
+const FINDER_PROTOCOLS = new Set([FINDER_PROTOCOL, FINDER_TEST_PROTOCOL])
 export const FINDER_INSTALL = 'install'
 export const FINDER_INSTALL_AS = 'install-as'
 export const FINDER_LINK_TO = 'link-to'
@@ -110,7 +112,8 @@ export function parseFinderInstallUrl(rawUrl) {
   } catch {
     return null
   }
-  if (parsed.protocol !== `${FINDER_PROTOCOL}:`) return null
+  const scheme = parsed.protocol.replace(/:$/, '')
+  if (!FINDER_PROTOCOLS.has(scheme)) return null
   const host = parsed.hostname.replace(/^\/+/, '')
   const parts = [host, ...parsed.pathname.split('/').filter(Boolean)].filter(Boolean)
   if (parts[0] !== 'finder') return null
@@ -131,11 +134,14 @@ export function parseFinderInstallUrl(rawUrl) {
   return { action, paths: uniquePaths(paths) }
 }
 
-export function finderInstallUrl(action, filePaths) {
+export function finderInstallUrl(action, filePaths, protocol = FINDER_PROTOCOL) {
   if (!isFinderAction(action)) {
     throw new Error('Unknown Finder install action')
   }
-  const url = new URL(`${FINDER_PROTOCOL}://finder/${action}`)
+  if (!FINDER_PROTOCOLS.has(protocol)) {
+    throw new Error('Unknown Finder install protocol')
+  }
+  const url = new URL(`${protocol}://finder/${action}`)
   for (const filePath of uniquePaths(filePaths)) {
     url.searchParams.append('p', filePath)
   }
@@ -146,13 +152,10 @@ function uniquePaths(filePaths) {
   const seen = new Set()
   const out = []
   for (const filePath of filePaths ?? []) {
-    if (typeof filePath !== 'string') continue
-    const trimmed = filePath.trim()
-    if (!trimmed || trimmed.startsWith('-')) continue
-    const key = trimmed
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push(trimmed)
+    if (typeof filePath !== 'string' || !filePath || filePath.startsWith('-')) continue
+    if (seen.has(filePath)) continue
+    seen.add(filePath)
+    out.push(filePath)
   }
   return out
 }
@@ -182,7 +185,10 @@ export function parseFinderLaunch(argv) {
       action = FINDER_LINK_TO
       continue
     }
-    if (typeof arg === 'string' && arg.startsWith(`${FINDER_PROTOCOL}:`)) {
+    if (
+      typeof arg === 'string' &&
+      (arg.startsWith(`${FINDER_PROTOCOL}:`) || arg.startsWith(`${FINDER_TEST_PROTOCOL}:`))
+    ) {
       const fromUrl = parseFinderInstallUrl(arg)
       if (fromUrl) {
         action = fromUrl.action
@@ -209,8 +215,8 @@ export function collectFinderFontPaths(filePaths, options = {}) {
   const missing = []
 
   for (const filePath of filePaths ?? []) {
-    if (typeof filePath !== 'string' || !filePath.trim()) continue
-    const resolved = filePath.trim()
+    if (typeof filePath !== 'string' || !filePath) continue
+    const resolved = filePath
     if (existsSync && !existsSync(resolved)) {
       missing.push(resolved)
       continue
@@ -358,10 +364,15 @@ export function createFinderJobQueue(runJob) {
           const job = queued.shift()
           activeKey = finderJobKey(job)
           try {
-            await runJob(job.action, job.paths)
+            await runJob(job.action, job.paths, job)
           } catch (error) {
             console.error('Finder job failed', error)
           } finally {
+            try {
+              job.close?.()
+            } catch {
+              // The file descriptors are best-effort.
+            }
             activeKey = null
           }
         }
@@ -373,10 +384,22 @@ export function createFinderJobQueue(runJob) {
   }
 
   return {
-    enqueue(action, filePaths) {
-      const job = { action, paths: Array.isArray(filePaths) ? filePaths : [] }
+    enqueue(action, filePaths, options = {}) {
+      const job = {
+        action,
+        paths: Array.isArray(filePaths) ? filePaths : [],
+        handles: options.handles,
+        close: options.close,
+      }
       const key = finderJobKey(job)
-      if (activeKey === key || queued.some((item) => finderJobKey(item) === key)) return chain
+      if (activeKey === key || queued.some((item) => finderJobKey(item) === key)) {
+        try {
+          job.close?.()
+        } catch {
+          // The duplicate's descriptors are best-effort.
+        }
+        return chain
+      }
       queued.push(job)
       return drain()
     },

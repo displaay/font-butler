@@ -1,0 +1,1693 @@
+import { createHash } from 'node:crypto'
+import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import path from 'node:path'
+import { Worker } from 'node:worker_threads'
+import { FINDER_INSTALL_AS, isClaimedFontPath, isInstallableFontPath } from './finder-install.mjs'
+import { TEST_FEED_USER_DATA_DIR } from './test-feed-data.mjs'
+
+export const FINDER_SYNC_BUNDLE_ID = 'app.fontbutler.desktop.FinderSync'
+export const FINDER_SYNC_TEST_BUNDLE_ID = 'app.fontbutler.desktop.FinderSync.Test'
+export const FINDER_SYNC_PARENT_BUNDLE_ID = 'app.fontbutler.desktop'
+export const FINDER_SYNC_AGENT_BUNDLE_ID = 'app.fontbutler.desktop.FinderSyncAgent'
+export const FINDER_SYNC_AGENT_TEST_BUNDLE_ID = 'app.fontbutler.desktop.FinderSyncAgent.Test'
+export const FINDER_SYNC_AGENT_EXECUTABLE = 'FontButtlerFinderSyncAgent'
+export const FINDER_SYNC_AGENT_APP_NAME = 'FontButtlerFinderSyncAgent.app'
+export const FINDER_SYNC_SOCKET_NAME = 'fontbutler-finder-sync.sock'
+export const FINDER_SYNC_TEST_SOCKET_NAME = 'fontbutler-finder-sync-test.sock'
+/** Private directory under the per-user temp dir. Short so the socket path fits in sun_path. */
+export const FINDER_SYNC_SOCKET_DIR = 'fontbutler-fs'
+export const FINDER_SYNC_PRINCIPAL_CLASS = 'FontButtlerFinderSync'
+export const FINDER_SYNC_EXTENSION_POINT = 'com.apple.FinderSync'
+export const FINDER_SYNC_APPEX_NAME = 'Font Buttler Finder Sync.appex'
+/**
+ * Packed product names the handoff may launch. The DMG and loose app are
+ * Cuttler.app. The 0.4.0 update zip is still Font Buttler.app so 0.3.x
+ * clients can install it. Test builds stay Font Buttler Test.app.
+ */
+export const FINDER_SYNC_PRODUCT_APP_BUNDLES = ['Cuttler.app', 'Font Buttler.app', 'Font Buttler Test.app']
+/** Inner executable names. A renamed zip keeps the Cuttler binary. */
+export const FINDER_SYNC_PRODUCT_EXECUTABLES = ['Cuttler', 'Font Buttler', 'Font Buttler Test']
+export const FINDER_SYNC_EXECUTABLE = 'FontButtlerFinderSync'
+export const FINDER_SYNC_ENTITLEMENT = 'com.apple.security.app-sandbox'
+export const FINDER_SYNC_APP_GROUP_ENTITLEMENT = 'com.apple.security.application-groups'
+export const FINDER_SYNC_TEAM_ID = 'A7WWML89LQ'
+export const FINDER_SYNC_SETTINGS_URL =
+  'x-apple.systempreferences:com.apple.LoginItems-Settings.extension'
+export const FINDER_SYNC_SHARED_ROOT = '/Users/Shared'
+export const FINDER_SYNC_VOLUMES_ROOT = '/Volumes'
+export const FINDER_SYNC_SYSTEM_FONTS_ROOT = '/Library/Fonts'
+export const FINDER_SYNC_MAX_FILES = 500
+export const FINDER_SYNC_MAX_BYTES = 2 * 1024 * 1024 * 1024
+export const FINDER_SYNC_TOO_MANY_FILES = 'That selection has more than 500 files.'
+export const FINDER_SYNC_TOO_LARGE = 'That selection is larger than 2 GB.'
+export const FINDER_SYNC_CHANGED_BEFORE_INSTALL = 'The file changed before it could be installed.'
+export const FINDER_SYNC_TREE_DEPTH = 10
+export const FINDER_SYNC_TREE_TOO_DEEP = 'That folder is nested more than 10 levels deep.'
+export const FINDER_SYNC_MISSING_APP =
+  "Font Buttler couldn't be found. Open it once from its new location."
+export const FINDER_SYNC_AGENT_DISABLED =
+  'Turn on Font Buttler in Login Items. Until then, use Services (right-click > Services > Install).'
+export const FINDER_SYNC_REQUEST_TTL_MS = 2 * 60 * 1000
+export const FINDER_SYNC_REQUEST_CAP = 256
+export const FINDER_SYNC_PENDING_ERROR_FILE = 'finder-sync-pending-error.json'
+export const FINDER_SYNC_PENDING_ERROR_MAX_BYTES = 8 * 1024
+export const FINDER_SYNC_PENDING_ERROR_MAX_ENTRIES = 5
+/** Suppress a repeat of the same Finder Sync error only for this long. */
+export const FINDER_SYNC_ERROR_SHOWN_TTL_MS = 30 * 1000
+export const FINDER_SYNC_NOT_RUNNING = 'Font Buttler is not running.'
+export const FINDER_SYNC_UNKNOWN_ACTION = 'Unknown Finder Sync action.'
+export const FINDER_SYNC_ERROR_MISSING_APP = 'missing-app'
+export const FINDER_SYNC_ERROR_NOT_RUNNING = 'not-running'
+export const FINDER_SYNC_ERROR_LOGIN_ITEMS = 'login-items'
+export const FINDER_SYNC_ERROR_UNKNOWN_ACTION = 'unknown-action'
+/** Release userData folder. The test feed uses TEST_FEED_USER_DATA_DIR. */
+export const FINDER_SYNC_USER_DATA_DIR = 'Font Buttler'
+export const FINDER_SYNC_TEST_USER_DATA_DIR = TEST_FEED_USER_DATA_DIR
+const FINDER_SYNC_ARCH_NAMES = ['ia32', 'x64', 'armv7l', 'arm64', 'universal']
+
+const MAX_PATH_LENGTH = 4096
+
+export function finderSyncBundleId(testFeed) {
+  return testFeed ? FINDER_SYNC_TEST_BUNDLE_ID : FINDER_SYNC_BUNDLE_ID
+}
+
+export function finderSyncMenuTitle(action, testFeed) {
+  const base = action === FINDER_INSTALL_AS ? 'Install as…' : 'Install'
+  return testFeed ? `${base} (Test)` : base
+}
+
+/**
+ * App-group id and Mach service. The test build has its own group.
+ * The id is team-prefixed (`A7WWML89LQ.group.…`). macOS 15 asks to
+ * "access data from other apps" when the group is not in that form.
+ * The app entitlements and the appex entitlements list this exact string.
+ * It is Font Buttler's group, not another app's container.
+ */
+export function finderSyncAppGroup(testFeed) {
+  return `${FINDER_SYNC_TEAM_ID}.group.${finderSyncBundleId(testFeed)}`
+}
+
+export function finderSyncAppGroupIsTeamPrefixed(group) {
+  return typeof group === 'string' && group.startsWith(`${FINDER_SYNC_TEAM_ID}.group.`) && group.length > `${FINDER_SYNC_TEAM_ID}.group.`.length
+}
+
+export function finderSyncMachService(testFeed) {
+  return finderSyncAppGroup(testFeed)
+}
+
+/**
+ * One code-signing requirement per flavour. The listener accepts that
+ * identifier and no other.
+ */
+export function finderSyncCodeSigningRequirement(testFeed) {
+  const identifier = finderSyncBundleId(Boolean(testFeed))
+  return `anchor apple generic and certificate leaf[subject.OU] = "${FINDER_SYNC_TEAM_ID}" and identifier "${identifier}"`
+}
+
+export function finderSyncAgentBundleId(testFeed) {
+  return testFeed ? FINDER_SYNC_AGENT_TEST_BUNDLE_ID : FINDER_SYNC_AGENT_BUNDLE_ID
+}
+
+/** LaunchAgent label. One label per flavour, and it is the helper's bundle id. */
+export function finderSyncAgentLabel(testFeed) {
+  return finderSyncAgentBundleId(testFeed)
+}
+
+export function finderSyncAgentPlistName(testFeed) {
+  return `${finderSyncAgentLabel(testFeed)}.plist`
+}
+
+/**
+ * Path of the helper executable relative to the .app root. `BundleProgram`
+ * is this path. The helper is a nested app so codesign takes the identifier
+ * from its Info.plist when it re-signs the bundle.
+ */
+export function finderSyncAgentBundleProgram() {
+  return `Contents/Helpers/${FINDER_SYNC_AGENT_APP_NAME}/Contents/MacOS/${FINDER_SYNC_AGENT_EXECUTABLE}`
+}
+
+/**
+ * The main app checks the socket peer against this. It is the helper, not
+ * the appex. One identifier per flavour.
+ */
+export function finderSyncAgentCodeSigningRequirement(testFeed) {
+  const identifier = finderSyncAgentBundleId(Boolean(testFeed))
+  return `anchor apple generic and certificate leaf[subject.OU] = "${FINDER_SYNC_TEAM_ID}" and identifier "${identifier}"`
+}
+
+/**
+ * The helper checks the app side of the socket against the parent bundle id.
+ * Both flavours use that id. The socket file name separates them.
+ */
+export function finderSyncParentCodeSigningRequirement() {
+  return `anchor apple generic and certificate leaf[subject.OU] = "${FINDER_SYNC_TEAM_ID}" and identifier "${FINDER_SYNC_PARENT_BUNDLE_ID}"`
+}
+
+export function finderSyncSocketName(testFeed) {
+  return testFeed ? FINDER_SYNC_TEST_SOCKET_NAME : FINDER_SYNC_SOCKET_NAME
+}
+
+/** Directory name both the app and the helper append under the per-user temp dir. */
+export function finderSyncSocketDirectoryName() {
+  return FINDER_SYNC_SOCKET_DIR
+}
+
+/**
+ * clang `-arch` slices for the helper and the receiver. A universal pack
+ * builds both slices; `lipo` joins them. `arch` is an electron-builder Arch
+ * number or a name (`arm64`, `x64`, `universal`).
+ */
+export function finderSyncClangArchArgs(arch = process.arch) {
+  const name = typeof arch === 'number' ? FINDER_SYNC_ARCH_NAMES[arch] : arch
+  if (name === 'arm64') return [['-arch', 'arm64']]
+  if (name === 'x64' || name === 'x86_64') return [['-arch', 'x86_64']]
+  if (name === 'universal') return [['-arch', 'arm64'], ['-arch', 'x86_64']]
+  return []
+}
+
+/**
+ * A crash can leave the unix socket behind. Replace it only when the path
+ * is a socket owned by this user. A regular file, a symlink, or another
+ * user's socket stays in place and the bind is refused.
+ */
+export function prepareFinderSyncSocket(filePath, io) {
+  if (!filePath || typeof io?.lstatSync !== 'function' || typeof io?.unlinkSync !== 'function') {
+    return { ok: false, unlinked: false, reason: 'unavailable' }
+  }
+  const uid = typeof io.getuid === 'function' ? io.getuid() : null
+  let stat
+  try {
+    stat = io.lstatSync(filePath)
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { ok: true, unlinked: false, reason: 'absent' }
+    return { ok: false, unlinked: false, reason: 'stat-failed' }
+  }
+  if (stat?.isSymbolicLink?.()) return { ok: false, unlinked: false, reason: 'symlink' }
+  if (!stat?.isSocket?.() || uid == null || stat.uid !== uid) {
+    return { ok: false, unlinked: false, reason: 'not-owned-socket' }
+  }
+  io.unlinkSync(filePath)
+  return { ok: true, unlinked: true, reason: 'replaced' }
+}
+
+function absoluteBundlePath(filePath) {
+  if (typeof filePath !== 'string' || !filePath.startsWith('/')) return ''
+  return filePath.replace(/\/+$/, '')
+}
+
+/**
+ * What this launch should do with this flavour's LaunchAgent only.
+ * A test build never names the release label or plist. The recorded app
+ * bundle path is the one this app wrote after a successful register.
+ * A different bundle path means unregister, then register. Opt-out only
+ * unregisters. An enabled or approved agent at the same path stays as it is.
+ * An enabled agent with no recorded bundle is registered again so launchd
+ * follows this app, including Cuttler.app and the zip's Font Buttler.app.
+ */
+export function planFinderSyncAgentRegistration({
+  testFeed = false,
+  currentBundle,
+  recordedBundle,
+  recordedProgram,
+  currentHelper,
+  status,
+  optedOut = false,
+} = {}) {
+  const label = finderSyncAgentLabel(testFeed)
+  const plist = finderSyncAgentPlistName(testFeed)
+  const plan = { action: 'keep', label, plist, testFeed: Boolean(testFeed), reason: 'current' }
+  if (optedOut) return { ...plan, action: 'unregister', reason: 'opt-out' }
+  if (status === 'unsupported') return { ...plan, action: 'keep', reason: 'unsupported' }
+  const current = absoluteBundlePath(currentBundle)
+  const recorded = absoluteBundlePath(recordedBundle)
+  const helper = absoluteBundlePath(currentHelper)
+  const previousProgram = typeof recordedProgram === 'string' ? recordedProgram.trim() : ''
+  if (recorded && current && recorded !== current) {
+    return { ...plan, action: 'reregister', reason: 'moved' }
+  }
+  // An old file stored only `program`. Compare it once. Saving the new
+  // record drops `program`, so the next launch takes the path above.
+  if (!recorded && previousProgram) {
+    const previousHelper = absoluteBundlePath(previousProgram)
+    if (helper && previousHelper && previousHelper !== helper) {
+      return { ...plan, action: 'reregister', reason: 'legacy-program' }
+    }
+    if (status === 'enabled' || status === 'requires-approval') {
+      return { ...plan, action: 'keep', reason: 'legacy-program' }
+    }
+    return { ...plan, action: 'register', reason: 'legacy-program' }
+  }
+  // A login item left over from another copy has no bundle path recorded
+  // by this app. Register again so the helper inside this bundle is the
+  // one launchd vends.
+  if (!recorded && !previousProgram && current && (status === 'enabled' || status === 'requires-approval')) {
+    return { ...plan, action: 'reregister', reason: 'unrecorded' }
+  }
+  if (status === 'enabled' || status === 'requires-approval') {
+    return { ...plan, action: 'keep', reason: status }
+  }
+  return { ...plan, action: 'register', reason: status || 'not-registered' }
+}
+
+export function readFinderSyncAgentRecord(text) {
+  const empty = { enabled: true, appBundlePath: '', helperPath: '', version: '', program: '' }
+  if (!text) return empty
+  try {
+    const parsed = JSON.parse(text)
+    return {
+      enabled: parsed?.enabled !== false,
+      appBundlePath: typeof parsed?.appBundlePath === 'string' ? parsed.appBundlePath : '',
+      helperPath: typeof parsed?.helperPath === 'string' ? parsed.helperPath : '',
+      version: typeof parsed?.version === 'string' ? parsed.version : '',
+      program: typeof parsed?.program === 'string' ? parsed.program : '',
+    }
+  } catch {
+    return empty
+  }
+}
+
+/**
+ * Apply one registration plan. `unregister` and `register` run only for
+ * that plan. A second call with the same bundle path and an enabled or
+ * approved status runs neither. The record is the one to persist after a
+ * successful register (enabled or requires-approval).
+ */
+export function commitFinderSyncAgentRegistration({
+  testFeed = false,
+  currentBundle = '',
+  helperPath = '',
+  version = '',
+  record,
+  status,
+  optedOut = false,
+  unregister = () => {},
+  register = () => status,
+} = {}) {
+  const stored = readFinderSyncAgentRecord(JSON.stringify(record ?? {}))
+  const plan = planFinderSyncAgentRegistration({
+    testFeed,
+    currentBundle,
+    recordedBundle: stored.appBundlePath,
+    recordedProgram: stored.program,
+    currentHelper: helperPath,
+    status,
+    optedOut,
+  })
+  if (plan.label !== finderSyncAgentLabel(testFeed) || plan.plist !== finderSyncAgentPlistName(testFeed)) {
+    return { plan, status: status || '', record: stored, saved: false, refused: true }
+  }
+  let resultStatus = status || ''
+  if (plan.action === 'unregister' || plan.action === 'reregister') unregister()
+  if (plan.action === 'register' || plan.action === 'reregister') {
+    const registered = register()
+    if (typeof registered === 'string' && registered) resultStatus = registered
+  }
+  const approved = resultStatus === 'enabled' || resultStatus === 'requires-approval'
+  const bundle = absoluteBundlePath(currentBundle)
+  if (!approved || !bundle || optedOut || plan.action === 'unregister') {
+    return { plan, status: resultStatus, record: stored, saved: false, refused: false }
+  }
+  const next = {
+    enabled: true,
+    appBundlePath: bundle,
+    helperPath: absoluteBundlePath(helperPath),
+    version: typeof version === 'string' ? version : '',
+  }
+  return { plan, status: resultStatus, record: next, saved: true, refused: false }
+}
+
+const FINDER_SYNC_ERROR_MESSAGES = {
+  [FINDER_SYNC_ERROR_MISSING_APP]: FINDER_SYNC_MISSING_APP,
+  [FINDER_SYNC_ERROR_NOT_RUNNING]: FINDER_SYNC_NOT_RUNNING,
+  [FINDER_SYNC_ERROR_LOGIN_ITEMS]: FINDER_SYNC_AGENT_DISABLED,
+  [FINDER_SYNC_ERROR_UNKNOWN_ACTION]: FINDER_SYNC_UNKNOWN_ACTION,
+}
+
+/**
+ * Folder name without `.app` when it is a product bundle. Cuttler is the
+ * current app. The update zip is still Font Buttler.app.
+ */
+export function finderSyncProductDisplayName(appPath) {
+  const base = path.basename(typeof appPath === 'string' ? appPath : '')
+  if (base.endsWith('.app')) {
+    const name = base.slice(0, -'.app'.length)
+    if (FINDER_SYNC_PRODUCT_EXECUTABLES.includes(name)) return name
+  }
+  return 'Cuttler'
+}
+
+export function finderSyncNotRunningMessage(appPath) {
+  return `${finderSyncProductDisplayName(appPath)} is not running.`
+}
+
+/**
+ * Lock file for one executable path. Font Buttler.app and
+ * release/mac-arm64/Cuttler.app share Electron's userData lock, so that
+ * lock cannot tell them apart.
+ */
+export function sameExecutableLockPath(exePath, directory) {
+  let resolved = path.resolve(String(exePath ?? ''))
+  try {
+    resolved = realpathSync(resolved)
+  } catch {
+    // The path is not on disk yet. The unresolved path still separates two apps.
+  }
+  const digest = createHash('sha256').update(resolved).digest('hex').slice(0, 32)
+  return path.join(directory, digest)
+}
+
+/**
+ * Claim this executable. A live owner keeps the claim. A dead owner's file
+ * is replaced. A different executable has a different path and does not block.
+ */
+export function claimSameExecutableInstance({
+  lockPath,
+  pid,
+  inode = 0,
+  legacyLiveIsCurrent = true,
+  isAlive,
+  io,
+} = {}) {
+  const writeFileSync = io?.writeFileSync
+  const readFileSync = io?.readFileSync
+  const unlinkSync = io?.unlinkSync
+  const mkdirSync = io?.mkdirSync
+  if (!lockPath || !writeFileSync || !readFileSync || !unlinkSync || !mkdirSync) {
+    return { held: false, reason: 'unavailable' }
+  }
+  const owner = Number(pid)
+  if (!Number.isInteger(owner) || owner <= 0) return { held: false, reason: 'pid' }
+  const currentInode = Number(inode)
+  const hasInode = Number.isInteger(currentInode) && currentInode > 0
+  mkdirSync(path.dirname(lockPath), { recursive: true, mode: 0o700 })
+  const body = hasInode ? `${owner}\n${currentInode}\n` : `${owner}\n`
+  const create = () => {
+    writeFileSync(lockPath, body, { flag: 'wx', mode: 0o600 })
+  }
+  const readClaim = () => {
+    const lines = String(readFileSync(lockPath, 'utf8')).split('\n')
+    return {
+      pid: Number.parseInt(lines[0], 10),
+      inode: Number.parseInt(lines[1], 10),
+    }
+  }
+  try {
+    create()
+    return { held: true, reason: 'created' }
+  } catch (error) {
+    if (error?.code !== 'EEXIST') return { held: false, reason: 'create-failed' }
+  }
+  let recorded = { pid: 0, inode: Number.NaN }
+  try {
+    recorded = readClaim()
+  } catch {
+    recorded = { pid: 0, inode: Number.NaN }
+  }
+  if (typeof isAlive === 'function' && isAlive(recorded.pid) === true) {
+    const recordedInode = recorded.inode
+    const sameBinary = hasInode && recordedInode === currentInode
+    const legacy = !(Number.isInteger(recordedInode) && recordedInode > 0)
+    if (sameBinary || (legacy && legacyLiveIsCurrent !== false)) return { held: false, reason: 'running' }
+  }
+  try {
+    unlinkSync(lockPath)
+  } catch {
+    return { held: false, reason: 'busy' }
+  }
+  try {
+    create()
+    return { held: true, reason: 'replaced' }
+  } catch (error) {
+    if (error?.code === 'EEXIST') return { held: false, reason: 'running' }
+    return { held: false, reason: 'create-failed' }
+  }
+}
+
+/**
+ * `quit`: this exact binary is already running. A second copy must not start
+ * the catalog or bind the Finder Sync socket.
+ * `receiver`: another install holds the shared library. This binary still
+ * listens, because the helper inside this bundle has to reach this executable.
+ * It handles the handoff and does not start a second catalog.
+ * `app`: this process owns the library.
+ */
+export function sharedLibraryLaunchMode({ sameExecutableHeld = false, sharedLockHeld = false } = {}) {
+  if (!sameExecutableHeld) return 'quit'
+  if (sharedLockHeld) return 'receiver'
+  return 'app'
+}
+
+/** Drop the claim only when this pid still owns the file. */
+export function releaseSameExecutableInstance({ lockPath, pid, io } = {}) {
+  const readFileSync = io?.readFileSync
+  const unlinkSync = io?.unlinkSync
+  if (!lockPath || !readFileSync || !unlinkSync) return false
+  let recorded = ''
+  try {
+    recorded = String(readFileSync(lockPath, 'utf8')).split('\n')[0].trim()
+  } catch {
+    return false
+  }
+  if (recorded !== String(pid)) return false
+  try {
+    unlinkSync(lockPath)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Fixed copy for a known Finder Sync error code. Anything else is empty. */
+export function finderSyncErrorMessage(code, appPath) {
+  if (code === FINDER_SYNC_ERROR_NOT_RUNNING) return finderSyncNotRunningMessage(appPath)
+  return Object.hasOwn(FINDER_SYNC_ERROR_MESSAGES, code) ? FINDER_SYNC_ERROR_MESSAGES[code] : ''
+}
+
+function pendingErrorByteLength(text) {
+  return Buffer.byteLength(typeof text === 'string' ? text : '', 'utf8')
+}
+
+/**
+ * Known codes from a pending-error record. Unknown codes, free-form
+ * messages, and a record over the size cap are ignored. At most
+ * FINDER_SYNC_PENDING_ERROR_MAX_ENTRIES codes are kept.
+ */
+export function readFinderSyncPendingErrors(text, appPath) {
+  if (!text || pendingErrorByteLength(text) > FINDER_SYNC_PENDING_ERROR_MAX_BYTES) return []
+  let parsed
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return []
+  }
+  const list = Array.isArray(parsed?.errors) ? parsed.errors : []
+  const seen = new Set()
+  const errors = []
+  for (const item of list) {
+    if (errors.length >= FINDER_SYNC_PENDING_ERROR_MAX_ENTRIES) break
+    const code = typeof item?.code === 'string' ? item.code : ''
+    const message = finderSyncErrorMessage(code, appPath)
+    if (!message || seen.has(code)) continue
+    seen.add(code)
+    errors.push({ code, message, at: typeof item?.at === 'number' ? item.at : 0 })
+  }
+  return errors
+}
+
+export function addFinderSyncPendingError(text, code, now = Date.now()) {
+  const message = finderSyncErrorMessage(code)
+  const prior = pendingErrorByteLength(text) > FINDER_SYNC_PENDING_ERROR_MAX_BYTES ? '' : text
+  const errors = readFinderSyncPendingErrors(prior).map((item) => ({ code: item.code, at: item.at }))
+  if (!message || errors.some((item) => item.code === code)) {
+    return { errors, added: false, text: JSON.stringify({ errors }) }
+  }
+  const next = [...errors, { code, at: now }]
+  if (next.length > FINDER_SYNC_PENDING_ERROR_MAX_ENTRIES) next.shift()
+  return { errors: next, added: true, text: JSON.stringify({ errors: next }) }
+}
+
+/**
+ * Read the pending-error file without following a symlink. A regular file
+ * is returned for deletion even when its contents are ignored.
+ */
+export function readFinderSyncPendingErrorFile(filePath, io = { openSync, fstatSync, readSync, closeSync }, appPath) {
+  if (!filePath || typeof io?.openSync !== 'function' || typeof io?.fstatSync !== 'function' || typeof io?.readSync !== 'function' || typeof io?.closeSync !== 'function') {
+    return { errors: [], discard: false, reason: 'unavailable' }
+  }
+  let fd
+  try {
+    fd = io.openSync(filePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { errors: [], discard: false, reason: 'absent' }
+    if (error?.code === 'ELOOP' || error?.code === 'EMLINK' || error?.code === 'EPERM') {
+      return { errors: [], discard: false, reason: 'symlink' }
+    }
+    return { errors: [], discard: false, reason: 'unreadable' }
+  }
+  try {
+    const stat = io.fstatSync(fd)
+    if (typeof stat?.isFile !== 'function' || !stat.isFile()) {
+      return { errors: [], discard: false, reason: 'not-file' }
+    }
+    if (typeof stat.size !== 'number' || stat.size < 0 || stat.size > FINDER_SYNC_PENDING_ERROR_MAX_BYTES) {
+      return { errors: [], discard: true, reason: 'oversize' }
+    }
+    const buffer = Buffer.alloc(stat.size)
+    let got = 0
+    while (got < stat.size) {
+      const count = io.readSync(fd, buffer, got, stat.size - got, null)
+      if (count <= 0) break
+      got += count
+    }
+    return {
+      errors: readFinderSyncPendingErrors(buffer.subarray(0, got).toString('utf8'), appPath),
+      discard: true,
+      reason: 'ok',
+    }
+  } catch {
+    return { errors: [], discard: true, reason: 'unreadable' }
+  } finally {
+    try {
+      io.closeSync(fd)
+    } catch {
+      // The descriptor is already closed.
+    }
+  }
+}
+
+function pruneFinderSyncErrorsShown(alreadyShown, now, ttl) {
+  if (!alreadyShown || typeof alreadyShown.entries !== 'function' || typeof alreadyShown.delete !== 'function') return
+  for (const [code, seenAt] of alreadyShown) {
+    if (typeof seenAt !== 'number' || now - seenAt >= ttl) alreadyShown.delete(code)
+  }
+}
+
+/**
+ * How the main app tells the user about one Finder Sync error code.
+ * Notifications use the app's existing permission. Off or denied falls
+ * back to an in-app dialog. The same code is skipped until the short
+ * window expires. An unknown code is not shown.
+ */
+export function routeFinderSyncError({
+  code,
+  notificationsEnabled = false,
+  permission = 'denied',
+  alreadyShown,
+  now = Date.now(),
+  ttl = FINDER_SYNC_ERROR_SHOWN_TTL_MS,
+  appPath,
+} = {}) {
+  const message = finderSyncErrorMessage(code, appPath)
+  if (!message) return { shown: false, channel: 'none', message: '', code: '' }
+  pruneFinderSyncErrorsShown(alreadyShown, now, ttl)
+  if (alreadyShown?.has?.(code)) return { shown: false, channel: 'duplicate', message, code }
+  const notify = notificationsEnabled === true && permission === 'granted'
+  return { shown: true, channel: notify ? 'notification' : 'dialog', message, code }
+}
+
+function pruneFinderSyncRequests(seen, now, ttl) {
+  const cutoff = now - ttl
+  for (const [id, seenAt] of seen) {
+    if (seenAt < cutoff) seen.delete(id)
+  }
+}
+
+/**
+ * True when this request id was already accepted. Does not record the id.
+ * An empty id is never a duplicate.
+ */
+export function finderSyncRequestSeen(seen, requestId, now = Date.now(), ttl = FINDER_SYNC_REQUEST_TTL_MS) {
+  if (!seen || typeof seen.delete !== 'function' || typeof seen.has !== 'function') return false
+  pruneFinderSyncRequests(seen, now, ttl)
+  if (!requestId) return false
+  return seen.has(requestId)
+}
+
+/**
+ * Record a request id after the install was queued. At most
+ * FINDER_SYNC_REQUEST_CAP ids are kept; the oldest timestamp is dropped.
+ */
+export function noteFinderSyncRequest(seen, requestId, now = Date.now(), cap = FINDER_SYNC_REQUEST_CAP) {
+  if (!seen || typeof seen.set !== 'function' || !requestId) return
+  if (seen.has(requestId)) seen.delete(requestId)
+  seen.set(requestId, now)
+  while (seen.size > cap) {
+    let oldestId = null
+    let oldestAt = Infinity
+    for (const [id, seenAt] of seen) {
+      if (seenAt < oldestAt) {
+        oldestAt = seenAt
+        oldestId = id
+      }
+    }
+    if (oldestId == null) break
+    seen.delete(oldestId)
+  }
+}
+
+function xmlEscape(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+}
+
+/**
+ * SMAppService agent plist. Launchd vends one Mach service, the app-group
+ * name. RunAtLoad stays false so launchd starts the helper on lookup.
+ */
+export function finderSyncAgentLaunchAgentPlist(testFeed) {
+  const label = finderSyncAgentLabel(testFeed)
+  const service = finderSyncMachService(testFeed)
+  const program = finderSyncAgentBundleProgram()
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>${xmlEscape(label)}</string>
+    <key>BundleProgram</key>
+    <string>${xmlEscape(program)}</string>
+    <key>AssociatedBundleIdentifiers</key>
+    <array>
+      <string>${FINDER_SYNC_PARENT_BUNDLE_ID}</string>
+    </array>
+    <key>MachServices</key>
+    <dict>
+      <key>${xmlEscape(service)}</key>
+      <true/>
+    </dict>
+    <key>RunAtLoad</key>
+    <false/>
+  </dict>
+</plist>
+`
+}
+
+export function finderSyncAgentInfoPlist({ testFeed = false, version = '1.0' } = {}) {
+  const bundleId = finderSyncAgentBundleId(testFeed)
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>${FINDER_SYNC_AGENT_EXECUTABLE}</string>
+    <key>CFBundleIdentifier</key>
+    <string>${xmlEscape(bundleId)}</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>Font Buttler Finder Sync Agent</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>${xmlEscape(version)}</string>
+    <key>CFBundleVersion</key>
+    <string>${xmlEscape(version)}</string>
+    <key>LSBackgroundOnly</key>
+    <true/>
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+  </dict>
+</plist>
+`
+}
+
+export function finderSyncAgentMachServiceKeys(plist) {
+  const body = String(plist ?? '').match(/<key>MachServices<\/key>\s*<dict>([\s\S]*?)<\/dict>/)
+  if (!body) return []
+  return [...body[1].matchAll(/<key>([^<]+)<\/key>/g)].map((match) => match[1])
+}
+
+export function finderSyncWireAction(action) {
+  if (action === 'installAs' || action === FINDER_INSTALL_AS) return FINDER_INSTALL_AS
+  if (action === 'install') return 'install'
+  return null
+}
+
+export function finderSyncAppexBundlePath(appPath) {
+  return path.join(appPath, 'Contents', 'PlugIns', FINDER_SYNC_APPEX_NAME)
+}
+
+function ancestorAppBundles(execPath) {
+  if (typeof execPath !== 'string' || !execPath) return []
+  let current = path.resolve(execPath)
+  const apps = []
+  for (let hop = 0; hop < 12; hop += 1) {
+    if (current.endsWith('.app')) apps.push(current)
+    const parent = path.dirname(current)
+    if (parent === current) break
+    current = parent
+  }
+  return apps
+}
+
+/**
+ * The product .app that contains this helper or appex. The nested agent
+ * app is skipped. Cuttler.app and the zip's Font Buttler.app both qualify
+ * when the Finder Sync appex is inside them.
+ */
+export function finderSyncContainingApp(execPath, { exists = existsSync } = {}) {
+  const apps = ancestorAppBundles(execPath).filter((app) => path.basename(app) !== FINDER_SYNC_AGENT_APP_NAME)
+  const products = apps.filter((app) => FINDER_SYNC_PRODUCT_APP_BUNDLES.includes(path.basename(app)))
+  const withAppex = (candidates) => candidates.find((app) => exists(finderSyncAppexBundlePath(app))) || ''
+  return withAppex(products) || withAppex(apps) || products[0] || ''
+}
+
+/** CFBundleExecutable from an XML Info.plist. Binary plists return empty. */
+export function finderSyncPlistExecutable(plist) {
+  const match = /<key>CFBundleExecutable<\/key>\s*<string>([^<]*)<\/string>/.exec(String(plist ?? ''))
+  return match ? match[1].trim() : ''
+}
+
+/**
+ * Main binary inside a product bundle. Prefer CFBundleExecutable, then the
+ * known product names, so Font Buttler.app can still hold a Cuttler binary.
+ */
+export function finderSyncMainExecutable(appPath, { exists = existsSync, readFile = readFileSync } = {}) {
+  if (!appPath) return ''
+  const macOS = path.join(appPath, 'Contents', 'MacOS')
+  const names = []
+  const plistPath = path.join(appPath, 'Contents', 'Info.plist')
+  if (exists(plistPath)) {
+    try {
+      const preferred = finderSyncPlistExecutable(readFile(plistPath, 'utf8'))
+      if (preferred) names.push(preferred)
+    } catch {
+      // A binary plist is resolved by the fallback names below.
+    }
+  }
+  for (const name of FINDER_SYNC_PRODUCT_EXECUTABLES) {
+    if (!names.includes(name)) names.push(name)
+  }
+  const folder = path.basename(appPath, '.app')
+  if (folder && !names.includes(folder)) names.push(folder)
+  for (const name of names) {
+    const binary = path.join(macOS, name)
+    if (exists(binary)) return binary
+  }
+  return ''
+}
+
+/**
+ * Home, `/Users/Shared`, and `/Volumes`. `/` and `/Library/Fonts` are not
+ * monitored. File Provider folders are not added. `home` is ignored when it
+ * is not a safe absolute path.
+ */
+export function finderSyncMonitorDirectories(home) {
+  const directories = []
+  if (typeof home === 'string' && home !== '/' && home !== FINDER_SYNC_SYSTEM_FONTS_ROOT && isSafeFinderSyncPath(home)) {
+    directories.push(home)
+  }
+  for (const root of [FINDER_SYNC_SHARED_ROOT, FINDER_SYNC_VOLUMES_ROOT]) {
+    if (!directories.includes(root)) directories.push(root)
+  }
+  return directories
+}
+
+/**
+ * Decide whether launch should point pluginkit at the appex inside this app.
+ * A disabled extension stays disabled. A matching path is left alone.
+ * An enabled extension whose path is some other copy is re-registered so a
+ * moved app does not keep a stale menu.
+ */
+export function parsePluginkitFinderSync(output, bundleId) {
+  const lines = String(output ?? '').split(/\r?\n/)
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index].match(/^([+\-!])\s+(\S+)/)
+    if (!match) continue
+    const identifier = match[2].split('(')[0]
+    if (identifier !== bundleId) continue
+    let pluginPath = ''
+    for (let next = index + 1; next < lines.length; next += 1) {
+      if (/^[+\-!]/.test(lines[next])) break
+      const pathMatch = lines[next].match(/^\s*Path\s*=\s*(.+)$/)
+      if (pathMatch) pluginPath = pathMatch[1].trim()
+    }
+    return { matched: true, flag: match[1], enabled: match[1] === '+', path: pluginPath }
+  }
+  return { matched: false, flag: '', enabled: false, path: '' }
+}
+
+export function planFinderSyncRegistration({ currentAppex, record } = {}) {
+  if (!currentAppex) return { action: 'none', reason: 'missing-appex' }
+  if (!record?.matched) return { action: 'none', reason: 'not-registered' }
+  if (record.flag === '-') return { action: 'none', reason: 'disabled' }
+  if (!record.path || record.path === currentAppex) return { action: 'none', reason: 'current' }
+  if (record.flag === '+' || record.flag === '!') {
+    return { action: 'reregister', appex: currentAppex, reason: 'moved' }
+  }
+  return { action: 'none', reason: 'disabled' }
+}
+
+export function refreshFinderSyncRegistration({
+  platform = process.platform,
+  packaged = false,
+  appPath,
+  testFeed = false,
+  spawnSync,
+} = {}) {
+  if (platform !== 'darwin' || packaged !== true || !appPath || typeof spawnSync !== 'function') {
+    return { action: 'none', reason: 'skipped' }
+  }
+  const bundleId = finderSyncBundleId(testFeed)
+  const appex = finderSyncAppexBundlePath(appPath)
+  let output = ''
+  try {
+    const listed = spawnSync('pluginkit', ['-m', '-A', '-v', '-i', bundleId], { encoding: 'utf8' })
+    output = `${listed?.stdout ?? ''}\n${listed?.stderr ?? ''}`
+  } catch {
+    return { action: 'none', reason: 'pluginkit-failed' }
+  }
+  const plan = planFinderSyncRegistration({
+    currentAppex: appex,
+    record: parsePluginkitFinderSync(output, bundleId),
+  })
+  if (plan.action !== 'reregister') return plan
+  try {
+    const added = spawnSync('pluginkit', ['-a', plan.appex], { encoding: 'utf8' })
+    if ((added?.status ?? 1) !== 0) return { ...plan, ok: false, reason: 'reregister-failed' }
+  } catch {
+    return { ...plan, ok: false, reason: 'reregister-failed' }
+  }
+  return { ...plan, ok: true }
+}
+
+export function isSafeFinderSyncPath(filePath) {
+  if (typeof filePath !== 'string') return false
+  if (!filePath.startsWith('/')) return false
+  if (filePath.includes('\0')) return false
+  if (filePath.length > MAX_PATH_LENGTH) return false
+  const parts = filePath.split('/')
+  if (parts.slice(1).some((part) => part === '' || part === '.' || part === '..')) return false
+  return true
+}
+
+export function fontMagicKind(header) {
+  if (!header || header.length < 4) return null
+  const bytes = [header[0], header[1], header[2], header[3]]
+  if (bytes[0] === 0x00 && bytes[1] === 0x01 && bytes[2] === 0x00 && bytes[3] === 0x00) return 'sfnt'
+  const tag = String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3])
+  if (tag === 'OTTO' || tag === 'true' || tag === 'typ1') return 'sfnt'
+  if (tag === 'ttcf') return 'collection'
+  if (tag === 'wOFF') return 'woff'
+  if (tag === 'wOF2') return 'woff2'
+  return null
+}
+
+function fontExtension(filePath) {
+  const base = filePath.split('/').pop() ?? ''
+  const dot = base.lastIndexOf('.')
+  if (dot <= 0) return ''
+  return base.slice(dot + 1).toLowerCase()
+}
+
+function magicMatchesExtension(ext, kind) {
+  if (ext === 'woff') return kind === 'woff'
+  if (ext === 'woff2') return kind === 'woff2'
+  if (ext === 'ttc' || ext === 'otc') return kind === 'collection'
+  if (ext === 'ttf' || ext === 'otf') return kind === 'sfnt'
+  return false
+}
+
+function resolveTrustedLink(linkPath, io) {
+  if (linkPath !== '/tmp' && linkPath !== '/var') return null
+  let target
+  try {
+    target = io.readlinkSync(linkPath)
+  } catch {
+    return null
+  }
+  if (typeof target !== 'string' || !target || target.includes('\0')) return null
+  const parent = linkPath.slice(0, linkPath.lastIndexOf('/')) || '/'
+  const resolved = target.startsWith('/')
+    ? target.replace(/\/+$/, '') || '/'
+    : `${parent === '/' ? '' : parent}/${target}`.replace(/\/\.\//g, '/')
+  const normalized = []
+  for (const part of resolved.split('/')) {
+    if (!part || part === '.') continue
+    if (part === '..') return null
+    normalized.push(part)
+  }
+  const absolute = `/${normalized.join('/')}`
+  const expected = linkPath === '/tmp' ? '/private/tmp' : '/private/var'
+  if (absolute !== expected) return null
+  try {
+    const stat = io.lstatSync(absolute)
+    if (stat?.isSymbolicLink?.() || !stat?.isDirectory?.()) return null
+  } catch {
+    return null
+  }
+  return absolute
+}
+
+/**
+ * Walk the path. `/tmp` and `/var` may be the standard symlinks to
+ * `/private/tmp` and `/private/var`. Every other symlink is refused.
+ * The returned path is the one later opened with O_NOFOLLOW.
+ */
+function resolveFinderSyncPath(filePath, io) {
+  const parts = filePath.split('/').filter(Boolean)
+  let current = ''
+  let last = null
+  for (const part of parts) {
+    current = `${current}/${part}`
+    let stat
+    try {
+      stat = io.lstatSync(current)
+    } catch {
+      return { error: 'File not found.' }
+    }
+    if (stat?.isSymbolicLink?.()) {
+      const redirected = resolveTrustedLink(current, io)
+      if (!redirected) return { error: 'Symlink paths are not installed.' }
+      current = redirected
+      try {
+        last = io.lstatSync(current)
+      } catch {
+        return { error: 'File not found.' }
+      }
+      continue
+    }
+    last = stat
+  }
+  return { path: current || '/', stat: last }
+}
+
+function headerFromIo(filePath, io, fd) {
+  try {
+    if (fd != null && typeof io.readAt === 'function') return io.readAt(fd, 4)
+    return io.readPrefix(filePath, 4)
+  } catch (error) {
+    if (error?.code === 'ELOOP') return { error: 'Symlink paths are not installed.' }
+    return { error: 'Not a font file.' }
+  }
+}
+
+function closeHandle(io, handle) {
+  if (handle?.fd == null || typeof io.closeSync !== 'function') return
+  try {
+    io.closeSync(handle.fd)
+  } catch {
+    // The descriptor is already unusable.
+  }
+}
+
+function openChecked(filePath, io, directory) {
+  if (typeof io.openSync !== 'function') return { fd: null, stat: null }
+  let fd
+  try {
+    fd = io.openSync(filePath, directory)
+  } catch (error) {
+    if (error?.code === 'ELOOP') return { error: 'Symlink paths are not installed.' }
+    return { error: directory ? 'File not found.' : 'Not a font file.' }
+  }
+  if (fd == null) return { fd: null, stat: null }
+  if (typeof io.fstatSync !== 'function') return { fd, stat: null }
+  try {
+    const stat = io.fstatSync(fd)
+    return { fd, stat }
+  } catch {
+    closeHandle(io, { fd })
+    return { error: 'File not found.' }
+  }
+}
+
+function inspectFontFile(filePath, io) {
+  const resolved = resolveFinderSyncPath(filePath, io)
+  if (resolved.error) return { error: resolved.error }
+  const pathToUse = resolved.path
+  const last = resolved.stat
+  if (last?.isDirectory?.()) {
+    const opened = openChecked(pathToUse, io, true)
+    if (opened.error) return { error: opened.error }
+    const stat = opened.stat ?? last
+    if (opened.fd != null && !stat?.isDirectory?.()) {
+      closeHandle(io, { fd: opened.fd })
+      return { error: 'Not a regular file.' }
+    }
+    return {
+      path: pathToUse,
+      kind: 'dir',
+      handle:
+        opened.fd == null
+          ? null
+          : { path: pathToUse, fd: opened.fd, dev: stat.dev, ino: stat.ino, kind: 'dir' },
+    }
+  }
+  if (!last?.isFile?.()) return { error: 'Not a regular file.' }
+  if (!isClaimedFontPath(pathToUse)) return { error: 'Not a font file.' }
+  const opened = openChecked(pathToUse, io, false)
+  if (opened.error) return { error: opened.error }
+  const fd = opened.fd
+  const header = headerFromIo(pathToUse, io, fd)
+  if (header?.error) {
+    closeHandle(io, { fd })
+    return { error: header.error }
+  }
+  if (!magicMatchesExtension(fontExtension(pathToUse), fontMagicKind(header))) {
+    closeHandle(io, { fd })
+    return { error: 'Not a font file.' }
+  }
+  const stat = opened.stat ?? last
+  if (fd != null && !stat?.isFile?.()) {
+    closeHandle(io, { fd })
+    return { error: 'Not a regular file.' }
+  }
+  return {
+    path: pathToUse,
+    kind: 'file',
+    handle:
+      fd == null
+        ? null
+        : { path: pathToUse, fd, dev: stat.dev, ino: stat.ino, kind: 'file', size: Number(stat.size) || 0 },
+    size: Number(stat?.size) || 0,
+  }
+}
+
+function emptySelection(rejected = [], limitError = null) {
+  return {
+    paths: [],
+    rejected,
+    handles: [],
+    limitError,
+    close() {},
+  }
+}
+
+function closeHandles(io, handles) {
+  for (const handle of handles) closeHandle(io, handle)
+}
+
+/**
+ * Count regular files under a folder without following symlinks.
+ * A symlink entry counts as one file so a directory of links cannot skip the cap.
+ */
+function measureTree(dirPath, io, state, depth) {
+  if (state.limit || state.error) return
+  if (depth > FINDER_SYNC_TREE_DEPTH) {
+    state.error = FINDER_SYNC_TREE_TOO_DEEP
+    return
+  }
+  if (typeof io.readdirSync !== 'function') return
+  let names
+  try {
+    names = io.readdirSync(dirPath) ?? []
+  } catch {
+    state.error = 'File not found.'
+    return
+  }
+  for (const name of names) {
+    if (state.limit || state.error) return
+    if (typeof name !== 'string' || !name || name.includes('/') || name.includes('\0') || name === '.' || name === '..') {
+      continue
+    }
+    const child = `${dirPath}/${name}`
+    let stat
+    try {
+      stat = io.lstatSync(child)
+    } catch {
+      continue
+    }
+    if (stat?.isSymbolicLink?.()) {
+      state.files += 1
+    } else if (stat?.isDirectory?.()) {
+      measureTree(child, io, state, depth + 1)
+      continue
+    } else if (stat?.isFile?.()) {
+      state.files += 1
+      state.bytes += Number(stat.size) || 0
+    } else {
+      continue
+    }
+    if (state.files > FINDER_SYNC_MAX_FILES) state.limit = 'files'
+    else if (state.bytes > FINDER_SYNC_MAX_BYTES) state.limit = 'bytes'
+  }
+}
+
+function limitMessage(limit) {
+  return limit === 'bytes' ? FINDER_SYNC_TOO_LARGE : FINDER_SYNC_TOO_MANY_FILES
+}
+
+/**
+ * Re-check a Finder Sync selection before the existing install flow.
+ * Font files must be regular files with font magic. Folders are accepted and
+ * measured so a directory cannot skip the file and byte caps. Symlinks are
+ * refused except the standard `/tmp` and `/var` links. An open descriptor is
+ * held so the install can confirm the same inode and the same bytes.
+ */
+export function validateFinderSyncSelection(filePaths, io) {
+  const selection = []
+  const seen = new Set()
+  const rejected = []
+
+  for (const raw of filePaths ?? []) {
+    if (typeof raw !== 'string') continue
+    const filePath = raw
+    if (!filePath || seen.has(filePath)) continue
+    seen.add(filePath)
+    if (!isSafeFinderSyncPath(filePath)) {
+      rejected.push({ path: filePath, reason: 'Not an absolute font file.' })
+      continue
+    }
+    selection.push(filePath)
+  }
+
+  if (selection.length > FINDER_SYNC_MAX_FILES) {
+    return emptySelection(rejected, FINDER_SYNC_TOO_MANY_FILES)
+  }
+
+  const paths = []
+  const handles = []
+  const state = { files: 0, bytes: 0, limit: null, error: null }
+
+  for (const filePath of selection) {
+    const inspected = inspectFontFile(filePath, io)
+    if (inspected.error) {
+      rejected.push({ path: filePath, reason: inspected.error })
+      continue
+    }
+    if (inspected.kind === 'dir') {
+      measureTree(inspected.path, io, state, 1)
+      if (state.error) {
+        closeHandle(io, inspected.handle)
+        closeHandles(io, handles)
+        rejected.push({ path: filePath, reason: state.error })
+        return emptySelection(rejected)
+      }
+      if (state.limit) {
+        closeHandle(io, inspected.handle)
+        closeHandles(io, handles)
+        return emptySelection(rejected, limitMessage(state.limit))
+      }
+      paths.push(inspected.path)
+      if (inspected.handle) handles.push(inspected.handle)
+      continue
+    }
+    const addedBytes = Number(inspected.size) || 0
+    state.files += 1
+    state.bytes += addedBytes
+    if (state.files > FINDER_SYNC_MAX_FILES || state.bytes > FINDER_SYNC_MAX_BYTES) {
+      closeHandle(io, inspected.handle)
+      closeHandles(io, handles)
+      const limit = state.bytes > FINDER_SYNC_MAX_BYTES && state.files <= FINDER_SYNC_MAX_FILES ? 'bytes' : 'files'
+      return emptySelection(rejected, limitMessage(limit))
+    }
+    if (inspected.handle?.kind === 'file') {
+      const fingerprint = fingerprintFd(io, inspected.handle.fd, inspected.handle.size)
+      if (!fingerprint) {
+        closeHandle(io, inspected.handle)
+        state.files -= 1
+        state.bytes -= addedBytes
+        rejected.push({ path: filePath, reason: 'Not a font file.' })
+        continue
+      }
+      inspected.handle.fingerprint = fingerprint
+    }
+    paths.push(inspected.path)
+    if (inspected.handle) handles.push(inspected.handle)
+  }
+
+  return {
+    paths,
+    rejected,
+    handles,
+    limitError: null,
+    close() {
+      closeHandles(io, handles)
+    },
+  }
+}
+
+const FINGERPRINT_CHUNK = 64 * 1024
+
+function fileByteSize(value) {
+  const size = typeof value === 'number' ? value : Number(value)
+  if (!Number.isSafeInteger(size) || size < 0) return null
+  return size
+}
+
+/** SHA-256 of exactly `size` bytes from an already-open descriptor. */
+function fingerprintFd(io, fd, size) {
+  const bytes = fileByteSize(size)
+  if (fd == null || bytes == null || typeof io?.readAt !== 'function') return null
+  const hash = createHash('sha256')
+  let offset = 0
+  while (offset < bytes) {
+    const want = Math.min(FINGERPRINT_CHUNK, bytes - offset)
+    let chunk
+    try {
+      chunk = io.readAt(fd, want, offset)
+    } catch {
+      return null
+    }
+    if (!chunk || chunk.length !== want) return null
+    hash.update(chunk)
+    offset += want
+  }
+  return hash.digest('hex')
+}
+
+/**
+ * An in-place rewrite keeps the device and inode. Compare the recorded size
+ * and content fingerprint, and refuse a file that has grown past 2 GB.
+ * Returns a user-facing reason, or null when the descriptor still matches.
+ */
+function refuseRewrittenFile(io, fd, current, handle) {
+  const size = fileByteSize(current?.size)
+  const recorded = fileByteSize(handle?.size)
+  if (size != null && size > FINDER_SYNC_MAX_BYTES) return FINDER_SYNC_TOO_LARGE
+  if (size == null || recorded == null || size !== recorded) return FINDER_SYNC_CHANGED_BEFORE_INSTALL
+  const fingerprint = fingerprintFd(io, fd, size)
+  if (!fingerprint || fingerprint !== handle.fingerprint) return FINDER_SYNC_CHANGED_BEFORE_INSTALL
+  return null
+}
+
+/**
+ * Confirm each held descriptor still names the same file and the same bytes,
+ * then reopen that path with O_NOFOLLOW and compare the inode, size, and
+ * content fingerprint. A swap or an in-place rewrite between the check and
+ * the install is refused.
+ */
+export function revalidateFinderSyncHandles(handles, io) {
+  for (const handle of handles ?? []) {
+    if (!handle || handle.fd == null || typeof io.fstatSync !== 'function' || typeof io.openSync !== 'function') {
+      return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL }
+    }
+    let current
+    try {
+      current = io.fstatSync(handle.fd)
+    } catch {
+      return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL }
+    }
+    const directory = handle.kind === 'dir'
+    if (directory ? !current?.isDirectory?.() : !current?.isFile?.()) {
+      return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL }
+    }
+    if (current.dev !== handle.dev || current.ino !== handle.ino) {
+      return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL }
+    }
+    if (!directory) {
+      const refused = refuseRewrittenFile(io, handle.fd, current, handle)
+      if (refused) return { ok: false, reason: refused }
+    }
+    let reopened
+    try {
+      reopened = io.openSync(handle.path, directory)
+    } catch {
+      return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL }
+    }
+    try {
+      const again = io.fstatSync(reopened)
+      if (!again || again.dev !== handle.dev || again.ino !== handle.ino) {
+        return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL }
+      }
+      if (!directory) {
+        const refused = refuseRewrittenFile(io, reopened, again, handle)
+        if (refused) return { ok: false, reason: refused }
+        const header = headerFromIo(handle.path, io, reopened)
+        if (header?.error || !magicMatchesExtension(fontExtension(handle.path), fontMagicKind(header))) {
+          return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL }
+        }
+      }
+    } finally {
+      closeHandle(io, { fd: reopened })
+    }
+  }
+  return { ok: true }
+}
+
+function descriptorDirectoryPath(dirfd) {
+  if (process.platform !== 'linux') return null
+  if (!Number.isInteger(dirfd) || dirfd < 0) return null
+  return `/proc/self/fd/${dirfd}`
+}
+
+function loadDescriptorNative() {
+  try {
+    const addon = createRequire(import.meta.url)('./finder-sync-receiver.node')
+    if (typeof addon?.openAt !== 'function' || typeof addon?.readDirFd !== 'function') return null
+    return addon
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Filesystem access for a Finder Sync selection. File bytes come from the
+ * descriptor opened with O_NOFOLLOW. A directory is listed and opened from
+ * that descriptor, not from the path, so a later symlink swap cannot change
+ * which file is read.
+ */
+export function createFinderSyncIo(native = loadDescriptorNative()) {
+  const flagsFor = (directory) => {
+    let flags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0)
+    if (directory && fsConstants.O_DIRECTORY) flags |= fsConstants.O_DIRECTORY
+    // A FIFO with no writer blocks O_RDONLY forever. Regular files ignore this.
+    else if (fsConstants.O_NONBLOCK) flags |= fsConstants.O_NONBLOCK
+    return flags
+  }
+  return {
+    lstatSync,
+    readlinkSync,
+    readdirSync: (filePath) => readdirSync(filePath),
+    openSync(filePath, directory) {
+      return openSync(filePath, flagsFor(Boolean(directory)))
+    },
+    closeSync(fd) {
+      closeSync(fd)
+    },
+    fstatSync(fd) {
+      return fstatSync(fd)
+    },
+    readAt(fd, length, position = 0) {
+      const buffer = Buffer.alloc(length)
+      const bytes = readSync(fd, buffer, 0, length, position ?? 0)
+      return buffer.subarray(0, bytes)
+    },
+    readPrefix(filePath, length) {
+      const fd = openSync(filePath, flagsFor(false))
+      try {
+        const buffer = Buffer.alloc(length)
+        const bytes = readSync(fd, buffer, 0, length, 0)
+        return buffer.subarray(0, bytes)
+      } finally {
+        closeSync(fd)
+      }
+    },
+    readDirFd(dirfd) {
+      if (typeof native?.readDirFd === 'function') return native.readDirFd(dirfd)
+      const base = descriptorDirectoryPath(dirfd)
+      if (!base) {
+        const error = new Error('Finder Sync cannot read that folder from its descriptor.')
+        error.code = 'ENOTSUP'
+        throw error
+      }
+      return readdirSync(base)
+    },
+    openAt(dirfd, name, directory) {
+      if (typeof name !== 'string' || !name || name === '.' || name === '..' || name.includes('/') || name.includes('\0')) {
+        const error = new Error('Finder Sync cannot open that file from its descriptor.')
+        error.code = 'EINVAL'
+        throw error
+      }
+      if (typeof native?.openAt === 'function') return native.openAt(dirfd, name, Boolean(directory))
+      const base = descriptorDirectoryPath(dirfd)
+      if (!base) {
+        const error = new Error('Finder Sync cannot open that file from its descriptor.')
+        error.code = 'ENOTSUP'
+        throw error
+      }
+      return openSync(`${base}/${name}`, flagsFor(Boolean(directory)))
+    },
+  }
+}
+
+function readDescriptorFile(fd, size, io, expectedFingerprint) {
+  const bytes = fileByteSize(size)
+  if (fd == null || bytes == null || typeof io?.readAt !== 'function') {
+    return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL }
+  }
+  const hash = createHash('sha256')
+  // allocUnsafeSlow owns a dedicated ArrayBuffer. A pooled Buffer cannot be
+  // transferred to the scan caller, and the install must move these bytes
+  // rather than copy a 2 GB selection back onto the main thread.
+  const data = Buffer.allocUnsafeSlow(bytes)
+  let offset = 0
+  while (offset < bytes) {
+    const want = Math.min(FINGERPRINT_CHUNK, bytes - offset)
+    let chunk
+    try {
+      chunk = io.readAt(fd, want, offset)
+    } catch {
+      return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL }
+    }
+    if (!chunk || chunk.length !== want) return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL }
+    chunk.copy(data, offset)
+    hash.update(data.subarray(offset, offset + chunk.length))
+    offset += chunk.length
+  }
+  const fingerprint = hash.digest('hex')
+  if (expectedFingerprint && fingerprint !== expectedFingerprint) {
+    return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL }
+  }
+  return { ok: true, data, fingerprint }
+}
+
+function walkDescriptorDirectory(dirfd, dirPath, depth, state, files, io) {
+  if (depth > FINDER_SYNC_TREE_DEPTH) return { ok: false, reason: FINDER_SYNC_TREE_TOO_DEEP }
+  let names
+  try {
+    names = io.readDirFd(dirfd) ?? []
+  } catch {
+    return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL }
+  }
+  for (const name of names) {
+    if (state.limit) return { ok: false, reason: limitMessage(state.limit) }
+    if (typeof name !== 'string' || !name || name === '.' || name === '..' || name.includes('/') || name.includes('\0')) {
+      continue
+    }
+    let fd
+    try {
+      fd = io.openAt(dirfd, name, false)
+    } catch (error) {
+      if (error?.code === 'ELOOP') continue
+      continue
+    }
+    try {
+      const stat = io.fstatSync(fd)
+      const identity = `${stat?.dev}:${stat?.ino}`
+      if (state.seen.has(identity)) continue
+      state.seen.add(identity)
+      const childPath = `${dirPath}/${name}`
+      if (stat?.isDirectory?.()) {
+        const nested = walkDescriptorDirectory(fd, childPath, depth + 1, state, files, io)
+        if (!nested.ok) return nested
+        continue
+      }
+      if (!stat?.isFile?.()) continue
+      if (/\.(woff2?)$/i.test(name)) {
+        state.skippedWeb.push(childPath)
+        continue
+      }
+      if (!isInstallableFontPath(childPath)) continue
+      const size = fileByteSize(stat.size)
+      if (size == null) continue
+      const header = headerFromIo(childPath, io, fd)
+      if (header?.error || !magicMatchesExtension(fontExtension(childPath), fontMagicKind(header))) continue
+      state.files += 1
+      state.bytes += size
+      if (state.files > FINDER_SYNC_MAX_FILES) {
+        state.limit = 'files'
+        return { ok: false, reason: FINDER_SYNC_TOO_MANY_FILES }
+      }
+      if (state.bytes > FINDER_SYNC_MAX_BYTES) {
+        state.limit = 'bytes'
+        return { ok: false, reason: FINDER_SYNC_TOO_LARGE }
+      }
+      const read = readDescriptorFile(fd, size, io)
+      if (!read.ok) return read
+      files.push({
+        filename: name,
+        data: read.data,
+        sourcePath: childPath,
+        mtimeMs: stat.mtimeMs,
+        size,
+      })
+    } finally {
+      closeHandle(io, { fd })
+    }
+  }
+  return { ok: true }
+}
+
+/**
+ * Re-check the held descriptors, then read the install from those descriptors.
+ * The returned buffers are the verified bytes. The path is not opened again.
+ */
+export function readVerifiedFinderFiles(handles, io) {
+  const files = []
+  const skippedWeb = []
+  const state = { files: 0, bytes: 0, limit: null, seen: new Set(), skippedWeb }
+  for (const handle of handles ?? []) {
+    let current
+    try {
+      current = io.fstatSync(handle.fd)
+    } catch {
+      return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL, files: [], skippedWeb }
+    }
+    if (current?.dev !== handle.dev || current?.ino !== handle.ino) {
+      return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL, files: [], skippedWeb }
+    }
+    if (handle.kind === 'dir') {
+      if (!current?.isDirectory?.()) {
+        return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL, files: [], skippedWeb }
+      }
+      state.seen.add(`${current.dev}:${current.ino}`)
+      const walked = walkDescriptorDirectory(handle.fd, handle.path, 1, state, files, io)
+      if (!walked.ok) return { ok: false, reason: walked.reason, files: [], skippedWeb }
+      continue
+    }
+    if (!current?.isFile?.()) {
+      return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL, files: [], skippedWeb }
+    }
+    const recordedSize = fileByteSize(handle.size)
+    const currentSize = fileByteSize(current?.size)
+    if (recordedSize == null || currentSize == null || recordedSize !== currentSize) {
+      return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL, files: [], skippedWeb }
+    }
+    const sourcePath = String(handle.path ?? '')
+    if (/\.(woff2?)$/i.test(sourcePath)) {
+      skippedWeb.push(sourcePath)
+      continue
+    }
+    if (!isInstallableFontPath(sourcePath)) continue
+    state.files += 1
+    state.bytes += currentSize
+    if (state.files > FINDER_SYNC_MAX_FILES) {
+      return { ok: false, reason: FINDER_SYNC_TOO_MANY_FILES, files: [], skippedWeb }
+    }
+    if (state.bytes > FINDER_SYNC_MAX_BYTES) {
+      return { ok: false, reason: FINDER_SYNC_TOO_LARGE, files: [], skippedWeb }
+    }
+    const read = readDescriptorFile(handle.fd, recordedSize, io, handle.fingerprint)
+    if (!read.ok) return { ok: false, reason: read.reason, files: [], skippedWeb }
+    const filename = sourcePath.split('/').pop() || 'font'
+    files.push({ filename, data: read.data, sourcePath, mtimeMs: current.mtimeMs, size: currentSize })
+  }
+  return { ok: true, files, skippedWeb }
+}
+
+let finderScanWorker = null
+let finderScanSeq = 0
+let finderScanHold = 0
+const finderScanPending = new Map()
+const finderScanStopping = new WeakSet()
+
+function retireFinderScanWorker(worker) {
+  if (!worker || finderScanStopping.has(worker)) return
+  finderScanStopping.add(worker)
+  if (finderScanWorker === worker) finderScanWorker = null
+  worker.terminate().catch(() => {})
+}
+
+function maybeRetireFinderScanWorker() {
+  if (finderScanPending.size === 0 && finderScanHold === 0) retireFinderScanWorker(finderScanWorker)
+}
+
+function finderScanFail(error) {
+  const pending = [...finderScanPending.values()]
+  finderScanPending.clear()
+  retireFinderScanWorker(finderScanWorker)
+  for (const job of pending) job.reject(error)
+}
+
+function settleFinderScan(message) {
+  const job = finderScanPending.get(message?.id)
+  if (!job) return
+  finderScanPending.delete(message.id)
+  if (message.error) job.reject(new Error(message.error))
+  else job.resolve(message)
+  maybeRetireFinderScanWorker()
+}
+
+function ensureFinderScanWorker() {
+  if (finderScanWorker) return finderScanWorker
+  const worker = new Worker(new URL('./finder-sync-scan.worker.mjs', import.meta.url), { execArgv: [] })
+  worker.unref()
+  worker.on('message', (message) => settleFinderScan(message))
+  worker.on('error', (error) => finderScanFail(error))
+  worker.on('exit', (code) => {
+    const stopping = finderScanStopping.has(worker)
+    if (finderScanWorker === worker) finderScanWorker = null
+    if (!stopping && code !== 0 && finderScanPending.size) {
+      finderScanFail(new Error('Finder Sync scan stopped.'))
+    }
+  })
+  finderScanWorker = worker
+  return worker
+}
+
+function callFinderScan(op, payload) {
+  const id = (finderScanSeq += 1)
+  return new Promise((resolve, reject) => {
+    finderScanPending.set(id, { resolve, reject })
+    try {
+      ensureFinderScanWorker().postMessage({ id, op, ...payload })
+    } catch (error) {
+      finderScanPending.delete(id)
+      reject(error)
+    }
+  })
+}
+
+// Node closes every descriptor a worker opened when that worker exits, and it
+// closes the number again even if the parent already reused it. Duplicate the
+// descriptor on this thread, then let the opening worker close the original.
+function dupFinderFd(fd, directory) {
+  const native = loadDescriptorNative()
+  if (typeof native?.dupFd === 'function') return native.dupFd(fd)
+  if (process.platform === 'linux') {
+    let flags = fsConstants.O_RDONLY | (fsConstants.O_CLOEXEC || 0)
+    if (directory && fsConstants.O_DIRECTORY) flags |= fsConstants.O_DIRECTORY
+    return openSync(`/proc/self/fd/${fd}`, flags)
+  }
+  const error = new Error('Finder Sync cannot keep that file open.')
+  error.code = 'ENOTSUP'
+  throw error
+}
+
+async function releaseWorkerFds(worker, fds) {
+  if (!fds.length || !worker || finderScanWorker !== worker || finderScanStopping.has(worker)) return
+  await callFinderScan('close', { fds })
+}
+
+async function adoptFinderHandles(handles) {
+  const owner = finderScanWorker
+  const adopted = []
+  const release = []
+  const opened = []
+  try {
+    for (const handle of handles ?? []) {
+      if (handle?.fd == null) {
+        adopted.push(handle)
+        continue
+      }
+      const fd = dupFinderFd(handle.fd, handle.kind === 'dir')
+      opened.push(fd)
+      release.push(handle.fd)
+      adopted.push({ ...handle, fd })
+    }
+    await releaseWorkerFds(owner, release)
+    return adopted
+  } catch (error) {
+    for (const fd of opened) {
+      try {
+        closeSync(fd)
+      } catch {
+        // The duplicate is already closed.
+      }
+    }
+    try {
+      await releaseWorkerFds(owner, release)
+    } catch {
+      // The opening worker is gone and will close what it still tracks.
+    }
+    throw error
+  }
+}
+
+/** Validate and hash a Finder selection on the scan worker. Descriptors stay open. */
+export async function scanFinderSyncSelection(filePaths) {
+  finderScanHold += 1
+  try {
+    const checked = await callFinderScan('validate', { paths: filePaths })
+    if (Array.isArray(checked.handles) && checked.handles.some((handle) => handle?.fd != null)) {
+      checked.handles = await adoptFinderHandles(checked.handles)
+    }
+    return checked
+  } finally {
+    finderScanHold -= 1
+    maybeRetireFinderScanWorker()
+  }
+}
+
+/** Re-check the held descriptors and read their bytes on the scan worker. */
+export function readFinderSyncFiles(handles) {
+  return callFinderScan('read', { handles })
+}
+
+export function formatFinderSyncRejections(rejected) {
+  return (rejected ?? [])
+    .map((item) => {
+      const reason = String(item?.reason ?? '').trim()
+      const filePath = String(item?.path ?? '').trim()
+      if (filePath && reason) return `${filePath}: ${reason}`
+      return reason || filePath
+    })
+    .filter(Boolean)
+    .join('\n')
+}
