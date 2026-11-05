@@ -828,6 +828,51 @@ test('activate-until-quit stays on when a project still owns the face', () => {
   }
 })
 
+test('a parked vault file is not adopted as the restored source', () => {
+  const paths = tempPaths('backup-vault-only-')
+  try {
+    const srcDir = path.join(paths.dataRoot, 'library-src')
+    fs.mkdirSync(srcDir, { recursive: true })
+    const sourcePath = path.join(srcDir, 'Parked.ttf')
+    writeTestFont(sourcePath, 'ParkedFam', 'ParkedFam-Regular')
+    fs.mkdirSync(paths.disabledDir, { recursive: true })
+    const vaultPath = path.join(paths.disabledDir, 'Parked.ttf')
+    fs.copyFileSync(sourcePath, vaultPath)
+    const vaultIno = fs.statSync(vaultPath).ino
+    saveCatalog(paths, {
+      version: 1,
+      entries: [
+        entryFor('parked-id', sourcePath, 'ParkedFam', 'ParkedFam-Regular', {
+          status: 'deactivated',
+          disabledPath: vaultPath,
+        }),
+      ],
+    })
+    const dest = path.join(paths.dataRoot, 'vault.cuttlerbackup')
+    createBackup(paths, { destinationPath: dest })
+    fs.rmSync(sourcePath)
+    saveCatalog(paths, { version: 1, entries: [] })
+
+    const plan = planRestore(paths, dest, { restoreOrganization: false })
+    assert.equal(plan.leftAsIs.some((row) => row.entryId === 'parked-id'), false)
+    assert.ok(plan.restored.some((row) => row.entryId === 'parked-id'))
+
+    const report = restoreBackup(paths, dest, { restoreOrganization: false })
+    assert.equal(report.failed.length, 0, JSON.stringify(report.failed))
+    const restored = loadCatalog(paths).entries.find((entry) => entry.id === 'parked-id')!
+    assert.equal(path.resolve(restored.sourcePath), path.resolve(sourcePath))
+    assert.equal(fs.existsSync(sourcePath), true)
+    assert.equal(isUnderAnyRoot(restored.sourcePath, [paths.disabledDir]), false)
+    assert.equal(path.resolve(restored.disabledPath ?? ''), path.resolve(vaultPath))
+    assert.equal(fs.existsSync(vaultPath), true)
+    assert.equal(fs.statSync(vaultPath).ino, vaultIno)
+    assert.equal(restored.sourceAvailability, 'present')
+    assert.equal(report.leftAsIs.some((row) => row.recordedPath === vaultPath), false)
+  } finally {
+    cleanup(paths)
+  }
+})
+
 test('restore puts back family ratings, comments, and retired tag seeds', () => {
   const source = tempPaths('backup-details-src-')
   const target = tempPaths('backup-details-dst-')

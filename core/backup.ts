@@ -892,15 +892,24 @@ function disabledPathForRestoredEntry(
   return path.resolve(recorded)
 }
 
-/** First recorded path (source, then installed, then parked) that already holds a file on this machine. */
-function existingRecordedPath(entry: CatalogEntry): string | undefined {
+/**
+ * First recorded path (source, then installed, then parked) that already holds a file on this machine.
+ * Files inside the disabled vault are the parked copy, not a source to adopt.
+ */
+function existingRecordedPath(paths: AppPaths, entry: CatalogEntry): string | undefined {
   const candidates = [
     entry.sourcePath,
     entry.installedPath,
     entry.disabledPath,
     ...(entry.installations ?? []).flatMap((c) => [c.path, c.parkedPath]),
   ]
-  return candidates.find((candidate) => candidate && fileIsFile(candidate) && !isProtectedFontPath(candidate))
+  return candidates.find(
+    (candidate) =>
+      Boolean(candidate) &&
+      fileIsFile(candidate) &&
+      !isProtectedFontPath(candidate) &&
+      !isUnderAnyRoot(candidate, [paths.disabledDir]),
+  )
 }
 
 /**
@@ -1062,7 +1071,7 @@ export function planRestore(paths: AppPaths, archivePath: string, options: Resto
           continue
         }
       }
-      const recordedExisting = existingRecordedPath(entry)
+      const recordedExisting = existingRecordedPath(paths, entry)
       if (recordedExisting) {
         report.leftAsIs.push({ entryId: entry.id, newEntryId: entry.id, fileName: chosen?.file.fileName ?? path.basename(recordedExisting), recordedPath: recordedExisting })
         if (activationForBackupEntry(entry, verifiedArchive.manifest) === 'on') report.reactivated.push({ entryId: entry.id, newEntryId: entry.id, fileName: path.basename(recordedExisting) })
@@ -1178,7 +1187,7 @@ export function restoreBackup(paths: AppPaths, archivePath: string, options: Res
       }
       const chosen = chooseFingerprintForEntry(backupEntry, manifest)
       const activation = activationForBackupEntry(backupEntry, manifest)
-      const recordedExisting = existingRecordedPath(backupEntry)
+      const recordedExisting = existingRecordedPath(paths, backupEntry)
       const fileName = chosen?.file.fileName ?? path.basename(backupEntry.sourcePath)
       // A file already on disk at the recorded path is left as-is: no hash
       // check, no overwrite, whatever its bytes. The entry points at it.
