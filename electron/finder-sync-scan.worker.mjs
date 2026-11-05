@@ -10,14 +10,20 @@ function transferableFile(file, transfers) {
   const data = file.data
   const bytes = data?.byteLength ?? 0
   const backing = data?.buffer
+  const described = {
+    filename: file.filename,
+    sourcePath: file.sourcePath,
+    mtimeMs: file.mtimeMs,
+    size: file.size,
+  }
   if (backing instanceof ArrayBuffer && (data.byteOffset ?? 0) === 0 && backing.byteLength === bytes) {
     transfers.push(backing)
-    return { filename: file.filename, data }
+    return { ...described, data }
   }
   const copy = new ArrayBuffer(bytes)
   if (bytes) new Uint8Array(copy).set(data)
   transfers.push(copy)
-  return { filename: file.filename, data: new Uint8Array(copy) }
+  return { ...described, data: new Uint8Array(copy) }
 }
 
 parentPort.on('message', (message) => {

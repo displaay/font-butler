@@ -451,7 +451,7 @@ async function ensureApiToken() {
     if (data.token) {
       apiToken = data.token
     }
-    if (data.settings) {
+    if (data.settings && !receiverOnly) {
       applyBootstrapSettings(data.settings)
     }
   }
@@ -466,7 +466,7 @@ async function ensureApiToken() {
     })
     const bootstrapBody = await response.text()
     const data = bootstrapBody ? JSON.parse(bootstrapBody) : {}
-    if (response.ok && data.settings) {
+    if (response.ok && data.settings && !receiverOnly) {
       applyBootstrapSettings(data.settings)
     }
   } catch {
@@ -718,6 +718,7 @@ function showStartingWindowIfNeeded() {
 }
 
 function showMainWindow() {
+  if (receiverOnly) return
   showDockIcon()
   if (
     shouldIgnoreShowMainWindowDuringBootstrap({
@@ -937,12 +938,15 @@ function createWindow() {
 async function postImportFiles(files) {
   const token = await ensureApiToken()
   const body = new FormData()
+  const sourcePaths = []
   for (const file of files ?? []) {
     const data = file?.data
-    if (!data) continue
+    if (!data || !file.sourcePath) continue
     body.append('files', new Blob([data]), file.filename || 'font')
+    sourcePaths.push(file.sourcePath)
   }
-  const response = await fetch(`${API}/api/import-files`, {
+  body.append('sourcePaths', JSON.stringify(sourcePaths))
+  const response = await fetch(`${API}/api/import-finder`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
     body,
@@ -1253,7 +1257,7 @@ function reportFinderSyncAgentStatus() {
   app.exit(line.includes('"status":"enabled"') ? 0 : 1)
 }
 
-function registerFinderSyncReceiver({ surface = false } = {}) {
+function registerFinderSyncReceiver({ surface = false, registerAgent = true } = {}) {
   if (process.platform !== 'darwin') return false
   const addon = loadFinderSyncReceiver()
   if (!addon) return false
@@ -1281,7 +1285,7 @@ function registerFinderSyncReceiver({ surface = false } = {}) {
         if (queued) noteFinderSyncRequest(finderSyncRequests, requestId)
       })
     })
-    applyFinderSyncAgentRegistration(addon, { surface })
+    if (registerAgent) applyFinderSyncAgentRegistration(addon, { surface })
     return true
   } catch (error) {
     console.error('Finder Sync receiver is not loaded', error)
@@ -1443,11 +1447,15 @@ async function runFinderInstallBytes(action, files, skippedWeb = []) {
     const ids = idsEligibleForFinderInstall(eligible)
     const byFormat = groupIdsByFormat(eligible.filter((entry) => ids.includes(entry.id)))
     for (const group of byFormat) {
-      await postApi('/api/install', {
-        ids: group,
-        familyName,
-        destinationIds,
-      })
+      for (const id of group) {
+        const entry = eligible.find((item) => item.id === id)
+        await postApi('/api/install', {
+          ids: [id],
+          familyName,
+          destinationIds,
+          expectedSourceFingerprint: entry?.sourceFingerprint,
+        })
+      }
     }
     if (issues.length) {
       await showFinderInstallIssues(action, issues, ids.length)
@@ -2477,12 +2485,13 @@ const receiverOnly = launchMode === 'receiver'
 if (launchMode === 'quit') {
   app.quit()
 } else {
+  const finderSyncRegisterOptions = { surface: !receiverOnly, registerAgent: !receiverOnly }
   app.on('will-finish-launching', () => {
-    registerNativeFinderServices()
-    registerFinderSyncReceiver()
+    if (!receiverOnly) registerNativeFinderServices()
+    registerFinderSyncReceiver(finderSyncRegisterOptions)
   })
-  registerNativeFinderServices()
-  registerFinderSyncReceiver()
+  if (!receiverOnly) registerNativeFinderServices()
+  registerFinderSyncReceiver(finderSyncRegisterOptions)
 
   app.on('second-instance', (_event, argv) => {
     if (app.isPackaged && !apiBootstrapReady && lastBootstrapError) {
@@ -2513,6 +2522,7 @@ if (launchMode === 'quit') {
   app.on('before-quit', (event) => {
     isQuitting = true
     if (documentAppObserver) documentAppObserver.stop()
+    if (receiverOnly) return
     if (!sessionReleaseOnQuitStarted) {
       sessionReleaseOnQuitStarted = true
       event.preventDefault()
@@ -2760,14 +2770,15 @@ if (launchMode === 'quit') {
       console.error('Could not clean up opened update disk images', error)
     }
     if (process.platform === 'darwin' && app.dock) {
-      applyDockIcon()
+      if (receiverOnly) app.dock.hide()
+      else applyDockIcon()
     }
     Menu.setApplicationMenu(buildAppMenu())
     nativeTheme.on('updated', () => {
       mainWindow?.setBackgroundColor(windowBackgroundColor())
     })
-    registerNativeFinderServices()
-    registerFinderSyncReceiver({ surface: true })
+    if (!receiverOnly) registerNativeFinderServices()
+    registerFinderSyncReceiver(finderSyncRegisterOptions)
     if (receiverOnly) {
       await finderJobs.start()
       return

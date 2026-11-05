@@ -44,7 +44,12 @@ import {
   upsertCopy,
   verifyManagedCopy,
 } from './destinations.ts'
-import { MAX_UPLOAD_BATCH_BYTES, MAX_UPLOAD_BYTES } from './constants.ts'
+import {
+  FINDER_SYNC_MAX_BYTES,
+  FINDER_SYNC_MAX_FILES,
+  MAX_UPLOAD_BATCH_BYTES,
+  MAX_UPLOAD_BYTES,
+} from './constants.ts'
 import { familyProgressReporter } from './batch-progress.ts'
 import {
   duplicateNotifyKey,
@@ -105,6 +110,7 @@ import {
   assertSingleInstallableFormat,
   formatConflictMessage,
   installedFormatConflicts,
+  isWebFontFile,
   WOFF_INSTALL_ERROR,
 } from './formats.ts'
 import {
@@ -120,6 +126,8 @@ import { isMacUserFontFile, replaceFontFileAtomically } from './user-fonts.ts'
 import {
   analysisFromPlanItem,
   analyzeFontFile,
+  analyzeFontFileSync,
+  forgetFontAnalysis,
   rememberFontAnalysis,
   type FontAnalysis,
 } from './font-analysis.ts'
@@ -1258,6 +1266,83 @@ export class FontButlerService {
           errors.push(`${filePath}: ${error instanceof Error ? error.message : String(error)}`)
           if (fs.existsSync(filePath)) {
             fs.rmSync(filePath, { force: true })
+          }
+        }
+        await yieldDuringBulkImport(index)
+      }
+      if (imported.length > 0) saveCatalog(this.paths, catalog)
+      await syncWatchers(this.paths)
+      emitCatalog(this.paths)
+      return { entries: imported, errors, ignored }
+    })
+  }
+
+  /**
+   * Finder Sync already verified these bytes from an open descriptor.
+   * The catalog records the Finder path, not the staged copy of those bytes.
+   */
+  async importFinderFiles(
+    files: { filename: string; data: Buffer; sourcePath: string; mtimeMs?: number; size?: number }[],
+  ): Promise<{ entries: CatalogEntry[]; errors: string[]; ignored: number }> {
+    return runCatalogTask(async () => {
+      if (files.length > FINDER_SYNC_MAX_FILES) {
+        throw new Error(`Finder Sync selection exceeds ${FINDER_SYNC_MAX_FILES} files`)
+      }
+      const totalBytes = files.reduce((sum, file) => sum + (file.data?.length ?? 0), 0)
+      if (totalBytes > FINDER_SYNC_MAX_BYTES) {
+        throw new Error(`Finder Sync selection exceeds ${FINDER_SYNC_MAX_BYTES / (1024 * 1024)}MB limit`)
+      }
+      fs.mkdirSync(this.paths.uploadsDir, { recursive: true })
+      const errors: string[] = []
+      const imported: CatalogEntry[] = []
+      let ignored = 0
+      const catalog = loadCatalog(this.paths)
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index]!
+        const sourcePath = typeof file.sourcePath === 'string' ? file.sourcePath : ''
+        if (!file.data || !path.isAbsolute(sourcePath) || sourcePath.includes('\0') || sourcePath.length > 4096) {
+          errors.push(`${file.filename || 'font'}: Finder Sync did not keep that file path.`)
+          await yieldDuringBulkImport(index)
+          continue
+        }
+        if (file.data.length > FINDER_SYNC_MAX_BYTES) {
+          errors.push(
+            `${sourcePath}: Finder Sync selection exceeds ${FINDER_SYNC_MAX_BYTES / (1024 * 1024)}MB limit`,
+          )
+          await yieldDuringBulkImport(index)
+          continue
+        }
+        if (isWebFontFile(sourcePath) || isWebFontFile(file.filename || '')) {
+          ignored += 1
+          await yieldDuringBulkImport(index)
+          continue
+        }
+        const recorded = path.resolve(sourcePath)
+        allowUnlinkedSource(this.paths, recorded)
+        let staged: string | null = null
+        try {
+          staged = writeUploadExclusive(this.paths.uploadsDir, file.filename || path.basename(recorded), file.data)
+          const parsed = analyzeFontFileSync(staged)
+          const analysis: FontAnalysis = {
+            ...parsed,
+            path: recorded,
+            size: file.data.length,
+            mtimeMs: typeof file.mtimeMs === 'number' ? file.mtimeMs : parsed.mtimeMs,
+          }
+          imported.push(
+            this.importOneUnlocked(staged, {
+              catalog,
+              persist: false,
+              analysis,
+              recordedSourcePath: recorded,
+            }),
+          )
+        } catch (error) {
+          errors.push(`${recorded}: ${error instanceof Error ? error.message : String(error)}`)
+        } finally {
+          if (staged) {
+            forgetFontAnalysis(staged)
+            if (fs.existsSync(staged)) fs.rmSync(staged, { force: true })
           }
         }
         await yieldDuringBulkImport(index)
@@ -4608,6 +4693,7 @@ export class FontButlerService {
       catalog?: ReturnType<typeof loadCatalog>
       persist?: boolean
       analysis?: FontAnalysis
+      recordedSourcePath?: string
     } = {},
   ): CatalogEntry {
     return importOneUnlockedFn(this.paths, filePath, options)

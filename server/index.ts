@@ -7,7 +7,13 @@ import { emitEvent } from '../core/events.ts'
 import { mountDocumentFontsRoute } from './document-fonts-route.ts'
 import { mountEventsRoutes } from './events-stream.ts'
 import { isFullyUnderAnyRoot } from '../core/containment.ts'
-import { MAX_UPLOAD_BATCH_BYTES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES } from '../core/constants.ts'
+import {
+  FINDER_SYNC_MAX_BYTES,
+  FINDER_SYNC_MAX_FILES,
+  MAX_UPLOAD_BATCH_BYTES,
+  MAX_UPLOAD_BYTES,
+  MAX_UPLOAD_FILES,
+} from '../core/constants.ts'
 import { denyRemoteRequest, isAuthorizedApiRequest, resolveStaticAsset } from '../core/http.ts'
 import { checkAppUpdate } from '../core/app-update.ts'
 import { currentCatalogGeneration } from '../core/catalog.ts'
@@ -540,6 +546,57 @@ app.post('/api/import-files', async (c) => {
     ...result,
     errors: [...oversized, ...result.errors],
   })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Could not import files'
+    const status = /exceeds/.test(message) ? 413 : 400
+    return c.json({ error: message }, status)
+  }
+})
+
+app.post('/api/import-finder', async (c) => {
+  try {
+    const body = await c.req.parseBody({ all: true })
+    const raw = body.files
+    const files = (Array.isArray(raw) ? raw : raw ? [raw] : []).filter(
+      (item): item is File => item instanceof File,
+    )
+    let sourcePaths: string[] = []
+    try {
+      const parsed = JSON.parse(typeof body.sourcePaths === 'string' ? body.sourcePaths : '')
+      sourcePaths = Array.isArray(parsed) ? parsed.map((item) => String(item ?? '')) : []
+    } catch {
+      sourcePaths = []
+    }
+    if (files.length !== sourcePaths.length) {
+      return c.json({ error: 'Finder Sync did not keep that file path.' }, 400)
+    }
+    if (files.length > FINDER_SYNC_MAX_FILES) {
+      return c.json({ error: `Finder Sync selection exceeds ${FINDER_SYNC_MAX_FILES} files` }, 413)
+    }
+    const uploads = []
+    let total = 0
+    for (let index = 0; index < files.length; index += 1) {
+      const file = files[index]!
+      if (file.size > FINDER_SYNC_MAX_BYTES) {
+        return c.json(
+          { error: `Finder Sync selection exceeds ${FINDER_SYNC_MAX_BYTES / (1024 * 1024)}MB limit` },
+          413,
+        )
+      }
+      total += file.size
+      if (total > FINDER_SYNC_MAX_BYTES) {
+        return c.json(
+          { error: `Finder Sync selection exceeds ${FINDER_SYNC_MAX_BYTES / (1024 * 1024)}MB limit` },
+          413,
+        )
+      }
+      uploads.push({
+        filename: file.name,
+        data: Buffer.from(await file.arrayBuffer()),
+        sourcePath: sourcePaths[index] ?? '',
+      })
+    }
+    return c.json(await service.importFinderFiles(uploads))
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Could not import files'
     const status = /exceeds/.test(message) ? 413 : 400

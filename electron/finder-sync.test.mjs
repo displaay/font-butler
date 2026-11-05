@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
   closeSync,
@@ -6,6 +7,7 @@ import {
   existsSync,
   fstatSync,
   lstatSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   openSync,
@@ -734,6 +736,10 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(receiver, /fdopendir\(/)
   assert.match(receiver, /dupFd/)
   assert.match(receiver, /F_DUPFD_CLOEXEC/)
+  assert.match(receiver, /char name\[1024\]/)
+  assert.match(receiver, /length \+ 1 >= sizeof\(name\)/)
+  assert.match(receiver, /O_NONBLOCK/)
+  assert.match(validator, /O_NONBLOCK/)
   assert.match(receiver, /st_uid != getuid/)
   assert.match(receiver, /agentServiceWithPlistName:CurrentAgentPlistName\(\)/)
   assert.doesNotMatch(receiver, /agentServiceWithPlistName:kRelease/)
@@ -759,7 +765,9 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(main, /enqueueValidatedFinderInstall/)
   assert.match(main, /scanFinderSyncSelection/)
   assert.match(main, /readFinderSyncFiles/)
-  assert.match(main, /\/api\/import-files/)
+  assert.match(main, /\/api\/import-finder/)
+  assert.match(main, /expectedSourceFingerprint/)
+  assert.match(main, /sourcePaths/)
   const enqueueValidated = main.slice(
     main.indexOf('async function enqueueValidatedFinderInstall'),
     main.indexOf('function runningTestFeed'),
@@ -1142,6 +1150,25 @@ test('a symlink swap after revalidation does not replace the verified font bytes
   }
 })
 
+test('a directly selected woff2 is skipped instead of imported', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'font-butler-woff-'))
+  const io = createFinderSyncIo()
+  let selected = null
+  try {
+    const filePath = path.join(dir, 'Preview.woff2')
+    writeFileSync(filePath, Buffer.from('wOF2preview-font'))
+    selected = validateFinderSyncSelection([filePath], io)
+    assert.equal(selected.handles.length, 1)
+    const verified = readVerifiedFinderFiles(selected.handles, io)
+    assert.equal(verified.ok, true)
+    assert.equal(verified.files.length, 0)
+    assert.deepEqual(verified.skippedWeb, [filePath])
+  } finally {
+    selected?.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('a directory swapped for a symlink does not import the new folder', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'font-butler-dir-swap-'))
   const io = createFinderSyncIo()
@@ -1191,6 +1218,42 @@ test('finder sync scanning hashes off the caller and returns descriptor bytes', 
     assert.equal(Buffer.from(verified.files[0].data).equals(original), true)
     for (const handle of checked.handles) closeSync(handle.fd)
   } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('a grown file and a hardlinked folder share one verified read', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'font-butler-shared-'))
+  const io = createFinderSyncIo()
+  let selected = null
+  try {
+    const filePath = path.join(dir, 'Grown.otf')
+    const original = Buffer.from('OTTOgrown-face!!')
+    writeFileSync(filePath, original)
+    const grown = validateFinderSyncSelection([filePath], io)
+    writeFileSync(filePath, Buffer.concat([original, Buffer.from('MORE')]))
+    const changed = readVerifiedFinderFiles(grown.handles, io)
+    assert.equal(changed.ok, false)
+    assert.equal(changed.reason, FINDER_SYNC_CHANGED_BEFORE_INSTALL)
+    grown.close()
+
+    const first = path.join(dir, 'A')
+    const second = path.join(dir, 'B')
+    mkdirSync(first)
+    mkdirSync(second)
+    const face = path.join(first, 'Face.otf')
+    writeFileSync(face, original)
+    linkSync(face, path.join(second, 'Face.otf'))
+    mkdirSync(path.join(first, 'pipes'))
+    execFileSync('mkfifo', [path.join(first, 'pipes', 'stuck.otf')])
+    selected = validateFinderSyncSelection([first, second], io)
+    const verified = readVerifiedFinderFiles(selected.handles, io)
+    assert.equal(verified.ok, true)
+    assert.equal(verified.files.length, 1)
+    assert.equal(verified.files[0].sourcePath, face)
+    assert.equal(Buffer.from(verified.files[0].data).equals(original), true)
+  } finally {
+    selected?.close()
     rmSync(dir, { recursive: true, force: true })
   }
 })
@@ -1305,7 +1368,16 @@ test('Finder Sync receiver registration does not release a live handoff', () => 
   assert.ok(installed !== -1 && flush > installed)
   assert.doesNotMatch(register.slice(installed), /napi_call_threadsafe_function\(g_tsfn/)
   assert.match(readRepo('electron/main.mjs'), /will-finish-launching/)
-  assert.match(readRepo('electron/main.mjs'), /registerFinderSyncReceiver\(\{ surface: true \}\)/)
+  assert.match(readRepo('electron/main.mjs'), /surface: !receiverOnly, registerAgent: !receiverOnly/)
+  assert.match(readRepo('electron/main.mjs'), /if \(receiverOnly\) return/)
+  assert.match(readRepo('electron/main.mjs'), /if \(receiverOnly\) app\.dock\.hide\(\)/)
+  assert.match(readRepo('electron/main.mjs'), /if \(receiverOnly\) return\n    if \(!sessionReleaseOnQuitStarted\)/)
+  assert.match(readRepo('core/constants.ts'), /FINDER_SYNC_MAX_BYTES = 2 \* 1024 \* 1024 \* 1024/)
+  const finderImport = readRepo('core/service.ts')
+  const finderImportFn = finderImport.slice(finderImport.indexOf('async importFinderFiles'), finderImport.indexOf('async openWith'))
+  assert.match(finderImportFn, /FINDER_SYNC_MAX_BYTES/)
+  assert.match(finderImportFn, /recordedSourcePath/)
+  assert.doesNotMatch(finderImportFn, /MAX_UPLOAD_BYTES|MAX_UPLOAD_BATCH_BYTES/)
 })
 
 test('a stale socket is replaced only when this user owns it, then another bind works', async () => {

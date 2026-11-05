@@ -1326,6 +1326,8 @@ export function createFinderSyncIo(native = loadDescriptorNative()) {
   const flagsFor = (directory) => {
     let flags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0)
     if (directory && fsConstants.O_DIRECTORY) flags |= fsConstants.O_DIRECTORY
+    // A FIFO with no writer blocks O_RDONLY forever. Regular files ignore this.
+    else if (fsConstants.O_NONBLOCK) flags |= fsConstants.O_NONBLOCK
     return flags
   }
   return {
@@ -1468,7 +1470,13 @@ function walkDescriptorDirectory(dirfd, dirPath, depth, state, files, io) {
       }
       const read = readDescriptorFile(fd, size, io)
       if (!read.ok) return read
-      files.push({ filename: name, data: read.data })
+      files.push({
+        filename: name,
+        data: read.data,
+        sourcePath: childPath,
+        mtimeMs: stat.mtimeMs,
+        size,
+      })
     } finally {
       closeHandle(io, { fd })
     }
@@ -1483,6 +1491,7 @@ function walkDescriptorDirectory(dirfd, dirPath, depth, state, files, io) {
 export function readVerifiedFinderFiles(handles, io) {
   const files = []
   const skippedWeb = []
+  const state = { files: 0, bytes: 0, limit: null, seen: new Set(), skippedWeb }
   for (const handle of handles ?? []) {
     let current
     try {
@@ -1497,7 +1506,6 @@ export function readVerifiedFinderFiles(handles, io) {
       if (!current?.isDirectory?.()) {
         return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL, files: [], skippedWeb }
       }
-      const state = { files: files.length, bytes: files.reduce((sum, file) => sum + file.data.length, 0), limit: null, seen: new Set(), skippedWeb }
       state.seen.add(`${current.dev}:${current.ino}`)
       const walked = walkDescriptorDirectory(handle.fd, handle.path, 1, state, files, io)
       if (!walked.ok) return { ok: false, reason: walked.reason, files: [], skippedWeb }
@@ -1506,10 +1514,29 @@ export function readVerifiedFinderFiles(handles, io) {
     if (!current?.isFile?.()) {
       return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL, files: [], skippedWeb }
     }
-    const read = readDescriptorFile(handle.fd, handle.size, io, handle.fingerprint)
+    const recordedSize = fileByteSize(handle.size)
+    const currentSize = fileByteSize(current?.size)
+    if (recordedSize == null || currentSize == null || recordedSize !== currentSize) {
+      return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL, files: [], skippedWeb }
+    }
+    const sourcePath = String(handle.path ?? '')
+    if (/\.(woff2?)$/i.test(sourcePath)) {
+      skippedWeb.push(sourcePath)
+      continue
+    }
+    if (!isInstallableFontPath(sourcePath)) continue
+    state.files += 1
+    state.bytes += currentSize
+    if (state.files > FINDER_SYNC_MAX_FILES) {
+      return { ok: false, reason: FINDER_SYNC_TOO_MANY_FILES, files: [], skippedWeb }
+    }
+    if (state.bytes > FINDER_SYNC_MAX_BYTES) {
+      return { ok: false, reason: FINDER_SYNC_TOO_LARGE, files: [], skippedWeb }
+    }
+    const read = readDescriptorFile(handle.fd, recordedSize, io, handle.fingerprint)
     if (!read.ok) return { ok: false, reason: read.reason, files: [], skippedWeb }
-    const filename = String(handle.path ?? '').split('/').pop() || 'font'
-    files.push({ filename, data: read.data })
+    const filename = sourcePath.split('/').pop() || 'font'
+    files.push({ filename, data: read.data, sourcePath, mtimeMs: current.mtimeMs, size: currentSize })
   }
   return { ok: true, files, skippedWeb }
 }

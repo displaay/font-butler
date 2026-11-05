@@ -48,20 +48,23 @@ export function importOneUnlocked(
     catalog?: CatalogFile
     persist?: boolean
     analysis?: FontAnalysis
+    /** Catalog path. `filePath` is only the verified bytes, and is not the source. */
+    recordedSourcePath?: string
   } = {},
 ): CatalogEntry {
-  const resolved = path.resolve(filePath)
-  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+  const bytePath = path.resolve(filePath)
+  const resolved = options.recordedSourcePath ? path.resolve(options.recordedSourcePath) : bytePath
+  if (!fs.existsSync(bytePath) || !fs.statSync(bytePath).isFile()) {
     throw new Error('Not a file.')
   }
-  const previewOnly = isWebFontFile(resolved)
+  const previewOnly = isWebFontFile(bytePath)
   if (!previewOnly) {
-    assertNotWebFont(resolved)
+    assertNotWebFont(bytePath)
   }
-  if (!isFontFile(resolved) && !isPreviewableFontFile(resolved)) {
+  if (!isFontFile(bytePath) && !isPreviewableFontFile(bytePath)) {
     throw new Error('Not a font file.')
   }
-  const analysis = options.analysis ?? peekFontAnalysis(resolved) ?? analyzeFontFileSync(resolved)
+  const analysis = options.analysis ?? peekFontAnalysis(bytePath) ?? analyzeFontFileSync(bytePath)
   const parsed = analysis.parsed
   if (parsed.faces.length === 0) {
     throw new Error('Could not read any faces in that font.')
@@ -71,7 +74,7 @@ export function importOneUnlocked(
   }
   const catalog = options.catalog ?? loadCatalog(paths)
   const persist = options.persist !== false
-  const fingerprint = analysis.fingerprint || tryFingerprintFile(resolved)
+  const fingerprint = analysis.fingerprint || tryFingerprintFile(bytePath)
   const samePath = (() => {
     const found = findByInstalledPath(catalog, resolved) ?? findBySourcePath(catalog, resolved)
     return found && isInactiveRetailListing(found) ? undefined : found
@@ -84,11 +87,20 @@ export function importOneUnlocked(
   const existing = options.forceNew ? samePath : (samePath ?? sameBytes)
   const stat = analysis?.mtimeMs != null && analysis.size != null
     ? { mtimeMs: analysis.mtimeMs, size: analysis.size }
-    : readFileStat(resolved)
+    : readFileStat(bytePath)
   const inUserFonts = isUnderAnyRoot(resolved, [paths.userFontsDir, paths.installDir])
   const settings = loadSettings(paths)
   const owner = mostSpecificOwner(settings.folders, resolved)
   if (existing) {
+    if (
+      options.recordedSourcePath &&
+      isUnderAnyRoot(existing.sourcePath, [paths.uploadsDir]) &&
+      path.resolve(existing.sourcePath) !== resolved
+    ) {
+      existing.sourcePath = resolved
+      existing.ownerFolderId = owner?.id ?? null
+      existing.sourcePresent = !inUserFonts
+    }
     if (samePath && inUserFonts && !existing.installedPath) {
       existing.installedPath = resolved
       existing.status = 'installed'

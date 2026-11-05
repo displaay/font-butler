@@ -882,17 +882,21 @@ static napi_value OpenAtExport(napi_env env, napi_callback_info info) {
   napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
   int32_t parentFd = -1;
   bool directory = false;
-  char name[NAME_MAX + 1];
+  // APFS names are up to 255 UTF-16 units, which can be 765 UTF-8 bytes.
+  // NAME_MAX is 255 and would truncate. A truncated name must not be opened.
+  char name[1024];
   size_t length = 0;
   memset(name, 0, sizeof(name));
   if (argc < 3 || napi_get_value_int32(env, args[0], &parentFd) != napi_ok ||
       napi_get_value_string_utf8(env, args[1], name, sizeof(name), &length) != napi_ok ||
+      length + 1 >= sizeof(name) ||
       napi_get_value_bool(env, args[2], &directory) != napi_ok || NameIsReserved(name, length)) {
     napi_throw_error(env, "EINVAL", "Finder Sync could not open that file.");
     return nullptr;
   }
   int flags = O_RDONLY | O_NOFOLLOW | O_CLOEXEC;
   if (directory) flags |= O_DIRECTORY;
+  else flags |= O_NONBLOCK;
   int fd = openat(parentFd, name, flags);
   if (fd < 0) {
     napi_throw_error(env, OpenAtErrorCode(errno), "Finder Sync could not open that file.");
