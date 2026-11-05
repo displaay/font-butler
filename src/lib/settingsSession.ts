@@ -2,14 +2,16 @@ export type ClosedSettingsFocus = {
   settingsOpen: false
   focusAppUpdate: false
   focusWatchFolders: false
+  focusFinderSync: false
 }
 
-/** Shared Settings dismiss: drop app-update and watch-folder deep-link focus. */
+/** Shared Settings dismiss: drop app-update, watch-folder, and Finder Sync deep-link focus. */
 export function closedSettingsFocus(): ClosedSettingsFocus {
   return {
     settingsOpen: false,
     focusAppUpdate: false,
     focusWatchFolders: false,
+    focusFinderSync: false,
   }
 }
 

@@ -54,13 +54,15 @@ export function SettingsSection({
   title,
   children,
   className,
+  id,
 }: {
   title?: ReactNode
   children: ReactNode
   className?: string
+  id?: string
 }) {
   return (
-    <section className={cn(title ? 'mt-6 first:mt-0' : undefined, className)}>
+    <section id={id} className={cn(title ? 'mt-6 first:mt-0' : undefined, className)}>
       {title ? (
         <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">{title}</h3>
       ) : null}
