@@ -107,6 +107,17 @@ body {
   text-rendering: geometricPrecision;
 }
 
+/* Cicero search token: selected-text highlight at 2.2× saturation, laid lightly on the field. */
+.search-token {
+  background: #b9daff;
+  color: #1d1d1f;
+}
+
+.dark .search-token {
+  background: #3f638b;
+  color: #f5f5f7;
+}
+
 .app-region-drag {
   -webkit-app-region: drag;
 }
