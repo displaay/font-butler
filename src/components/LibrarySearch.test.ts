@@ -84,6 +84,11 @@ test('arrow keys and Enter apply the highlighted filter and leave the rest of th
     root.render(createElement(Harness))
   })
 
+  const input = document.querySelector('input')
+  assert.equal(input?.getAttribute('placeholder'), 'Search')
+  assert.equal(input?.getAttribute('aria-label'), 'Search')
+  assert.equal(document.querySelector('button[aria-label="Filters"]'), null)
+
   await act(async () => {
     await type('fig')
   })
@@ -130,6 +135,60 @@ test('arrow keys and Enter apply the highlighted filter and leave the rest of th
   assert.equal(document.querySelector('[data-filters]')?.getAttribute('data-filters'), 'classification:sans-serif')
   assert.equal(document.querySelector('[data-tokens]')?.getAttribute('data-tokens'), 'oldstyle')
   assert.equal(document.querySelector('[role="listbox"]'), null)
+  const sansTag = document.querySelector('button[aria-label="Remove Sans Serif"]')
+  assert.ok(sansTag instanceof view.HTMLElement)
+  assert.equal(sansTag.textContent, 'Sans Serif')
+  assert.equal(sansTag.classList.contains('search-token'), true)
+  const styleTag = document.querySelector('button[aria-label="Remove oldstyle"]')
+  assert.equal(styleTag?.classList.contains('search-token'), true)
+  assert.equal(styleTag?.querySelector('svg'), null)
+
+  await act(async () => {
+    await type('')
+  })
+  await act(async () => {
+    press('Backspace')
+  })
+  assert.equal(document.querySelector('[data-filters]')?.getAttribute('data-filters'), '')
+  assert.equal(document.querySelector('button[aria-label="Remove Sans Serif"]'), null)
+  assert.equal(document.querySelector('[data-tokens]')?.getAttribute('data-tokens'), 'oldstyle')
+
+  await act(async () => {
+    root.unmount()
+  })
+  host.remove()
+})
+
+test('classification and foundry filters are tags in the field, status chips are not', async () => {
+  function ChipHarness() {
+    const [filters, setFilters] = useState(['installed', 'classification:sans-serif', 'foundry:Displaay'])
+    return createElement(LibrarySearch, {
+      text: 'Inter',
+      tokens: [{ id: 'variable', label: 'Variable', group: 'kind' }],
+      libraryFilters: filters,
+      onTextChange: () => {},
+      onTokensChange: () => {},
+      onLibraryFiltersChange: setFilters,
+    })
+  }
+
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  await act(async () => {
+    root.render(createElement(ChipHarness))
+  })
+
+  const labels = [...document.querySelectorAll('button[aria-label^="Remove "]')].map((node) => node.textContent)
+  assert.deepEqual(labels, ['Variable', 'Sans Serif', 'Displaay'])
+  assert.equal(document.querySelector('button[aria-label="Filters"]'), null)
+  const sans = document.querySelector('button[aria-label="Remove Sans Serif"]')
+  assert.ok(sans instanceof view.HTMLElement)
+  await act(async () => {
+    sans.click()
+  })
+  const after = [...document.querySelectorAll('button[aria-label^="Remove "]')].map((node) => node.textContent)
+  assert.deepEqual(after, ['Variable', 'Displaay'])
 
   await act(async () => {
     root.unmount()

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
-import { Search, X } from 'lucide-react'
+import { Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { FONT_CLASSIFICATION_LABELS, isFontClassification } from '../../shared/font-classification.ts'
 import type { LibraryFilter } from '../../shared/library-filters.ts'
 import {
   applySearchSuggestion,
@@ -21,6 +22,38 @@ const SECTION_LABELS: Record<SearchSuggestionKind, string> = {
 const NO_TAGS: NonNullable<SearchFilterCatalog['tags']> = []
 const NO_FOUNDRIES: string[] = []
 const NO_FILTERS: LibraryFilter[] = []
+
+type SearchBarTag =
+  | { key: string; label: string; kind: 'token'; tokenId: string }
+  | { key: string; label: string; kind: 'filter'; filterId: LibraryFilter }
+
+/** Classification and foundry picks from the suggestions. Sidebar status chips stay in the Filters panel. */
+function searchFilterTagLabel(filter: string): string | null {
+  if (filter.startsWith('classification:')) {
+    const id = filter.slice('classification:'.length)
+    return isFontClassification(id) ? FONT_CLASSIFICATION_LABELS[id] : null
+  }
+  if (filter.startsWith('foundry:')) {
+    const name = filter.slice('foundry:'.length).trim()
+    return name || null
+  }
+  return null
+}
+
+function searchBarTags(tokens: readonly SearchToken[], libraryFilters: readonly LibraryFilter[]): SearchBarTag[] {
+  const tags: SearchBarTag[] = tokens.map((token) => ({
+    key: `token:${token.id}`,
+    label: token.label,
+    kind: 'token',
+    tokenId: token.id,
+  }))
+  for (const filter of libraryFilters) {
+    const label = searchFilterTagLabel(filter)
+    if (!label) continue
+    tags.push({ key: `filter:${filter}`, label, kind: 'filter', filterId: filter })
+  }
+  return tags
+}
 
 export function LibrarySearch({
   text,
@@ -53,11 +86,8 @@ export function LibrarySearch({
     }),
     [tags, foundries, tokens, libraryFilters],
   )
-  const matches = useMemo(() => searchFilterSuggestions(text, catalog), [text, catalog])
-  const shown = useMemo(
-    () => (text.trim() ? matches : searchFilterSuggestions(text, catalog, { browse: true })),
-    [text, matches, catalog],
-  )
+  const shown = useMemo(() => searchFilterSuggestions(text, catalog), [text, catalog])
+  const barTags = useMemo(() => searchBarTags(tokens, libraryFilters), [tokens, libraryFilters])
   const shownKey = shown.map((item) => item.id).join('\n')
   const [highlightKey, setHighlightKey] = useState(shownKey)
   if (highlightKey !== shownKey) {
@@ -90,10 +120,19 @@ export function LibrarySearch({
     setMenuOpen(false)
   }
 
+  function removeBarTag(tag: SearchBarTag) {
+    if (tag.kind === 'token') {
+      onTokensChange(tokens.filter((item) => item.id !== tag.tokenId))
+      return
+    }
+    onLibraryFiltersChange?.(libraryFilters.filter((item) => item !== tag.filterId))
+  }
+
   function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key === 'Backspace' && text === '' && tokens.length > 0) {
+    if (event.key === 'Backspace' && text === '' && barTags.length > 0) {
       event.preventDefault()
-      onTokensChange(tokens.slice(0, -1))
+      const last = barTags[barTags.length - 1]
+      if (last) removeBarTag(last)
       return
     }
     if (event.key === 'Escape') {
@@ -124,19 +163,18 @@ export function LibrarySearch({
 
   return (
     <div className="relative">
-      <div className="flex min-h-8 items-center gap-1 rounded-md border bg-background px-2 py-1">
+      <div className="flex min-h-7 items-center gap-1 rounded-full border bg-background px-2.5">
         <Search className="size-3.5 shrink-0 text-muted-foreground" />
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
-          {tokens.map((token) => (
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1 py-1">
+          {barTags.map((tag) => (
             <button
-              key={token.id}
+              key={tag.key}
               type="button"
-              className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] text-foreground"
-              aria-label={`Remove ${token.label}`}
-              onClick={() => onTokensChange(tokens.filter((item) => item.id !== token.id))}
+              className="search-token inline-flex h-[18px] max-w-full items-center truncate rounded-[4px] px-1.5 text-[13px] leading-none"
+              aria-label={`Remove ${tag.label}`}
+              onClick={() => removeBarTag(tag)}
             >
-              {token.label}
-              <X className="size-3 opacity-70" />
+              {tag.label}
             </button>
           ))}
           <input
@@ -151,29 +189,16 @@ export function LibrarySearch({
             onFocus={() => {
               if (searchFilterSuggestions(text, catalog).length > 0) setMenuOpen(true)
             }}
-            placeholder={tokens.length > 0 ? '' : 'Search families'}
-            aria-label="Search families"
+            placeholder="Search"
+            aria-label="Search"
             aria-autocomplete="list"
             aria-controls="library-search-filters"
             aria-expanded={menuOpen}
             aria-activedescendant={menuOpen && activeIndex >= 0 ? `library-search-option-${activeIndex}` : undefined}
             role="combobox"
-            className="h-6 min-w-[6rem] flex-1 bg-transparent text-[13px] outline-none placeholder:text-muted-foreground [&::-webkit-search-cancel-button]:appearance-none"
+            className="h-5 min-w-[4rem] flex-1 bg-transparent text-[13px] outline-none placeholder:text-muted-foreground [&::-webkit-search-cancel-button]:appearance-none"
           />
         </div>
-        <button
-          type="button"
-          className={cn(
-            'shrink-0 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground',
-            menuOpen && 'bg-muted text-foreground',
-          )}
-          aria-haspopup="listbox"
-          aria-expanded={menuOpen}
-          aria-label="Filters"
-          onClick={() => setMenuOpen((open) => !open)}
-        >
-          Filters
-        </button>
       </div>
       {menuOpen ? (
         <div
