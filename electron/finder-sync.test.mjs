@@ -658,7 +658,9 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(agent, /SecRequirementCreateWithString/)
   assert.match(agent, /CFBundleIdentifier/)
   assert.doesNotMatch(agent, /SecStaticCodeCheckValidity/)
-  assert.doesNotMatch(agent, /kSecCSStrictValidate/)
+  assert.match(agent, /SecCodeCheckValidity/)
+  assert.match(agent, /kSecCSStrictValidate/)
+  assert.match(agent, /PeerMeetsParentRequirement/)
   assert.match(agent, /LOCAL_PEERTOKEN/)
   assert.match(agent, /SecCodeCopyGuestWithAttributes/)
   assert.match(agent, /kSecGuestAttributeAudit/)
@@ -1264,6 +1266,7 @@ test('the handoff finds Cuttler.app and the zip Font Buttler.app that contain th
     agent.indexOf('static BOOL ParentExecutableMatches'),
     agent.indexOf('static NSString *RunningProductName'),
   )
+  assert.match(parentMatch, /PeerMeetsParentRequirement\(fd\)/)
   assert.match(parentMatch, /PathIsInsideApp\(kernel, appURL\.path\)/)
   assert.match(parentMatch, /ContainingAppURL\(\)/)
   assert.doesNotMatch(parentMatch, /setCodeSigningRequirement/)
@@ -1271,6 +1274,7 @@ test('the handoff finds Cuttler.app and the zip Font Buttler.app that contain th
   assert.doesNotMatch(agent, /kSecCSBasicValidateOnly/)
   assert.match(agent, /kForwardAfterSpawnSeconds = 20/)
   const mainSource = readRepo('electron/main.mjs')
+  assert.match(mainSource, /createFinderJobQueue\(\(action, filePaths, job\) => runFinderJob\(action, filePaths, job\)\)/)
   assert.match(mainSource, /claimSameExecutableInstance/)
   assert.match(mainSource, /sharedLibraryLaunchMode/)
   assert.match(mainSource, /launchMode === 'quit'/)

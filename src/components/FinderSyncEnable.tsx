@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   FINDER_SYNC_ENABLE_DESCRIPTION,
@@ -9,12 +9,12 @@ import {
   type FinderSyncAgentStatusName,
 } from '@/lib/finderSync'
 
-function openFinderExtensionsSettings() {
-  void window.fontButlerDesktop?.openFinderExtensions?.()
+function openFinderExtensionsSettings(refresh: () => void) {
+  void Promise.resolve(window.fontButlerDesktop?.openFinderExtensions?.()).then(() => refresh())
 }
 
-function openFinderSyncLoginItems() {
-  void window.fontButlerDesktop?.openFinderSyncLoginItems?.()
+function openFinderSyncLoginItems(refresh: () => void) {
+  void Promise.resolve(window.fontButlerDesktop?.openFinderSyncLoginItems?.()).then(() => refresh())
 }
 
 export function FinderSyncEnableButton({
@@ -26,17 +26,32 @@ export function FinderSyncEnableButton({
 }) {
   const [fetched, setFetched] = useState<{ status?: string; enabled?: boolean; error?: string } | null>(null)
   const [enabledOverride, setEnabledOverride] = useState<boolean | null>(null)
+  const refreshRef = useRef<() => void>(() => {})
   useEffect(() => {
     if (statusProp) return
     let cancelled = false
-    void window.fontButlerDesktop?.getFinderSyncAgentStatus?.().then((result) => {
-      if (cancelled || !result) return
-      setFetched(result)
-    })
+    const refresh = () => {
+      void window.fontButlerDesktop?.getFinderSyncAgentStatus?.().then((result) => {
+        if (cancelled || !result) return
+        setFetched(result)
+        setEnabledOverride(null)
+      })
+    }
+    refreshRef.current = refresh
+    refresh()
+    const onFocus = () => refresh()
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refresh()
+    }
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', onVisible)
     return () => {
       cancelled = true
+      window.removeEventListener('focus', onFocus)
+      document.removeEventListener('visibilitychange', onVisible)
     }
   }, [statusProp])
+  const refresh = () => refreshRef.current()
   const status = statusProp ?? fetched?.status ?? 'enabled'
   const enabled = enabledOverride ?? fetched?.enabled !== false
   const registrationError = statusProp ? '' : (fetched?.error ?? '')
@@ -55,8 +70,9 @@ export function FinderSyncEnableButton({
           onChange={(event) => {
             const next = event.target.checked
             setEnabledOverride(next)
-            void window.fontButlerDesktop?.setFinderSyncAgentEnabled?.(next).then((ok) => {
+            void Promise.resolve(window.fontButlerDesktop?.setFinderSyncAgentEnabled?.(next)).then((ok) => {
               if (ok === false) setEnabledOverride(!next)
+              refresh()
             })
           }}
         />
@@ -66,7 +82,9 @@ export function FinderSyncEnableButton({
             variant="outline"
             size="sm"
             disabled={disabled}
-            onClick={action === 'login-items' ? openFinderSyncLoginItems : openFinderExtensionsSettings}
+            onClick={() =>
+              action === 'login-items' ? openFinderSyncLoginItems(refresh) : openFinderExtensionsSettings(refresh)
+            }
           >
             {action === 'login-items' ? FINDER_SYNC_LOGIN_ITEMS_BUTTON : FINDER_SYNC_SETTINGS_BUTTON}
           </Button>

@@ -152,13 +152,10 @@ function uniquePaths(filePaths) {
   const seen = new Set()
   const out = []
   for (const filePath of filePaths ?? []) {
-    if (typeof filePath !== 'string') continue
-    const trimmed = filePath.trim()
-    if (!trimmed || trimmed.startsWith('-')) continue
-    const key = trimmed
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push(trimmed)
+    if (typeof filePath !== 'string' || !filePath || filePath.startsWith('-')) continue
+    if (seen.has(filePath)) continue
+    seen.add(filePath)
+    out.push(filePath)
   }
   return out
 }
@@ -218,8 +215,8 @@ export function collectFinderFontPaths(filePaths, options = {}) {
   const missing = []
 
   for (const filePath of filePaths ?? []) {
-    if (typeof filePath !== 'string' || !filePath.trim()) continue
-    const resolved = filePath.trim()
+    if (typeof filePath !== 'string' || !filePath) continue
+    const resolved = filePath
     if (existsSync && !existsSync(resolved)) {
       missing.push(resolved)
       continue

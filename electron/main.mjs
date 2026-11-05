@@ -314,7 +314,7 @@ const watchNoticeBuffer = createWatchNoticeBuffer()
 let isQuitting = false
 let sessionReleaseOnQuitStarted = false
 const queuedFiles = []
-const finderJobs = createFinderJobQueue((action, filePaths) => runFinderJob(action, filePaths))
+const finderJobs = createFinderJobQueue((action, filePaths, job) => runFinderJob(action, filePaths, job))
 /** @type {null | { updateAvailable?: boolean, latestVersion?: string, htmlUrl?: string | null, releaseNotes?: string | null }} */
 let appUpdate = null
 const APP_UPDATE_POLL_MS = 6 * 60 * 60 * 1000

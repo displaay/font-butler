@@ -123,6 +123,14 @@ test('parseFinderLaunch reads install flags, URLs, and font paths', () => {
   })
 })
 
+test('collectFinderFontPaths does not trim a path into a different file', () => {
+  const collected = collectFinderFontPaths(['/Fonts/Family ', '/Fonts/Family'], {
+    existsSync: () => true,
+    statSync: () => ({ isDirectory: () => true }),
+  })
+  assert.deepEqual(collected.paths, ['/Fonts/Family ', '/Fonts/Family'])
+})
+
 test('collectFinderFontPaths keeps installable fonts and folders, skips WOFF', () => {
   assert.equal(isInstallableFontPath('/x.otf'), true)
   assert.equal(isInstallableFontPath('/x.woff2'), false)

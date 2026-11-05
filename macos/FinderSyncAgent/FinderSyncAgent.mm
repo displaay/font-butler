@@ -489,6 +489,45 @@ static BOOL AncestorHasBundleIdentifier(NSString *path, NSString *expected) {
   return NO;
 }
 
+// Path and Info.plist are not enough: a user-writable .app can contain an
+// unsigned binary whose ancestor plist still says app.fontbutler.desktop.
+// The audit token must satisfy the team and identifier requirement.
+static BOOL PeerMeetsParentRequirement(int fd) {
+  NSString *expected = ExpectedParentBundleIdentifier();
+  if (!expected.length) return NO;
+  NSString *requirementText =
+      [NSString stringWithFormat:@"anchor apple generic and certificate leaf[subject.OU] = \"A7WWML89LQ\" and identifier \"%@\"",
+                                 expected];
+  audit_token_t token;
+  memset(&token, 0, sizeof(token));
+  socklen_t length = (socklen_t)sizeof(token);
+  if (getsockopt(fd, SOL_LOCAL, LOCAL_PEERTOKEN, &token, &length) != 0 || length != sizeof(token)) return NO;
+  CFDataRef auditData = CFDataCreate(kCFAllocatorDefault, (const UInt8 *)&token, (CFIndex)sizeof(token));
+  if (!auditData) return NO;
+  const void *keys[] = {kSecGuestAttributeAudit};
+  const void *values[] = {auditData};
+  CFDictionaryRef attributes = CFDictionaryCreate(kCFAllocatorDefault, keys, values, 1, &kCFTypeDictionaryKeyCallBacks,
+                                                 &kCFTypeDictionaryValueCallBacks);
+  SecCodeRef guest = NULL;
+  OSStatus copyStatus = errSecInternalError;
+  if (attributes) {
+    copyStatus = SecCodeCopyGuestWithAttributes(NULL, attributes, kSecCSDefaultFlags, &guest);
+    CFRelease(attributes);
+  }
+  CFRelease(auditData);
+  if (copyStatus != errSecSuccess || !guest) return NO;
+  SecRequirementRef requirement = NULL;
+  OSStatus created = SecRequirementCreateWithString((__bridge CFStringRef)requirementText, kSecCSDefaultFlags, &requirement);
+  if (created != errSecSuccess || !requirement) {
+    CFRelease(guest);
+    return NO;
+  }
+  OSStatus valid = SecCodeCheckValidity(guest, kSecCSStrictValidate, requirement);
+  CFRelease(requirement);
+  CFRelease(guest);
+  return valid == errSecSuccess;
+}
+
 // The socket peer has to be this helper's containing app. The XPC peer is the
 // Finder Sync appex or the Mac check client, not Electron. An installed
 // Font Buttler.app with the same bundle id is a different path and does not
@@ -496,6 +535,7 @@ static BOOL AncestorHasBundleIdentifier(NSString *path, NSString *expected) {
 static BOOL ParentExecutableMatches(int fd) {
   NSString *expected = ExpectedParentBundleIdentifier();
   if (!expected.length) return NO;
+  if (!PeerMeetsParentRequirement(fd)) return NO;
   NSURL *appURL = ContainingAppURL();
   if (![BundleIdentifierOfApp(appURL.path) isEqualToString:expected]) return NO;
   NSString *kernel = PeerKernelPath(fd);
@@ -506,7 +546,7 @@ static BOOL ParentExecutableMatches(int fd) {
   if (!PathIsInsideApp(path, appURL.path)) return NO;
   if ([identifier isEqualToString:expected]) return YES;
   if (AncestorHasBundleIdentifier(path, expected)) return YES;
-  return YES;
+  return NO;
 }
 
 static NSString *RunningProductName(void) {
