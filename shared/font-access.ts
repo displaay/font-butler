@@ -13,7 +13,15 @@ export type SystemFontAccess = {
   path: string
 }
 
-export type FontAccessPayload = FontFileAccess | SystemFontAccess
+/** A font opened in Compare. The path must also be on the server allowlist. */
+export type CompareFontAccess = {
+  kind: 'compare-font'
+  path: string
+  /** Face inside a TTC/OTC. Standalone fonts use 0. Bound into the signature. */
+  face: number
+}
+
+export type FontAccessPayload = FontFileAccess | SystemFontAccess | CompareFontAccess
 
 export type FontAccessQuery = {
   exp?: string
@@ -21,15 +29,23 @@ export type FontAccessQuery = {
   which?: string
   revision?: string
   path?: string
+  face?: string
 }
 
 export function isFontPreviewPath(pathname: string): boolean {
-  return pathname === '/api/system-font' || pathname.startsWith('/api/font-file/')
+  return (
+    pathname === '/api/system-font' ||
+    pathname === '/api/compare-font' ||
+    pathname.startsWith('/api/font-file/')
+  )
 }
 
 export function fontAccessMessage(payload: FontAccessPayload, exp: string): string {
   if (payload.kind === 'font-file') {
     return `v1\nfont-file\n${payload.id}\n${payload.which}\n${payload.revision}\n${exp}`
+  }
+  if (payload.kind === 'compare-font') {
+    return `v1\ncompare-font\n${payload.path}\n${payload.face}\n${exp}`
   }
   return `v1\nsystem-font\n${payload.path}\n${exp}`
 }
@@ -48,12 +64,23 @@ export function fontAccessPayloadFromRequest(
       revision: query.revision?.trim() || '',
     }
   }
-  if (pathname === '/api/system-font') {
+  if (pathname === '/api/system-font' || pathname === '/api/compare-font') {
     const filePath = query.path?.trim()
     if (!filePath) return null
-    return { kind: 'system-font', path: filePath }
+    if (pathname === '/api/system-font') return { kind: 'system-font', path: filePath }
+    const face = compareFaceIndex(query.face)
+    if (face === null) return null
+    return { kind: 'compare-font', path: filePath, face }
   }
   return null
+}
+
+export function compareFaceIndex(value: string | undefined): number | null {
+  if (value == null || value.trim() === '') return 0
+  if (!/^\d+$/.test(value.trim())) return null
+  const face = Number(value)
+  if (!Number.isInteger(face) || face < 0 || face > 1024) return null
+  return face
 }
 
 export function withFontAccessQuery(

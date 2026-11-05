@@ -18,6 +18,7 @@ import {
   upsertEntry,
 } from './catalog.ts'
 import { getOrCreateApiToken } from './auth.ts'
+import { inspectCompareFiles } from './compare-files.ts'
 import { cacheClearLogoutProbe, loadBuildIdentity, loadFaultSwitchTestBuild } from './build-identity.ts'
 import { readFontPreviewBytes } from './font-bytes.ts'
 import {
@@ -240,7 +241,7 @@ import {
   isCleanupEligible,
   setUpdateHold,
 } from './state.ts'
-import { postscriptPreview } from './rename.ts'
+import { postscriptPreview, standaloneSfntFace } from './rename.ts'
 import { revealInFileManager } from './reveal.ts'
 import { loadSettings, saveSettings } from './settings.ts'
 import { isAppIconStyle } from '../shared/appIcon.ts'
@@ -2514,6 +2515,48 @@ export class FontButlerService {
       buffer: await readFontPreviewBytes(filePath),
       mime: mimeForFont(filePath),
       filename: path.basename(filePath),
+    }
+  }
+
+  /** Real font paths the user has opened in Compare. Not a catalog membership. */
+  private compareAllowed = new Set<string>()
+
+  /**
+   * Read font files for Compare without importing them. A path outside the
+   * library is allowed once it is a real font file the user named.
+   */
+  inspectComparePaths(inputs: string[]): import('./compare-files.ts').CompareInspectResult {
+    const result = inspectCompareFiles(inputs)
+    for (const filePath of result.paths) this.compareAllowed.add(filePath)
+    return result
+  }
+
+  compareFontBytes(filePath: string, faceIndex = 0): { buffer: Buffer; mime: string; filename: string } {
+    let resolved: string
+    try {
+      resolved = fs.realpathSync(path.resolve(filePath))
+    } catch {
+      throw new Error('That font is not open for comparison.')
+    }
+    if (!this.compareAllowed.has(resolved) || !isPreviewableFontFile(resolved)) {
+      throw new Error('That font is not open for comparison.')
+    }
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+      throw new Error('Font file is missing.')
+    }
+    let face: { buffer: Buffer; collection: boolean }
+    try {
+      face = standaloneSfntFace(fs.readFileSync(resolved), faceIndex)
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : 'That font face is not in the file.')
+    }
+    const extension = face.collection && face.buffer.length >= 4 && face.buffer.readUInt32BE(0) === 0x4f54544f ? '.otf' : '.ttf'
+    return {
+      buffer: face.buffer,
+      mime: face.collection ? (extension === '.otf' ? 'font/otf' : 'font/ttf') : mimeForFont(resolved),
+      filename: face.collection
+        ? `${path.basename(resolved, path.extname(resolved))}-${faceIndex}${extension}`
+        : path.basename(resolved),
     }
   }
 

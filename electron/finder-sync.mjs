@@ -3,7 +3,7 @@ import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, 
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { Worker } from 'node:worker_threads'
-import { FINDER_INSTALL_AS, isClaimedFontPath, isInstallableFontPath } from './finder-install.mjs'
+import { FINDER_COMPARE, FINDER_INSTALL_AS, isClaimedFontPath, isInstallableFontPath } from './finder-install.mjs'
 import { TEST_FEED_USER_DATA_DIR } from './test-feed-data.mjs'
 
 export const FINDER_SYNC_BUNDLE_ID = 'app.fontbutler.desktop.FinderSync'
@@ -73,7 +73,12 @@ export function finderSyncBundleId(testFeed) {
 }
 
 export function finderSyncMenuTitle(action, testFeed) {
-  const base = action === FINDER_INSTALL_AS ? 'Install as…' : 'Install'
+  const base =
+    action === FINDER_INSTALL_AS || action === 'install-as'
+      ? 'Install as…'
+      : action === FINDER_COMPARE
+        ? 'Compare'
+        : 'Install'
   return testFeed ? `${base} (Test)` : base
 }
 
@@ -705,6 +710,7 @@ export function finderSyncAgentMachServiceKeys(plist) {
 export function finderSyncWireAction(action) {
   if (action === 'installAs' || action === FINDER_INSTALL_AS) return FINDER_INSTALL_AS
   if (action === 'install') return 'install'
+  if (action === FINDER_COMPARE) return FINDER_COMPARE
   return null
 }
 

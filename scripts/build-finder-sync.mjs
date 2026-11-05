@@ -58,6 +58,7 @@ export function finderSyncInfoPlist({
 }) {
   const installTitle = finderSyncMenuTitle('install', testFeed)
   const installAsTitle = finderSyncMenuTitle('install-as', testFeed)
+  const compareTitle = finderSyncMenuTitle('compare', testFeed)
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -90,6 +91,8 @@ export function finderSyncInfoPlist({
     <string>${xmlEscape(installTitle)}</string>
     <key>FontButtlerInstallAsTitle</key>
     <string>${xmlEscape(installAsTitle)}</string>
+    <key>FontButtlerCompareTitle</key>
+    <string>${xmlEscape(compareTitle)}</string>
     <key>FontButtlerMachService</key>
     <string>${xmlEscape(finderSyncMachService(testFeed))}</string>
     <key>NSExtension</key>
@@ -307,6 +310,8 @@ export function finderSyncAppexFailures({
   expectedInstallTitle = '',
   installAsTitle = '',
   expectedInstallAsTitle = '',
+  compareTitle = '',
+  expectedCompareTitle = '',
   expectedAppGroup = '',
   entitlementText = '',
   machService = '',
@@ -361,6 +366,11 @@ export function finderSyncAppexFailures({
       `The Finder Sync Install as title is ${installAsTitle || 'missing'}, expected ${expectedInstallAsTitle}.`,
     )
   }
+  if (expectedCompareTitle && compareTitle !== expectedCompareTitle) {
+    failures.push(
+      `The Finder Sync Compare title is ${compareTitle || 'missing'}, expected ${expectedCompareTitle}.`,
+    )
+  }
   // Notarization of this nested appex is the enclosing app's Notarized
   // Developer ID result. spctl -t exec rejects the appex ("does not seem to
   // be an app") and never prints that string. The appex has no staple of its
@@ -388,6 +398,7 @@ export function verifyFinderSyncAppex({
   requireDeveloperId = false,
   expectedInstallTitle = '',
   expectedInstallAsTitle = '',
+  expectedCompareTitle = '',
   spawnSync = nodeSpawnSync,
   readFileSync = nodeReadFileSync,
   existsSync = nodeExistsSync,
@@ -399,6 +410,7 @@ export function verifyFinderSyncAppex({
   let urlScheme = ''
   let installTitle = ''
   let installAsTitle = ''
+  let compareTitle = ''
   let codesignDisplay = ''
   let codesignVerifyStatus = 1
   let entitlementKeys = []
@@ -413,6 +425,7 @@ export function verifyFinderSyncAppex({
       urlScheme = plistString(plist, 'FontButtlerURLScheme')
       installTitle = plistString(plist, 'FontButtlerInstallTitle')
       installAsTitle = plistString(plist, 'FontButtlerInstallAsTitle')
+      compareTitle = plistString(plist, 'FontButtlerCompareTitle')
       machService = plistString(plist, 'FontButtlerMachService')
     } catch {
       bundleId = ''
@@ -449,6 +462,8 @@ export function verifyFinderSyncAppex({
     expectedInstallTitle,
     installAsTitle,
     expectedInstallAsTitle,
+    compareTitle,
+    expectedCompareTitle,
     expectedAppGroup,
     machService,
     expectedMachService: expectedAppGroup ? finderSyncMachService(expectedBundleId === finderSyncBundleId(true)) : '',

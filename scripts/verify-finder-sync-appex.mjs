@@ -22,6 +22,7 @@ export async function afterSign(context) {
     requireDeveloperId: Boolean(identity && identity !== '-'),
     expectedInstallTitle: finderSyncMenuTitle('install', testFeed),
     expectedInstallAsTitle: finderSyncMenuTitle('install-as', testFeed),
+    expectedCompareTitle: finderSyncMenuTitle('compare', testFeed),
   })
   if (!verified.ok) {
     throw new Error(verified.failures.join('\n'))

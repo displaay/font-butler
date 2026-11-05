@@ -217,7 +217,8 @@ function isActivateTarget(target: EventTarget | null): boolean {
   return typeof element.getAttribute === 'function' && element.getAttribute('role') === 'button'
 }
 
-export function shortcutAction(event: KeyboardEvent): ShortcutAction | null {
+export function shortcutAction(event: KeyboardEvent, options?: { suspended?: boolean }): ShortcutAction | null {
+  if (options?.suspended) return null
   if (event.defaultPrevented) return null
   if (isTypingTarget(event.target)) return null
   if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 'a') {

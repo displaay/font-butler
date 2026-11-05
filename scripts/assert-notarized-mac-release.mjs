@@ -295,6 +295,8 @@ export function finderSyncReleaseFailures(appPath, { readFile = readFileSync, ex
     expectedInstallTitle: finderSyncMenuTitle('install', testFeed),
     installAsTitle: plistString(plist, 'FontButtlerInstallAsTitle'),
     expectedInstallAsTitle: finderSyncMenuTitle('install-as', testFeed),
+    compareTitle: plistString(plist, 'FontButtlerCompareTitle'),
+    expectedCompareTitle: finderSyncMenuTitle('compare', testFeed),
     expectedAppGroup,
     machService: plistString(plist, 'FontButtlerMachService'),
     expectedMachService: finderSyncMachService(testFeed),

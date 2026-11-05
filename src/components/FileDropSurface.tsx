@@ -42,7 +42,7 @@ export function FileDropSurface({
   const onDraggingChangeRef = useRef(onDraggingChange)
   const onDropRef = useRef(onDrop)
   const watchdogRef = useRef<number | undefined>(undefined)
-  const internalImageDragRef = useRef(false)
+  const internalDragRef = useRef(false)
 
   function reset() {
     window.clearTimeout(watchdogRef.current)
@@ -50,6 +50,16 @@ export function FileDropSurface({
     if (!draggingRef.current) return
     draggingRef.current = false
     onDraggingChangeRef.current(false)
+  }
+
+  function deliver(dataTransfer: DataTransfer | null) {
+    if (!dataTransfer) return
+    if (hasFontButlerEntries(dataTransfer)) {
+      onDropRef.current(dataTransfer)
+      return
+    }
+    if (internalDragRef.current || !transferHasFiles(dataTransfer)) return
+    onDropRef.current(dataTransfer)
   }
 
   useEffect(() => {
@@ -61,7 +71,7 @@ export function FileDropSurface({
 
   useEffect(() => {
     const accepts = (dataTransfer: DataTransfer | null) => {
-      if (ignoreRef?.current || internalImageDragRef.current) return false
+      if (ignoreRef?.current || internalDragRef.current) return false
       if (!dataTransfer || hasFontButlerEntries(dataTransfer)) return false
       return transferHasFiles(dataTransfer)
     }
@@ -96,12 +106,11 @@ export function FileDropSurface({
       if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
       show()
     }
-    const onDragStart = (event: DragEvent) => {
-      const target = event.target
-      internalImageDragRef.current = target instanceof Element && target.tagName === 'IMG'
+    const onDragStart = () => {
+      internalDragRef.current = true
     }
-    const onDragEndImage = () => {
-      internalImageDragRef.current = false
+    const onDragEndInternal = () => {
+      internalDragRef.current = false
     }
     const onLeave = (event: DragEvent) => {
       const next = event.relatedTarget
@@ -134,8 +143,8 @@ export function FileDropSurface({
     window.addEventListener('dragover', onOver, capture)
     window.addEventListener('dragleave', onLeave, capture)
     window.addEventListener('drop', onDropCapture, capture)
+    window.addEventListener('dragend', onDragEndInternal, capture)
     window.addEventListener('dragend', clear, capture)
-    window.addEventListener('dragend', onDragEndImage, capture)
     window.addEventListener('blur', clear, capture)
     document.addEventListener('visibilitychange', onVisibility, capture)
     window.addEventListener('mousemove', onMouseMove, capture)
@@ -148,8 +157,8 @@ export function FileDropSurface({
       window.removeEventListener('dragover', onOver, capture)
       window.removeEventListener('dragleave', onLeave, capture)
       window.removeEventListener('drop', onDropCapture, capture)
+      window.removeEventListener('dragend', onDragEndInternal, capture)
       window.removeEventListener('dragend', clear, capture)
-      window.removeEventListener('dragend', onDragEndImage, capture)
       window.removeEventListener('blur', clear, capture)
       document.removeEventListener('visibilitychange', onVisibility, capture)
       window.removeEventListener('mousemove', onMouseMove, capture)
@@ -165,7 +174,7 @@ export function FileDropSurface({
       onDrop={(event) => {
         event.preventDefault()
         reset()
-        onDropRef.current(event.dataTransfer)
+        deliver(event.dataTransfer)
       }}
     >
       {children}
@@ -177,7 +186,7 @@ export function FileDropSurface({
             event.preventDefault()
             event.stopPropagation()
             reset()
-            onDropRef.current(event.dataTransfer)
+            deliver(event.dataTransfer)
           }}
           onClick={(event) => {
             event.preventDefault()

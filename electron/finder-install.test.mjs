@@ -10,6 +10,8 @@ import {
   FINDER_INSTALL_AS_MESSAGE,
   FINDER_INSTALL_FLAG,
   FINDER_INSTALL_MESSAGE,
+  FINDER_COMPARE,
+  FINDER_COMPARE_FLAG,
   FINDER_LINK_TO,
   FINDER_LINK_TO_FLAG,
   FINDER_LINK_TO_MESSAGE,
@@ -30,6 +32,8 @@ import {
   groupIdsByFormat,
   idsEligibleForFinderInstall,
   isInstallableFontPath,
+  compareLaunchArgv,
+  finderCompareArgv,
   parseFinderInstallUrl,
   parseFinderLaunch,
   suggestedFamilyName,
@@ -120,6 +124,16 @@ test('parseFinderLaunch reads install flags, URLs, and font paths', () => {
   assert.deepEqual(parseFinderInstallUrl(linkUrl), {
     action: FINDER_LINK_TO,
     paths: ['/Fonts/A.woff'],
+  })
+  const compareUrl = finderInstallUrl(FINDER_COMPARE, ['/Fonts/Loose.otf', '/Fonts/Other.woff2'])
+  assert.match(compareUrl, new RegExp(`^${FINDER_PROTOCOL}://finder/compare`))
+  assert.deepEqual(parseFinderInstallUrl(compareUrl), {
+    action: FINDER_COMPARE,
+    paths: ['/Fonts/Loose.otf', '/Fonts/Other.woff2'],
+  })
+  assert.deepEqual(parseFinderLaunch(['electron', '.', FINDER_COMPARE_FLAG, '/Fonts/Loose.otf']), {
+    action: FINDER_COMPARE,
+    paths: ['/Fonts/Loose.otf'],
   })
 })
 
@@ -282,6 +296,58 @@ test('finder services addon compile is skipped off macOS', () => {
   assert.equal(result.skipped, true)
 })
 
+test('compare launch flags and URLs do not fall through to install', () => {
+  assert.deepEqual(finderCompareArgv(['electron', '.', FINDER_COMPARE_FLAG, '/Fonts/A.otf', '/Fonts/B.ttf']), [
+    '/Fonts/A.otf',
+    '/Fonts/B.ttf',
+  ])
+  const url = finderInstallUrl(FINDER_COMPARE, ['/Fonts/Loose.otf'])
+  assert.deepEqual(finderCompareArgv(['Cuttler', url]), ['/Fonts/Loose.otf'])
+  assert.equal(finderCompareArgv(['Cuttler', finderInstallUrl(FINDER_INSTALL, ['/Fonts/A.otf'])]), null)
+  assert.equal(finderCompareArgv(['Cuttler', FINDER_INSTALL_FLAG, '/Fonts/A.otf']), null)
+  const main = readRepo('electron/main.mjs')
+  assert.match(main, /finderCompareArgv/)
+  const openUrl = main.slice(main.indexOf("app.on('open-url'"), main.indexOf("app.on('before-quit'"))
+  assert.match(openUrl, /preventDefault/)
+  assert.match(openUrl, /finderCompareArgv/)
+  assert.match(openUrl, /enqueueFinderJob\(FINDER_COMPARE/)
+  assert.doesNotMatch(openUrl, /openFont|sendWhenReady/)
+  const ready = main.slice(main.indexOf('compareLaunchArgv(process.argv)'), main.indexOf('queuedFiles.length = 0'))
+  assert.match(ready, /enqueueFinderJob\(FINDER_COMPARE/)
+  assert.match(ready, /claimedByCompare\.has\(arg\)/)
+  assert.match(ready, /claimedByCompare\.has\(filePath\)/)
+  const compareUrl = finderInstallUrl(FINDER_COMPARE, ['/Fonts/Loose.otf'])
+  const launch = compareLaunchArgv(['Cuttler', compareUrl])
+  assert.ok(launch)
+  assert.equal(launch.claimed.has(compareUrl), true)
+  assert.equal(launch.claimed.has('/Fonts/Loose.otf'), true)
+  assert.equal(compareLaunchArgv(['Cuttler', finderInstallUrl(FINDER_INSTALL, ['/Fonts/A.otf'])]), null)
+  const second = main.slice(main.indexOf("app.on('second-instance'"), main.indexOf("app.on('open-file'"))
+  assert.match(second, /finderCompareArgv/)
+  assert.match(second, /enqueueFinderJob\(FINDER_COMPARE/)
+  assert.doesNotMatch(second, /sendWhenReady/)
+  assert.ok(second.indexOf('enqueueFinderJob(FINDER_COMPARE') < second.indexOf('openFont'))
+})
+
+test('canceling Compare Fonts does not apply the library selection', () => {
+  const main = readRepo('electron/main.mjs')
+  const start = main.indexOf("label: 'Compare Fonts…'")
+  const end = main.indexOf('return Menu.buildFromTemplate', start)
+  assert.ok(start > 0 && end > start)
+  const item = main.slice(start, end)
+  assert.match(item, /if \(!paths \|\| paths\.length === 0\) return/)
+  assert.match(item, /finder-compare/)
+  assert.doesNotMatch(item, /open-compare/)
+  const app = readRepo('src/App.tsx')
+  assert.match(app, /addCompareFamilies/)
+  assert.match(app, /mode === 'family'\) return addCompareFamilies/)
+  assert.match(app, /mode === 'files'\) return replaceCompareFiles/)
+  assert.match(app, /paths\.length > 1 \? 'files' : 'drop'/)
+  assert.match(app, /picked\.length > 1 \? 'files' : 'drop'/)
+  assert.doesNotMatch(app, /applyComparePaths\(paths, 'add'\)/)
+  assert.doesNotMatch(app, /applyComparePaths\(paths, groups\.length > 1 \? 'replace' : 'add'\)/)
+})
+
 test('Electron main handles Finder services through the existing install APIs', () => {
   const main = readRepo('electron/main.mjs')
   const preload = readRepo('electron/preload.cjs')
@@ -307,6 +373,10 @@ test('Electron main handles Finder services through the existing install APIs', 
   assert.doesNotMatch(main, /\/api\/relink/)
   assert.doesNotMatch(main, /CSC_IDENTITY_AUTO_DISCOVERY/)
   assert.match(preload, /onFinderLinkTo/)
+  assert.match(preload, /onFinderCompare/)
+  assert.match(preload, /queuedFinderCompare/)
+  assert.match(preload, /onOpenCompare/)
+  assert.match(preload, /queuedOpenCompare/)
   assert.match(preload, /onExternalFontOpen/)
   assert.match(preload, /external-font-open/)
   assert.match(main, /external-font-open/)

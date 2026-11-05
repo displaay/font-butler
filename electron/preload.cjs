@@ -3,6 +3,12 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron')
 const queuedWatchNotices = []
 const watchNoticeListeners = new Set()
 
+const queuedFinderCompare = []
+const finderCompareListeners = new Set()
+
+let queuedOpenCompare = false
+const openCompareListeners = new Set()
+
 let externalFontOpenDepth = 0
 const externalFontOpenListeners = new Set()
 
@@ -28,6 +34,20 @@ ipcRenderer.on('watch-notices', (_event, notices) => {
     return
   }
   for (const listener of watchNoticeListeners) listener(list)
+})
+ipcRenderer.on('finder-compare', (_event, payload) => {
+  if (finderCompareListeners.size === 0) {
+    queuedFinderCompare.push(payload)
+    return
+  }
+  for (const listener of finderCompareListeners) listener(payload)
+})
+ipcRenderer.on('open-compare', () => {
+  if (openCompareListeners.size === 0) {
+    queuedOpenCompare = true
+    return
+  }
+  for (const listener of openCompareListeners) listener()
 })
 
 contextBridge.exposeInMainWorld('fontButlerDesktop', {
@@ -107,6 +127,25 @@ contextBridge.exposeInMainWorld('fontButlerDesktop', {
     ipcRenderer.on('finder-link-to', listener)
     return () => ipcRenderer.removeListener('finder-link-to', listener)
   },
+  onOpenCompare: (callback) => {
+    const listener = () => callback()
+    openCompareListeners.add(listener)
+    if (queuedOpenCompare) {
+      queuedOpenCompare = false
+      callback()
+    }
+    return () => openCompareListeners.delete(listener)
+  },
+  onFinderCompare: (callback) => {
+    const listener = (payload) => callback(payload)
+    finderCompareListeners.add(listener)
+    if (queuedFinderCompare.length > 0) {
+      const pending = queuedFinderCompare.splice(0, queuedFinderCompare.length)
+      for (const payload of pending) callback(payload)
+    }
+    return () => finderCompareListeners.delete(listener)
+  },
+  pickCompareFonts: () => ipcRenderer.invoke('pick-compare-fonts'),
   onExternalFontOpen: (callback) => {
     const listener = (payload) => callback(payload)
     externalFontOpenListeners.add(listener)
