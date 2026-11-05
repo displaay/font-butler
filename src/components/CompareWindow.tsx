@@ -307,11 +307,15 @@ export function CompareWindow({
                     event.dataTransfer.setData('text/plain', entry.id)
                     setDragId(entry.id)
                   }}
-                  onDragOver={(event) => event.preventDefault()}
+                  onDragOver={(event) => {
+                    if (!dragId) return
+                    event.preventDefault()
+                  }}
                   onDrop={(event) => {
+                    if (!dragId) return
                     event.preventDefault()
                     event.stopPropagation()
-                    if (dragId) onMove(dragId, entry.id)
+                    onMove(dragId, entry.id)
                     setDragId(null)
                   }}
                 >
@@ -518,11 +522,15 @@ function OverlaySamples({
               event.dataTransfer.setData('text/plain', entry.id)
               onDrag(entry.id)
             }}
-            onDragOver={(event) => event.preventDefault()}
+            onDragOver={(event) => {
+              if (!dragId) return
+              event.preventDefault()
+            }}
             onDrop={(event) => {
+              if (!dragId) return
               event.preventDefault()
               event.stopPropagation()
-              if (dragId) onMove(dragId, entry.id)
+              onMove(dragId, entry.id)
               onDrag(null)
             }}
           >

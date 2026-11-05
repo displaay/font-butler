@@ -373,6 +373,8 @@ test('Electron main handles Finder services through the existing install APIs', 
   assert.doesNotMatch(main, /\/api\/relink/)
   assert.doesNotMatch(main, /CSC_IDENTITY_AUTO_DISCOVERY/)
   assert.match(preload, /onFinderLinkTo/)
+  assert.match(preload, /onFinderCompare/)
+  assert.match(preload, /queuedFinderCompare/)
   assert.match(preload, /onExternalFontOpen/)
   assert.match(preload, /external-font-open/)
   assert.match(main, /external-font-open/)
