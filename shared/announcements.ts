@@ -34,7 +34,7 @@ export const WHATS_NEW_PAGES: AnnouncementPage[] = [
   {
     id: 'family-tags',
     title: 'Family tags',
-    body: 'Tag a family from its menu or the selection bar. Licensed, Trial, Open Source, and Unlicensed are ready to use. Displaay retail starts on Trial until you save a worker token.',
+    body: 'Tag a family from its menu or the selection bar. Licensed, Trial, Open Source, and Unlicensed are ready to use — pick a color when you make a new one. Displaay retail starts on Trial until you save a worker token.',
   },
   {
     id: 'document-font-sheet',
@@ -42,24 +42,29 @@ export const WHATS_NEW_PAGES: AnnouncementPage[] = [
     body: 'Open a PDF, IDML, Word, or PowerPoint file. Cuttler groups those fonts into on, in the library but off, or missing. Activate what you have, or create a project from the document.',
   },
   {
-    id: 'library-search',
-    title: 'Library search',
-    body: 'Type several words — each one has to match. A tag name in the query finds families with that tag.',
-  },
-  {
-    id: 'search-filter-suggestions',
-    title: 'Search filter suggestions',
-    body: 'Start typing a filter name and matching filters appear under the search field. Choose one to narrow the library and set the preview style.',
+    id: 'advanced-search',
+    title: 'Advanced search',
+    body: 'Type several words — each one has to match. A tag name finds families with that tag. Start typing a filter name and matching filters appear under the search field; choose one to narrow the library and set the preview style.',
   },
   {
     id: 'activate-until-quit',
-    title: 'Activate until quit',
-    body: 'Turn a face on for this session only. Quit the app and it turns back off — unless a project or a normal activate still wants it.',
+    title: 'Temporary install',
+    body: 'Right-click a face and choose Activate until quit for a temporary install. It stays on only for this session — quit Cuttler and it turns back off, unless a project or a normal activate still wants it.',
   },
   {
-    id: 'new-tag-color',
-    title: 'Tag colors',
-    body: 'Pick a color when you create a tag. The swatch shows up on family cards and in search, so tags are easy to spot.',
+    id: 'adobe-document-watch',
+    title: 'Adobe document watch',
+    body: 'In Settings, turn on Watch documents in Adobe and Office. When InDesign, Illustrator, Photoshop, Acrobat, Word, or PowerPoint is in front with a supported file, Cuttler opens the font sheet for that document.',
+  },
+  {
+    id: 'finder-extension',
+    title: 'Finder extension',
+    body: 'Right-click a font file or a folder of fonts in Finder and install into Cuttler. Enable the Finder menu once in Settings (Login Items & Extensions). Until that is on, use Services → Install the same way.',
+  },
+  {
+    id: 'compare',
+    title: 'Compare',
+    body: 'Open Compare to stack or overlay faces side by side — including fonts you drop in from Finder. Pick styles, flip between stacked and overlay, and judge them in one place.',
   },
 ]
 
