@@ -152,7 +152,13 @@ test('document sheet helpers keep missing names out of activation', () => {
   assert.equal(isDocumentFontPath('/jobs/Brief.PDF'), true)
   assert.equal(isDocumentFontPath('/jobs/Brief.docx'), true)
   assert.equal(isDocumentFontPath('/jobs/Deck.pptx'), true)
-  assert.equal(isDocumentFontPath('/jobs/Brief.indd'), false)
+  assert.equal(isDocumentFontPath('/jobs/Brief.indd'), true)
+  assert.equal(isDocumentFontPath('/jobs/Brief.indt'), true)
+  assert.equal(isDocumentFontPath('/jobs/Mark.ai'), true)
+  assert.equal(isDocumentFontPath('/jobs/Poster.psd'), true)
+  assert.equal(isDocumentFontPath('/jobs/Poster.psb'), true)
+  assert.equal(isDocumentFontPath('/jobs/Board.fig'), false)
+  assert.equal(documentProjectName('/jobs/Brief.indd'), 'Brief')
   assert.deepEqual(
     documentPathsFrom(['/a/Brief.pdf', '/a/Brief.docx', '/a/Face.otf', '/a/Brief.pdf']),
     ['/a/Brief.pdf', '/a/Brief.docx'],

@@ -122,6 +122,195 @@ test('idml snippet matches PostScript name, then family and style, and does not 
   }
 })
 
+test('indd and indt read the first XMP font list and ignore a later packet', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-doc-indd-'))
+  try {
+    const indd = path.join(dir, 'Book.indd')
+    fs.writeFileSync(indd, indesignWithXmp())
+    const report = reportDocumentFonts(indd, [
+      catalogEntry({
+        id: 'regular',
+        postscriptName: 'MinionPro-Regular',
+        familyName: 'Minion Pro',
+        styleName: 'Regular',
+        status: 'installed',
+        installedFingerprint: 'fp-minion',
+      }),
+      catalogEntry({
+        id: 'bold',
+        postscriptName: 'Family-Bold',
+        familyName: 'Family',
+        styleName: 'Bold',
+        status: 'deactivated',
+      }),
+    ])
+    assert.equal(report.kind, 'indd')
+    assert.deepEqual(
+      report.fonts.map((font) => [font.postscriptName, font.familyName, font.styleName, font.status, font.assetId]),
+      [
+        ['MinionPro-Regular', 'Minion Pro', 'Regular', 'on', 'regular'],
+        ['Family-Bold', 'Family', 'Bold', 'in-library-off', 'bold'],
+        ['Ampersand-Regular', 'A & B', 'Regular', 'missing', undefined],
+      ],
+    )
+    assert.equal(report.fonts[0]?.installedFingerprint, 'fp-minion')
+    assert.equal(report.fonts.some((font) => font.postscriptName === 'Ignored-Face'), false)
+
+    const template = path.join(dir, 'Book.indt')
+    fs.writeFileSync(template, indesignWithXmp())
+    assert.equal(reportDocumentFonts(template, []).kind, 'indd')
+    assert.equal(reportDocumentFonts(template, []).fonts.length, 3)
+
+    const empty = path.join(dir, 'Empty.indd')
+    fs.writeFileSync(empty, Buffer.from('DOCUMENT\0no font list', 'utf8'))
+    assert.deepEqual(reportDocumentFonts(empty, []).fonts, [])
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('illustrator combines PDF font names with XMP and fills in family and style', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-doc-ai-'))
+  try {
+    const ai = path.join(dir, 'Mark.ai')
+    const pdf = [
+      '%PDF-1.4',
+      '1 0 obj',
+      '<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+MinionPro-Regular-Identity-H /DescendantFonts [2 0 R] >>',
+      'endobj',
+      '3 0 obj',
+      '<< /Type /Font /BaseFont /Arial,Bold >>',
+      'endobj',
+      '%%EOF',
+    ].join('\n')
+    fs.writeFileSync(ai, Buffer.concat([Buffer.from(pdf), Buffer.from(indesignWithXmp())]))
+    const report = reportDocumentFonts(ai, [
+      catalogEntry({
+        id: 'regular',
+        postscriptName: 'MinionPro-Regular',
+        familyName: 'Minion Pro',
+        styleName: 'Regular',
+        status: 'installed',
+        installedFingerprint: 'fp-minion',
+      }),
+    ])
+    assert.equal(report.kind, 'ai')
+    assert.deepEqual(
+      report.fonts.map((font) => [font.postscriptName, font.familyName, font.styleName, font.status]),
+      [
+        ['MinionPro-Regular', 'Minion Pro', 'Regular', 'on'],
+        ['Arial,Bold', 'Arial', 'Bold', 'missing'],
+        ['Family-Bold', 'Family', 'Bold', 'missing'],
+        ['Ampersand-Regular', 'A & B', 'Regular', 'missing'],
+      ],
+    )
+    assert.equal(report.fonts[0]?.installedFingerprint, 'fp-minion')
+    assert.equal(report.fonts[0]?.matchedBy, 'postscript')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('photoshop text layers name the fonts a run uses, including a large document', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-doc-psd-'))
+  try {
+    const psd = path.join(dir, 'Poster.psd')
+    const engine = Buffer.from(
+      '/StyleRun << /RunArray [ << /StyleSheet << /StyleSheetData << /Font 0 >> >> >> << /StyleSheet << /StyleSheetData << /Font 1 >> >> >> << /StyleSheet << /StyleSheetData << /Font 2 >> >> >> ] /RunLengthArray [ 4 2 1 ] >> /ResourceDict << /FontSet [ << /Name (Family-Regular) >> << /Name (Family\\(Bold\\)) >> << /Name (AdobeInvisFont) >> ] >>',
+      'latin1',
+    )
+    fs.writeFileSync(psd, photoshopFile(engine, 1))
+    const report = reportDocumentFonts(psd, [
+      catalogEntry({
+        id: 'regular',
+        postscriptName: 'Family-Regular',
+        familyName: 'Family',
+        styleName: 'Regular',
+        status: 'installed',
+        installedFingerprint: 'fp-regular',
+      }),
+    ])
+    assert.equal(report.kind, 'psd')
+    assert.deepEqual(
+      report.fonts.map((font) => [font.postscriptName, font.status, font.assetId]),
+      [
+        ['Family-Regular', 'on', 'regular'],
+        ['Family(Bold)', 'missing', undefined],
+      ],
+    )
+
+    const fallback = path.join(dir, 'Fallback.psb')
+    fs.writeFileSync(
+      fallback,
+      photoshopFile(
+        '/StyleRun << /RunLengthArray [ 3 ] >> /ResourceDict << /StyleSheetSet [ << /Font 1 >> ] /FontSet [ << /Name (NotUsed-Regular) >> << /Name (Family-Bold) >> << /Name (AdobeInvisFont) >> ] >>',
+        2,
+      ),
+    )
+    const large = reportDocumentFonts(fallback, [])
+    assert.equal(large.kind, 'psd')
+    assert.deepEqual(
+      large.fonts.map((font) => font.postscriptName),
+      ['Family-Bold'],
+    )
+
+    const utf = path.join(dir, 'Utf.psd')
+    fs.writeFileSync(
+      utf,
+      photoshopFile(
+        Buffer.concat([
+          Buffer.from('/StyleRun << /Font 0 /RunLengthArray [ 2 ] >> /ResourceDict << /FontSet [ << /Name (', 'latin1'),
+          Buffer.from([0xfe, 0xff, 0x00, 0x4d, 0x00, 0x69, 0x00, 0x6e]),
+          Buffer.from(') >> ] >>', 'latin1'),
+        ]),
+        1,
+      ),
+    )
+    assert.deepEqual(
+      reportDocumentFonts(utf, []).fonts.map((font) => font.postscriptName),
+      ['Min'],
+    )
+
+    const junk = path.join(dir, 'Junk.psd')
+    fs.writeFileSync(junk, Buffer.from('not a photoshop file'))
+    assert.throws(() => reportDocumentFonts(junk, []), /Could not read that Photoshop file/)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('a live InDesign font list is classified without a file', async () => {
+  const app = new Hono()
+  mountDocumentFontsRoute(app, () => [
+    catalogEntry({
+      id: 'regular',
+      postscriptName: 'Family-Regular',
+      familyName: 'Family',
+      styleName: 'Regular',
+      status: 'deactivated',
+    }),
+  ])
+  const response = await app.request('/api/documents/fonts', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      fonts: [
+        { postscriptName: 'Family-Regular', familyName: 'Family', styleName: '' },
+        { postscriptName: 'Missing-Face', familyName: 'Missing', styleName: 'Regular' },
+      ],
+    }),
+  })
+  assert.equal(response.status, 200)
+  const body = (await response.json()) as DocumentFontReport
+  assert.equal(body.kind, 'indd')
+  assert.equal(body.live, true)
+  assert.equal(body.path, 'InDesign')
+  assert.equal(body.fonts[0]?.status, 'in-library-off')
+  assert.equal(body.fonts[0]?.assetId, 'regular')
+  assert.equal(body.fonts[0]?.styleName, '')
+  assert.equal(body.fonts[1]?.status, 'missing')
+})
+
 test('a lowercase plus tag is not a subset prefix, and an active duplicate wins', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-doc-prefix-'))
   try {
@@ -197,7 +386,7 @@ test('POST /api/documents/fonts reports a file and does not require a project wr
     assert.equal(office.status, 400)
     assert.equal(
       ((await office.json()) as { error?: string }).error,
-      'Document fonts can be read from PDF, IDML, Word, and PowerPoint files.',
+      'Document fonts can be read from PDF, IDML, InDesign, Illustrator, Photoshop, Word, and PowerPoint files.',
     )
 
     const response = await app.request('/api/documents/fonts', {
@@ -556,6 +745,67 @@ function catalogEntry(options: {
     addedAt: 1,
     updatedAt: 1,
   }
+}
+
+function indesignWithXmp(): Buffer {
+  const packets = [
+    '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:Description>placed image</rdf:Description></x:xmpmeta>',
+    '<x:xmpmeta xmlns:x="adobe:ns:meta/"><xmpTPg:Fonts><rdf:Bag><rdf:li stFnt:fontName="  "/></rdf:Bag></xmpTPg:Fonts></x:xmpmeta>',
+    `<x:xmpmeta xmlns:x="adobe:ns:meta/">
+      <xmpTPg:Fonts>
+        <rdf:Bag>
+          <rdf:li stFnt:fontName="MinionPro-Regular" stFnt:fontFamily="Minion Pro" stFnt:fontFace="Regular"/>
+          <rdf:li rdf:parseType="Resource">
+            <stFnt:fontName>Family-Bold</stFnt:fontName>
+            <stFnt:fontFamily>Family</stFnt:fontFamily>
+            <stFnt:fontFace>Bold</stFnt:fontFace>
+          </rdf:li>
+          <rdf:li stFnt:fontName="Ampersand-Regular" stFnt:fontFamily="A &amp; B" stFnt:fontFace="Regular"/>
+        </rdf:Bag>
+      </xmpTPg:Fonts>
+    </x:xmpmeta>`,
+    '<x:xmpmeta><xmpTPg:Fonts><rdf:Bag><rdf:li stFnt:fontName="Ignored-Face" stFnt:fontFamily="Ignored" stFnt:fontFace="Regular"/></rdf:Bag></xmpTPg:Fonts></x:xmpmeta>',
+  ]
+  return Buffer.concat([Buffer.from('DOCUMENT\0', 'utf8'), ...packets.map((packet) => Buffer.from(packet, 'utf8'))])
+}
+
+function photoshopFile(engine: Buffer | string, version = 1): Buffer {
+  const engineBytes = Buffer.isBuffer(engine) ? engine : Buffer.from(engine, 'latin1')
+  const width = version === 2 ? 8 : 4
+  const tysh = Buffer.concat([
+    Buffer.from('8BIMTySh', 'ascii'),
+    uInt(engineBytes.length, 4),
+    engineBytes,
+  ])
+  const name = Buffer.from([0x01, 0x41, 0x00, 0x00])
+  const extraBody = Buffer.concat([uInt(0, 4), uInt(0, 4), name, tysh])
+  const layer = Buffer.concat([
+    Buffer.alloc(16),
+    uInt(0, 2),
+    Buffer.alloc(12),
+    uInt(extraBody.length, 4),
+    extraBody,
+  ])
+  const layerInfoBody = Buffer.concat([uInt(1, 2), layer])
+  const layerMaskBody = Buffer.concat([uInt(layerInfoBody.length, width), layerInfoBody])
+  return Buffer.concat([
+    Buffer.from('8BPS', 'ascii'),
+    uInt(version, 2),
+    Buffer.alloc(20),
+    uInt(0, 4),
+    uInt(0, 4),
+    uInt(layerMaskBody.length, width),
+    layerMaskBody,
+  ])
+}
+
+function uInt(value: number, bytes: number): Buffer {
+  const buffer = Buffer.alloc(bytes)
+  for (let index = bytes - 1; index >= 0; index -= 1) {
+    buffer[index] = value & 0xff
+    value = Math.floor(value / 256)
+  }
+  return buffer
 }
 
 function pdfWithFlateBaseFont(name: string): Buffer {

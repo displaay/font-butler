@@ -4,8 +4,16 @@ import zlib from 'node:zlib'
 import type { CatalogEntry, FontFaceInfo } from './types.ts'
 
 /**
- * Read font names from a PDF, IDML, Word, or PowerPoint file and classify each
- * against the catalog. This does not create or update projects.
+ * Read font names from a PDF, IDML, InDesign, Illustrator, Photoshop, Word, or
+ * PowerPoint file and classify each against the catalog. This does not create
+ * or update projects.
+ *
+ * InDesign (.indd, .indt) uses the xmpTPg:Fonts list in the file's XMP.
+ * Illustrator (.ai) uses that list plus the PDF font resources, when the file
+ * was saved with PDF compatibility. Photoshop (.psd, .psb) uses the PostScript
+ * names its text layers actually set. These are the readers in Cicero's
+ * DocumentFonts.swift and PhotoshopFonts.swift. A font the file does not name
+ * is left out.
  *
  * {@link documentProjectDraft} turns this report into project members.
  * Unique asset ids are the members, `installedFingerprint` is the pin when it
@@ -50,7 +58,9 @@ export type DocumentFontRequest = {
 
 export type DocumentFontReport = {
   path: string
-  kind: 'pdf' | 'idml' | 'docx' | 'pptx'
+  kind: 'pdf' | 'idml' | 'docx' | 'pptx' | 'indd' | 'ai' | 'psd'
+  /** Names came from InDesign, not from a file on disk. */
+  live?: boolean
   fonts: DocumentFontRequest[]
 }
 
@@ -86,12 +96,7 @@ export function reportDocumentFonts(
     throw new Error('Path is not a file.')
   }
   const buffer = fs.readFileSync(resolved)
-  const requests =
-    kind === 'pdf'
-      ? pdfFontRequests(buffer)
-      : kind === 'idml'
-        ? idmlFontRequests(buffer)
-        : officeFontRequests(buffer, kind)
+  const requests = fontRequests(kind, buffer)
   const catalog = typeof entries === 'function' ? entries() : entries
   return {
     path: resolved,
@@ -100,13 +105,58 @@ export function reportDocumentFonts(
   }
 }
 
+/** Classify font names InDesign reported. There is no file to read. */
+export function reportNamedDocumentFonts(
+  fonts: readonly { postscriptName?: string; familyName?: string; styleName?: string }[],
+  entries: readonly CatalogEntry[] | (() => readonly CatalogEntry[]),
+): DocumentFontReport {
+  const requests: ParsedFont[] = []
+  for (const font of fonts) {
+    const postscriptName = String(font?.postscriptName ?? '').trim()
+    const familyName = String(font?.familyName ?? '').trim()
+    const styleName = String(font?.styleName ?? '').trim()
+    if (!postscriptName && !familyName) continue
+    requests.push({ postscriptName, familyName, styleName })
+  }
+  const catalog = typeof entries === 'function' ? entries() : entries
+  return {
+    path: 'InDesign',
+    kind: 'indd',
+    live: true,
+    fonts: matchFonts(requests, catalog),
+  }
+}
+
 function documentKind(filePath: string): DocumentFontReport['kind'] {
   const ext = path.extname(filePath).toLowerCase()
   if (ext === '.pdf') return 'pdf'
+  if (ext === '.ai') return 'ai'
   if (ext === '.idml') return 'idml'
+  if (ext === '.indd' || ext === '.indt') return 'indd'
+  if (ext === '.psd' || ext === '.psb') return 'psd'
   if (ext === '.docx') return 'docx'
   if (ext === '.pptx') return 'pptx'
-  throw new Error('Document fonts can be read from PDF, IDML, Word, and PowerPoint files.')
+  throw new Error(
+    'Document fonts can be read from PDF, IDML, InDesign, Illustrator, Photoshop, Word, and PowerPoint files.',
+  )
+}
+
+function fontRequests(kind: DocumentFontReport['kind'], buffer: Buffer): ParsedFont[] {
+  switch (kind) {
+    case 'pdf':
+      return pdfFontRequests(buffer)
+    case 'ai':
+      return aiFontRequests(buffer)
+    case 'idml':
+      return idmlFontRequests(buffer)
+    case 'indd':
+      return inddFontRequests(buffer)
+    case 'psd':
+      return photoshopFontRequests(buffer)
+    case 'docx':
+    case 'pptx':
+      return officeFontRequests(buffer, kind)
+  }
 }
 
 function matchFonts(requests: readonly ParsedFont[], entries: readonly CatalogEntry[]): DocumentFontRequest[] {
@@ -649,4 +699,332 @@ function readZipEntry(
     }
   }
   throw new Error(`Could not read that ${label}.`)
+}
+
+const XMP_START = Buffer.from('<x:xmpmeta')
+const XMP_END = Buffer.from('</x:xmpmeta>')
+const XMP_FONTS = Buffer.from('xmpTPg:Fonts')
+const XMP_LI = /<rdf:li\b([^>]*?)(?:\/>|>([\s\S]*?)<\/rdf:li>)/g
+const XMP_ATTR = /\bstFnt:(fontName|fontFamily|fontFace)\s*=\s*(?:"([^"]*)"|'([^']*)')/g
+const XMP_ELEMENT = /<stFnt:(fontName|fontFamily|fontFace)\b[^>]*>([\s\S]*?)<\/stFnt:\1>/g
+
+/** Illustrator: PDF font resources, then the XMP font list. One row per font. */
+function aiFontRequests(buffer: Buffer): ParsedFont[] {
+  const fromPdf = pdfFontRequests(buffer).map((font) => pdfNamedFont(font.postscriptName))
+  return uniqueParsedFonts([...fromPdf, ...xmpFontRequests(buffer)])
+}
+
+/** InDesign and InDesign templates: the first XMP packet that lists fonts. */
+function inddFontRequests(buffer: Buffer): ParsedFont[] {
+  return uniqueParsedFonts(xmpFontRequests(buffer))
+}
+
+/**
+ * Fonts in an XMP packet's xmpTPg:Fonts list. The first packet that has any wins.
+ * Later packets, including fonts from a placed image, are left out.
+ */
+function xmpFontRequests(buffer: Buffer): ParsedFont[] {
+  let from = 0
+  while (from < buffer.length) {
+    const open = buffer.indexOf(XMP_START, from)
+    if (open < 0) break
+    const close = buffer.indexOf(XMP_END, open + XMP_START.length)
+    if (close < 0) break
+    const packet = buffer.subarray(open, close + XMP_END.length)
+    from = close + XMP_END.length
+    if (!packet.includes(XMP_FONTS)) continue
+    const fonts = xmpPacketFonts(packet.toString('utf8'))
+    if (fonts.length > 0) return fonts
+  }
+  return []
+}
+
+function xmpPacketFonts(xml: string): ParsedFont[] {
+  const sections = [...xml.matchAll(/<xmpTPg:Fonts\b[^>]*>([\s\S]*?)<\/xmpTPg:Fonts>/g)]
+  const body = sections.map((section) => section[1] ?? '').join('\n')
+  const fonts: ParsedFont[] = []
+  for (const match of body.matchAll(XMP_LI)) {
+    const fields = new Map<string, string>()
+    for (const attr of (match[1] ?? '').matchAll(XMP_ATTR)) {
+      fields.set(attr[1] ?? '', decodeXml(attr[2] ?? attr[3] ?? ''))
+    }
+    for (const element of (match[2] ?? '').matchAll(XMP_ELEMENT)) {
+      fields.set(element[1] ?? '', decodeXml(element[2] ?? ''))
+    }
+    const postscriptName = trimmed(fields.get('fontName'))
+    const familyName = trimmed(fields.get('fontFamily'))
+    const styleName = trimmed(fields.get('fontFace'))
+    if (!postscriptName && !familyName) continue
+    fonts.push({ postscriptName, familyName, styleName })
+  }
+  return fonts
+}
+
+/** "MinionPro-Regular-Identity-H" is the composite font's name plus its encoding. */
+function pdfNamedFont(name: string): ParsedFont {
+  let base = name
+  for (const suffix of ['-Identity-H', '-Identity-V']) {
+    if (base.endsWith(suffix)) base = base.slice(0, -suffix.length)
+  }
+  const comma = base.indexOf(',')
+  if (comma > 0) {
+    return {
+      postscriptName: base,
+      familyName: base.slice(0, comma),
+      styleName: base.slice(comma + 1),
+    }
+  }
+  return { postscriptName: base, familyName: '', styleName: '' }
+}
+
+/** One row per PostScript name, or family and style when there is no PostScript name. */
+function uniqueParsedFonts(fonts: readonly ParsedFont[]): ParsedFont[] {
+  const result: ParsedFont[] = []
+  const index = new Map<string, number>()
+  for (const font of fonts) {
+    const postscriptName = font.postscriptName.trim()
+    const familyName = font.familyName.trim()
+    const styleName = font.styleName.trim()
+    const key = (postscriptName || `${familyName}|${styleName}`).toLowerCase()
+    if (key === '|') continue
+    const at = index.get(key)
+    if (at === undefined) {
+      index.set(key, result.length)
+      result.push({
+        postscriptName,
+        familyName,
+        styleName,
+        officeFamily: font.officeFamily,
+      })
+      continue
+    }
+    const existing = result[at]
+    if (!existing) continue
+    if (!existing.familyName && familyName) existing.familyName = familyName
+    if (!existing.styleName && styleName) existing.styleName = styleName
+  }
+  return result
+}
+
+function trimmed(value: string | undefined): string {
+  return (value ?? '').trim()
+}
+
+const PSD_LONG_LAYER_KEYS = new Set([
+  'LMsk',
+  'Lr16',
+  'Lr32',
+  'Layr',
+  'Mt16',
+  'Mt32',
+  'Mtrn',
+  'Alph',
+  'FMsk',
+  'lnk2',
+  'FEid',
+  'FXid',
+  'PxSD',
+])
+
+/** A Photoshop length that cannot be an offset in the file is ignored. */
+const PSD_MAX_LENGTH = 2_147_483_647 * 1024
+
+/**
+ * Fonts a Photoshop text layer sets, by PostScript name. Reads layer records
+ * only. Text inside a placed smart object is left out. AdobeInvisFont is not
+ * a font the text is set in.
+ */
+function photoshopFontRequests(buffer: Buffer): ParsedFont[] {
+  const reader = { buffer, offset: 0 }
+  const signature = readBytes(reader, 4)
+  const version = readUint(reader, 2)
+  if (!signature || signature.toString('ascii') !== '8BPS' || (version !== 1 && version !== 2)) {
+    throw new Error('Could not read that Photoshop file.')
+  }
+  const isLarge = version === 2
+  skipBytes(reader, 20)
+  for (let section = 0; section < 2; section += 1) {
+    const length = readUint(reader, 4)
+    if (length === null) throw new Error('Could not read that Photoshop file.')
+    skipBytes(reader, length)
+  }
+  const sectionLength = readUint(reader, isLarge ? 8 : 4)
+  const layerInfo = readUint(reader, isLarge ? 8 : 4)
+  const count = readInt16(reader)
+  if (sectionLength === null || layerInfo === null || layerInfo <= 0 || count === null) return []
+  const fonts: ParsedFont[] = []
+  for (let layer = 0; layer < Math.abs(count); layer += 1) {
+    skipBytes(reader, 16)
+    const channels = readUint(reader, 2)
+    if (channels === null) break
+    skipBytes(reader, channels * (2 + (isLarge ? 8 : 4)))
+    skipBytes(reader, 12)
+    const extra = readUint(reader, 4)
+    if (extra === null) break
+    const end = reader.offset + extra
+    for (let block = 0; block < 2; block += 1) {
+      const length = readUint(reader, 4)
+      skipBytes(reader, length ?? extra)
+    }
+    const nameLength = readUint(reader, 1)
+    if (nameLength === null) break
+    skipBytes(reader, Math.floor((nameLength + 1 + 3) / 4) * 4 - 1)
+    while (reader.offset + 12 <= end && reader.offset + 12 <= buffer.length) {
+      const mark = readBytes(reader, 4)
+      const keyBytes = readBytes(reader, 4)
+      if (!mark || !keyBytes) break
+      const markText = mark.toString('ascii')
+      if (markText !== '8BIM' && markText !== '8B64') break
+      const key = keyBytes.toString('ascii')
+      const length = readUint(reader, isLarge && PSD_LONG_LAYER_KEYS.has(key) ? 8 : 4)
+      if (length === null) break
+      const start = reader.offset
+      if (key === 'TySh' && start + length <= Math.min(end, buffer.length)) {
+        fonts.push(...textLayerFonts(buffer.subarray(start, start + length)))
+      }
+      reader.offset = start + length
+    }
+    reader.offset = Math.min(end, buffer.length)
+  }
+  return uniqueParsedFonts(fonts)
+}
+
+function textLayerFonts(bytes: Buffer): ParsedFont[] {
+  const resources = findAscii(bytes, '/ResourceDict')
+  if (resources < 0) return []
+  const fontSet = findAscii(bytes, '/FontSet', resources)
+  if (fontSet < 0) return []
+  const names = photoshopFontNames(bytes, fontSet)
+  const used = new Set<number>()
+  const runs = findAscii(bytes, '/StyleRun')
+  if (runs >= 0 && runs < resources) {
+    const region = bytes.subarray(runs, resources)
+    const named = numbersAfter(region, '/Font')
+    for (const index of named) used.add(index)
+    if (named.length < occurrences(region, '/RunLength')) {
+      const sheets = findAscii(bytes, '/StyleSheetSet', resources)
+      if (sheets >= 0 && sheets < fontSet) {
+        const fallback = numbersAfter(bytes.subarray(sheets, fontSet), '/Font')[0]
+        if (fallback !== undefined) used.add(fallback)
+      }
+    }
+  }
+  const fonts: ParsedFont[] = []
+  for (const index of [...used].sort((left, right) => left - right)) {
+    const name = names[index]
+    if (!name || name === 'AdobeInvisFont') continue
+    fonts.push({ postscriptName: name, familyName: '', styleName: '' })
+  }
+  return fonts
+}
+
+function photoshopFontNames(bytes: Buffer, start: number): string[] {
+  const names: string[] = []
+  let at = start
+  const close = findAscii(bytes, ']', start)
+  const limit = close < 0 ? bytes.length : close
+  while (at < limit) {
+    const nameAt = findAscii(bytes, '/Name', at)
+    if (nameAt < 0 || nameAt >= limit) break
+    at = nameAt + 5
+    while (at < bytes.length && isPhotoshopSpace(bytes[at]!)) at += 1
+    if (at >= bytes.length || bytes[at] !== 0x28) continue
+    at += 1
+    const raw: number[] = []
+    while (at < bytes.length && bytes[at] !== 0x29) {
+      if (bytes[at] === 0x5c && at + 1 < bytes.length) at += 1
+      raw.push(bytes[at]!)
+      at += 1
+    }
+    names.push(photoshopString(Buffer.from(raw)))
+  }
+  return names
+}
+
+function photoshopString(raw: Buffer): string {
+  if (raw.length >= 2 && raw[0] === 0xfe && raw[1] === 0xff) {
+    const swapped = Buffer.alloc(raw.length - (raw.length % 2) - 2)
+    for (let index = 0; index < swapped.length; index += 2) {
+      swapped[index] = raw[index + 3]!
+      swapped[index + 1] = raw[index + 2]!
+    }
+    return swapped.toString('utf16le')
+  }
+  return raw.toString('latin1')
+}
+
+function numbersAfter(bytes: Buffer, key: string): number[] {
+  const found: number[] = []
+  const needle = Buffer.from(key)
+  let at = 0
+  while (at <= bytes.length - needle.length) {
+    const match = bytes.indexOf(needle, at)
+    if (match < 0) break
+    at = match + needle.length
+    let digits = at
+    while (digits < bytes.length && (bytes[digits] === 0x20 || bytes[digits] === 0x09)) digits += 1
+    if (digits <= at) continue
+    let value = 0
+    let any = false
+    while (digits < bytes.length && bytes[digits]! >= 0x30 && bytes[digits]! <= 0x39 && value < 1_000_000) {
+      value = value * 10 + (bytes[digits]! - 0x30)
+      any = true
+      digits += 1
+    }
+    if (any) found.push(value)
+  }
+  return found
+}
+
+function occurrences(bytes: Buffer, key: string): number {
+  let count = 0
+  let at = 0
+  while (at < bytes.length) {
+    const match = findAscii(bytes, key, at)
+    if (match < 0) break
+    count += 1
+    at = match + 1
+  }
+  return count
+}
+
+function findAscii(bytes: Buffer, key: string, from = 0): number {
+  if (from < 0 || from > bytes.length) return -1
+  return bytes.indexOf(key, from)
+}
+
+function isPhotoshopSpace(byte: number): boolean {
+  return byte === 0x20 || byte === 0x09 || byte === 0x0a || byte === 0x0d
+}
+
+type ByteReader = { buffer: Buffer; offset: number }
+
+function skipBytes(reader: ByteReader, count: number): void {
+  if (!Number.isFinite(count) || count <= 0) return
+  const room = reader.buffer.length - reader.offset
+  reader.offset = count > room ? reader.buffer.length : reader.offset + count
+}
+
+function readBytes(reader: ByteReader, count: number): Buffer | null {
+  if (count < 0 || reader.offset + count > reader.buffer.length) return null
+  const start = reader.offset
+  reader.offset += count
+  return reader.buffer.subarray(start, reader.offset)
+}
+
+function readUint(reader: ByteReader, count: number): number | null {
+  const bytes = readBytes(reader, count)
+  if (!bytes) return null
+  let value = 0
+  for (const byte of bytes) {
+    value = value * 256 + byte
+    if (value > PSD_MAX_LENGTH) return null
+  }
+  return value
+}
+
+function readInt16(reader: ByteReader): number | null {
+  const value = readUint(reader, 2)
+  if (value === null) return null
+  return value > 0x7fff ? value - 0x10000 : value
 }

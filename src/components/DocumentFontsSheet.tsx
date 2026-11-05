@@ -77,8 +77,8 @@ function DocumentFontsBody({
         <DialogTitle>{name}</DialogTitle>
         <DialogDescription>Fonts used in this {kindLabel}.</DialogDescription>
       </DialogHeader>
-      <p className="mb-3 truncate font-mono text-[11px] text-muted-foreground" title={report.path}>
-        {report.path}
+      <p className="mb-3 truncate font-mono text-[11px] text-muted-foreground" title={report.live ? 'Open documents' : report.path}>
+        {report.live ? 'Open documents' : report.path}
       </p>
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto">
         <FontGroup title="On" fonts={groups.on} empty="None of these faces are active." />
@@ -189,7 +189,10 @@ function documentKindLabel(kind: DocumentFontReport['kind']): string {
   if (kind === 'pdf') return 'PDF'
   if (kind === 'idml') return 'IDML'
   if (kind === 'docx') return 'Word document'
-  return 'PowerPoint file'
+  if (kind === 'pptx') return 'PowerPoint file'
+  if (kind === 'indd') return 'InDesign document'
+  if (kind === 'ai') return 'Illustrator file'
+  return 'Photoshop file'
 }
 
 function rowKey(font: DocumentFontRow): string {

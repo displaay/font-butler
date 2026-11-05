@@ -14,6 +14,7 @@ electron/server.bundle.mjs
 electron/font-analysis-worker.mjs
 electron/finder-services.node
 electron/session-fonts.node
+electron/indesign-fonts.node
 electron/app-icons/
 electron/apple-touch-icon.png
 electron/favicon-16.png

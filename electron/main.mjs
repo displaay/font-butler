@@ -781,6 +781,9 @@ function documentObserver() {
       onOpenedPath(event) {
         documentWatch().open(event)
       },
+      onInDesignFonts(event) {
+        documentWatch().live(event)
+      },
     })
   }
   return documentAppObserver
@@ -825,7 +828,12 @@ function openSettings(focus) {
 const documentOpenOptions = {
   title: 'Open document',
   properties: ['openFile'],
-  filters: [{ name: 'PDF, IDML, Word, and PowerPoint', extensions: ['pdf', 'idml', 'docx', 'pptx'] }],
+  filters: [
+    {
+      name: 'PDF, IDML, InDesign, Illustrator, Photoshop, Word, and PowerPoint',
+      extensions: ['pdf', 'idml', 'indd', 'indt', 'ai', 'psd', 'psb', 'docx', 'pptx'],
+    },
+  ],
 }
 
 async function pickDocumentPath() {

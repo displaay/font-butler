@@ -441,6 +441,9 @@ function AppShell() {
   const applyMarqueeKeysRef = useRef<(keys: string[]) => void>(() => {})
   const reinstallFromMenuBarRef = useRef<(ids: string[]) => void>(() => {})
   const openDocumentAtRef = useRef<(filePath: string) => void>(() => {})
+  const openLiveDocumentRef = useRef<
+    (fonts: readonly { postscriptName?: string; familyName?: string; styleName?: string }[]) => void
+  >(() => {})
   const syncRetailRef = useRef<(choices?: Record<string, RetailCollisionAction>) => void>(() => {})
   const libraryViewportRef = useRef<HTMLDivElement>(null)
   const libraryGridRef = useRef<HTMLDivElement>(null)
@@ -996,6 +999,10 @@ function AppShell() {
       syncExternalFontOpenStatus()
     })
     const stopDocument = window.fontButlerDesktop?.onOpenDocument?.((payload) => {
+      if (Array.isArray(payload?.liveFonts)) {
+        openLiveDocumentRef.current(payload.liveFonts)
+        return
+      }
       const filePath = payload?.path
       if (typeof filePath !== 'string' || filePath.trim() === '') return
       openDocumentAtRef.current(filePath)
@@ -2080,10 +2087,26 @@ function AppShell() {
   }
   openDocumentAtRef.current = openDocumentAt
 
+  async function openLiveDocument(
+    fonts: readonly { postscriptName?: string; familyName?: string; styleName?: string }[],
+  ) {
+    setDocumentBusy(true)
+    try {
+      setDocumentReport(await api.documentLiveFonts(fonts))
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not read document fonts')
+    } finally {
+      setDocumentBusy(false)
+    }
+  }
+  openLiveDocumentRef.current = openLiveDocument
+
   async function pickAndOpenDocument() {
     const pick = window.fontButlerDesktop?.pickDocument
     if (!pick) {
-      toast.error('Open a PDF, IDML, Word, or PowerPoint document from the Cuttler app.')
+      toast.error(
+        'Open a PDF, IDML, InDesign, Illustrator, Photoshop, Word, or PowerPoint document from the Cuttler app.',
+      )
       return
     }
     const filePath = await pick()
@@ -2099,7 +2122,11 @@ function AppShell() {
     try {
       await api.activateMany(ids)
       await refreshCatalog()
-      setDocumentReport(await api.documentFonts(documentReport.path))
+      setDocumentReport(
+        documentReport.live
+          ? await api.documentLiveFonts(documentReport.fonts)
+          : await api.documentFonts(documentReport.path),
+      )
       toast.success(ids.length === 1 ? 'Activated 1 font' : `Activated ${ids.length} fonts`)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not activate fonts')
@@ -2112,10 +2139,10 @@ function AppShell() {
     if (!documentReport) return
     setDocumentBusy(true)
     try {
-      const result = await api.createDocumentProject(
-        documentProjectName(documentReport.path, name),
-        documentReport.path,
-      )
+      const projectName = documentProjectName(documentReport.path, name)
+      const result = documentReport.live
+        ? await api.createLiveDocumentProject(projectName, documentReport.fonts)
+        : await api.createDocumentProject(projectName, documentReport.path)
       setProjects((current) => [result.project, ...current.filter((item) => item.id !== result.project.id)])
       setProjectFilter(result.project.id)
       setTab('library')

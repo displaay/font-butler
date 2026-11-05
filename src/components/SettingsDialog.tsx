@@ -689,7 +689,7 @@ function GeneralPane({
         {isDesktop ? (
           <SettingsRow
             label="Watch documents in Adobe and Office"
-            description="When InDesign, Illustrator, Photoshop, Acrobat, Word, or PowerPoint is in front with a PDF, IDML, Word, or PowerPoint file, show its fonts. Off until you turn this on. InDesign, Illustrator, and Figma files are not parsed. This only opens the font sheet."
+            description="When InDesign is in front, ask it for the fonts in its open documents, including while Missing Fonts is open. Illustrator, Photoshop, Acrobat, Word, and PowerPoint are read from the open file. A Figma file is not parsed. Off until you turn this on. This only opens the font sheet."
             htmlFor="watch-document-opens"
           >
             <input

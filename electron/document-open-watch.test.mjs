@@ -6,7 +6,13 @@ import { test } from 'node:test'
 import { reportDocumentFonts } from '../core/document-fonts.ts'
 import { loadSettings } from '../core/settings.ts'
 import { withService } from '../core/test-util.ts'
-import { createDocumentAppObserver, recentDocumentPaths, recentFileMatchesBundle } from './document-app-watch.mjs'
+import {
+  INDESIGN_FONT_POLL_MS,
+  createDocumentAppObserver,
+  recentDocumentPaths,
+  recentFileMatchesBundle,
+} from './document-app-watch.mjs'
+import { fontsFromInDesignReply } from './indesign-fonts.mjs'
 import {
   classifyOpenedDocument,
   createDocumentOpenWatch,
@@ -23,6 +29,25 @@ const WORD = 'com.microsoft.Word'
 
 function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-doc-watch-'))
+}
+
+function inddWithFonts() {
+  return Buffer.from(
+    `<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description xmlns:xmpTPg="http://ns.adobe.com/xap/1.0/t/pg/" xmlns:stFnt="http://ns.adobe.com/xap/1.0/sType/Font#">
+      <xmpTPg:Fonts>
+        <rdf:Bag>
+          <rdf:li stFnt:fontName="Family-Regular" stFnt:fontFamily="Family" stFnt:fontFace="Regular"/>
+        </rdf:Bag>
+      </xmpTPg:Fonts>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>`,
+    'utf8',
+  )
 }
 
 function writePdf(dir, name = 'Note.pdf') {
@@ -63,12 +88,14 @@ function catalog() {
   ]
 }
 
-test('a fake opened path runs the parser for a supported file and not for indd', () => {
+test('a fake opened path parses pdf, indd, and ai, and only notes figma', () => {
   const dir = tempDir()
   try {
     const pdf = writePdf(dir)
     const indd = path.join(dir, 'Book.indd')
-    fs.writeFileSync(indd, 'not parsed')
+    fs.writeFileSync(indd, inddWithFonts())
+    const ai = path.join(dir, 'Mark.ai')
+    fs.writeFileSync(ai, inddWithFonts())
     const parsed = []
     const effects = []
     const watch = createDocumentOpenWatch({
@@ -85,10 +112,10 @@ test('a fake opened path runs the parser for a supported file and not for indd',
 
     watch.open({ bundleId: INDESIGN, path: pdf })
     watch.open({ bundleId: INDESIGN, path: indd })
-    watch.open({ bundleId: 'com.adobe.illustrator', path: path.join(dir, 'Mark.ai') })
+    watch.open({ bundleId: 'com.adobe.illustrator', path: ai })
     watch.open({ bundleId: 'com.figma.Desktop', path: path.join(dir, 'Board.fig') })
 
-    assert.deepEqual(parsed, [pdf])
+    assert.deepEqual(parsed, [pdf, indd, ai])
     assert.equal(effects.length, 4)
     assert.equal(effects[0].action, 'sheet')
     assert.equal(effects[0].report.kind, 'pdf')
@@ -100,15 +127,20 @@ test('a fake opened path runs the parser for a supported file and not for indd',
       channel: 'open-document',
       payload: { path: pdf },
     })
-    for (const effect of effects.slice(1)) {
-      assert.equal(effect.action, 'note')
-      assert.equal(effect.message.includes('\n'), false)
-      assert.equal(documentWatchIpc(effect).channel, 'document-watch-note')
-    }
-    assert.match(unsupportedDocumentNote(indd), /export IDML or PDF/i)
+    assert.equal(effects[1].action, 'sheet')
+    assert.equal(effects[1].report.kind, 'indd')
+    assert.equal(effects[1].report.fonts[0].postscriptName, 'Family-Regular')
+    assert.equal(effects[1].report.fonts[0].familyName, 'Family')
+    assert.equal(effects[2].action, 'sheet')
+    assert.equal(effects[2].report.kind, 'ai')
+    assert.equal(effects[3].action, 'note')
+    assert.equal(effects[3].message.includes('\n'), false)
+    assert.equal(documentWatchIpc(effects[3]).channel, 'document-watch-note')
+    assert.equal(unsupportedDocumentNote(indd), '')
+    assert.match(unsupportedDocumentNote(path.join(dir, 'Board.fig')), /Export a PDF/i)
 
     watch.open({ bundleId: INDESIGN, path: pdf })
-    assert.deepEqual(parsed, [pdf])
+    assert.deepEqual(parsed, [pdf, indd, ai])
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }
@@ -190,19 +222,31 @@ test('supported Office and IDML paths are parsed and other extensions are ignore
       return { path: filePath }
     },
   })
-  for (const name of ['Notes.docx', 'Deck.pptx', 'Story.idml', 'Notes.txt', 'Photo.psd']) {
+  for (const name of [
+    'Notes.docx',
+    'Deck.pptx',
+    'Story.idml',
+    'Book.indd',
+    'Book.indt',
+    'Mark.ai',
+    'Photo.psd',
+    'Photo.psb',
+    'Notes.txt',
+    'Board.fig',
+  ]) {
     watch.open({ bundleId: WORD, path: path.join('/docs', name) })
   }
-  assert.deepEqual(seen, ['.docx', '.pptx', '.idml'])
+  assert.deepEqual(seen, ['.docx', '.pptx', '.idml', '.indd', '.indt', '.ai', '.psd', '.psb'])
   assert.equal(classifyOpenedDocument('/docs/Notes.txt'), 'ignore')
-  assert.equal(classifyOpenedDocument('/docs/Book.INDD'), 'note')
+  assert.equal(classifyOpenedDocument('/docs/Book.INDD'), 'parse')
+  assert.equal(classifyOpenedDocument('/docs/Board.fig'), 'note')
 })
 
 test('an unsupported front document does not parse, and a quiet watch does not note it', () => {
   const dir = tempDir()
   try {
-    const indd = path.join(dir, 'Book.indd')
-    fs.writeFileSync(indd, 'binary')
+    const fig = path.join(dir, 'Board.fig')
+    fs.writeFileSync(fig, 'binary')
     const parsed = []
     const notes = []
     const watch = createDocumentOpenWatch({
@@ -216,13 +260,13 @@ test('an unsupported front document does not parse, and a quiet watch does not n
         if (effect.action === 'note') notes.push(effect.message)
       },
     })
-    watch.open({ bundleId: INDESIGN, path: indd })
+    watch.open({ bundleId: 'com.figma.Desktop', path: fig })
     assert.deepEqual(parsed, [])
     assert.deepEqual(notes, [])
     watch.setEnabled(true)
-    watch.open({ bundleId: INDESIGN, path: indd })
+    watch.open({ bundleId: 'com.figma.Desktop', path: fig })
     assert.deepEqual(parsed, [])
-    assert.deepEqual(notes, ['Open in the app, then export IDML or PDF to read fonts.'])
+    assert.deepEqual(notes, ['This Figma file is not read here. Export a PDF to see its fonts.'])
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }
@@ -293,7 +337,7 @@ test('front app text, lsof, and recent bytes yield one opened path', async () =>
   try {
     inddObserver.start()
     await inddObserver.whenIdle()
-    assert.deepEqual(parsed, [])
+    assert.deepEqual(parsed, [inddPath])
   } finally {
     inddObserver.stop()
     fs.rmSync(inddDir, { recursive: true, force: true })
@@ -344,6 +388,232 @@ test('versioned Adobe bundle ids still find the shared recent-document file', ()
 test('the macOS observer does not use Accessibility or activate other apps', () => {
   const source = fs.readFileSync(new URL('./document-app-watch.mjs', import.meta.url), 'utf8')
   assert.equal(/System Events|AXUIElement|osascript|tell application|NSAppleScript/.test(source), false)
+  const ask = fs.readFileSync(new URL('./indesign-fonts.mm', import.meta.url), 'utf8')
+  assert.equal(/osascript|NSAppleScript|tell application/.test(ask), false)
+  assert.match(ask, /descriptorWithProcessIdentifier/)
+  assert.match(ask, /PropertyOf\("fPSN"/)
+  assert.match(ask, /PropertyOf\("fFam"/)
+  assert.match(ask, /PropertyOf\("fSty"/)
+  assert.match(ask, /Every\("docu"/)
+  assert.match(ask, /Every\("FonT"/)
+  assert.equal(INDESIGN_FONT_POLL_MS, 500)
+})
+
+test('InDesign live reply lines up names and drops a row with no name', () => {
+  const lined = fontsFromInDesignReply({
+    postscriptNames: ['Family-Regular', '  ', 'Family-Bold'],
+    families: ['Family', '', 'Family'],
+    styles: ['', 'Regular', 'Bold'],
+  })
+  assert.equal(lined.refused, false)
+  assert.deepEqual(lined.fonts, [
+    { postscriptName: 'Family-Regular', familyName: 'Family', styleName: '' },
+    { postscriptName: 'Family-Bold', familyName: 'Family', styleName: 'Bold' },
+  ])
+  const uneven = fontsFromInDesignReply({
+    postscriptNames: ['Family-Regular'],
+    families: ['Family', 'Family'],
+    styles: ['Regular'],
+  })
+  assert.deepEqual(uneven.fonts, [])
+  assert.equal(fontsFromInDesignReply({ refused: true }).refused, true)
+  assert.equal(fontsFromInDesignReply({ unavailable: true }).unavailable, true)
+})
+
+test('frontmost InDesign is asked for fonts and the open file is not read', async () => {
+  const asked = []
+  const opened = []
+  const live = []
+  let openCalls = 0
+  const delays = []
+  let tick = () => {}
+  let reply = {
+    postscriptNames: ['Family-Regular', 'Family-Bold'],
+    families: ['Family', 'Family'],
+    styles: ['', 'Bold'],
+  }
+  let front = { bundleId: INDESIGN, pid: 42 }
+  const observer = createDocumentAppObserver({
+    platform: 'darwin',
+    pollMs: 60_000,
+    openFilePollMs: 0,
+    readFront: async () => front,
+    askInDesign: async (pid) => {
+      asked.push(pid)
+      return reply
+    },
+    listOpenPaths: async () => {
+      openCalls += 1
+      return ['/tmp/Book.indd']
+    },
+    listRecentPaths: async () => ['/tmp/Book.indd'],
+    onOpenedPath(event) {
+      opened.push(event)
+    },
+    onInDesignFonts(event) {
+      live.push(event)
+    },
+    scheduleInterval(fn, ms) {
+      delays.push(ms)
+      tick = fn
+      return () => {
+        tick = () => {}
+      }
+    },
+  })
+  try {
+    observer.start()
+    await observer.whenIdle()
+    assert.deepEqual(asked, [42])
+    assert.equal(openCalls, 0)
+    assert.deepEqual(opened, [])
+    assert.equal(live.length, 1)
+    assert.equal(live[0].fonts[0].styleName, '')
+    assert.equal(live[0].fonts[1].postscriptName, 'Family-Bold')
+    assert.deepEqual(delays, [500])
+
+    tick()
+    await observer.whenIdle()
+    assert.deepEqual(asked, [42, 42])
+    assert.equal(live.length, 1)
+
+    reply = {
+      postscriptNames: ['Family-Bold'],
+      families: ['Family'],
+      styles: ['Bold'],
+    }
+    tick()
+    await observer.whenIdle()
+    assert.equal(live.length, 2)
+    assert.equal(live[1].fonts.length, 1)
+
+    front = { bundleId: 'com.adobe.illustrator', pid: 9 }
+    await observer.poll()
+    assert.equal(openCalls, 1)
+    assert.equal(asked.length, 3)
+
+    front = { bundleId: INDESIGN, pid: 42 }
+    reply = {
+      postscriptNames: ['Family-Bold'],
+      families: ['Family'],
+      styles: ['Bold'],
+    }
+    await observer.poll()
+    assert.equal(live.length, 3)
+    assert.equal(openCalls, 1)
+  } finally {
+    observer.stop()
+  }
+})
+
+test('an empty InDesign reply does not read the open file', async () => {
+  let openCalls = 0
+  let live = 0
+  const observer = createDocumentAppObserver({
+    platform: 'darwin',
+    pollMs: 60_000,
+    readFront: async () => ({ bundleId: INDESIGN, pid: 7 }),
+    askInDesign: async () => ({ postscriptNames: [], families: [], styles: [] }),
+    listOpenPaths: async () => {
+      openCalls += 1
+      return ['/tmp/Book.indd']
+    },
+    onOpenedPath() {
+      throw new Error('opened a path')
+    },
+    onInDesignFonts() {
+      live += 1
+    },
+    scheduleInterval() {
+      return () => {}
+    },
+  })
+  try {
+    observer.start()
+    await observer.whenIdle()
+    assert.equal(openCalls, 0)
+    assert.equal(live, 0)
+  } finally {
+    observer.stop()
+  }
+})
+
+test('a refused InDesign is asked once, and a missing ask reads the file', async () => {
+  let calls = 0
+  const refused = createDocumentAppObserver({
+    platform: 'darwin',
+    pollMs: 60_000,
+    readFront: async () => ({ bundleId: INDESIGN, pid: 5 }),
+    askInDesign: async () => {
+      calls += 1
+      return { refused: true }
+    },
+    listOpenPaths: async () => {
+      throw new Error('file path')
+    },
+    onOpenedPath() {
+      throw new Error('opened a path')
+    },
+    onInDesignFonts() {
+      throw new Error('fonts')
+    },
+  })
+  try {
+    refused.start()
+    await refused.whenIdle()
+    await refused.poll()
+    assert.equal(calls, 1)
+  } finally {
+    refused.stop()
+  }
+
+  const opened = []
+  const fallback = createDocumentAppObserver({
+    platform: 'darwin',
+    pollMs: 60_000,
+    openFilePollMs: 0,
+    readFront: async () => ({ bundleId: INDESIGN, pid: 5 }),
+    askInDesign: async () => ({ unavailable: true }),
+    listOpenPaths: async () => ['/tmp/Book.indd'],
+    listRecentPaths: async () => [],
+    onOpenedPath(event) {
+      opened.push(event.path)
+    },
+  })
+  try {
+    fallback.start()
+    await fallback.whenIdle()
+    assert.deepEqual(opened, ['/tmp/Book.indd'])
+  } finally {
+    fallback.stop()
+  }
+})
+
+test('a live InDesign list opens the sheet without reading a file', () => {
+  const parsed = []
+  const effects = []
+  const watch = createDocumentOpenWatch({
+    enabled: true,
+    debounceMs: 0,
+    parse(filePath) {
+      parsed.push(filePath)
+      return { path: filePath }
+    },
+    onEffect(effect) {
+      effects.push(effect)
+    },
+  })
+  const fonts = [{ postscriptName: 'Family-Regular', familyName: 'Family', styleName: 'Regular' }]
+  watch.live({ bundleId: INDESIGN, fonts })
+  watch.live({ bundleId: 'com.adobe.illustrator', fonts })
+  assert.deepEqual(parsed, [])
+  assert.equal(effects.length, 1)
+  assert.equal(effects[0].action, 'live')
+  assert.deepEqual(documentWatchIpc(effects[0]), {
+    channel: 'open-document',
+    payload: { liveFonts: fonts, name: 'InDesign' },
+  })
+  assert.equal(documentWatchIpc({ action: 'live', fonts: [] }), null)
 })
 
 test('the observer does not start away from macOS', async () => {
