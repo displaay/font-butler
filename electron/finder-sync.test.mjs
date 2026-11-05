@@ -845,7 +845,10 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
     FINDER_SYNC_SETTINGS_URL,
     'x-apple.systempreferences:com.apple.LoginItems-Settings.extension',
   )
-  assert.match(main, /app\.on\('open-url', \(event\) => \{\s*event\.preventDefault\(\)\s*\}\)/)
+  const openUrl = main.slice(main.indexOf("app.on('open-url'"), main.indexOf("app.on('before-quit'"))
+  assert.match(openUrl, /event\.preventDefault\(\)/)
+  assert.match(openUrl, /finderCompareArgv/)
+  assert.doesNotMatch(openUrl, /openFont|enqueueFinderJob|runFinderInstall/)
   assert.match(main, /addon\.register\(\(action, filePaths\) => \{\s*enqueueFinderJob\(action, filePaths\)/s)
   assert.match(main, /runFinderInstall/)
   const preload = readRepo('electron/preload.cjs')
