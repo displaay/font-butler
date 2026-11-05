@@ -3,16 +3,20 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import zlib from 'node:zlib'
+import { normalizeFamilyDetails } from '../shared/family-details.ts'
+import { ensureSeedTags, normalizeFamilyTagAssignments, SEED_FAMILY_TAGS, type FamilyTagSeed } from '../shared/family-tags.ts'
 import { faceIdentityKey, loadCatalog, saveCatalog, writeCatalogBackup } from './catalog.ts'
+import { isUnderAnyRoot } from './containment.ts'
 import { fingerprintBuffer, fingerprintFile, entryKnownFingerprints, tryFingerprintFile } from './fingerprint.ts'
 import { folderForPath } from './folders.ts'
 import { inspectSfntTables, parseFontFile } from './parse.ts'
 import type { AppPaths } from './paths.ts'
 import { projectsPath } from './paths.ts'
-import { loadProjects, saveProjects } from './projects.ts'
-import { loadSettings, saveSettings } from './settings.ts'
+import { hasActivationDemand, loadProjects, saveProjects } from './projects.ts'
 import { normalizeSavedFilters } from './saved-filters.ts'
-import { ensureSeedTags, normalizeFamilyTagAssignments } from '../shared/family-tags.ts'
+import { loadSessionActivationIds } from './session-activation.ts'
+import { loadSettings, saveSettings } from './settings.ts'
+import { applyEntryFacts } from './state.ts'
 import type { AppSettings, CatalogEntry, CatalogFile, ProjectSet } from './types.ts'
 
 export const BACKUP_FORMAT_VERSION = 1
@@ -276,10 +280,51 @@ export type BackupEntryRef = {
   activation?: BackupActivation
 }
 
-/** Was-on state recorded in the archive. Temporary/session activations never come back on. */
-export function backupActivationFor(entry: CatalogEntry): BackupActivation {
+const FAMILY_TAG_SEEDS = new Set<FamilyTagSeed>(
+  SEED_FAMILY_TAGS.flatMap((tag) => (tag.seed ? [tag.seed] : [])),
+)
+
+/** Was-on state recorded in the archive. Activate-until-quit stays off unless something else still owns the face. */
+export function backupActivationFor(
+  entry: CatalogEntry,
+  sessionActivationIds?: ReadonlySet<string>,
+): BackupActivation {
+  // Session ids with no activation owner are activate-until-quit. A project or manual
+  // install still owns the face, so it stays on — same rule as releaseRecordedSessionActivations.
+  if (sessionActivationIds?.has(entry.id) && !hasActivationDemand(entry)) return 'temporary'
   if (entry.temporaryActivation) return 'temporary'
   return entry.status === 'installed' || entry.status === 'outdated' ? 'on' : 'off'
+}
+
+/**
+ * Activation recorded when the backup was made. Session ids exist only on the
+ * source library, so restore trusts the manifest instead of the target's session file.
+ */
+function activationForBackupEntry(entry: CatalogEntry, manifest: BackupManifest): BackupActivation {
+  let on = false
+  let off = false
+  for (const file of manifest.files ?? []) {
+    for (const ref of file.entries ?? []) {
+      if (ref.entryId !== entry.id) continue
+      if (ref.activation === 'temporary') return 'temporary'
+      if (ref.activation === 'on') on = true
+      else if (ref.activation === 'off') off = true
+    }
+  }
+  if (on && !off) return 'on'
+  if (off) return 'off'
+  return backupActivationFor(entry)
+}
+
+function normalizeRetiredTagSeeds(value: unknown): FamilyTagSeed[] {
+  if (!Array.isArray(value)) return []
+  const seeds: FamilyTagSeed[] = []
+  for (const item of value) {
+    if (typeof item !== 'string' || !FAMILY_TAG_SEEDS.has(item as FamilyTagSeed)) continue
+    const seed = item as FamilyTagSeed
+    if (!seeds.includes(seed)) seeds.push(seed)
+  }
+  return seeds
 }
 
 const PROTECTED_PREFIXES = ['/System/', '/Library/Application Support/Apple/', '/usr/', '/private/']
@@ -370,6 +415,7 @@ function collectLibrary(paths: AppPaths, appVersion: string, includeFonts = true
   const catalog = loadCatalog(paths)
   const projects = loadProjects(paths)
   const settings = loadSettings(paths)
+  const sessionActivationIds = new Set(loadSessionActivationIds(paths))
   const { redacted, keys } = redactSecrets(settings)
   const redactedSettings = redacted as AppSettings
 
@@ -421,7 +467,7 @@ function collectLibrary(paths: AppPaths, appVersion: string, includeFonts = true
           ? { installations: entry.installations.map((c) => ({ path: c.path, ...(c.parkedPath ? { parkedPath: c.parkedPath } : {}) })) }
           : {}),
         ...(owner ? { ownerWatchFolderRoot: owner.root } : {}),
-        activation: backupActivationFor(entry),
+        activation: backupActivationFor(entry, sessionActivationIds),
       }
       const existing = byFingerprint.get(fingerprint)
       if (existing) {
@@ -829,15 +875,41 @@ function fileIsFile(filePath: string | undefined): filePath is string {
   try { return fs.statSync(filePath).isFile() } catch { return false }
 }
 
-/** First recorded path (source, then installed, then parked) that already holds a file on this machine. */
-function existingRecordedPath(entry: CatalogEntry): string | undefined {
+/**
+ * Parked copies live in the disabled vault and are a different file from the source.
+ * A restored source must not be recorded as disabledPath: Uninstall would delete it,
+ * and Activate would rename it into the Fonts folder.
+ */
+function disabledPathForRestoredEntry(
+  paths: AppPaths,
+  sourcePath: string,
+  backupEntry: CatalogEntry,
+): string | undefined {
+  const recorded = backupEntry.disabledPath
+  if (!recorded || !fileIsFile(recorded)) return undefined
+  if (path.resolve(recorded) === path.resolve(sourcePath)) return undefined
+  if (!isUnderAnyRoot(recorded, [paths.disabledDir])) return undefined
+  return path.resolve(recorded)
+}
+
+/**
+ * First recorded path (source, then installed, then parked) that already holds a file on this machine.
+ * Files inside the disabled vault are the parked copy, not a source to adopt.
+ */
+function existingRecordedPath(paths: AppPaths, entry: CatalogEntry): string | undefined {
   const candidates = [
     entry.sourcePath,
     entry.installedPath,
     entry.disabledPath,
     ...(entry.installations ?? []).flatMap((c) => [c.path, c.parkedPath]),
   ]
-  return candidates.find((candidate) => candidate && fileIsFile(candidate) && !isProtectedFontPath(candidate))
+  return candidates.find(
+    (candidate) =>
+      Boolean(candidate) &&
+      fileIsFile(candidate) &&
+      !isProtectedFontPath(candidate) &&
+      !isUnderAnyRoot(candidate, [paths.disabledDir]),
+  )
 }
 
 /**
@@ -999,10 +1071,10 @@ export function planRestore(paths: AppPaths, archivePath: string, options: Resto
           continue
         }
       }
-      const recordedExisting = existingRecordedPath(entry)
+      const recordedExisting = existingRecordedPath(paths, entry)
       if (recordedExisting) {
         report.leftAsIs.push({ entryId: entry.id, newEntryId: entry.id, fileName: chosen?.file.fileName ?? path.basename(recordedExisting), recordedPath: recordedExisting })
-        if (backupActivationFor(entry) === 'on') report.reactivated.push({ entryId: entry.id, newEntryId: entry.id, fileName: path.basename(recordedExisting) })
+        if (activationForBackupEntry(entry, verifiedArchive.manifest) === 'on') report.reactivated.push({ entryId: entry.id, newEntryId: entry.id, fileName: path.basename(recordedExisting) })
         continue
       }
       if (!chosen || !verifiedArchive.verified.has(chosen.fingerprint)) {
@@ -1025,7 +1097,7 @@ export function planRestore(paths: AppPaths, archivePath: string, options: Resto
       const key = faceIdentityKey(entry.faces, entry.format)
       const conflict = key ? conflictKeys.get(key) : undefined
       const restoredPath = path.join(restoredFontsDir(paths), chosen.fingerprint, sanitizeFileName(chosen.file.fileName))
-      const reactivated = backupActivationFor(entry) === 'on' && !conflict
+      const reactivated = activationForBackupEntry(entry, verifiedArchive.manifest) === 'on' && !conflict
       if (conflict) {
         report.parkedAsExtra.push({ entryId: entry.id, newEntryId: entry.id, fingerprint: chosen.fingerprint, fileName: chosen.file.fileName, conflictingEntryId: conflict.id, faceIdentityKey: key })
       } else {
@@ -1095,11 +1167,13 @@ export function restoreBackup(paths: AppPaths, archivePath: string, options: Res
       const incomingTags = familyTagsPayload.tags ?? backupCatalog.tags ?? []
       const beforeIds = new Set((current.tags ?? []).map((t) => t.id))
       report.familyTagsRestored = incomingTags.filter((t) => t && !beforeIds.has(t.id)).length
-      current.tags = ensureSeedTags(incomingTags)
+      current.retiredTagSeeds = normalizeRetiredTagSeeds(backupCatalog.retiredTagSeeds)
+      current.tags = ensureSeedTags(incomingTags, current.retiredTagSeeds)
       current.familyTags = normalizeFamilyTagAssignments(
         familyTagsPayload.familyTags ?? backupCatalog.familyTags ?? [],
         current.tags,
       )
+      current.familyDetails = normalizeFamilyDetails(backupCatalog.familyDetails)
     }
 
     // Catalog font entries (only when the fonts choice is on).
@@ -1112,8 +1186,8 @@ export function restoreBackup(paths: AppPaths, archivePath: string, options: Res
         continue
       }
       const chosen = chooseFingerprintForEntry(backupEntry, manifest)
-      const activation = backupActivationFor(backupEntry)
-      const recordedExisting = existingRecordedPath(backupEntry)
+      const activation = activationForBackupEntry(backupEntry, manifest)
+      const recordedExisting = existingRecordedPath(paths, backupEntry)
       const fileName = chosen?.file.fileName ?? path.basename(backupEntry.sourcePath)
       // A file already on disk at the recorded path is left as-is: no hash
       // check, no overwrite, whatever its bytes. The entry points at it.
@@ -1162,19 +1236,20 @@ export function restoreBackup(paths: AppPaths, archivePath: string, options: Res
         ...JSON.parse(JSON.stringify(backupEntry)) as CatalogEntry,
         id: newId,
         sourcePath: restoredPath,
-        disabledPath: wantsOn ? undefined : restoredPath,
+        // Never the source file. Uninstall deletes disabledPath, and Activate renames it into Fonts.
+        disabledPath: wantsOn ? undefined : disabledPathForRestoredEntry(paths, restoredPath, backupEntry),
         installedPath,
         installations: [],
         status: wantsOn ? 'installed' : 'deactivated',
         sourceFingerprint: fingerprint || backupEntry.sourceFingerprint,
         installedFingerprint: installedPath ? (tryFingerprintFile(installedPath) ?? (fingerprint || undefined)) : undefined,
-        sourcePresent: true,
-        sourceAvailability: 'none',
         ownerFolderId: backupEntry.ownerFolderId ?? null,
-        temporaryActivation: backupEntry.temporaryActivation,
         updatedAt: now,
       }
+      delete restored.temporaryActivation
       if (restoredPath !== backupEntry.sourcePath) delete (restored as { sourceRoot?: unknown }).sourceRoot
+      // Clearing disabledPath makes the source external. Recompute availability or previews treat a present file as unlinked.
+      applyEntryFacts(restored)
       current.entries.push(restored)
       if (fingerprint) byFingerprint.set(fingerprint, restored)
       if (recordedExisting) {
