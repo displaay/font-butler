@@ -7,6 +7,7 @@ import { CatalogMenuItems } from '@/components/BatchActions'
 import { DisplaayMark } from '@/components/DisplaayMark'
 import { CatalogCardActions } from '@/components/FontCardActions'
 import { catalogFontFamily } from '@/components/FontFaceStyles'
+import { TextSampleField } from '@/components/TextSampleField'
 import { InstanceList } from '@/components/InstanceList'
 import {
   ContextMenu,
@@ -33,6 +34,7 @@ import { displayStateParts, familyCopyDestinations, isNotInstalledLabel, needsLo
 import type { FamilyGroup, ProjectSet, RetailSyncView, ViewLayout } from '@/lib/types'
 import { useCardActionChrome } from '@/hooks/useCardActionChrome'
 import { cardPreviewSample } from '@/lib/previewSample'
+import { DEFAULT_TEXT_PREVIEW } from '@/lib/textPreview'
 import { cardPreviewFromRequest, previewRequestActive, type PreviewRequest } from '../../shared/library-search.ts'
 import { cn } from '@/lib/utils'
 
@@ -41,6 +43,9 @@ export const LibraryCard = memo(function LibraryCard({
   retail,
   layout,
   previewSize,
+  sampleText = DEFAULT_TEXT_PREVIEW,
+  sampleLanguage = 'en',
+  onSampleTextChange,
   showSourcePath,
   showAddedAt,
   showInstanceCounts = false,
@@ -110,6 +115,9 @@ export const LibraryCard = memo(function LibraryCard({
   retail?: RetailSyncView | null
   layout: ViewLayout
   previewSize: number
+  sampleText?: string
+  sampleLanguage?: string
+  onSampleTextChange?: (value: string) => void
   showSourcePath?: boolean
   showAddedAt?: boolean
   showInstanceCounts?: boolean
@@ -186,7 +194,7 @@ export const LibraryCard = memo(function LibraryCard({
   const missingSource = hasSourceMissing(group)
   const instances = useMemo(() => catalogInstanceRows(group, retail), [group, retail])
   const hoverInstances = useMemo(() => catalogHoverInstanceRows(group, retail), [group, retail])
-  const showInstances = instances.length > 0 && layout === 'list'
+  const showInstances = instances.length > 0 && layout !== 'grid'
   const previewFamily = catalogFontFamily(group.previewEntryId)
   const previewWeight = preview.faces[0]?.weight
   const previewItalic = preview.faces[0]?.italic
@@ -320,7 +328,7 @@ export const LibraryCard = memo(function LibraryCard({
         />
         <FamilyTagDots definitions={tagDefinitions ?? []} appliedIds={appliedTagIds ?? []} />
         <FamilyRatingBadge rating={familyRating} />
-        {layout === 'list' && mixedWarning ? (
+        {(layout === 'list' || layout === 'text') && mixedWarning ? (
           <Badge
             tone="accent"
             className="max-w-full truncate"
@@ -412,7 +420,96 @@ export const LibraryCard = memo(function LibraryCard({
             ) : null}
           </div>
         ) : null}
-        {layout === 'grid' ? (
+        {layout === 'text' ? (
+          <>
+            <div className="flex items-stretch border-b border-border/80">
+              <ContextMenuTrigger asChild>
+                <button
+                  type="button"
+                  onClick={handleCardClick}
+                  onContextMenu={skipClickAfterContextMenu}
+                  onDoubleClick={onInspect}
+                  className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left"
+                >
+                  <div className="min-w-0 flex-1">{identity}</div>
+                  {locationBadges ? (
+                    <span
+                      className={cn(
+                        'ml-auto flex shrink-0 items-center gap-1',
+                        !batch && (selected || actionsVisible) && 'invisible',
+                      )}
+                    >
+                      {locationBadges}
+                    </span>
+                  ) : null}
+                </button>
+              </ContextMenuTrigger>
+              {showInstances && (
+                <button
+                  type="button"
+                  data-no-marquee=""
+                  aria-expanded={expanded}
+                  aria-label={expanded ? 'Hide instances' : 'Show instances'}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    setExpanded((value) => !value)
+                  }}
+                  className="flex w-10 shrink-0 items-center justify-center text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                >
+                  <ChevronDown
+                    className={cn('size-4 transition-transform', expanded && 'rotate-180')}
+                  />
+                </button>
+              )}
+            </div>
+            <div className="min-w-0">
+              <TextSampleField
+                label={group.familyName}
+                lang={sampleLanguage}
+                family={previewFamily}
+                weight={lockedPreview?.weight ?? previewWeight}
+                italic={lockedPreview?.italic ?? previewItalic}
+                variation={lockedPreview?.variation}
+                featureSettings={lockedPreview?.featureSettings}
+                size={previewSize}
+                value={sampleText}
+                onChange={(value) => onSampleTextChange?.(value)}
+              />
+            </div>
+            {expanded && showInstances && (
+              <InstanceList
+                rows={instances}
+                selectedEntryId={selectedEntryId}
+                onSelectEntry={onSelectEntry}
+                instanceActions={{
+                  entries: group.entries,
+                  busy,
+                  uninstallOnly,
+                  onInstall: onInstallInstance,
+                  onActivate: onActivateInstance,
+                  onActivateUntilQuit: onActivateUntilQuitInstance,
+                  onDeactivate: onDeactivateInstance,
+                  onUninstall: onUninstallInstance,
+                  onInstallToAdobe: onInstallInstanceToAdobe,
+                  onUninstallFromAdobe: onUninstallInstanceFromAdobe,
+                  adobeAvailable,
+                  onFormatSwap: onSwapInstanceFormat,
+                  onOpen: (entryId) => {
+                    onEnsureSelected()
+                    onSelectEntry(entryId)
+                  },
+                  onTurnRetailSyncOff: onTurnInstanceRetailSyncOff,
+                  onRevealInstalled: onRevealInstance
+                    ? (entryId) => onRevealInstance(entryId, 'installed')
+                    : undefined,
+                  onRevealSource: onRevealInstance
+                    ? (entryId) => onRevealInstance(entryId, 'source')
+                    : undefined,
+                }}
+              />
+            )}
+          </>
+        ) : layout === 'grid' ? (
           <PreviewRetryBoundary>
             <ContextMenuTrigger asChild>
               <button
@@ -528,7 +625,7 @@ export const LibraryCard = memo(function LibraryCard({
             missingSource={missingSource}
             busy={busy}
             visible={selected || actionsVisible}
-            offset={layout === 'list' && showInstances}
+            offset={showInstances}
             onInstall={onInstall}
             onReinstall={onReinstall}
             onDeactivate={onDeactivate}
@@ -656,6 +753,8 @@ export const LibraryCard = memo(function LibraryCard({
   prev.busy === next.busy &&
   prev.layout === next.layout &&
   prev.previewSize === next.previewSize &&
+  prev.sampleText === next.sampleText &&
+  prev.sampleLanguage === next.sampleLanguage &&
   prev.showSourcePath === next.showSourcePath &&
   prev.showAddedAt === next.showAddedAt &&
   prev.showInstanceCounts === next.showInstanceCounts &&

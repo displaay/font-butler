@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
 
 const EMPTY_TAG_IDS: readonly string[] = []
 import { toast } from 'sonner'
@@ -55,7 +55,16 @@ import {
   GRID_PREVIEW_SIZE_KEY,
   ViewOptions,
   readGridPreviewSize,
+  readStoredViewLayout,
 } from '@/components/ViewOptions'
+import {
+  TEXT_PREVIEW_LANGUAGE_KEY,
+  TEXT_PREVIEW_SAMPLE_KEY,
+  applyTextPreviewLanguage,
+  estimateTextPreviewLines,
+  readTextPreviewLanguage,
+  readTextPreviewSample,
+} from '@/lib/textPreview'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { NotifyProvider, useClearActionStatusIf, useSetActionStatus } from '@/components/NotifyProvider'
@@ -249,6 +258,8 @@ function AppShell() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsFocusAppUpdate, setSettingsFocusAppUpdate] = useState(false)
   const [settingsFocusWatchFolders, setSettingsFocusWatchFolders] = useState(false)
+  const [settingsFocusFinderSync, setSettingsFocusFinderSync] = useState(false)
+  const [announcementSuspended, setAnnouncementSuspended] = useState(false)
   const [appUpdate, setAppUpdate] = useState<AppUpdateStatus | null>(null)
   const [appUpdateInstall, setAppUpdateInstall] = useState<{
     phase: 'idle' | 'downloading' | 'verifying' | 'installing' | 'opening' | 'error'
@@ -268,6 +279,16 @@ function AppShell() {
     setSettingsOpen(closed.settingsOpen)
     setSettingsFocusAppUpdate(closed.focusAppUpdate)
     setSettingsFocusWatchFolders(closed.focusWatchFolders)
+    setSettingsFocusFinderSync(closed.focusFinderSync)
+    setAnnouncementSuspended(false)
+  }
+
+  function openFinderSyncSettings() {
+    setSettingsFocusAppUpdate(false)
+    setSettingsFocusWatchFolders(false)
+    setSettingsFocusFinderSync(true)
+    setAnnouncementSuspended(true)
+    setSettingsOpen(true)
   }
 
   function applyFamilyTagPayload(payload: { tags?: FamilyTag[]; familyTags?: FamilyTagAssignment[] }) {
@@ -410,9 +431,28 @@ function AppShell() {
   const [hideFormats, setHideFormats] = useState(
     () => localStorage.getItem('font-butler-hide-formats') === 'true',
   )
-  const [viewLayout, setViewLayout] = useState<ViewLayout>(() =>
-    localStorage.getItem('font-butler-view-layout') === 'grid' ? 'grid' : 'list',
-  )
+  const [viewLayout, setViewLayout] = useState<ViewLayout>(readStoredViewLayout)
+  const [sampleLanguage, setSampleLanguage] = useState(readTextPreviewLanguage)
+  const [sampleText, setSampleText] = useState(readTextPreviewSample)
+  const editSampleText = useCallback((text: string) => {
+    setSampleText(text)
+    try {
+      localStorage.setItem(TEXT_PREVIEW_SAMPLE_KEY, text)
+    } catch {
+      // The shared sample still updates in this session when storage is blocked.
+    }
+  }, [])
+  const chooseSampleLanguage = useCallback((id: string) => {
+    const next = applyTextPreviewLanguage(id)
+    setSampleLanguage(next.id)
+    setSampleText(next.text)
+    try {
+      localStorage.setItem(TEXT_PREVIEW_LANGUAGE_KEY, next.id)
+      localStorage.setItem(TEXT_PREVIEW_SAMPLE_KEY, next.text)
+    } catch {
+      // The shared sample still updates in this session when storage is blocked.
+    }
+  }, [])
   const [sortMode, setSortMode] = useState<SortMode>(readSortMode)
   const [selectedFamilyKeys, setSelectedFamilyKeys] = useState<string[]>([])
   const [selectedSystemKeys, setSelectedSystemKeys] = useState<string[]>([])
@@ -943,6 +983,7 @@ function AppShell() {
     function onKeyDown(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key === ',') {
         event.preventDefault()
+        setSettingsFocusFinderSync(false)
         setSettingsOpen(true)
       }
     }
@@ -964,6 +1005,8 @@ function AppShell() {
     })
     const stopDesktop = window.fontButlerDesktop?.onOpenSettings((payload) => {
       setSettingsFocusAppUpdate(payload?.focus === 'app-update')
+      setSettingsFocusWatchFolders(false)
+      setSettingsFocusFinderSync(false)
       setSettingsOpen(true)
     })
     const stopReinstall = window.fontButlerDesktop?.onReinstallFonts?.((payload) => {
@@ -1440,6 +1483,7 @@ function AppShell() {
     layout: viewLayout,
     previewSize: gridPreviewSize,
     extraLines: (showSources ? 1 : 0) + (browseSubtitleShown ? 1 : 0),
+    sampleLines: viewLayout === 'text' ? estimateTextPreviewLines(sampleText, gridPreviewSize) : 1,
     viewportRef: libraryViewportRef,
     gridRef: libraryGridRef,
     enabled: tab !== 'activity',
@@ -2602,11 +2646,13 @@ function AppShell() {
           onOpenSettings={() => {
             setSettingsFocusAppUpdate(Boolean(appUpdate?.updateAvailable))
             setSettingsFocusWatchFolders(false)
+            setSettingsFocusFinderSync(false)
             setSettingsOpen(true)
           }}
           onOpenWatchFoldersSettings={() => {
             setSettingsFocusAppUpdate(false)
             setSettingsFocusWatchFolders(true)
+            setSettingsFocusFinderSync(false)
             setSettingsOpen(true)
           }}
         />
@@ -2702,6 +2748,8 @@ function AppShell() {
                       setGridPreviewSize(next)
                       localStorage.setItem(GRID_PREVIEW_SIZE_KEY, String(next))
                     }}
+                    sampleLanguage={sampleLanguage}
+                    onSampleLanguageChange={chooseSampleLanguage}
                   />
                 {tab === 'system' && !query.trim() && systemGroups.length > shownSystemGroups.length && (
                   <p className="text-sm text-muted-foreground">
@@ -2731,6 +2779,7 @@ function AppShell() {
                       onOpenSettings={() => {
                         setSettingsFocusAppUpdate(false)
                         setSettingsFocusWatchFolders(true)
+                        setSettingsFocusFinderSync(false)
                         setSettingsOpen(true)
                       }}
                     />
@@ -2818,6 +2867,9 @@ function AppShell() {
                           previewRequest={previewRequest}
                           layout={viewLayout}
                           previewSize={gridPreviewSize}
+                          sampleText={sampleText}
+                          sampleLanguage={sampleLanguage}
+                          onSampleTextChange={editSampleText}
                           group={group}
                           showSourcePath={showSources}
                           showInstanceCounts={showInstanceCounts}
@@ -2863,6 +2915,9 @@ function AppShell() {
                           previewRequest={previewRequest}
                           layout={viewLayout}
                           previewSize={gridPreviewSize}
+                          sampleText={sampleText}
+                          sampleLanguage={sampleLanguage}
+                          onSampleTextChange={editSampleText}
                           group={group}
                           retail={retail}
                           showSourcePath={showSources}
@@ -3779,6 +3834,7 @@ function AppShell() {
           onCheckAppUpdate={(refresh) => void loadAppUpdate(refresh)}
           highlightAppUpdate={settingsFocusAppUpdate}
           highlightWatchFolders={settingsFocusWatchFolders}
+          highlightFinderSync={settingsFocusFinderSync}
           onStartOnboarding={() => {
             closeSettings()
             setOnboardingOpen(startOnboardingFromSettings().onboardingOpen)
@@ -3797,9 +3853,10 @@ function AppShell() {
         />
         <AnnouncementDialog
           announcement={announcement}
-          open={Boolean(announcement) && !onboardingOpen}
+          open={Boolean(announcement) && !onboardingOpen && !announcementSuspended}
           currentIcon={settings ? parseAppIconStyle(settings.appIcon) : null}
           onSelectIcon={chooseAnnouncementIcon}
+          onOpenFinderSettings={openFinderSyncSettings}
           onDismiss={(item) => {
             setAnnouncement(null)
             window.fontButlerDesktop?.dismissAnnouncement?.(item.id)

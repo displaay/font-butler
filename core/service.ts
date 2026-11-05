@@ -1006,7 +1006,7 @@ export class FontButlerService {
   }): Promise<AppSettings> {
     const current = loadSettings(this.paths)
     const next: AppSettings = { ...current }
-    if (patch.defaultView === 'list' || patch.defaultView === 'grid') {
+    if (patch.defaultView === 'list' || patch.defaultView === 'grid' || patch.defaultView === 'text') {
       next.defaultView = patch.defaultView
     }
     if (patch.defaultSort === 'name' || patch.defaultSort === 'added') {

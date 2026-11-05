@@ -17,9 +17,10 @@ test('whats-new pages start with the rename, then each shipped feature', () => {
       'adobe-document-watch',
       'finder-extension',
       'compare',
+      'family-ratings',
     ],
   )
-  assert.equal(WHATS_NEW_PAGES.length, 9)
+  assert.equal(WHATS_NEW_PAGES.length, 10)
   assert.equal(WHATS_NEW_PAGES[0]?.title, 'Now called Cuttler')
   assert.equal(WHATS_NEW_PAGES[2]?.title, 'Family tags')
   assert.match(WHATS_NEW_PAGES[2]?.body ?? '', /color/i)
@@ -36,6 +37,10 @@ test('whats-new pages start with the rename, then each shipped feature', () => {
   assert.match(WHATS_NEW_PAGES[7]?.body ?? '', /Finder/i)
   assert.equal(WHATS_NEW_PAGES[8]?.title, 'Compare')
   assert.match(WHATS_NEW_PAGES[8]?.body ?? '', /Compare/)
+  assert.equal(WHATS_NEW_PAGES[9]?.title, 'Star ratings & comments')
+  assert.match(WHATS_NEW_PAGES[9]?.body ?? '', /stars/i)
+  assert.match(WHATS_NEW_PAGES[9]?.body ?? '', /comment/i)
+  assert.match(WHATS_NEW_PAGES[9]?.body ?? '', /Font Book|FontExplorer/i)
   assert.equal(
     WHATS_NEW_PAGES.some((page) => page.id === 'library-search' || page.id === 'search-filter-suggestions'),
     false,
@@ -46,6 +51,7 @@ test('whats-new pages start with the rename, then each shipped feature', () => {
   )
   assert.equal(ANNOUNCEMENTS.length, 1)
   assert.equal(ANNOUNCEMENTS[0]?.id, 'whats-new')
+  assert.equal(ANNOUNCEMENTS[0]?.title, "What's new")
   assert.equal(ANNOUNCEMENTS[0]?.celebrate, true)
   assert.equal(ANNOUNCEMENTS[0]?.showWhen, 'upgrade')
   assert.equal(ANNOUNCEMENTS[0]?.pages, WHATS_NEW_PAGES)
@@ -60,6 +66,8 @@ test('AnnouncementDialog reuses welcome Dialog surface classes', async () => {
   assert.match(source, /from '@\/components\/ui\/dialog'/)
   assert.match(source, /w-\[min\(92vw,480px\)\]/)
   assert.match(source, /overflow-y-auto/)
+  assert.match(source, /What&apos;s new/)
+  assert.match(source, /text-sm font-semibold tracking-tight text-foreground/)
   assert.match(source, /Got it/)
   assert.match(source, /Step /)
   assert.match(source, /page\?\.id === RENAME_PAGE_ID/)
@@ -81,11 +89,17 @@ test('AnnouncementDialog reuses welcome Dialog surface classes', async () => {
   assert.match(source, /\/announcement\/adobe-document-watch\.png/)
   assert.match(source, /\/announcement\/finder-extension-settings\.png/)
   assert.match(source, /\/announcement\/compare-window\.png/)
+  assert.match(source, /\/announcement\/star-rating\.png/)
+  assert.match(source, /\/announcement\/family-comment\.png/)
   assert.match(source, /'advanced-search':/)
   assert.match(source, /'activate-until-quit':/)
   assert.match(source, /'adobe-document-watch':/)
   assert.match(source, /'finder-extension':/)
+  assert.match(source, /FINDER_EXTENSION_PAGE_ID/)
+  assert.match(source, /Open Settings/)
+  assert.match(source, /onOpenFinderSettings\?\.\(\)/)
   assert.match(source, /compare:\s*\[/)
+  assert.match(source, /'family-ratings':/)
   assert.doesNotMatch(source, /'library-search':/)
   assert.doesNotMatch(source, /'search-filter-suggestions':/)
   assert.doesNotMatch(source, /'new-tag-color':/)
@@ -111,6 +125,8 @@ test('whats-new announcement cutouts exist under public/announcement', async () 
     'adobe-document-watch.png',
     'finder-extension-settings.png',
     'compare-window.png',
+    'star-rating.png',
+    'family-comment.png',
   ]) {
     await access(`${root}/${name}`)
   }
@@ -126,6 +142,8 @@ test('library-search cutouts are tight action crops, not wide window slices', as
     'adobe-document-watch.png',
     'finder-extension-settings.png',
     'compare-window.png',
+    'star-rating.png',
+    'family-comment.png',
   ]) {
     const buf = await readFile(`${root}/${name}`)
     assert.equal(buf.toString('ascii', 1, 4), 'PNG')
@@ -140,11 +158,23 @@ test('ConfettiBurst is a main-window overlay, not nested in the dialog', async (
   const dialog = await readFile(fileURLToPath(new URL('./AnnouncementDialog.tsx', import.meta.url)), 'utf8')
   const confetti = await readFile(fileURLToPath(new URL('./ConfettiBurst.tsx', import.meta.url)), 'utf8')
   const app = await readFile(fileURLToPath(new URL('../App.tsx', import.meta.url)), 'utf8')
+  const settings = await readFile(fileURLToPath(new URL('./SettingsDialog.tsx', import.meta.url)), 'utf8')
+  const main = await readFile(fileURLToPath(new URL('../../electron/main.mjs', import.meta.url)), 'utf8')
+  const preload = await readFile(fileURLToPath(new URL('../../electron/preload.cjs', import.meta.url)), 'utf8')
   assert.doesNotMatch(dialog, /ConfettiBurst|confetti|canvas/)
   assert.match(confetti, /fixed inset-0/)
   assert.match(confetti, /burstConfetti/)
   assert.match(app, /<ConfettiBurst playKey=\{confettiPlayKey\}/)
   assert.match(app, /<AnnouncementDialog/)
   assert.match(app, /onSelectIcon=\{chooseAnnouncementIcon\}/)
+  assert.match(app, /onOpenFinderSettings=\{openFinderSyncSettings\}/)
+  assert.match(app, /highlightFinderSync=\{settingsFocusFinderSync\}/)
+  assert.match(settings, /id="finder-sync-settings"/)
+  assert.match(settings, /FinderSyncEnableButton/)
+  assert.match(settings, /aria-label="Finder menu in Login Items"/)
+  assert.match(main, /open-finder-sync-login-items/)
+  assert.match(main, /open-finder-extensions/)
+  assert.match(preload, /openFinderSyncLoginItems: \(\) => ipcRenderer\.invoke\('open-finder-sync-login-items'\)/)
+  assert.match(preload, /openFinderExtensions: \(\) => ipcRenderer\.invoke\('open-finder-extensions'\)/)
   assert.match(app, /updateSettings\(\{ appIcon: style \}\)/)
 })

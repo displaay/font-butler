@@ -137,7 +137,7 @@ const emptySettings = (): AppSettings => ({
 })
 
 function isViewLayout(value: unknown): value is ViewLayout {
-  return value === 'list' || value === 'grid'
+  return value === 'list' || value === 'grid' || value === 'text'
 }
 
 function isSortMode(value: unknown): value is SortMode {

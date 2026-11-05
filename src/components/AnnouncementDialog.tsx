@@ -16,6 +16,7 @@ import {
 } from '../../shared/announcements.ts'
 
 const RENAME_PAGE_ID = 'rename'
+const FINDER_EXTENSION_PAGE_ID = 'finder-extension'
 const CUTTLER_ICON: AppIconStyle = 'cuttler'
 
 type PageFigure = { src: string; alt: string }
@@ -54,7 +55,7 @@ const PAGE_FIGURES: Record<string, PageFigure[]> = {
     },
     {
       src: '/announcement/search-filter-suggestions.png',
-      alt: 'Search field with matching filter suggestions',
+      alt: 'Search field with a chosen filter in the field and matching suggestions',
     },
   ],
   'activate-until-quit': [
@@ -81,6 +82,16 @@ const PAGE_FIGURES: Record<string, PageFigure[]> = {
       alt: 'Compare window with Stacked and Overlay, showing two faces',
     },
   ],
+  'family-ratings': [
+    {
+      src: '/announcement/star-rating.png',
+      alt: 'Family card showing a star rating badge',
+    },
+    {
+      src: '/announcement/family-comment.png',
+      alt: 'Inspector comment field for a family',
+    },
+  ],
 }
 
 function pagesFor(item: Announcement): AnnouncementPage[] {
@@ -101,6 +112,7 @@ export function AnnouncementDialog({
   onDismiss,
   currentIcon = null,
   onSelectIcon,
+  onOpenFinderSettings,
 }: {
   announcement: Announcement | null
   open: boolean
@@ -108,13 +120,15 @@ export function AnnouncementDialog({
   /** Null until settings have loaded, so the old icon is not guessed. */
   currentIcon?: AppIconStyle | null
   onSelectIcon?: (style: AppIconStyle) => Promise<void> | void
+  /** Opens Settings on the Finder Sync control. */
+  onOpenFinderSettings?: () => void
 }) {
   const item = announcement
   const pages = item ? pagesFor(item) : []
   const dismissedRef = useRef(false)
   const [saving, setSaving] = useState(false)
   const [pageIndex, setPageIndex] = useState(0)
-  const resetKey = `${open}:${item?.id ?? ''}`
+  const resetKey = item?.id ?? ''
   const [seenKey, setSeenKey] = useState(resetKey)
   if (seenKey !== resetKey) {
     setSeenKey(resetKey)
@@ -165,7 +179,12 @@ export function AnnouncementDialog({
         )}
       >
         <DialogHeader className="pr-6">
-          <DialogTitle>{page?.title ?? item?.title ?? ''}</DialogTitle>
+          <DialogTitle>What&apos;s new</DialogTitle>
+          {page?.title || item?.title ? (
+            <p className="text-sm font-semibold tracking-tight text-foreground">
+              {page?.title ?? item?.title}
+            </p>
+          ) : null}
           <DialogDescription>{page?.body ?? item?.body ?? ''}</DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto">
@@ -242,6 +261,11 @@ export function AnnouncementDialog({
           </div>
           {offersIconChoice ? null : (
             <div className="flex justify-end gap-2">
+              {page?.id === FINDER_EXTENSION_PAGE_ID ? (
+                <Button type="button" variant="outline" onClick={() => onOpenFinderSettings?.()}>
+                  Open Settings
+                </Button>
+              ) : null}
               {lastPage ? (
                 <Button type="button" onClick={dismiss}>
                   Got it

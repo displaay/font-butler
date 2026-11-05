@@ -44,7 +44,7 @@ export const WHATS_NEW_PAGES: AnnouncementPage[] = [
   {
     id: 'advanced-search',
     title: 'Advanced search',
-    body: 'Type several words — each one has to match. A tag name finds families with that tag. Start typing a filter name and matching filters appear under the search field; choose one to narrow the library and set the preview style.',
+    body: 'Type several words — each one has to match. A tag name finds families with that tag. Start typing a filter name and matching filters appear under the search field; choose one and it stays in the field, narrowing the library and the preview style.',
   },
   {
     id: 'activate-until-quit',
@@ -54,7 +54,7 @@ export const WHATS_NEW_PAGES: AnnouncementPage[] = [
   {
     id: 'adobe-document-watch',
     title: 'Adobe document watch',
-    body: 'In Settings, turn on Watch documents in Adobe and Office. When InDesign, Illustrator, Photoshop, Acrobat, Word, or PowerPoint is in front with a supported file, Cuttler opens the font sheet for that document.',
+    body: 'In Settings, turn on Watch documents in Adobe and Office. When InDesign is in front, Cuttler asks it for the fonts in its open documents, including while Missing Fonts is open. Illustrator, Photoshop, Acrobat, Word, and PowerPoint are read from the open file.',
   },
   {
     id: 'finder-extension',
@@ -66,6 +66,11 @@ export const WHATS_NEW_PAGES: AnnouncementPage[] = [
     title: 'Compare',
     body: 'Open Compare to stack or overlay faces side by side — including fonts you drop in from Finder. Pick styles, flip between stacked and overlay, and judge them in one place.',
   },
+  {
+    id: 'family-ratings',
+    title: 'Star ratings & comments',
+    body: 'Rate a family with up to five stars — the badge shows on the library card. Add a comment in the inspector for notes that stay with the family. Font Book and FontExplorer imports can bring ratings and comments along.',
+  },
 ]
 
 /** Product announcements shown in the main window (welcome-style dialog) after launch. */
@@ -73,7 +78,7 @@ export const ANNOUNCEMENTS: Announcement[] = [
   {
     id: 'whats-new',
     sinceVersion: '0.4.0',
-    title: WHATS_NEW_PAGES[0]!.title,
+    title: "What's new",
     body: WHATS_NEW_PAGES[0]!.body,
     celebrate: true,
     showWhen: 'upgrade',

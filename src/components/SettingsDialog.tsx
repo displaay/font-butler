@@ -173,6 +173,7 @@ export function SettingsDialog({
   onCheckAppUpdate,
   highlightAppUpdate = false,
   highlightWatchFolders = false,
+  highlightFinderSync = false,
   onStartOnboarding,
   retail = null,
   retailFamiliesOnMac,
@@ -189,6 +190,8 @@ export function SettingsDialog({
   onCheckAppUpdate?: (refresh?: boolean) => void
   highlightAppUpdate?: boolean
   highlightWatchFolders?: boolean
+  /** Open General and scroll to the Finder Sync control in the App section. */
+  highlightFinderSync?: boolean
   onStartOnboarding?: () => void
   retail?: RetailSyncStatus | null
   retailFamiliesOnMac?: ReadonlySet<string>
@@ -229,6 +232,22 @@ export function SettingsDialog({
     if (!open || !highlightWatchFolders) return
     setCategory('folders')
   }, [open, highlightWatchFolders])
+
+  useEffect(() => {
+    if (!open || !highlightFinderSync) return
+    setCategory('general')
+  }, [open, highlightFinderSync])
+
+  useEffect(() => {
+    if (!open || !highlightFinderSync || category !== 'general') return
+    const frame = requestAnimationFrame(() => {
+      const control = document.querySelector<HTMLElement>('[aria-label="Finder menu in Login Items"]')
+      const row = control?.closest('.grid')
+      const target = row instanceof HTMLElement ? row : document.getElementById('finder-sync-settings')
+      target?.scrollIntoView({ block: 'center' })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [open, highlightFinderSync, category])
 
   useEffect(() => {
     if (!open) return
@@ -435,6 +454,7 @@ export function SettingsDialog({
                   checkingAppUpdate={checkingAppUpdate}
                   onCheckAppUpdate={onCheckAppUpdate}
                   highlightAppUpdate={highlightAppUpdate}
+                  highlightFinderSync={highlightFinderSync}
                   onStartOnboarding={onStartOnboarding}
                 />
               )}
@@ -527,6 +547,7 @@ function GeneralPane({
   checkingAppUpdate,
   onCheckAppUpdate,
   highlightAppUpdate,
+  highlightFinderSync,
   onStartOnboarding,
 }: {
   settings: AppSettings | null
@@ -537,6 +558,7 @@ function GeneralPane({
   checkingAppUpdate: boolean
   onCheckAppUpdate?: (refresh?: boolean) => void
   highlightAppUpdate: boolean
+  highlightFinderSync: boolean
   onStartOnboarding?: () => void
 }) {
   return (
@@ -636,7 +658,7 @@ function GeneralPane({
         </SettingsRow>
         <SettingsRow
           label="Default view"
-          description="List or grid when you open the library."
+          description="List, grid, or text when you open the library."
           htmlFor="default-view"
         >
           <select
@@ -650,6 +672,7 @@ function GeneralPane({
           >
             <option value="list">List</option>
             <option value="grid">Grid</option>
+            <option value="text">Text</option>
           </select>
         </SettingsRow>
         <SettingsRow
@@ -673,7 +696,13 @@ function GeneralPane({
         <LatinPreviewRow settings={settings} busy={busy} onSave={onSave} />
       </SettingsSection>
 
-      <SettingsSection title="App">
+      <SettingsSection
+        id="finder-sync-settings"
+        title="App"
+        className={cn(
+          highlightFinderSync && 'rounded-md ring-2 ring-ring/40 ring-offset-2 ring-offset-background',
+        )}
+      >
         <SettingsRow
           label="Icon in menu bar"
           description="Keep Cuttler running in the menu bar after you close the window. The Dock icon hides until you show the window again. Click the icon to show the window, reinstall updated fonts, clear caches, or quit."

@@ -249,7 +249,7 @@ export type FamilyGroup = {
   addedAt: number
 }
 
-export type ViewLayout = 'list' | 'grid'
+export type ViewLayout = 'list' | 'grid' | 'text'
 
 export type ThemeMode = 'light' | 'dark' | 'system'
 export type { AppIconStyle }
