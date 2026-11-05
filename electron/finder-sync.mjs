@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto'
-import { closeSync, constants as fsConstants, existsSync, fstatSync, openSync, readFileSync, readSync, realpathSync } from 'node:fs'
+import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import path from 'node:path'
-import { FINDER_INSTALL_AS, isClaimedFontPath } from './finder-install.mjs'
+import { Worker } from 'node:worker_threads'
+import { FINDER_INSTALL_AS, isClaimedFontPath, isInstallableFontPath } from './finder-install.mjs'
 import { TEST_FEED_USER_DATA_DIR } from './test-feed-data.mjs'
 
 export const FINDER_SYNC_BUNDLE_ID = 'app.fontbutler.desktop.FinderSync'
@@ -1296,6 +1298,359 @@ export function revalidateFinderSyncHandles(handles, io) {
     }
   }
   return { ok: true }
+}
+
+function descriptorDirectoryPath(dirfd) {
+  if (process.platform !== 'linux') return null
+  if (!Number.isInteger(dirfd) || dirfd < 0) return null
+  return `/proc/self/fd/${dirfd}`
+}
+
+function loadDescriptorNative() {
+  try {
+    const addon = createRequire(import.meta.url)('./finder-sync-receiver.node')
+    if (typeof addon?.openAt !== 'function' || typeof addon?.readDirFd !== 'function') return null
+    return addon
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Filesystem access for a Finder Sync selection. File bytes come from the
+ * descriptor opened with O_NOFOLLOW. A directory is listed and opened from
+ * that descriptor, not from the path, so a later symlink swap cannot change
+ * which file is read.
+ */
+export function createFinderSyncIo(native = loadDescriptorNative()) {
+  const flagsFor = (directory) => {
+    let flags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0)
+    if (directory && fsConstants.O_DIRECTORY) flags |= fsConstants.O_DIRECTORY
+    return flags
+  }
+  return {
+    lstatSync,
+    readlinkSync,
+    readdirSync: (filePath) => readdirSync(filePath),
+    openSync(filePath, directory) {
+      return openSync(filePath, flagsFor(Boolean(directory)))
+    },
+    closeSync(fd) {
+      closeSync(fd)
+    },
+    fstatSync(fd) {
+      return fstatSync(fd)
+    },
+    readAt(fd, length, position = 0) {
+      const buffer = Buffer.alloc(length)
+      const bytes = readSync(fd, buffer, 0, length, position ?? 0)
+      return buffer.subarray(0, bytes)
+    },
+    readPrefix(filePath, length) {
+      const fd = openSync(filePath, flagsFor(false))
+      try {
+        const buffer = Buffer.alloc(length)
+        const bytes = readSync(fd, buffer, 0, length, 0)
+        return buffer.subarray(0, bytes)
+      } finally {
+        closeSync(fd)
+      }
+    },
+    readDirFd(dirfd) {
+      if (typeof native?.readDirFd === 'function') return native.readDirFd(dirfd)
+      const base = descriptorDirectoryPath(dirfd)
+      if (!base) {
+        const error = new Error('Finder Sync cannot read that folder from its descriptor.')
+        error.code = 'ENOTSUP'
+        throw error
+      }
+      return readdirSync(base)
+    },
+    openAt(dirfd, name, directory) {
+      if (typeof name !== 'string' || !name || name === '.' || name === '..' || name.includes('/') || name.includes('\0')) {
+        const error = new Error('Finder Sync cannot open that file from its descriptor.')
+        error.code = 'EINVAL'
+        throw error
+      }
+      if (typeof native?.openAt === 'function') return native.openAt(dirfd, name, Boolean(directory))
+      const base = descriptorDirectoryPath(dirfd)
+      if (!base) {
+        const error = new Error('Finder Sync cannot open that file from its descriptor.')
+        error.code = 'ENOTSUP'
+        throw error
+      }
+      return openSync(`${base}/${name}`, flagsFor(Boolean(directory)))
+    },
+  }
+}
+
+function readDescriptorFile(fd, size, io, expectedFingerprint) {
+  const bytes = fileByteSize(size)
+  if (fd == null || bytes == null || typeof io?.readAt !== 'function') {
+    return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL }
+  }
+  const hash = createHash('sha256')
+  // allocUnsafeSlow owns a dedicated ArrayBuffer. A pooled Buffer cannot be
+  // transferred to the scan caller, and the install must move these bytes
+  // rather than copy a 2 GB selection back onto the main thread.
+  const data = Buffer.allocUnsafeSlow(bytes)
+  let offset = 0
+  while (offset < bytes) {
+    const want = Math.min(FINGERPRINT_CHUNK, bytes - offset)
+    let chunk
+    try {
+      chunk = io.readAt(fd, want, offset)
+    } catch {
+      return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL }
+    }
+    if (!chunk || chunk.length !== want) return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL }
+    chunk.copy(data, offset)
+    hash.update(data.subarray(offset, offset + chunk.length))
+    offset += chunk.length
+  }
+  const fingerprint = hash.digest('hex')
+  if (expectedFingerprint && fingerprint !== expectedFingerprint) {
+    return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL }
+  }
+  return { ok: true, data, fingerprint }
+}
+
+function walkDescriptorDirectory(dirfd, dirPath, depth, state, files, io) {
+  if (depth > FINDER_SYNC_TREE_DEPTH) return { ok: false, reason: FINDER_SYNC_TREE_TOO_DEEP }
+  let names
+  try {
+    names = io.readDirFd(dirfd) ?? []
+  } catch {
+    return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL }
+  }
+  for (const name of names) {
+    if (state.limit) return { ok: false, reason: limitMessage(state.limit) }
+    if (typeof name !== 'string' || !name || name === '.' || name === '..' || name.includes('/') || name.includes('\0')) {
+      continue
+    }
+    let fd
+    try {
+      fd = io.openAt(dirfd, name, false)
+    } catch (error) {
+      if (error?.code === 'ELOOP') continue
+      continue
+    }
+    try {
+      const stat = io.fstatSync(fd)
+      const identity = `${stat?.dev}:${stat?.ino}`
+      if (state.seen.has(identity)) continue
+      state.seen.add(identity)
+      const childPath = `${dirPath}/${name}`
+      if (stat?.isDirectory?.()) {
+        const nested = walkDescriptorDirectory(fd, childPath, depth + 1, state, files, io)
+        if (!nested.ok) return nested
+        continue
+      }
+      if (!stat?.isFile?.()) continue
+      if (/\.(woff2?)$/i.test(name)) {
+        state.skippedWeb.push(childPath)
+        continue
+      }
+      if (!isInstallableFontPath(childPath)) continue
+      const size = fileByteSize(stat.size)
+      if (size == null) continue
+      const header = headerFromIo(childPath, io, fd)
+      if (header?.error || !magicMatchesExtension(fontExtension(childPath), fontMagicKind(header))) continue
+      state.files += 1
+      state.bytes += size
+      if (state.files > FINDER_SYNC_MAX_FILES) {
+        state.limit = 'files'
+        return { ok: false, reason: FINDER_SYNC_TOO_MANY_FILES }
+      }
+      if (state.bytes > FINDER_SYNC_MAX_BYTES) {
+        state.limit = 'bytes'
+        return { ok: false, reason: FINDER_SYNC_TOO_LARGE }
+      }
+      const read = readDescriptorFile(fd, size, io)
+      if (!read.ok) return read
+      files.push({ filename: name, data: read.data })
+    } finally {
+      closeHandle(io, { fd })
+    }
+  }
+  return { ok: true }
+}
+
+/**
+ * Re-check the held descriptors, then read the install from those descriptors.
+ * The returned buffers are the verified bytes. The path is not opened again.
+ */
+export function readVerifiedFinderFiles(handles, io) {
+  const files = []
+  const skippedWeb = []
+  for (const handle of handles ?? []) {
+    let current
+    try {
+      current = io.fstatSync(handle.fd)
+    } catch {
+      return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL, files: [], skippedWeb }
+    }
+    if (current?.dev !== handle.dev || current?.ino !== handle.ino) {
+      return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL, files: [], skippedWeb }
+    }
+    if (handle.kind === 'dir') {
+      if (!current?.isDirectory?.()) {
+        return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL, files: [], skippedWeb }
+      }
+      const state = { files: files.length, bytes: files.reduce((sum, file) => sum + file.data.length, 0), limit: null, seen: new Set(), skippedWeb }
+      state.seen.add(`${current.dev}:${current.ino}`)
+      const walked = walkDescriptorDirectory(handle.fd, handle.path, 1, state, files, io)
+      if (!walked.ok) return { ok: false, reason: walked.reason, files: [], skippedWeb }
+      continue
+    }
+    if (!current?.isFile?.()) {
+      return { ok: false, reason: FINDER_SYNC_CHANGED_BEFORE_INSTALL, files: [], skippedWeb }
+    }
+    const read = readDescriptorFile(handle.fd, handle.size, io, handle.fingerprint)
+    if (!read.ok) return { ok: false, reason: read.reason, files: [], skippedWeb }
+    const filename = String(handle.path ?? '').split('/').pop() || 'font'
+    files.push({ filename, data: read.data })
+  }
+  return { ok: true, files, skippedWeb }
+}
+
+let finderScanWorker = null
+let finderScanSeq = 0
+let finderScanHold = 0
+const finderScanPending = new Map()
+const finderScanStopping = new WeakSet()
+
+function retireFinderScanWorker(worker) {
+  if (!worker || finderScanStopping.has(worker)) return
+  finderScanStopping.add(worker)
+  if (finderScanWorker === worker) finderScanWorker = null
+  worker.terminate().catch(() => {})
+}
+
+function maybeRetireFinderScanWorker() {
+  if (finderScanPending.size === 0 && finderScanHold === 0) retireFinderScanWorker(finderScanWorker)
+}
+
+function finderScanFail(error) {
+  const pending = [...finderScanPending.values()]
+  finderScanPending.clear()
+  retireFinderScanWorker(finderScanWorker)
+  for (const job of pending) job.reject(error)
+}
+
+function settleFinderScan(message) {
+  const job = finderScanPending.get(message?.id)
+  if (!job) return
+  finderScanPending.delete(message.id)
+  if (message.error) job.reject(new Error(message.error))
+  else job.resolve(message)
+  maybeRetireFinderScanWorker()
+}
+
+function ensureFinderScanWorker() {
+  if (finderScanWorker) return finderScanWorker
+  const worker = new Worker(new URL('./finder-sync-scan.worker.mjs', import.meta.url), { execArgv: [] })
+  worker.unref()
+  worker.on('message', (message) => settleFinderScan(message))
+  worker.on('error', (error) => finderScanFail(error))
+  worker.on('exit', (code) => {
+    const stopping = finderScanStopping.has(worker)
+    if (finderScanWorker === worker) finderScanWorker = null
+    if (!stopping && code !== 0 && finderScanPending.size) {
+      finderScanFail(new Error('Finder Sync scan stopped.'))
+    }
+  })
+  finderScanWorker = worker
+  return worker
+}
+
+function callFinderScan(op, payload) {
+  const id = (finderScanSeq += 1)
+  return new Promise((resolve, reject) => {
+    finderScanPending.set(id, { resolve, reject })
+    try {
+      ensureFinderScanWorker().postMessage({ id, op, ...payload })
+    } catch (error) {
+      finderScanPending.delete(id)
+      reject(error)
+    }
+  })
+}
+
+// Node closes every descriptor a worker opened when that worker exits, and it
+// closes the number again even if the parent already reused it. Duplicate the
+// descriptor on this thread, then let the opening worker close the original.
+function dupFinderFd(fd, directory) {
+  const native = loadDescriptorNative()
+  if (typeof native?.dupFd === 'function') return native.dupFd(fd)
+  if (process.platform === 'linux') {
+    let flags = fsConstants.O_RDONLY | (fsConstants.O_CLOEXEC || 0)
+    if (directory && fsConstants.O_DIRECTORY) flags |= fsConstants.O_DIRECTORY
+    return openSync(`/proc/self/fd/${fd}`, flags)
+  }
+  const error = new Error('Finder Sync cannot keep that file open.')
+  error.code = 'ENOTSUP'
+  throw error
+}
+
+async function releaseWorkerFds(worker, fds) {
+  if (!fds.length || !worker || finderScanWorker !== worker || finderScanStopping.has(worker)) return
+  await callFinderScan('close', { fds })
+}
+
+async function adoptFinderHandles(handles) {
+  const owner = finderScanWorker
+  const adopted = []
+  const release = []
+  const opened = []
+  try {
+    for (const handle of handles ?? []) {
+      if (handle?.fd == null) {
+        adopted.push(handle)
+        continue
+      }
+      const fd = dupFinderFd(handle.fd, handle.kind === 'dir')
+      opened.push(fd)
+      release.push(handle.fd)
+      adopted.push({ ...handle, fd })
+    }
+    await releaseWorkerFds(owner, release)
+    return adopted
+  } catch (error) {
+    for (const fd of opened) {
+      try {
+        closeSync(fd)
+      } catch {
+        // The duplicate is already closed.
+      }
+    }
+    try {
+      await releaseWorkerFds(owner, release)
+    } catch {
+      // The opening worker is gone and will close what it still tracks.
+    }
+    throw error
+  }
+}
+
+/** Validate and hash a Finder selection on the scan worker. Descriptors stay open. */
+export async function scanFinderSyncSelection(filePaths) {
+  finderScanHold += 1
+  try {
+    const checked = await callFinderScan('validate', { paths: filePaths })
+    if (Array.isArray(checked.handles) && checked.handles.some((handle) => handle?.fd != null)) {
+      checked.handles = await adoptFinderHandles(checked.handles)
+    }
+    return checked
+  } finally {
+    finderScanHold -= 1
+    maybeRetireFinderScanWorker()
+  }
+}
+
+/** Re-check the held descriptors and read their bytes on the scan worker. */
+export function readFinderSyncFiles(handles) {
+  return callFinderScan('read', { handles })
 }
 
 export function formatFinderSyncRejections(rejected) {

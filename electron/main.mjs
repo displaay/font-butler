@@ -67,8 +67,8 @@ import {
   sharedLibraryLaunchMode,
   routeFinderSyncError,
   refreshFinderSyncRegistration,
-  revalidateFinderSyncHandles,
-  validateFinderSyncSelection,
+  readFinderSyncFiles,
+  scanFinderSyncSelection,
 } from './finder-sync.mjs'
 import { deliverNativeNotice, electronNotificationPermission } from './notify.mjs'
 import {
@@ -934,6 +934,32 @@ function createWindow() {
   })
 }
 
+async function postImportFiles(files) {
+  const token = await ensureApiToken()
+  const body = new FormData()
+  for (const file of files ?? []) {
+    const data = file?.data
+    if (!data) continue
+    body.append('files', new Blob([data]), file.filename || 'font')
+  }
+  const response = await fetch(`${API}/api/import-files`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body,
+  })
+  const rawBody = await response.text()
+  let data = {}
+  try {
+    data = rawBody ? JSON.parse(rawBody) : {}
+  } catch {
+    data = {}
+  }
+  if (!response.ok) {
+    throw new Error(data.error || `Request failed (HTTP ${response.status})`)
+  }
+  return data
+}
+
 async function postApi(pathname, body) {
   const token = await ensureApiToken()
   const response = await fetch(`${API}${pathname}`, {
@@ -1014,53 +1040,35 @@ function enqueueFinderJob(action, filePaths, options) {
   return finderJobs.enqueue(action, filePaths, options)
 }
 
-function finderSyncIo() {
-  const flagsFor = (directory) => {
-    let flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0)
-    if (directory && fs.constants.O_DIRECTORY) flags |= fs.constants.O_DIRECTORY
-    return flags
-  }
-  return {
-    lstatSync: (filePath) => fs.lstatSync(filePath),
-    readlinkSync: (filePath) => fs.readlinkSync(filePath),
-    readdirSync: (filePath) => fs.readdirSync(filePath),
-    openSync(filePath, directory) {
-      return fs.openSync(filePath, flagsFor(Boolean(directory)))
-    },
-    closeSync(fd) {
-      fs.closeSync(fd)
-    },
-    fstatSync(fd) {
-      return fs.fstatSync(fd)
-    },
-    readAt(fd, length, position = 0) {
-      const buffer = Buffer.alloc(length)
-      const bytes = fs.readSync(fd, buffer, 0, length, position ?? 0)
-      return buffer.subarray(0, bytes)
-    },
-    readPrefix(filePath, length) {
-      const fd = fs.openSync(filePath, flagsFor(false))
-      try {
-        const buffer = Buffer.alloc(length)
-        const bytes = fs.readSync(fd, buffer, 0, length, 0)
-        return buffer.subarray(0, bytes)
-      } finally {
-        fs.closeSync(fd)
-      }
-    },
+function closeFinderHandles(handles) {
+  for (const handle of handles ?? []) {
+    if (handle?.fd == null) continue
+    try {
+      fs.closeSync(handle.fd)
+    } catch {
+      // The descriptor is already closed.
+    }
   }
 }
 
-function enqueueValidatedFinderInstall(action, filePaths) {
-  const checked = validateFinderSyncSelection(filePaths, finderSyncIo())
+async function enqueueValidatedFinderInstall(action, filePaths) {
+  let checked
+  try {
+    checked = await scanFinderSyncSelection(filePaths)
+  } catch (error) {
+    console.error('Finder Sync selection was not checked', error)
+    dialog.showErrorBox(finderInstallTitle(action), 'Those files could not be checked.')
+    showMainWindow()
+    return false
+  }
   if (checked.limitError) {
-    checked.close?.()
+    closeFinderHandles(checked.handles)
     dialog.showErrorBox(finderInstallTitle(action), checked.limitError)
     showMainWindow()
     return false
   }
-  if (checked.paths.length === 0) {
-    checked.close?.()
+  if (!Array.isArray(checked.paths) || checked.paths.length === 0) {
+    closeFinderHandles(checked.handles)
     dialog.showErrorBox(
       finderInstallTitle(action),
       formatFinderSyncRejections(checked.rejected) || 'No installable font files in that selection.',
@@ -1068,10 +1076,14 @@ function enqueueValidatedFinderInstall(action, filePaths) {
     showMainWindow()
     return false
   }
-  if (checked.rejected.length) {
+  if (checked.rejected?.length) {
     dialog.showErrorBox(finderInstallTitle(action), formatFinderSyncRejections(checked.rejected))
   }
-  enqueueFinderJob(action, checked.paths, { handles: checked.handles, close: checked.close })
+  const handles = Array.isArray(checked.handles) ? checked.handles : []
+  enqueueFinderJob(action, checked.paths, {
+    handles,
+    close: () => closeFinderHandles(handles),
+  })
   return true
 }
 
@@ -1265,8 +1277,9 @@ function registerFinderSyncReceiver({ surface = false } = {}) {
         showMainWindow()
         return
       }
-      const queued = enqueueValidatedFinderInstall(action, Array.isArray(payload?.paths) ? payload.paths : [])
-      if (queued) noteFinderSyncRequest(finderSyncRequests, requestId)
+      void enqueueValidatedFinderInstall(action, Array.isArray(payload?.paths) ? payload.paths : []).then((queued) => {
+        if (queued) noteFinderSyncRequest(finderSyncRequests, requestId)
+      })
     })
     applyFinderSyncAgentRegistration(addon, { surface })
     return true
@@ -1325,16 +1338,26 @@ async function promptFinderInstallAs(entries) {
 }
 
 async function runFinderJob(action, filePaths, job) {
-  if (action !== FINDER_LINK_TO && job?.handles?.length) {
-    const again = revalidateFinderSyncHandles(job.handles, finderSyncIo())
-    if (!again.ok) {
-      dialog.showErrorBox(finderInstallTitle(action), again.reason)
+  if (action === FINDER_LINK_TO) {
+    runFinderLinkTo(filePaths)
+    return
+  }
+  if (job?.handles?.length) {
+    let verified
+    try {
+      verified = await readFinderSyncFiles(job.handles)
+    } catch (error) {
+      console.error('Finder Sync files were not read', error)
+      dialog.showErrorBox(finderInstallTitle(action), 'Those files could not be checked.')
       showMainWindow()
       return
     }
-  }
-  if (action === FINDER_LINK_TO) {
-    runFinderLinkTo(filePaths)
+    if (!verified?.ok) {
+      dialog.showErrorBox(finderInstallTitle(action), verified?.reason || 'The file changed before it could be installed.')
+      showMainWindow()
+      return
+    }
+    await runFinderInstallBytes(action, verified.files, verified.skippedWeb)
     return
   }
   await runFinderInstall(action, filePaths)
@@ -1375,6 +1398,70 @@ async function showFinderInstallIssues(action, issues, installed) {
   }
   if (parent) await dialog.showMessageBox(parent, options)
   else await dialog.showMessageBox(options)
+}
+
+async function runFinderInstallBytes(action, files, skippedWeb = []) {
+  const uploads = (files ?? []).filter((file) => file?.data)
+  if (uploads.length === 0) {
+    const issues = finderInstallIssues({ skippedWeb })
+    dialog.showErrorBox(
+      finderInstallTitle(action),
+      formatFinderInstallIssues(issues) || 'No installable font files in that selection.',
+    )
+    showMainWindow()
+    return
+  }
+  notifyOpenFontPending()
+  try {
+    const imported = await postImportFiles(uploads)
+    const entries = imported.entries ?? []
+    const issues = finderInstallIssues({
+      errors: imported.errors,
+      skippedWeb,
+      missing: [],
+    })
+    const eligible = entries.filter((entry) => idsEligibleForFinderInstall([entry]).length > 0)
+    if (eligible.length === 0) {
+      const already = entries.filter((entry) => entry.status === 'installed')
+      if (already.length && !issues.length) {
+        showMainWindow()
+        return
+      }
+      throw new Error(formatFinderInstallIssues(issues) || 'Nothing in that selection can be installed.')
+    }
+    let familyName
+    let destinationIds
+    if (action === FINDER_INSTALL_AS) {
+      const options = await promptFinderInstallAs(eligible)
+      if (!options) {
+        showMainWindow()
+        return
+      }
+      familyName = options.familyName
+      destinationIds = options.destinationIds
+    }
+    const ids = idsEligibleForFinderInstall(eligible)
+    const byFormat = groupIdsByFormat(eligible.filter((entry) => ids.includes(entry.id)))
+    for (const group of byFormat) {
+      await postApi('/api/install', {
+        ids: group,
+        familyName,
+        destinationIds,
+      })
+    }
+    if (issues.length) {
+      await showFinderInstallIssues(action, issues, ids.length)
+    }
+  } catch (error) {
+    console.error('Finder install failed', error)
+    dialog.showErrorBox(
+      finderInstallTitle(action),
+      error instanceof Error ? error.message : 'Install failed',
+    )
+  } finally {
+    notifyOpenFontDone()
+  }
+  showMainWindow()
 }
 
 async function runFinderInstall(action, filePaths) {

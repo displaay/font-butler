@@ -43,6 +43,11 @@ napi_status napi_get_cb_info(napi_env env, napi_callback_info cbinfo, size_t *ar
                              void **data);
 napi_status napi_typeof(napi_env env, napi_value value, napi_valuetype *result);
 napi_status napi_get_undefined(napi_env env, napi_value *result);
+napi_status napi_get_value_int32(napi_env env, napi_value value, int32_t *result);
+napi_status napi_get_value_bool(napi_env env, napi_value value, bool *result);
+napi_status napi_get_value_string_utf8(napi_env env, napi_value value, char *buf, size_t bufsize, size_t *result);
+napi_status napi_create_int32(napi_env env, int32_t value, napi_value *result);
+napi_status napi_throw_error(napi_env env, const char *code, const char *msg);
 napi_status napi_create_string_utf8(napi_env env, const char *str, size_t length, napi_value *result);
 napi_status napi_create_array_with_length(napi_env env, size_t length, napi_value *result);
 napi_status napi_set_element(napi_env env, napi_value object, uint32_t index, napi_value value);
@@ -78,6 +83,7 @@ extern "C" void napi_module_register(napi_module *mod);
   static void fn(void) __attribute__((constructor)); \
   static void fn(void)
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -849,6 +855,118 @@ static napi_value RegisterAgentExport(napi_env env, napi_callback_info info) {
   return JsString(env, RegisterAgent().UTF8String);
 }
 
+static BOOL NameIsReserved(const char *name, size_t length) {
+  if (!name || length == 0) return YES;
+  if (name[0] == '.' && length == 1) return YES;
+  if (length == 2 && name[0] == '.' && name[1] == '.') return YES;
+  for (size_t index = 0; index < length; index += 1) {
+    if (name[index] == '/' || name[index] == '\0') return YES;
+  }
+  return NO;
+}
+
+static const char *OpenAtErrorCode(int error) {
+  if (error == ELOOP) return "ELOOP";
+  if (error == ENOTDIR) return "ENOTDIR";
+  if (error == ENOENT) return "ENOENT";
+  if (error == EACCES || error == EPERM) return "EACCES";
+  if (error == EINVAL) return "EINVAL";
+  return "EIO";
+}
+
+// openat keeps the read on the directory descriptor. A path swap after the
+// selection was checked cannot redirect this open.
+static napi_value OpenAtExport(napi_env env, napi_callback_info info) {
+  size_t argc = 3;
+  napi_value args[3];
+  napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+  int32_t parentFd = -1;
+  bool directory = false;
+  char name[NAME_MAX + 1];
+  size_t length = 0;
+  memset(name, 0, sizeof(name));
+  if (argc < 3 || napi_get_value_int32(env, args[0], &parentFd) != napi_ok ||
+      napi_get_value_string_utf8(env, args[1], name, sizeof(name), &length) != napi_ok ||
+      napi_get_value_bool(env, args[2], &directory) != napi_ok || NameIsReserved(name, length)) {
+    napi_throw_error(env, "EINVAL", "Finder Sync could not open that file.");
+    return nullptr;
+  }
+  int flags = O_RDONLY | O_NOFOLLOW | O_CLOEXEC;
+  if (directory) flags |= O_DIRECTORY;
+  int fd = openat(parentFd, name, flags);
+  if (fd < 0) {
+    napi_throw_error(env, OpenAtErrorCode(errno), "Finder Sync could not open that file.");
+    return nullptr;
+  }
+  napi_value out = nullptr;
+  napi_create_int32(env, fd, &out);
+  return out;
+}
+
+// A worker-owned descriptor dies with that worker. The main thread has to
+// hold its own duplicate for the rest of the install.
+static napi_value DupFdExport(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value args[1];
+  napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+  int32_t source = -1;
+  if (argc < 1 || napi_get_value_int32(env, args[0], &source) != napi_ok || source < 0) {
+    napi_throw_error(env, "EINVAL", "Finder Sync could not keep that file open.");
+    return nullptr;
+  }
+  int fd = fcntl(source, F_DUPFD_CLOEXEC, 0);
+  if (fd < 0) {
+    napi_throw_error(env, OpenAtErrorCode(errno), "Finder Sync could not keep that file open.");
+    return nullptr;
+  }
+  napi_value out = nullptr;
+  napi_create_int32(env, fd, &out);
+  return out;
+}
+
+// dup first: fdopendir takes ownership of its descriptor.
+static napi_value ReadDirFdExport(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value args[1];
+  napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+  int32_t parentFd = -1;
+  if (argc < 1 || napi_get_value_int32(env, args[0], &parentFd) != napi_ok || parentFd < 0) {
+    napi_throw_error(env, "EINVAL", "Finder Sync could not read that folder.");
+    return nullptr;
+  }
+  int copy = dup(parentFd);
+  if (copy < 0) {
+    napi_throw_error(env, OpenAtErrorCode(errno), "Finder Sync could not read that folder.");
+    return nullptr;
+  }
+  DIR *dir = fdopendir(copy);
+  if (!dir) {
+    int error = errno;
+    close(copy);
+    napi_throw_error(env, OpenAtErrorCode(error), "Finder Sync could not read that folder.");
+    return nullptr;
+  }
+  NSMutableArray<NSString *> *names = [NSMutableArray array];
+  while (names.count < 100000) {
+    errno = 0;
+    struct dirent *entry = readdir(dir);
+    if (!entry) break;
+    if (entry->d_name[0] == '\0') continue;
+    NSString *name = [NSString stringWithUTF8String:entry->d_name];
+    if (!name.length) continue;
+    [names addObject:name];
+  }
+  closedir(dir);
+  napi_value list = nullptr;
+  napi_create_array_with_length(env, names.count, &list);
+  for (NSUInteger index = 0; index < names.count; index += 1) {
+    napi_value item = nullptr;
+    napi_create_string_utf8(env, names[index].UTF8String, NAPI_AUTO_LENGTH, &item);
+    napi_set_element(env, list, (uint32_t)index, item);
+  }
+  return list;
+}
+
 static napi_value UnregisterAgentExport(napi_env env, napi_callback_info info) {
   (void)info;
   return JsString(env, UnregisterAgent().UTF8String);
@@ -875,6 +993,15 @@ static napi_value Init(napi_env env, napi_value exports) {
   napi_value openLoginItemsFn;
   napi_create_function(env, "openLoginItems", NAPI_AUTO_LENGTH, OpenLoginItemsExport, nullptr, &openLoginItemsFn);
   napi_set_named_property(env, exports, "openLoginItems", openLoginItemsFn);
+  napi_value openAtFn;
+  napi_create_function(env, "openAt", NAPI_AUTO_LENGTH, OpenAtExport, nullptr, &openAtFn);
+  napi_set_named_property(env, exports, "openAt", openAtFn);
+  napi_value dupFdFn;
+  napi_create_function(env, "dupFd", NAPI_AUTO_LENGTH, DupFdExport, nullptr, &dupFdFn);
+  napi_set_named_property(env, exports, "dupFd", dupFdFn);
+  napi_value readDirFdFn;
+  napi_create_function(env, "readDirFd", NAPI_AUTO_LENGTH, ReadDirFdExport, nullptr, &readDirFdFn);
+  napi_set_named_property(env, exports, "readDirFd", readDirFdFn);
   return exports;
 }
 
