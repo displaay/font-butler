@@ -2,6 +2,12 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { Window } from 'happy-dom'
 import type { CatalogEntry, FamilyGroup, FontFaceInfo } from '../lib/types.ts'
+import {
+  PREVIEW_AUTO_RETRY_DELAY_MS,
+  PREVIEW_LOAD_TIMEOUT_MS,
+  setPreviewAutoRetryDelayForTests,
+  setPreviewLoadTimeoutForTests,
+} from '../lib/previewReady.ts'
 import { DEFAULT_TEXT_PREVIEW, textPreviewLanguage } from '../lib/textPreview.ts'
 
 const dom = new Window({
@@ -222,6 +228,44 @@ test('the language menu replaces the shared sample with that pangram', async () 
     assert.match(textPreviewLanguage('fr').text, /whisky/)
     assert.equal(host.querySelector('[data-sample-language-menu]'), null)
   } finally {
+    await unmount()
+  }
+})
+
+test('a failed preview font shows retry instead of a fallback specimen', async () => {
+  setPreviewLoadTimeoutForTests(20)
+  setPreviewAutoRetryDelayForTests(0)
+  const family = 'fc-text-preview-failed'
+  const fonts = {
+    check: () => false,
+    load: () => Promise.resolve([]),
+    ready: Promise.resolve(),
+    addEventListener() {},
+    removeEventListener() {},
+    forEach(callback: (face: { family: string; weight: number; style: string; status: string }) => void) {
+      callback({ family, weight: 400, style: 'normal', status: 'error' })
+    },
+  }
+  Object.defineProperty(document, 'fonts', { configurable: true, value: fonts })
+  const { TextSampleField } = await import('./TextSampleField.tsx')
+  const { host, unmount } = await mount(
+    createElement(TextSampleField, {
+      label: 'Broken',
+      family,
+      size: 4,
+      value: DEFAULT_TEXT_PREVIEW,
+      onChange: () => {},
+    }),
+  )
+  try {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 80))
+    })
+    assert.equal(host.querySelector('textarea'), null)
+    assert.match(host.textContent ?? '', /Preview failed/)
+  } finally {
+    setPreviewLoadTimeoutForTests(PREVIEW_LOAD_TIMEOUT_MS)
+    setPreviewAutoRetryDelayForTests(PREVIEW_AUTO_RETRY_DELAY_MS)
     await unmount()
   }
 })
