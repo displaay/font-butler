@@ -78,7 +78,7 @@ export const ANNOUNCEMENTS: Announcement[] = [
   {
     id: 'whats-new',
     sinceVersion: '0.4.0',
-    title: WHATS_NEW_PAGES[0]!.title,
+    title: "What's new",
     body: WHATS_NEW_PAGES[0]!.body,
     celebrate: true,
     showWhen: 'upgrade',
