@@ -2120,7 +2120,7 @@ function AppShell() {
     function onKeyDown(event: KeyboardEvent) {
       if (renameEntry) return
       if (document.querySelector('[role="dialog"]')) return
-      const action = shortcutAction(event)
+      const action = shortcutAction(event, { suspended: compareOpenRef.current })
       if (!action) return
       if (action === 'collapse') {
         if (!inspectSelection) return

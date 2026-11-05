@@ -65,10 +65,14 @@ test('font preview query tokens are bound to path and which', () => {
     ),
     false,
   )
-  const compare = signFontAccess(secret, { kind: 'compare-font', path: '/tmp/Loose.otf' }, now)
+  const compare = signFontAccess(secret, { kind: 'compare-font', path: '/tmp/Loose.otf', face: 0 }, now)
   assert.equal(
-    verifyFontPreviewQuery(secret, '/api/compare-font', { ...compare, path: '/tmp/Loose.otf' }, now),
+    verifyFontPreviewQuery(secret, '/api/compare-font', { ...compare, path: '/tmp/Loose.otf', face: '0' }, now),
     true,
+  )
+  assert.equal(
+    verifyFontPreviewQuery(secret, '/api/compare-font', { ...compare, path: '/tmp/Loose.otf', face: '1' }, now),
+    false,
   )
   assert.equal(
     verifyFontPreviewQuery(secret, '/api/compare-font', { ...compare, path: '/tmp/Other.otf' }, now),

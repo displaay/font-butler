@@ -40,6 +40,7 @@ import {
   destinationChoices,
   familyNamePromptScript,
   finderInstallIssues,
+  finderCompareArgv,
   FINDER_COMPARE,
   FINDER_INSTALL_AS,
   FINDER_LINK_TO,
@@ -2577,6 +2578,12 @@ if (launchMode === 'quit') {
       void retryPackagedBootstrap()
       return
     }
+    const comparePaths = finderCompareArgv(argv)
+    if (comparePaths) {
+      sendWhenReady('finder-compare', { paths: comparePaths })
+      showMainWindow()
+      return
+    }
     const extra = argv.filter((arg) => /\.(ttf|otf|ttc|otc|woff2?)$/i.test(arg))
     extra.forEach((filePath) => {
       void openFont(filePath)
@@ -2594,8 +2601,13 @@ if (launchMode === 'quit') {
   })
 
   // A font-butler URL is not an install. Any page could open one.
-  app.on('open-url', (event) => {
+  // Compare is the only URL this process accepts.
+  app.on('open-url', (event, url) => {
     event.preventDefault()
+    const comparePaths = typeof url === 'string' ? finderCompareArgv([url]) : null
+    if (!comparePaths) return
+    sendWhenReady('finder-compare', { paths: comparePaths })
+    showMainWindow()
   })
 
   app.on('before-quit', (event) => {
@@ -2910,8 +2922,17 @@ if (launchMode === 'quit') {
     } catch (error) {
       console.error('Finder Sync registration was not refreshed', error)
     }
-    const fromArgv = process.argv.filter((arg) => /\.(ttf|otf|ttc|otc|woff2?)$/i.test(arg))
+    const comparePaths = finderCompareArgv(process.argv)
+    const compareFiles = new Set(comparePaths ?? [])
+    if (comparePaths) {
+      sendWhenReady('finder-compare', { paths: comparePaths })
+      showMainWindow()
+    }
+    const fromArgv = process.argv.filter(
+      (arg) => /\.(ttf|otf|ttc|otc|woff2?)$/i.test(arg) && !compareFiles.has(arg),
+    )
     for (const filePath of [...queuedFiles, ...fromArgv]) {
+      if (compareFiles.has(filePath)) continue
       await openFont(filePath)
     }
     queuedFiles.length = 0

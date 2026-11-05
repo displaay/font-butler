@@ -174,6 +174,13 @@ function isLikelyLaunchArg(arg) {
   return false
 }
 
+/** Compare argv or a compare URL. Install flags and install URLs are not compare launches. */
+export function finderCompareArgv(argv) {
+  const parsed = parseFinderLaunch(argv)
+  if (!parsed || parsed.action !== FINDER_COMPARE) return null
+  return parsed.paths
+}
+
 export function parseFinderLaunch(argv) {
   const args = Array.isArray(argv) ? argv : []
   let action = null

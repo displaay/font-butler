@@ -180,6 +180,25 @@ function fvarInstancePostScriptNameIds(buf: Buffer): number[] {
   return ids
 }
 
+/**
+ * One face as a standalone sfnt. A collection's tables are absolute, so the
+ * browser cannot select a member from the whole TTC/OTC.
+ */
+export function standaloneSfntFace(file: Buffer, faceIndex: number): { buffer: Buffer; collection: boolean } {
+  if (!Number.isInteger(faceIndex) || faceIndex < 0) {
+    throw new Error('That font face is not in the file.')
+  }
+  const collection = file.length >= 12 && file.readUInt32BE(0) === TTC_TAG
+  if (!collection) {
+    if (faceIndex !== 0) throw new Error('That font face is not in the file.')
+    return { buffer: file, collection: false }
+  }
+  const starts = collectionFaceStarts(file)
+  if (faceIndex >= starts.length) throw new Error('That font face is not in the file.')
+  const parsed = parseSfntAt(file, starts[faceIndex] ?? 0)
+  return { buffer: packSfnt(parsed.sfntVersion, parsed.tables), collection: true }
+}
+
 function faceStart(file: Buffer, faceIndex: number): number {
   const starts = collectionFaceStarts(file)
   return starts[faceIndex] ?? starts[0] ?? 0

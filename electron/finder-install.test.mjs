@@ -32,6 +32,7 @@ import {
   groupIdsByFormat,
   idsEligibleForFinderInstall,
   isInstallableFontPath,
+  finderCompareArgv,
   parseFinderInstallUrl,
   parseFinderLaunch,
   suggestedFamilyName,
@@ -292,6 +293,26 @@ test('finder services addon compile is skipped off macOS', () => {
   }
   assert.equal(result.ok, false)
   assert.equal(result.skipped, true)
+})
+
+test('compare launch flags and URLs do not fall through to install', () => {
+  assert.deepEqual(finderCompareArgv(['electron', '.', FINDER_COMPARE_FLAG, '/Fonts/A.otf', '/Fonts/B.ttf']), [
+    '/Fonts/A.otf',
+    '/Fonts/B.ttf',
+  ])
+  const url = finderInstallUrl(FINDER_COMPARE, ['/Fonts/Loose.otf'])
+  assert.deepEqual(finderCompareArgv(['Cuttler', url]), ['/Fonts/Loose.otf'])
+  assert.equal(finderCompareArgv(['Cuttler', finderInstallUrl(FINDER_INSTALL, ['/Fonts/A.otf'])]), null)
+  assert.equal(finderCompareArgv(['Cuttler', FINDER_INSTALL_FLAG, '/Fonts/A.otf']), null)
+  const main = readRepo('electron/main.mjs')
+  assert.match(main, /finderCompareArgv/)
+  const openUrl = main.slice(main.indexOf("app.on('open-url'"), main.indexOf("app.on('before-quit'"))
+  assert.match(openUrl, /preventDefault/)
+  assert.match(openUrl, /finderCompareArgv/)
+  assert.doesNotMatch(openUrl, /openFont|enqueueFinderJob/)
+  const second = main.slice(main.indexOf("app.on('second-instance'"), main.indexOf("app.on('open-file'"))
+  assert.match(second, /finderCompareArgv/)
+  assert.ok(second.indexOf('finder-compare') < second.indexOf('openFont'))
 })
 
 test('canceling Compare Fonts does not apply the library selection', () => {

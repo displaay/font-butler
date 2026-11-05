@@ -24,6 +24,7 @@ import { catalogEvent } from '../core/service-helpers.ts'
 import { closeFontAnalysisWorker } from '../core/font-analysis.ts'
 import { closeAllWatchers } from '../core/watch.ts'
 import type { AppSettings, ProjectSet } from '../core/types.ts'
+import { compareFaceIndex } from '../shared/font-access.ts'
 
 function mimeForStatic(filePath: string): string {
   switch (path.extname(filePath).toLowerCase()) {
@@ -240,6 +241,7 @@ app.use('/api/*', async (c, next) => {
         which: c.req.query('which'),
         revision: c.req.query('revision'),
         path: c.req.query('path'),
+        face: c.req.query('face'),
       },
     })
   ) {
@@ -1479,8 +1481,10 @@ app.post('/api/compare/inspect', async (c) => {
 app.get('/api/compare-font', (c) => {
   const filePath = c.req.query('path')
   if (!filePath) return c.json({ error: 'Missing path' }, 400)
+  const faceIndex = compareFaceIndex(c.req.query('face'))
+  if (faceIndex === null) return c.json({ error: 'Missing face' }, 400)
   try {
-    const file = service.compareFontBytes(filePath)
+    const file = service.compareFontBytes(filePath, faceIndex)
     return new Response(file.buffer, {
       headers: {
         'Content-Type': file.mime,

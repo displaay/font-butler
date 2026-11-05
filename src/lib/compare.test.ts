@@ -7,12 +7,16 @@ import {
   emptyCompare,
   familyIdForName,
   replaceCompareFamilies,
+  moveCompareEntry,
+  removeCompareEntry,
   replaceCompareFiles,
   resolvedCompareFace,
+  shownCompareFamilyIds,
   type CompareFace,
   type CompareFamily,
 } from '../../shared/compare.ts'
-import { compareDropPaths } from './compare.ts'
+import { compareDropPaths, comparePathForEntry } from './compare.ts'
+import type { CatalogEntry } from './types.ts'
 
 function face(filePath: string, styleName: string, weight: number): CompareFace {
   return {
@@ -104,6 +108,70 @@ test('two files that are not catalog entries become two comparison rows', () => 
     [alpha.filePath, beta.filePath],
   )
   assert.equal(model.entries.every((entry) => !entry.familyId.startsWith('catalog:')), true)
+})
+
+test('moving a row downward inserts it before the target', () => {
+  const entries = ['a', 'b', 'c'].map((id, tint) => ({
+    id,
+    familyId: `family:${id}`,
+    styleId: null,
+    tint,
+  }))
+  const model = { families: [], entries }
+  assert.deepEqual(
+    moveCompareEntry(model, 'a', 'c').entries.map((entry) => entry.id),
+    ['b', 'a', 'c'],
+  )
+  assert.deepEqual(
+    moveCompareEntry(model, 'c', 'a').entries.map((entry) => entry.id),
+    ['c', 'a', 'b'],
+  )
+})
+
+test('a family checkmark follows visible rows', () => {
+  const added = addCompareFamilies(emptyCompare(), [family('Acme', [face('/Fonts/Acme.ttf', 'Regular', 400)])])
+  const removed = removeCompareEntry(added, added.entries[0]!.id)
+  assert.equal(removed.families.length, 1)
+  assert.equal(shownCompareFamilyIds(removed).size, 0)
+  assert.equal(shownCompareFamilyIds(added).has(familyIdForName('Acme')), true)
+})
+
+test('compare uses an Adobe copy when the source is missing', () => {
+  const entry = {
+    status: 'installed',
+    sourcePath: '/Fonts/Missing.otf',
+    sourcePresent: false,
+    installations: [
+      {
+        destinationId: 'adobe-shared',
+        path: '/Adobe/Fonts/Acme.otf',
+        verification: 'file-present',
+      },
+    ],
+  } as CatalogEntry
+  assert.equal(comparePathForEntry(entry), '/Adobe/Fonts/Acme.otf')
+  const parked = {
+    status: 'deactivated',
+    sourcePath: '/Fonts/Missing.otf',
+    sourcePresent: false,
+    installations: [
+      {
+        destinationId: 'adobe-shared',
+        path: '/Adobe/Fonts/Acme.otf',
+        parkedPath: '/Library/Fonts/.parked/Acme.otf',
+        verification: 'unavailable',
+      },
+    ],
+  } as CatalogEntry
+  assert.equal(comparePathForEntry(parked), '/Library/Fonts/.parked/Acme.otf')
+  assert.equal(
+    comparePathForEntry({
+      status: 'uninstalled',
+      sourcePath: '/Fonts/Missing.otf',
+      sourcePresent: false,
+    } as CatalogEntry),
+    null,
+  )
 })
 
 test('compare drop paths keep web fonts and folders', () => {

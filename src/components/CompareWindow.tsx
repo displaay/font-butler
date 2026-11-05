@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Plus, X } from 'lucide-react'
 import { getApiToken } from '@/lib/api'
-import { signFontAccess, withFontAccessQuery } from '@/lib/font-access'
+import { FONT_ACCESS_TTL_MS, signFontAccess, withFontAccessQuery } from '@/lib/font-access'
 import {
   COMPARE_LIMIT,
   COMPARE_PLACEHOLDER,
@@ -14,6 +14,7 @@ import {
   familyIdForName,
   isCompareFull,
   resolvedCompareFace,
+  shownCompareFamilyIds,
   type CompareFamily,
   type CompareLayout,
   type CompareModel,
@@ -68,8 +69,16 @@ export function CompareWindow({
   const [adding, setAdding] = useState(false)
   const [optionsOpen, setOptionsOpen] = useState(false)
   const [dragId, setDragId] = useState<string | null>(null)
+  const [fontAccessEpoch, setFontAccessEpoch] = useState(0)
   const sample = text.trim() ? text : COMPARE_PLACEHOLDER
   const full = isCompareFull(model)
+  const shownFamilies = shownCompareFamilyIds(model)
+
+  useEffect(() => {
+    const refreshIn = Math.max(1_000, FONT_ACCESS_TTL_MS - 5 * 60 * 1000)
+    const timer = window.setTimeout(() => setFontAccessEpoch((epoch) => epoch + 1), refreshIn)
+    return () => window.clearTimeout(timer)
+  }, [fontAccessEpoch, model.families, model.entries])
 
   useEffect(() => {
     const style = document.createElement('style')
@@ -82,9 +91,16 @@ export function CompareWindow({
         const rules: string[] = []
         for (const family of model.families) {
           for (const face of family.faces) {
-            const access = await signFontAccess(secret, { kind: 'compare-font', path: face.filePath })
+            const access = await signFontAccess(secret, {
+              kind: 'compare-font',
+              path: face.filePath,
+              face: face.faceIndex,
+            })
             const url = withFontAccessQuery(
-              `/api/compare-font?${new URLSearchParams({ path: face.filePath })}`,
+              `/api/compare-font?${new URLSearchParams({
+                path: face.filePath,
+                face: String(face.faceIndex),
+              })}`,
               access,
             )
             const weight = face.isVariable ? '1 1000' : String(face.weight || 400)
@@ -103,7 +119,7 @@ export function CompareWindow({
       cancelled = true
       style.remove()
     }
-  }, [model.families])
+  }, [model.families, model.entries, fontAccessEpoch])
 
   return (
     <div className="fixed inset-0 z-30 flex flex-col bg-background text-foreground">
@@ -115,7 +131,7 @@ export function CompareWindow({
           {adding ? (
             <AddFamilies
               libraryFamilies={libraryFamilies}
-              model={model}
+              shownFamilies={shownFamilies}
               full={full}
               onAdd={(paths) => onAddFamilies(paths)}
               onRemove={onRemoveFamily}
@@ -437,20 +453,19 @@ function OverlaySamples({
 
 function AddFamilies({
   libraryFamilies,
-  model,
+  shownFamilies,
   full,
   onAdd,
   onRemove,
 }: {
   libraryFamilies: CompareLibraryFamily[]
-  model: CompareModel
+  shownFamilies: Set<string>
   full: boolean
   onAdd: (paths: string[]) => void
   onRemove: (familyId: string) => void
 }) {
   const [query, setQuery] = useState('')
   const listed = useMemo(() => compareCandidates(libraryFamilies, query), [libraryFamilies, query])
-  const compared = new Set(model.families.map((family) => family.name.toLocaleLowerCase()))
   return (
     <div className="absolute top-full left-0 z-20 mt-1 flex h-96 w-80 flex-col rounded-md border bg-background shadow-md">
       <div className="p-2">
@@ -467,7 +482,7 @@ function AddFamilies({
           <p className="px-3 py-6 text-center text-sm text-muted-foreground">No Families Found</p>
         ) : (
           listed.map((family) => {
-            const present = compared.has(family.name.toLocaleLowerCase())
+            const present = shownFamilies.has(familyIdForName(family.name))
             const disabled = full && !present
             return (
               <button

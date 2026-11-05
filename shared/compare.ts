@@ -272,6 +272,11 @@ export function compareAnotherStyle(model: CompareModel, entryId: string): Compa
   return withEntry(model, family.id, nextFace.id)
 }
 
+/** Family ids that still have a visible row. Leftover family metadata does not count. */
+export function shownCompareFamilyIds(model: CompareModel): Set<string> {
+  return new Set(model.entries.map((entry) => entry.familyId))
+}
+
 export function moveCompareEntry(model: CompareModel, entryId: string, beforeId: string): CompareModel {
   if (entryId === beforeId) return model
   const entries = [...model.entries]
@@ -280,6 +285,7 @@ export function moveCompareEntry(model: CompareModel, entryId: string, beforeId:
   if (from < 0 || to < 0) return model
   const [item] = entries.splice(from, 1)
   if (!item) return model
-  entries.splice(to, 0, item)
+  // Removing an earlier row shifts the target left. Insert before that row.
+  entries.splice(from < to ? to - 1 : to, 0, item)
   return { ...model, entries }
 }

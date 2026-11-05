@@ -27,10 +27,11 @@ export {
   resolvedCompareFace,
   setCompareStyle,
   setCompareTint,
+  shownCompareFamilyIds,
 } from '../../shared/compare.ts'
 export type { CompareEntry, CompareFace, CompareFamily, CompareLayout, CompareModel } from '../../shared/compare.ts'
 
-/** The file Compare should read for a library font. Missing sources are skipped. */
+/** The file Compare should read for a library font. A missing source is not used when a copy exists. */
 export function comparePathForEntry(entry: CatalogEntry): string | null {
   const installed = entry.installedPath?.trim() || ''
   const disabled = entry.disabledPath?.trim() || ''
@@ -38,7 +39,13 @@ export function comparePathForEntry(entry: CatalogEntry): string | null {
   if (entry.status === 'deactivated' && disabled) return disabled
   if ((entry.status === 'installed' || entry.status === 'outdated') && installed) return installed
   if (source && entry.sourcePresent !== false) return source
-  return installed || disabled || source || null
+  const copies = entry.installations ?? []
+  const live = copies.find((copy) => copy.verification === 'file-present' && copy.path?.trim() && !copy.parkedPath)
+  if (live?.path) return live.path.trim()
+  const parked = copies.find((copy) => copy.parkedPath?.trim())
+  if (parked?.parkedPath) return parked.parkedPath.trim()
+  if (disabled) return disabled
+  return null
 }
 
 export function compareCssFamily(faceId: string): string {

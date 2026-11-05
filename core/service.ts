@@ -241,7 +241,7 @@ import {
   isCleanupEligible,
   setUpdateHold,
 } from './state.ts'
-import { postscriptPreview } from './rename.ts'
+import { postscriptPreview, standaloneSfntFace } from './rename.ts'
 import { revealInFileManager } from './reveal.ts'
 import { loadSettings, saveSettings } from './settings.ts'
 import { isAppIconStyle } from '../shared/appIcon.ts'
@@ -2531,7 +2531,7 @@ export class FontButlerService {
     return result
   }
 
-  compareFontBytes(filePath: string): { buffer: Buffer; mime: string; filename: string } {
+  compareFontBytes(filePath: string, faceIndex = 0): { buffer: Buffer; mime: string; filename: string } {
     let resolved: string
     try {
       resolved = fs.realpathSync(path.resolve(filePath))
@@ -2544,10 +2544,19 @@ export class FontButlerService {
     if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
       throw new Error('Font file is missing.')
     }
+    let face: { buffer: Buffer; collection: boolean }
+    try {
+      face = standaloneSfntFace(fs.readFileSync(resolved), faceIndex)
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : 'That font face is not in the file.')
+    }
+    const extension = face.collection && face.buffer.length >= 4 && face.buffer.readUInt32BE(0) === 0x4f54544f ? '.otf' : '.ttf'
     return {
-      buffer: fs.readFileSync(resolved),
-      mime: mimeForFont(resolved),
-      filename: path.basename(resolved),
+      buffer: face.buffer,
+      mime: face.collection ? (extension === '.otf' ? 'font/otf' : 'font/ttf') : mimeForFont(resolved),
+      filename: face.collection
+        ? `${path.basename(resolved, path.extname(resolved))}-${faceIndex}${extension}`
+        : path.basename(resolved),
     }
   }
 
