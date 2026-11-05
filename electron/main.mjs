@@ -40,6 +40,7 @@ import {
   destinationChoices,
   familyNamePromptScript,
   finderInstallIssues,
+  FINDER_COMPARE,
   FINDER_INSTALL_AS,
   FINDER_LINK_TO,
   formatFinderInstallIssues,
@@ -1100,33 +1101,37 @@ function closeFinderHandles(handles) {
   }
 }
 
+function finderActionTitle(action) {
+  if (action === FINDER_COMPARE) return 'Compare'
+  return finderInstallTitle(action)
+}
+
 async function enqueueValidatedFinderInstall(action, filePaths) {
+  const title = finderActionTitle(action)
   let checked
   try {
     checked = await scanFinderSyncSelection(filePaths)
   } catch (error) {
     console.error('Finder Sync selection was not checked', error)
-    dialog.showErrorBox(finderInstallTitle(action), 'Those files could not be checked.')
+    dialog.showErrorBox(title, 'Those files could not be checked.')
     showMainWindow()
     return false
   }
   if (checked.limitError) {
     closeFinderHandles(checked.handles)
-    dialog.showErrorBox(finderInstallTitle(action), checked.limitError)
+    dialog.showErrorBox(title, checked.limitError)
     showMainWindow()
     return false
   }
   if (!Array.isArray(checked.paths) || checked.paths.length === 0) {
     closeFinderHandles(checked.handles)
-    dialog.showErrorBox(
-      finderInstallTitle(action),
-      formatFinderSyncRejections(checked.rejected) || 'No installable font files in that selection.',
-    )
+    const empty = action === FINDER_COMPARE ? 'No font files in that selection.' : 'No installable font files in that selection.'
+    dialog.showErrorBox(title, formatFinderSyncRejections(checked.rejected) || empty)
     showMainWindow()
     return false
   }
   if (checked.rejected?.length) {
-    dialog.showErrorBox(finderInstallTitle(action), formatFinderSyncRejections(checked.rejected))
+    dialog.showErrorBox(title, formatFinderSyncRejections(checked.rejected))
   }
   const handles = Array.isArray(checked.handles) ? checked.handles : []
   enqueueFinderJob(action, checked.paths, {
@@ -1387,6 +1392,11 @@ async function promptFinderInstallAs(entries) {
 }
 
 async function runFinderJob(action, filePaths, job) {
+  if (action === FINDER_COMPARE) {
+    sendWhenReady('finder-compare', { paths: filePaths })
+    showMainWindow()
+    return
+  }
   if (action === FINDER_LINK_TO) {
     runFinderLinkTo(filePaths)
     return
@@ -2385,6 +2395,18 @@ function buildAppMenu() {
       void openDocumentFromMenu()
     },
   }
+  const compareFontsItem = {
+    label: 'Compare Fonts…',
+    click: () => {
+      void pickCompareFonts().then((paths) => {
+        if (!paths || paths.length === 0) {
+          sendWhenReady('open-compare')
+          return
+        }
+        sendWhenReady('finder-compare', { paths })
+      })
+    },
+  }
   return Menu.buildFromTemplate([
     ...(process.platform === 'darwin'
       ? [
@@ -2420,6 +2442,7 @@ function buildAppMenu() {
             label: 'File',
             submenu: [
               openDocumentItem,
+              compareFontsItem,
               { type: 'separator' },
               {
                 label: 'Check for Updates…',
@@ -2435,12 +2458,25 @@ function buildAppMenu() {
       ? [
           {
             label: 'File',
-            submenu: [openDocumentItem, { type: 'separator' }, { role: 'close' }],
+            submenu: [openDocumentItem, compareFontsItem, { type: 'separator' }, { role: 'close' }],
           },
         ]
       : []),
     { role: 'editMenu' },
     { role: 'viewMenu' },
+    {
+      label: 'Fonts',
+      submenu: [
+        {
+          label: 'Compare',
+          accelerator: 'Alt+CommandOrControl+C',
+          click: () => {
+            sendWhenReady('open-compare')
+            showMainWindow()
+          },
+        },
+      ],
+    },
     {
       label: 'Font cache',
       submenu: [
@@ -3026,6 +3062,19 @@ ipcMain.handle('app-update-install-state', () => appUpdateInstaller().status())
 ipcMain.handle('request-notifications', () => electronNotificationPermission(Notification))
 
 ipcMain.handle('pick-document', () => pickDocumentPath())
+
+async function pickCompareFonts() {
+  const options = {
+    title: 'Compare Fonts',
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: 'Fonts', extensions: ['ttf', 'otf', 'ttc', 'otc', 'woff', 'woff2'] }],
+  }
+  const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options)
+  if (result.canceled) return null
+  return result.filePaths
+}
+
+ipcMain.handle('pick-compare-fonts', () => pickCompareFonts())
 
 ipcMain.handle('pick-file', async () => {
   const options = {

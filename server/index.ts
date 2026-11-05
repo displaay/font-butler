@@ -126,6 +126,7 @@ const CATALOG_READ_PATHS = new Set([
 function isFontFileReadPath(pathname: string): boolean {
   return (
     pathname.startsWith('/api/font-file/') ||
+    pathname === '/api/compare-font' ||
     pathname.startsWith('/api/preview-meta/') ||
     pathname.startsWith('/api/preview-glyph/')
   )
@@ -1466,6 +1467,29 @@ app.get('/api/font-file/:id', async (c) => {
       { error: error instanceof Error ? error.message : 'Missing font' },
       404,
     )
+  }
+})
+
+app.post('/api/compare/inspect', async (c) => {
+  const body = await c.req.json<{ paths?: string[] }>()
+  const paths = Array.isArray(body.paths) ? body.paths.filter((item) => typeof item === 'string') : []
+  return c.json(service.inspectComparePaths(paths))
+})
+
+app.get('/api/compare-font', (c) => {
+  const filePath = c.req.query('path')
+  if (!filePath) return c.json({ error: 'Missing path' }, 400)
+  try {
+    const file = service.compareFontBytes(filePath)
+    return new Response(file.buffer, {
+      headers: {
+        'Content-Type': file.mime,
+        'Cache-Control': 'private, max-age=3600',
+        'Content-Disposition': contentDisposition(file.filename),
+      },
+    })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : 'Missing font' }, 404)
   }
 })
 

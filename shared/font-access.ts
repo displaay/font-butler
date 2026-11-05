@@ -13,7 +13,13 @@ export type SystemFontAccess = {
   path: string
 }
 
-export type FontAccessPayload = FontFileAccess | SystemFontAccess
+/** A font opened in Compare. The path must also be on the server allowlist. */
+export type CompareFontAccess = {
+  kind: 'compare-font'
+  path: string
+}
+
+export type FontAccessPayload = FontFileAccess | SystemFontAccess | CompareFontAccess
 
 export type FontAccessQuery = {
   exp?: string
@@ -24,12 +30,19 @@ export type FontAccessQuery = {
 }
 
 export function isFontPreviewPath(pathname: string): boolean {
-  return pathname === '/api/system-font' || pathname.startsWith('/api/font-file/')
+  return (
+    pathname === '/api/system-font' ||
+    pathname === '/api/compare-font' ||
+    pathname.startsWith('/api/font-file/')
+  )
 }
 
 export function fontAccessMessage(payload: FontAccessPayload, exp: string): string {
   if (payload.kind === 'font-file') {
     return `v1\nfont-file\n${payload.id}\n${payload.which}\n${payload.revision}\n${exp}`
+  }
+  if (payload.kind === 'compare-font') {
+    return `v1\ncompare-font\n${payload.path}\n${exp}`
   }
   return `v1\nsystem-font\n${payload.path}\n${exp}`
 }
@@ -48,10 +61,10 @@ export function fontAccessPayloadFromRequest(
       revision: query.revision?.trim() || '',
     }
   }
-  if (pathname === '/api/system-font') {
+  if (pathname === '/api/system-font' || pathname === '/api/compare-font') {
     const filePath = query.path?.trim()
     if (!filePath) return null
-    return { kind: 'system-font', path: filePath }
+    return { kind: pathname === '/api/compare-font' ? 'compare-font' : 'system-font', path: filePath }
   }
   return null
 }

@@ -4,9 +4,11 @@ const FINDER_PROTOCOLS = new Set([FINDER_PROTOCOL, FINDER_TEST_PROTOCOL])
 export const FINDER_INSTALL = 'install'
 export const FINDER_INSTALL_AS = 'install-as'
 export const FINDER_LINK_TO = 'link-to'
+export const FINDER_COMPARE = 'compare'
 export const FINDER_INSTALL_FLAG = '--finder-install'
 export const FINDER_INSTALL_AS_FLAG = '--finder-install-as'
 export const FINDER_LINK_TO_FLAG = '--finder-link-to'
+export const FINDER_COMPARE_FLAG = '--finder-compare'
 export const FINDER_ACTIONS = [FINDER_INSTALL, FINDER_INSTALL_AS, FINDER_LINK_TO]
 
 export const INSTALLABLE_FONT_EXTENSIONS = ['ttf', 'otf', 'ttc', 'otc']
@@ -37,8 +39,12 @@ export function isFinderLinkToAction(value) {
   return value === FINDER_LINK_TO
 }
 
+export function isFinderCompareAction(value) {
+  return value === FINDER_COMPARE
+}
+
 export function isFinderAction(value) {
-  return isFinderInstallAction(value) || isFinderLinkToAction(value)
+  return isFinderInstallAction(value) || isFinderLinkToAction(value) || isFinderCompareAction(value)
 }
 
 export function isInstallableFontPath(filePath) {
@@ -183,6 +189,10 @@ export function parseFinderLaunch(argv) {
     }
     if (arg === FINDER_LINK_TO_FLAG) {
       action = FINDER_LINK_TO
+      continue
+    }
+    if (arg === FINDER_COMPARE_FLAG) {
+      action = FINDER_COMPARE
       continue
     }
     if (

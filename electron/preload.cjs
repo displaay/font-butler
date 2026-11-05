@@ -107,6 +107,17 @@ contextBridge.exposeInMainWorld('fontButlerDesktop', {
     ipcRenderer.on('finder-link-to', listener)
     return () => ipcRenderer.removeListener('finder-link-to', listener)
   },
+  onOpenCompare: (callback) => {
+    const listener = () => callback()
+    ipcRenderer.on('open-compare', listener)
+    return () => ipcRenderer.removeListener('open-compare', listener)
+  },
+  onFinderCompare: (callback) => {
+    const listener = (_event, payload) => callback(payload)
+    ipcRenderer.on('finder-compare', listener)
+    return () => ipcRenderer.removeListener('finder-compare', listener)
+  },
+  pickCompareFonts: () => ipcRenderer.invoke('pick-compare-fonts'),
   onExternalFontOpen: (callback) => {
     const listener = (payload) => callback(payload)
     externalFontOpenListeners.add(listener)

@@ -10,6 +10,8 @@ import {
   FINDER_INSTALL_AS_MESSAGE,
   FINDER_INSTALL_FLAG,
   FINDER_INSTALL_MESSAGE,
+  FINDER_COMPARE,
+  FINDER_COMPARE_FLAG,
   FINDER_LINK_TO,
   FINDER_LINK_TO_FLAG,
   FINDER_LINK_TO_MESSAGE,
@@ -120,6 +122,16 @@ test('parseFinderLaunch reads install flags, URLs, and font paths', () => {
   assert.deepEqual(parseFinderInstallUrl(linkUrl), {
     action: FINDER_LINK_TO,
     paths: ['/Fonts/A.woff'],
+  })
+  const compareUrl = finderInstallUrl(FINDER_COMPARE, ['/Fonts/Loose.otf', '/Fonts/Other.woff2'])
+  assert.match(compareUrl, new RegExp(`^${FINDER_PROTOCOL}://finder/compare`))
+  assert.deepEqual(parseFinderInstallUrl(compareUrl), {
+    action: FINDER_COMPARE,
+    paths: ['/Fonts/Loose.otf', '/Fonts/Other.woff2'],
+  })
+  assert.deepEqual(parseFinderLaunch(['electron', '.', FINDER_COMPARE_FLAG, '/Fonts/Loose.otf']), {
+    action: FINDER_COMPARE,
+    paths: ['/Fonts/Loose.otf'],
   })
 })
 

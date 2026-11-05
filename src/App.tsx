@@ -45,6 +45,7 @@ import { RenameDialog } from '@/components/RenameDialog'
 import { ReplaceFormatDialog } from '@/components/ReplaceFormatDialog'
 import { RetailCollisionDialog } from '@/components/RetailCollisionDialog'
 import { LatinPreviewProvider } from '@/components/AaPreview'
+import { CompareWindow } from '@/components/CompareWindow'
 import { FileDropSurface } from '@/components/FileDropSurface'
 import { SettingsDialog } from '@/components/SettingsDialog'
 import { logoutNoticeAction } from '@/lib/logout-notice'
@@ -93,6 +94,23 @@ import {
   unreadOperationIdsToMark,
 } from '@/lib/activityInbox'
 import { appUpdateInstallFromMain } from '@/lib/app-update'
+import {
+  addDroppedFiles,
+  compareDropPaths,
+  comparePathForEntry,
+  COMPARE_DEFAULT_SIZE,
+  clampCompareSize,
+  emptyCompare,
+  removeCompareEntry,
+  removeCompareFamily,
+  replaceCompareFamilies,
+  setCompareStyle,
+  setCompareTint,
+  compareAnotherStyle,
+  moveCompareEntry,
+  type CompareLayout,
+  type CompareModel,
+} from '@/lib/compare'
 import { desktopPathForFile, hasInsetTrafficLights } from '@/lib/desktop'
 import {
   collectDropPayload,
@@ -242,6 +260,15 @@ function AppShell() {
   const [selectedFamily, setSelectedFamily] = useState<string | null>(null)
   const [selectedSystem, setSelectedSystem] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
+  const [compareOpen, setCompareOpen] = useState(false)
+  const [compareModel, setCompareModel] = useState<CompareModel>(emptyCompare)
+  const [compareLayout, setCompareLayout] = useState<CompareLayout>('stacked')
+  const [compareText, setCompareText] = useState('')
+  const [compareSize, setCompareSize] = useState(COMPARE_DEFAULT_SIZE)
+  const compareOpenRef = useRef(false)
+  compareOpenRef.current = compareOpen
+  const openCompareFromMenuRef = useRef<() => void>(() => {})
+  const openComparePathsRef = useRef<(paths: string[]) => void>(() => {})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   // Font-file work is queued; busy disables duplicate action clicks while dialogs stay usable.
@@ -1026,6 +1053,19 @@ function AppShell() {
         setHighlightOperation(payload.operationId)
       }
     })
+    const stopOpenCompare = window.fontButlerDesktop?.onOpenCompare?.(() => {
+      openCompareFromMenuRef.current()
+    })
+    const stopFinderCompare = window.fontButlerDesktop?.onFinderCompare?.((payload) => {
+      const paths = Array.isArray(payload?.paths)
+        ? payload.paths.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+        : []
+      if (paths.length === 0) {
+        setCompareOpen(true)
+        return
+      }
+      openComparePathsRef.current(paths)
+    })
     const stopFinderLinkTo = window.fontButlerDesktop?.onFinderLinkTo?.((payload) => {
       const paths = Array.isArray(payload?.paths)
         ? payload.paths.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
@@ -1078,6 +1118,8 @@ function AppShell() {
       stopDesktop?.()
       stopReinstall?.()
       stopOpenTab?.()
+      stopOpenCompare?.()
+      stopFinderCompare?.()
       stopFinderLinkTo?.()
       stopExternalFontOpen?.()
       stopDocument?.()
@@ -1437,6 +1479,41 @@ function AppShell() {
     return map
   }, [familyTagAssignments])
   const catalogSelection = selectedCatalogGroups()
+  const compareLibraryFamilies = useMemo(
+    () =>
+      groupCatalog(entries)
+        .map((group) => ({
+          name: group.familyName,
+          paths: [
+            ...new Set(
+              group.entries
+                .map((entry) => comparePathForEntry(entry))
+                .filter((item): item is string => Boolean(item)),
+            ),
+          ],
+        }))
+        .filter((group) => group.paths.length > 0),
+    [entries],
+  )
+  openCompareFromMenuRef.current = () => {
+    if (tab !== 'system' && catalogSelection.length > 0) {
+      const paths = [
+        ...new Set(
+          catalogSelection.flatMap((group) =>
+            group.entries
+              .map((entry) => comparePathForEntry(entry))
+              .filter((item): item is string => Boolean(item)),
+          ),
+        ),
+      ]
+      void applyComparePaths(paths, catalogSelection.length > 1 ? 'replace' : 'add')
+      return
+    }
+    setCompareOpen(true)
+  }
+  openComparePathsRef.current = (paths) => {
+    void applyComparePaths(paths, paths.length > 1 ? 'replace' : 'add')
+  }
   const systemSelection = selectedSystemList()
   const catalogPlan = catalogBatchPlan(catalogSelection, adobeAvailable)
   const systemPlan = systemBatchPlan(systemSelection)
@@ -2200,9 +2277,62 @@ function AppShell() {
     }
   }
 
+  async function applyComparePaths(paths: string[], mode: 'add' | 'replace') {
+    const unique = [...new Set(paths.map((item) => item.trim()).filter(Boolean))]
+    if (unique.length === 0) {
+      setCompareOpen(true)
+      return
+    }
+    try {
+      const result = await api.inspectCompare(unique)
+      if (result.errors.length > 0) toast.error(result.errors.slice(0, 3).join('\n'))
+      setCompareModel((current) =>
+        mode === 'replace' ? replaceCompareFamilies(result.families) : addDroppedFiles(current, result.families),
+      )
+      setCompareOpen(true)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not compare those fonts')
+    }
+  }
+
+  async function openCompareFiles() {
+    const pick = window.fontButlerDesktop?.pickCompareFonts
+    if (!pick) {
+      toast.message('Choose font files from the Cuttler app.')
+      setCompareOpen(true)
+      return
+    }
+    const picked = await pick()
+    if (!picked || picked.length === 0) {
+      setCompareOpen(true)
+      return
+    }
+    await applyComparePaths(picked, picked.length > 1 ? 'replace' : 'add')
+  }
+
   async function handleDrop(dataTransfer: DataTransfer, projectId?: string) {
     if (fontDragRef.current || hasFontButlerEntries(dataTransfer)) {
       setDragging(false)
+      return
+    }
+    if (compareOpenRef.current) {
+      try {
+        const payload = await collectDropPayload(dataTransfer)
+        setDragging(false)
+        const paths = compareDropPaths({
+          paths: payload.paths,
+          folders: payload.folders,
+          files: payload.files.map((file) => ({ name: file.name, path: desktopPathForFile(file) })),
+        })
+        if (paths.length === 0) {
+          toast.message('Drop font files to compare them.')
+          return
+        }
+        await applyComparePaths(paths, 'add')
+      } catch (error) {
+        setDragging(false)
+        toast.error(error instanceof Error ? error.message : 'Could not compare those fonts')
+      }
       return
     }
     const targetProjectId = projectId ?? libraryProjectTarget()
@@ -2526,9 +2656,11 @@ function AppShell() {
         dragging={dragging}
         ignoreRef={fontDragRef}
         label={
-          tab === 'library' && selectedProject && !selectedSmartProject
-            ? `Drop fonts or folders to add them to ${selectedProject.name}`
-            : 'Drop fonts or folders to add them'
+          compareOpen
+            ? 'Drop font files to compare them'
+            : tab === 'library' && selectedProject && !selectedSmartProject
+              ? `Drop fonts or folders to add them to ${selectedProject.name}`
+              : 'Drop fonts or folders to add them'
         }
         onDraggingChange={setDragging}
         onDrop={(dataTransfer) => {
@@ -3107,6 +3239,20 @@ function AppShell() {
                           onAddToProject={(id, ids) => void addFontsToProject(id, ids)}
                           onRemoveFromProject={(id, ids) => void removeFontsFromProject(id, ids)}
                           onCreateProjectFromCard={(ids, familyNames) => openNewProject(ids, familyNames)}
+                          compareLabel={useBatch ? 'Compare' : 'Add to Compare'}
+                          onCompare={() => {
+                            const groups = useBatch ? catalogSelection : [group]
+                            const paths = [
+                              ...new Set(
+                                groups.flatMap((item) =>
+                                  item.entries
+                                    .map((entry) => comparePathForEntry(entry))
+                                    .filter((filePath): filePath is string => Boolean(filePath)),
+                                ),
+                              ),
+                            ]
+                            void applyComparePaths(paths, groups.length > 1 ? 'replace' : 'add')
+                          }}
                           onFontDragStart={beginFontDrag}
                           onFontDragEnd={endFontDrag}
                           tagDefinitions={familyTagDefs}
@@ -3903,6 +4049,30 @@ function AppShell() {
         />
         <MarqueeOverlay rect={marqueeRect} />
         <Toaster theme={settings?.theme ?? 'system'} />
+        {compareOpen ? (
+          <CompareWindow
+            model={compareModel}
+            layout={compareLayout}
+            text={compareText}
+            size={compareSize}
+            libraryFamilies={compareLibraryFamilies}
+            onLayout={setCompareLayout}
+            onText={setCompareText}
+            onSize={(next) => setCompareSize(clampCompareSize(next))}
+            onClose={() => {
+              setCompareOpen(false)
+              setCompareModel(emptyCompare())
+            }}
+            onAddFamilies={(paths) => void applyComparePaths(paths, 'add')}
+            onRemoveFamily={(familyId) => setCompareModel((current) => removeCompareFamily(current, familyId))}
+            onRemoveEntry={(entryId) => setCompareModel((current) => removeCompareEntry(current, entryId))}
+            onStyle={(entryId, styleId) => setCompareModel((current) => setCompareStyle(current, entryId, styleId))}
+            onAnotherStyle={(entryId) => setCompareModel((current) => compareAnotherStyle(current, entryId))}
+            onTint={(entryId, tint) => setCompareModel((current) => setCompareTint(current, entryId, tint))}
+            onMove={(entryId, beforeId) => setCompareModel((current) => moveCompareEntry(current, entryId, beforeId))}
+            onOpenFiles={() => void openCompareFiles()}
+          />
+        ) : null}
       </FileDropSurface>
     </LatinPreviewProvider>
   )

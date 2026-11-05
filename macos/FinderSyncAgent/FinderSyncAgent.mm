@@ -696,7 +696,7 @@ static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL over
            requestId:(NSString *)requestId
                reply:(void (^)(NSString *))reply {
   NSString *wire = [action isKindOfClass:[NSString class]] ? action : @"";
-  BOOL known = [wire isEqualToString:@"install"] || [wire isEqualToString:@"installAs"];
+  BOOL known = [wire isEqualToString:@"install"] || [wire isEqualToString:@"installAs"] || [wire isEqualToString:@"compare"];
   NSArray *incoming = [paths isKindOfClass:[NSArray class]] ? paths : @[];
   NSString *request = [requestId isKindOfClass:[NSString class]] ? requestId : @"";
   dispatch_async(self.forwardQueue, ^{

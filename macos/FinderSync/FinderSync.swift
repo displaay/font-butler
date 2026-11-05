@@ -75,6 +75,12 @@ final class FontButtlerFinderSync: FIFinderSync {
                 action: #selector(installSelectionAs(_:))
             )
         )
+        menu.addItem(
+            menuItem(
+                title: menuTitle(key: "FontButtlerCompareTitle", fallback: "Compare"),
+                action: #selector(compareSelection(_:))
+            )
+        )
         return menu
     }
 
@@ -90,6 +96,12 @@ final class FontButtlerFinderSync: FIFinderSync {
 
     @objc private func installSelectionAs(_ sender: Any?) {
         handOff(action: "installAs")
+    }
+
+    /// Opens the files in Cuttler's Compare window. The extension still only
+    /// hands the paths across; it does not read the fonts.
+    @objc private func compareSelection(_ sender: Any?) {
+        handOff(action: "compare")
     }
 
     /// Send the selection to the containing app. One request id per click.

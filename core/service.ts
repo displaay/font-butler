@@ -18,6 +18,7 @@ import {
   upsertEntry,
 } from './catalog.ts'
 import { getOrCreateApiToken } from './auth.ts'
+import { inspectCompareFiles } from './compare-files.ts'
 import { cacheClearLogoutProbe, loadBuildIdentity, loadFaultSwitchTestBuild } from './build-identity.ts'
 import { readFontPreviewBytes } from './font-bytes.ts'
 import {
@@ -2514,6 +2515,39 @@ export class FontButlerService {
       buffer: await readFontPreviewBytes(filePath),
       mime: mimeForFont(filePath),
       filename: path.basename(filePath),
+    }
+  }
+
+  /** Real font paths the user has opened in Compare. Not a catalog membership. */
+  private compareAllowed = new Set<string>()
+
+  /**
+   * Read font files for Compare without importing them. A path outside the
+   * library is allowed once it is a real font file the user named.
+   */
+  inspectComparePaths(inputs: string[]): import('./compare-files.ts').CompareInspectResult {
+    const result = inspectCompareFiles(inputs)
+    for (const filePath of result.paths) this.compareAllowed.add(filePath)
+    return result
+  }
+
+  compareFontBytes(filePath: string): { buffer: Buffer; mime: string; filename: string } {
+    let resolved: string
+    try {
+      resolved = fs.realpathSync(path.resolve(filePath))
+    } catch {
+      throw new Error('That font is not open for comparison.')
+    }
+    if (!this.compareAllowed.has(resolved) || !isPreviewableFontFile(resolved)) {
+      throw new Error('That font is not open for comparison.')
+    }
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+      throw new Error('Font file is missing.')
+    }
+    return {
+      buffer: fs.readFileSync(resolved),
+      mime: mimeForFont(resolved),
+      filename: path.basename(resolved),
     }
   }
 

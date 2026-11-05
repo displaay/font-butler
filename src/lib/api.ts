@@ -1,3 +1,4 @@
+import type { CompareFamily } from '../../shared/compare.ts'
 import type { DocumentFontReport } from '../../shared/document-project.ts'
 import type { FamilyDetail } from '../../shared/family-details.ts'
 import type {
@@ -286,6 +287,10 @@ export const api = {
   uninstallTestInstalls: (paths: string[]) =>
     json<{ fonts: import('./testInstall').TestInstallFont[] }>(
       post('/api/test-installs/uninstall', { paths }),
+    ),
+  inspectCompare: (paths: string[]) =>
+    json<{ families: CompareFamily[]; paths: string[]; errors: string[] }>(
+      post('/api/compare/inspect', { paths }),
     ),
   inspectDrop: (paths: string[]) =>
     json<{

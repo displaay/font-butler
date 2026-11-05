@@ -1,5 +1,5 @@
 import { memo, useMemo, useRef, useState, type DragEvent, type MouseEvent } from 'react'
-import { Check, ChevronDown, FolderMinus, FolderOpen, Plus } from 'lucide-react'
+import { Check, ChevronDown, FolderMinus, FolderOpen, Plus, SquareSplitHorizontal } from 'lucide-react'
 import { AaPreview, CyclingAaPreview, PreviewRetryBoundary } from '@/components/AaPreview'
 import { DuplicateCopyBadges, NameWithFormatTags, RetailBadge, SourceBadge, StateBadges, DestinationIcons, TrialBadge } from '@/components/Badges'
 import { Badge } from '@/components/ui/badge'
@@ -97,6 +97,8 @@ export const LibraryCard = memo(function LibraryCard({
   onAddToProject,
   onRemoveFromProject,
   onCreateProjectFromCard,
+  onCompare,
+  compareLabel = 'Compare',
   onFontDragStart,
   onFontDragEnd,
   tagDefinitions,
@@ -169,6 +171,8 @@ export const LibraryCard = memo(function LibraryCard({
   onAddToProject: (projectId: string, ids: string[]) => void
   onRemoveFromProject: (projectId: string, ids: string[]) => void
   onCreateProjectFromCard: (ids: string[], familyNames: string[]) => void
+  onCompare?: () => void
+  compareLabel?: string
   onFontDragStart: () => void
   onFontDragEnd: () => void
   tagDefinitions?: readonly FamilyTag[]
@@ -715,6 +719,11 @@ export const LibraryCard = memo(function LibraryCard({
             onSelect={() => projectFilter && onRemoveFromProject(projectFilter, dragIds)}
           >
             <FolderMinus /> Remove from project
+          </ContextMenuItem>
+        ) : null}
+        {onCompare ? (
+          <ContextMenuItem onSelect={onCompare}>
+            <SquareSplitHorizontal /> {compareLabel}
           </ContextMenuItem>
         ) : null}
         <ContextMenuSeparator />
