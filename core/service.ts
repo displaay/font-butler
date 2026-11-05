@@ -4644,9 +4644,18 @@ export class FontButlerService {
       if (!entry) {
         return this.importOneUnlocked(filePath, { ...options, catalog, analysis })
       }
+      let changed = false
       if (analysis.parsed.previewSample && entry.previewSample !== analysis.parsed.previewSample) {
         applyParsedFont(entry, analysis.parsed)
         entry.previewSample = analysis.parsed.previewSample
+        changed = true
+      }
+      // Partial faces replace the catalog without coverage. Completed coverage must
+      // still land when the preview sample is unchanged (same-font re-import).
+      if (mergeFaceLanguages(entry.faces, analysis.parsed.faces)) {
+        changed = true
+      }
+      if (changed) {
         touchEntry(entry)
         if (persist) saveCatalog(this.paths, catalog)
         emitEvent({ type: 'catalog', entries: catalog.entries })

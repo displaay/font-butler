@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { test } from 'node:test'
+import { orthographyRequirements } from '../shared/language-coverage.ts'
 import { withService, writeTestFont } from './test-util.ts'
 
 test('same-basename uploads in one request keep distinct files and entries', async () => {
@@ -40,5 +41,24 @@ test('uploads that sanitize to the same name stay distinct', async () => {
     assert.equal(result.entries.length, 2)
     assert.notEqual(result.entries[0].sourcePath, result.entries[1].sourcePath)
     assert.ok(result.entries.every((entry) => fs.existsSync(entry.sourcePath)))
+  })
+})
+
+test('re-importing the same font keeps completed language coverage', async () => {
+  await withService(async (service, paths) => {
+    await service.init()
+    const [english] = orthographyRequirements('eng')
+    assert.ok(english)
+    const source = path.join(paths.dataRoot, 'Covered.ttf')
+    writeTestFont(source, 'Covered', 'Covered-Regular', { codePoints: [...english] })
+    const first = await service.importPaths([source])
+    assert.equal(first.entries[0]?.faces[0]?.languages?.includes('eng'), true)
+
+    const copy = path.join(paths.dataRoot, 'Covered-copy.ttf')
+    fs.copyFileSync(source, copy)
+    const second = await service.importPaths([copy])
+    assert.equal(second.entries.length, 1)
+    assert.equal(second.entries[0]?.id, first.entries[0]?.id)
+    assert.equal(second.entries[0]?.faces[0]?.languages?.includes('eng'), true)
   })
 })
