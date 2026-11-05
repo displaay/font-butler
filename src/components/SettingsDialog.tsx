@@ -746,6 +746,25 @@ function GeneralPane({
             />
           </SettingsRow>
         ) : null}
+        {isDesktop ? (
+          <SettingsRow
+            label="Finder menu"
+            description="Enable the Finder menu in Login Items & Extensions. Until that is on, use Services → Install."
+          >
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              aria-label="Finder menu in Login Items"
+              disabled={busy}
+              onClick={() => {
+                void window.fontButlerDesktop?.openFinderLoginItems?.()
+              }}
+            >
+              Open Login Items & Extensions
+            </Button>
+          </SettingsRow>
+        ) : null}
         <SettingsRow
           label="Allow notifications"
           description="Cuttler can notify you when fonts are installed or updated."
