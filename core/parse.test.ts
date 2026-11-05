@@ -397,6 +397,20 @@ test('parseFontFile records Cicero language coverage from glyphs that draw', () 
     })
     assert.equal(parseFontFile(hollow).faces[0]?.languages?.includes('eng'), false)
 
+    const [sanskrit] = orthographyRequirements('san')
+    assert.ok(sanskrit)
+    const devanagari = path.join(dir, 'Sanskrit.ttf')
+    writeTestFont(devanagari, 'Sanskrit', 'Sanskrit-Regular', {
+      codePoints: [...sanskrit],
+      emptyCodePoints: [0x200c, 0x200d],
+    })
+    assert.equal(parseFontFile(devanagari).faces[0]?.languages?.includes('san'), true)
+    const missingJoiner = path.join(dir, 'SanskritMissing.ttf')
+    writeTestFont(missingJoiner, 'Sanskrit Missing', 'SanskritMissing-Regular', {
+      codePoints: sanskrit.filter((code) => code !== 0x200d),
+    })
+    assert.equal(parseFontFile(missingJoiner).faces[0]?.languages?.includes('san'), false)
+
     const skipped = parseFontFile(covered, { coverage: false }).faces[0]
     assert.equal(skipped?.languages, undefined)
     assert.equal(parseFontFile(covered, { previewSample: false }).faces[0]?.languages, undefined)

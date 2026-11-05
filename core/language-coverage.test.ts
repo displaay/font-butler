@@ -6,6 +6,7 @@ import {
   isCoverageLanguageId,
   isCoverageScript,
   languageIdForSearchTerm,
+  coverageIgnoresOutline,
   mergeFaceLanguages,
   orthographyRequirements,
   supportedCoverage,
@@ -55,6 +56,17 @@ test('an English base set does not cover Czech, and the search term is the langu
   assert.equal(languageIdForSearchTerm('Czech'), 'ces')
   assert.equal(languageIdForSearchTerm('deutsch'), 'deu')
   assert.equal(languageIdForSearchTerm('cze'), undefined)
+})
+
+test('joiners and viramas count without an outline, letters do not', () => {
+  assert.equal(coverageIgnoresOutline(0x20), true)
+  assert.equal(coverageIgnoresOutline(0x200c), true)
+  assert.equal(coverageIgnoresOutline(0x200d), true)
+  assert.equal(coverageIgnoresOutline(0x094d), true)
+  assert.equal(coverageIgnoresOutline(0x0b4d), true)
+  assert.equal(coverageIgnoresOutline(0x2800), true)
+  assert.equal(coverageIgnoresOutline(0x41), false)
+  assert.equal(coverageIgnoresOutline(0x010d), false)
 })
 
 test('mergeFaceLanguages fills faces that have not been read yet', () => {

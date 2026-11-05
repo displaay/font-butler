@@ -8,7 +8,7 @@ import {
   previewSampleFromCoverage,
 } from '../shared/previewSample.ts'
 import { classifyFont, designerFromName, foundryFromManufacturer } from '../shared/font-classification.ts'
-import { hyperglotCodePointSet, supportedCoverage } from '../shared/language-coverage.ts'
+import { coverageIgnoresOutline, hyperglotCodePointSet, supportedCoverage } from '../shared/language-coverage.ts'
 import { FONT_EXTENSIONS, WEB_FONT_EXTENSIONS, type FontAxisInfo, type FontFaceInfo, type NamedInstanceInfo } from './types.ts'
 
 export function isFontFile(filePath: string): boolean {
@@ -328,7 +328,11 @@ function glyphDraws(font: Font, code: number): boolean {
   )
 }
 
-/** Code points Hyperglot asks about that this font draws. A space counts even when its glyph is empty. */
+/**
+ * Code points Hyperglot asks about that this font covers. Letters need an
+ * outline. A space, joiner, virama, or other non-drawing character counts
+ * when the font maps it, matching Cicero's `EmptyGlyphs.drawn`.
+ */
 function drawingCodePoints(font: Font): Set<number> {
   const universe = hyperglotCodePointSet()
   const present = new Set<number>()
@@ -336,7 +340,7 @@ function drawingCodePoints(font: Font): Set<number> {
   if (!Array.isArray(cmap)) return present
   for (const code of cmap) {
     if (!Number.isInteger(code) || !universe.has(code)) continue
-    if (code === 0x20) {
+    if (coverageIgnoresOutline(code)) {
       present.add(code)
       continue
     }

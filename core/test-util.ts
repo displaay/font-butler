@@ -55,7 +55,7 @@ export function writeTestFont(
     version?: string
     weight?: number
     codePoints?: number[]
-    /** Mapped code points whose glyphs have no outline. They must not count as covered. */
+    /** Mapped code points whose glyphs have no outline. A letter must not count as covered. */
     emptyCodePoints?: number[]
     manufacturer?: string
     designer?: string
