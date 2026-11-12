@@ -412,6 +412,39 @@ test('a folder move rewrites mutation journal snapshot, destination, and catalog
     fs.mkdirSync(legacyInstall, { recursive: true })
     fs.writeFileSync(snapshot, 'original-bytes')
     fs.writeFileSync(path.join(legacyInstall, 'Family.otf'), 'live-bytes')
+    fs.mkdirSync(path.join(legacyData, 'plans'), { recursive: true })
+    fs.writeFileSync(
+      path.join(legacyData, 'operations.json'),
+      JSON.stringify({
+        operations: [
+          {
+            destination: path.join(legacyInstall, 'Family.otf'),
+            items: [
+              {
+                expectedSourcePath: path.join(legacyData, 'sources', 'Family.otf'),
+                previousSourcePath: '/Users/you/Inbox/Family.otf',
+                previousEntry: { installedPath: path.join(legacyInstall, 'Family.otf') },
+              },
+            ],
+          },
+        ],
+      }),
+    )
+    fs.writeFileSync(
+      path.join(legacyData, 'settings.json'),
+      JSON.stringify({
+        watchFolders: [legacyInstall, '/Users/you/Inbox'],
+        folders: [{ root: path.join(legacyData, 'sources') }],
+      }),
+    )
+    fs.writeFileSync(
+      path.join(legacyData, 'retail-manifest.json'),
+      JSON.stringify({ files: { 'Family.otf': { installedPath: path.join(legacyInstall, 'Family.otf'), relativePath: 'Family.otf' } } }),
+    )
+    fs.writeFileSync(
+      path.join(legacyData, 'plans', 'plan.json'),
+      JSON.stringify({ items: [{ path: path.join(legacyInstall, 'Family.otf') }] }),
+    )
     fs.writeFileSync(
       path.join(legacyData, 'mutation-journal.json'),
       JSON.stringify({
@@ -456,6 +489,19 @@ test('a folder move rewrites mutation journal snapshot, destination, and catalog
     assert.equal(target.entryBefore.installations[0].path, path.join(next.installDir, 'Family.otf'))
     assert.equal(fs.readFileSync(movedSnapshot, 'utf8'), 'original-bytes')
     assert.equal(fs.existsSync(snapshot), false)
+    const operations = JSON.parse(fs.readFileSync(path.join(next.dataRoot, 'operations.json'), 'utf8'))
+    assert.equal(operations.operations[0].destination, path.join(next.installDir, 'Family.otf'))
+    assert.equal(operations.operations[0].items[0].expectedSourcePath, path.join(next.dataRoot, 'sources', 'Family.otf'))
+    assert.equal(operations.operations[0].items[0].previousSourcePath, '/Users/you/Inbox/Family.otf')
+    assert.equal(operations.operations[0].items[0].previousEntry.installedPath, path.join(next.installDir, 'Family.otf'))
+    const settings = JSON.parse(fs.readFileSync(path.join(next.dataRoot, 'settings.json'), 'utf8'))
+    assert.deepEqual(settings.watchFolders, [next.installDir, '/Users/you/Inbox'])
+    assert.equal(settings.folders[0].root, path.join(next.dataRoot, 'sources'))
+    const retail = JSON.parse(fs.readFileSync(path.join(next.dataRoot, 'retail-manifest.json'), 'utf8'))
+    assert.equal(retail.files['Family.otf'].installedPath, path.join(next.installDir, 'Family.otf'))
+    assert.equal(retail.files['Family.otf'].relativePath, 'Family.otf')
+    const plan = JSON.parse(fs.readFileSync(path.join(next.dataRoot, 'plans', 'plan.json'), 'utf8'))
+    assert.equal(plan.items[0].path, path.join(next.installDir, 'Family.otf'))
   } finally {
     fs.rmSync(home, { recursive: true, force: true })
   }

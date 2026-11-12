@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { detectAppUpdateRuntime, readAppTestFeedMarker } from './app-update-install.mjs'
-import { shouldMigrateRealMacLibrary } from './mac-data-migration.mjs'
+import { migrateLegacyMacAppDirs, shouldMigrateRealMacLibrary } from './mac-data-migration.mjs'
 import { applyTestFeedDataIsolation, planTestFeedDataIsolation, TEST_FEED_USER_DATA_DIR } from './test-feed-data.mjs'
 
 function fakeApp(appData, { ready = false } = {}) {
@@ -232,4 +232,30 @@ test('an explicit data override does not migrate the real Mac library', () => {
   assert.equal(shouldMigrateRealMacLibrary({ platform: 'darwin', testFeed: true, env: {} }), false)
   assert.equal(shouldMigrateRealMacLibrary({ platform: 'linux', env: {} }), false)
   assert.equal(shouldMigrateRealMacLibrary({ platform: 'darwin', env: { FONT_BUTLER_DATA: '' } }), true)
+})
+
+test('the Electron main gate does not move the real library when a data override is set', () => {
+  const home = mkdtempSync(path.join(tmpdir(), 'fb-override-move-'))
+  const legacy = path.join(home, 'Library/Application Support/Font Buttler')
+  const fonts = path.join(home, 'Library/Fonts/Font Buttler')
+  try {
+    mkdirSync(legacy, { recursive: true })
+    mkdirSync(fonts, { recursive: true })
+    writeFileSync(path.join(legacy, 'catalog.json'), '{"version":1,"entries":[{"id":"real"}]}')
+    writeFileSync(path.join(fonts, 'Family.otf'), 'font')
+    for (const env of [{ FONT_BUTLER_DATA: '/tmp/isolated' }, { FONTCASE_DATA: '/tmp/isolated' }]) {
+      const gate = shouldMigrateRealMacLibrary({ platform: 'darwin', testFeed: false, env })
+      assert.equal(gate, false)
+      if (gate) migrateLegacyMacAppDirs(home)
+    }
+    assert.equal(readFileSync(path.join(legacy, 'catalog.json'), 'utf8').includes('real'), true)
+    assert.equal(readFileSync(path.join(fonts, 'Family.otf'), 'utf8'), 'font')
+    assert.equal(existsSync(path.join(home, 'Library/Application Support/Cuttler')), false)
+    assert.equal(
+      shouldMigrateRealMacLibrary({ platform: 'darwin', testFeed: false, env: {} }),
+      true,
+    )
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
 })

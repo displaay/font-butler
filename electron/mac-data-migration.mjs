@@ -408,12 +408,34 @@ function clearPendingMigration(home) {
   fs.rmSync(pendingMigrationPath(home), { force: true })
 }
 
+function rewriteJsonTree(root, replacements) {
+  if (!root || !replacements?.length || !followedDirectory(root)) return
+  const stack = [root]
+  while (stack.length > 0) {
+    const current = stack.pop()
+    let entries
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue
+      const abs = path.join(current, entry.name)
+      if (entry.isDirectory()) {
+        stack.push(abs)
+      } else if (entry.isFile() && entry.name.endsWith('.json')) {
+        if (entry.name === 'catalog.json') rewriteCatalogLegacyPaths(abs, replacements)
+        rewriteJsonLegacyPaths(abs, replacements)
+      }
+    }
+  }
+}
+
 function applyLibraryRewrites(dataRoot, stalledDataDir, replacements) {
   if (!replacements?.length) return
-  const roots = new Set([dataRoot, stalledDataDir].filter(Boolean))
-  for (const root of roots) {
-    rewriteCatalogLegacyPaths(path.join(root, 'catalog.json'), replacements)
-    rewriteJsonLegacyPaths(path.join(root, 'mutation-journal.json'), replacements)
+  for (const root of new Set([dataRoot, stalledDataDir].filter(Boolean))) {
+    rewriteJsonTree(root, replacements)
   }
 }
 
