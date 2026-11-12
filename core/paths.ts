@@ -69,6 +69,7 @@ export function buildPaths(options: {
         stalled: Boolean(adopted),
         stalledDataDir: adopted,
         blockedByOwner: false,
+        runningInstanceDataDir: null as string | null,
       }
     : !override && mac
       ? migrateLegacyMacAppDirs(home, options.migrationHooks)
@@ -78,12 +79,17 @@ export function buildPaths(options: {
           stalled: false,
           stalledDataDir: null as string | null,
           blockedByOwner: false,
+          runningInstanceDataDir: null as string | null,
         }
   if (!override && migrated.blockedByOwner) {
     throw new Error(legacyOwnerBlockMessage(migrated))
   }
   const dataRoot =
-    !adopted && migrated.stalled && migrated.stalledDataDir ? migrated.stalledDataDir : migrated.dataRoot
+    !override && migrated.runningInstanceDataDir
+      ? migrated.runningInstanceDataDir
+      : !adopted && migrated.stalled && migrated.stalledDataDir
+        ? migrated.stalledDataDir
+        : migrated.dataRoot
   const isolated = Boolean(override)
   const userFontsDir = isolated
     ? path.join(dataRoot, 'user-fonts')

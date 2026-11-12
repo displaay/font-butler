@@ -157,7 +157,7 @@ if (
     // Only a finished move skips the worker. A throw must not open the
     // library on stale paths; the next launch retries the pending rewrite.
     // A live legacy owner is not finished: the next launch moves once it quits.
-    if (!macDataMigration?.blockedByOwner) {
+    if (!macDataMigration?.blockedByOwner && !macDataMigration?.runningInstanceDataDir) {
       process.env[MIGRATION_HANDLED_ENV] = '1'
     }
   } catch (error) {
@@ -194,15 +194,18 @@ if (macDataMigration?.blockedByOwner) {
   process.exit(0)
 }
 if (testFeedPlan?.isolate !== true && canSetUserData) {
+  const runningRoot = macDataMigration?.runningInstanceDataDir || ''
   const stalledRoot =
-    macDataMigration?.stalled && macDataMigration.stalledDataDir ? macDataMigration.stalledDataDir : ''
+    !runningRoot && macDataMigration?.stalled && macDataMigration.stalledDataDir
+      ? macDataMigration.stalledDataDir
+      : ''
   if (stalledRoot) {
     process.env[MIGRATION_STALL_ENV] = '1'
     process.env[MIGRATION_DATA_ROOT_ENV] = stalledRoot
   }
   app.setPath(
     'userData',
-    stalledRoot || path.join(app.getPath('appData'), APP_FOLDER_NAME),
+    runningRoot || stalledRoot || path.join(app.getPath('appData'), APP_FOLDER_NAME),
   )
 }
 

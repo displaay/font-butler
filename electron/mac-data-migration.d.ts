@@ -19,6 +19,11 @@ export type MacDirMigrationHooks = {
   ownerWaitMs?: number
   ownerPollMs?: number
   sleepSync?: (ms: number) => void
+  execPath?: string
+  /** True when pid is this exact binary. Null when that cannot be known. */
+  isSameExecutable?: (pid: number) => boolean | null
+  /** True when pid is Cuttler, Font Buttler, Font Butler, or Electron. False for any other process. */
+  isAppProcess?: (pid: number) => boolean | null
 }
 
 export type MacDataMigration = {
@@ -36,6 +41,12 @@ export type MacDataMigration = {
   blockedByOwner: boolean
   ownerPid: number | null
   ownerDataDir: string | null
+  /**
+   * Set when this exact executable already holds the legacy lock. The caller
+   * keeps userData there so Electron's single-instance lock can hand off,
+   * and does not move the folder.
+   */
+  runningInstanceDataDir: string | null
 }
 
 export function isFreshDataRoot(dir: string): boolean
@@ -66,18 +77,12 @@ export function rewriteCatalogLegacyPaths(
 export function migrationStallMessage(result: MacDataMigration | null | undefined): string
 export function readSingletonLockPid(lockPath: string): number | null
 export function singletonCookieHeld(cookiePath: string): boolean | null
-export function legacyLibraryHasRunningOwner(
-  dir: string,
-  hooks?: {
-    selfPid?: number
-    isAlive?: (pid: number) => boolean
-    cookieHeld?: (cookiePath: string, pid?: number) => boolean | null
-  },
-): boolean
+export function isLegacyAppExecutable(exePath: string): boolean
+export function legacyLibraryHasRunningOwner(dir: string, hooks?: MacDirMigrationHooks): boolean
 export function findLegacyLibraryOwner(
   home: string,
   hooks?: MacDirMigrationHooks,
-): { dir: string; pid: number | null } | null
+): { dir: string; pid: number | null; kind: 'legacy' | 'same-app' } | null
 export function legacyOwnerBlockMessage(result: {
   ownerDataDir?: string | null
 } | null | undefined): string

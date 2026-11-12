@@ -11,6 +11,7 @@ import {
   MIGRATION_STALL_ENV,
   PENDING_MIGRATION_FILE,
   launchAfterMigrationFailure,
+  isLegacyAppExecutable,
   legacyLibraryHasRunningOwner,
   legacyOwnerBlockMessage,
   migrationStallMessage,
@@ -27,6 +28,7 @@ import {
   type AppPaths,
 } from './paths.ts'
 import { pruneStaleDuplicates } from './duplicates.ts'
+import { isUnlinkedSource, recoverUnlinkedSources } from './unlinked-sources.ts'
 
 function tempHome(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-paths-'))
@@ -893,8 +895,9 @@ test('a handled launch does not migrate again after a fonts-only stall or a thro
 
 function ownerHooks(
   alive: (pid: number) => boolean,
-  held: boolean | (() => boolean | null) = true,
+  held: boolean | null | (() => boolean | null) = true,
   waitMs = 0,
+  extra: Record<string, unknown> = {},
 ) {
   return {
     ownerWaitMs: waitMs,
@@ -902,7 +905,14 @@ function ownerHooks(
     sleepSync() {},
     isAlive: alive,
     cookieHeld: () => (typeof held === 'function' ? held() : held),
+    ...extra,
   }
+}
+
+function placeSymlinkCookie(dir: string) {
+  const cookie = path.join(dir, 'SingletonCookie')
+  fs.rmSync(cookie, { force: true })
+  fs.symlinkSync(`chromium-token-${process.pid}`, cookie)
 }
 
 function placeLegacyLock(dir: string, pid: number) {
@@ -1221,6 +1231,200 @@ test('duplicates and unlinked sources keep their paths after the library moves',
     assert.equal(kept.length, 1)
     assert.equal(kept[0].path, movedIncoming)
     assert.equal(kept[0].notifyKey, `${movedIncoming}|fp-incoming|fp-installed`)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('a truncated unlinked list is recovered from its backup and an unusable list stays resettable', () => {
+  const home = tempHome()
+  const legacyData = path.join(home, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  const external = '/Users/you/Inbox/Kept.otf'
+  const internal = path.join(legacyData, 'sources', 'Kept.otf')
+  try {
+    fs.mkdirSync(legacyData, { recursive: true })
+    fs.writeFileSync(path.join(legacyData, 'catalog.json'), catalog([{ id: 'kept' }]))
+    fs.writeFileSync(path.join(legacyData, 'unlinked-sources.json'), '{')
+    fs.writeFileSync(
+      path.join(legacyData, 'unlinked-sources.json.bak'),
+      JSON.stringify({ version: 1, paths: [external, internal] }),
+    )
+    const next = migrateLegacyMacAppDirs(home)
+    const movedInternal = path.join(next.dataRoot, 'sources', 'Kept.otf')
+    const primary = JSON.parse(fs.readFileSync(path.join(next.dataRoot, 'unlinked-sources.json'), 'utf8'))
+    const backup = JSON.parse(fs.readFileSync(path.join(next.dataRoot, 'unlinked-sources.json.bak'), 'utf8'))
+    assert.deepEqual(primary.paths, [external, movedInternal])
+    assert.deepEqual(backup.paths, [external, movedInternal])
+    assert.equal(fs.existsSync(path.join(next.dataRoot, 'unlinked-sources.json.unreadable')), false)
+    const library = { dataRoot: next.dataRoot } as AppPaths
+    assert.equal(isUnlinkedSource(library, external), true)
+    assert.equal(isUnlinkedSource(library, movedInternal), true)
+    const again = migrateLegacyMacAppDirs(home)
+    assert.equal(again.stalled, false)
+    assert.deepEqual(
+      JSON.parse(fs.readFileSync(path.join(again.dataRoot, 'unlinked-sources.json'), 'utf8')).paths,
+      [external, movedInternal],
+    )
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+
+  const entriesHome = tempHome()
+  const entriesLegacy = path.join(entriesHome, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(entriesLegacy, { recursive: true })
+    fs.writeFileSync(path.join(entriesLegacy, 'catalog.json'), catalog([{ id: 'entries' }]))
+    fs.writeFileSync(path.join(entriesLegacy, 'unlinked-sources.json'), '{')
+    fs.writeFileSync(
+      path.join(entriesLegacy, 'unlinked-sources.json.bak'),
+      JSON.stringify({
+        version: 1,
+        entries: [{ path: path.join(entriesLegacy, 'sources', 'FromEntries.otf'), fingerprint: 'abc' }],
+      }),
+    )
+    const next = migrateLegacyMacAppDirs(entriesHome)
+    const recovered = JSON.parse(fs.readFileSync(path.join(next.dataRoot, 'unlinked-sources.json'), 'utf8'))
+    assert.equal(recovered.entries[0].path, path.join(next.dataRoot, 'sources', 'FromEntries.otf'))
+    assert.equal(recovered.entries[0].fingerprint, 'abc')
+  } finally {
+    fs.rmSync(entriesHome, { recursive: true, force: true })
+  }
+
+  const brokenHome = tempHome()
+  const brokenLegacy = path.join(brokenHome, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(brokenLegacy, { recursive: true })
+    fs.writeFileSync(path.join(brokenLegacy, 'catalog.json'), catalog([{ id: 'broken' }]))
+    fs.writeFileSync(path.join(brokenLegacy, 'unlinked-sources.json'), '{')
+    const next = migrateLegacyMacAppDirs(brokenHome)
+    const primaryPath = path.join(next.dataRoot, 'unlinked-sources.json')
+    assert.equal(fs.readFileSync(primaryPath, 'utf8'), '{')
+    assert.equal(fs.existsSync(`${primaryPath}.unreadable`), false)
+    assert.equal(fs.existsSync(`${primaryPath}.bak`), false)
+    const library = { dataRoot: next.dataRoot } as AppPaths
+    assert.equal(isUnlinkedSource(library, '/Users/you/Inbox/Any.otf'), true)
+    const retried = migrateLegacyMacAppDirs(brokenHome)
+    assert.equal(fs.readFileSync(path.join(retried.dataRoot, 'unlinked-sources.json'), 'utf8'), '{')
+    assert.equal(isUnlinkedSource({ dataRoot: retried.dataRoot } as AppPaths, '/Users/you/Inbox/Any.otf'), true)
+    assert.equal(recoverUnlinkedSources(library), true)
+  } finally {
+    fs.rmSync(brokenHome, { recursive: true, force: true })
+  }
+})
+
+test('a symlink cookie does not treat a recycled pid as the legacy owner', async () => {
+  assert.equal(isLegacyAppExecutable('/Applications/Cuttler.app/Contents/MacOS/Cuttler'), true)
+  assert.equal(isLegacyAppExecutable('/Applications/Cuttler.app/Contents/MacOS/Cuttler Helper'), false)
+  assert.equal(isLegacyAppExecutable('/Applications/Font Buttler.app/Contents/MacOS/Font Buttler'), true)
+  assert.equal(isLegacyAppExecutable('/Applications/Font Butler.app/Contents/MacOS/Font Butler'), true)
+  assert.equal(isLegacyAppExecutable('Electron'), true)
+  assert.equal(isLegacyAppExecutable('/usr/bin/sleep'), false)
+
+  const home = tempHome()
+  const legacyData = path.join(home, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' })
+  try {
+    placeLegacyLock(legacyData, child.pid ?? 0)
+    placeSymlinkCookie(legacyData)
+    fs.writeFileSync(path.join(legacyData, 'catalog.json'), catalog([{ id: 'recycled' }]))
+    await waitFor(() => {
+      try {
+        return fs.statSync(`/proc/${child.pid}/exe`).isFile()
+      } catch {
+        return false
+      }
+    }, 'unrelated process did not start')
+    assert.equal(fs.lstatSync(path.join(legacyData, 'SingletonCookie')).isSymbolicLink(), true)
+    assert.equal(legacyLibraryHasRunningOwner(legacyData), false)
+    const next = migrateLegacyMacAppDirs(home)
+    assert.equal(next.blockedByOwner, false)
+    assert.equal(next.runningInstanceDataDir, null)
+    assert.equal(next.movedData, true)
+    assert.equal(fs.existsSync(path.join(next.dataRoot, 'catalog.json')), true)
+  } finally {
+    child.kill('SIGKILL')
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+
+  const owned = tempHome()
+  const ownedLegacy = path.join(owned, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  try {
+    placeLegacyLock(ownedLegacy, 2468)
+    placeSymlinkCookie(ownedLegacy)
+    fs.writeFileSync(path.join(ownedLegacy, 'catalog.json'), catalog([{ id: 'old-app' }]))
+    let slept = 0
+    const hooks = ownerHooks(() => true, null, 40, {
+      isSameExecutable: () => false,
+      isAppProcess: () => true,
+      sleepSync() {
+        slept += 1
+      },
+    })
+    const blocked = migrateLegacyMacAppDirs(owned, hooks)
+    assert.equal(blocked.blockedByOwner, true)
+    assert.equal(blocked.runningInstanceDataDir, null)
+    assert.equal(blocked.movedData, false)
+    assert.ok(slept > 0)
+    assert.equal(legacyLibraryHasRunningOwner(ownedLegacy, hooks), true)
+    assert.equal(fs.existsSync(path.join(owned, 'Library/Application Support', APP_FOLDER_NAME)), false)
+    assert.equal(fs.existsSync(path.join(ownedLegacy, 'catalog.json')), true)
+  } finally {
+    fs.rmSync(owned, { recursive: true, force: true })
+  }
+})
+
+test('a same-executable lock in the legacy folder hands off instead of blocking', () => {
+  const home = tempHome()
+  const legacyData = path.join(home, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  const legacyInstall = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const cuttlerData = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
+  try {
+    placeLegacyLock(legacyData, 5151)
+    placeSymlinkCookie(legacyData)
+    fs.mkdirSync(legacyInstall, { recursive: true })
+    fs.writeFileSync(path.join(legacyInstall, 'Family.otf'), 'font')
+    fs.writeFileSync(path.join(legacyData, 'catalog.json'), catalog([{ id: 'stalled-app' }]))
+    let slept = 0
+    const hooks = ownerHooks(() => true, null, 10_000, {
+      isSameExecutable: () => true,
+      isAppProcess: () => true,
+      sleepSync() {
+        slept += 1
+      },
+    })
+    const next = migrateLegacyMacAppDirs(home, hooks)
+    assert.equal(next.blockedByOwner, false)
+    assert.equal(next.runningInstanceDataDir, legacyData)
+    assert.equal(next.movedData, false)
+    assert.equal(next.movedFonts, false)
+    assert.equal(slept, 0)
+    assert.equal(legacyLibraryHasRunningOwner(legacyData, hooks), false)
+    assert.equal(fs.existsSync(path.join(legacyData, 'catalog.json')), true)
+    assert.equal(fs.existsSync(path.join(legacyInstall, 'Family.otf')), true)
+    assert.equal(fs.existsSync(cuttlerData), false)
+    const paths = buildPaths({ home, mac: true, migrationHooks: hooks })
+    assert.equal(paths.dataRoot, legacyData)
+    assert.equal(fs.existsSync(cuttlerData), false)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('a regular cookie whose flock check cannot run still blocks a live pid', () => {
+  const home = tempHome()
+  const legacyData = path.join(home, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  try {
+    placeLegacyLock(legacyData, 9191)
+    fs.writeFileSync(path.join(legacyData, 'catalog.json'), catalog([{ id: 'unknown-flock' }]))
+    const hooks = ownerHooks(() => true, null, 0, {
+      isSameExecutable: () => false,
+      isAppProcess: () => false,
+    })
+    const blocked = migrateLegacyMacAppDirs(home, hooks)
+    assert.equal(blocked.blockedByOwner, true)
+    assert.equal(blocked.movedData, false)
+    assert.equal(fs.lstatSync(path.join(legacyData, 'SingletonCookie')).isSymbolicLink(), false)
+    assert.equal(fs.existsSync(path.join(home, 'Library/Application Support', APP_FOLDER_NAME)), false)
   } finally {
     fs.rmSync(home, { recursive: true, force: true })
   }

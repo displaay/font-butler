@@ -564,8 +564,54 @@ function rewriteLibraryFiles(root, replacements) {
   for (const entry of entries) {
     if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith('.json')) continue
     if (ESSENTIAL_JSON.includes(entry.name) || NON_ESSENTIAL_JSON.has(entry.name)) continue
+    if (entry.name === 'unlinked-sources.json') {
+      rewriteUnlinkedSources(path.join(root, entry.name), replacements)
+      continue
+    }
     if (!APP_JSON.has(entry.name)) continue
     rewriteOptionalJson(path.join(root, entry.name), replacements)
+  }
+}
+
+/**
+ * A missing unlinked-sources.json is an empty list. A present but invalid
+ * primary is resettable, and loadUnlinkedList recovers a valid .bak only in
+ * that case. Quarantining the primary would drop the unlink list.
+ */
+function readUsableUnlinked(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) return null
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'))
+    if (!parsed || parsed.version !== 1) return null
+    if (Array.isArray(parsed.paths) || Array.isArray(parsed.entries)) return parsed
+    return null
+  } catch {
+    return null
+  }
+}
+
+function rewrittenJsonDocument(parsed, replacements) {
+  const copy = structuredClone(parsed)
+  const next = rewriteJsonValue(copy, replacements)
+  return { value: next, changed: next !== copy }
+}
+
+function rewriteUnlinkedSources(filePath, replacements) {
+  if (!filePath || !replacements?.length || !fs.existsSync(filePath)) return
+  const backupPath = `${filePath}.bak`
+  const primary = readUsableUnlinked(filePath)
+  const backup = readUsableUnlinked(backupPath)
+  if (!primary && !backup) return
+  if (primary) {
+    const next = rewrittenJsonDocument(primary, replacements)
+    if (next.changed) commitJson(filePath, next.value)
+  } else {
+    const recovered = rewrittenJsonDocument(backup, replacements)
+    commitJson(filePath, recovered.value)
+  }
+  if (backup) {
+    const next = rewrittenJsonDocument(backup, replacements)
+    if (next.changed) commitJson(backupPath, next.value)
   }
 }
 
@@ -684,9 +730,11 @@ export function readSingletonLockPid(lockPath) {
 }
 
 /**
- * True when another process holds Chromium's exclusive flock on SingletonCookie.
- * False when the cookie is missing or the flock is free (the recorded pid was
- * recycled, or the owner already exited). Null when the check itself cannot run.
+ * True when another process holds an exclusive flock on a regular-file
+ * SingletonCookie. False when the cookie is missing or the flock is free.
+ * Null when the cookie is not a regular file, or the flock check cannot run.
+ * Chromium 152's cookie is a symlink and is never flocked; callers must not
+ * treat that null as an owner.
  */
 export function singletonCookieHeld(cookiePath) {
   let st
@@ -708,23 +756,124 @@ export function singletonCookieHeld(cookiePath) {
   return null
 }
 
+function cookieLayout(cookiePath) {
+  let st
+  try {
+    st = fs.lstatSync(cookiePath)
+  } catch {
+    return 'missing'
+  }
+  if (st.isSymbolicLink()) return 'symlink'
+  if (st.isFile()) return 'file'
+  return 'other'
+}
+
+/** Chromium's IsChromeProcess check, for this app's main executables. Helpers are not the lock owner. */
+export function isLegacyAppExecutable(exePath) {
+  const base = path.basename(String(exePath ?? '')).replace(/ \(deleted\)$/, '')
+  if (!base || /helper/i.test(base)) return false
+  return /^(cuttler|font buttler|font butler|electron)$/i.test(base)
+}
+
+function processExecutableIdentity(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return null
+  if (process.platform === 'darwin') return darwinProcessExecutable(pid)
+  try {
+    const st = fs.statSync(`/proc/${pid}/exe`)
+    const link = fs.readlinkSync(`/proc/${pid}/exe`).replace(/ \(deleted\)$/, '')
+    return { path: link, dev: st.dev, ino: st.ino }
+  } catch {
+    return null
+  }
+}
+
+function darwinProcessExecutable(pid) {
+  let result
+  try {
+    result = spawnSync('lsof', ['-a', '-p', String(pid), '-d', 'txt', '-F', 'ni'], {
+      encoding: 'utf8',
+      timeout: 2000,
+    })
+  } catch {
+    return null
+  }
+  if (result?.status !== 0 || !result.stdout) return null
+  let exePath = ''
+  let ino = null
+  for (const line of String(result.stdout).split('\n')) {
+    if (line.startsWith('n') && line.length > 1 && !exePath) exePath = line.slice(1)
+    else if (line.startsWith('i') && ino == null) {
+      const value = Number(line.slice(1))
+      if (Number.isInteger(value) && value > 0) ino = value
+    }
+  }
+  if (!exePath) return null
+  let dev = null
+  try {
+    dev = fs.statSync(exePath).dev
+  } catch {
+    dev = null
+  }
+  return { path: exePath, dev, ino }
+}
+
+function defaultIsSameExecutable(pid, execPath = process.execPath) {
+  const other = processExecutableIdentity(pid)
+  if (!other || other.ino == null) return null
+  let self
+  try {
+    self = fs.statSync(execPath)
+  } catch {
+    return null
+  }
+  if (self.ino == null) return null
+  return String(other.ino) === String(self.ino) && String(other.dev) === String(self.dev)
+}
+
+function defaultIsAppProcess(pid) {
+  const other = processExecutableIdentity(pid)
+  if (!other?.path) return null
+  return isLegacyAppExecutable(other.path)
+}
+
 /**
- * True when a process other than this one still owns the legacy userData.
- * 0.4.0 holds Electron's SingletonLock in that folder. A dead pid, this pid,
- * or a live pid that does not hold SingletonCookie is not an owner.
+ * 'legacy': a different binary still owns the old library (0.4.0 or Font Butler).
+ * 'same-app': this exact executable already holds the lock (stalled 0.4.1).
+ * 'none': no live owner.
  */
-export function legacyLibraryHasRunningOwner(dir, {
-  selfPid = process.pid,
-  isAlive = defaultProcessAlive,
-  cookieHeld = singletonCookieHeld,
-} = {}) {
-  if (!dir) return false
+function classifyLegacyOwner(dir, hooks) {
+  if (!dir) return 'none'
+  const selfPid = hooks?.selfPid ?? process.pid
+  const isAlive = hooks?.isAlive ?? defaultProcessAlive
   const pid = readSingletonLockPid(path.join(dir, 'SingletonLock'))
-  if (!pid || pid === selfPid) return false
-  if (isAlive(pid) !== true) return false
-  const held = cookieHeld(path.join(dir, 'SingletonCookie'), pid)
-  if (held === false) return false
-  return true
+  if (!pid || pid === selfPid) return 'none'
+  if (isAlive(pid) !== true) return 'none'
+  const cookiePath = path.join(dir, 'SingletonCookie')
+  const layout = cookieLayout(cookiePath)
+  if (layout === 'missing') return 'none'
+  if (layout !== 'symlink') {
+    const cookieHeld = hooks?.cookieHeld ?? singletonCookieHeld
+    const held = cookieHeld(cookiePath, pid)
+    if (held === false) return 'none'
+    return 'legacy'
+  }
+  const same = typeof hooks?.isSameExecutable === 'function'
+    ? hooks.isSameExecutable(pid)
+    : defaultIsSameExecutable(pid, hooks?.execPath)
+  if (same === true) return 'same-app'
+  const app = typeof hooks?.isAppProcess === 'function' ? hooks.isAppProcess(pid) : defaultIsAppProcess(pid)
+  if (app === false) return 'none'
+  return 'legacy'
+}
+
+/**
+ * True when a different still-running app owns the legacy userData.
+ * A dead pid, this pid, a same-executable second instance, an unflocked
+ * regular cookie, or a symlink cookie whose process is not this app is not
+ * an owner. A regular cookie whose flock check cannot run stays an owner.
+ */
+export function legacyLibraryHasRunningOwner(dir, hooks = {}) {
+  return classifyLegacyOwner(dir, hooks) === 'legacy'
 }
 
 function legacyDataDirectories(home) {
@@ -732,17 +881,16 @@ function legacyDataDirectories(home) {
 }
 
 export function findLegacyLibraryOwner(home, hooks) {
-  const probe = {
-    selfPid: hooks?.selfPid ?? process.pid,
-    isAlive: hooks?.isAlive ?? defaultProcessAlive,
-    cookieHeld: hooks?.cookieHeld ?? singletonCookieHeld,
-  }
+  let sameApp = null
   for (const dir of legacyDataDirectories(home)) {
     if (!lstatOrNull(dir)) continue
-    if (!legacyLibraryHasRunningOwner(dir, probe)) continue
-    return { dir, pid: readSingletonLockPid(path.join(dir, 'SingletonLock')) }
+    const kind = classifyLegacyOwner(dir, hooks)
+    if (kind === 'none') continue
+    const found = { dir, pid: readSingletonLockPid(path.join(dir, 'SingletonLock')), kind }
+    if (kind === 'legacy') return found
+    if (!sameApp) sameApp = found
   }
-  return null
+  return sameApp
 }
 
 function waitForLegacyLibraryOwner(home, hooks) {
@@ -751,10 +899,10 @@ function waitForLegacyLibraryOwner(home, hooks) {
   const sleep = hooks?.sleepSync ?? defaultSleepSync
   const started = Date.now()
   let owner = findLegacyLibraryOwner(home, hooks)
-  if (!owner || timeoutMs <= 0) return owner
+  if (!owner || owner.kind === 'same-app' || timeoutMs <= 0) return owner
   const maxSpins = Math.ceil(timeoutMs / Math.max(intervalMs, 1)) + 2
   let spins = 0
-  while (owner && spins < maxSpins && Date.now() - started < timeoutMs) {
+  while (owner?.kind === 'legacy' && spins < maxSpins && Date.now() - started < timeoutMs) {
     sleep(Math.max(intervalMs, 0))
     spins += 1
     owner = findLegacyLibraryOwner(home, hooks)
@@ -781,6 +929,25 @@ function ownerBlockedResult(dataRoot, installDir, owner) {
     blockedByOwner: true,
     ownerPid: owner.pid,
     ownerDataDir: owner.dir,
+    runningInstanceDataDir: null,
+  }
+}
+
+function sameAppInstanceResult(dataRoot, installDir, owner) {
+  return {
+    dataRoot,
+    installDir,
+    stalled: false,
+    stalledDataDir: null,
+    stalledFontsDir: null,
+    dataOccupied: false,
+    fontsOccupied: false,
+    movedData: false,
+    movedFonts: false,
+    blockedByOwner: false,
+    ownerPid: null,
+    ownerDataDir: null,
+    runningInstanceDataDir: owner.dir,
   }
 }
 
@@ -812,7 +979,8 @@ export function migrateLegacyMacAppDirs(home, hooks) {
   // Wait out a quitting updater, then refuse rather than move the library
   // out from under a process that still has it open.
   const owner = waitForLegacyLibraryOwner(home, hooks)
-  if (owner) return ownerBlockedResult(dataRoot, installDir, owner)
+  if (owner?.kind === 'legacy') return ownerBlockedResult(dataRoot, installDir, owner)
+  if (owner?.kind === 'same-app') return sameAppInstanceResult(dataRoot, installDir, owner)
   let pending = readPendingMigration(home)
   if (pending) rewriteKeptLibrary(pending, dataRoot)
   const dataSources = LEGACY_APP_FOLDER_NAMES.map((name) =>
@@ -889,5 +1057,6 @@ export function migrateLegacyMacAppDirs(home, hooks) {
     blockedByOwner: false,
     ownerPid: null,
     ownerDataDir: null,
+    runningInstanceDataDir: null,
   }
 }
