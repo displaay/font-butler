@@ -1373,6 +1373,36 @@ test('a symlink cookie does not treat a recycled pid as the legacy owner', async
   }
 })
 
+test('an unreadable symlink-cookie identity does not block the move', () => {
+  const home = tempHome()
+  const legacyData = path.join(home, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  const cuttlerData = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
+  try {
+    placeLegacyLock(legacyData, 4242)
+    placeSymlinkCookie(legacyData)
+    fs.writeFileSync(path.join(legacyData, 'catalog.json'), catalog([{ id: 'unreadable-owner' }]))
+    let slept = 0
+    const hooks = ownerHooks(() => true, null, 10_000, {
+      isSameExecutable: () => null,
+      isAppProcess: () => null,
+      sleepSync() {
+        slept += 1
+      },
+    })
+    assert.equal(fs.lstatSync(path.join(legacyData, 'SingletonCookie')).isSymbolicLink(), true)
+    assert.equal(legacyLibraryHasRunningOwner(legacyData, hooks), false)
+    const next = migrateLegacyMacAppDirs(home, hooks)
+    assert.equal(slept, 0)
+    assert.equal(next.blockedByOwner, false)
+    assert.equal(next.runningInstanceDataDir, null)
+    assert.equal(next.movedData, true)
+    assert.equal(fs.existsSync(legacyData), false)
+    assert.equal(fs.existsSync(path.join(cuttlerData, 'catalog.json')), true)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
 test('a same-executable lock in the legacy folder hands off instead of blocking', () => {
   const home = tempHome()
   const legacyData = path.join(home, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)

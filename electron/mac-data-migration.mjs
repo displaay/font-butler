@@ -862,15 +862,18 @@ function classifyLegacyOwner(dir, hooks) {
     : defaultIsSameExecutable(pid, hooks?.execPath)
   if (same === true) return 'same-app'
   const app = typeof hooks?.isAppProcess === 'function' ? hooks.isAppProcess(pid) : defaultIsAppProcess(pid)
-  if (app === false) return 'none'
-  return 'legacy'
+  if (app === true) return 'legacy'
+  // Chromium treats an empty executable path as an orphaned lock. An identity
+  // we cannot read (failed lsof, another user's process) is not an owner.
+  return 'none'
 }
 
 /**
  * True when a different still-running app owns the legacy userData.
  * A dead pid, this pid, a same-executable second instance, an unflocked
- * regular cookie, or a symlink cookie whose process is not this app is not
- * an owner. A regular cookie whose flock check cannot run stays an owner.
+ * regular cookie, a symlink cookie whose process is not this app, or a
+ * symlink cookie whose executable cannot be read is not an owner. A regular
+ * cookie whose flock check cannot run stays an owner.
  */
 export function legacyLibraryHasRunningOwner(dir, hooks = {}) {
   return classifyLegacyOwner(dir, hooks) === 'legacy'
