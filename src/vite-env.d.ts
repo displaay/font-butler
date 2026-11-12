@@ -70,7 +70,7 @@ declare global {
           body?: string
           celebrate?: boolean
           sinceVersion?: string
-          showWhen?: 'upgrade' | 'always'
+          showWhen?: 'upgrade' | 'always' | 'migration-stalled'
         }) => void,
       ) => () => void
       dismissAnnouncement?: (id: string) => void

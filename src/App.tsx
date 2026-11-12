@@ -1112,7 +1112,12 @@ function AppShell() {
         body,
         celebrate: payload.celebrate === true,
         sinceVersion: typeof payload.sinceVersion === 'string' ? payload.sinceVersion : '',
-        showWhen: payload.showWhen === 'always' || payload.showWhen === 'upgrade' ? payload.showWhen : undefined,
+        showWhen:
+          payload.showWhen === 'always' ||
+          payload.showWhen === 'upgrade' ||
+          payload.showWhen === 'migration-stalled'
+            ? payload.showWhen
+            : undefined,
       })
     })
     return () => {

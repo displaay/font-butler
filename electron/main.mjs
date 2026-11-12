@@ -18,6 +18,16 @@ import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readApiTokenFile } from './api-token.mjs'
+import {
+  APP_FOLDER_NAME,
+  MIGRATION_DATA_ROOT_ENV,
+  MIGRATION_HANDLED_ENV,
+  MIGRATION_STALL_ENV,
+  launchAfterMigrationFailure,
+  legacyOwnerBlockMessage,
+  migrateLegacyMacAppDirs,
+  shouldMigrateRealMacLibrary,
+} from './mac-data-migration.mjs'
 import { isAllowedAppUpdateUrl, trayTooltip } from './app-update.mjs'
 import {
   cleanupOpenedUpdateDmgs,
@@ -122,17 +132,82 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
 
-// productName is Cuttler; pin userData to the historical Cuttler folder so
-// libraries, settings, and tokens stay put. Leave APP_FOLDER_NAME / api-token alone.
-// Must run before ready. Test-feed isolation may override to Font Buttler Test.
-if (typeof app.isReady !== 'function' || !app.isReady()) {
-  app.setPath('userData', path.join(app.getPath('appData'), 'Font Buttler'))
-}
-
 // Before requestSingleInstanceLock and before app ready. Only the packaged
 // fontButlerTestFeed marker selects this. A LaunchServices relaunch has no
-// environment, so the marker alone has to isolate the test build.
-applyTestFeedDataIsolation(app)
+// environment, so the marker alone has to isolate the test build. A marked
+// build must not move the real library.
+const testFeedPlan = applyTestFeedDataIsolation(app)
+
+// 0.4.0 pinned userData at Font Buttler. This release uses Cuttler and moves
+// the old folders on first launch. Must run before ready, and before Electron
+// creates the Cuttler userData directory.
+let macDataMigration = null
+/** Essential path rewrite did not finish. Do not open the library this launch. */
+let migrationFailure = null
+const canSetUserData = typeof app.isReady !== 'function' || !app.isReady()
+if (
+  canSetUserData &&
+  shouldMigrateRealMacLibrary({
+    platform: process.platform,
+    testFeed: testFeedPlan?.isolate === true,
+  })
+) {
+  try {
+    macDataMigration = migrateLegacyMacAppDirs(app.getPath('home'))
+    // Only a finished move skips the worker. A throw must not open the
+    // library on stale paths; the next launch retries the pending rewrite.
+    // A live legacy owner is not finished: the next launch moves once it quits.
+    if (!macDataMigration?.blockedByOwner && !macDataMigration?.runningInstanceDataDir) {
+      process.env[MIGRATION_HANDLED_ENV] = '1'
+    }
+  } catch (error) {
+    delete process.env[MIGRATION_HANDLED_ENV]
+    migrationFailure = launchAfterMigrationFailure(app.getPath('home'))
+    if (migrationFailure.stalled && migrationFailure.stalledDataDir) {
+      macDataMigration = {
+        stalled: true,
+        stalledDataDir: migrationFailure.stalledDataDir,
+        dataRoot: migrationFailure.dataRoot || path.join(app.getPath('appData'), APP_FOLDER_NAME),
+        installDir: migrationFailure.installDir,
+        movedData: false,
+        movedFonts: false,
+        dataOccupied: true,
+        fontsOccupied: false,
+      }
+    }
+    console.error('Could not migrate library folders', error)
+  }
+}
+// The previous app's SingletonLock is not this process's userData lock.
+// Leave both libraries untouched and do not create the Cuttler folder.
+if (macDataMigration?.blockedByOwner) {
+  const message = legacyOwnerBlockMessage(macDataMigration)
+  console.error(message)
+  try {
+    dialog.showErrorBox('Quit Cuttler first', message)
+  } catch (error) {
+    console.error('Could not show the library-in-use message', error)
+  }
+  app.exit(0)
+  // app.exit before ready can return. Do not fall through into setPath,
+  // which would create an empty Cuttler library beside the one still in use.
+  process.exit(0)
+}
+if (testFeedPlan?.isolate !== true && canSetUserData) {
+  const runningRoot = macDataMigration?.runningInstanceDataDir || ''
+  const stalledRoot =
+    !runningRoot && macDataMigration?.stalled && macDataMigration.stalledDataDir
+      ? macDataMigration.stalledDataDir
+      : ''
+  if (stalledRoot) {
+    process.env[MIGRATION_STALL_ENV] = '1'
+    process.env[MIGRATION_DATA_ROOT_ENV] = stalledRoot
+  }
+  app.setPath(
+    'userData',
+    runningRoot || stalledRoot || path.join(app.getPath('appData'), APP_FOLDER_NAME),
+  )
+}
 
 const debugLog = createDebugLogStore()
 let debugLogFilePath = defaultLogFilePath()
@@ -388,6 +463,8 @@ function startMainUiAfterBootstrap() {
     pendingAnnouncement = presentPendingAnnouncement({
       userDataDir: app.getPath('userData'),
       currentVersion: app.getVersion(),
+      migrationStalled: macDataMigration?.stalled === true,
+      migration: macDataMigration,
     })
     deliverPendingAnnouncement()
   } catch (error) {
@@ -2680,6 +2757,17 @@ if (launchMode === 'quit') {
           ...(process.env.FONT_BUTLER_DATA
             ? { FONT_BUTLER_DATA: process.env.FONT_BUTLER_DATA }
             : {}),
+          // Main already ran migration. A second pass can move fonts main
+          // stalled, or throw again on a path rewrite main already attempted.
+          ...(process.env[MIGRATION_HANDLED_ENV] === '1'
+            ? { [MIGRATION_HANDLED_ENV]: process.env[MIGRATION_HANDLED_ENV] }
+            : {}),
+          ...(process.env[MIGRATION_STALL_ENV] === '1'
+            ? {
+                [MIGRATION_STALL_ENV]: process.env[MIGRATION_STALL_ENV],
+                [MIGRATION_DATA_ROOT_ENV]: process.env[MIGRATION_DATA_ROOT_ENV],
+              }
+            : {}),
           // Same reason as FONT_BUTLER_DATA: the worker must not write the
           // real app's main.log when this process is Font Buttler Test.
           ...(process.env.FONT_BUTLER_LOG_NAME
@@ -2748,6 +2836,14 @@ if (launchMode === 'quit') {
   }
 
   async function startPackagedBackend() {
+    if (migrationFailure?.blockWorker) {
+      const where = migrationFailure.stalledDataDir
+        ? `Your library is still in ${migrationFailure.stalledDataDir}.`
+        : 'Library paths could not be updated.'
+      throw new Error(
+        `Cuttler could not finish opening your library. ${where} Quit and open Cuttler again. Nothing was recovered or deleted.`,
+      )
+    }
     if (!app.isPackaged) {
       return
     }

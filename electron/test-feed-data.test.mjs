@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { detectAppUpdateRuntime, readAppTestFeedMarker } from './app-update-install.mjs'
+import { migrateLegacyMacAppDirs, shouldMigrateRealMacLibrary } from './mac-data-migration.mjs'
 import { applyTestFeedDataIsolation, planTestFeedDataIsolation, TEST_FEED_USER_DATA_DIR } from './test-feed-data.mjs'
 
 function fakeApp(appData, { ready = false } = {}) {
@@ -196,4 +197,83 @@ test('main sets test-feed userData and FONT_BUTLER_DATA before the single-instan
   assert.match(helper, /env\.FONT_BUTLER_LOG_NAME = TEST_FEED_USER_DATA_DIR/)
   assert.match(main, /FONT_BUTLER_DATA: process\.env\.FONT_BUTLER_DATA/)
   assert.match(main, /FONT_BUTLER_LOG_NAME: process\.env\.FONT_BUTLER_LOG_NAME/)
+  const migrateAt = main.indexOf("migrateLegacyMacAppDirs(app.getPath('home'))")
+  const setAt = main.indexOf('app.setPath(')
+  assert.ok(migrateAt > applyAt)
+  assert.ok(setAt > migrateAt)
+  assert.ok(setAt < lockAt)
+  assert.match(main, /shouldMigrateRealMacLibrary\(\{/)
+  assert.match(main, /platform: process\.platform/)
+  assert.match(main, /testFeed: testFeedPlan\?\.isolate === true/)
+  assert.match(main, /MIGRATION_STALL_ENV/)
+  assert.match(main, /MIGRATION_DATA_ROOT_ENV/)
+  assert.match(main, /stalledDataDir/)
+  assert.match(main, /\[MIGRATION_STALL_ENV\]: process\.env\[MIGRATION_STALL_ENV\]/)
+  const handledAt = main.indexOf("process.env[MIGRATION_HANDLED_ENV] = '1'")
+  assert.ok(handledAt > migrateAt)
+  assert.match(main, /if \(!macDataMigration\?\.blockedByOwner && !macDataMigration\?\.runningInstanceDataDir\)/)
+  assert.match(main, /runningInstanceDataDir/)
+  const ownerExit = main.indexOf('app.exit(0)')
+  const processExit = main.indexOf('process.exit(0)')
+  assert.ok(ownerExit > migrateAt)
+  assert.ok(processExit > ownerExit)
+  assert.ok(processExit < setAt)
+  assert.match(main, /legacyOwnerBlockMessage\(macDataMigration\)/)
+  assert.match(main, /Quit Cuttler first/)
+  assert.match(main, /delete process\.env\[MIGRATION_HANDLED_ENV\]/)
+  assert.match(main, /launchAfterMigrationFailure\(app\.getPath\('home'\)\)/)
+  assert.match(main, /migrationFailure\?\.blockWorker/)
+  const startFn = main.slice(main.indexOf('async function startPackagedBackend'))
+  assert.match(startFn, /if \(migrationFailure\?\.blockWorker\)/)
+  assert.ok(startFn.indexOf('migrationFailure?.blockWorker') < startFn.indexOf('spawnApiWorker('))
+  assert.match(main, /\[MIGRATION_HANDLED_ENV\]: process\.env\[MIGRATION_HANDLED_ENV\]/)
+  assert.doesNotMatch(main, /setPath\('userData', path\.join\(app\.getPath\('appData'\), 'Font Buttler'\)\)/)
+})
+
+test('an explicit data override does not migrate the real Mac library', () => {
+  assert.equal(shouldMigrateRealMacLibrary({ platform: 'darwin', testFeed: false, env: {} }), true)
+  assert.equal(
+    shouldMigrateRealMacLibrary({ platform: 'darwin', env: { FONT_BUTLER_DATA: '/tmp/isolated' } }),
+    false,
+  )
+  assert.equal(
+    shouldMigrateRealMacLibrary({ platform: 'darwin', env: { FONTCASE_DATA: '/tmp/isolated' } }),
+    false,
+  )
+  assert.equal(
+    shouldMigrateRealMacLibrary({
+      platform: 'darwin',
+      env: { FONT_BUTLER_DATA: '/tmp/library', FONTCASE_DATA: '/tmp/other' },
+    }),
+    false,
+  )
+  assert.equal(shouldMigrateRealMacLibrary({ platform: 'darwin', testFeed: true, env: {} }), false)
+  assert.equal(shouldMigrateRealMacLibrary({ platform: 'linux', env: {} }), false)
+  assert.equal(shouldMigrateRealMacLibrary({ platform: 'darwin', env: { FONT_BUTLER_DATA: '' } }), true)
+})
+
+test('the Electron main gate does not move the real library when a data override is set', () => {
+  const home = mkdtempSync(path.join(tmpdir(), 'fb-override-move-'))
+  const legacy = path.join(home, 'Library/Application Support/Font Buttler')
+  const fonts = path.join(home, 'Library/Fonts/Font Buttler')
+  try {
+    mkdirSync(legacy, { recursive: true })
+    mkdirSync(fonts, { recursive: true })
+    writeFileSync(path.join(legacy, 'catalog.json'), '{"version":1,"entries":[{"id":"real"}]}')
+    writeFileSync(path.join(fonts, 'Family.otf'), 'font')
+    for (const env of [{ FONT_BUTLER_DATA: '/tmp/isolated' }, { FONTCASE_DATA: '/tmp/isolated' }]) {
+      const gate = shouldMigrateRealMacLibrary({ platform: 'darwin', testFeed: false, env })
+      assert.equal(gate, false)
+      if (gate) migrateLegacyMacAppDirs(home)
+    }
+    assert.equal(readFileSync(path.join(legacy, 'catalog.json'), 'utf8').includes('real'), true)
+    assert.equal(readFileSync(path.join(fonts, 'Family.otf'), 'utf8'), 'font')
+    assert.equal(existsSync(path.join(home, 'Library/Application Support/Cuttler')), false)
+    assert.equal(
+      shouldMigrateRealMacLibrary({ platform: 'darwin', testFeed: false, env: {} }),
+      true,
+    )
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
 })
