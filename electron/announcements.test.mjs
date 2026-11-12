@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
+import { migrationStallMessage } from './mac-data-migration.mjs'
 import {
   dismissAnnouncement,
   presentPendingAnnouncement,
@@ -15,7 +16,7 @@ test('presentPendingAnnouncement seeds fresh installs and returns null', () => {
     const result = presentPendingAnnouncement({ userDataDir: dir, currentVersion: '0.4.0' })
     assert.equal(result, null)
     const state = JSON.parse(fs.readFileSync(path.join(dir, 'announcements.json'), 'utf8'))
-    assert.deepEqual(state.seenIds, ['whats-new'])
+    assert.deepEqual(state.seenIds, ['migration-stalled', 'whats-new'])
     assert.equal(state.firstRunVersion, '0.4.0')
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
@@ -37,6 +38,50 @@ test('presentPendingAnnouncement returns the paged announcement for an establish
       presentPendingAnnouncement({ userDataDir: dir, currentVersion: '0.4.0' }),
       null,
     )
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('a stalled migration names the old folder and a quiet move shows nothing new', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-ann-'))
+  try {
+    fs.writeFileSync(path.join(dir, 'announcements.json'), JSON.stringify({ seenIds: ['whats-new'], firstRunVersion: '0.4.0' }))
+    const migration = {
+      stalled: true,
+      dataRoot: '/Users/me/Library/Application Support/Cuttler',
+      installDir: '/Users/me/Library/Fonts/Cuttler',
+      stalledDataDir: '/Users/me/Library/Application Support/Font Buttler',
+      stalledFontsDir: '/Users/me/Library/Fonts/Font Buttler',
+      movedData: false,
+      movedFonts: false,
+    }
+    const stalled = presentPendingAnnouncement({
+      userDataDir: dir,
+      currentVersion: '0.4.1',
+      migrationStalled: true,
+      migration,
+    })
+    assert.equal(stalled?.id, 'migration-stalled')
+    assert.equal(stalled?.body, migrationStallMessage(migration))
+    assert.match(stalled?.body ?? '', /Application Support\/Font Buttler/)
+    assert.match(stalled?.body ?? '', /Fonts\/Font Buttler/)
+    assert.match(stalled?.body ?? '', /already had files/)
+    assert.equal(
+      presentPendingAnnouncement({
+        userDataDir: dir,
+        currentVersion: '0.4.1',
+        migrationStalled: false,
+        migration: { ...migration, stalled: false, stalledDataDir: null, stalledFontsDir: null },
+      }),
+      null,
+    )
+    const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-ann-fresh-'))
+    try {
+      assert.equal(presentPendingAnnouncement({ userDataDir: fresh, currentVersion: '0.4.1' }), null)
+    } finally {
+      fs.rmSync(fresh, { recursive: true, force: true })
+    }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }

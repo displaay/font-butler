@@ -18,6 +18,7 @@ import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readApiTokenFile } from './api-token.mjs'
+import { APP_FOLDER_NAME, migrateLegacyMacAppDirs } from './mac-data-migration.mjs'
 import { isAllowedAppUpdateUrl, trayTooltip } from './app-update.mjs'
 import {
   cleanupOpenedUpdateDmgs,
@@ -122,17 +123,27 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
 
-// productName is Cuttler; pin userData to the historical Cuttler folder so
-// libraries, settings, and tokens stay put. Leave APP_FOLDER_NAME / api-token alone.
-// Must run before ready. Test-feed isolation may override to Font Buttler Test.
-if (typeof app.isReady !== 'function' || !app.isReady()) {
-  app.setPath('userData', path.join(app.getPath('appData'), 'Font Buttler'))
-}
-
 // Before requestSingleInstanceLock and before app ready. Only the packaged
 // fontButlerTestFeed marker selects this. A LaunchServices relaunch has no
-// environment, so the marker alone has to isolate the test build.
-applyTestFeedDataIsolation(app)
+// environment, so the marker alone has to isolate the test build. A marked
+// build must not move the real library.
+const testFeedPlan = applyTestFeedDataIsolation(app)
+
+// 0.4.0 pinned userData at Font Buttler. This release uses Cuttler and moves
+// the old folders on first launch. Must run before ready, and before Electron
+// creates the Cuttler userData directory.
+let macDataMigration = null
+const canSetUserData = typeof app.isReady !== 'function' || !app.isReady()
+if (process.platform === 'darwin' && testFeedPlan?.isolate !== true && canSetUserData) {
+  try {
+    macDataMigration = migrateLegacyMacAppDirs(app.getPath('home'))
+  } catch (error) {
+    console.error('Could not migrate library folders', error)
+  }
+}
+if (testFeedPlan?.isolate !== true && canSetUserData) {
+  app.setPath('userData', path.join(app.getPath('appData'), APP_FOLDER_NAME))
+}
 
 const debugLog = createDebugLogStore()
 let debugLogFilePath = defaultLogFilePath()
@@ -388,6 +399,8 @@ function startMainUiAfterBootstrap() {
     pendingAnnouncement = presentPendingAnnouncement({
       userDataDir: app.getPath('userData'),
       currentVersion: app.getVersion(),
+      migrationStalled: macDataMigration?.stalled === true,
+      migration: macDataMigration,
     })
     deliverPendingAnnouncement()
   } catch (error) {

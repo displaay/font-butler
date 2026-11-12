@@ -179,8 +179,12 @@ export function AnnouncementDialog({
         )}
       >
         <DialogHeader className="pr-6">
-          <DialogTitle>What&apos;s new</DialogTitle>
-          {page?.title || item?.title ? (
+          {item && item.id !== 'whats-new' ? (
+            <DialogTitle>{item.title}</DialogTitle>
+          ) : (
+            <DialogTitle>What&apos;s new</DialogTitle>
+          )}
+          {(!item || item.id === 'whats-new') && (page?.title || item?.title) ? (
             <p className="text-sm font-semibold tracking-tight text-foreground">
               {page?.title ?? item?.title}
             </p>
@@ -255,9 +259,11 @@ export function AnnouncementDialog({
                 Back
               </Button>
             ) : null}
-            <p className="text-xs text-muted-foreground">
-              Step {pageIndex + 1} of {Math.max(pages.length, 1)}
-            </p>
+            {pages.length > 1 ? (
+              <p className="text-xs text-muted-foreground">
+                Step {pageIndex + 1} of {pages.length}
+              </p>
+            ) : null}
           </div>
           {offersIconChoice ? null : (
             <div className="flex justify-end gap-2">

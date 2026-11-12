@@ -49,12 +49,17 @@ test('whats-new pages start with the rename, then each shipped feature', () => {
     WHATS_NEW_PAGES.some((page) => page.id === 'new-tag-color'),
     false,
   )
-  assert.equal(ANNOUNCEMENTS.length, 1)
-  assert.equal(ANNOUNCEMENTS[0]?.id, 'whats-new')
-  assert.equal(ANNOUNCEMENTS[0]?.title, "What's new")
-  assert.equal(ANNOUNCEMENTS[0]?.celebrate, true)
-  assert.equal(ANNOUNCEMENTS[0]?.showWhen, 'upgrade')
-  assert.equal(ANNOUNCEMENTS[0]?.pages, WHATS_NEW_PAGES)
+  const whatsNew = ANNOUNCEMENTS.find((item) => item.id === 'whats-new')
+  assert.ok(whatsNew)
+  assert.equal(whatsNew.title, "What's new")
+  assert.equal(whatsNew.celebrate, true)
+  assert.equal(whatsNew.showWhen, 'upgrade')
+  assert.equal(whatsNew.pages, WHATS_NEW_PAGES)
+  const stalled = ANNOUNCEMENTS.find((item) => item.showWhen === 'migration-stalled')
+  assert.ok(stalled)
+  assert.equal(stalled.celebrate, false)
+  assert.match(stalled.body, /previous folder/)
+  assert.match(stalled.body, /already had files/)
   assert.equal(
     WHATS_NEW_PAGES.some((page) => /conflict/i.test(`${page.id} ${page.title} ${page.body}`)),
     false,

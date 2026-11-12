@@ -6,6 +6,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { migrationStallMessage } from './mac-data-migration.mjs'
 import {
   ANNOUNCEMENTS,
   markAnnouncementSeen,
@@ -54,7 +55,7 @@ export function writeAnnouncementStateFile(filePath, state) {
   fs.renameSync(tmp, filePath)
 }
 
-export function planAnnouncementPopup({ userDataDir, currentVersion }) {
+export function planAnnouncementPopup({ userDataDir, currentVersion, migrationStalled = false }) {
   const filePath = announcementsFilePath(userDataDir)
   const raw = readAnnouncementStateFile(filePath)
   const libraryEstablished = libraryLooksEstablished(userDataDir)
@@ -62,6 +63,7 @@ export function planAnnouncementPopup({ userDataDir, currentVersion }) {
     state: raw,
     currentVersion,
     libraryEstablished,
+    migrationStalled,
   })
   if (planned.seedSeen) {
     writeAnnouncementStateFile(filePath, planned.state)
@@ -73,9 +75,15 @@ export function planAnnouncementPopup({ userDataDir, currentVersion }) {
  * Resolve the next announcement for the main window (or null).
  * Fresh installs seed seen ids and return null.
  */
-export function presentPendingAnnouncement({ userDataDir, currentVersion }) {
-  const planned = planAnnouncementPopup({ userDataDir, currentVersion })
-  return planned.announcement ?? null
+export function presentPendingAnnouncement({ userDataDir, currentVersion, migrationStalled = false, migration = null }) {
+  const planned = planAnnouncementPopup({ userDataDir, currentVersion, migrationStalled })
+  const announcement = planned.announcement
+  if (!announcement) return null
+  if (announcement.showWhen === 'migration-stalled') {
+    const body = migrationStallMessage(migration)
+    if (body) return { ...announcement, body }
+  }
+  return announcement
 }
 
 /** Mark an announcement id seen after the renderer dismisses it. */

@@ -1,4 +1,4 @@
-export type AnnouncementShowWhen = 'upgrade' | 'always'
+export type AnnouncementShowWhen = 'upgrade' | 'always' | 'migration-stalled'
 
 export type AnnouncementPage = {
   id: string
@@ -73,8 +73,21 @@ export const WHATS_NEW_PAGES: AnnouncementPage[] = [
   },
 ]
 
-/** Product announcements shown in the main window (welcome-style dialog) after launch. */
+/**
+ * Product announcements shown in the main window (welcome-style dialog) after launch.
+ * `migration-stalled` is first so a blocked folder move is shown before What's new.
+ * The list does not decide that case: the caller passes migrationStalled from the
+ * folder migration. A missing flag never shows it.
+ */
 export const ANNOUNCEMENTS: Announcement[] = [
+  {
+    id: 'migration-stalled',
+    sinceVersion: '0.4.1',
+    title: 'Library left in place',
+    body: 'Your library is still in the previous folder. Cuttler already had files at the new path, so nothing was moved or deleted.',
+    celebrate: false,
+    showWhen: 'migration-stalled',
+  },
   {
     id: 'whats-new',
     sinceVersion: '0.4.0',
@@ -115,23 +128,28 @@ export function allAnnouncementIds(list: Announcement[] = ANNOUNCEMENTS): string
 /**
  * Pure gate for the announcement popup.
  *
- * Fresh install (no prior library, no announcement record): seed every current
- * id as seen and show nothing. Existing library with no record: treat as an
- * upgrade and surface the first matching unseen announcement. Later launches
- * only show ids not yet marked seen.
+ * Fresh install (no prior library, no announcement record, migration did not
+ * stall): seed every current id as seen and show nothing. Existing library
+ * with no record: treat as an upgrade and surface the first matching unseen
+ * announcement. Later launches only show ids not yet marked seen.
+ * `showWhen: 'migration-stalled'` waits for migrationStalled from the folder
+ * migration. This function does not look at disk.
  */
 export function nextAnnouncementToShow(input: {
   announcements?: Announcement[]
   state: AnnouncementState | null | undefined
   currentVersion: string
   libraryEstablished: boolean
+  /** Set by the folder migration. The list does not infer this from disk. */
+  migrationStalled?: boolean
 }): { announcement: Announcement | null; seedSeen: boolean; state: AnnouncementState } {
   const announcements = input.announcements ?? ANNOUNCEMENTS
   const currentVersion = String(input.currentVersion ?? '').trim()
   const hasRecord = input.state != null
   const libraryEstablished = input.libraryEstablished === true
+  const migrationStalled = input.migrationStalled === true
 
-  if (!hasRecord && !libraryEstablished) {
+  if (!hasRecord && !libraryEstablished && !migrationStalled) {
     const seeded: AnnouncementState = {
       seenIds: allAnnouncementIds(announcements),
       firstRunVersion: currentVersion || null,
@@ -150,6 +168,7 @@ export function nextAnnouncementToShow(input: {
   for (const item of announcements) {
     if (seen.has(item.id)) continue
     if (item.showWhen === 'upgrade' && !libraryEstablished) continue
+    if (item.showWhen === 'migration-stalled' && !migrationStalled) continue
     return { announcement: item, seedSeen: false, state }
   }
   return { announcement: null, seedSeen: false, state }
