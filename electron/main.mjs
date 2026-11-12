@@ -23,6 +23,7 @@ import {
   MIGRATION_DATA_ROOT_ENV,
   MIGRATION_HANDLED_ENV,
   MIGRATION_STALL_ENV,
+  launchAfterMigrationFailure,
   migrateLegacyMacAppDirs,
   shouldMigrateRealMacLibrary,
 } from './mac-data-migration.mjs'
@@ -140,6 +141,8 @@ const testFeedPlan = applyTestFeedDataIsolation(app)
 // the old folders on first launch. Must run before ready, and before Electron
 // creates the Cuttler userData directory.
 let macDataMigration = null
+/** Essential path rewrite did not finish. Do not open the library this launch. */
+let migrationFailure = null
 const canSetUserData = typeof app.isReady !== 'function' || !app.isReady()
 if (
   canSetUserData &&
@@ -150,11 +153,24 @@ if (
 ) {
   try {
     macDataMigration = migrateLegacyMacAppDirs(app.getPath('home'))
-    // Only a finished call skips the worker. A throw leaves the worker to
-    // finish the path rewrite before it opens the library.
+    // Only a finished call skips the worker. A throw must not open the
+    // library on stale paths; the next launch retries the pending rewrite.
     process.env[MIGRATION_HANDLED_ENV] = '1'
   } catch (error) {
     delete process.env[MIGRATION_HANDLED_ENV]
+    migrationFailure = launchAfterMigrationFailure(app.getPath('home'))
+    if (migrationFailure.stalled && migrationFailure.stalledDataDir) {
+      macDataMigration = {
+        stalled: true,
+        stalledDataDir: migrationFailure.stalledDataDir,
+        dataRoot: migrationFailure.dataRoot || path.join(app.getPath('appData'), APP_FOLDER_NAME),
+        installDir: migrationFailure.installDir,
+        movedData: false,
+        movedFonts: false,
+        dataOccupied: true,
+        fontsOccupied: false,
+      }
+    }
     console.error('Could not migrate library folders', error)
   }
 }
@@ -2798,6 +2814,14 @@ if (launchMode === 'quit') {
   }
 
   async function startPackagedBackend() {
+    if (migrationFailure?.blockWorker) {
+      const where = migrationFailure.stalledDataDir
+        ? `Your library is still in ${migrationFailure.stalledDataDir}.`
+        : 'Library paths could not be updated.'
+      throw new Error(
+        `Cuttler could not finish opening your library. ${where} Quit and open Cuttler again. Nothing was recovered or deleted.`,
+      )
+    }
     if (!app.isPackaged) {
       return
     }

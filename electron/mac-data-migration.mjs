@@ -434,8 +434,49 @@ function clearPendingMigration(home) {
   fs.rmSync(pendingMigrationPath(home), { force: true })
 }
 
+const ESSENTIAL_JSON = ['catalog.json', 'mutation-journal.json']
+const APP_JSON = new Set([
+  'operations.json',
+  'settings.json',
+  'retail-manifest.json',
+  'projects.json',
+  'family-tags.json',
+  'saved-filters.json',
+])
+/** Readers already tolerate a corrupt copy. A bad file must not block the journal rewrite. */
+const NON_ESSENTIAL_JSON = new Set([
+  'system-cache.json',
+  'finder-sync-agent.json',
+  'finder-sync-pending-error.json',
+  'announcements.json',
+  'opened-update-dmgs.json',
+  'folder-migration.json',
+])
+
+function rewriteNamedJson(abs, name, replacements) {
+  if (name === 'catalog.json') rewriteCatalogLegacyPaths(abs, replacements)
+  else rewriteJsonLegacyPaths(abs, replacements)
+}
+
 function rewriteLibraryFiles(root, replacements) {
   if (!root || !replacements?.length || !followedDirectory(root)) return
+  for (const name of ESSENTIAL_JSON) {
+    const abs = path.join(root, name)
+    if (fs.existsSync(abs)) rewriteNamedJson(abs, name, replacements)
+  }
+  const plans = path.join(root, 'plans')
+  if (followedDirectory(plans)) {
+    let planEntries = []
+    try {
+      planEntries = fs.readdirSync(plans, { withFileTypes: true })
+    } catch {
+      planEntries = []
+    }
+    for (const entry of planEntries) {
+      if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith('.json')) continue
+      rewriteJsonLegacyPaths(path.join(plans, entry.name), replacements)
+    }
+  }
   let entries
   try {
     entries = fs.readdirSync(root, { withFileTypes: true })
@@ -443,16 +484,28 @@ function rewriteLibraryFiles(root, replacements) {
     return
   }
   for (const entry of entries) {
-    if (entry.isSymbolicLink()) continue
-    const abs = path.join(root, entry.name)
-    if (entry.isDirectory()) {
-      if (USER_CONTENT_DIRS.has(entry.name) || entry.name !== 'plans') continue
-      rewriteLibraryFiles(abs, replacements)
-      continue
-    }
-    if (!entry.isFile() || !entry.name.endsWith('.json')) continue
-    if (entry.name === 'catalog.json') rewriteCatalogLegacyPaths(abs, replacements)
-    rewriteJsonLegacyPaths(abs, replacements)
+    if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith('.json')) continue
+    if (ESSENTIAL_JSON.includes(entry.name) || NON_ESSENTIAL_JSON.has(entry.name)) continue
+    if (!APP_JSON.has(entry.name)) continue
+    rewriteNamedJson(path.join(root, entry.name), entry.name, replacements)
+  }
+}
+
+/**
+ * After migrate throws, decide where this launch may run. A pending rewrite
+ * blocks the worker so journal recovery cannot delete snapshots. A stall
+ * recorded in that marker keeps the app on the old library.
+ */
+export function launchAfterMigrationFailure(home) {
+  const pending = readPendingMigration(home)
+  const stalledDataDir =
+    pending?.stalledDataDir && followedDirectory(pending.stalledDataDir) ? pending.stalledDataDir : null
+  return {
+    blockWorker: Boolean(pending?.needsRewrite),
+    stalled: Boolean(stalledDataDir),
+    stalledDataDir,
+    dataRoot: typeof pending?.dataRoot === 'string' ? pending.dataRoot : null,
+    installDir: path.join(home, 'Library/Fonts', APP_FOLDER_NAME),
   }
 }
 

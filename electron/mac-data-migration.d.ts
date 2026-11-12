@@ -37,6 +37,13 @@ export function rewriteJsonLegacyPaths(
 ): void
 export function adoptedMigrationDataRoot(env?: NodeJS.ProcessEnv): string | null
 export function migrationAlreadyHandled(env?: NodeJS.ProcessEnv): boolean
+export function launchAfterMigrationFailure(home: string): {
+  blockWorker: boolean
+  stalled: boolean
+  stalledDataDir: string | null
+  dataRoot: string | null
+  installDir: string
+}
 export function shouldMigrateRealMacLibrary(input?: {
   platform?: string
   testFeed?: boolean

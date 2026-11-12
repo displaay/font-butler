@@ -9,6 +9,7 @@ import {
   MIGRATION_HANDLED_ENV,
   MIGRATION_STALL_ENV,
   PENDING_MIGRATION_FILE,
+  launchAfterMigrationFailure,
   migrationStallMessage,
 } from '../electron/mac-data-migration.mjs'
 import {
@@ -793,6 +794,69 @@ test('a data stall that later succeeds still rewrites paths into Cuttler', () =>
     assert.equal(journal.journals[0].targets[0].files[0].snapshotPath, movedSnapshot)
     assert.equal(fs.readFileSync(movedSnapshot, 'utf8'), 'original-bytes')
     assert.equal(fs.existsSync(path.join(home, 'Library/Application Support', PENDING_MIGRATION_FILE)), false)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('truncated non-essential JSON does not block the journal rewrite', () => {
+  const home = tempHome()
+  const legacyData = path.join(home, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  const snapshot = path.join(legacyData, 'journal', 'job', 'macos-live.otf')
+  const pending = path.join(home, 'Library/Application Support', PENDING_MIGRATION_FILE)
+  try {
+    fs.mkdirSync(path.dirname(snapshot), { recursive: true })
+    fs.writeFileSync(snapshot, 'original-bytes')
+    fs.writeFileSync(path.join(legacyData, 'finder-sync-agent.json'), '{')
+    fs.writeFileSync(path.join(legacyData, 'system-cache.json'), '{')
+    fs.writeFileSync(
+      path.join(legacyData, 'catalog.json'),
+      catalog([{ id: 'ok', disabledPath: path.join(legacyData, 'Disabled', 'A.otf') }]),
+    )
+    fs.writeFileSync(
+      path.join(legacyData, 'mutation-journal.json'),
+      JSON.stringify({ journals: [{ targets: [{ files: [{ snapshotPath: snapshot }] }] }] }),
+    )
+    const next = migrateLegacyMacAppDirs(home)
+    assert.equal(next.stalled, false)
+    const movedSnapshot = path.join(next.dataRoot, 'journal', 'job', 'macos-live.otf')
+    const journal = JSON.parse(fs.readFileSync(path.join(next.dataRoot, 'mutation-journal.json'), 'utf8'))
+    assert.equal(journal.journals[0].targets[0].files[0].snapshotPath, movedSnapshot)
+    assert.equal(fs.readFileSync(movedSnapshot, 'utf8'), 'original-bytes')
+    assert.equal(fs.readFileSync(path.join(next.dataRoot, 'finder-sync-agent.json'), 'utf8'), '{')
+    assert.equal(fs.readFileSync(path.join(next.dataRoot, 'system-cache.json'), 'utf8'), '{')
+    assert.equal(fs.existsSync(pending), false)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('a bad journal blocks opening the library and a stall throw stays on the old folder', () => {
+  const home = tempHome()
+  const legacyData = path.join(home, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  const nextData = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
+  const legacyInstall = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const pending = path.join(home, 'Library/Application Support', PENDING_MIGRATION_FILE)
+  try {
+    fs.mkdirSync(legacyData, { recursive: true })
+    fs.mkdirSync(nextData, { recursive: true })
+    fs.mkdirSync(legacyInstall, { recursive: true })
+    fs.writeFileSync(path.join(legacyInstall, 'Family.otf'), 'font')
+    fs.writeFileSync(path.join(nextData, 'settings.json'), '{}')
+    fs.writeFileSync(path.join(nextData, 'catalog.json'), catalog([{ id: 'occupied', installedPath: path.join(legacyInstall, 'Family.otf') }]))
+    fs.writeFileSync(path.join(legacyData, 'catalog.json'), catalog([{ id: 'kept', installedPath: path.join(legacyInstall, 'Family.otf') }]))
+    fs.writeFileSync(path.join(legacyData, 'mutation-journal.json'), '{')
+    assert.throws(() => migrateLegacyMacAppDirs(home), /Could not read/)
+    const failure = launchAfterMigrationFailure(home)
+    assert.equal(failure.blockWorker, true)
+    assert.equal(failure.stalled, true)
+    assert.equal(failure.stalledDataDir, legacyData)
+    assert.equal(fs.existsSync(pending), true)
+    assert.equal(fs.readFileSync(path.join(nextData, 'catalog.json'), 'utf8').includes('occupied'), true)
+    assert.match(fs.readFileSync(path.join(nextData, 'catalog.json'), 'utf8'), /Font Buttler/)
+    assert.equal(fs.readFileSync(path.join(legacyData, 'mutation-journal.json'), 'utf8'), '{')
+    assert.equal(fs.existsSync(path.join(home, 'Library/Fonts', APP_FOLDER_NAME, 'Family.otf')), true)
+    assert.equal(fs.existsSync(legacyInstall), false)
   } finally {
     fs.rmSync(home, { recursive: true, force: true })
   }
