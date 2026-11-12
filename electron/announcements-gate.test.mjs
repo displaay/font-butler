@@ -106,6 +106,23 @@ test('a successful move does not replay the 0.4.0 whats-new id and a fresh insta
   assert.equal(fresh.state.seenIds.includes('migration-stalled'), true)
 })
 
+test('a stalled migration keeps showing after the id was marked seen', () => {
+  const result = nextAnnouncementToShow({
+    state: { seenIds: ['migration-stalled', 'whats-new'], firstRunVersion: '0.4.1' },
+    currentVersion: '0.4.1',
+    libraryEstablished: true,
+    migrationStalled: true,
+  })
+  assert.equal(result.announcement?.id, 'migration-stalled')
+  const quiet = nextAnnouncementToShow({
+    state: { seenIds: ['migration-stalled', 'whats-new'], firstRunVersion: '0.4.1' },
+    currentVersion: '0.4.1',
+    libraryEstablished: true,
+    migrationStalled: false,
+  })
+  assert.equal(quiet.announcement, null)
+})
+
 test('the announcement gate does not infer a stall from folders', () => {
   const source = readFileSync(new URL('./announcements-gate.mjs', import.meta.url), 'utf8')
   assert.match(source, /migrationStalled === true/)

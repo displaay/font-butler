@@ -18,7 +18,13 @@ import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readApiTokenFile } from './api-token.mjs'
-import { APP_FOLDER_NAME, migrateLegacyMacAppDirs } from './mac-data-migration.mjs'
+import {
+  APP_FOLDER_NAME,
+  MIGRATION_DATA_ROOT_ENV,
+  MIGRATION_STALL_ENV,
+  migrateLegacyMacAppDirs,
+  shouldMigrateRealMacLibrary,
+} from './mac-data-migration.mjs'
 import { isAllowedAppUpdateUrl, trayTooltip } from './app-update.mjs'
 import {
   cleanupOpenedUpdateDmgs,
@@ -134,7 +140,13 @@ const testFeedPlan = applyTestFeedDataIsolation(app)
 // creates the Cuttler userData directory.
 let macDataMigration = null
 const canSetUserData = typeof app.isReady !== 'function' || !app.isReady()
-if (process.platform === 'darwin' && testFeedPlan?.isolate !== true && canSetUserData) {
+if (
+  canSetUserData &&
+  shouldMigrateRealMacLibrary({
+    platform: process.platform,
+    testFeed: testFeedPlan?.isolate === true,
+  })
+) {
   try {
     macDataMigration = migrateLegacyMacAppDirs(app.getPath('home'))
   } catch (error) {
@@ -142,7 +154,16 @@ if (process.platform === 'darwin' && testFeedPlan?.isolate !== true && canSetUse
   }
 }
 if (testFeedPlan?.isolate !== true && canSetUserData) {
-  app.setPath('userData', path.join(app.getPath('appData'), APP_FOLDER_NAME))
+  const stalledRoot =
+    macDataMigration?.stalled && macDataMigration.stalledDataDir ? macDataMigration.stalledDataDir : ''
+  if (stalledRoot) {
+    process.env[MIGRATION_STALL_ENV] = '1'
+    process.env[MIGRATION_DATA_ROOT_ENV] = stalledRoot
+  }
+  app.setPath(
+    'userData',
+    stalledRoot || path.join(app.getPath('appData'), APP_FOLDER_NAME),
+  )
 }
 
 const debugLog = createDebugLogStore()
@@ -2692,6 +2713,15 @@ if (launchMode === 'quit') {
           // after a future filter, and the worker would then use the real library.
           ...(process.env.FONT_BUTLER_DATA
             ? { FONT_BUTLER_DATA: process.env.FONT_BUTLER_DATA }
+            : {}),
+          // A stalled move keeps the worker on the old library. Without this
+          // the worker would migrate again and could finish a move main
+          // already reported as failed.
+          ...(process.env[MIGRATION_STALL_ENV] === '1'
+            ? {
+                [MIGRATION_STALL_ENV]: process.env[MIGRATION_STALL_ENV],
+                [MIGRATION_DATA_ROOT_ENV]: process.env[MIGRATION_DATA_ROOT_ENV],
+              }
             : {}),
           // Same reason as FONT_BUTLER_DATA: the worker must not write the
           // real app's main.log when this process is Font Buttler Test.

@@ -166,7 +166,7 @@ export function nextAnnouncementToShow(input: {
 
   const seen = new Set(state.seenIds)
   for (const item of announcements) {
-    if (seen.has(item.id)) continue
+    if (seen.has(item.id) && !(item.showWhen === 'migration-stalled' && migrationStalled)) continue
     if (item.showWhen === 'upgrade' && !libraryEstablished) continue
     if (item.showWhen === 'migration-stalled' && !migrationStalled) continue
     return { announcement: item, seedSeen: false, state }

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { detectAppUpdateRuntime, readAppTestFeedMarker } from './app-update-install.mjs'
+import { shouldMigrateRealMacLibrary } from './mac-data-migration.mjs'
 import { applyTestFeedDataIsolation, planTestFeedDataIsolation, TEST_FEED_USER_DATA_DIR } from './test-feed-data.mjs'
 
 function fakeApp(appData, { ready = false } = {}) {
@@ -197,11 +198,38 @@ test('main sets test-feed userData and FONT_BUTLER_DATA before the single-instan
   assert.match(main, /FONT_BUTLER_DATA: process\.env\.FONT_BUTLER_DATA/)
   assert.match(main, /FONT_BUTLER_LOG_NAME: process\.env\.FONT_BUTLER_LOG_NAME/)
   const migrateAt = main.indexOf("migrateLegacyMacAppDirs(app.getPath('home'))")
-  const setAt = main.indexOf("app.setPath('userData', path.join(app.getPath('appData'), APP_FOLDER_NAME))")
+  const setAt = main.indexOf('app.setPath(')
   assert.ok(migrateAt > applyAt)
   assert.ok(setAt > migrateAt)
   assert.ok(setAt < lockAt)
-  assert.match(main, /process\.platform === 'darwin'/)
-  assert.match(main, /testFeedPlan\?\.isolate !== true/)
+  assert.match(main, /shouldMigrateRealMacLibrary\(\{/)
+  assert.match(main, /platform: process\.platform/)
+  assert.match(main, /testFeed: testFeedPlan\?\.isolate === true/)
+  assert.match(main, /MIGRATION_STALL_ENV/)
+  assert.match(main, /MIGRATION_DATA_ROOT_ENV/)
+  assert.match(main, /stalledDataDir/)
+  assert.match(main, /\[MIGRATION_STALL_ENV\]: process\.env\[MIGRATION_STALL_ENV\]/)
   assert.doesNotMatch(main, /setPath\('userData', path\.join\(app\.getPath\('appData'\), 'Font Buttler'\)\)/)
+})
+
+test('an explicit data override does not migrate the real Mac library', () => {
+  assert.equal(shouldMigrateRealMacLibrary({ platform: 'darwin', testFeed: false, env: {} }), true)
+  assert.equal(
+    shouldMigrateRealMacLibrary({ platform: 'darwin', env: { FONT_BUTLER_DATA: '/tmp/isolated' } }),
+    false,
+  )
+  assert.equal(
+    shouldMigrateRealMacLibrary({ platform: 'darwin', env: { FONTCASE_DATA: '/tmp/isolated' } }),
+    false,
+  )
+  assert.equal(
+    shouldMigrateRealMacLibrary({
+      platform: 'darwin',
+      env: { FONT_BUTLER_DATA: '/tmp/library', FONTCASE_DATA: '/tmp/other' },
+    }),
+    false,
+  )
+  assert.equal(shouldMigrateRealMacLibrary({ platform: 'darwin', testFeed: true, env: {} }), false)
+  assert.equal(shouldMigrateRealMacLibrary({ platform: 'linux', env: {} }), false)
+  assert.equal(shouldMigrateRealMacLibrary({ platform: 'darwin', env: { FONT_BUTLER_DATA: '' } }), true)
 })

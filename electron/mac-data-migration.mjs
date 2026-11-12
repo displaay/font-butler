@@ -21,6 +21,10 @@ export const PREVIOUS_APP_FOLDER_NAME = 'Font Buttler'
 export const LEGACY_APP_FOLDER_NAME = 'Font Butler'
 export const LEGACY_APP_FOLDER_NAMES = [PREVIOUS_APP_FOLDER_NAME, LEGACY_APP_FOLDER_NAME]
 export const FOLDER_MIGRATION_FILE = 'folder-migration.json'
+/** Sibling of the library folders. Survives a crash between rename and path rewrite. */
+export const PENDING_MIGRATION_FILE = 'cuttler-folder-migration.json'
+export const MIGRATION_STALL_ENV = 'FONT_BUTLER_MIGRATION_STALL'
+export const MIGRATION_DATA_ROOT_ENV = 'FONT_BUTLER_MIGRATION_DATA_ROOT'
 
 function rewritePathPrefix(value, from, to) {
   if (typeof value !== 'string' || !from || from === to) return value
@@ -43,21 +47,32 @@ function realDirectory(dir) {
   return Boolean(st && st.isDirectory() && !st.isSymbolicLink())
 }
 
+/** Follow a symlink. A broken link is not a directory and is not "missing". */
+function followedDirectory(dir) {
+  try {
+    return fs.statSync(dir).isDirectory()
+  } catch {
+    return false
+  }
+}
+
 /** True when the folder is missing, or has neither catalog.json nor settings.json. */
 export function isFreshDataRoot(dir) {
-  const st = lstatOrNull(dir)
-  if (!st) return true
-  if (!st.isDirectory() || st.isSymbolicLink()) return false
+  if (!followedDirectory(dir)) {
+    if (lstatOrNull(dir)?.isSymbolicLink()) return false
+    return !lstatOrNull(dir)
+  }
   return (
     !fs.existsSync(path.join(dir, 'catalog.json')) && !fs.existsSync(path.join(dir, 'settings.json'))
   )
 }
 
-/** True when the folder is missing or contains no entries. A symlink is not empty. */
+/** True when the folder is missing or contains no entries. A broken symlink is not empty. */
 export function isEmptyDir(dir) {
-  const st = lstatOrNull(dir)
-  if (!st) return true
-  if (!st.isDirectory() || st.isSymbolicLink()) return false
+  if (!followedDirectory(dir)) {
+    if (lstatOrNull(dir)?.isSymbolicLink()) return false
+    return !lstatOrNull(dir)
+  }
   try {
     return fs.readdirSync(dir).length === 0
   } catch {
@@ -181,13 +196,65 @@ function applyReplacements(value, replacements) {
   return next
 }
 
+function rewriteJsonValue(value, replacements) {
+  if (typeof value === 'string') return applyReplacements(value, replacements)
+  if (Array.isArray(value)) {
+    let changed = false
+    const next = value.map((item) => {
+      const rewritten = rewriteJsonValue(item, replacements)
+      if (rewritten !== item) changed = true
+      return rewritten
+    })
+    return changed ? next : value
+  }
+  if (value && typeof value === 'object') {
+    let changed = false
+    const next = {}
+    for (const [key, item] of Object.entries(value)) {
+      const rewritten = rewriteJsonValue(item, replacements)
+      if (rewritten !== item) changed = true
+      next[key] = rewritten
+    }
+    return changed ? next : value
+  }
+  return value
+}
+
+function commitJson(filePath, value) {
+  const tmp = `${filePath}.${process.pid}.${process.hrtime.bigint()}.tmp`
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(value, null, 2))
+    fs.renameSync(tmp, filePath)
+  } catch (error) {
+    fs.rmSync(tmp, { force: true })
+    throw error
+  }
+}
+
+/**
+ * Rewrite every absolute path in a JSON file, then replace it with tmp-then-rename.
+ * A read or write failure throws so the caller can leave a retry marker.
+ */
+export function rewriteJsonLegacyPaths(filePath, replacements) {
+  if (!filePath || !replacements?.length || !fs.existsSync(filePath)) return
+  let parsed
+  try {
+    parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'))
+  } catch (error) {
+    throw new Error(`Could not read ${filePath} to rewrite library paths`, { cause: error })
+  }
+  const next = rewriteJsonValue(parsed, replacements)
+  if (next === parsed) return
+  commitJson(filePath, next)
+}
+
 export function rewriteCatalogLegacyPaths(catalogPath, replacements) {
   if (!catalogPath || !fs.existsSync(catalogPath) || !replacements?.length) return
   let parsed
   try {
     parsed = JSON.parse(fs.readFileSync(catalogPath, 'utf8'))
-  } catch {
-    return
+  } catch (error) {
+    throw new Error(`Could not read ${catalogPath} to rewrite library paths`, { cause: error })
   }
   if (!parsed || !Array.isArray(parsed.entries)) return
   let changed = false
@@ -211,13 +278,7 @@ export function rewriteCatalogLegacyPaths(catalogPath, replacements) {
     }
   }
   if (!changed) return
-  const tmp = `${catalogPath}.${process.pid}.${process.hrtime.bigint()}.tmp`
-  try {
-    fs.writeFileSync(tmp, JSON.stringify(parsed, null, 2))
-    fs.renameSync(tmp, catalogPath)
-  } catch {
-    fs.rmSync(tmp, { force: true })
-  }
+  commitJson(catalogPath, parsed)
 }
 
 function readMarker(dataRoot) {
@@ -255,9 +316,18 @@ function folderRank(dir) {
  * holds the data. A lower-priority folder left behind after a recorded
  * move of a higher-priority folder is not a new stall.
  */
+function unresolvedLibraryLink(dir) {
+  const st = lstatOrNull(dir)
+  return Boolean(st?.isSymbolicLink() && !followedDirectory(dir))
+}
+
 function migrateSide({ dest, sources, unused, movedFrom, hooks }) {
-  const present = sources.filter(realDirectory)
-  if (present.length === 0) return { status: 'absent', source: null }
+  const present = sources.filter(followedDirectory)
+  const dangling = sources.filter(unresolvedLibraryLink)
+  if (present.length === 0) {
+    if (dangling.length > 0) return { status: 'stalled', source: dangling[0], occupied: false }
+    return { status: 'absent', source: null }
+  }
   const movedIndex = LEGACY_APP_FOLDER_NAMES.indexOf(movedFrom ?? '')
   const ignored = (dir) => {
     const rank = folderRank(dir)
@@ -274,8 +344,8 @@ function migrateSide({ dest, sources, unused, movedFrom, hooks }) {
   } catch {
     // The source is still the library. Dest was restored if a fresh folder
     // had been moved aside. Say so instead of continuing with an empty Cuttler.
-    if (realDirectory(source)) return { status: 'stalled', source, occupied: false }
-    if (realDirectory(dest)) return { status: 'moved', source }
+    if (followedDirectory(source)) return { status: 'stalled', source, occupied: false }
+    if (followedDirectory(dest)) return { status: 'moved', source }
     throw new Error(`Could not move ${source}`)
   }
   return { status: 'moved', source }
@@ -304,9 +374,78 @@ export function migrationStallMessage(result) {
   return parts.join(' ')
 }
 
+export function adoptedMigrationDataRoot(env = process.env) {
+  if (env?.[MIGRATION_STALL_ENV] !== '1') return null
+  const root = env?.[MIGRATION_DATA_ROOT_ENV]
+  if (typeof root !== 'string' || root.trim() === '') return null
+  return root
+}
+
+function pendingMigrationPath(home) {
+  return path.join(home, 'Library/Application Support', PENDING_MIGRATION_FILE)
+}
+
+function readPendingMigration(home) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(pendingMigrationPath(home), 'utf8'))
+    if (!parsed || parsed.version !== 1 || parsed.needsRewrite !== true) return null
+    if (!Array.isArray(parsed.replacements) || parsed.replacements.length === 0) return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+function writePendingMigration(home, body) {
+  const file = pendingMigrationPath(home)
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  const tmp = `${file}.${process.pid}.${process.hrtime.bigint()}.tmp`
+  fs.writeFileSync(tmp, `${JSON.stringify({ version: 1, ...body }, null, 2)}\n`)
+  fs.renameSync(tmp, file)
+}
+
+function clearPendingMigration(home) {
+  fs.rmSync(pendingMigrationPath(home), { force: true })
+}
+
+function applyLibraryRewrites(dataRoot, stalledDataDir, replacements) {
+  if (!replacements?.length) return
+  const roots = new Set([dataRoot, stalledDataDir].filter(Boolean))
+  for (const root of roots) {
+    rewriteCatalogLegacyPaths(path.join(root, 'catalog.json'), replacements)
+    rewriteJsonLegacyPaths(path.join(root, 'mutation-journal.json'), replacements)
+  }
+}
+
+/**
+ * Real-library migration runs only for an unmarked Mac build with no
+ * FONT_BUTLER_DATA / FONTCASE_DATA override. An explicit data root is an
+ * isolated library and must not rename the folders the installed app uses.
+ */
+export function shouldMigrateRealMacLibrary({
+  platform = process.platform,
+  testFeed = false,
+  env = process.env,
+} = {}) {
+  if (platform !== 'darwin' || testFeed === true) return false
+  const override = env?.FONT_BUTLER_DATA ?? env?.FONTCASE_DATA
+  return !override
+}
+
 export function migrateLegacyMacAppDirs(home, hooks) {
   const dataRoot = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
   const installDir = path.join(home, 'Library/Fonts', APP_FOLDER_NAME)
+  const pending = readPendingMigration(home)
+  if (pending) {
+    applyLibraryRewrites(pending.dataRoot, pending.stalledDataDir, pending.replacements)
+    if (pending.dataRoot && followedDirectory(pending.dataRoot)) {
+      writeMarker(pending.dataRoot, {
+        dataFrom: pending.dataFrom,
+        fontsFrom: pending.fontsFrom,
+      })
+    }
+    clearPendingMigration(home)
+  }
   const dataSources = LEGACY_APP_FOLDER_NAMES.map((name) =>
     path.join(home, 'Library/Application Support', name),
   )
@@ -316,29 +455,41 @@ export function migrateLegacyMacAppDirs(home, hooks) {
     dest: dataRoot,
     sources: dataSources,
     unused: isFreshDataRoot,
-    movedFrom: marker?.dataFrom,
+    movedFrom: marker?.dataFrom ?? pending?.dataFrom ?? null,
     hooks,
   })
   const fonts = migrateSide({
     dest: installDir,
     sources: fontSources,
     unused: isEmptyDir,
-    movedFrom: marker?.fontsFrom,
+    movedFrom: marker?.fontsFrom ?? pending?.fontsFrom ?? null,
     hooks,
   })
   const replacements = []
   if (data.status === 'moved') replacements.push({ from: data.source, to: dataRoot })
   if (fonts.status === 'moved') replacements.push({ from: fonts.source, to: installDir })
-  if (replacements.length > 0) {
-    const catalogs = new Set([path.join(dataRoot, 'catalog.json')])
-    if (data.status === 'stalled' && data.source) catalogs.add(path.join(data.source, 'catalog.json'))
-    for (const catalog of catalogs) rewriteCatalogLegacyPaths(catalog, replacements)
+  const record = {
+    dataFrom: data.status === 'moved' ? path.basename(data.source) : marker?.dataFrom ?? pending?.dataFrom ?? null,
+    fontsFrom: fonts.status === 'moved' ? path.basename(fonts.source) : marker?.fontsFrom ?? pending?.fontsFrom ?? null,
   }
-  if (data.status === 'moved' || fonts.status === 'moved') {
-    writeMarker(dataRoot, {
-      dataFrom: data.status === 'moved' ? path.basename(data.source) : marker?.dataFrom ?? null,
-      fontsFrom: fonts.status === 'moved' ? path.basename(fonts.source) : marker?.fontsFrom ?? null,
+  if (replacements.length > 0) {
+    const stalledDataDir = data.status === 'stalled' ? data.source : null
+    writePendingMigration(home, {
+      needsRewrite: true,
+      replacements,
+      dataRoot,
+      stalledDataDir,
+      dataFrom: record.dataFrom,
+      fontsFrom: record.fontsFrom,
     })
+    if (hooks?.failRewrite) {
+      throw new Error('rewrite failed')
+    }
+    applyLibraryRewrites(dataRoot, stalledDataDir, replacements)
+    if (data.status === 'moved' || followedDirectory(dataRoot)) {
+      writeMarker(dataRoot, record)
+    }
+    clearPendingMigration(home)
   }
   return {
     dataRoot,

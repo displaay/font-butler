@@ -6,6 +6,7 @@ import {
   APP_FOLDER_NAME,
   LEGACY_APP_FOLDER_NAME,
   PREVIOUS_APP_FOLDER_NAME,
+  adoptedMigrationDataRoot,
   isFreshDataRoot,
   migrateLegacyMacAppDirs,
   rewriteCatalogLegacyPaths,
@@ -55,14 +56,24 @@ export function buildPaths(options: {
   const home = options.home ?? os.homedir()
   const override = options.override
   const mac = options.mac ?? isMac()
-  const migrated =
-    !override && mac
+  const adopted = !override ? adoptedMigrationDataRoot() : null
+  const migrated = adopted
+    ? {
+        dataRoot: adopted,
+        installDir: path.join(home, 'Library/Fonts', APP_FOLDER_NAME),
+        stalled: true,
+        stalledDataDir: adopted,
+      }
+    : !override && mac
       ? migrateLegacyMacAppDirs(home)
       : {
           dataRoot: override ?? path.join(projectRoot, '.font-butler-data'),
           installDir: '',
+          stalled: false,
+          stalledDataDir: null as string | null,
         }
-  const dataRoot = migrated.dataRoot
+  const dataRoot =
+    !adopted && migrated.stalled && migrated.stalledDataDir ? migrated.stalledDataDir : migrated.dataRoot
   const isolated = Boolean(override)
   const userFontsDir = isolated
     ? path.join(dataRoot, 'user-fonts')
