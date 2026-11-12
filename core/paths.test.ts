@@ -751,6 +751,53 @@ test('unreadable user JSON does not stick the migration, and a bad plan is retri
   }
 })
 
+test('a data stall that later succeeds still rewrites paths into Cuttler', () => {
+  const home = tempHome()
+  const legacyData = path.join(home, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  const legacyInstall = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const snapshot = path.join(legacyData, 'journal', 'job', 'macos-live.otf')
+  try {
+    fs.mkdirSync(path.dirname(snapshot), { recursive: true })
+    fs.mkdirSync(legacyInstall, { recursive: true })
+    fs.writeFileSync(snapshot, 'original-bytes')
+    fs.writeFileSync(path.join(legacyInstall, 'Family.otf'), 'font')
+    fs.writeFileSync(
+      path.join(legacyData, 'catalog.json'),
+      catalog([{ id: 'later', sourcePath: path.join(legacyData, 'sources', 'Family.otf') }]),
+    )
+    fs.writeFileSync(
+      path.join(legacyData, 'mutation-journal.json'),
+      JSON.stringify({ journals: [{ targets: [{ files: [{ snapshotPath: snapshot }] }] }] }),
+    )
+    const blocked = migrateLegacyMacAppDirs(home, {
+      renameSync(from, to) {
+        if (from.endsWith(`${path.sep}${PREVIOUS_APP_FOLDER_NAME}`) && from.includes(`${path.sep}Application Support${path.sep}`)) {
+          const error = new Error('transient') as NodeJS.ErrnoException
+          error.code = 'EIO'
+          throw error
+        }
+        fs.renameSync(from, to)
+      },
+    })
+    assert.equal(blocked.stalled, true)
+    assert.equal(blocked.movedData, false)
+    assert.equal(blocked.movedFonts, true)
+    assert.equal(fs.existsSync(path.join(legacyData, 'catalog.json')), true)
+    const next = migrateLegacyMacAppDirs(home)
+    assert.equal(next.stalled, false)
+    assert.equal(next.movedData, true)
+    const row = JSON.parse(fs.readFileSync(path.join(next.dataRoot, 'catalog.json'), 'utf8')).entries[0]
+    assert.equal(row.sourcePath, path.join(next.dataRoot, 'sources', 'Family.otf'))
+    const journal = JSON.parse(fs.readFileSync(path.join(next.dataRoot, 'mutation-journal.json'), 'utf8'))
+    const movedSnapshot = path.join(next.dataRoot, 'journal', 'job', 'macos-live.otf')
+    assert.equal(journal.journals[0].targets[0].files[0].snapshotPath, movedSnapshot)
+    assert.equal(fs.readFileSync(movedSnapshot, 'utf8'), 'original-bytes')
+    assert.equal(fs.existsSync(path.join(home, 'Library/Application Support', PENDING_MIGRATION_FILE)), false)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
 test('a handled launch does not migrate again after a fonts-only stall or a throw', () => {
   const home = tempHome()
   const legacyInstall = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)

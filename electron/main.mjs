@@ -148,12 +148,13 @@ if (
     testFeed: testFeedPlan?.isolate === true,
   })
 ) {
-  // Set before the call so a throw, a fonts-only stall, and a success all
-  // tell the worker this launch already migrated.
-  process.env[MIGRATION_HANDLED_ENV] = '1'
   try {
     macDataMigration = migrateLegacyMacAppDirs(app.getPath('home'))
+    // Only a finished call skips the worker. A throw leaves the worker to
+    // finish the path rewrite before it opens the library.
+    process.env[MIGRATION_HANDLED_ENV] = '1'
   } catch (error) {
+    delete process.env[MIGRATION_HANDLED_ENV]
     console.error('Could not migrate library folders', error)
   }
 }

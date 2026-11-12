@@ -504,8 +504,9 @@ function movedReplacements(pending, { omitDest = '' } = {}) {
 
 function rewriteKeptLibrary(pending, dataRoot) {
   if (!pending?.replacements?.length) return
-  const occupiedDest = pending.stalledDataDir ? dataRoot : ''
-  const target = pending.stalledDataDir && followedDirectory(pending.stalledDataDir)
+  const retainingOldLibrary = Boolean(pending.stalledDataDir && followedDirectory(pending.stalledDataDir))
+  const occupiedDest = retainingOldLibrary ? dataRoot : ''
+  const target = retainingOldLibrary
     ? pending.stalledDataDir
     : followedDirectory(dataRoot)
       ? dataRoot
@@ -540,6 +541,8 @@ export function migrateLegacyMacAppDirs(home, hooks) {
   })
   if (data.status === 'stalled') {
     pending = rememberMove(home, pending, null, { dataRoot, stalledDataDir: data.source })
+  } else if (data.status === 'moved') {
+    pending = rememberMove(home, pending, null, { dataRoot, stalledDataDir: null })
   }
   if (hooks?.crashAfterDataMove) {
     throw new Error('killed after the data folder rename')

@@ -1,15 +1,18 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { APP_FOLDER_NAME, LEGACY_APP_FOLDER_NAMES } from './mac-data-migration.mjs'
+import { adoptedMigrationDataRoot, APP_FOLDER_NAME, LEGACY_APP_FOLDER_NAMES } from './mac-data-migration.mjs'
 
 export function apiTokenFileCandidates({
   platform = process.platform,
   home = os.homedir(),
   cwd = process.cwd(),
   dataOverride = process.env.FONT_BUTLER_DATA ?? process.env.FONTCASE_DATA,
+  env = process.env,
 } = {}) {
   if (dataOverride) return [path.join(dataOverride, 'api-token')]
+  const adopted = adoptedMigrationDataRoot(env)
+  if (adopted) return [path.join(adopted, 'api-token')]
   if (platform === 'darwin') {
     const root = path.join(home, 'Library/Application Support')
     return [APP_FOLDER_NAME, ...LEGACY_APP_FOLDER_NAMES].map((name) => path.join(root, name, 'api-token'))

@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
+import { MIGRATION_DATA_ROOT_ENV, MIGRATION_STALL_ENV } from './mac-data-migration.mjs'
 import { apiTokenFilePath, readApiTokenFile } from './api-token.mjs'
 
 test('api token path follows FONT_BUTLER_DATA, then macOS Application Support, then the project data dir', () => {
@@ -42,6 +43,32 @@ test('readApiTokenFile uses a token left in the old folder when Cuttler has none
     fs.mkdirSync(older, { recursive: true })
     fs.writeFileSync(path.join(older, 'api-token'), oldToken)
     assert.equal(readApiTokenFile(undefined, options), oldToken)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('a stalled migration reads the API token from the adopted library', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-token-stall-'))
+  const current = path.join(home, 'Library/Application Support/Cuttler')
+  const previous = path.join(home, 'Library/Application Support/Font Buttler')
+  try {
+    fs.mkdirSync(current, { recursive: true })
+    fs.mkdirSync(previous, { recursive: true })
+    fs.writeFileSync(path.join(current, 'api-token'), 'cuttler-token-0001')
+    fs.writeFileSync(path.join(previous, 'api-token'), 'buttler-token-0001')
+    assert.equal(
+      readApiTokenFile(undefined, {
+        platform: 'darwin',
+        home,
+        dataOverride: '',
+        env: {
+          [MIGRATION_STALL_ENV]: '1',
+          [MIGRATION_DATA_ROOT_ENV]: previous,
+        },
+      }),
+      'buttler-token-0001',
+    )
   } finally {
     fs.rmSync(home, { recursive: true, force: true })
   }
