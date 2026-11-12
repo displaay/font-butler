@@ -9,6 +9,7 @@ import {
   adoptedMigrationDataRoot,
   migrationAlreadyHandled,
   isFreshDataRoot,
+  legacyOwnerBlockMessage,
   migrateLegacyMacAppDirs,
   rewriteCatalogLegacyPaths,
 } from '../electron/mac-data-migration.mjs'
@@ -53,6 +54,8 @@ export function buildPaths(options: {
   home?: string
   override?: string
   mac?: boolean
+  /** Tests inject owner checks. Production calls this with no hooks. */
+  migrationHooks?: Parameters<typeof migrateLegacyMacAppDirs>[1]
 }): AppPaths {
   const home = options.home ?? os.homedir()
   const override = options.override
@@ -65,15 +68,20 @@ export function buildPaths(options: {
         installDir: path.join(home, 'Library/Fonts', APP_FOLDER_NAME),
         stalled: Boolean(adopted),
         stalledDataDir: adopted,
+        blockedByOwner: false,
       }
     : !override && mac
-      ? migrateLegacyMacAppDirs(home)
+      ? migrateLegacyMacAppDirs(home, options.migrationHooks)
       : {
           dataRoot: override ?? path.join(projectRoot, '.font-butler-data'),
           installDir: '',
           stalled: false,
           stalledDataDir: null as string | null,
+          blockedByOwner: false,
         }
+  if (!override && migrated.blockedByOwner) {
+    throw new Error(legacyOwnerBlockMessage(migrated))
+  }
   const dataRoot =
     !adopted && migrated.stalled && migrated.stalledDataDir ? migrated.stalledDataDir : migrated.dataRoot
   const isolated = Boolean(override)

@@ -11,6 +11,7 @@
  */
 
 import crypto from 'node:crypto'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -268,15 +269,23 @@ export function rewriteJsonLegacyPaths(filePath, replacements) {
   commitJson(filePath, next)
 }
 
-export function rewriteCatalogLegacyPaths(catalogPath, replacements) {
-  if (!catalogPath || !fs.existsSync(catalogPath) || !replacements?.length) return
-  let parsed
+function catalogBackupPath(catalogPath) {
+  return path.join(path.dirname(catalogPath), 'catalog.json.bak')
+}
+
+/** Same shape loadCatalog accepts: version 1 and an entries array. */
+function readUsableCatalog(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) return null
   try {
-    parsed = JSON.parse(fs.readFileSync(catalogPath, 'utf8'))
-  } catch (error) {
-    throw new Error(`Could not read ${catalogPath} to rewrite library paths`, { cause: error })
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'))
+    if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.entries)) return null
+    return parsed
+  } catch {
+    return null
   }
-  if (!parsed || !Array.isArray(parsed.entries)) return
+}
+
+function applyCatalogReplacements(parsed, replacements) {
   let changed = false
   const rewriteKey = (row, key) => {
     const current = row[key]
@@ -297,8 +306,38 @@ export function rewriteCatalogLegacyPaths(catalogPath, replacements) {
       }
     }
   }
-  if (!changed) return
-  commitJson(catalogPath, parsed)
+  return changed
+}
+
+function rewrittenCatalog(parsed, replacements) {
+  const copy = structuredClone(parsed)
+  return { value: copy, changed: applyCatalogReplacements(copy, replacements) }
+}
+
+/**
+ * Rewrite catalog paths. A truncated primary is recovered from catalog.json.bak,
+ * the same backup loadCatalog uses. Both copies are rewritten so a later
+ * backup recovery still sees Cuttler paths. Neither copy usable is a hard failure.
+ */
+export function rewriteCatalogLegacyPaths(catalogPath, replacements) {
+  if (!catalogPath || !replacements?.length || !fs.existsSync(catalogPath)) return
+  const backupPath = catalogBackupPath(catalogPath)
+  const primary = readUsableCatalog(catalogPath)
+  const backup = readUsableCatalog(backupPath)
+  if (!primary && !backup) {
+    throw new Error(`Could not read ${catalogPath} to rewrite library paths`)
+  }
+  if (primary) {
+    const next = rewrittenCatalog(primary, replacements)
+    if (next.changed) commitJson(catalogPath, next.value)
+  } else {
+    const recovered = rewrittenCatalog(backup, replacements)
+    commitJson(catalogPath, recovered.value)
+  }
+  if (backup) {
+    const next = rewrittenCatalog(backup, replacements)
+    if (next.changed) commitJson(backupPath, next.value)
+  }
 }
 
 function readMarker(dataRoot) {
@@ -442,6 +481,12 @@ const APP_JSON = new Set([
   'projects.json',
   'family-tags.json',
   'saved-filters.json',
+  // duplicates.json notifyKey is `${path}|fingerprint|occupying`. The whole
+  // string is rewritten when the path sits under a moved folder. The skipped
+  // list uses those same keys, so it has to move with them.
+  'duplicates.json',
+  'skipped-duplicates.json',
+  'unlinked-sources.json',
 ])
 /** Readers already tolerate a corrupt copy. A bad file must not block the journal rewrite. */
 const NON_ESSENTIAL_JSON = new Set([
@@ -456,6 +501,39 @@ const NON_ESSENTIAL_JSON = new Set([
 function rewriteNamedJson(abs, name, replacements) {
   if (name === 'catalog.json') rewriteCatalogLegacyPaths(abs, replacements)
   else rewriteJsonLegacyPaths(abs, replacements)
+}
+
+/** Keep the bytes, but stop readers from opening a file that is not JSON. */
+function quarantineUnreadable(filePath) {
+  const dest = `${filePath}.unreadable`
+  try {
+    if (fs.existsSync(dest)) return
+    fs.renameSync(filePath, dest)
+  } catch {
+    // The reader already ignores a truncated file. Launch still continues.
+  }
+}
+
+/**
+ * Settings, operations, plans, and the other app JSON readers return empty
+ * when the file is truncated. A bad copy must not block catalog or journal.
+ */
+function rewriteOptionalJson(filePath, replacements) {
+  if (!filePath || !replacements?.length || !fs.existsSync(filePath)) return
+  let parsed
+  try {
+    parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'))
+  } catch {
+    quarantineUnreadable(filePath)
+    return
+  }
+  const next = rewriteJsonValue(parsed, replacements)
+  if (next === parsed) return
+  try {
+    commitJson(filePath, next)
+  } catch {
+    // The readable file stays. A settings write failure is not a lost journal.
+  }
 }
 
 function rewriteLibraryFiles(root, replacements) {
@@ -474,7 +552,7 @@ function rewriteLibraryFiles(root, replacements) {
     }
     for (const entry of planEntries) {
       if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith('.json')) continue
-      rewriteJsonLegacyPaths(path.join(plans, entry.name), replacements)
+      rewriteOptionalJson(path.join(plans, entry.name), replacements)
     }
   }
   let entries
@@ -487,7 +565,7 @@ function rewriteLibraryFiles(root, replacements) {
     if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith('.json')) continue
     if (ESSENTIAL_JSON.includes(entry.name) || NON_ESSENTIAL_JSON.has(entry.name)) continue
     if (!APP_JSON.has(entry.name)) continue
-    rewriteNamedJson(path.join(root, entry.name), entry.name, replacements)
+    rewriteOptionalJson(path.join(root, entry.name), replacements)
   }
 }
 
@@ -549,6 +627,163 @@ export function shouldMigrateRealMacLibrary({
   return !override
 }
 
+const OWNER_WAIT_MS = 10_000
+const OWNER_POLL_MS = 200
+const COOKIE_FLOCK_PERL =
+  'use Fcntl qw(:flock); open my $fh, "<", $ARGV[0] or exit 2; flock($fh, LOCK_EX | LOCK_NB) ? exit 0 : exit 1;'
+
+function defaultSleepSync(ms) {
+  if (!ms || ms < 0) return
+  const until = Date.now() + ms
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+    return
+  } catch {
+    // A host that rejects Atomics.wait must still wait. Failing here would
+    // skip the owner check and move the library out from under 0.4.0.
+  }
+  while (Date.now() < until) {
+    // Spin only when timed waits are unavailable.
+  }
+}
+
+function defaultProcessAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error?.code === 'EPERM'
+  }
+}
+
+/**
+ * Chromium's SingletonLock symlink target is `hostname-pid`. The hostname may
+ * contain dashes, so the pid is the trailing integer. A regular file with the
+ * same text is accepted for fixtures.
+ */
+export function readSingletonLockPid(lockPath) {
+  let raw = ''
+  try {
+    raw = fs.readlinkSync(lockPath)
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null
+    try {
+      const st = fs.lstatSync(lockPath)
+      if (!st.isFile() || st.isSymbolicLink()) return null
+      raw = fs.readFileSync(lockPath, 'utf8')
+    } catch {
+      return null
+    }
+  }
+  raw = String(raw).trim()
+  const match = /-(\d+)$/.exec(raw)
+  const pid = Number(match ? match[1] : /^\d+$/.test(raw) ? raw : '')
+  if (!Number.isInteger(pid) || pid <= 0) return null
+  return pid
+}
+
+/**
+ * True when another process holds Chromium's exclusive flock on SingletonCookie.
+ * False when the cookie is missing or the flock is free (the recorded pid was
+ * recycled, or the owner already exited). Null when the check itself cannot run.
+ */
+export function singletonCookieHeld(cookiePath) {
+  let st
+  try {
+    st = fs.lstatSync(cookiePath)
+  } catch {
+    return false
+  }
+  if (!st.isFile() || st.isSymbolicLink()) return null
+  let result
+  try {
+    result = spawnSync('perl', ['-e', COOKIE_FLOCK_PERL, cookiePath], { timeout: 2000 })
+  } catch {
+    return null
+  }
+  if (result?.error || result?.status == null) return null
+  if (result.status === 0) return false
+  if (result.status === 1) return true
+  return null
+}
+
+/**
+ * True when a process other than this one still owns the legacy userData.
+ * 0.4.0 holds Electron's SingletonLock in that folder. A dead pid, this pid,
+ * or a live pid that does not hold SingletonCookie is not an owner.
+ */
+export function legacyLibraryHasRunningOwner(dir, {
+  selfPid = process.pid,
+  isAlive = defaultProcessAlive,
+  cookieHeld = singletonCookieHeld,
+} = {}) {
+  if (!dir) return false
+  const pid = readSingletonLockPid(path.join(dir, 'SingletonLock'))
+  if (!pid || pid === selfPid) return false
+  if (isAlive(pid) !== true) return false
+  const held = cookieHeld(path.join(dir, 'SingletonCookie'), pid)
+  if (held === false) return false
+  return true
+}
+
+function legacyDataDirectories(home) {
+  return LEGACY_APP_FOLDER_NAMES.map((name) => path.join(home, 'Library/Application Support', name))
+}
+
+export function findLegacyLibraryOwner(home, hooks) {
+  const probe = {
+    selfPid: hooks?.selfPid ?? process.pid,
+    isAlive: hooks?.isAlive ?? defaultProcessAlive,
+    cookieHeld: hooks?.cookieHeld ?? singletonCookieHeld,
+  }
+  for (const dir of legacyDataDirectories(home)) {
+    if (!lstatOrNull(dir)) continue
+    if (!legacyLibraryHasRunningOwner(dir, probe)) continue
+    return { dir, pid: readSingletonLockPid(path.join(dir, 'SingletonLock')) }
+  }
+  return null
+}
+
+function waitForLegacyLibraryOwner(home, hooks) {
+  const timeoutMs = Number.isFinite(hooks?.ownerWaitMs) ? hooks.ownerWaitMs : OWNER_WAIT_MS
+  const intervalMs = Number.isFinite(hooks?.ownerPollMs) ? hooks.ownerPollMs : OWNER_POLL_MS
+  const sleep = hooks?.sleepSync ?? defaultSleepSync
+  const started = Date.now()
+  let owner = findLegacyLibraryOwner(home, hooks)
+  if (!owner || timeoutMs <= 0) return owner
+  const maxSpins = Math.ceil(timeoutMs / Math.max(intervalMs, 1)) + 2
+  let spins = 0
+  while (owner && spins < maxSpins && Date.now() - started < timeoutMs) {
+    sleep(Math.max(intervalMs, 0))
+    spins += 1
+    owner = findLegacyLibraryOwner(home, hooks)
+  }
+  return owner
+}
+
+export function legacyOwnerBlockMessage(result) {
+  const where = result?.ownerDataDir ? ` (${result.ownerDataDir})` : ''
+  return `Quit the previous Cuttler (Font Buttler) first. It is still running and using your current library${where}. This version did not move or open that library. Quit the other app, then open Cuttler again.`
+}
+
+function ownerBlockedResult(dataRoot, installDir, owner) {
+  return {
+    dataRoot,
+    installDir,
+    stalled: false,
+    stalledDataDir: null,
+    stalledFontsDir: null,
+    dataOccupied: false,
+    fontsOccupied: false,
+    movedData: false,
+    movedFonts: false,
+    blockedByOwner: true,
+    ownerPid: owner.pid,
+    ownerDataDir: owner.dir,
+  }
+}
+
 function movedReplacements(pending, { omitDest = '' } = {}) {
   return (pending?.replacements ?? []).filter(
     (pair) => pair.to !== omitDest && !followedDirectory(pair.from) && followedDirectory(pair.to),
@@ -572,6 +807,12 @@ function rewriteKeptLibrary(pending, dataRoot) {
 export function migrateLegacyMacAppDirs(home, hooks) {
   const dataRoot = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
   const installDir = path.join(home, 'Library/Fonts', APP_FOLDER_NAME)
+  // 0.4.0's instance lock lives in the legacy folder. Electron's own lock
+  // follows this process's userData (Cuttler) and cannot see that owner.
+  // Wait out a quitting updater, then refuse rather than move the library
+  // out from under a process that still has it open.
+  const owner = waitForLegacyLibraryOwner(home, hooks)
+  if (owner) return ownerBlockedResult(dataRoot, installDir, owner)
   let pending = readPendingMigration(home)
   if (pending) rewriteKeptLibrary(pending, dataRoot)
   const dataSources = LEGACY_APP_FOLDER_NAMES.map((name) =>
@@ -645,5 +886,8 @@ export function migrateLegacyMacAppDirs(home, hooks) {
     fontsOccupied: fonts.status === 'stalled' ? fonts.occupied !== false : false,
     movedData: data.status === 'moved',
     movedFonts: fonts.status === 'moved',
+    blockedByOwner: false,
+    ownerPid: null,
+    ownerDataDir: null,
   }
 }

@@ -13,6 +13,12 @@ export type MacDirMigrationHooks = {
   copyFileSync?: (from: string, to: string) => void
   failRewrite?: boolean
   crashAfterDataMove?: boolean
+  selfPid?: number
+  isAlive?: (pid: number) => boolean
+  cookieHeld?: (cookiePath: string, pid?: number) => boolean | null
+  ownerWaitMs?: number
+  ownerPollMs?: number
+  sleepSync?: (ms: number) => void
 }
 
 export type MacDataMigration = {
@@ -26,6 +32,10 @@ export type MacDataMigration = {
   fontsOccupied: boolean
   movedData: boolean
   movedFonts: boolean
+  /** True when a running 0.4.0-style owner still holds the legacy library. */
+  blockedByOwner: boolean
+  ownerPid: number | null
+  ownerDataDir: string | null
 }
 
 export function isFreshDataRoot(dir: string): boolean
@@ -54,4 +64,21 @@ export function rewriteCatalogLegacyPaths(
   replacements: Array<{ from: string; to: string }>,
 ): void
 export function migrationStallMessage(result: MacDataMigration | null | undefined): string
+export function readSingletonLockPid(lockPath: string): number | null
+export function singletonCookieHeld(cookiePath: string): boolean | null
+export function legacyLibraryHasRunningOwner(
+  dir: string,
+  hooks?: {
+    selfPid?: number
+    isAlive?: (pid: number) => boolean
+    cookieHeld?: (cookiePath: string, pid?: number) => boolean | null
+  },
+): boolean
+export function findLegacyLibraryOwner(
+  home: string,
+  hooks?: MacDirMigrationHooks,
+): { dir: string; pid: number | null } | null
+export function legacyOwnerBlockMessage(result: {
+  ownerDataDir?: string | null
+} | null | undefined): string
 export function migrateLegacyMacAppDirs(home: string, hooks?: MacDirMigrationHooks): MacDataMigration

@@ -24,6 +24,7 @@ import {
   MIGRATION_HANDLED_ENV,
   MIGRATION_STALL_ENV,
   launchAfterMigrationFailure,
+  legacyOwnerBlockMessage,
   migrateLegacyMacAppDirs,
   shouldMigrateRealMacLibrary,
 } from './mac-data-migration.mjs'
@@ -153,9 +154,12 @@ if (
 ) {
   try {
     macDataMigration = migrateLegacyMacAppDirs(app.getPath('home'))
-    // Only a finished call skips the worker. A throw must not open the
+    // Only a finished move skips the worker. A throw must not open the
     // library on stale paths; the next launch retries the pending rewrite.
-    process.env[MIGRATION_HANDLED_ENV] = '1'
+    // A live legacy owner is not finished: the next launch moves once it quits.
+    if (!macDataMigration?.blockedByOwner) {
+      process.env[MIGRATION_HANDLED_ENV] = '1'
+    }
   } catch (error) {
     delete process.env[MIGRATION_HANDLED_ENV]
     migrationFailure = launchAfterMigrationFailure(app.getPath('home'))
@@ -173,6 +177,21 @@ if (
     }
     console.error('Could not migrate library folders', error)
   }
+}
+// The previous app's SingletonLock is not this process's userData lock.
+// Leave both libraries untouched and do not create the Cuttler folder.
+if (macDataMigration?.blockedByOwner) {
+  const message = legacyOwnerBlockMessage(macDataMigration)
+  console.error(message)
+  try {
+    dialog.showErrorBox('Quit Cuttler first', message)
+  } catch (error) {
+    console.error('Could not show the library-in-use message', error)
+  }
+  app.exit(0)
+  // app.exit before ready can return. Do not fall through into setPath,
+  // which would create an empty Cuttler library beside the one still in use.
+  process.exit(0)
 }
 if (testFeedPlan?.isolate !== true && canSetUserData) {
   const stalledRoot =
