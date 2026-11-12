@@ -21,6 +21,7 @@ import { readApiTokenFile } from './api-token.mjs'
 import {
   APP_FOLDER_NAME,
   MIGRATION_DATA_ROOT_ENV,
+  MIGRATION_HANDLED_ENV,
   MIGRATION_STALL_ENV,
   migrateLegacyMacAppDirs,
   shouldMigrateRealMacLibrary,
@@ -147,6 +148,9 @@ if (
     testFeed: testFeedPlan?.isolate === true,
   })
 ) {
+  // Set before the call so a throw, a fonts-only stall, and a success all
+  // tell the worker this launch already migrated.
+  process.env[MIGRATION_HANDLED_ENV] = '1'
   try {
     macDataMigration = migrateLegacyMacAppDirs(app.getPath('home'))
   } catch (error) {
@@ -2714,9 +2718,11 @@ if (launchMode === 'quit') {
           ...(process.env.FONT_BUTLER_DATA
             ? { FONT_BUTLER_DATA: process.env.FONT_BUTLER_DATA }
             : {}),
-          // A stalled move keeps the worker on the old library. Without this
-          // the worker would migrate again and could finish a move main
-          // already reported as failed.
+          // Main already ran migration. A second pass can move fonts main
+          // stalled, or throw again on a path rewrite main already attempted.
+          ...(process.env[MIGRATION_HANDLED_ENV] === '1'
+            ? { [MIGRATION_HANDLED_ENV]: process.env[MIGRATION_HANDLED_ENV] }
+            : {}),
           ...(process.env[MIGRATION_STALL_ENV] === '1'
             ? {
                 [MIGRATION_STALL_ENV]: process.env[MIGRATION_STALL_ENV],

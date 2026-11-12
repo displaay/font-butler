@@ -6,6 +6,7 @@ import { test } from 'node:test'
 import {
   FOLDER_MIGRATION_FILE,
   MIGRATION_DATA_ROOT_ENV,
+  MIGRATION_HANDLED_ENV,
   MIGRATION_STALL_ENV,
   PENDING_MIGRATION_FILE,
   migrationStallMessage,
@@ -327,7 +328,7 @@ test('a fonts move rewrites the catalog that stayed behind when application supp
       JSON.stringify({ journals: [{ targets: [{ files: [{ originalPath: installed }] }] }] }),
     )
     fs.writeFileSync(path.join(nextData, 'settings.json'), '{}')
-    fs.writeFileSync(path.join(nextData, 'catalog.json'), catalog([{ id: 'new', installedPath: '/keep/this.otf' }]))
+    fs.writeFileSync(path.join(nextData, 'catalog.json'), catalog([{ id: 'new', installedPath: installed }]))
     const next = migrateLegacyMacAppDirs(home)
     assert.equal(next.stalled, true)
     assert.equal(next.movedData, false)
@@ -339,7 +340,7 @@ test('a fonts move rewrites the catalog that stayed behind when application supp
     assert.equal(oldJournal.journals[0].targets[0].files[0].originalPath, path.join(next.installDir, 'Family.otf'))
     const newCatalog = JSON.parse(fs.readFileSync(path.join(nextData, 'catalog.json'), 'utf8'))
     assert.equal(newCatalog.entries[0].id, 'new')
-    assert.equal(newCatalog.entries[0].installedPath, '/keep/this.otf')
+    assert.equal(newCatalog.entries[0].installedPath, installed)
     assert.equal(fs.existsSync(path.join(next.installDir, 'Family.otf')), true)
   } finally {
     fs.rmSync(home, { recursive: true, force: true })
@@ -659,6 +660,112 @@ test('a failed path rewrite leaves the pending marker for the next launch', () =
     assert.equal(row.installedPath, path.join(finished.dataRoot, 'Disabled', 'A.otf'))
     assert.equal(fs.existsSync(pending), false)
   } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('a crash after the data rename rewrites the journal on the next launch', () => {
+  const home = tempHome()
+  const legacyData = path.join(home, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  const legacyInstall = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const snapshot = path.join(legacyData, 'journal', 'job', 'macos-live.otf')
+  const pending = path.join(home, 'Library/Application Support', PENDING_MIGRATION_FILE)
+  try {
+    fs.mkdirSync(path.dirname(snapshot), { recursive: true })
+    fs.mkdirSync(legacyInstall, { recursive: true })
+    fs.writeFileSync(snapshot, 'original-bytes')
+    fs.writeFileSync(path.join(legacyInstall, 'Family.otf'), 'font')
+    fs.writeFileSync(
+      path.join(legacyData, 'catalog.json'),
+      catalog([{ id: 'moved', installedPath: path.join(legacyInstall, 'Family.otf') }]),
+    )
+    fs.writeFileSync(
+      path.join(legacyData, 'mutation-journal.json'),
+      JSON.stringify({
+        journals: [{ targets: [{ files: [{ snapshotPath: snapshot, originalPath: path.join(legacyInstall, 'Family.otf') }] }] }],
+      }),
+    )
+    assert.equal(fs.existsSync(pending), false)
+    assert.throws(() => migrateLegacyMacAppDirs(home, { crashAfterDataMove: true }), /killed after the data folder rename/)
+    const dataRoot = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
+    const movedSnapshot = path.join(dataRoot, 'journal', 'job', 'macos-live.otf')
+    assert.equal(fs.existsSync(legacyData), false)
+    assert.equal(fs.readFileSync(movedSnapshot, 'utf8'), 'original-bytes')
+    assert.match(fs.readFileSync(path.join(dataRoot, 'mutation-journal.json'), 'utf8'), /Font Buttler/)
+    assert.equal(fs.existsSync(pending), true)
+    const next = migrateLegacyMacAppDirs(home)
+    assert.equal(next.stalled, false)
+    const journal = JSON.parse(fs.readFileSync(path.join(dataRoot, 'mutation-journal.json'), 'utf8'))
+    assert.equal(journal.journals[0].targets[0].files[0].snapshotPath, movedSnapshot)
+    assert.equal(journal.journals[0].targets[0].files[0].originalPath, path.join(next.installDir, 'Family.otf'))
+    const row = JSON.parse(fs.readFileSync(path.join(dataRoot, 'catalog.json'), 'utf8')).entries[0]
+    assert.equal(row.installedPath, path.join(next.installDir, 'Family.otf'))
+    assert.equal(fs.readFileSync(movedSnapshot, 'utf8'), 'original-bytes')
+    assert.equal(fs.existsSync(pending), false)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('unreadable user JSON does not stick the migration, and a bad plan is retried', () => {
+  const home = tempHome()
+  const legacyData = path.join(home, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  const pending = path.join(home, 'Library/Application Support', PENDING_MIGRATION_FILE)
+  try {
+    fs.mkdirSync(path.join(legacyData, 'sources'), { recursive: true })
+    fs.mkdirSync(path.join(legacyData, 'uploads'), { recursive: true })
+    fs.writeFileSync(path.join(legacyData, 'sources', 'note.json'), '{')
+    fs.writeFileSync(path.join(legacyData, 'uploads', 'drop.json'), '{')
+    fs.writeFileSync(path.join(legacyData, 'catalog.json'), catalog([{ id: 'ok', installedPath: path.join(legacyData, 'Disabled', 'A.otf') }]))
+    const moved = migrateLegacyMacAppDirs(home)
+    assert.equal(moved.stalled, false)
+    assert.equal(fs.existsSync(pending), false)
+    assert.equal(
+      JSON.parse(fs.readFileSync(path.join(moved.dataRoot, 'catalog.json'), 'utf8')).entries[0].installedPath,
+      path.join(moved.dataRoot, 'Disabled', 'A.otf'),
+    )
+    assert.equal(fs.readFileSync(path.join(moved.dataRoot, 'sources', 'note.json'), 'utf8'), '{')
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+
+  const retryHome = tempHome()
+  const retryLegacy = path.join(retryHome, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  const retryPending = path.join(retryHome, 'Library/Application Support', PENDING_MIGRATION_FILE)
+  const plan = path.join(retryHome, 'Library/Application Support', APP_FOLDER_NAME, 'plans', 'bad.json')
+  try {
+    fs.mkdirSync(path.join(retryLegacy, 'plans'), { recursive: true })
+    fs.writeFileSync(path.join(retryLegacy, 'catalog.json'), catalog([{ id: 'ok', installedPath: path.join(retryLegacy, 'Disabled', 'A.otf') }]))
+    fs.writeFileSync(path.join(retryLegacy, 'plans', 'bad.json'), '{')
+    assert.throws(() => migrateLegacyMacAppDirs(retryHome), /Could not read/)
+    assert.equal(fs.existsSync(retryPending), true)
+    assert.throws(() => migrateLegacyMacAppDirs(retryHome), /Could not read/)
+    assert.equal(fs.existsSync(retryPending), true)
+    fs.writeFileSync(plan, JSON.stringify({ items: [{ path: path.join(retryLegacy, 'Disabled', 'A.otf') }] }))
+    const done = migrateLegacyMacAppDirs(retryHome)
+    assert.equal(fs.existsSync(retryPending), false)
+    const fixed = JSON.parse(fs.readFileSync(plan, 'utf8'))
+    assert.equal(fixed.items[0].path, path.join(done.dataRoot, 'Disabled', 'A.otf'))
+  } finally {
+    fs.rmSync(retryHome, { recursive: true, force: true })
+  }
+})
+
+test('a handled launch does not migrate again after a fonts-only stall or a throw', () => {
+  const home = tempHome()
+  const legacyInstall = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const previous = process.env[MIGRATION_HANDLED_ENV]
+  try {
+    fs.mkdirSync(legacyInstall, { recursive: true })
+    fs.writeFileSync(path.join(legacyInstall, 'Family.otf'), 'font')
+    process.env[MIGRATION_HANDLED_ENV] = '1'
+    const paths = buildPaths({ home, mac: true })
+    assert.equal(paths.dataRoot, path.join(home, 'Library/Application Support', APP_FOLDER_NAME))
+    assert.equal(fs.existsSync(path.join(legacyInstall, 'Family.otf')), true)
+    assert.equal(fs.existsSync(path.join(home, 'Library/Fonts', APP_FOLDER_NAME)), false)
+  } finally {
+    if (previous === undefined) delete process.env[MIGRATION_HANDLED_ENV]
+    else process.env[MIGRATION_HANDLED_ENV] = previous
     fs.rmSync(home, { recursive: true, force: true })
   }
 })

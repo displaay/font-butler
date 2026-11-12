@@ -209,6 +209,10 @@ test('main sets test-feed userData and FONT_BUTLER_DATA before the single-instan
   assert.match(main, /MIGRATION_DATA_ROOT_ENV/)
   assert.match(main, /stalledDataDir/)
   assert.match(main, /\[MIGRATION_STALL_ENV\]: process\.env\[MIGRATION_STALL_ENV\]/)
+  const handledAt = main.indexOf("process.env[MIGRATION_HANDLED_ENV] = '1'")
+  assert.ok(handledAt > 0)
+  assert.ok(handledAt < migrateAt)
+  assert.match(main, /\[MIGRATION_HANDLED_ENV\]: process\.env\[MIGRATION_HANDLED_ENV\]/)
   assert.doesNotMatch(main, /setPath\('userData', path\.join\(app\.getPath\('appData'\), 'Font Buttler'\)\)/)
 })
 

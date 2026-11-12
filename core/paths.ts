@@ -7,6 +7,7 @@ import {
   LEGACY_APP_FOLDER_NAME,
   PREVIOUS_APP_FOLDER_NAME,
   adoptedMigrationDataRoot,
+  migrationAlreadyHandled,
   isFreshDataRoot,
   migrateLegacyMacAppDirs,
   rewriteCatalogLegacyPaths,
@@ -56,12 +57,13 @@ export function buildPaths(options: {
   const home = options.home ?? os.homedir()
   const override = options.override
   const mac = options.mac ?? isMac()
+  const handled = !override && migrationAlreadyHandled()
   const adopted = !override ? adoptedMigrationDataRoot() : null
-  const migrated = adopted
+  const migrated = handled || adopted
     ? {
-        dataRoot: adopted,
+        dataRoot: adopted ?? path.join(home, 'Library/Application Support', APP_FOLDER_NAME),
         installDir: path.join(home, 'Library/Fonts', APP_FOLDER_NAME),
-        stalled: true,
+        stalled: Boolean(adopted),
         stalledDataDir: adopted,
       }
     : !override && mac

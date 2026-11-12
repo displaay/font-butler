@@ -25,6 +25,26 @@ export const FOLDER_MIGRATION_FILE = 'folder-migration.json'
 export const PENDING_MIGRATION_FILE = 'cuttler-folder-migration.json'
 export const MIGRATION_STALL_ENV = 'FONT_BUTLER_MIGRATION_STALL'
 export const MIGRATION_DATA_ROOT_ENV = 'FONT_BUTLER_MIGRATION_DATA_ROOT'
+/** Set before main's migrate call, including when that call throws. */
+export const MIGRATION_HANDLED_ENV = 'FONT_BUTLER_MIGRATION_HANDLED'
+
+/** Directories that hold user files, not app state. A bad file here must not block launch. */
+const USER_CONTENT_DIRS = new Set([
+  'sources',
+  'uploads',
+  'revisions',
+  'retail-cache',
+  'journal',
+  'Disabled',
+  'Backups',
+  'user-fonts',
+  'computer-fonts',
+  'system-fonts',
+  'supplemental',
+  'office-cache',
+  'ats-cache',
+  'adobe-fonts',
+])
 
 function rewritePathPrefix(value, from, to) {
   if (typeof value !== 'string' || !from || from === to) return value
@@ -321,7 +341,7 @@ function unresolvedLibraryLink(dir) {
   return Boolean(st?.isSymbolicLink() && !followedDirectory(dir))
 }
 
-function migrateSide({ dest, sources, unused, movedFrom, hooks }) {
+function migrateSide({ dest, sources, unused, movedFrom, hooks, beforeMove }) {
   const present = sources.filter(followedDirectory)
   const dangling = sources.filter(unresolvedLibraryLink)
   if (present.length === 0) {
@@ -340,6 +360,7 @@ function migrateSide({ dest, sources, unused, movedFrom, hooks }) {
   }
   const source = present.find((dir) => !unused(dir)) ?? present[0]
   try {
+    beforeMove?.(source, dest)
     moveDirectoryAtomic(source, dest, hooks)
   } catch {
     // The source is still the library. Dest was restored if a fresh folder
@@ -381,6 +402,11 @@ export function adoptedMigrationDataRoot(env = process.env) {
   return root
 }
 
+/** Main already ran migration this launch, so the worker must not run it again. */
+export function migrationAlreadyHandled(env = process.env) {
+  return env?.[MIGRATION_HANDLED_ENV] === '1'
+}
+
 function pendingMigrationPath(home) {
   return path.join(home, 'Library/Application Support', PENDING_MIGRATION_FILE)
 }
@@ -408,35 +434,51 @@ function clearPendingMigration(home) {
   fs.rmSync(pendingMigrationPath(home), { force: true })
 }
 
-function rewriteJsonTree(root, replacements) {
+function rewriteLibraryFiles(root, replacements) {
   if (!root || !replacements?.length || !followedDirectory(root)) return
-  const stack = [root]
-  while (stack.length > 0) {
-    const current = stack.pop()
-    let entries
-    try {
-      entries = fs.readdirSync(current, { withFileTypes: true })
-    } catch {
+  let entries
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true })
+  } catch {
+    return
+  }
+  for (const entry of entries) {
+    if (entry.isSymbolicLink()) continue
+    const abs = path.join(root, entry.name)
+    if (entry.isDirectory()) {
+      if (USER_CONTENT_DIRS.has(entry.name) || entry.name !== 'plans') continue
+      rewriteLibraryFiles(abs, replacements)
       continue
     }
-    for (const entry of entries) {
-      if (entry.isSymbolicLink()) continue
-      const abs = path.join(current, entry.name)
-      if (entry.isDirectory()) {
-        stack.push(abs)
-      } else if (entry.isFile() && entry.name.endsWith('.json')) {
-        if (entry.name === 'catalog.json') rewriteCatalogLegacyPaths(abs, replacements)
-        rewriteJsonLegacyPaths(abs, replacements)
-      }
-    }
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue
+    if (entry.name === 'catalog.json') rewriteCatalogLegacyPaths(abs, replacements)
+    rewriteJsonLegacyPaths(abs, replacements)
   }
 }
 
-function applyLibraryRewrites(dataRoot, stalledDataDir, replacements) {
-  if (!replacements?.length) return
-  for (const root of new Set([dataRoot, stalledDataDir].filter(Boolean))) {
-    rewriteJsonTree(root, replacements)
+function pairMoved(pair) {
+  return !followedDirectory(pair.from) && followedDirectory(pair.to)
+}
+
+function rememberMove(home, current, replacement, extra = {}) {
+  const replacements = [...(current?.replacements ?? [])]
+  if (
+    replacement &&
+    !replacements.some((item) => item.from === replacement.from && item.to === replacement.to)
+  ) {
+    replacements.push(replacement)
   }
+  const next = {
+    needsRewrite: true,
+    replacements,
+    dataRoot: extra.dataRoot ?? current?.dataRoot,
+    stalledDataDir: extra.stalledDataDir === undefined ? current?.stalledDataDir ?? null : extra.stalledDataDir,
+    dataFrom: extra.dataFrom === undefined ? current?.dataFrom ?? null : extra.dataFrom,
+    fontsFrom: extra.fontsFrom === undefined ? current?.fontsFrom ?? null : extra.fontsFrom,
+  }
+  if (next.replacements.length === 0) return next.stalledDataDir ? next : current
+  writePendingMigration(home, next)
+  return next
 }
 
 /**
@@ -454,20 +496,30 @@ export function shouldMigrateRealMacLibrary({
   return !override
 }
 
+function movedReplacements(pending, { omitDest = '' } = {}) {
+  return (pending?.replacements ?? []).filter(
+    (pair) => pair.to !== omitDest && !followedDirectory(pair.from) && followedDirectory(pair.to),
+  )
+}
+
+function rewriteKeptLibrary(pending, dataRoot) {
+  if (!pending?.replacements?.length) return
+  const occupiedDest = pending.stalledDataDir ? dataRoot : ''
+  const target = pending.stalledDataDir && followedDirectory(pending.stalledDataDir)
+    ? pending.stalledDataDir
+    : followedDirectory(dataRoot)
+      ? dataRoot
+      : null
+  const replacements = movedReplacements(pending, { omitDest: occupiedDest })
+  if (!target || replacements.length === 0) return
+  rewriteLibraryFiles(target, replacements)
+}
+
 export function migrateLegacyMacAppDirs(home, hooks) {
   const dataRoot = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
   const installDir = path.join(home, 'Library/Fonts', APP_FOLDER_NAME)
-  const pending = readPendingMigration(home)
-  if (pending) {
-    applyLibraryRewrites(pending.dataRoot, pending.stalledDataDir, pending.replacements)
-    if (pending.dataRoot && followedDirectory(pending.dataRoot)) {
-      writeMarker(pending.dataRoot, {
-        dataFrom: pending.dataFrom,
-        fontsFrom: pending.fontsFrom,
-      })
-    }
-    clearPendingMigration(home)
-  }
+  let pending = readPendingMigration(home)
+  if (pending) rewriteKeptLibrary(pending, dataRoot)
   const dataSources = LEGACY_APP_FOLDER_NAMES.map((name) =>
     path.join(home, 'Library/Application Support', name),
   )
@@ -479,39 +531,53 @@ export function migrateLegacyMacAppDirs(home, hooks) {
     unused: isFreshDataRoot,
     movedFrom: marker?.dataFrom ?? pending?.dataFrom ?? null,
     hooks,
+    beforeMove(source) {
+      pending = rememberMove(home, pending, { from: source, to: dataRoot }, {
+        dataRoot,
+        dataFrom: path.basename(source),
+      })
+    },
   })
+  if (data.status === 'stalled') {
+    pending = rememberMove(home, pending, null, { dataRoot, stalledDataDir: data.source })
+  }
+  if (hooks?.crashAfterDataMove) {
+    throw new Error('killed after the data folder rename')
+  }
   const fonts = migrateSide({
     dest: installDir,
     sources: fontSources,
     unused: isEmptyDir,
     movedFrom: marker?.fontsFrom ?? pending?.fontsFrom ?? null,
     hooks,
+    beforeMove(source) {
+      pending = rememberMove(home, pending, { from: source, to: installDir }, {
+        dataRoot,
+        fontsFrom: path.basename(source),
+      })
+    },
   })
-  const replacements = []
-  if (data.status === 'moved') replacements.push({ from: data.source, to: dataRoot })
-  if (fonts.status === 'moved') replacements.push({ from: fonts.source, to: installDir })
+  pending = readPendingMigration(home) ?? pending
+  if (data.status === 'stalled' && data.source) {
+    pending = rememberMove(home, pending, null, { dataRoot, stalledDataDir: data.source })
+  }
   const record = {
     dataFrom: data.status === 'moved' ? path.basename(data.source) : marker?.dataFrom ?? pending?.dataFrom ?? null,
     fontsFrom: fonts.status === 'moved' ? path.basename(fonts.source) : marker?.fontsFrom ?? pending?.fontsFrom ?? null,
   }
-  if (replacements.length > 0) {
-    const stalledDataDir = data.status === 'stalled' ? data.source : null
-    writePendingMigration(home, {
-      needsRewrite: true,
-      replacements,
-      dataRoot,
-      stalledDataDir,
-      dataFrom: record.dataFrom,
-      fontsFrom: record.fontsFrom,
-    })
-    if (hooks?.failRewrite) {
-      throw new Error('rewrite failed')
+  if (pending?.replacements?.length) {
+    pending = { ...pending, dataFrom: record.dataFrom, fontsFrom: record.fontsFrom, dataRoot }
+    writePendingMigration(home, pending)
+    if (hooks?.failRewrite) throw new Error('rewrite failed')
+    rewriteKeptLibrary(pending, dataRoot)
+    const library = pending.stalledDataDir && followedDirectory(pending.stalledDataDir)
+      ? pending.stalledDataDir
+      : dataRoot
+    if (followedDirectory(library) && (record.dataFrom || record.fontsFrom)) {
+      writeMarker(library, record)
     }
-    applyLibraryRewrites(dataRoot, stalledDataDir, replacements)
-    if (data.status === 'moved' || followedDirectory(dataRoot)) {
-      writeMarker(dataRoot, record)
-    }
-    clearPendingMigration(home)
+    const unfinished = pending.replacements.some((pair) => followedDirectory(pair.from))
+    if (!unfinished) clearPendingMigration(home)
   }
   return {
     dataRoot,

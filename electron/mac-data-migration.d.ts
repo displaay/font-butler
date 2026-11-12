@@ -6,11 +6,13 @@ export const FOLDER_MIGRATION_FILE: string
 export const PENDING_MIGRATION_FILE: string
 export const MIGRATION_STALL_ENV: string
 export const MIGRATION_DATA_ROOT_ENV: string
+export const MIGRATION_HANDLED_ENV: string
 
 export type MacDirMigrationHooks = {
   renameSync?: (from: string, to: string) => void
   copyFileSync?: (from: string, to: string) => void
   failRewrite?: boolean
+  crashAfterDataMove?: boolean
 }
 
 export type MacDataMigration = {
@@ -34,6 +36,7 @@ export function rewriteJsonLegacyPaths(
   replacements: Array<{ from: string; to: string }>,
 ): void
 export function adoptedMigrationDataRoot(env?: NodeJS.ProcessEnv): string | null
+export function migrationAlreadyHandled(env?: NodeJS.ProcessEnv): boolean
 export function shouldMigrateRealMacLibrary(input?: {
   platform?: string
   testFeed?: boolean
