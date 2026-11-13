@@ -90,6 +90,7 @@ import {
   finderSyncCodeSigningRequirement,
   finderSyncContainingApp,
   finderSyncMachService,
+  finderSyncMachServiceSuffix,
   finderSyncMainExecutable,
   finderSyncMenuTitle,
   finderSyncPlistExecutable,
@@ -109,6 +110,7 @@ import {
   addFinderSyncPendingError,
   carryFinderSyncPendingError,
   consumeFinderSyncPendingErrorFiles,
+  finderSyncGroupContainerDirectory,
   finderSyncPendingErrorConsumePaths,
   finderSyncPendingErrorFolderName,
   finderSyncPendingErrorWriteDirectory,
@@ -216,8 +218,13 @@ test('Finder Sync handoff names one app group and one code-signing requirement p
   assert.equal(finderSyncWireAction(FINDER_INSTALL_AS), FINDER_INSTALL_AS)
   assert.equal(finderSyncWireAction('compare'), 'compare')
   assert.equal(finderSyncWireAction(FINDER_LINK_TO), null)
-  assert.equal(finderSyncAppGroup(false), finderSyncMachService(false))
-  assert.equal(finderSyncAppGroup(true), finderSyncMachService(true))
+  assert.equal(finderSyncMachService(false), `${finderSyncAppGroup(false)}.agent`)
+  assert.equal(finderSyncMachService(true), `${finderSyncAppGroup(true)}.agent`)
+  assert.equal(finderSyncMachServiceSuffix(finderSyncMachService(false), finderSyncAppGroup(false)), 'agent')
+  assert.equal(finderSyncMachServiceSuffix(finderSyncMachService(true), finderSyncAppGroup(true)), 'agent')
+  assert.equal(finderSyncMachServiceSuffix(finderSyncAppGroup(false), finderSyncAppGroup(false)), '')
+  assert.equal(finderSyncMachServiceSuffix(finderSyncAppGroup(true), finderSyncAppGroup(true)), '')
+  assert.notEqual(finderSyncMachService(false), finderSyncMachService(true))
   assert.equal(finderSyncAppGroup(false), `${FINDER_SYNC_TEAM_ID}.group.${FINDER_SYNC_BUNDLE_ID}`)
   assert.equal(finderSyncAppGroup(true), `${FINDER_SYNC_TEAM_ID}.group.${FINDER_SYNC_TEST_BUNDLE_ID}`)
   assert.equal(finderSyncAppGroupIsTeamPrefixed(finderSyncAppGroup(false)), true)
@@ -453,6 +460,13 @@ test('Finder Sync monitors home, /Users/Shared, and /Volumes', () => {
   assert.deepEqual(finderSyncMonitorDirectories('/Users/Shared'), ['/Users/Shared', '/Volumes'])
   assert.equal(finderSyncMonitorDirectories('/Users/ada').includes('/Library/Fonts'), false)
   assert.equal(finderSyncMonitorDirectories('/Library/Fonts').includes('/Library/Fonts'), false)
+  assert.deepEqual(finderSyncMonitorDirectories('/Users/ada', ['/', '/Volumes/Cuttler/', '/Library/Fonts', '/Volumes/Hidden DMG']), [
+    '/Users/ada',
+    '/Users/Shared',
+    '/Volumes',
+    '/Volumes/Cuttler',
+    '/Volumes/Hidden DMG',
+  ])
 
   const bundleId = FINDER_SYNC_TEST_BUNDLE_ID
   const current = finderSyncAppexBundlePath('/Applications/Font Buttler Test/Font Buttler.app')
@@ -678,6 +692,10 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   const nativeTest = readRepo('electron/finder-sync-xpc-test.mm')
   const validator = readRepo('electron/finder-sync.mjs')
   assert.match(swift, /fileURLWithPath: "\/Volumes"/)
+  assert.match(swift, /mountedVolumeURLs/)
+  assert.match(swift, /didMountNotification/)
+  assert.match(swift, /didUnmountNotification/)
+  assert.doesNotMatch(swift, /skipHiddenVolumes/)
   assert.match(swift, /fileURLWithPath: "\/Users\/Shared"/)
   assert.match(swift, /getpwuid\(getuid\(\)\)/)
   assert.match(swift, /pw_dir/)
@@ -706,7 +724,12 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(swift, /finderSyncMissingApp/)
   assert.match(swift, /finderSyncAgentDisabled/)
   assert.doesNotMatch(swift, /UNUserNotificationCenter/)
-  assert.match(swift, /NSLog\(/)
+  assert.match(swift, /%\{public\}@/)
+  assert.match(swift, /os_log\(/)
+  assert.match(swift, /queueFinderSyncPendingError/)
+  assert.match(swift, /containerURL\(forSecurityApplicationGroupIdentifier:/)
+  assert.match(swift, /finder-sync-pending-error\.json/)
+  assert.doesNotMatch(swift, /NSLog\(/)
   assert.doesNotMatch(swift, /NSAlert/)
   assert.ok(swift.includes(FINDER_SYNC_MISSING_APP))
   assert.doesNotMatch(swift, /addingTimeInterval\(10\)/)
@@ -1765,9 +1788,42 @@ test('the handoff finds Cuttler.app and the zip Font Buttler.app that contain th
   assert.equal(zipBundle.reason, 'moved')
 })
 
+test('Finder Sync Mach service matches in the helper, the LaunchAgent plist, and the appex', () => {
+  const agent = readRepo('macos/FinderSyncAgent/FinderSyncAgent.mm')
+  const receiver = readRepo('electron/finder-sync-receiver.mm')
+  for (const testFeed of [false, true]) {
+    const group = finderSyncAppGroup(testFeed)
+    const service = finderSyncMachService(testFeed)
+    assert.equal(finderSyncMachServiceSuffix(service, group), 'agent')
+    assert.notEqual(service, group)
+    assert.deepEqual(finderSyncAgentMachServiceKeys(finderSyncAgentLaunchAgentPlist(testFeed)), [service])
+    const info = finderSyncInfoPlist({
+      bundleId: finderSyncBundleId(testFeed),
+      version: '0.4.1',
+      testFeed,
+    })
+    assert.equal(plistString(info, 'FontButtlerMachService'), service)
+    assert.equal(plistString(info, 'FontButtlerAppGroup'), group)
+    const literal = `@"${service}"`
+    assert.equal(agent.includes(literal), true)
+    assert.equal(receiver.includes(literal), true)
+  }
+  assert.match(readRepo('electron/main.mjs'), /machService: record\.machService/)
+  assert.match(readRepo('electron/main.mjs'), /currentMachService: finderSyncMachService\(testFeed\)/)
+  const container = finderSyncGroupContainerDirectory('/Users/ada', finderSyncAppGroup(false))
+  assert.equal(container, `/Users/ada/Library/Group Containers/${finderSyncAppGroup(false)}`)
+  assert.equal(finderSyncGroupContainerDirectory('/Users/ada', ''), '')
+  const consumed = finderSyncPendingErrorConsumePaths({
+    userDataDir: '/Users/ada/Library/Application Support/Cuttler',
+    groupContainerDir: container,
+  })
+  assert.equal(consumed[1], `${container}/finder-sync-pending-error.json`)
+})
+
 test('a second launch from the same bundle path does not register again', () => {
   const bundle = '/Applications/Font Buttler.app'
   const helper = `${bundle}/${finderSyncAgentBundleProgram()}`
+  const service = finderSyncMachService(false)
   const calls = []
   let record = readFinderSyncAgentRecord('')
   const launch = (status) => {
@@ -1775,7 +1831,8 @@ test('a second launch from the same bundle path does not register again', () => 
       testFeed: false,
       currentBundle: bundle,
       helperPath: helper,
-      version: '0.3.12',
+      version: '0.4.1',
+      currentMachService: service,
       record,
       status,
       unregister() {
@@ -1794,7 +1851,8 @@ test('a second launch from the same bundle path does not register again', () => 
   assert.equal(first.saved, true)
   assert.equal(record.appBundlePath, bundle)
   assert.equal(record.helperPath, helper)
-  assert.equal(record.version, '0.3.12')
+  assert.equal(record.version, '0.4.1')
+  assert.equal(record.machService, service)
   assert.equal(record.enabled, true)
   calls.length = 0
   const second = launch('enabled')
@@ -1810,7 +1868,8 @@ test('a second launch from the same bundle path does not register again', () => 
     testFeed: false,
     currentBundle: movedBundle,
     helperPath: `${movedBundle}/${finderSyncAgentBundleProgram()}`,
-    version: '0.3.12',
+    version: '0.4.1',
+    currentMachService: service,
     record,
     status: 'enabled',
     unregister() {
@@ -1850,7 +1909,8 @@ test('a second launch from the same bundle path does not register again', () => 
     testFeed: false,
     currentBundle: bundle,
     helperPath: helper,
-    version: '0.3.12',
+    version: '0.4.1',
+    currentMachService: service,
     record: legacy,
     status: 'enabled',
     unregister() {
@@ -1870,8 +1930,9 @@ test('a second launch from the same bundle path does not register again', () => 
     testFeed: false,
     currentBundle: bundle,
     helperPath: helper,
-    version: '0.3.12',
-    record: readFinderSyncAgentRecord(JSON.stringify({ enabled: true, program: helper })),
+    version: '0.4.1',
+    currentMachService: service,
+    record: readFinderSyncAgentRecord(JSON.stringify({ enabled: true, program: helper, machService: service })),
     status: 'enabled',
     unregister() {
       calls.push('unregister')
@@ -1890,7 +1951,8 @@ test('a second launch from the same bundle path does not register again', () => 
     testFeed: false,
     currentBundle: bundle,
     helperPath: helper,
-    version: '0.3.12',
+    version: '0.4.1',
+    currentMachService: service,
     record: legacySame.record,
     status: 'enabled',
     unregister() {
@@ -1903,6 +1965,77 @@ test('a second launch from the same bundle path does not register again', () => 
   })
   assert.deepEqual(calls, [])
   assert.equal(legacyDone.plan.reason, 'enabled')
+
+  calls.length = 0
+  const fromRelease = commitFinderSyncAgentRegistration({
+    testFeed: false,
+    currentBundle: bundle,
+    helperPath: helper,
+    version: '0.4.1',
+    currentMachService: service,
+    record: readFinderSyncAgentRecord(JSON.stringify({
+      enabled: true,
+      appBundlePath: bundle,
+      helperPath: helper,
+      version: '0.4.0',
+    })),
+    status: 'enabled',
+    unregister() {
+      calls.push('unregister')
+    },
+    register() {
+      calls.push('register')
+      return 'enabled'
+    },
+  })
+  assert.deepEqual(calls, ['unregister', 'register'])
+  assert.equal(fromRelease.plan.action, 'reregister')
+  assert.equal(fromRelease.plan.reason, 'mach-service')
+  assert.equal(fromRelease.record.machService, service)
+  calls.length = 0
+  const oldName = commitFinderSyncAgentRegistration({
+    testFeed: false,
+    currentBundle: bundle,
+    helperPath: helper,
+    version: '0.4.1',
+    currentMachService: service,
+    record: readFinderSyncAgentRecord(JSON.stringify({
+      enabled: true,
+      appBundlePath: bundle,
+      helperPath: helper,
+      version: '0.4.1',
+      machService: finderSyncAppGroup(false),
+    })),
+    status: 'enabled',
+    unregister() {
+      calls.push('unregister')
+    },
+    register() {
+      calls.push('register')
+      return 'enabled'
+    },
+  })
+  assert.deepEqual(calls, ['unregister', 'register'])
+  assert.equal(oldName.plan.reason, 'mach-service')
+  calls.length = 0
+  const versionOnly = commitFinderSyncAgentRegistration({
+    testFeed: false,
+    currentBundle: bundle,
+    helperPath: helper,
+    version: '0.4.2',
+    currentMachService: service,
+    record: fromRelease.record,
+    status: 'enabled',
+    unregister() {
+      calls.push('unregister')
+    },
+    register() {
+      calls.push('register')
+      return 'enabled'
+    },
+  })
+  assert.deepEqual(calls, [])
+  assert.equal(versionOnly.plan.action, 'keep')
 
   const seen = new Map()
   assert.equal(finderSyncRequestSeen(seen, 'click-1', 1_000), false)

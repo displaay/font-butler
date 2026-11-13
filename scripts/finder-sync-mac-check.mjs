@@ -14,9 +14,9 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readAppTestFeedMarker } from '../electron/app-update-install.mjs'
-import { finderSyncMainExecutable } from '../electron/finder-sync.mjs'
-import { finderSyncAppexPath } from './build-finder-sync.mjs'
-import { finderSyncAgentExecutablePath } from './build-finder-sync-agent.mjs'
+import { finderSyncAgentMachServiceKeys, finderSyncMainExecutable } from '../electron/finder-sync.mjs'
+import { finderSyncAppexPath, plistString } from './build-finder-sync.mjs'
+import { finderSyncAgentExecutablePath, finderSyncAgentPlistPath } from './build-finder-sync-agent.mjs'
 import { findAppBundles } from './assert-notarized-mac-release.mjs'
 import { strayMachOFiles } from './macho-slices.mjs'
 import { runFinderSyncXpcRejectionTest } from './test-finder-sync-xpc.mjs'
@@ -44,6 +44,16 @@ function run(command, args, options = {}) {
     output: `${result.stdout ?? ''}\n${result.stderr ?? ''}`,
     error: result.error?.message ?? '',
   }
+}
+
+function readPlistText(file) {
+  if (!existsSync(file)) return ''
+  const raw = readFileSync(file)
+  if (raw.length >= 6 && raw.subarray(0, 6).toString('ascii') === 'bplist') {
+    const converted = run('plutil', ['-convert', 'xml1', '-o', '-', file])
+    return converted.status === 0 ? converted.output : ''
+  }
+  return raw.toString('utf8')
 }
 
 function readHeader(file) {
@@ -123,6 +133,8 @@ function collect(app, dmg, zip) {
     agentStatusError: agentStatus ? '' : statusRun.output.trim() || statusRun.error || 'The app did not print a Finder Sync agent status.',
     appEntitlements: run('codesign', ['-d', '--entitlements', ':-', app]).output,
     appexEntitlements: existsSync(appex) ? run('codesign', ['-d', '--entitlements', ':-', appex]).output : '',
+    appexMachService: plistString(readPlistText(path.join(appex, 'Contents', 'Info.plist')), 'FontButtlerMachService'),
+    launchAgentServices: finderSyncAgentMachServiceKeys(readPlistText(finderSyncAgentPlistPath(app, testFeed))),
     helperEntitlements: '',
     helperCodesignDisplay: '',
     spctlApp: assessSpctl(app),
