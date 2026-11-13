@@ -477,7 +477,6 @@ function startMainUiAfterBootstrap() {
   void loadActivity()
   void loadAppUpdate()
   void loadRetailStatus()
-  stageLaunchAnnouncement()
 }
 
 async function stopPackagedApiWorker() {

@@ -19,8 +19,12 @@ export type MacDirMigrationHooks = {
   crashAfterCopyCommit?: boolean
   /** Called with the temp directory before a cross-device copy starts. */
   onPartialDir?: (dir: string) => void
-  /** Final rename of a verified copy onto the destination. Tests force EXDEV. */
+  /** Final rename of a verified copy onto the destination. Tests force EXDEV or EACCES. */
   renameIntoPlace?: (from: string, to: string) => void
+  /** Throw after a font copy is recorded as staged and before it is renamed into Fonts. */
+  crashAfterStaged?: boolean
+  /** st_dev of a directory. Tests use this to simulate a volume change. */
+  deviceId?: (dir: string) => number | string | null
   /** Throw after the rename into place and before the committed flag is written. */
   crashBeforeCommitRecord?: boolean
   /** Throw instead of writing the committed flag. The copy is already in place. */

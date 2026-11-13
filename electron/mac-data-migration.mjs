@@ -127,6 +127,7 @@ function describeTree(root) {
         rows.push(`dir\0${rel}`)
         walk(abs)
       } else if (entry.isFile()) {
+        if (entry.name === PARTIAL_MARKER_FILE) continue
         const size = fs.statSync(abs).size
         rows.push(`file\0${rel}\0${size}\0${hashFile(abs)}`)
       } else {
@@ -145,26 +146,80 @@ function libraryFontsDestination(dir) {
   return fontsAt > 0 && parts[fontsAt - 1] === 'Library'
 }
 
+/** Written inside a partial when it is created. Cleanup trusts this, not the name's pid. */
+export const PARTIAL_MARKER_FILE = '.cuttler-partial.json'
+/** A live pid whose start time does not match is only removed once the partial is this old. */
+export const PARTIAL_STALE_MS = 60 * 60 * 1000
+
+function processStartMs() {
+  return Math.round(Date.now() - process.uptime() * 1000)
+}
+
+export function currentPartialOwner() {
+  return { pid: process.pid, startTime: processStartMs() }
+}
+
+/** Real Fonts directory. A symlink is resolved before staging and before cleanup. */
+export function realFontsDirectory(fontsDir) {
+  const resolved = path.resolve(String(fontsDir ?? ''))
+  try {
+    return fs.realpathSync(resolved)
+  } catch {
+    return resolved
+  }
+}
+
 /**
  * Cross-device copies need a temp folder on the same volume as the destination
- * so the last rename is atomic. Fonts temps go in Application Support, which
- * shares that volume on a normal home and is not a font folder.
+ * so the last rename is atomic. Fonts temps are a sibling of the real Fonts
+ * directory: FontServices does not scan that parent.
  */
 export function movePartialDirectory(dest) {
   const stamp = `${process.pid}-${process.hrtime.bigint()}`
   if (libraryFontsDestination(dest)) {
-    // Sibling of the real Fonts directory: same volume, so rename into
-    // Fonts is atomic, and FontServices does not scan outside Fonts.
-    const fontsRoot = path.dirname(path.resolve(dest))
-    let realFonts = fontsRoot
-    try {
-      realFonts = fs.realpathSync(fontsRoot)
-    } catch {
-      realFonts = fontsRoot
-    }
-    return path.join(path.dirname(realFonts), `.cuttler-move.partial-${stamp}`)
+    const fontsRoot = realFontsDirectory(path.dirname(path.resolve(dest)))
+    return path.join(path.dirname(fontsRoot), `.cuttler-move.partial-${stamp}`)
   }
   return `${dest}.partial-${stamp}`
+}
+
+function writePartialMarker(dir, now = Date.now()) {
+  const body = { pid: process.pid, startTime: processStartMs(), createdAt: now }
+  fs.writeFileSync(path.join(dir, PARTIAL_MARKER_FILE), `${JSON.stringify(body)}\n`)
+  return body
+}
+
+function readPartialMarker(dir) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(dir, PARTIAL_MARKER_FILE), 'utf8'))
+    if (!parsed || !Number.isInteger(parsed.pid) || !Number.isInteger(parsed.createdAt)) return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+function directoryHasPartialMarker(dir) {
+  return readPartialMarker(dir) != null
+}
+
+function deviceOf(dir, hooks) {
+  if (typeof hooks?.deviceId === 'function') return hooks.deviceId(dir)
+  try {
+    return fs.statSync(dir).dev
+  } catch {
+    return null
+  }
+}
+
+function partialMayDelete(dir, { isAlive, now, ourStart }) {
+  const marker = readPartialMarker(dir)
+  if (!marker) return false
+  const alive = isAlive(marker.pid) === true
+  const sameProcess = marker.pid === process.pid && marker.startTime === ourStart
+  if (alive && sameProcess) return false
+  if (!alive) return true
+  return now - marker.createdAt >= PARTIAL_STALE_MS
 }
 
 /** Ours only: `Cuttler.partial-<pid>-<time>` or `.cuttler-move.partial-<pid>-<time>`. */
@@ -173,13 +228,6 @@ export function isOurMovePartialName(name) {
     /^(?:Cuttler|Font Buttler|Font Butler)\.partial-\d+-\d+$/.test(name) ||
     /^\.cuttler-move\.partial-\d+-\d+$/.test(name)
   )
-}
-
-function partialOwnerPid(name) {
-  const match = /\.partial-(\d+)-\d+$/.exec(name)
-  if (!match || !isOurMovePartialName(name)) return null
-  const pid = Number(match[1])
-  return Number.isInteger(pid) && pid > 0 ? pid : null
 }
 
 function processAlive(pid) {
@@ -191,13 +239,31 @@ function processAlive(pid) {
   }
 }
 
-export function cleanMovePartials(home, isAlive = processAlive) {
+export function cleanMovePartials(home, isAliveOrOptions = processAlive) {
+  const options = typeof isAliveOrOptions === 'function' ? { isAlive: isAliveOrOptions } : isAliveOrOptions ?? {}
+  const isAlive = options.isAlive ?? processAlive
+  const now = options.now ?? Date.now()
+  const ourStart = options.processStart ?? processStartMs()
+  const keep = new Set((options.keep ?? []).map((item) => path.resolve(String(item))))
+  const fontsLink = path.join(home, 'Library/Fonts')
+  const realFonts = realFontsDirectory(fontsLink)
   const parents = [
     path.join(home, 'Library'),
     path.join(home, 'Library/Application Support'),
-    path.join(home, 'Library/Fonts'),
+    path.dirname(realFonts),
+    realFonts,
+    fontsLink,
   ]
+  const seen = new Set()
   for (const dir of parents) {
+    let resolved = dir
+    try {
+      resolved = fs.realpathSync(dir)
+    } catch {
+      resolved = path.resolve(dir)
+    }
+    if (seen.has(resolved)) continue
+    seen.add(resolved)
     let entries = []
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true })
@@ -206,13 +272,14 @@ export function cleanMovePartials(home, isAlive = processAlive) {
     }
     for (const entry of entries) {
       if (!isOurMovePartialName(entry.name)) continue
-      const pid = partialOwnerPid(entry.name)
-      if (pid != null && isAlive(pid)) continue
       const abs = path.join(dir, entry.name)
+      if (keep.has(path.resolve(abs))) continue
       if (entry.isSymbolicLink()) {
         fs.unlinkSync(abs)
         continue
       }
+      if (!entry.isDirectory()) continue
+      if (!partialMayDelete(abs, { isAlive, now, ourStart })) continue
       fs.rmSync(abs, { recursive: true, force: true })
     }
   }
@@ -282,17 +349,62 @@ export function moveDirectoryAtomic(from, to, hooks = {}) {
       hooks.onPartialDir?.(tmp)
       let committed = false
       try {
+        fs.mkdirSync(tmp, { recursive: true })
+        writePartialMarker(tmp)
         copyTree(from, tmp, copyFileSync)
         if (!directoryTreesMatch(from, tmp)) {
           const mismatch = new Error('Copied folder did not match the source')
           mismatch.code = 'EVERIFY'
           throw mismatch
         }
-        // Fonts: the commit record is written while the copy is still outside
-        // Library/Fonts. Only then is it renamed into place, and only then
-        // may the source be removed. A crash before the record leaves the
-        // source as the only fonts folder macOS can see.
+        // Fonts stay outside Library/Fonts until renameIntoPlace succeeds.
+        // The record is 'staged' before that rename and 'committed' only after.
         if (fontDest) {
+          if (hooks.crashBeforeCommitRecord) {
+            const killed = new Error('killed before the copy commit record')
+            killed.code = 'ECOPYGAP'
+            throw killed
+          }
+          const fontsRoot = realFontsDirectory(path.dirname(path.resolve(to)))
+          hooks.onFontStaged?.({
+            from,
+            to,
+            staging: tmp,
+            stagingDev: deviceOf(path.dirname(tmp), hooks),
+            destDev: deviceOf(fontsRoot, hooks),
+          })
+          if (hooks.crashAfterStaged) {
+            const killed = new Error('killed after the font copy was staged')
+            killed.code = 'ESTAGED'
+            throw killed
+          }
+          try {
+            renameIntoPlace(tmp, to)
+          } catch (renameError) {
+            if (renameError?.code === 'EXDEV' || renameError?.code === 'EACCES') {
+              const blocked = new Error('Font copy is staged but could not be moved into Fonts')
+              blocked.code = 'EFONTPLACE'
+              blocked.cause = renameError
+              throw blocked
+            }
+            throw renameError
+          }
+          try {
+            hooks.onCopyCommitted?.(from, to)
+          } catch (recordError) {
+            try {
+              if (!lstatOrNull(tmp) && lstatOrNull(to)) fs.renameSync(to, tmp)
+            } catch {
+              // The placed copy is still outside the committed state.
+            }
+            throw recordError
+          }
+          committed = true
+          fs.rmSync(path.join(to, PARTIAL_MARKER_FILE), { force: true })
+        } else {
+          renameIntoPlace(tmp, to)
+          fs.rmSync(path.join(to, PARTIAL_MARKER_FILE), { force: true })
+          committed = true
           if (hooks.crashBeforeCommitRecord) {
             const killed = new Error('killed before the copy commit record')
             killed.code = 'ECOPYGAP'
@@ -300,23 +412,6 @@ export function moveDirectoryAtomic(from, to, hooks = {}) {
           }
           hooks.onCopyCommitted?.(from, to)
         }
-        try {
-          renameIntoPlace(tmp, to)
-        } catch (renameError) {
-          if (fontDest && renameError?.code === 'EXDEV') {
-            const blocked = new Error('Font copy cannot be renamed onto the Fonts volume')
-            blocked.code = 'EFONTVOLUME'
-            throw blocked
-          }
-          throw renameError
-        }
-        committed = true
-        if (!fontDest && hooks.crashBeforeCommitRecord) {
-          const killed = new Error('killed before the copy commit record')
-          killed.code = 'ECOPYGAP'
-          throw killed
-        }
-        if (!fontDest) hooks.onCopyCommitted?.(from, to)
         if (backup) {
           try {
             fs.rmSync(backup, { recursive: true, force: true })
@@ -345,7 +440,8 @@ export function moveDirectoryAtomic(from, to, hooks = {}) {
           copyError?.code === 'ECOPYCOMMIT' ||
           copyError?.code === 'ECOPYGAP' ||
           copyError?.code === 'ECOMMITTED' ||
-          copyError?.code === 'EFONTVOLUME'
+          copyError?.code === 'EFONTPLACE' ||
+          copyError?.code === 'ESTAGED'
         ) {
           throw copyError
         }
@@ -360,14 +456,11 @@ export function moveDirectoryAtomic(from, to, hooks = {}) {
       }
     }
   } catch (error) {
-    if (
-      error?.code === 'ECOPYCOMMIT' ||
-      error?.code === 'ECOPYGAP' ||
-      error?.code === 'ECOMMITTED' ||
-      error?.code === 'EFONTVOLUME'
-    ) {
+    if (error?.code === 'EFONTPLACE' || error?.code === 'ESTAGED') {
+      restoreBackup()
       throw error
     }
+    if (error?.code === 'ECOPYCOMMIT' || error?.code === 'ECOPYGAP' || error?.code === 'ECOMMITTED') throw error
     restoreBackup()
     throw error
   }
@@ -584,10 +677,12 @@ function migrateSide({ dest, sources, unused, movedFrom, hooks, beforeMove, comm
       leftover: leftover && lstatOrNull(leftover) ? leftover : null,
     }
   } catch (error) {
-    if (error?.code === 'EFONTVOLUME') {
-      return { status: 'stalled', source, occupied: false, unfinishedCopy: true, volumeBlocked: true }
+    if (error?.code === 'EFONTPLACE') {
+      return { status: 'stalled', source, occupied: false, placeFailed: true }
     }
-    if (error?.code === 'ECOPYCOMMIT' || error?.code === 'ECOPYGAP' || error?.code === 'ECOMMITTED') throw error
+    if (error?.code === 'ESTAGED' || error?.code === 'ECOPYCOMMIT' || error?.code === 'ECOPYGAP' || error?.code === 'ECOMMITTED') {
+      throw error
+    }
     // The source is still the library. Dest was restored if a fresh folder
     // had been moved aside. Say so instead of continuing with an empty Cuttler.
     if (followedDirectory(source)) return { status: 'stalled', source, occupied: false }
@@ -626,13 +721,14 @@ export function migrationStallMessage(result) {
     )
   }
   if (result.stalled && result.stalledFontsDir) {
+    const destThere = followedDirectory(result.installDir) && !isEmptyDir(result.installDir)
     parts.push(
       stallSentence(
         'fonts',
         result.stalledFontsDir,
         result.installDir,
         result.fontsOccupied,
-        result.unfinishedFontsCopy,
+        result.unfinishedFontsCopy === true && destThere,
       ),
     )
   }
@@ -662,7 +758,7 @@ export function committedLeftoverDirectories(home) {
   const pending = readPendingMigration(home)
   const dirs = []
   for (const pair of pending?.replacements ?? []) {
-    if (pair?.committed !== true || typeof pair.from !== 'string') continue
+    if (pair?.committed !== true || typeof pair.from !== 'string' || !fontPlacementRecorded(pair)) continue
     if (lstatOrNull(pair.from)) dirs.push(pair.from)
   }
   return dirs
@@ -1190,9 +1286,19 @@ function sameAppInstanceResult(dataRoot, installDir, owner) {
   }
 }
 
+function fontPlacementRecorded(pair) {
+  if (!pair || !libraryFontsDestination(pair.to)) return pair?.committed === true
+  return pair.committed === true && (pair.phase === 'placed' || pair.phase === 'done')
+}
+
+function fontDestPlaced(pair) {
+  return fontPlacementRecorded(pair) && followedDirectory(pair.to) && !isEmptyDir(pair.to)
+}
+
 function movedReplacements(pending, { omitDest = '' } = {}) {
   return (pending?.replacements ?? []).filter((pair) => {
-    if (pair.to === omitDest || !followedDirectory(pair.to)) return false
+    if (pair.to === omitDest || !followedDirectory(pair.to) || isEmptyDir(pair.to)) return false
+    if (libraryFontsDestination(pair.to) && !fontDestPlaced(pair)) return false
     // A committed copy is in place even when the source folder is still there.
     if (pair.committed === true) return true
     return !followedDirectory(pair.from)
@@ -1202,8 +1308,9 @@ function movedReplacements(pending, { omitDest = '' } = {}) {
 function markCopyCommitted(home, current, from, to) {
   const replacements = (current?.replacements ?? []).map((item) => ({ ...item }))
   const index = replacements.findIndex((item) => item.from === from && item.to === to)
-  if (index === -1) replacements.push({ from, to, committed: true })
-  else replacements[index] = { ...replacements[index], committed: true }
+  const placed = { committed: true, phase: libraryFontsDestination(to) ? 'placed' : undefined }
+  if (index === -1) replacements.push({ from, to, ...placed })
+  else replacements[index] = { ...replacements[index], ...placed, staging: undefined }
   const next = {
     needsRewrite: true,
     replacements,
@@ -1236,19 +1343,98 @@ function libraryCopyUncommitted(pending, dataRoot) {
   )
 }
 
-function parkUncommittedFontCopy(installDir, pending) {
+function referencedStaging(pending) {
+  const paths = []
+  for (const pair of pending?.replacements ?? []) {
+    if (typeof pair?.staging !== 'string' || pair.staging === '') continue
+    if (pair.phase === 'done') continue
+    if (pair.committed === true && fontDestPlaced(pair)) continue
+    paths.push(pair.staging)
+  }
+  return paths
+}
+
+function fontVolumesMatch(staging, dest, hooks) {
+  const fontsRoot = realFontsDirectory(path.dirname(path.resolve(dest)))
+  const left = deviceOf(path.dirname(staging), hooks)
+  const right = deviceOf(fontsRoot, hooks)
+  if (left == null || right == null) return false
+  return String(left) === String(right)
+}
+
+function destEmptyAndOurs(dir) {
+  if (!followedDirectory(dir)) return false
+  let names = []
+  try {
+    names = fs.readdirSync(dir)
+  } catch {
+    return false
+  }
+  return names.length > 0 && names.every((name) => name === PARTIAL_MARKER_FILE)
+}
+
+function updateFontPair(home, current, from, to, patch) {
+  const replacements = (current?.replacements ?? []).map((item) => ({ ...item }))
+  const index = replacements.findIndex((item) => item.from === from && item.to === to)
+  if (index === -1) replacements.push({ from, to, ...patch })
+  else replacements[index] = { ...replacements[index], ...patch }
+  const next = {
+    needsRewrite: true,
+    replacements,
+    dataRoot: current?.dataRoot,
+    stalledDataDir: current?.stalledDataDir ?? null,
+    dataFrom: current?.dataFrom ?? null,
+    fontsFrom: current?.fontsFrom ?? null,
+  }
+  writePendingMigration(home, next)
+  return next
+}
+
+/**
+ * Move a Fonts/Cuttler folder aside only when it carries our partial marker.
+ * A folder the user filled (no marker) is left where it is.
+ */
+function parkMarkedFontCopy(installDir, pending) {
   const pair = (pending?.replacements ?? []).find(
-    (item) =>
-      item?.to === installDir &&
-      item.committed !== true &&
-      followedDirectory(item.from) &&
-      followedDirectory(installDir),
+    (item) => item?.to === installDir && !fontDestPlaced(item) && followedDirectory(item.from) && followedDirectory(installDir),
   )
-  if (!pair) return false
+  if (!pair) return 'absent'
+  if (isEmptyDir(installDir)) return 'absent'
+  if (!directoryHasPartialMarker(installDir)) return 'foreign'
   const staged = movePartialDirectory(installDir)
   fs.mkdirSync(path.dirname(staged), { recursive: true })
   fs.renameSync(installDir, staged)
-  return true
+  return 'parked'
+}
+
+function placeStagedFont(pair, hooks) {
+  const staging = pair.staging
+  const dest = pair.to
+  if (!staging || !followedDirectory(staging)) {
+    return { status: 'stalled', source: pair.from, occupied: false }
+  }
+  const destAbsent = !lstatOrNull(dest)
+  const destOurs = destEmptyAndOurs(dest)
+  if (!destAbsent && !destOurs) {
+    const occupied = followedDirectory(dest) && !isEmptyDir(dest)
+    return { status: 'stalled', source: pair.from, occupied, stagedKept: true }
+  }
+  if (!fontVolumesMatch(staging, dest, hooks)) {
+    return { status: 'stalled', source: pair.from, occupied: false, stagedKept: true }
+  }
+  const renameIntoPlace = hooks?.renameIntoPlace ?? fs.renameSync
+  if (destOurs) fs.rmSync(dest, { recursive: true, force: true })
+  fs.mkdirSync(path.dirname(dest), { recursive: true })
+  try {
+    renameIntoPlace(staging, dest)
+  } catch (error) {
+    if (error?.code === 'EXDEV' || error?.code === 'EACCES') {
+      return { status: 'stalled', source: pair.from, occupied: false, stagedKept: true }
+    }
+    throw error
+  }
+  fs.rmSync(path.join(dest, PARTIAL_MARKER_FILE), { force: true })
+  return { status: 'placed', source: pair.from }
 }
 
 export function migrateLegacyMacAppDirs(home, hooks) {
@@ -1261,16 +1447,25 @@ export function migrateLegacyMacAppDirs(home, hooks) {
   const owner = waitForLegacyLibraryOwner(home, hooks)
   if (owner?.kind === 'legacy') return ownerBlockedResult(dataRoot, installDir, owner)
   if (owner?.kind === 'same-app') return sameAppInstanceResult(dataRoot, installDir, owner)
-  cleanMovePartials(home)
   let pending = readPendingMigration(home)
+  cleanMovePartials(home, { keep: referencedStaging(pending) })
   if (pending) rewriteKeptLibrary(pending, dataRoot)
   const committedSources = new Set(
     (pending?.replacements ?? [])
-      .filter((item) => item?.committed === true && typeof item.from === 'string')
+      .filter((item) => item?.committed === true && typeof item.from === 'string' && fontPlacementRecorded(item))
       .map((item) => item.from),
   )
   const moveHooks = {
     ...hooks,
+    onFontStaged({ from, to, staging, stagingDev, destDev }) {
+      pending = updateFontPair(home, pending, from, to, {
+        phase: 'staged',
+        committed: false,
+        staging,
+        stagingDev,
+        destDev,
+      })
+    },
     onCopyCommitted(from, to) {
       if (hooks?.failCommitRecord) {
         const error = new Error('commit record failed')
@@ -1319,22 +1514,10 @@ export function migrateLegacyMacAppDirs(home, hooks) {
   // The library copy is not the library until its commit record is written.
   // Moving fonts first would activate both font folders and rewrite only one catalog.
   const unfinishedDataCopy = data.status === 'stalled' && libraryCopyUncommitted(pending, dataRoot)
-  let unfinishedFontsCopy = false
+  const unfinishedFontsCopy = false
   let fonts
-  if (unfinishedDataCopy) {
-    // Fonts never started. Do not describe that as a move that did not finish.
-    fonts = { status: 'absent', source: null, occupied: false }
-  } else if (pending?.fontVolumeBlocked === true) {
-    unfinishedFontsCopy = true
-    fonts = {
-      status: 'stalled',
-      source: fontSources.find((dir) => followedDirectory(dir)) ?? null,
-      occupied: false,
-      unfinishedCopy: true,
-    }
-  } else {
-    parkUncommittedFontCopy(installDir, pending)
-    fonts = migrateSide({
+  const runFontsMove = () =>
+    migrateSide({
       dest: installDir,
       sources: fontSources,
       unused: isEmptyDir,
@@ -1342,15 +1525,65 @@ export function migrateLegacyMacAppDirs(home, hooks) {
       hooks: moveHooks,
       committedSources,
       beforeMove(source) {
-        pending = rememberMove(home, pending, { from: source, to: installDir }, {
+        pending = rememberMove(home, pending, { from: source, to: installDir, phase: 'copying' }, {
           dataRoot,
           fontsFrom: path.basename(source),
         })
       },
     })
-    unfinishedFontsCopy = fonts.unfinishedCopy === true || fonts.volumeBlocked === true
-    if (fonts.volumeBlocked) {
-      pending = rememberMove(home, pending, null, { dataRoot, fontVolumeBlocked: true })
+  if (unfinishedDataCopy) {
+    // Fonts never started. Do not describe that as a move that did not finish.
+    fonts = { status: 'absent', source: null, occupied: false }
+  } else {
+    const fontPair = (pending?.replacements ?? []).find((item) => item?.to === installDir) ?? null
+    const stagedCopy =
+      fontPair &&
+      !fontDestPlaced(fontPair) &&
+      typeof fontPair.staging === 'string' &&
+      followedDirectory(fontPair.staging)
+    if (stagedCopy) {
+      const resumed = placeStagedFont(fontPair, hooks)
+      if (resumed.status === 'placed') {
+        pending = updateFontPair(home, pending, fontPair.from, installDir, {
+          phase: 'placed',
+          committed: true,
+          staging: undefined,
+        })
+        committedSources.add(fontPair.from)
+        let leftover = null
+        try {
+          const remove = hooks?.rmSync ?? fs.rmSync
+          remove(fontPair.from, { recursive: true, force: true })
+        } catch {
+          leftover = fontPair.from
+        }
+        if (lstatOrNull(fontPair.from)) leftover = fontPair.from
+        else {
+          pending = updateFontPair(home, pending, fontPair.from, installDir, { phase: 'done', committed: true })
+        }
+        fonts = { status: 'moved', source: fontPair.from, leftover }
+      } else {
+        fonts = {
+          status: 'stalled',
+          source: resumed.source ?? fontPair.from,
+          occupied: resumed.occupied === true,
+        }
+      }
+    } else if (parkMarkedFontCopy(installDir, pending) === 'foreign') {
+      fonts = {
+        status: 'stalled',
+        source: fontSources.find((dir) => followedDirectory(dir)) ?? fontPair?.from ?? null,
+        occupied: true,
+      }
+    } else {
+      fonts = runFontsMove()
+      if (fonts.status === 'moved' && fonts.source) {
+        pending = updateFontPair(home, pending, fonts.source, installDir, {
+          phase: fonts.leftover ? 'placed' : 'done',
+          committed: true,
+          staging: undefined,
+        })
+      }
     }
   }
   pending = readPendingMigration(home) ?? pending
