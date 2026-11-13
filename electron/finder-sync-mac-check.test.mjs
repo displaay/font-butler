@@ -14,7 +14,9 @@ import {
   formatCheckLine,
   formatSummary,
   linuxRefusalMessage,
+  appexSymbolTableProblem,
   machoArchs,
+  nmDefinesScriptMain,
   nmListsExtensionMain,
   parseAgentStatusOutput,
   parseMacCheckArgs,
@@ -87,6 +89,13 @@ test('the Mac checklist parses codesign, spctl, and agent status without a Mac',
   assert.equal(sameArchSet(['arm64'], ['arm64']), true)
   assert.equal(nmListsExtensionMain('0000000100003f50 T _NSExtensionMain\n'), true)
   assert.equal(nmListsExtensionMain('T _NSExtensionMainExtra\n'), false)
+  assert.equal(nmDefinesScriptMain('0000000100003f50 T _main\n                 U _NSExtensionMain\n'), true)
+  assert.equal(nmDefinesScriptMain('                 U _main\n'), false)
+  assert.equal(nmDefinesScriptMain('0000000100003f50 T _mainish\n'), false)
+  assert.equal(nmDefinesScriptMain('                 U _NSExtensionMain\n'), false)
+  assert.equal(appexSymbolTableProblem('                 U _NSExtensionMain\n', 0), '')
+  assert.match(appexSymbolTableProblem('0000000100003f50 T _main\n', 0), /-parse-as-library/)
+  assert.match(appexSymbolTableProblem('', 1), /symbol table/)
   assert.deepEqual(straySliceNames(['/App/helper', '/App/helper.slice0', '/App/helper.slice12']), [
     '/App/helper.slice0',
     '/App/helper.slice12',
@@ -196,6 +205,16 @@ test('a complete signed-app observation passes, and a missing entitlement or pen
       ['com.apple.security.application-groups', group],
     ]),
   }))
+  const scriptMain = buildChecklist(passingObservations({
+    appexNm: '0000000100003f50 T _main\n0000000100004000 T _NSExtensionMain\n',
+  }))
+  assert.equal(scriptMain.find((item) => item.id === 'appex-entry').state, 'pass')
+  assert.equal(scriptMain.find((item) => item.id === 'appex-script-main').state, 'fail')
+  assert.match(scriptMain.find((item) => item.id === 'appex-script-main').reason, /-parse-as-library/)
+  assert.equal(summarizeChecklist(scriptMain).ok, false)
+  const missingNm = buildChecklist(passingObservations({ appexNm: '', appexNmError: 'The appex executable is missing.' }))
+  assert.equal(missingNm.find((item) => item.id === 'appex-script-main').state, 'fail')
+
   assert.equal(missingEvents.find((item) => item.id === 'app-entitlements').state, 'fail')
 
   const jitOnHelper = buildChecklist(passingObservations({

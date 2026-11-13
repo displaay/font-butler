@@ -20,7 +20,14 @@ import {
   TEST_FEED_PRODUCT_NAME,
   TEST_FEED_VERSION_ENV,
 } from './mac-signing.mjs'
-import { finderSyncAppGroup, finderSyncBundleId, finderSyncMachService, finderSyncMenuTitle } from '../electron/finder-sync.mjs'
+import {
+  FINDER_SYNC_EXECUTABLE,
+  finderSyncAppGroup,
+  finderSyncBundleId,
+  finderSyncMachService,
+  finderSyncMenuTitle,
+} from '../electron/finder-sync.mjs'
+import { appexSymbolTableProblem } from './finder-sync-mac-check-lib.mjs'
 import {
   entitlementKeysFromCodesign,
   finderSyncAppexFailures,
@@ -279,7 +286,7 @@ export function finderSyncReleaseFailures(appPath, { readFile = readFileSync, ex
   const verify = runCommand('codesign', ['--verify', '--deep', '--strict', '--verbose=2', appex])
   const entitlements = runCommand('codesign', ['-d', '--entitlements', ':-', appex])
   const expectedAppGroup = finderSyncAppGroup(testFeed)
-  return finderSyncAppexFailures({
+  const failures = finderSyncAppexFailures({
     present: true,
     bundleId: plistString(plist, 'CFBundleIdentifier'),
     expectedBundleId,
@@ -301,6 +308,14 @@ export function finderSyncReleaseFailures(appPath, { readFile = readFileSync, ex
     machService: plistString(plist, 'FontButtlerMachService'),
     expectedMachService: finderSyncMachService(testFeed),
   })
+  // A defined `_main` is the script-mode binary. `-O` may dead-strip it;
+  // the compile-args test is what fails when `-parse-as-library` is dropped.
+  // This still rejects a shipped appex whose linker kept the script main.
+  const executable = path.join(appex, 'Contents', 'MacOS', FINDER_SYNC_EXECUTABLE)
+  const symbols = runCommand('nm', ['-g', executable])
+  const symbolProblem = appexSymbolTableProblem(symbols?.output, symbols?.status)
+  if (symbolProblem) failures.push(symbolProblem)
+  return failures
 }
 
 function prefixFailures(where, failures) {

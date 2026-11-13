@@ -119,12 +119,25 @@ export function entitlementKeysFromCodesign(output) {
   return keys
 }
 
+/**
+ * Frontend and link flags for the Finder Sync appex.
+ *
+ * `-parse-as-library` is required. A single file passed to swiftc is
+ * otherwise a top-level script: file-level lets such as `fontExtensions`
+ * are initialised only when that script's main runs. The process entry
+ * is `_NSExtensionMain`, so main never runs and the first contextual menu
+ * crashes in `Set.contains`. Library mode initialises those lets on first
+ * use. FinderSync.swift has no top-level statements, so nothing depended
+ * on that script main. The other native targets are Objective-C++ via
+ * clang++, not swiftc.
+ */
 export function finderSyncCompileArgs({ sdk, target, source, output }) {
   return [
     '-sdk',
     sdk,
     '-target',
     target,
+    '-parse-as-library',
     '-O',
     '-framework',
     'Cocoa',
@@ -141,6 +154,100 @@ export function finderSyncCompileArgs({ sdk, target, source, output }) {
     '-o',
     output,
   ]
+}
+
+const TOP_LEVEL_ATTRIBUTE = String.raw`@[A-Za-z_][A-Za-z0-9_]*(?:\([^)\n]*\))?`
+const TOP_LEVEL_MODIFIERS = String.raw`(?:private|fileprivate|internal|public|open|final|static|override|mutating|nonmutating|nonisolated|indirect|unowned|weak|lazy|required|convenience|dynamic|distributed)\s+`
+const TOP_LEVEL_KEYWORD = String.raw`import|let|var|func|class|struct|enum|protocol|typealias|extension|actor|associatedtype`
+const TOP_LEVEL_DECLARATION = new RegExp(
+  `^(?:${TOP_LEVEL_ATTRIBUTE}\\s+)*(?:${TOP_LEVEL_MODIFIERS})*(?:${TOP_LEVEL_KEYWORD})\\b`,
+)
+const TOP_LEVEL_ATTRIBUTE_ONLY = new RegExp(`^(?:${TOP_LEVEL_ATTRIBUTE}\\s*)+$`)
+const TOP_LEVEL_DIRECTIVE = /^#(?:if|else|elseif|endif|sourceLocation|available|warning|error)\b/
+const TOP_LEVEL_STORED = new RegExp(
+  `^(?:${TOP_LEVEL_ATTRIBUTE}\\s+)*(?:(?:private|fileprivate|internal|public|open|static|lazy|unowned|weak)\\s+)*(?:let|var)\\s+([A-Za-z_][A-Za-z0-9_]*)`,
+)
+
+function consumeSwiftString(text, start) {
+  if (text.startsWith('"""', start)) {
+    const end = text.indexOf('"""', start + 3)
+    return end === -1 ? text.length : end + 3
+  }
+  let index = start + 1
+  while (index < text.length) {
+    if (text[index] === '\\') {
+      index += 2
+      continue
+    }
+    if (text[index] === '"') return index + 1
+    index += 1
+  }
+  return text.length
+}
+
+/**
+ * File-level stored lets and any top-level statements in a Swift file.
+ * Statements would not run under `_NSExtensionMain`, and they do not
+ * compile with `-parse-as-library`. Angle brackets are tracked only outside
+ * braces, so a range such as `0..<12` inside a function does not swallow
+ * the next file-level let.
+ */
+export function finderSyncTopLevelShape(source) {
+  const text = String(source ?? '')
+  const chunks = []
+  let chunk = ''
+  let brace = 0
+  let paren = 0
+  let bracket = 0
+  let angle = 0
+  let index = 0
+  const flush = () => {
+    const trimmed = chunk.trim()
+    chunk = ''
+    if (trimmed) chunks.push(trimmed)
+  }
+  while (index < text.length) {
+    if (text.startsWith('//', index)) {
+      if (brace === 0 && paren === 0 && bracket === 0 && angle === 0) flush()
+      const end = text.indexOf('\n', index)
+      index = end === -1 ? text.length : end + 1
+      continue
+    }
+    if (text.startsWith('/*', index)) {
+      const end = text.indexOf('*/', index + 2)
+      index = end === -1 ? text.length : end + 2
+      continue
+    }
+    if (text[index] === '"') {
+      const next = consumeSwiftString(text, index)
+      chunk += text.slice(index, next)
+      index = next
+      continue
+    }
+    const ch = text[index]
+    if (ch === '{') brace += 1
+    else if (ch === '}') brace = Math.max(0, brace - 1)
+    else if (ch === '(') paren += 1
+    else if (ch === ')') paren = Math.max(0, paren - 1)
+    else if (ch === '[') bracket += 1
+    else if (ch === ']') bracket = Math.max(0, bracket - 1)
+    else if (brace === 0 && ch === '<') angle += 1
+    else if (brace === 0 && ch === '>' && angle > 0) angle -= 1
+    chunk += ch
+    if (ch === '\n' && brace === 0 && paren === 0 && bracket === 0 && angle === 0) flush()
+    index += 1
+  }
+  flush()
+  const storedGlobals = []
+  const executable = []
+  for (const item of chunks) {
+    const stored = TOP_LEVEL_STORED.exec(item)
+    if (stored) storedGlobals.push(stored[1])
+    else if (!TOP_LEVEL_DECLARATION.test(item) && !TOP_LEVEL_ATTRIBUTE_ONLY.test(item) && !TOP_LEVEL_DIRECTIVE.test(item)) {
+      executable.push(item)
+    }
+  }
+  return { storedGlobals, executable }
 }
 
 function readPackageVersion(root) {
