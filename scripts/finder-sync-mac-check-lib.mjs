@@ -18,6 +18,7 @@ import {
   FINDER_SYNC_TEAM_ID,
   finderSyncAgentBundleId,
   finderSyncAppGroup,
+  finderSyncMachServiceSuffix,
   validateFinderSyncSelection,
 } from '../electron/finder-sync.mjs'
 import { DEVELOPER_ID_IDENTITY } from './mac-signing.mjs'
@@ -69,6 +70,7 @@ export const AUTOMATED_CHECKS = [
   { id: 'agent-status', title: 'SMAppService status from --finder-sync-agent-status' },
   { id: 'app-entitlements', title: 'app entitlements: allow-jit, apple-events, and the team group' },
   { id: 'appex-group', title: 'appex entitlements use this build’s team-prefixed group' },
+  { id: 'mach-service-suffix', title: 'Mach service is <app-group>.<suffix>, in the appex and the LaunchAgent' },
   { id: 'helper-runtime', title: 'helper has the hardened runtime and no allow-jit' },
   { id: 'helper-identifier', title: 'helper identifier matches this build' },
   { id: 'spctl-app', title: 'spctl reports Notarized Developer ID for the app' },
@@ -93,9 +95,10 @@ export const AUTOMATED_CHECKS = [
 export const MANUAL_MAC_CHECKS = [
   {
     id: 'menu-roots',
-    action: 'Right-click a font in your home folder, in /Users/Shared, and on a volume under /Volumes.',
+    action:
+      'Right-click a font in your home folder, in /Users/Shared, and on a mounted disk image, including one Finder hides.',
     expect:
-      'Install and Install as… appear, and Finder does not crash. They do not come from monitoring /Library/Fonts.',
+      'Install and Install as… appear on the disk image itself, and Finder does not crash. They do not come from monitoring /Library/Fonts.',
   },
   {
     id: 'file-provider',
@@ -511,6 +514,22 @@ export function buildChecklist(observations = {}) {
     appexGroups.length === 1 && appexGroups[0] === group
       ? pass('appex-group', group)
       : fail('appex-group', `Appex group is ${appexGroups[0] || 'missing'}, expected ${group}.`),
+  )
+  const appexGroup = appexGroups.length === 1 ? appexGroups[0] : ''
+  const machService = String(observations.appexMachService ?? '')
+  const launchServices = Array.isArray(observations.launchAgentServices) ? observations.launchAgentServices : []
+  const machSuffix = finderSyncMachServiceSuffix(machService, appexGroup)
+  const machOk = machSuffix.length > 0 && launchServices.length === 1 && launchServices[0] === machService
+  results.push(
+    machOk
+      ? pass(
+          'mach-service-suffix',
+          `${machService} is ${appexGroup}.${machSuffix}. A sandboxed mach-lookup is not run: the ping client is unsandboxed.`,
+        )
+      : fail(
+          'mach-service-suffix',
+          `Mach service ${machService || 'missing'} must be ${appexGroup || 'the appex group'} plus a non-empty suffix, and the LaunchAgent must vend that same name.`,
+        ),
   )
   const helperRuntimeOk = hardenedRuntime(helperDisplay) && !entitlementsHaveKey(helperEntitlements, 'com.apple.security.cs.allow-jit')
   results.push(

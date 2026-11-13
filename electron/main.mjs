@@ -67,6 +67,8 @@ import {
   commitFinderSyncAgentRegistration,
   consumeFinderSyncPendingErrorFiles,
   finderSyncAgentBundleProgram,
+  finderSyncMachService,
+  finderSyncPendingErrorGroupContainer,
   finderSyncPendingErrorConsumePaths,
   finderSyncRequestSeen,
   finderSyncWireAction,
@@ -1271,13 +1273,21 @@ function consumeFinderSyncPendingErrors() {
   // when the move stalled. The helper writes the live library. Also read the
   // other support folders so a record left by the previous helper, or written
   // beside a library this launch is not using, is shown once and deleted.
-  // Test feed and FONT_BUTLER_DATA / FONTCASE_DATA stay on userData alone.
+  // Test feed and FONT_BUTLER_DATA / FONTCASE_DATA stay off the installed
+  // release app's support folders and its group container. The test feed
+  // still reads its own group container.
+  const testFeed = testFeedPlan?.isolate === true
+  const includeInstalledRecords = shouldMigrateRealMacLibrary({
+    platform: process.platform,
+    testFeed,
+  })
   const files = finderSyncPendingErrorConsumePaths({
     userDataDir: app.getPath('userData'),
     appSupportDir: app.getPath('appData'),
-    includeOtherSupportDirs: shouldMigrateRealMacLibrary({
-      platform: process.platform,
-      testFeed: testFeedPlan?.isolate === true,
+    includeOtherSupportDirs: includeInstalledRecords,
+    groupContainerDir: finderSyncPendingErrorGroupContainer(app.getPath('home'), {
+      testFeed,
+      includeInstalledGroup: includeInstalledRecords,
     }),
   })
   const errors = consumeFinderSyncPendingErrorFiles(files, { appPath: currentFinderSyncBundle() })
@@ -1305,6 +1315,7 @@ function saveFinderSyncAgentRecord(record) {
       appBundlePath: record.appBundlePath || '',
       helperPath: record.helperPath || '',
       version: record.version || '',
+      machService: record.machService || '',
     }),
   )
 }
@@ -1348,10 +1359,17 @@ function applyFinderSyncAgentRegistration(addon, { surface = false } = {}) {
     currentBundle,
     helperPath: currentBundle ? path.join(currentBundle, finderSyncAgentBundleProgram()) : '',
     version: app.getVersion(),
+    currentMachService: finderSyncMachService(testFeed),
     record,
     status: status.status,
     unregister() {
-      addon.unregisterAgent()
+      const removed = parseAgentJson(addon.unregisterAgent())
+      if (removed?.error) {
+        console.error('Finder Sync agent unregister failed', removed.error)
+        result = removed
+        return { ok: false, error: removed.error }
+      }
+      return { ok: true }
     },
     register() {
       result = parseAgentJson(addon.registerAgent())

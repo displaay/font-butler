@@ -95,6 +95,8 @@ export function finderSyncInfoPlist({
     <string>${xmlEscape(compareTitle)}</string>
     <key>FontButtlerMachService</key>
     <string>${xmlEscape(finderSyncMachService(testFeed))}</string>
+    <key>FontButtlerAppGroup</key>
+    <string>${xmlEscape(finderSyncAppGroup(testFeed))}</string>
     <key>NSExtension</key>
     <dict>
       <key>NSExtensionPointIdentifier</key>

@@ -7,6 +7,7 @@ import { FINDER_COMPARE, FINDER_INSTALL_AS, isClaimedFontPath, isInstallableFont
 import {
   FINDER_SYNC_PENDING_ERROR_MAX_BYTES,
   FINDER_SYNC_PENDING_ERROR_MAX_ENTRIES,
+  finderSyncGroupContainerDirectory,
   parseFinderSyncPendingErrorEntries,
   readFinderSyncPendingErrorRecord,
 } from './finder-sync-pending-error.mjs'
@@ -22,6 +23,7 @@ export {
   FINDER_SYNC_RELEASE_SUPPORT_DIR,
   FINDER_SYNC_TEST_SUPPORT_DIR,
   carryFinderSyncPendingError,
+  finderSyncGroupContainerDirectory,
   finderSyncPendingErrorConsumePaths,
   finderSyncPendingErrorFolderName,
   finderSyncPendingErrorWriteDirectory,
@@ -101,11 +103,13 @@ export function finderSyncMenuTitle(action, testFeed) {
 }
 
 /**
- * App-group id and Mach service. The test build has its own group.
+ * App-group id. The test build has its own group.
  * The id is team-prefixed (`A7WWML89LQ.group.…`). macOS 15 asks to
  * "access data from other apps" when the group is not in that form.
  * The app entitlements and the appex entitlements list this exact string.
  * It is Font Buttler's group, not another app's container.
+ * It is not the Mach service name. The sandbox allows lookup of
+ * `<group>.<suffix>` only, and denies a lookup of the group id itself.
  */
 export function finderSyncAppGroup(testFeed) {
   return `${FINDER_SYNC_TEAM_ID}.group.${finderSyncBundleId(testFeed)}`
@@ -115,8 +119,28 @@ export function finderSyncAppGroupIsTeamPrefixed(group) {
   return typeof group === 'string' && group.startsWith(`${FINDER_SYNC_TEAM_ID}.group.`) && group.length > `${FINDER_SYNC_TEAM_ID}.group.`.length
 }
 
+/** Suffix launchd vends under the app group. The sandbox requires a non-empty suffix. */
+export const FINDER_SYNC_MACH_SERVICE_SUFFIX = 'agent'
+
+/**
+ * Mach service for this flavour. Release is `<release group>.agent`.
+ * Test is `<test group>.agent`, and the test group already ends in `.Test`.
+ */
 export function finderSyncMachService(testFeed) {
-  return finderSyncAppGroup(testFeed)
+  return `${finderSyncAppGroup(testFeed)}.${FINDER_SYNC_MACH_SERVICE_SUFFIX}`
+}
+
+/**
+ * Suffix after `<group>.`, or empty when `service` is not a child of that group.
+ * The bare group id has an empty suffix and is denied by the app sandbox.
+ */
+export function finderSyncMachServiceSuffix(service, group) {
+  if (typeof service !== 'string' || typeof group !== 'string' || !group) return ''
+  const prefix = `${group}.`
+  if (!service.startsWith(prefix)) return ''
+  const suffix = service.slice(prefix.length)
+  if (!suffix || suffix.startsWith('.') || suffix.endsWith('.')) return ''
+  return suffix
 }
 
 /**
@@ -224,9 +248,15 @@ function absoluteBundlePath(filePath) {
  * A test build never names the release label or plist. The recorded app
  * bundle path is the one this app wrote after a successful register.
  * A different bundle path means unregister, then register. Opt-out only
- * unregisters. An enabled or approved agent at the same path stays as it is.
- * An enabled agent with no recorded bundle is registered again so launchd
- * follows this app, including Cuttler.app and the zip's Font Buttler.app.
+ * unregisters. An enabled or approved agent at the same path stays as it is
+ * when its recorded `machService` is already this build's service.
+ * 0.4.0 (and a 0.4.1 build from before the `.agent` suffix) saved no
+ * `machService`. BTM keeps vending the plist it copied at register time, so
+ * that launch unregisters and registers. Unregister drops the old Mach name.
+ * Register submits the plist in this app, whose MachServices key is
+ * `<group>.agent`. The saved record then includes `machService`. A later
+ * launch from the same path with that same name does not register again.
+ * A version change alone does not: only a missing or different service does.
  */
 export function planFinderSyncAgentRegistration({
   testFeed = false,
@@ -234,6 +264,8 @@ export function planFinderSyncAgentRegistration({
   recordedBundle,
   recordedProgram,
   currentHelper,
+  recordedMachService = '',
+  currentMachService = '',
   status,
   optedOut = false,
 } = {}) {
@@ -246,6 +278,14 @@ export function planFinderSyncAgentRegistration({
   const recorded = absoluteBundlePath(recordedBundle)
   const helper = absoluteBundlePath(currentHelper)
   const previousProgram = typeof recordedProgram === 'string' ? recordedProgram.trim() : ''
+  const recordedService = typeof recordedMachService === 'string' ? recordedMachService : ''
+  const serviceChanged = typeof currentMachService === 'string' && currentMachService.length > 0 && recordedService !== currentMachService
+  const keep = (reason) => {
+    if (serviceChanged && (status === 'enabled' || status === 'requires-approval')) {
+      return { ...plan, action: 'reregister', reason: 'mach-service' }
+    }
+    return { ...plan, action: 'keep', reason }
+  }
   if (recorded && current && recorded !== current) {
     return { ...plan, action: 'reregister', reason: 'moved' }
   }
@@ -257,7 +297,7 @@ export function planFinderSyncAgentRegistration({
       return { ...plan, action: 'reregister', reason: 'legacy-program' }
     }
     if (status === 'enabled' || status === 'requires-approval') {
-      return { ...plan, action: 'keep', reason: 'legacy-program' }
+      return keep('legacy-program')
     }
     return { ...plan, action: 'register', reason: 'legacy-program' }
   }
@@ -268,13 +308,13 @@ export function planFinderSyncAgentRegistration({
     return { ...plan, action: 'reregister', reason: 'unrecorded' }
   }
   if (status === 'enabled' || status === 'requires-approval') {
-    return { ...plan, action: 'keep', reason: status }
+    return keep(status)
   }
   return { ...plan, action: 'register', reason: status || 'not-registered' }
 }
 
 export function readFinderSyncAgentRecord(text) {
-  const empty = { enabled: true, appBundlePath: '', helperPath: '', version: '', program: '' }
+  const empty = { enabled: true, appBundlePath: '', helperPath: '', version: '', program: '', machService: '' }
   if (!text) return empty
   try {
     const parsed = JSON.parse(text)
@@ -284,6 +324,7 @@ export function readFinderSyncAgentRecord(text) {
       helperPath: typeof parsed?.helperPath === 'string' ? parsed.helperPath : '',
       version: typeof parsed?.version === 'string' ? parsed.version : '',
       program: typeof parsed?.program === 'string' ? parsed.program : '',
+      machService: typeof parsed?.machService === 'string' ? parsed.machService : '',
     }
   } catch {
     return empty
@@ -301,6 +342,7 @@ export function commitFinderSyncAgentRegistration({
   currentBundle = '',
   helperPath = '',
   version = '',
+  currentMachService = '',
   record,
   status,
   optedOut = false,
@@ -313,7 +355,9 @@ export function commitFinderSyncAgentRegistration({
     currentBundle,
     recordedBundle: stored.appBundlePath,
     recordedProgram: stored.program,
+    recordedMachService: stored.machService,
     currentHelper: helperPath,
+    currentMachService,
     status,
     optedOut,
   })
@@ -321,7 +365,20 @@ export function commitFinderSyncAgentRegistration({
     return { plan, status: status || '', record: stored, saved: false, refused: true }
   }
   let resultStatus = status || ''
-  if (plan.action === 'unregister' || plan.action === 'reregister') unregister()
+  if (plan.action === 'unregister' || plan.action === 'reregister') {
+    const removed = unregister()
+    const failed = removed && typeof removed === 'object' && (removed.ok === false || removed.error)
+    if (failed) {
+      return {
+        plan,
+        status: resultStatus,
+        record: stored,
+        saved: false,
+        refused: false,
+        error: String(removed.error || 'Finder Sync agent unregister failed.'),
+      }
+    }
+  }
   if (plan.action === 'register' || plan.action === 'reregister') {
     const registered = register()
     if (typeof registered === 'string' && registered) resultStatus = registered
@@ -336,6 +393,7 @@ export function commitFinderSyncAgentRegistration({
     appBundlePath: bundle,
     helperPath: absoluteBundlePath(helperPath),
     version: typeof version === 'string' ? version : '',
+    machService: typeof currentMachService === 'string' ? currentMachService : '',
   }
   return { plan, status: resultStatus, record: next, saved: true, refused: false }
 }
@@ -636,8 +694,8 @@ function xmlEscape(value) {
 }
 
 /**
- * SMAppService agent plist. Launchd vends one Mach service, the app-group
- * name. RunAtLoad stays false so launchd starts the helper on lookup.
+ * SMAppService agent plist. Launchd vends one Mach service, `<group>.agent`.
+ * RunAtLoad stays false so launchd starts the helper on lookup.
  */
 export function finderSyncAgentLaunchAgentPlist(testFeed) {
   const label = finderSyncAgentLabel(testFeed)
@@ -776,19 +834,32 @@ export function finderSyncMainExecutable(appPath, { exists = existsSync, readFil
 }
 
 /**
- * Home, `/Users/Shared`, and `/Volumes`. `/` and `/Library/Fonts` are not
- * monitored. File Provider folders are not added. `home` is ignored when it
- * is not a safe absolute path.
+ * Whether a mounted-volume path is added to the Finder Sync directory set.
+ * This is the tested rule. FinderSync.swift `finderSyncMountPathIncluded`
+ * repeats it: the appex cannot call this module. `/`, `/Library/Fonts`, and
+ * `/System/Volumes` (Data, Preboot, VM) are out. A hidden disk image under
+ * `/Volumes` stays in. `finderSyncMonitorDirectories` is not a second list.
  */
-export function finderSyncMonitorDirectories(home) {
-  const directories = []
-  if (typeof home === 'string' && home !== '/' && home !== FINDER_SYNC_SYSTEM_FONTS_ROOT && isSafeFinderSyncPath(home)) {
-    directories.push(home)
-  }
-  for (const root of [FINDER_SYNC_SHARED_ROOT, FINDER_SYNC_VOLUMES_ROOT]) {
-    if (!directories.includes(root)) directories.push(root)
-  }
-  return directories
+export function finderSyncMountPathIncluded(mountPath) {
+  if (typeof mountPath !== 'string') return false
+  const normalized = mountPath.length > 1 ? mountPath.replace(/\/+$/, '') : mountPath
+  if (!isSafeFinderSyncPath(normalized)) return false
+  if (normalized === '/' || normalized === FINDER_SYNC_SYSTEM_FONTS_ROOT) return false
+  if (normalized.startsWith(`${FINDER_SYNC_SYSTEM_FONTS_ROOT}/`)) return false
+  if (normalized === '/System/Volumes' || normalized.startsWith('/System/Volumes/')) return false
+  return true
+}
+
+/**
+ * Group container to read and delete on this launch.
+ * The test feed reads only its own group. An isolated data root
+ * (`FONT_BUTLER_DATA` / `FONTCASE_DATA`, `includeInstalledGroup` false)
+ * reads none, so it does not consume the installed app's queued error.
+ */
+export function finderSyncPendingErrorGroupContainer(homeDir, { testFeed = false, includeInstalledGroup = false } = {}) {
+  if (testFeed === true) return finderSyncGroupContainerDirectory(homeDir, finderSyncAppGroup(true))
+  if (includeInstalledGroup === true) return finderSyncGroupContainerDirectory(homeDir, finderSyncAppGroup(false))
+  return ''
 }
 
 /**

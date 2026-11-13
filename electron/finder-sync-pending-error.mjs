@@ -170,16 +170,29 @@ export function finderSyncPendingErrorWriteDirectory(appSupportDir, { testFeed =
 }
 
 /**
+ * App-group container the sandboxed appex can write. The helper's
+ * Application Support file is outside that sandbox, so a lookup that never
+ * reaches the helper is recorded here instead.
+ */
+export function finderSyncGroupContainerDirectory(homeDir, group) {
+  if (typeof homeDir !== 'string' || !homeDir.startsWith('/')) return ''
+  if (typeof group !== 'string' || !group || group.includes('/') || group.includes('\0')) return ''
+  return path.join(homeDir, 'Library/Group Containers', group)
+}
+
+/**
  * Files the app reads once, then deletes.
- * userData is always first. The other Application Support folders are added
- * only for a real Mac library. A test feed and a FONT_BUTLER_DATA /
- * FONTCASE_DATA launch pass includeOtherSupportDirs false so they do not
- * read or delete the installed app's record.
+ * userData is first. `groupContainerDir` is added only when the caller
+ * passes one. An isolated FONT_BUTLER_DATA / FONTCASE_DATA launch passes
+ * an empty group directory so this does not read or delete the installed
+ * release app's queued error. The other Application Support folders are
+ * added only for a real Mac library.
  */
 export function finderSyncPendingErrorConsumePaths({
   userDataDir,
   appSupportDir,
   includeOtherSupportDirs = false,
+  groupContainerDir = '',
 } = {}) {
   const files = []
   const add = (dir) => {
@@ -190,6 +203,7 @@ export function finderSyncPendingErrorConsumePaths({
     files.push(file)
   }
   add(userDataDir)
+  add(groupContainerDir)
   if (includeOtherSupportDirs === true && appSupportDir) {
     add(path.join(appSupportDir, FINDER_SYNC_RELEASE_SUPPORT_DIR))
     for (const name of FINDER_SYNC_LEGACY_SUPPORT_DIRS) add(path.join(appSupportDir, name))

@@ -28,7 +28,7 @@ import {
   straySliceNames,
   summarizeChecklist,
 } from '../scripts/finder-sync-mac-check-lib.mjs'
-import { finderSyncAppGroup } from './finder-sync.mjs'
+import { finderSyncAppGroup, finderSyncMachService } from './finder-sync.mjs'
 
 const group = finderSyncAppGroup(false)
 
@@ -56,6 +56,8 @@ function passingObservations(extra = {}) {
       ['com.apple.security.application-groups', group],
     ]),
     appexEntitlements: entitlements([['com.apple.security.application-groups', group]]),
+    appexMachService: finderSyncMachService(false),
+    launchAgentServices: [finderSyncMachService(false)],
     helperEntitlements: entitlements([['com.apple.security.application-groups', group]]),
     helperCodesignDisplay: 'Identifier=app.fontbutler.desktop.FinderSyncAgent\nflags=0x10000(runtime)\n',
     spctlApp: { ok: true, reason: 'Notarized Developer ID' },
@@ -186,6 +188,7 @@ test('archive app discovery accepts Cuttler and Font Buttler product names', () 
   assert.match(roundtrip, /finderSyncMainExecutable\(app\)/)
   const check = readFileSync(new URL('../scripts/finder-sync-mac-check.mjs', import.meta.url), 'utf8')
   assert.match(check, /finderSyncMainExecutable\(app\)/)
+  assert.match(check, /launchAgentServices: finderSyncAgentMachServiceKeys\(readPlistText\(finderSyncAgentPlistPath\(app, testFeed\)\)\)/)
 })
 
 test('a complete signed-app observation passes, and a missing entitlement or pending approval fails', () => {
@@ -214,6 +217,28 @@ test('a complete signed-app observation passes, and a missing entitlement or pen
   assert.equal(summarizeChecklist(scriptMain).ok, false)
   const missingNm = buildChecklist(passingObservations({ appexNm: '', appexNmError: 'The appex executable is missing.' }))
   assert.equal(missingNm.find((item) => item.id === 'appex-script-main').state, 'fail')
+
+  const bareGroup = buildChecklist(passingObservations({
+    appexMachService: group,
+    launchAgentServices: [group],
+  }))
+  assert.equal(bareGroup.find((item) => item.id === 'mach-service-suffix').state, 'fail')
+  const mismatched = buildChecklist(passingObservations({
+    appexMachService: finderSyncMachService(false),
+    launchAgentServices: [finderSyncMachService(true)],
+  }))
+  assert.equal(mismatched.find((item) => item.id === 'mach-service-suffix').state, 'fail')
+  assert.match(mismatched.find((item) => item.id === 'mach-service-suffix').reason, /LaunchAgent/)
+  const droppedServices = buildChecklist(passingObservations({ launchAgentServices: undefined }))
+  assert.equal(droppedServices.find((item) => item.id === 'mach-service-suffix').state, 'fail')
+  const testService = buildChecklist(passingObservations({
+    testFeed: true,
+    appexEntitlements: entitlements([['com.apple.security.application-groups', finderSyncAppGroup(true)]]),
+    appexMachService: finderSyncMachService(true),
+    launchAgentServices: [finderSyncMachService(true)],
+    helperCodesignDisplay: 'Identifier=app.fontbutler.desktop.FinderSyncAgent.Test\nflags=0x10000(runtime)\n',
+  }))
+  assert.equal(testService.find((item) => item.id === 'mach-service-suffix').state, 'pass')
 
   assert.equal(missingEvents.find((item) => item.id === 'app-entitlements').state, 'fail')
 

@@ -25,8 +25,8 @@ static NSString *const kReleaseRequirement =
     @"anchor apple generic and certificate leaf[subject.OU] = \"A7WWML89LQ\" and identifier \"app.fontbutler.desktop.FinderSync\"";
 static NSString *const kTestRequirement =
     @"anchor apple generic and certificate leaf[subject.OU] = \"A7WWML89LQ\" and identifier \"app.fontbutler.desktop.FinderSync.Test\"";
-static NSString *const kReleaseService = @"A7WWML89LQ.group.app.fontbutler.desktop.FinderSync";
-static NSString *const kTestService = @"A7WWML89LQ.group.app.fontbutler.desktop.FinderSync.Test";
+static NSString *const kReleaseService = @"A7WWML89LQ.group.app.fontbutler.desktop.FinderSync.agent";
+static NSString *const kTestService = @"A7WWML89LQ.group.app.fontbutler.desktop.FinderSync.Test.agent";
 static NSString *const kReleaseAgentBundleId = @"app.fontbutler.desktop.FinderSyncAgent";
 static NSString *const kTestAgentBundleId = @"app.fontbutler.desktop.FinderSyncAgent.Test";
 // The socket peer must be the Font Buttler app. Both flavours share this id.
