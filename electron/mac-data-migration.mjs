@@ -153,8 +153,16 @@ function libraryFontsDestination(dir) {
 export function movePartialDirectory(dest) {
   const stamp = `${process.pid}-${process.hrtime.bigint()}`
   if (libraryFontsDestination(dest)) {
-    const library = path.dirname(path.dirname(path.resolve(dest)))
-    return path.join(library, 'Application Support', `.cuttler-move.partial-${stamp}`)
+    // Sibling of the real Fonts directory: same volume, so rename into
+    // Fonts is atomic, and FontServices does not scan outside Fonts.
+    const fontsRoot = path.dirname(path.resolve(dest))
+    let realFonts = fontsRoot
+    try {
+      realFonts = fs.realpathSync(fontsRoot)
+    } catch {
+      realFonts = fontsRoot
+    }
+    return path.join(path.dirname(realFonts), `.cuttler-move.partial-${stamp}`)
   }
   return `${dest}.partial-${stamp}`
 }
@@ -167,21 +175,45 @@ export function isOurMovePartialName(name) {
   )
 }
 
-export function cleanMovePartials(home) {
+function partialOwnerPid(name) {
+  const match = /\.partial-(\d+)-\d+$/.exec(name)
+  if (!match || !isOurMovePartialName(name)) return null
+  const pid = Number(match[1])
+  return Number.isInteger(pid) && pid > 0 ? pid : null
+}
+
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error?.code === 'EPERM'
+  }
+}
+
+export function cleanMovePartials(home, isAlive = processAlive) {
   const parents = [
+    path.join(home, 'Library'),
     path.join(home, 'Library/Application Support'),
     path.join(home, 'Library/Fonts'),
   ]
   for (const dir of parents) {
-    let names = []
+    let entries = []
     try {
-      names = fs.readdirSync(dir)
+      entries = fs.readdirSync(dir, { withFileTypes: true })
     } catch {
       continue
     }
-    for (const name of names) {
-      if (!isOurMovePartialName(name)) continue
-      fs.rmSync(path.join(dir, name), { recursive: true, force: true })
+    for (const entry of entries) {
+      if (!isOurMovePartialName(entry.name)) continue
+      const pid = partialOwnerPid(entry.name)
+      if (pid != null && isAlive(pid)) continue
+      const abs = path.join(dir, entry.name)
+      if (entry.isSymbolicLink()) {
+        fs.unlinkSync(abs)
+        continue
+      }
+      fs.rmSync(abs, { recursive: true, force: true })
     }
   }
 }
@@ -245,6 +277,8 @@ export function moveDirectoryAtomic(from, to, hooks = {}) {
     } catch (error) {
       if (error?.code !== 'EXDEV') throw error
       const tmp = movePartialDirectory(to)
+      const fontDest = libraryFontsDestination(to)
+      const renameIntoPlace = hooks.renameIntoPlace ?? fs.renameSync
       hooks.onPartialDir?.(tmp)
       let committed = false
       try {
@@ -254,16 +288,35 @@ export function moveDirectoryAtomic(from, to, hooks = {}) {
           mismatch.code = 'EVERIFY'
           throw mismatch
         }
-        fs.renameSync(tmp, to)
+        // Fonts: the commit record is written while the copy is still outside
+        // Library/Fonts. Only then is it renamed into place, and only then
+        // may the source be removed. A crash before the record leaves the
+        // source as the only fonts folder macOS can see.
+        if (fontDest) {
+          if (hooks.crashBeforeCommitRecord) {
+            const killed = new Error('killed before the copy commit record')
+            killed.code = 'ECOPYGAP'
+            throw killed
+          }
+          hooks.onCopyCommitted?.(from, to)
+        }
+        try {
+          renameIntoPlace(tmp, to)
+        } catch (renameError) {
+          if (fontDest && renameError?.code === 'EXDEV') {
+            const blocked = new Error('Font copy cannot be renamed onto the Fonts volume')
+            blocked.code = 'EFONTVOLUME'
+            throw blocked
+          }
+          throw renameError
+        }
         committed = true
-        if (hooks.crashBeforeCommitRecord) {
+        if (!fontDest && hooks.crashBeforeCommitRecord) {
           const killed = new Error('killed before the copy commit record')
           killed.code = 'ECOPYGAP'
           throw killed
         }
-        // The copy is the library only after this record is written. A crash
-        // before that stalls and does not adopt either folder.
-        hooks.onCopyCommitted?.(from, to)
+        if (!fontDest) hooks.onCopyCommitted?.(from, to)
         if (backup) {
           try {
             fs.rmSync(backup, { recursive: true, force: true })
@@ -288,7 +341,12 @@ export function moveDirectoryAtomic(from, to, hooks = {}) {
         }
         if (lstatOrNull(from)) leftover = from
       } catch (copyError) {
-        if (copyError?.code === 'ECOPYCOMMIT' || copyError?.code === 'ECOPYGAP' || copyError?.code === 'ECOMMITTED') {
+        if (
+          copyError?.code === 'ECOPYCOMMIT' ||
+          copyError?.code === 'ECOPYGAP' ||
+          copyError?.code === 'ECOMMITTED' ||
+          copyError?.code === 'EFONTVOLUME'
+        ) {
           throw copyError
         }
         if (committed) {
@@ -302,7 +360,14 @@ export function moveDirectoryAtomic(from, to, hooks = {}) {
       }
     }
   } catch (error) {
-    if (error?.code === 'ECOPYCOMMIT' || error?.code === 'ECOPYGAP' || error?.code === 'ECOMMITTED') throw error
+    if (
+      error?.code === 'ECOPYCOMMIT' ||
+      error?.code === 'ECOPYGAP' ||
+      error?.code === 'ECOMMITTED' ||
+      error?.code === 'EFONTVOLUME'
+    ) {
+      throw error
+    }
     restoreBackup()
     throw error
   }
@@ -519,6 +584,9 @@ function migrateSide({ dest, sources, unused, movedFrom, hooks, beforeMove, comm
       leftover: leftover && lstatOrNull(leftover) ? leftover : null,
     }
   } catch (error) {
+    if (error?.code === 'EFONTVOLUME') {
+      return { status: 'stalled', source, occupied: false, unfinishedCopy: true, volumeBlocked: true }
+    }
     if (error?.code === 'ECOPYCOMMIT' || error?.code === 'ECOPYGAP' || error?.code === 'ECOMMITTED') throw error
     // The source is still the library. Dest was restored if a fresh folder
     // had been moved aside. Say so instead of continuing with an empty Cuttler.
@@ -558,7 +626,15 @@ export function migrationStallMessage(result) {
     )
   }
   if (result.stalled && result.stalledFontsDir) {
-    parts.push(stallSentence('fonts', result.stalledFontsDir, result.installDir, result.fontsOccupied))
+    parts.push(
+      stallSentence(
+        'fonts',
+        result.stalledFontsDir,
+        result.installDir,
+        result.fontsOccupied,
+        result.unfinishedFontsCopy,
+      ),
+    )
   }
   if (result.leftoverDataDir) {
     parts.push(leftoverSentence('library', result.leftoverDataDir, result.dataRoot, result.leftoverDataDestEmpty))
@@ -810,6 +886,8 @@ function rememberMove(home, current, replacement, extra = {}) {
     stalledDataDir: extra.stalledDataDir === undefined ? current?.stalledDataDir ?? null : extra.stalledDataDir,
     dataFrom: extra.dataFrom === undefined ? current?.dataFrom ?? null : extra.dataFrom,
     fontsFrom: extra.fontsFrom === undefined ? current?.fontsFrom ?? null : extra.fontsFrom,
+    fontVolumeBlocked:
+      extra.fontVolumeBlocked === undefined ? current?.fontVolumeBlocked === true : extra.fontVolumeBlocked,
   }
   if (next.replacements.length === 0) return next.stalledDataDir ? next : current
   writePendingMigration(home, next)
@@ -1158,10 +1236,24 @@ function libraryCopyUncommitted(pending, dataRoot) {
   )
 }
 
+function parkUncommittedFontCopy(installDir, pending) {
+  const pair = (pending?.replacements ?? []).find(
+    (item) =>
+      item?.to === installDir &&
+      item.committed !== true &&
+      followedDirectory(item.from) &&
+      followedDirectory(installDir),
+  )
+  if (!pair) return false
+  const staged = movePartialDirectory(installDir)
+  fs.mkdirSync(path.dirname(staged), { recursive: true })
+  fs.renameSync(installDir, staged)
+  return true
+}
+
 export function migrateLegacyMacAppDirs(home, hooks) {
   const dataRoot = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
   const installDir = path.join(home, 'Library/Fonts', APP_FOLDER_NAME)
-  cleanMovePartials(home)
   // 0.4.0's instance lock lives in the legacy folder. Electron's own lock
   // follows this process's userData (Cuttler) and cannot see that owner.
   // Wait out a quitting updater, then refuse rather than move the library
@@ -1169,6 +1261,7 @@ export function migrateLegacyMacAppDirs(home, hooks) {
   const owner = waitForLegacyLibraryOwner(home, hooks)
   if (owner?.kind === 'legacy') return ownerBlockedResult(dataRoot, installDir, owner)
   if (owner?.kind === 'same-app') return sameAppInstanceResult(dataRoot, installDir, owner)
+  cleanMovePartials(home)
   let pending = readPendingMigration(home)
   if (pending) rewriteKeptLibrary(pending, dataRoot)
   const committedSources = new Set(
@@ -1226,26 +1319,40 @@ export function migrateLegacyMacAppDirs(home, hooks) {
   // The library copy is not the library until its commit record is written.
   // Moving fonts first would activate both font folders and rewrite only one catalog.
   const unfinishedDataCopy = data.status === 'stalled' && libraryCopyUncommitted(pending, dataRoot)
-  const fonts = unfinishedDataCopy
-    ? {
-        status: fontSources.some((dir) => followedDirectory(dir)) ? 'stalled' : 'absent',
-        source: fontSources.find((dir) => followedDirectory(dir)) ?? null,
-        occupied: false,
-      }
-    : migrateSide({
-        dest: installDir,
-        sources: fontSources,
-        unused: isEmptyDir,
-        movedFrom: marker?.fontsFrom ?? pending?.fontsFrom ?? null,
-        hooks: moveHooks,
-        committedSources,
-        beforeMove(source) {
-          pending = rememberMove(home, pending, { from: source, to: installDir }, {
-            dataRoot,
-            fontsFrom: path.basename(source),
-          })
-        },
-      })
+  let unfinishedFontsCopy = false
+  let fonts
+  if (unfinishedDataCopy) {
+    // Fonts never started. Do not describe that as a move that did not finish.
+    fonts = { status: 'absent', source: null, occupied: false }
+  } else if (pending?.fontVolumeBlocked === true) {
+    unfinishedFontsCopy = true
+    fonts = {
+      status: 'stalled',
+      source: fontSources.find((dir) => followedDirectory(dir)) ?? null,
+      occupied: false,
+      unfinishedCopy: true,
+    }
+  } else {
+    parkUncommittedFontCopy(installDir, pending)
+    fonts = migrateSide({
+      dest: installDir,
+      sources: fontSources,
+      unused: isEmptyDir,
+      movedFrom: marker?.fontsFrom ?? pending?.fontsFrom ?? null,
+      hooks: moveHooks,
+      committedSources,
+      beforeMove(source) {
+        pending = rememberMove(home, pending, { from: source, to: installDir }, {
+          dataRoot,
+          fontsFrom: path.basename(source),
+        })
+      },
+    })
+    unfinishedFontsCopy = fonts.unfinishedCopy === true || fonts.volumeBlocked === true
+    if (fonts.volumeBlocked) {
+      pending = rememberMove(home, pending, null, { dataRoot, fontVolumeBlocked: true })
+    }
+  }
   pending = readPendingMigration(home) ?? pending
   if (data.status === 'stalled' && data.source) {
     pending = rememberMove(home, pending, null, { dataRoot, stalledDataDir: data.source })
@@ -1293,6 +1400,7 @@ export function migrateLegacyMacAppDirs(home, hooks) {
     leftoverDataDestEmpty: data.destEmpty === true,
     leftoverFontsDestEmpty: fonts.destEmpty === true,
     unfinishedDataCopy,
+    unfinishedFontsCopy,
     dataOccupied: data.status === 'stalled' ? data.occupied !== false : false,
     fontsOccupied: fonts.status === 'stalled' ? fonts.occupied !== false : false,
     movedData: data.status === 'moved',

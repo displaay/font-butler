@@ -449,14 +449,13 @@ let retailStatus = null
 let runPackagedBootstrap = null
 /** Held until the renderer pulls it and later acknowledges the dismiss. */
 const announcementSlot = createAnnouncementSlot()
+announcementSlot.onShow((announcement) => {
+  const win = mainWindow
+  if (!win || win.isDestroyed()) return
+  win.webContents.send('announcement:show', announcement)
+})
 
-function startMainUiAfterBootstrap() {
-  void listenForApiEvents()
-  createWindow()
-  void loadCatalog()
-  void loadActivity()
-  void loadAppUpdate()
-  void loadRetailStatus()
+function stageLaunchAnnouncement() {
   try {
     const migrationNotice = migrationAnnouncementFlags(macDataMigration)
     announcementSlot.stage(presentPendingAnnouncement({
@@ -469,6 +468,16 @@ function startMainUiAfterBootstrap() {
   } catch (error) {
     console.error('Could not present announcement', error)
   }
+}
+
+function startMainUiAfterBootstrap() {
+  void listenForApiEvents()
+  createWindow()
+  void loadCatalog()
+  void loadActivity()
+  void loadAppUpdate()
+  void loadRetailStatus()
+  stageLaunchAnnouncement()
 }
 
 async function stopPackagedApiWorker() {
@@ -2961,6 +2970,7 @@ if (launchMode === 'quit') {
   }
 
   app.whenReady().then(async () => {
+    stageLaunchAnnouncement()
     debugLogFilePath = defaultLogFilePath(app.getPath('home'))
     const fileWriter = createDebugLogFileWriter(debugLogFilePath)
     attachDebugLogPersistence(debugLog, fileWriter)
@@ -3063,6 +3073,7 @@ if (launchMode === 'quit') {
 }
 
 ipcMain.on('renderer-app-mounted', () => {
+  announcementSlot.markMounted()
   flushWatchNotices()
 })
 

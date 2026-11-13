@@ -1113,19 +1113,22 @@ function AppShell() {
       const title = typeof payload.title === 'string' ? payload.title : ''
       const body = typeof payload.body === 'string' ? payload.body : ''
       if (!id || !title) return
-      setAnnouncement({
-        id,
-        title,
-        body,
-        celebrate: payload.celebrate === true,
-        sinceVersion: typeof payload.sinceVersion === 'string' ? payload.sinceVersion : '',
-        showWhen:
-          payload.showWhen === 'always' ||
-          payload.showWhen === 'upgrade' ||
-          payload.showWhen === 'migration-stalled' ||
-          payload.showWhen === 'migration-leftover'
-            ? payload.showWhen
-            : undefined,
+      setAnnouncement((current) => {
+        if (current?.id === id) return current
+        return {
+          id,
+          title,
+          body,
+          celebrate: payload.celebrate === true,
+          sinceVersion: typeof payload.sinceVersion === 'string' ? payload.sinceVersion : '',
+          showWhen:
+            payload.showWhen === 'always' ||
+            payload.showWhen === 'upgrade' ||
+            payload.showWhen === 'migration-stalled' ||
+            payload.showWhen === 'migration-leftover'
+              ? payload.showWhen
+              : undefined,
+        }
       })
     }
     let cancelled = false

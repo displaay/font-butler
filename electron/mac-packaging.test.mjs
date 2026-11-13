@@ -1010,6 +1010,10 @@ test('a test-feed pack stamps extraMetadata and does not change a normal pack', 
   assert.match(bad.error, /FONT_BUTLER_TEST_VERSION/)
   assert.match(readRepo('scripts/mac-pack.mjs'), /applyTestFeedMetadata/)
   assert.match(readRepo('scripts/mac-pack.mjs'), /applyBuildIdentityResource/)
+  assert.match(
+    readRepo('scripts/mac-pack.mjs'),
+    /applyBuildIdentityResource\(\s*stamped\.build,\s*process\.env,\s*identityFile,\s*currentCommit\(repoRoot\)\s*\)/,
+  )
   assert.equal(PRODUCTION_APP_ID, 'app.fontbutler.desktop')
   const identity = applyBuildIdentityResource(build, {}, '/tmp/build-identity.json')
   assert.deepEqual(identity.document, { testBuild: false })
