@@ -25,8 +25,9 @@ import {
   MIGRATION_STALL_ENV,
   launchAfterMigrationFailure,
   legacyOwnerBlockMessage,
+  committedLeftoverDirectories,
   migrateLegacyMacAppDirs,
-  migrationNeedsNotice,
+  migrationAnnouncementFlags,
   shouldMigrateRealMacLibrary,
 } from './mac-data-migration.mjs'
 import { isAllowedAppUpdateUrl, trayTooltip } from './app-update.mjs'
@@ -464,7 +465,7 @@ function startMainUiAfterBootstrap() {
     pendingAnnouncement = presentPendingAnnouncement({
       userDataDir: app.getPath('userData'),
       currentVersion: app.getVersion(),
-      migrationStalled: migrationNeedsNotice(macDataMigration),
+      ...migrationAnnouncementFlags(macDataMigration),
       migration: macDataMigration,
     })
     deliverPendingAnnouncement()
@@ -1280,6 +1281,9 @@ function consumeFinderSyncPendingErrors() {
       platform: process.platform,
       testFeed: testFeedPlan?.isolate === true,
     }),
+    // A committed copy's leftover is not the live library. Do not read or
+    // delete anything inside it, including a queued Finder Sync error.
+    skipDirs: committedLeftoverDirectories(app.getPath('home')),
   })
   const errors = consumeFinderSyncPendingErrorFiles(files, { appPath: currentFinderSyncBundle() })
   for (const item of errors) presentFinderSyncUserError(item.code)

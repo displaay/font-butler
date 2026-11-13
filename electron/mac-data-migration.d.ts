@@ -17,6 +17,10 @@ export type MacDirMigrationHooks = {
   crashAfterDataMove?: boolean
   /** Throw after the verified copy is renamed into place and recorded, before source removal. */
   crashAfterCopyCommit?: boolean
+  /** Throw after the rename into place and before the committed flag is written. */
+  crashBeforeCommitRecord?: boolean
+  /** Throw instead of writing the committed flag. The copy is already in place. */
+  failCommitRecord?: boolean
   selfPid?: number
   isAlive?: (pid: number) => boolean
   cookieHeld?: (cookiePath: string, pid?: number) => boolean | null
@@ -85,7 +89,11 @@ export function rewriteCatalogLegacyPaths(
   replacements: Array<{ from: string; to: string }>,
 ): void
 export function migrationStallMessage(result: MacDataMigration | null | undefined): string
-export function migrationNeedsNotice(result: MacDataMigration | null | undefined): boolean
+export function migrationAnnouncementFlags(result: MacDataMigration | null | undefined): {
+  migrationStalled: boolean
+  migrationLeftover: boolean
+}
+export function committedLeftoverDirectories(home: string): string[]
 export function readSingletonLockPid(lockPath: string): number | null
 export function singletonCookieHeld(cookiePath: string): boolean | null
 export function isLegacyAppExecutable(exePath: string): boolean

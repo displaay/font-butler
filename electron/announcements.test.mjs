@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
-import { migrationNeedsNotice, migrationStallMessage } from './mac-data-migration.mjs'
+import { migrationAnnouncementFlags, migrationStallMessage } from './mac-data-migration.mjs'
 import {
   dismissAnnouncement,
   presentPendingAnnouncement,
@@ -16,7 +16,7 @@ test('presentPendingAnnouncement seeds fresh installs and returns null', () => {
     const result = presentPendingAnnouncement({ userDataDir: dir, currentVersion: '0.4.0' })
     assert.equal(result, null)
     const state = JSON.parse(fs.readFileSync(path.join(dir, 'announcements.json'), 'utf8'))
-    assert.deepEqual(state.seenIds, ['migration-stalled', 'whats-new'])
+    assert.deepEqual(state.seenIds, ['migration-stalled', 'migration-leftover', 'whats-new'])
     assert.equal(state.firstRunVersion, '0.4.0')
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
@@ -87,19 +87,36 @@ test('a stalled migration names the old folder and a quiet move shows nothing ne
       movedData: true,
       movedFonts: true,
     }
-    assert.equal(migrationNeedsNotice(leftover), true)
-    assert.equal(migrationNeedsNotice({ stalled: false }), false)
+    const flags = migrationAnnouncementFlags(leftover)
+    assert.deepEqual(flags, { migrationStalled: false, migrationLeftover: true })
+    assert.deepEqual(migrationAnnouncementFlags({ stalled: true, leftoverDataDir: leftover.leftoverDataDir }), {
+      migrationStalled: true,
+      migrationLeftover: false,
+    })
     const leftBehind = presentPendingAnnouncement({
       userDataDir: dir,
       currentVersion: '0.4.1',
-      migrationStalled: migrationNeedsNotice(leftover),
+      ...flags,
       migration: leftover,
     })
-    assert.equal(leftBehind?.id, 'migration-stalled')
+    assert.equal(leftBehind?.id, 'migration-leftover')
     assert.equal(leftBehind?.title, 'Old folder left behind')
     assert.equal(leftBehind?.body, migrationStallMessage(leftover))
-    assert.match(leftBehind?.body ?? '', /could not be fully removed/)
+    assert.match(leftBehind?.body ?? '', /Application Support\/Font Buttler is no longer used/)
+    assert.match(leftBehind?.body ?? '', /You can remove it/)
+    assert.match(leftBehind?.body ?? '', /Fonts\/Font Buttler is no longer used/)
+    assert.match(leftBehind?.body ?? '', /Fonts in that folder may still be active/)
     assert.equal((leftBehind?.body ?? '').includes('still in'), false)
+    dismissAnnouncement({ userDataDir: dir, id: leftBehind.id })
+    assert.equal(
+      presentPendingAnnouncement({
+        userDataDir: dir,
+        currentVersion: '0.4.1',
+        ...flags,
+        migration: leftover,
+      }),
+      null,
+    )
     const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-ann-fresh-'))
     try {
       assert.equal(presentPendingAnnouncement({ userDataDir: fresh, currentVersion: '0.4.1' }), null)
@@ -109,6 +126,16 @@ test('a stalled migration names the old folder and a quiet move shows nothing ne
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('main wires leftover notices separately from a real stall', () => {
+  const main = readFileSync(new URL('./main.mjs', import.meta.url), 'utf8')
+  const callStart = main.indexOf('presentPendingAnnouncement({')
+  const callEnd = main.indexOf('deliverPendingAnnouncement()', callStart)
+  const call = main.slice(callStart, callEnd)
+  assert.match(call, /migrationAnnouncementFlags\(macDataMigration\)/)
+  assert.doesNotMatch(call, /stalled === true/)
+  assert.doesNotMatch(call, /migrationNeedsNotice/)
 })
 
 test('announcements host no longer opens a dark-glass BrowserWindow', () => {

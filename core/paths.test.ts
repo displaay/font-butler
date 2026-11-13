@@ -15,7 +15,7 @@ import {
   isLegacyAppExecutable,
   legacyLibraryHasRunningOwner,
   legacyOwnerBlockMessage,
-  migrationNeedsNotice,
+  migrationAnnouncementFlags,
   migrationStallMessage,
   readSingletonLockPid,
   singletonCookieHeld,
@@ -563,8 +563,10 @@ test('an EXDEV copy that cannot finish deleting the source keeps the destination
     const journal = JSON.parse(fs.readFileSync(path.join(next.dataRoot, 'mutation-journal.json'), 'utf8'))
     assert.equal(journal.journals[0].targets[0].files[0].snapshotPath, path.join(next.dataRoot, 'journal', 'job', 'face.otf'))
     const notice = migrationStallMessage(next)
-    assert.equal(migrationNeedsNotice(next), true)
-    assert.match(notice, /could not be fully removed/)
+    assert.deepEqual(migrationAnnouncementFlags(next), { migrationStalled: false, migrationLeftover: true })
+    assert.match(notice, /is no longer used/)
+    assert.match(notice, /You can remove it/)
+    assert.match(notice, /Fonts in that folder may still be active/)
     assert.match(notice, /Application Support\/Font Buttler/)
     assert.match(notice, /Fonts\/Font Buttler/)
     assert.match(notice, /Application Support\/Cuttler/)
@@ -661,9 +663,153 @@ test('a crash after an EXDEV copy commit adopts the destination on the next laun
     assert.equal(fs.readFileSync(path.join(next.installDir, 'Family.otf'), 'utf8'), 'font-bytes')
     assert.equal(fs.existsSync(legacyInstall), false)
     assert.match(fs.readFileSync(path.join(legacyData, 'catalog.json'), 'utf8'), /Font Buttler/)
-    assert.equal(migrationNeedsNotice(next), true)
-    assert.match(migrationStallMessage(next), /could not be fully removed/)
+    assert.deepEqual(migrationAnnouncementFlags(next), { migrationStalled: false, migrationLeftover: true })
+    assert.match(migrationStallMessage(next), /is no longer used/)
+    assert.match(migrationStallMessage(next), /You can remove it/)
+    assert.equal(migrationStallMessage(next).includes('Fonts in that folder may still be active'), false)
     assert.equal(migrationStallMessage(next).includes('still in'), false)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('an emptied destination does not adopt a committed leftover source', () => {
+  const home = tempHome()
+  const legacyData = path.join(home, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  const legacyInstall = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(path.join(legacyData, 'sources'), { recursive: true })
+    fs.mkdirSync(legacyInstall, { recursive: true })
+    fs.writeFileSync(path.join(legacyData, 'sources', 'a.otf'), 'a-bytes')
+    fs.writeFileSync(path.join(legacyData, 'sources', 'b.otf'), 'b-bytes')
+    fs.writeFileSync(path.join(legacyData, 'catalog.json'), catalog([{ id: 'kept' }]))
+    fs.writeFileSync(path.join(legacyData, 'settings.json'), '{"kept":true}')
+    fs.writeFileSync(path.join(legacyInstall, 'a.otf'), 'font-a')
+    fs.writeFileSync(path.join(legacyInstall, 'b.otf'), 'font-b')
+    const first = migrateLegacyMacAppDirs(home, {
+      renameSync: exdevRename(),
+      rmSync(target) {
+        const victim = [path.join(target, 'b.otf'), path.join(target, 'sources', 'b.otf')].find((file) =>
+          fs.existsSync(file),
+        )
+        if (victim) fs.rmSync(victim)
+        const error = new Error('partial delete') as NodeJS.ErrnoException
+        error.code = 'EIO'
+        throw error
+      },
+    })
+    assert.equal(first.leftoverDataDir, legacyData)
+    assert.equal(first.leftoverFontsDir, legacyInstall)
+    fs.rmSync(path.join(first.dataRoot, 'catalog.json'))
+    fs.rmSync(path.join(first.dataRoot, 'settings.json'))
+    fs.writeFileSync(path.join(first.dataRoot, 'probe.txt'), 'leave-this')
+    fs.rmSync(first.installDir, { recursive: true, force: true })
+    const sourceDataFiles = listFiles(legacyData)
+    const sourceFontFiles = listFiles(legacyInstall)
+    let renames = 0
+    const again = migrateLegacyMacAppDirs(home, {
+      renameSync(from, to) {
+        renames += 1
+        if (from === legacyData || from === legacyInstall) throw new Error(`refused to move leftover ${from}`)
+        fs.renameSync(from, to)
+      },
+    })
+    assert.equal(renames, 0)
+    assert.equal(again.stalled, false)
+    assert.equal(again.stalledDataDir, null)
+    assert.equal(again.stalledFontsDir, null)
+    assert.equal(again.leftoverDataDir, legacyData)
+    assert.equal(again.leftoverFontsDir, legacyInstall)
+    assert.deepEqual(listFiles(legacyData), sourceDataFiles)
+    assert.deepEqual(listFiles(legacyInstall), sourceFontFiles)
+    assert.equal(fs.existsSync(path.join(legacyData, 'sources', 'b.otf')), false)
+    assert.equal(fs.readFileSync(path.join(legacyData, 'sources', 'a.otf'), 'utf8'), 'a-bytes')
+    assert.equal(fs.existsSync(path.join(legacyInstall, 'b.otf')), false)
+    assert.equal(fs.readFileSync(path.join(legacyInstall, 'a.otf'), 'utf8'), 'font-a')
+    assert.equal(fs.existsSync(path.join(first.installDir, 'a.otf')), false)
+    assert.equal(fs.existsSync(path.join(first.dataRoot, 'catalog.json')), false)
+    assert.equal(fs.readFileSync(path.join(first.dataRoot, 'probe.txt'), 'utf8'), 'leave-this')
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('a crash before the commit record still adopts the verified destination', () => {
+  const home = tempHome()
+  const legacyData = path.join(home, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  const legacyInstall = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(legacyData, { recursive: true })
+    fs.mkdirSync(legacyInstall, { recursive: true })
+    fs.writeFileSync(
+      path.join(legacyData, 'catalog.json'),
+      catalog([{ id: 'copied', installedPath: path.join(legacyInstall, 'Family.otf') }]),
+    )
+    fs.writeFileSync(path.join(legacyData, 'keep.otf'), 'keep')
+    fs.writeFileSync(path.join(legacyInstall, 'Family.otf'), 'font-bytes')
+    const sourceFiles = listFiles(legacyData)
+    assert.throws(
+      () => migrateLegacyMacAppDirs(home, { renameSync: exdevRename(), crashBeforeCommitRecord: true }),
+      /killed before the copy commit record/,
+    )
+    const dataRoot = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
+    assert.deepEqual(listFiles(legacyData), sourceFiles)
+    assert.equal(fs.readFileSync(path.join(dataRoot, 'keep.otf'), 'utf8'), 'keep')
+    const pendingPath = path.join(home, 'Library/Application Support', PENDING_MIGRATION_FILE)
+    const pending = JSON.parse(fs.readFileSync(pendingPath, 'utf8'))
+    assert.equal(
+      pending.replacements.some(
+        (pair: { from: string; committed?: boolean }) => pair.from === legacyData && pair.committed === true,
+      ),
+      false,
+    )
+    const next = migrateLegacyMacAppDirs(home, {
+      renameSync(from, to) {
+        if (from === legacyData) throw new Error('refused to move leftover data')
+        fs.renameSync(from, to)
+      },
+    })
+    assert.equal(next.stalled, false)
+    assert.equal(next.stalledDataDir, null)
+    assert.equal(next.leftoverDataDir, legacyData)
+    assert.deepEqual(listFiles(legacyData), sourceFiles)
+    assert.equal(fs.readFileSync(path.join(dataRoot, 'keep.otf'), 'utf8'), 'keep')
+    assert.equal(fs.readFileSync(path.join(legacyData, 'keep.otf'), 'utf8'), 'keep')
+    const row = JSON.parse(fs.readFileSync(path.join(dataRoot, 'catalog.json'), 'utf8')).entries[0]
+    assert.equal(row.id, 'copied')
+    assert.equal(row.installedPath, path.join(next.installDir, 'Family.otf'))
+    assert.match(fs.readFileSync(path.join(legacyData, 'catalog.json'), 'utf8'), /Font Buttler/)
+    assert.equal(fs.readFileSync(path.join(next.installDir, 'Family.otf'), 'utf8'), 'font-bytes')
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('a failed commit record still adopts the verified destination on the next launch', () => {
+  const home = tempHome()
+  const legacyData = path.join(home, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(legacyData, { recursive: true })
+    fs.writeFileSync(path.join(legacyData, 'catalog.json'), catalog([{ id: 'copied' }]))
+    fs.writeFileSync(path.join(legacyData, 'keep.otf'), 'keep')
+    assert.throws(
+      () => migrateLegacyMacAppDirs(home, { renameSync: exdevRename(), failCommitRecord: true }),
+      /commit record failed/,
+    )
+    const dataRoot = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
+    assert.equal(fs.readFileSync(path.join(legacyData, 'keep.otf'), 'utf8'), 'keep')
+    assert.equal(fs.readFileSync(path.join(dataRoot, 'keep.otf'), 'utf8'), 'keep')
+    const next = migrateLegacyMacAppDirs(home, {
+      renameSync(from, to) {
+        if (from === legacyData) throw new Error('refused to move leftover data')
+        fs.renameSync(from, to)
+      },
+    })
+    assert.equal(next.stalled, false)
+    assert.equal(next.leftoverDataDir, legacyData)
+    assert.equal(fs.readFileSync(path.join(legacyData, 'keep.otf'), 'utf8'), 'keep')
+    assert.equal(fs.readFileSync(path.join(dataRoot, 'keep.otf'), 'utf8'), 'keep')
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dataRoot, 'catalog.json'), 'utf8')).entries[0].id, 'copied')
   } finally {
     fs.rmSync(home, { recursive: true, force: true })
   }

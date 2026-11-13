@@ -104,6 +104,33 @@ test('a successful move does not replay the 0.4.0 whats-new id and a fresh insta
   assert.equal(fresh.seedSeen, true)
   assert.equal(fresh.state.seenIds.includes('whats-new'), true)
   assert.equal(fresh.state.seenIds.includes('migration-stalled'), true)
+  assert.equal(fresh.state.seenIds.includes('migration-leftover'), true)
+})
+
+test('a leftover notice shows once and a real stall keeps showing after dismissal', () => {
+  const first = nextAnnouncementToShow({
+    state: { seenIds: ['whats-new'], firstRunVersion: '0.4.1' },
+    currentVersion: '0.4.1',
+    libraryEstablished: true,
+    migrationLeftover: true,
+  })
+  assert.equal(first.announcement?.id, 'migration-leftover')
+  assert.equal(first.announcement?.showWhen, 'migration-leftover')
+  const dismissed = markAnnouncementSeen(first.state, 'migration-leftover')
+  const again = nextAnnouncementToShow({
+    state: dismissed,
+    currentVersion: '0.4.1',
+    libraryEstablished: true,
+    migrationLeftover: true,
+  })
+  assert.equal(again.announcement, null)
+  const stall = nextAnnouncementToShow({
+    state: { seenIds: ['migration-stalled', 'migration-leftover', 'whats-new'], firstRunVersion: '0.4.1' },
+    currentVersion: '0.4.1',
+    libraryEstablished: true,
+    migrationStalled: true,
+  })
+  assert.equal(stall.announcement?.id, 'migration-stalled')
 })
 
 test('a stalled migration keeps showing after the id was marked seen', () => {
@@ -126,6 +153,7 @@ test('a stalled migration keeps showing after the id was marked seen', () => {
 test('the announcement gate does not infer a stall from folders', () => {
   const source = readFileSync(new URL('./announcements-gate.mjs', import.meta.url), 'utf8')
   assert.match(source, /migrationStalled === true/)
+  assert.match(source, /migrationLeftover === true/)
   assert.doesNotMatch(source, /Application Support|Library\/Fonts|migrateLegacy|readdirSync/)
 })
 

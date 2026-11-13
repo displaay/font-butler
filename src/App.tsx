@@ -1115,7 +1115,8 @@ function AppShell() {
         showWhen:
           payload.showWhen === 'always' ||
           payload.showWhen === 'upgrade' ||
-          payload.showWhen === 'migration-stalled'
+          payload.showWhen === 'migration-stalled' ||
+          payload.showWhen === 'migration-leftover'
             ? payload.showWhen
             : undefined,
       })
