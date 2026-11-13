@@ -25,7 +25,9 @@ import {
   MIGRATION_STALL_ENV,
   launchAfterMigrationFailure,
   legacyOwnerBlockMessage,
+  committedLeftoverDirectories,
   migrateLegacyMacAppDirs,
+  migrationAnnouncementFlags,
   shouldMigrateRealMacLibrary,
 } from './mac-data-migration.mjs'
 import { isAllowedAppUpdateUrl, trayTooltip } from './app-update.mjs'
@@ -40,6 +42,7 @@ import {
 import { createDocumentAppObserver } from './document-app-watch.mjs'
 import { createDocumentOpenWatch, documentWatchIpc } from './document-open-watch.mjs'
 import { createExternalFontOpenNotifier } from './external-font-open-notify.mjs'
+import { createAnnouncementSlot } from './announcement-delivery.mjs'
 import { dismissAnnouncement, presentPendingAnnouncement } from './announcements.mjs'
 import { applyTestFeedDataIsolation } from './test-feed-data.mjs'
 import { macosDockIconPng } from './dock-icon.mjs'
@@ -444,12 +447,30 @@ const RETAIL_TICK_MS = 60 * 1000
 let retailStatus = null
 /** @type {null | (() => Promise<boolean>)} */
 let runPackagedBootstrap = null
-/** @type {null | { id: string, title: string, body: string, celebrate: boolean, sinceVersion?: string, showWhen?: string }} */
-let pendingAnnouncement = null
+/** Held until the renderer pulls it and later acknowledges the dismiss. */
+const announcementSlot = createAnnouncementSlot()
+announcementSlot.onShow((announcement) => {
+  const win = mainWindow
+  if (!win || win.isDestroyed()) return
+  win.webContents.send('announcement:show', announcement)
+})
 
-function deliverPendingAnnouncement() {
-  if (!pendingAnnouncement || !mainWindow || mainWindow.isDestroyed()) return
-  mainWindow.webContents.send('announcement:show', pendingAnnouncement)
+function stageLaunchAnnouncement() {
+  try {
+    const migrationNotice = migrationAnnouncementFlags(macDataMigration)
+    announcementSlot.stage(presentPendingAnnouncement({
+      userDataDir: app.getPath('userData'),
+      currentVersion: app.getVersion(),
+      migrationStalled: migrationNotice.migrationStalled,
+      migrationLeftover: migrationNotice.migrationLeftover,
+      fontsRenameReason: migrationNotice.fontsRenameReason,
+      oldHeadNotice: migrationNotice.oldHeadNotice,
+      oldHeadNoticeId: migrationNotice.oldHeadNoticeId,
+      migration: macDataMigration,
+    }))
+  } catch (error) {
+    console.error('Could not present announcement', error)
+  }
 }
 
 function startMainUiAfterBootstrap() {
@@ -459,17 +480,6 @@ function startMainUiAfterBootstrap() {
   void loadActivity()
   void loadAppUpdate()
   void loadRetailStatus()
-  try {
-    pendingAnnouncement = presentPendingAnnouncement({
-      userDataDir: app.getPath('userData'),
-      currentVersion: app.getVersion(),
-      migrationStalled: macDataMigration?.stalled === true,
-      migration: macDataMigration,
-    })
-    deliverPendingAnnouncement()
-  } catch (error) {
-    console.error('Could not present announcement', error)
-  }
 }
 
 async function stopPackagedApiWorker() {
@@ -1279,6 +1289,9 @@ function consumeFinderSyncPendingErrors() {
       platform: process.platform,
       testFeed: testFeedPlan?.isolate === true,
     }),
+    // A committed copy's leftover is not the live library. Do not read or
+    // delete anything inside it, including a queued Finder Sync error.
+    skipDirs: committedLeftoverDirectories(app.getPath('home')),
   })
   const errors = consumeFinderSyncPendingErrorFiles(files, { appPath: currentFinderSyncBundle() })
   for (const item of errors) presentFinderSyncUserError(item.code)
@@ -2959,6 +2972,7 @@ if (launchMode === 'quit') {
   }
 
   app.whenReady().then(async () => {
+    stageLaunchAnnouncement()
     debugLogFilePath = defaultLogFilePath(app.getPath('home'))
     const fileWriter = createDebugLogFileWriter(debugLogFilePath)
     attachDebugLogPersistence(debugLog, fileWriter)
@@ -3061,19 +3075,21 @@ if (launchMode === 'quit') {
 }
 
 ipcMain.on('renderer-app-mounted', () => {
+  announcementSlot.markMounted()
   flushWatchNotices()
-  deliverPendingAnnouncement()
 })
+
+ipcMain.handle('announcement:pending', () => announcementSlot.pull())
 
 ipcMain.on('announcement:dismiss', (_event, id) => {
   try {
     if (typeof id === 'string' && id.trim()) {
+      announcementSlot.acknowledge(id.trim())
       dismissAnnouncement({ userDataDir: app.getPath('userData'), id: id.trim() })
     }
   } catch (error) {
     console.error('Could not dismiss announcement', error)
   }
-  pendingAnnouncement = null
 })
 
 ipcMain.handle('quit-app', () => {

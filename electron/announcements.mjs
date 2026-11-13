@@ -55,7 +55,15 @@ export function writeAnnouncementStateFile(filePath, state) {
   fs.renameSync(tmp, filePath)
 }
 
-export function planAnnouncementPopup({ userDataDir, currentVersion, migrationStalled = false }) {
+export function planAnnouncementPopup({
+  userDataDir,
+  currentVersion,
+  migrationStalled = false,
+  migrationLeftover = false,
+  fontsRenameReason = null,
+  oldHeadNotice = false,
+  oldHeadNoticeId = null,
+}) {
   const filePath = announcementsFilePath(userDataDir)
   const raw = readAnnouncementStateFile(filePath)
   const libraryEstablished = libraryLooksEstablished(userDataDir)
@@ -64,6 +72,10 @@ export function planAnnouncementPopup({ userDataDir, currentVersion, migrationSt
     currentVersion,
     libraryEstablished,
     migrationStalled,
+    migrationLeftover,
+    fontsRenameReason,
+    oldHeadNotice,
+    oldHeadNoticeId,
   })
   if (planned.seedSeen) {
     writeAnnouncementStateFile(filePath, planned.state)
@@ -75,10 +87,35 @@ export function planAnnouncementPopup({ userDataDir, currentVersion, migrationSt
  * Resolve the next announcement for the main window (or null).
  * Fresh installs seed seen ids and return null.
  */
-export function presentPendingAnnouncement({ userDataDir, currentVersion, migrationStalled = false, migration = null }) {
-  const planned = planAnnouncementPopup({ userDataDir, currentVersion, migrationStalled })
+export function presentPendingAnnouncement({
+  userDataDir,
+  currentVersion,
+  migrationStalled = false,
+  migrationLeftover = false,
+  fontsRenameReason = null,
+  oldHeadNotice = false,
+  oldHeadNoticeId = null,
+  migration = null,
+}) {
+  const planned = planAnnouncementPopup({
+    userDataDir,
+    currentVersion,
+    migrationStalled,
+    migrationLeftover,
+    fontsRenameReason,
+    oldHeadNotice,
+    oldHeadNoticeId,
+  })
   const announcement = planned.announcement
   if (!announcement) return null
+  if (announcement.showWhen === 'old-head-kept' || announcement.showWhen === 'fonts-rename-blocked') {
+    const body = migrationStallMessage(migration)
+    return { ...announcement, body: body || announcement.body }
+  }
+  if (announcement.showWhen === 'migration-leftover') {
+    const body = migrationStallMessage(migration)
+    return { ...announcement, title: 'Old folder left behind', body: body || announcement.body }
+  }
   if (announcement.showWhen === 'migration-stalled') {
     const body = migrationStallMessage(migration)
     if (body) return { ...announcement, body }

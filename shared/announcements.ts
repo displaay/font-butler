@@ -1,4 +1,4 @@
-export type AnnouncementShowWhen = 'upgrade' | 'always' | 'migration-stalled'
+export type AnnouncementShowWhen = 'upgrade' | 'always' | 'migration-stalled' | 'migration-leftover' | 'fonts-rename-blocked' | 'old-head-kept'
 
 export type AnnouncementPage = {
   id: string
@@ -77,7 +77,8 @@ export const WHATS_NEW_PAGES: AnnouncementPage[] = [
  * Product announcements shown in the main window (welcome-style dialog) after launch.
  * `migration-stalled` is first so a blocked folder move is shown before What's new.
  * The list does not decide that case: the caller passes migrationStalled from the
- * folder migration. A missing flag never shows it.
+ * folder migration. A missing flag never shows it. `migration-leftover` shows
+ * once when the library moved and an old folder could not be removed.
  */
 export const ANNOUNCEMENTS: Announcement[] = [
   {
@@ -87,6 +88,14 @@ export const ANNOUNCEMENTS: Announcement[] = [
     body: 'Your library is still in the previous folder. Cuttler already had files at the new path, so nothing was moved or deleted.',
     celebrate: false,
     showWhen: 'migration-stalled',
+  },
+  {
+    id: 'migration-leftover',
+    sinceVersion: '0.4.1',
+    title: 'Old folder left behind',
+    body: 'The previous folder is no longer used. You can remove it.',
+    celebrate: false,
+    showWhen: 'migration-leftover',
   },
   {
     id: 'whats-new',
@@ -133,7 +142,8 @@ export function allAnnouncementIds(list: Announcement[] = ANNOUNCEMENTS): string
  * with no record: treat as an upgrade and surface the first matching unseen
  * announcement. Later launches only show ids not yet marked seen.
  * `showWhen: 'migration-stalled'` waits for migrationStalled from the folder
- * migration. This function does not look at disk.
+ * migration and shows again while that flag is set. `migration-leftover`
+ * shows once. This function does not look at disk.
  */
 export function nextAnnouncementToShow(input: {
   announcements?: Announcement[]
@@ -142,14 +152,24 @@ export function nextAnnouncementToShow(input: {
   libraryEstablished: boolean
   /** Set by the folder migration. The list does not infer this from disk. */
   migrationStalled?: boolean
+  /** Leftover folder after a committed copy. Shown once, then stays dismissed. */
+  migrationLeftover?: boolean
+  /** Fonts rename could not finish. Shown once per reason, then stays dismissed. */
+  fontsRenameReason?: string | null
+  /** Old partials or backup folders left on disk. Shown once per set of paths. */
+  oldHeadNotice?: boolean
+  /** Hashed id for that set. A new path is a new id. */
+  oldHeadNoticeId?: string | null
 }): { announcement: Announcement | null; seedSeen: boolean; state: AnnouncementState } {
   const announcements = input.announcements ?? ANNOUNCEMENTS
   const currentVersion = String(input.currentVersion ?? '').trim()
   const hasRecord = input.state != null
   const libraryEstablished = input.libraryEstablished === true
   const migrationStalled = input.migrationStalled === true
+  const migrationLeftover = input.migrationLeftover === true
+  const fontsRenameReason = typeof input.fontsRenameReason === 'string' ? input.fontsRenameReason : ''
 
-  if (!hasRecord && !libraryEstablished && !migrationStalled) {
+  if (!hasRecord && !libraryEstablished && !migrationStalled && !migrationLeftover && !fontsRenameReason && input.oldHeadNotice !== true) {
     const seeded: AnnouncementState = {
       seenIds: allAnnouncementIds(announcements),
       firstRunVersion: currentVersion || null,
@@ -165,10 +185,43 @@ export function nextAnnouncementToShow(input: {
   }
 
   const seen = new Set(state.seenIds)
+  if (fontsRenameReason) {
+    const id = `fonts-rename-${fontsRenameReason}`
+    if (!seen.has(id)) {
+      return {
+        announcement: {
+          id,
+          sinceVersion: '0.4.1',
+          title: fontsRenameReason === 'old-head' || fontsRenameReason === 'placed' ? 'Both font folders kept' : 'Fonts left in place',
+          body: '',
+          celebrate: false,
+          showWhen: 'fonts-rename-blocked',
+        },
+        seedSeen: false,
+        state,
+      }
+    }
+  }
+  const oldHeadNoticeId = typeof input.oldHeadNoticeId === 'string' ? input.oldHeadNoticeId : ''
+  if (input.oldHeadNotice === true && oldHeadNoticeId && !seen.has(oldHeadNoticeId)) {
+    return {
+      announcement: {
+        id: oldHeadNoticeId,
+        sinceVersion: '0.4.1',
+        title: 'Old folders kept',
+        body: '',
+        celebrate: false,
+        showWhen: 'old-head-kept',
+      },
+      seedSeen: false,
+      state,
+    }
+  }
   for (const item of announcements) {
     if (seen.has(item.id) && !(item.showWhen === 'migration-stalled' && migrationStalled)) continue
     if (item.showWhen === 'upgrade' && !libraryEstablished) continue
     if (item.showWhen === 'migration-stalled' && !migrationStalled) continue
+    if (item.showWhen === 'migration-leftover' && !migrationLeftover) continue
     return { announcement: item, seedSeen: false, state }
   }
   return { announcement: null, seedSeen: false, state }

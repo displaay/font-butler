@@ -1100,27 +1100,46 @@ function AppShell() {
       if (!text || text.includes('\n')) return
       toast.message(text)
     })
-    const stopAnnouncement = window.fontButlerDesktop?.onAnnouncement?.((payload) => {
+    const applyAnnouncement = (payload: {
+      id?: string
+      title?: string
+      body?: string
+      celebrate?: boolean
+      sinceVersion?: string
+      showWhen?: string
+    } | null | undefined) => {
       if (!payload || typeof payload !== 'object') return
       const id = typeof payload.id === 'string' ? payload.id : ''
       const title = typeof payload.title === 'string' ? payload.title : ''
       const body = typeof payload.body === 'string' ? payload.body : ''
       if (!id || !title) return
-      setAnnouncement({
-        id,
-        title,
-        body,
-        celebrate: payload.celebrate === true,
-        sinceVersion: typeof payload.sinceVersion === 'string' ? payload.sinceVersion : '',
-        showWhen:
-          payload.showWhen === 'always' ||
-          payload.showWhen === 'upgrade' ||
-          payload.showWhen === 'migration-stalled'
-            ? payload.showWhen
-            : undefined,
+      setAnnouncement((current) => {
+        if (current?.id === id) return current
+        return {
+          id,
+          title,
+          body,
+          celebrate: payload.celebrate === true,
+          sinceVersion: typeof payload.sinceVersion === 'string' ? payload.sinceVersion : '',
+          showWhen:
+            payload.showWhen === 'always' ||
+            payload.showWhen === 'upgrade' ||
+          payload.showWhen === 'migration-stalled' ||
+          payload.showWhen === 'migration-leftover' ||
+          payload.showWhen === 'fonts-rename-blocked' ||
+          payload.showWhen === 'old-head-kept'
+              ? payload.showWhen
+              : undefined,
+        }
       })
+    }
+    let cancelled = false
+    void window.fontButlerDesktop?.pullAnnouncement?.().then((payload) => {
+      if (!cancelled) applyAnnouncement(payload)
     })
+    const stopAnnouncement = window.fontButlerDesktop?.onAnnouncement?.(applyAnnouncement)
     return () => {
+      cancelled = true
       window.removeEventListener('keydown', onKeyDown)
       stopInstall?.()
       stopDesktop?.()

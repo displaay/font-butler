@@ -180,10 +180,14 @@ export function finderSyncPendingErrorConsumePaths({
   userDataDir,
   appSupportDir,
   includeOtherSupportDirs = false,
+  skipDirs = [],
 } = {}) {
   const files = []
+  const skipped = new Set(
+    (skipDirs ?? []).filter((dir) => typeof dir === 'string' && dir !== '').map((dir) => path.resolve(dir)),
+  )
   const add = (dir) => {
-    if (!dir) return
+    if (!dir || skipped.has(path.resolve(dir))) return
     const file = path.join(dir, FINDER_SYNC_PENDING_ERROR_FILE)
     const key = path.normalize(file)
     if (files.some((item) => path.normalize(item) === key)) return

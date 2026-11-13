@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
+import { dismissAnnouncement, presentPendingAnnouncement } from '../electron/announcements.mjs'
 import { FINDER_SYNC_PENDING_ERROR_FILE } from '../electron/finder-sync-pending-error.mjs'
 import {
   FOLDER_MIGRATION_FILE,
@@ -15,6 +16,7 @@ import {
   isLegacyAppExecutable,
   legacyLibraryHasRunningOwner,
   legacyOwnerBlockMessage,
+  migrationAnnouncementFlags,
   migrationStallMessage,
   readSingletonLockPid,
   singletonCookieHeld,
@@ -351,7 +353,8 @@ test('an empty fonts destination is replaced and a non-empty one stalls', () => 
     fs.writeFileSync(path.join(oldFonts, 'Family.otf'), 'old-font')
     fs.writeFileSync(path.join(newFonts, 'Other.otf'), 'new-font')
     const next = migrateLegacyMacAppDirs(blocked)
-    assert.equal(next.stalled, true)
+    assert.equal(next.stalled, false)
+    assert.equal(next.fontsRenameReason, 'occupied')
     assert.equal(next.stalledFontsDir, oldFonts)
     assert.equal(next.stalledDataDir, null)
     assert.equal(fs.readFileSync(path.join(oldFonts, 'Family.otf'), 'utf8'), 'old-font')
@@ -477,6 +480,1101 @@ test('a copy that does not match the source leaves the old folder in place', () 
   } finally {
     fs.rmSync(home, { recursive: true, force: true })
   }
+})
+
+function listFiles(root: string): string[] {
+  const out: string[] = []
+  const walk = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const abs = path.join(dir, entry.name)
+      if (entry.isDirectory()) walk(abs)
+      else out.push(path.relative(root, abs))
+    }
+  }
+  if (fs.existsSync(root)) walk(root)
+  return out.sort()
+}
+
+function exdevRename() {
+  return (_from: string, _to: string) => {
+    const error = new Error('cross device') as NodeJS.ErrnoException
+    error.code = 'EXDEV'
+    throw error
+  }
+}
+
+test('an EXDEV copy that cannot finish deleting the source keeps the destination', () => {
+  const home = tempHome()
+  const legacyData = path.join(home, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  const legacyInstall = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const snapshot = path.join(legacyData, 'journal', 'job', 'face.otf')
+  try {
+    fs.mkdirSync(path.join(legacyData, 'sources'), { recursive: true })
+    fs.mkdirSync(path.dirname(snapshot), { recursive: true })
+    fs.mkdirSync(legacyInstall, { recursive: true })
+    fs.writeFileSync(path.join(legacyData, 'sources', 'keep.otf'), 'keep-bytes')
+    fs.writeFileSync(path.join(legacyData, 'sources', 'drop.otf'), 'drop-bytes')
+    fs.writeFileSync(snapshot, 'snapshot-bytes')
+    fs.writeFileSync(path.join(legacyInstall, 'keep.otf'), 'font-keep')
+    fs.writeFileSync(path.join(legacyInstall, 'drop.otf'), 'font-drop')
+    fs.writeFileSync(
+      path.join(legacyData, 'catalog.json'),
+      catalog([{ id: 'kept', installedPath: path.join(legacyInstall, 'keep.otf'), sourcePath: path.join(legacyData, 'sources', 'keep.otf') }]),
+    )
+    fs.writeFileSync(
+      path.join(legacyData, 'mutation-journal.json'),
+      JSON.stringify({ journals: [{ targets: [{ files: [{ snapshotPath: snapshot }] }] }] }),
+    )
+    const sourceCatalog = fs.readFileSync(path.join(legacyData, 'catalog.json'), 'utf8')
+    let removals = 0
+    const next = migrateLegacyMacAppDirs(home, {
+      renameSync: exdevRename(),
+      rmSync(target) {
+        removals += 1
+        const victim = [path.join(target, 'drop.otf'), path.join(target, 'sources', 'drop.otf')].find((file) =>
+          fs.existsSync(file),
+        )
+        if (victim) fs.rmSync(victim)
+        const error = new Error('partial delete') as NodeJS.ErrnoException
+        error.code = 'EIO'
+        throw error
+      },
+    })
+    assert.equal(removals, 1)
+    assert.equal(next.stalled, false)
+    assert.equal(next.movedData, true)
+    assert.equal(next.movedFonts, true)
+    assert.equal(next.stalledDataDir, null)
+    assert.equal(next.stalledFontsDir, null)
+    assert.equal(next.leftoverDataDir, legacyData)
+    assert.equal(next.leftoverFontsDir, null)
+    assert.equal(next.dataRoot, path.join(home, 'Library/Application Support', APP_FOLDER_NAME))
+    assert.equal(fs.readFileSync(path.join(next.dataRoot, 'sources', 'keep.otf'), 'utf8'), 'keep-bytes')
+    assert.equal(fs.readFileSync(path.join(next.dataRoot, 'sources', 'drop.otf'), 'utf8'), 'drop-bytes')
+    assert.equal(fs.readFileSync(path.join(next.dataRoot, 'journal', 'job', 'face.otf'), 'utf8'), 'snapshot-bytes')
+    assert.equal(fs.readFileSync(path.join(next.installDir, 'keep.otf'), 'utf8'), 'font-keep')
+    assert.equal(fs.readFileSync(path.join(next.installDir, 'drop.otf'), 'utf8'), 'font-drop')
+    assert.equal(fs.existsSync(path.join(legacyData, 'sources', 'drop.otf')), false)
+    assert.equal(fs.readFileSync(path.join(legacyData, 'sources', 'keep.otf'), 'utf8'), 'keep-bytes')
+    assert.equal(fs.readFileSync(path.join(legacyData, 'catalog.json'), 'utf8'), sourceCatalog)
+    assert.equal(fs.existsSync(legacyInstall), false)
+    const catalogRow = JSON.parse(fs.readFileSync(path.join(next.dataRoot, 'catalog.json'), 'utf8')).entries[0]
+    assert.equal(catalogRow.installedPath, path.join(next.installDir, 'keep.otf'))
+    assert.equal(catalogRow.sourcePath, path.join(next.dataRoot, 'sources', 'keep.otf'))
+    const journal = JSON.parse(fs.readFileSync(path.join(next.dataRoot, 'mutation-journal.json'), 'utf8'))
+    assert.equal(journal.journals[0].targets[0].files[0].snapshotPath, path.join(next.dataRoot, 'journal', 'job', 'face.otf'))
+    const notice = migrationStallMessage(next)
+    assert.deepEqual(migrationAnnouncementFlags(next), { migrationStalled: false, migrationLeftover: true, fontsRenameReason: null, oldHeadNotice: false, oldHeadNoticeId: null })
+    assert.match(notice, /is no longer used/)
+    assert.match(notice, /You can remove it/)
+    assert.match(notice, /Application Support\/Font Buttler/)
+    assert.match(notice, /Application Support\/Cuttler/)
+    assert.equal(notice.includes('still in'), false)
+    const dataFiles = listFiles(legacyData)
+    fs.writeFileSync(path.join(next.dataRoot, 'probe.txt'), 'do-not-overwrite')
+    fs.writeFileSync(path.join(next.installDir, 'probe.txt'), 'do-not-overwrite')
+    let renames = 0
+    const again = migrateLegacyMacAppDirs(home, {
+      renameSync(from, to) {
+        renames += 1
+        if (from === legacyData || from === legacyInstall) throw new Error(`refused to move leftover ${from}`)
+        fs.renameSync(from, to)
+      },
+    })
+    assert.equal(renames, 0)
+    assert.equal(again.stalled, false)
+    assert.equal(again.stalledDataDir, null)
+    assert.equal(again.stalledFontsDir, null)
+    assert.equal(again.leftoverDataDir, legacyData)
+    assert.equal(again.leftoverFontsDir, null)
+    assert.equal(again.dataRoot, next.dataRoot)
+    assert.deepEqual(listFiles(legacyData), dataFiles)
+    assert.equal(fs.existsSync(legacyInstall), false)
+    assert.equal(fs.readFileSync(path.join(next.dataRoot, 'probe.txt'), 'utf8'), 'do-not-overwrite')
+    assert.equal(fs.readFileSync(path.join(next.installDir, 'probe.txt'), 'utf8'), 'do-not-overwrite')
+    assert.equal(fs.readFileSync(path.join(next.dataRoot, 'sources', 'drop.otf'), 'utf8'), 'drop-bytes')
+    assert.equal(fs.readFileSync(path.join(next.installDir, 'drop.otf'), 'utf8'), 'font-drop')
+    assert.equal(JSON.parse(fs.readFileSync(path.join(next.dataRoot, 'catalog.json'), 'utf8')).entries[0].id, 'kept')
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('a crash after an EXDEV copy commit adopts the destination on the next launch', () => {
+  const home = tempHome()
+  const legacyData = path.join(home, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  const legacyInstall = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const snapshot = path.join(legacyData, 'journal', 'job', 'face.otf')
+  try {
+    fs.mkdirSync(path.dirname(snapshot), { recursive: true })
+    fs.mkdirSync(legacyInstall, { recursive: true })
+    fs.writeFileSync(snapshot, 'snapshot-bytes')
+    fs.writeFileSync(path.join(legacyInstall, 'Family.otf'), 'font-bytes')
+    fs.writeFileSync(
+      path.join(legacyData, 'catalog.json'),
+      catalog([{ id: 'copied', installedPath: path.join(legacyInstall, 'Family.otf') }]),
+    )
+    fs.writeFileSync(
+      path.join(legacyData, 'mutation-journal.json'),
+      JSON.stringify({
+        journals: [{ targets: [{ files: [{ snapshotPath: snapshot, originalPath: path.join(legacyInstall, 'Family.otf') }] }] }],
+      }),
+    )
+    const sourceFiles = listFiles(legacyData)
+    assert.throws(
+      () => migrateLegacyMacAppDirs(home, { renameSync: exdevRename(), crashAfterCopyCommit: true }),
+      /killed after the copy commit/,
+    )
+    const dataRoot = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
+    assert.deepEqual(listFiles(legacyData), sourceFiles)
+    assert.equal(fs.readFileSync(path.join(legacyData, 'journal', 'job', 'face.otf'), 'utf8'), 'snapshot-bytes')
+    assert.equal(fs.readFileSync(path.join(dataRoot, 'journal', 'job', 'face.otf'), 'utf8'), 'snapshot-bytes')
+    assert.equal(fs.readFileSync(path.join(dataRoot, 'catalog.json'), 'utf8').includes('copied'), true)
+    assert.equal(fs.existsSync(legacyInstall), true)
+    assert.equal(fs.existsSync(path.join(home, 'Library/Fonts', APP_FOLDER_NAME)), false)
+    const pending = JSON.parse(fs.readFileSync(path.join(home, 'Library/Application Support', PENDING_MIGRATION_FILE), 'utf8'))
+    assert.equal(pending.replacements.some((pair: { from: string; committed?: boolean }) => pair.from === legacyData && pair.committed === true), true)
+    fs.writeFileSync(path.join(dataRoot, 'probe.txt'), 'do-not-overwrite')
+    const next = migrateLegacyMacAppDirs(home, {
+      renameSync(from, to) {
+        if (from === legacyData) throw new Error('refused to move leftover data')
+        fs.renameSync(from, to)
+      },
+    })
+    assert.equal(next.stalled, false)
+    assert.equal(next.stalledDataDir, null)
+    assert.equal(next.leftoverDataDir, legacyData)
+    assert.equal(next.leftoverFontsDir, null)
+    assert.equal(next.movedFonts, true)
+    assert.equal(next.dataRoot, dataRoot)
+    assert.deepEqual(listFiles(legacyData), sourceFiles)
+    assert.equal(fs.readFileSync(path.join(dataRoot, 'probe.txt'), 'utf8'), 'do-not-overwrite')
+    assert.equal(fs.readFileSync(path.join(dataRoot, 'journal', 'job', 'face.otf'), 'utf8'), 'snapshot-bytes')
+    assert.equal(fs.readFileSync(path.join(legacyData, 'journal', 'job', 'face.otf'), 'utf8'), 'snapshot-bytes')
+    const row = JSON.parse(fs.readFileSync(path.join(dataRoot, 'catalog.json'), 'utf8')).entries[0]
+    assert.equal(row.id, 'copied')
+    assert.equal(row.installedPath, path.join(next.installDir, 'Family.otf'))
+    const journal = JSON.parse(fs.readFileSync(path.join(dataRoot, 'mutation-journal.json'), 'utf8'))
+    assert.equal(journal.journals[0].targets[0].files[0].snapshotPath, path.join(dataRoot, 'journal', 'job', 'face.otf'))
+    assert.equal(journal.journals[0].targets[0].files[0].originalPath, path.join(next.installDir, 'Family.otf'))
+    assert.equal(fs.readFileSync(path.join(next.installDir, 'Family.otf'), 'utf8'), 'font-bytes')
+    assert.equal(fs.existsSync(legacyInstall), false)
+    assert.match(fs.readFileSync(path.join(legacyData, 'catalog.json'), 'utf8'), /Font Buttler/)
+    assert.deepEqual(migrationAnnouncementFlags(next), { migrationStalled: false, migrationLeftover: true, fontsRenameReason: null, oldHeadNotice: false, oldHeadNoticeId: null })
+    assert.match(migrationStallMessage(next), /is no longer used/)
+    assert.match(migrationStallMessage(next), /You can remove it/)
+    assert.equal(migrationStallMessage(next).includes('Fonts in that folder may still be active'), false)
+    assert.equal(migrationStallMessage(next).includes('still in'), false)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('an emptied destination does not adopt a committed leftover source', () => {
+  const home = tempHome()
+  const legacyData = path.join(home, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  const legacyInstall = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(path.join(legacyData, 'sources'), { recursive: true })
+    fs.mkdirSync(legacyInstall, { recursive: true })
+    fs.writeFileSync(path.join(legacyData, 'sources', 'a.otf'), 'a-bytes')
+    fs.writeFileSync(path.join(legacyData, 'sources', 'b.otf'), 'b-bytes')
+    fs.writeFileSync(path.join(legacyData, 'catalog.json'), catalog([{ id: 'kept' }]))
+    fs.writeFileSync(path.join(legacyData, 'settings.json'), '{"kept":true}')
+    fs.writeFileSync(path.join(legacyInstall, 'a.otf'), 'font-a')
+    fs.writeFileSync(path.join(legacyInstall, 'b.otf'), 'font-b')
+    const first = migrateLegacyMacAppDirs(home, {
+      renameSync: exdevRename(),
+      rmSync(target) {
+        const victim = [path.join(target, 'b.otf'), path.join(target, 'sources', 'b.otf')].find((file) =>
+          fs.existsSync(file),
+        )
+        if (victim) fs.rmSync(victim)
+        const error = new Error('partial delete') as NodeJS.ErrnoException
+        error.code = 'EIO'
+        throw error
+      },
+    })
+    assert.equal(first.leftoverDataDir, legacyData)
+    assert.equal(first.leftoverFontsDir, null)
+    assert.equal(fs.existsSync(legacyInstall), false)
+    fs.rmSync(path.join(first.dataRoot, 'catalog.json'))
+    fs.rmSync(path.join(first.dataRoot, 'settings.json'))
+    fs.writeFileSync(path.join(first.dataRoot, 'probe.txt'), 'leave-this')
+    fs.rmSync(first.installDir, { recursive: true, force: true })
+    const sourceDataFiles = listFiles(legacyData)
+    let renames = 0
+    const again = migrateLegacyMacAppDirs(home, {
+      renameSync(from, to) {
+        renames += 1
+        if (from === legacyData || from === legacyInstall) throw new Error(`refused to move leftover ${from}`)
+        fs.renameSync(from, to)
+      },
+    })
+    assert.equal(renames, 0)
+    assert.equal(again.stalled, false)
+    assert.equal(again.stalledDataDir, null)
+    assert.equal(again.stalledFontsDir, null)
+    assert.equal(again.leftoverDataDir, legacyData)
+    assert.equal(again.leftoverFontsDir, null)
+    assert.deepEqual(listFiles(legacyData), sourceDataFiles)
+    assert.equal(fs.existsSync(path.join(legacyData, 'sources', 'b.otf')), false)
+    assert.equal(fs.readFileSync(path.join(legacyData, 'sources', 'a.otf'), 'utf8'), 'a-bytes')
+    assert.equal(fs.existsSync(path.join(first.installDir, 'a.otf')), false)
+    assert.equal(fs.existsSync(path.join(first.dataRoot, 'catalog.json')), false)
+    assert.equal(fs.readFileSync(path.join(first.dataRoot, 'probe.txt'), 'utf8'), 'leave-this')
+    const emptied = migrationStallMessage(again)
+    assert.match(emptied, /Application Support\/Font Buttler/)
+    assert.match(emptied, /is empty/)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+function fileBytes(root: string): Record<string, string> {
+  const bytes: Record<string, string> = {}
+  for (const name of listFiles(root)) bytes[name] = fs.readFileSync(path.join(root, name), 'utf8')
+  return bytes
+}
+
+function assertUncommittedCopyStalls(
+  hook: 'crashBeforeCommitRecord' | 'failCommitRecord',
+  differ: boolean,
+) {
+  const home = tempHome()
+  const legacyData = path.join(home, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  const legacyInstall = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const oldFont = path.join(legacyInstall, 'Family.otf')
+  try {
+    fs.mkdirSync(legacyData, { recursive: true })
+    fs.mkdirSync(legacyInstall, { recursive: true })
+    fs.writeFileSync(path.join(legacyData, 'catalog.json'), catalog([{ id: 'copied', installedPath: oldFont }]))
+    fs.writeFileSync(path.join(legacyData, 'keep.otf'), 'keep')
+    fs.writeFileSync(oldFont, 'font-bytes')
+    const pattern = hook === 'crashBeforeCommitRecord' ? /killed before the copy commit record/ : /commit record failed/
+    assert.throws(() => migrateLegacyMacAppDirs(home, { renameSync: exdevRename(), [hook]: true }), pattern)
+    const dataRoot = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
+    if (differ) fs.writeFileSync(path.join(dataRoot, 'Preferences'), 'chromium')
+    const sourceBefore = fileBytes(legacyData)
+    const destBefore = fileBytes(dataRoot)
+    const fontsBefore = fileBytes(legacyInstall)
+    const pendingPath = path.join(home, 'Library/Application Support', PENDING_MIGRATION_FILE)
+    const pendingBefore = JSON.parse(fs.readFileSync(pendingPath, 'utf8'))
+    assert.equal(
+      pendingBefore.replacements.some((pair: { committed?: boolean }) => pair.committed === true),
+      false,
+    )
+    const next = migrateLegacyMacAppDirs(home)
+    assert.equal(next.stalled, true)
+    assert.equal(next.leftoverDataDir, null)
+    assert.equal(next.movedData, false)
+    assert.equal(next.movedFonts, false)
+    assert.equal(next.stalledDataDir, legacyData)
+    assert.equal(next.stalledFontsDir, null)
+    assert.deepEqual(fileBytes(legacyData), sourceBefore)
+    assert.deepEqual(fileBytes(dataRoot), destBefore)
+    assert.deepEqual(fileBytes(legacyInstall), fontsBefore)
+    assert.equal(fs.existsSync(path.join(home, 'Library/Fonts', APP_FOLDER_NAME)), false)
+    const kept = JSON.parse(fs.readFileSync(path.join(legacyData, 'catalog.json'), 'utf8')).entries[0]
+    const copied = JSON.parse(fs.readFileSync(path.join(dataRoot, 'catalog.json'), 'utf8')).entries[0]
+    assert.equal(kept.installedPath, oldFont)
+    assert.equal(copied.installedPath, oldFont)
+    const notice = migrationStallMessage(next)
+    assert.match(notice, /unfinished copy/)
+    assert.match(notice, /left in place/)
+    assert.equal(notice.includes('can be removed'), false)
+    assert.equal(notice.includes('already had files'), false)
+    assert.equal(notice.includes('did not finish'), false)
+    const pendingAfter = JSON.parse(fs.readFileSync(pendingPath, 'utf8'))
+    assert.equal(
+      pendingAfter.replacements.some((pair: { committed?: boolean }) => pair.committed === true),
+      false,
+    )
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+}
+
+test('a crash before the commit record stalls and leaves both folders untouched', () => {
+  assertUncommittedCopyStalls('crashBeforeCommitRecord', false)
+  assertUncommittedCopyStalls('crashBeforeCommitRecord', true)
+})
+
+test('a failed commit record stalls and leaves both folders untouched', () => {
+  assertUncommittedCopyStalls('failCommitRecord', false)
+  assertUncommittedCopyStalls('failCommitRecord', true)
+})
+
+test('a fonts rename writes the intent before the rename and recovers a kill after it', () => {
+  const home = tempHome()
+  const legacyInstall = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const nextInstall = path.join(home, 'Library/Fonts', APP_FOLDER_NAME)
+  const dataRoot = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
+  const fontPath = path.join(legacyInstall, 'a.otf')
+  const pendingPath = path.join(home, 'Library/Application Support', PENDING_MIGRATION_FILE)
+  try {
+    fs.mkdirSync(dataRoot, { recursive: true })
+    fs.mkdirSync(legacyInstall, { recursive: true })
+    fs.writeFileSync(fontPath, 'a')
+    fs.writeFileSync(path.join(dataRoot, 'catalog.json'), catalog([{ id: 'a', installedPath: fontPath }]))
+    fs.writeFileSync(path.join(dataRoot, 'settings.json'), '{}\n')
+    assert.throws(
+      () =>
+        migrateLegacyMacAppDirs(home, {
+          fontRenameSync(from, to) {
+            const recorded = JSON.parse(fs.readFileSync(pendingPath, 'utf8')).replacements.find(
+              (item: { phase?: string }) => item.phase === 'renaming',
+            )
+            assert.equal(recorded?.phase, 'renaming')
+            fs.renameSync(from, to)
+            const killed = new Error('killed after the fonts rename') as NodeJS.ErrnoException
+            killed.code = 'EFONTRENAME'
+            throw killed
+          },
+        }),
+      /fonts rename/,
+    )
+    assert.equal(fs.existsSync(legacyInstall), false)
+    assert.equal(fs.readFileSync(path.join(nextInstall, 'a.otf'), 'utf8'), 'a')
+    const readPath = () =>
+      JSON.parse(fs.readFileSync(path.join(dataRoot, 'catalog.json'), 'utf8')).entries[0].installedPath
+    assert.equal(readPath(), fontPath)
+    const next = migrateLegacyMacAppDirs(home)
+    assert.equal(next.movedFonts, true)
+    assert.equal(readPath(), path.join(nextInstall, 'a.otf'))
+    assert.equal(fs.readFileSync(path.join(nextInstall, 'a.otf'), 'utf8'), 'a')
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('a fonts rename that hits EXDEV or EACCES leaves the folder and the catalog', () => {
+  for (const code of ['EXDEV', 'EACCES', 'EPERM'] as const) {
+    const home = tempHome()
+    const legacyInstall = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+    const nextInstall = path.join(home, 'Library/Fonts', APP_FOLDER_NAME)
+    const dataRoot = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
+    const fontPath = path.join(legacyInstall, 'a.otf')
+    try {
+      fs.mkdirSync(dataRoot, { recursive: true })
+      fs.mkdirSync(legacyInstall, { recursive: true })
+      fs.writeFileSync(fontPath, 'a')
+      fs.writeFileSync(path.join(dataRoot, 'catalog.json'), catalog([{ id: 'a', installedPath: fontPath }]))
+      fs.writeFileSync(path.join(dataRoot, 'settings.json'), '{}\n')
+      const first = migrateLegacyMacAppDirs(home, {
+        fontRenameSync() {
+          const error = new Error(code) as NodeJS.ErrnoException
+          error.code = code
+          throw error
+        },
+      })
+      assert.equal(first.movedFonts, false)
+      assert.equal(first.stalled, false)
+      assert.equal(first.fontsRenameReason, code)
+      assert.equal(fs.readFileSync(fontPath, 'utf8'), 'a')
+      assert.equal(fs.existsSync(nextInstall), false)
+      const readPath = () =>
+        JSON.parse(fs.readFileSync(path.join(dataRoot, 'catalog.json'), 'utf8')).entries[0].installedPath
+      assert.equal(readPath(), fontPath)
+      assert.match(migrationStallMessage(first), /Nothing was copied or removed/)
+      assert.match(migrationStallMessage(first), /Font Buttler/)
+      const second = migrateLegacyMacAppDirs(home)
+      assert.equal(second.movedFonts, true)
+      assert.equal(readPath(), path.join(nextInstall, 'a.otf'))
+      assert.equal(fs.readFileSync(path.join(nextInstall, 'a.otf'), 'utf8'), 'a')
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  }
+})
+
+test('an empty Fonts/Cuttler is removed with rmdir and a folder with files is left', () => {
+  const home = tempHome()
+  const legacyInstall = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const nextInstall = path.join(home, 'Library/Fonts', APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(legacyInstall, { recursive: true })
+    fs.mkdirSync(nextInstall, { recursive: true })
+    fs.writeFileSync(path.join(legacyInstall, 'a.otf'), 'a')
+    const moved = migrateLegacyMacAppDirs(home)
+    assert.equal(moved.movedFonts, true)
+    assert.equal(fs.existsSync(legacyInstall), false)
+    assert.equal(fs.readFileSync(path.join(nextInstall, 'a.otf'), 'utf8'), 'a')
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+  const occupied = tempHome()
+  const oldFonts = path.join(occupied, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const newFonts = path.join(occupied, 'Library/Fonts', APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(oldFonts, { recursive: true })
+    fs.mkdirSync(newFonts, { recursive: true })
+    fs.writeFileSync(path.join(oldFonts, 'a.otf'), 'a')
+    fs.writeFileSync(path.join(newFonts, 'mine.otf'), 'mine')
+    const stalled = migrateLegacyMacAppDirs(occupied)
+    assert.equal(stalled.movedFonts, false)
+    assert.equal(stalled.stalled, false)
+    assert.equal(stalled.fontsRenameReason, 'occupied')
+    assert.equal(fs.readFileSync(path.join(oldFonts, 'a.otf'), 'utf8'), 'a')
+    assert.equal(fs.readFileSync(path.join(newFonts, 'mine.otf'), 'utf8'), 'mine')
+    assert.match(migrationStallMessage(stalled), /already has files/)
+  } finally {
+    fs.rmSync(occupied, { recursive: true, force: true })
+  }
+})
+
+test('a forged font record and a symlink source are not renamed', () => {
+  const home = tempHome()
+  const evil = path.join(home, 'evil-fonts')
+  const nextInstall = path.join(home, 'Library/Fonts', APP_FOLDER_NAME)
+  const pending = path.join(home, 'Library/Application Support', PENDING_MIGRATION_FILE)
+  try {
+    fs.mkdirSync(evil, { recursive: true })
+    fs.writeFileSync(path.join(evil, 'a.otf'), 'a')
+    fs.mkdirSync(path.dirname(pending), { recursive: true })
+    fs.writeFileSync(
+      pending,
+      JSON.stringify({
+        version: 1,
+        needsRewrite: true,
+        replacements: [{ from: evil, to: nextInstall, phase: 'renaming', committed: false }],
+        dataRoot: path.join(home, 'Library/Application Support', APP_FOLDER_NAME),
+      }),
+    )
+    const refused = migrateLegacyMacAppDirs(home)
+    assert.equal(refused.movedFonts, false)
+    assert.equal(fs.readFileSync(path.join(evil, 'a.otf'), 'utf8'), 'a')
+    assert.equal(fs.existsSync(path.join(nextInstall, 'a.otf')), false)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+  const linked = tempHome()
+  const target = path.join(linked, 'real-fonts')
+  const link = path.join(linked, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(target, { recursive: true })
+    fs.writeFileSync(path.join(target, 'a.otf'), 'a')
+    fs.mkdirSync(path.dirname(link), { recursive: true })
+    fs.symlinkSync(target, link)
+    const stalled = migrateLegacyMacAppDirs(linked)
+    assert.equal(stalled.movedFonts, false)
+    assert.equal(fs.lstatSync(link).isSymbolicLink(), true)
+    assert.equal(fs.readFileSync(path.join(target, 'a.otf'), 'utf8'), 'a')
+    assert.match(migrationStallMessage(stalled), /is a symlink/)
+  } finally {
+    fs.rmSync(linked, { recursive: true, force: true })
+  }
+})
+
+test('an old committed font record with both folders is not deleted', () => {
+  const home = tempHome()
+  const legacyInstall = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const nextInstall = path.join(home, 'Library/Fonts', APP_FOLDER_NAME)
+  const pending = path.join(home, 'Library/Application Support', PENDING_MIGRATION_FILE)
+  const fresh = path.join(home, 'Library/Fonts', 'Cuttler.fresh-1-2')
+  const partial = path.join(home, 'Library', '.cuttler-move.partial-3-4')
+  try {
+    fs.mkdirSync(legacyInstall, { recursive: true })
+    fs.mkdirSync(nextInstall, { recursive: true })
+    fs.writeFileSync(path.join(legacyInstall, 'a.otf'), 'a')
+    fs.writeFileSync(path.join(nextInstall, 'b.otf'), 'b')
+    fs.mkdirSync(fresh)
+    fs.mkdirSync(partial, { recursive: true })
+    fs.writeFileSync(path.join(partial, '.cuttler-partial.json'), '{"pid":1}\n')
+    fs.writeFileSync(path.join(partial, 'kept.otf'), 'kept')
+    fs.mkdirSync(path.dirname(pending), { recursive: true })
+    fs.writeFileSync(
+      pending,
+      JSON.stringify({
+        version: 1,
+        needsRewrite: true,
+        replacements: [{ from: legacyInstall, to: nextInstall, committed: true }],
+        dataRoot: path.join(home, 'Library/Application Support', APP_FOLDER_NAME),
+      }),
+    )
+    const result = migrateLegacyMacAppDirs(home)
+    assert.equal(result.movedFonts, false)
+    assert.equal(fs.readFileSync(path.join(legacyInstall, 'a.otf'), 'utf8'), 'a')
+    assert.equal(fs.readFileSync(path.join(nextInstall, 'b.otf'), 'utf8'), 'b')
+    assert.equal(fs.existsSync(fresh), true)
+    assert.equal(fs.readFileSync(path.join(partial, 'kept.otf'), 'utf8'), 'kept')
+    assert.match(migrationStallMessage(result), /kept, nothing deleted/)
+    assert.equal(migrationAnnouncementFlags(result).oldHeadNotice, true)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('a second instance does not show a leftover notice', () => {
+  assert.deepEqual(
+    migrationAnnouncementFlags({
+      blockedByOwner: true,
+      stalled: false,
+      leftoverFontsDir: '/Users/me/Library/Fonts/Font Buttler',
+      leftoverDataDir: '/Users/me/Library/Application Support/Font Buttler',
+    }),
+    { migrationStalled: false, migrationLeftover: false, fontsRenameReason: null, oldHeadNotice: false, oldHeadNoticeId: null },
+  )
+  assert.deepEqual(
+    migrationAnnouncementFlags({
+      runningInstanceDataDir: '/Users/me/Library/Application Support/Font Buttler',
+      stalled: true,
+      leftoverFontsDir: '/Users/me/Library/Fonts/Font Buttler',
+    }),
+    { migrationStalled: false, migrationLeftover: false, fontsRenameReason: null, oldHeadNotice: false, oldHeadNoticeId: null },
+  )
+})
+
+test('the fonts rename removes an empty directory only with rmdir', () => {
+  const source = fs.readFileSync(new URL('../electron/mac-data-migration.mjs', import.meta.url), 'utf8')
+  const rmdir = source.slice(source.indexOf('function rmdirEmptyPlainDir'), source.indexOf('function updateFontPair'))
+  const rename = source.slice(source.indexOf('function renameLegacyFonts'), source.indexOf('export function migrateLegacyMacAppDirs'))
+  assert.match(rmdir, /fs\.rmdirSync\(dir\)/)
+  assert.equal(rmdir.includes('rmSync'), false)
+  assert.equal(rename.includes('rmSync'), false)
+  assert.equal(rename.includes('copyTree'), false)
+})
+
+test('symlinked Fonts and Application Support keep lexical catalog paths that exist', () => {
+  for (const which of ['Fonts', 'Application Support'] as const) {
+    const home = tempHome()
+    const realRoot = path.join(home, `real-${which.replace(/\s/g, '-')}`)
+    const link = path.join(home, 'Library', which)
+    const legacy = path.join(link, PREVIOUS_APP_FOLDER_NAME)
+    const dest = path.join(link, APP_FOLDER_NAME)
+    try {
+      fs.mkdirSync(path.join(realRoot, PREVIOUS_APP_FOLDER_NAME), { recursive: true })
+      fs.mkdirSync(path.dirname(link), { recursive: true })
+      fs.symlinkSync(realRoot, link)
+      const fontFile = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME, 'a.otf')
+      const dataDir = path.join(home, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+      fs.mkdirSync(path.dirname(fontFile), { recursive: true })
+      fs.writeFileSync(fontFile, 'a')
+      fs.mkdirSync(dataDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(dataDir, 'catalog.json'),
+        catalog([{ id: 'a', installedPath: path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME, 'a.otf') }]),
+      )
+      fs.writeFileSync(path.join(dataDir, 'settings.json'), '{}\n')
+      const next = migrateLegacyMacAppDirs(home)
+      assert.equal(next.stalled, false)
+      const catalogPath = path.join(home, 'Library/Application Support', APP_FOLDER_NAME, 'catalog.json')
+      const installed = JSON.parse(fs.readFileSync(catalogPath, 'utf8')).entries[0].installedPath
+      const lexicalFont = path.join(home, 'Library/Fonts', APP_FOLDER_NAME, 'a.otf')
+      assert.equal(installed, lexicalFont)
+      assert.equal(fs.existsSync(installed), true)
+      assert.equal(fs.existsSync(path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME, 'a.otf')), false)
+      if (which === 'Fonts') assert.notEqual(fs.realpathSync(dest), dest)
+      else assert.notEqual(fs.realpathSync(path.join(home, 'Library/Application Support', APP_FOLDER_NAME)), path.join(home, 'Library/Application Support', APP_FOLDER_NAME))
+      assert.equal(legacy.includes(which) || true, true)
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  }
+})
+
+test('a fonts rename block is shown once per reason and a stray Font Butler folder does not stall', () => {
+  const home = tempHome()
+  const legacyInstall = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const stray = path.join(home, 'Library/Fonts', LEGACY_APP_FOLDER_NAME)
+  const dataRoot = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(dataRoot, { recursive: true })
+    fs.mkdirSync(legacyInstall, { recursive: true })
+    fs.mkdirSync(stray, { recursive: true })
+    fs.writeFileSync(path.join(legacyInstall, 'a.otf'), 'a')
+    fs.writeFileSync(path.join(stray, 'stray.otf'), 'stray')
+    fs.writeFileSync(
+      path.join(dataRoot, 'catalog.json'),
+      catalog([{ id: 'a', installedPath: path.join(legacyInstall, 'a.otf') }]),
+    )
+    fs.writeFileSync(path.join(dataRoot, 'settings.json'), '{}\n')
+    const moved = migrateLegacyMacAppDirs(home, {
+      fontRenameSync() {
+        const error = new Error('cross device') as NodeJS.ErrnoException
+        error.code = 'EXDEV'
+        throw error
+      },
+    })
+    assert.equal(moved.stalled, false)
+    assert.equal(moved.fontsRenameReason, 'EXDEV')
+    assert.equal(fs.readFileSync(path.join(stray, 'stray.otf'), 'utf8'), 'stray')
+    const flags = migrationAnnouncementFlags(moved)
+    const shown = presentPendingAnnouncement({
+      userDataDir: dataRoot,
+      currentVersion: '0.4.1',
+      migrationStalled: flags.migrationStalled,
+      migrationLeftover: flags.migrationLeftover,
+      fontsRenameReason: flags.fontsRenameReason,
+      migration: moved,
+    })
+    assert.equal(shown?.id, 'fonts-rename-EXDEV')
+    dismissAnnouncement({ userDataDir: dataRoot, id: shown?.id ?? '' })
+    const again = migrateLegacyMacAppDirs(home, {
+      fontRenameSync() {
+        const error = new Error('cross device') as NodeJS.ErrnoException
+        error.code = 'EXDEV'
+        throw error
+      },
+    })
+    const quiet = presentPendingAnnouncement({
+      userDataDir: dataRoot,
+      currentVersion: '0.4.1',
+      ...migrationAnnouncementFlags(again),
+      migration: again,
+    })
+    assert.notEqual(quiet?.id, 'fonts-rename-EXDEV')
+    const changed = migrateLegacyMacAppDirs(home, {
+      fontRenameSync() {
+        const error = new Error('denied') as NodeJS.ErrnoException
+        error.code = 'EACCES'
+        throw error
+      },
+    })
+    const nextNotice = presentPendingAnnouncement({
+      userDataDir: dataRoot,
+      currentVersion: '0.4.1',
+      ...migrationAnnouncementFlags(changed),
+      migration: changed,
+    })
+    assert.equal(nextNotice?.id, 'fonts-rename-EACCES')
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+  const both = tempHome()
+  const buttler = path.join(both, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const butler = path.join(both, 'Library/Fonts', LEGACY_APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(path.join(both, 'Library/Application Support', APP_FOLDER_NAME), { recursive: true })
+    fs.writeFileSync(path.join(both, 'Library/Application Support', APP_FOLDER_NAME, 'settings.json'), '{}\n')
+    fs.mkdirSync(buttler, { recursive: true })
+    fs.mkdirSync(butler, { recursive: true })
+    fs.writeFileSync(path.join(buttler, 'a.otf'), 'a')
+    fs.writeFileSync(path.join(butler, 'stray.otf'), 'stray')
+    const first = migrateLegacyMacAppDirs(both)
+    assert.equal(first.stalled, false)
+    assert.equal(first.fontsRenameReason, null)
+    assert.equal(fs.readFileSync(path.join(both, 'Library/Fonts', APP_FOLDER_NAME, 'a.otf'), 'utf8'), 'a')
+    assert.equal(fs.readFileSync(path.join(butler, 'stray.otf'), 'utf8'), 'stray')
+    const second = migrateLegacyMacAppDirs(both)
+    assert.equal(second.stalled, false)
+    assert.equal(second.fontsRenameReason, null)
+    assert.equal(fs.readFileSync(path.join(butler, 'stray.otf'), 'utf8'), 'stray')
+  } finally {
+    fs.rmSync(both, { recursive: true, force: true })
+  }
+})
+
+test('a legacy from-to record recovers a finished fonts rename and a bad dest does not throw', () => {
+  const home = tempHome()
+  const legacyInstall = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const nextInstall = path.join(home, 'Library/Fonts', APP_FOLDER_NAME)
+  const dataRoot = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
+  const pending = path.join(home, 'Library/Application Support', PENDING_MIGRATION_FILE)
+  try {
+    fs.mkdirSync(dataRoot, { recursive: true })
+    fs.mkdirSync(nextInstall, { recursive: true })
+    fs.writeFileSync(path.join(nextInstall, 'a.otf'), 'a')
+    fs.writeFileSync(
+      path.join(dataRoot, 'catalog.json'),
+      catalog([{ id: 'a', installedPath: path.join(legacyInstall, 'a.otf') }]),
+    )
+    fs.writeFileSync(path.join(dataRoot, 'settings.json'), '{}\n')
+    fs.writeFileSync(
+      pending,
+      JSON.stringify({
+        version: 1,
+        needsRewrite: true,
+        replacements: [{ from: legacyInstall, to: nextInstall }],
+        dataRoot,
+      }),
+    )
+    const next = migrateLegacyMacAppDirs(home)
+    assert.equal(next.movedFonts, true)
+    assert.equal(
+      JSON.parse(fs.readFileSync(path.join(dataRoot, 'catalog.json'), 'utf8')).entries[0].installedPath,
+      path.join(nextInstall, 'a.otf'),
+    )
+    assert.equal(fs.existsSync(path.join(nextInstall, 'a.otf')), true)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+  for (const kind of ['symlink', 'file'] as const) {
+    const blocked = tempHome()
+    const source = path.join(blocked, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+    const dest = path.join(blocked, 'Library/Fonts', APP_FOLDER_NAME)
+    try {
+      fs.mkdirSync(source, { recursive: true })
+      fs.writeFileSync(path.join(source, 'a.otf'), 'a')
+      fs.mkdirSync(path.dirname(dest), { recursive: true })
+      if (kind === 'symlink') fs.symlinkSync(path.join(blocked, 'missing-target'), dest)
+      else fs.writeFileSync(dest, 'not a folder')
+      const result = migrateLegacyMacAppDirs(blocked)
+      assert.equal(result.movedFonts, false)
+      assert.equal(result.stalled, false)
+      assert.equal(result.fontsRenameReason === 'symlink' || result.fontsRenameReason === 'file', true)
+      assert.equal(fs.readFileSync(path.join(source, 'a.otf'), 'utf8'), 'a')
+      assert.equal(launchAfterMigrationFailure(blocked).blockWorker, false)
+      const record = path.join(blocked, 'Library/Application Support', PENDING_MIGRATION_FILE)
+      if (fs.existsSync(record)) {
+        const body = JSON.parse(fs.readFileSync(record, 'utf8'))
+        assert.equal((body.replacements ?? []).some((item: { phase?: string }) => item.phase === 'renaming'), false)
+      }
+    } finally {
+      fs.rmSync(blocked, { recursive: true, force: true })
+    }
+  }
+})
+
+test('Finder metadata in an empty fonts folder is unlinked and a forged record is dropped', () => {
+  const home = tempHome()
+  const legacyInstall = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const nextInstall = path.join(home, 'Library/Fonts', APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(legacyInstall, { recursive: true })
+    fs.mkdirSync(nextInstall, { recursive: true })
+    fs.writeFileSync(path.join(legacyInstall, 'a.otf'), 'a')
+    fs.writeFileSync(path.join(nextInstall, '.DS_Store'), 'store')
+    fs.writeFileSync(path.join(nextInstall, '.localized'), '')
+    const next = migrateLegacyMacAppDirs(home)
+    assert.equal(next.movedFonts, true)
+    assert.equal(fs.readFileSync(path.join(nextInstall, 'a.otf'), 'utf8'), 'a')
+    assert.equal(fs.existsSync(path.join(nextInstall, '.DS_Store')), false)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+  const forged = tempHome()
+  const evil = path.join(forged, 'evil-fonts')
+  const pending = path.join(forged, 'Library/Application Support', PENDING_MIGRATION_FILE)
+  try {
+    fs.mkdirSync(evil, { recursive: true })
+    fs.writeFileSync(path.join(evil, 'a.otf'), 'a')
+    fs.mkdirSync(path.dirname(pending), { recursive: true })
+    fs.writeFileSync(
+      pending,
+      JSON.stringify({
+        version: 1,
+        needsRewrite: true,
+        replacements: [{ from: evil, to: path.join(forged, 'Library/Fonts', APP_FOLDER_NAME), phase: 'renaming' }],
+        dataRoot: path.join(forged, 'Library/Application Support', APP_FOLDER_NAME),
+      }),
+    )
+    const logs: string[] = []
+    const write = console.error
+    console.error = (...args: unknown[]) => {
+      logs.push(args.map(String).join(' '))
+    }
+    try {
+      const first = migrateLegacyMacAppDirs(forged)
+      assert.equal(first.stalled, false)
+      assert.equal(first.fontsRenameReason, null)
+      assert.equal(migrationStallMessage(first), '')
+      const second = migrateLegacyMacAppDirs(forged)
+      assert.equal(migrationStallMessage(second), '')
+    } finally {
+      console.error = write
+    }
+    assert.equal(logs.some((line) => line.includes('Dropping a font migration record')), true)
+    assert.equal(fs.readFileSync(path.join(evil, 'a.otf'), 'utf8'), 'a')
+    assert.equal(fs.existsSync(pending), false)
+  } finally {
+    fs.rmSync(forged, { recursive: true, force: true })
+  }
+})
+
+test('font partials inside Library/Fonts are moved aside and foreign names stay', () => {
+  const home = tempHome()
+  const fonts = path.join(home, 'Library/Fonts')
+  const support = path.join(home, 'Library/Application Support')
+  const legacy = path.join(support, PREVIOUS_APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(legacy, { recursive: true })
+    fs.writeFileSync(path.join(legacy, 'catalog.json'), catalog([]))
+    const live = path.join(fonts, 'Cuttler.partial-4-9')
+    fs.mkdirSync(live, { recursive: true })
+    fs.writeFileSync(path.join(live, 'a.otf'), 'dup')
+    const foreign = path.join(fonts, 'MyCuttler.partial-1-2')
+    fs.mkdirSync(foreign, { recursive: true })
+    fs.writeFileSync(path.join(foreign, 'keep.otf'), 'keep')
+    const extra = path.join(fonts, 'Cuttler.partial-1-2-extra')
+    fs.mkdirSync(extra, { recursive: true })
+    fs.writeFileSync(path.join(extra, 'keep.otf'), 'keep')
+    const libraryPartial = path.join(support, 'Cuttler.partial-8-8')
+    fs.mkdirSync(libraryPartial, { recursive: true })
+    fs.writeFileSync(path.join(libraryPartial, '.cuttler-partial.json'), '{"pid":1}\n')
+    fs.writeFileSync(path.join(libraryPartial, 'half.json'), '{}')
+    const result = migrateLegacyMacAppDirs(home)
+    assert.equal(fs.readFileSync(path.join(live, 'a.otf'), 'utf8'), 'dup')
+    assert.equal(fs.readFileSync(path.join(foreign, 'keep.otf'), 'utf8'), 'keep')
+    assert.equal(fs.readFileSync(path.join(extra, 'keep.otf'), 'utf8'), 'keep')
+    assert.equal(fs.readFileSync(path.join(libraryPartial, 'half.json'), 'utf8'), '{}')
+    assert.match(migrationStallMessage(result), /kept, nothing deleted/)
+    assert.equal(migrationAnnouncementFlags(result).oldHeadNotice, true)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('an old committed pair with both font folders is kept and said once', () => {
+  const home = tempHome()
+  const legacyInstall = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const nextInstall = path.join(home, 'Library/Fonts', APP_FOLDER_NAME)
+  const dataRoot = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
+  const pending = path.join(home, 'Library/Application Support', PENDING_MIGRATION_FILE)
+  try {
+    fs.mkdirSync(dataRoot, { recursive: true })
+    fs.mkdirSync(legacyInstall, { recursive: true })
+    fs.mkdirSync(nextInstall, { recursive: true })
+    fs.writeFileSync(path.join(legacyInstall, 'a.otf'), 'old')
+    fs.writeFileSync(path.join(nextInstall, 'a.otf'), 'new')
+    fs.writeFileSync(path.join(dataRoot, 'settings.json'), '{}\n')
+    fs.writeFileSync(
+      pending,
+      JSON.stringify({
+        version: 1,
+        needsRewrite: true,
+        replacements: [{ from: legacyInstall, to: nextInstall, committed: true }],
+        dataRoot,
+      }),
+    )
+    const first = migrateLegacyMacAppDirs(home)
+    assert.equal(first.fontsRenameReason, 'old-head')
+    assert.equal(fs.readFileSync(path.join(legacyInstall, 'a.otf'), 'utf8'), 'old')
+    assert.equal(fs.readFileSync(path.join(nextInstall, 'a.otf'), 'utf8'), 'new')
+    const notice = migrationStallMessage(first)
+    assert.match(notice, /nothing was deleted/)
+    assert.match(notice, /Font Buttler/)
+    assert.match(notice, /Cuttler/)
+    const flags = migrationAnnouncementFlags(first)
+    const shown = presentPendingAnnouncement({
+      userDataDir: dataRoot,
+      currentVersion: '0.4.1',
+      ...flags,
+      migration: first,
+    })
+    assert.equal(shown?.id, 'fonts-rename-old-head')
+    dismissAnnouncement({ userDataDir: dataRoot, id: 'fonts-rename-old-head' })
+    const second = migrateLegacyMacAppDirs(home)
+    const quiet = presentPendingAnnouncement({
+      userDataDir: dataRoot,
+      currentVersion: '0.4.1',
+      ...migrationAnnouncementFlags(second),
+      migration: second,
+    })
+    assert.notEqual(quiet?.id, 'fonts-rename-old-head')
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('a fresh backup with a font file is kept and a non-empty Cuttler is not deleted', () => {
+  const home = tempHome()
+  const legacy = path.join(home, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  const backup = path.join(home, 'Library/Application Support', 'Cuttler.fresh-123')
+  try {
+    fs.mkdirSync(legacy, { recursive: true })
+    fs.writeFileSync(path.join(legacy, 'catalog.json'), catalog([{ id: 'a' }]))
+    fs.writeFileSync(path.join(legacy, 'settings.json'), '{}\n')
+    fs.mkdirSync(backup, { recursive: true })
+    fs.writeFileSync(path.join(backup, 'x.otf'), 'keep-me')
+    const result = migrateLegacyMacAppDirs(home)
+    assert.equal(fs.readFileSync(path.join(backup, 'x.otf'), 'utf8'), 'keep-me')
+    const notice = migrationStallMessage(result)
+    assert.match(notice, /Cuttler\.fresh-123/)
+    assert.match(notice, /kept, nothing deleted/)
+    assert.equal(notice.includes('can be removed'), false)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+  const held = tempHome()
+  const oldData = path.join(held, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  const cuttler = path.join(held, 'Library/Application Support', APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(oldData, { recursive: true })
+    fs.writeFileSync(path.join(oldData, 'catalog.json'), catalog([{ id: 'old' }]))
+    fs.writeFileSync(path.join(oldData, 'settings.json'), '{}\n')
+    fs.mkdirSync(cuttler, { recursive: true })
+    fs.writeFileSync(path.join(cuttler, 'x.otf'), 'still-here')
+    const moved = migrateLegacyMacAppDirs(held)
+    assert.equal(moved.movedData, true)
+    const kept = fs.readdirSync(path.dirname(cuttler)).filter((name) => name.startsWith('Cuttler.fresh-'))
+    assert.equal(kept.length > 0, true)
+    assert.equal(fs.readFileSync(path.join(path.dirname(cuttler), kept[0], 'x.otf'), 'utf8'), 'still-here')
+    const again = migrateLegacyMacAppDirs(held)
+    assert.match(migrationStallMessage(again), /kept, nothing deleted/)
+  } finally {
+    fs.rmSync(held, { recursive: true, force: true })
+  }
+})
+
+test('only a verified library partial is removed', () => {
+  const home = tempHome()
+  const source = path.join(home, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  const partial = path.join(home, 'Library/Application Support', 'Cuttler.partial-9-9')
+  const ours = { pid: 50, startTime: 1, createdAt: 2 }
+  try {
+    fs.mkdirSync(source, { recursive: true })
+    fs.writeFileSync(path.join(source, 'catalog.json'), catalog([]))
+    fs.writeFileSync(path.join(source, 'keep.txt'), 'same')
+    fs.mkdirSync(partial, { recursive: true })
+    fs.writeFileSync(path.join(partial, 'catalog.json'), catalog([]))
+    fs.writeFileSync(path.join(partial, 'keep.txt'), 'same')
+    fs.writeFileSync(path.join(partial, 'mine.otf'), 'mine')
+    fs.writeFileSync(path.join(partial, '.cuttler-partial.json'), `${JSON.stringify(ours)}\n`)
+    migrateLegacyMacAppDirs(home, { isAlive: () => false })
+    assert.equal(fs.readFileSync(path.join(partial, 'mine.otf'), 'utf8'), 'mine')
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+  const matched = tempHome()
+  const matchedSource = path.join(matched, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  const matchedPartial = path.join(matched, 'Library/Application Support', 'Cuttler.partial-3-3')
+  try {
+    fs.mkdirSync(matchedSource, { recursive: true })
+    fs.writeFileSync(path.join(matchedSource, 'catalog.json'), catalog([]))
+    fs.mkdirSync(matchedPartial, { recursive: true })
+    fs.writeFileSync(path.join(matchedPartial, 'catalog.json'), catalog([]))
+    fs.writeFileSync(path.join(matchedPartial, '.cuttler-partial.json'), `${JSON.stringify({ pid: 70, startTime: 1, createdAt: 2 })}\n`)
+    migrateLegacyMacAppDirs(matched, { isAlive: () => false })
+    assert.equal(fs.existsSync(matchedPartial), false)
+  } finally {
+    fs.rmSync(matched, { recursive: true, force: true })
+  }
+  const forged = tempHome()
+  const forgedSource = path.join(forged, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  const forgedPartial = path.join(forged, 'Library/Application Support', 'Cuttler.partial-4-4')
+  const dotPartial = path.join(forged, 'Library', '.cuttler-move.partial-1-1')
+  const fontPartial = path.join(forged, 'Library/Fonts', 'Cuttler.partial-5-5')
+  try {
+    fs.mkdirSync(forgedSource, { recursive: true })
+    fs.writeFileSync(path.join(forgedSource, 'catalog.json'), catalog([]))
+    fs.mkdirSync(forgedPartial, { recursive: true })
+    fs.writeFileSync(path.join(forgedPartial, 'catalog.json'), catalog([]))
+    fs.writeFileSync(path.join(forgedPartial, '.cuttler-partial.json'), '{"pid":"no"}\n')
+    fs.mkdirSync(dotPartial, { recursive: true })
+    fs.writeFileSync(path.join(dotPartial, 'a.otf'), 'a')
+    fs.mkdirSync(fontPartial, { recursive: true })
+    fs.writeFileSync(path.join(fontPartial, 'a.otf'), 'a')
+    fs.writeFileSync(path.join(fontPartial, '.cuttler-partial.json'), `${JSON.stringify({ pid: 1, startTime: 1, createdAt: 1 })}\n`)
+    migrateLegacyMacAppDirs(forged, { isAlive: () => false })
+    assert.equal(fs.existsSync(forgedPartial), true)
+    assert.equal(fs.readFileSync(path.join(dotPartial, 'a.otf'), 'utf8'), 'a')
+    assert.equal(fs.readFileSync(path.join(fontPartial, 'a.otf'), 'utf8'), 'a')
+  } finally {
+    fs.rmSync(forged, { recursive: true, force: true })
+  }
+  const live = tempHome()
+  const liveSource = path.join(live, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  const livePartial = path.join(live, 'Library/Application Support', 'Cuttler.partial-6-6')
+  try {
+    fs.mkdirSync(liveSource, { recursive: true })
+    fs.writeFileSync(path.join(liveSource, 'catalog.json'), catalog([]))
+    fs.mkdirSync(livePartial, { recursive: true })
+    fs.writeFileSync(path.join(livePartial, 'catalog.json'), catalog([]))
+    fs.writeFileSync(path.join(livePartial, '.cuttler-partial.json'), `${JSON.stringify({ pid: 4242, startTime: 1, createdAt: 1 })}\n`)
+    migrateLegacyMacAppDirs(live, { isAlive: (pid: number) => pid === 4242 })
+    assert.equal(fs.existsSync(livePartial), true)
+  } finally {
+    fs.rmSync(live, { recursive: true, force: true })
+  }
+})
+
+test('an empty Font Buttler yields to a full Font Butler, and a fonts rename ENOENT is not a throw', () => {
+  const home = tempHome()
+  const empty = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const full = path.join(home, 'Library/Fonts', LEGACY_APP_FOLDER_NAME)
+  const dest = path.join(home, 'Library/Fonts', APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(empty, { recursive: true })
+    fs.mkdirSync(full, { recursive: true })
+    fs.writeFileSync(path.join(full, 'a.otf'), 'full')
+    const next = migrateLegacyMacAppDirs(home)
+    assert.equal(next.movedFonts, true)
+    assert.equal(fs.readFileSync(path.join(dest, 'a.otf'), 'utf8'), 'full')
+    assert.equal(fs.existsSync(empty), true)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+  const raced = tempHome()
+  const source = path.join(raced, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const target = path.join(raced, 'Library/Fonts', APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(source, { recursive: true })
+    fs.writeFileSync(path.join(source, 'a.otf'), 'a')
+    const result = migrateLegacyMacAppDirs(raced, {
+      fontRenameSync(from, to) {
+        fs.renameSync(from, to)
+        const error = new Error('already renamed') as NodeJS.ErrnoException
+        error.code = 'ENOENT'
+        throw error
+      },
+    })
+    assert.equal(result.movedFonts, true)
+    assert.equal(fs.readFileSync(path.join(target, 'a.otf'), 'utf8'), 'a')
+  } finally {
+    fs.rmSync(raced, { recursive: true, force: true })
+  }
+})
+
+test('a directory named .DS_Store makes the fonts destination occupied', () => {
+  const home = tempHome()
+  const source = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const dest = path.join(home, 'Library/Fonts', APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(source, { recursive: true })
+    fs.writeFileSync(path.join(source, 'a.otf'), 'a')
+    fs.mkdirSync(path.join(dest, '.DS_Store'), { recursive: true })
+    fs.writeFileSync(path.join(dest, '.DS_Store', 'nested'), 'nope')
+    const result = migrateLegacyMacAppDirs(home)
+    assert.equal(result.movedFonts, false)
+    assert.equal(result.fontsRenameReason, 'occupied')
+    assert.equal(fs.readFileSync(path.join(dest, '.DS_Store', 'nested'), 'utf8'), 'nope')
+    assert.equal(fs.readFileSync(path.join(source, 'a.otf'), 'utf8'), 'a')
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('old-head paths are announced once', () => {
+  const home = tempHome()
+  const backup = path.join(home, 'Library/Application Support', 'Cuttler.fresh-9-9')
+  const dataRoot = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(dataRoot, { recursive: true })
+    fs.writeFileSync(path.join(dataRoot, 'settings.json'), '{}\n')
+    fs.mkdirSync(backup, { recursive: true })
+    fs.writeFileSync(path.join(backup, 'x.otf'), 'x')
+    const first = migrateLegacyMacAppDirs(home)
+    const flags = migrationAnnouncementFlags(first)
+    assert.equal(flags.oldHeadNotice, true)
+    const shown = presentPendingAnnouncement({
+      userDataDir: dataRoot,
+      currentVersion: '0.4.1',
+      ...flags,
+      migration: first,
+    })
+    assert.match(shown?.id ?? '', /^old-head-kept-[0-9a-f]{12}$/)
+    assert.match(shown?.body ?? '', /kept, nothing deleted/)
+    dismissAnnouncement({ userDataDir: dataRoot, id: shown?.id ?? '' })
+    const second = migrateLegacyMacAppDirs(home)
+    const quiet = presentPendingAnnouncement({
+      userDataDir: dataRoot,
+      currentVersion: '0.4.1',
+      ...migrationAnnouncementFlags(second),
+      migration: second,
+    })
+    assert.notEqual(quiet?.id, shown?.id)
+    assert.equal(fs.readFileSync(path.join(backup, 'x.otf'), 'utf8'), 'x')
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('launch does not hash or compare library trees to recover an uncommitted copy', () => {
+  const source = fs.readFileSync(new URL('../electron/mac-data-migration.mjs', import.meta.url), 'utf8')
+  assert.equal(source.includes('confirmVerifiedCopies'), false)
+  assert.deepEqual(source.match(/directoryTreesMatch\(/g), ['directoryTreesMatch(', 'directoryTreesMatch(', 'directoryTreesMatch('])
+  assert.match(source, /directoryTreesMatch\(from, tmp\)/)
 })
 
 test('a folder move rewrites mutation journal snapshot, destination, and catalog paths', () => {
@@ -1521,6 +2619,465 @@ test('a regular cookie whose flock check cannot run still blocks a live pid', ()
     assert.equal(blocked.movedData, false)
     assert.equal(fs.lstatSync(path.join(legacyData, 'SingletonCookie')).isSymbolicLink(), false)
     assert.equal(fs.existsSync(path.join(home, 'Library/Application Support', APP_FOLDER_NAME)), false)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('a dangling fonts destination is a symlink, not a followed directory', () => {
+  const home = tempHome()
+  const source = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const dest = path.join(home, 'Library/Fonts', APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(source, { recursive: true })
+    fs.writeFileSync(path.join(source, 'a.otf'), 'a')
+    fs.symlinkSync(path.join(home, 'missing-fonts-target'), dest)
+    const result = migrateLegacyMacAppDirs(home)
+    assert.equal(result.fontsRenameReason, 'symlink')
+    assert.equal(result.movedFonts, false)
+    assert.equal(fs.readFileSync(path.join(source, 'a.otf'), 'utf8'), 'a')
+    assert.equal(fs.lstatSync(dest).isSymbolicLink(), true)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('a font record is accepted when only the real path matches', () => {
+  const home = tempHome()
+  const realFonts = fs.mkdtempSync(path.join(os.tmpdir(), 'font-butler-real-fonts-'))
+  const dataRoot = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
+  const realSource = path.join(realFonts, PREVIOUS_APP_FOLDER_NAME)
+  const realDest = path.join(realFonts, APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(path.join(home, 'Library'), { recursive: true })
+    fs.symlinkSync(realFonts, path.join(home, 'Library/Fonts'))
+    fs.mkdirSync(realSource, { recursive: true })
+    fs.writeFileSync(path.join(realSource, 'a.otf'), 'a')
+    fs.mkdirSync(realDest, { recursive: true })
+    fs.writeFileSync(path.join(realDest, 'b.otf'), 'b')
+    fs.mkdirSync(dataRoot, { recursive: true })
+    fs.writeFileSync(path.join(dataRoot, 'settings.json'), '{}\n')
+    fs.writeFileSync(path.join(dataRoot, 'catalog.json'), catalog([{ id: 'a', installedPath: path.join(realSource, 'a.otf') }]))
+    fs.mkdirSync(path.dirname(path.join(home, 'Library/Application Support', PENDING_MIGRATION_FILE)), { recursive: true })
+    fs.writeFileSync(
+      path.join(home, 'Library/Application Support', PENDING_MIGRATION_FILE),
+      JSON.stringify({
+        version: 1,
+        needsRewrite: true,
+        replacements: [{ from: realSource, to: realDest, phase: 'renaming', committed: false }],
+        dataRoot,
+      }),
+    )
+    migrateLegacyMacAppDirs(home)
+    const pending = JSON.parse(fs.readFileSync(path.join(home, 'Library/Application Support', PENDING_MIGRATION_FILE), 'utf8'))
+    assert.equal(pending.replacements.some((item: { from?: string }) => item.from === realSource), true)
+    assert.equal(fs.readFileSync(path.join(realSource, 'a.otf'), 'utf8'), 'a')
+    assert.equal(fs.readFileSync(path.join(realDest, 'b.otf'), 'utf8'), 'b')
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+    fs.rmSync(realFonts, { recursive: true, force: true })
+  }
+})
+
+test('a forged font pair does not rewrite the catalog', () => {
+  const home = tempHome()
+  const dataRoot = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
+  const fonts = path.join(home, 'Library/Fonts', APP_FOLDER_NAME)
+  const foreign = '/tmp/not-a-font'
+  try {
+    fs.mkdirSync(dataRoot, { recursive: true })
+    fs.mkdirSync(fonts, { recursive: true })
+    fs.writeFileSync(path.join(fonts, 'a.otf'), 'a')
+    fs.writeFileSync(path.join(dataRoot, 'settings.json'), '{}\n')
+    fs.writeFileSync(path.join(dataRoot, 'catalog.json'), catalog([{ id: 'a', installedPath: path.join(foreign, 'a.otf') }]))
+    fs.writeFileSync(
+      path.join(home, 'Library/Application Support', PENDING_MIGRATION_FILE),
+      JSON.stringify({
+        version: 1,
+        needsRewrite: true,
+        replacements: [{ from: foreign, to: fonts, committed: true, phase: 'placed' }],
+        dataRoot,
+      }),
+    )
+    migrateLegacyMacAppDirs(home)
+    const kept = JSON.parse(fs.readFileSync(path.join(dataRoot, 'catalog.json'), 'utf8')).entries[0].installedPath
+    assert.equal(kept, path.join(foreign, 'a.otf'))
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('an unfinished library copy does not rewrite font paths', () => {
+  const home = tempHome()
+  const legacy = path.join(home, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  const dataRoot = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
+  const oldFont = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME, 'a.otf')
+  const newFont = path.join(home, 'Library/Fonts', APP_FOLDER_NAME, 'a.otf')
+  try {
+    fs.mkdirSync(legacy, { recursive: true })
+    fs.mkdirSync(dataRoot, { recursive: true })
+    fs.mkdirSync(path.dirname(newFont), { recursive: true })
+    fs.writeFileSync(newFont, 'a')
+    fs.writeFileSync(path.join(legacy, 'catalog.json'), catalog([{ id: 'a', installedPath: oldFont }]))
+    fs.writeFileSync(path.join(legacy, 'settings.json'), '{}\n')
+    fs.writeFileSync(path.join(dataRoot, 'catalog.json'), catalog([{ id: 'a', installedPath: oldFont }]))
+    fs.writeFileSync(path.join(dataRoot, 'settings.json'), '{}\n')
+    fs.writeFileSync(
+      path.join(home, 'Library/Application Support', PENDING_MIGRATION_FILE),
+      JSON.stringify({
+        version: 1,
+        needsRewrite: true,
+        replacements: [
+          { from: legacy, to: dataRoot, committed: false },
+          {
+            from: path.dirname(oldFont),
+            to: path.dirname(newFont),
+            committed: true,
+            phase: 'placed',
+          },
+        ],
+        dataRoot,
+      }),
+    )
+    const result = migrateLegacyMacAppDirs(home)
+    assert.equal(result.movedData, false)
+    const kept = JSON.parse(fs.readFileSync(path.join(legacy, 'catalog.json'), 'utf8')).entries[0].installedPath
+    assert.equal(kept, oldFont)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('a committed font record without a placed phase does not rewrite the catalog', () => {
+  const home = tempHome()
+  const dataRoot = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
+  const source = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const dest = path.join(home, 'Library/Fonts', APP_FOLDER_NAME)
+  const oldFont = path.join(source, 'a.otf')
+  try {
+    fs.mkdirSync(dataRoot, { recursive: true })
+    fs.mkdirSync(source, { recursive: true })
+    fs.mkdirSync(dest, { recursive: true })
+    fs.writeFileSync(oldFont, 'old')
+    fs.writeFileSync(path.join(dest, 'b.otf'), 'new')
+    fs.writeFileSync(path.join(dataRoot, 'settings.json'), '{}\n')
+    fs.writeFileSync(path.join(dataRoot, 'catalog.json'), catalog([{ id: 'a', installedPath: oldFont }]))
+    fs.writeFileSync(
+      path.join(home, 'Library/Application Support', PENDING_MIGRATION_FILE),
+      JSON.stringify({
+        version: 1,
+        needsRewrite: true,
+        replacements: [{ from: source, to: dest, committed: true }],
+        dataRoot,
+      }),
+    )
+    migrateLegacyMacAppDirs(home)
+    const kept = JSON.parse(fs.readFileSync(path.join(dataRoot, 'catalog.json'), 'utf8')).entries[0].installedPath
+    assert.equal(kept, oldFont)
+    assert.equal(fs.readFileSync(oldFont, 'utf8'), 'old')
+    assert.equal(fs.readFileSync(path.join(dest, 'b.otf'), 'utf8'), 'new')
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('a dotfile in the fonts destination is not finder metadata', () => {
+  const home = tempHome()
+  const source = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const dest = path.join(home, 'Library/Fonts', APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(source, { recursive: true })
+    fs.writeFileSync(path.join(source, 'a.otf'), 'a')
+    fs.mkdirSync(dest, { recursive: true })
+    fs.writeFileSync(path.join(dest, '.mine'), 'keep')
+    const result = migrateLegacyMacAppDirs(home)
+    assert.equal(result.movedFonts, false)
+    assert.equal(fs.readFileSync(path.join(dest, '.mine'), 'utf8'), 'keep')
+    assert.equal(fs.readFileSync(path.join(source, 'a.otf'), 'utf8'), 'a')
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('partial names that only share a prefix are left unlisted', () => {
+  const home = tempHome()
+  const support = path.join(home, 'Library/Application Support')
+  const extra = path.join(support, 'Cuttler.partial-1-2-extra')
+  const mine = path.join(support, 'MyCuttler.partial-1-2')
+  const linkTarget = path.join(home, 'secret-partial')
+  const link = path.join(support, 'Cuttler.fresh-link')
+  try {
+    fs.mkdirSync(extra, { recursive: true })
+    fs.writeFileSync(path.join(extra, 'keep.otf'), 'extra')
+    fs.mkdirSync(mine, { recursive: true })
+    fs.writeFileSync(path.join(mine, 'keep.otf'), 'mine')
+    fs.mkdirSync(linkTarget, { recursive: true })
+    fs.writeFileSync(path.join(linkTarget, 'secret.otf'), 'secret')
+    fs.symlinkSync(linkTarget, link)
+    const result = migrateLegacyMacAppDirs(home)
+    const notice = migrationStallMessage(result)
+    assert.equal(notice.includes('Cuttler.partial-1-2-extra'), false)
+    assert.equal(notice.includes('MyCuttler.partial-1-2'), false)
+    assert.equal(notice.includes('Cuttler.fresh-link'), false)
+    assert.equal(fs.readFileSync(path.join(extra, 'keep.otf'), 'utf8'), 'extra')
+    assert.equal(fs.readFileSync(path.join(mine, 'keep.otf'), 'utf8'), 'mine')
+    assert.equal(fs.readFileSync(path.join(linkTarget, 'secret.otf'), 'utf8'), 'secret')
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('a cache-only Font Buttler does not hide the Font Butler catalog', () => {
+  const home = tempHome()
+  const cacheOnly = path.join(home, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  const real = path.join(home, 'Library/Application Support', LEGACY_APP_FOLDER_NAME)
+  const dest = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(path.join(cacheOnly, 'Cache'), { recursive: true })
+    fs.writeFileSync(path.join(cacheOnly, 'Cache', 'data_0'), 'cache')
+    fs.mkdirSync(real, { recursive: true })
+    fs.writeFileSync(path.join(real, 'catalog.json'), catalog([{ id: 'real' }]))
+    fs.writeFileSync(path.join(real, 'settings.json'), '{}\n')
+    const result = migrateLegacyMacAppDirs(home)
+    assert.equal(result.movedData, true)
+    assert.equal(result.stalled, false)
+    const kept = JSON.parse(fs.readFileSync(path.join(dest, 'catalog.json'), 'utf8'))
+    assert.equal(kept.entries[0].id, 'real')
+    assert.equal(fs.readFileSync(path.join(cacheOnly, 'Cache', 'data_0'), 'utf8'), 'cache')
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('chromium files in a fresh Cuttler do not stall the library move', () => {
+  const home = tempHome()
+  const legacy = path.join(home, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  const dest = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(legacy, { recursive: true })
+    fs.writeFileSync(path.join(legacy, 'catalog.json'), catalog([{ id: 'library' }]))
+    fs.writeFileSync(path.join(legacy, 'settings.json'), '{}\n')
+    fs.mkdirSync(path.join(dest, 'GPUCache'), { recursive: true })
+    fs.mkdirSync(path.join(dest, 'Local Storage'), { recursive: true })
+    fs.writeFileSync(path.join(dest, 'Preferences'), '{}')
+    fs.writeFileSync(path.join(dest, 'Local State'), '{}')
+    fs.writeFileSync(path.join(dest, 'SingletonLock'), 'lock')
+    const result = migrateLegacyMacAppDirs(home)
+    assert.equal(result.stalled, false)
+    assert.equal(result.movedData, true)
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dest, 'catalog.json'), 'utf8')).entries[0].id, 'library')
+    const backups = fs.readdirSync(path.dirname(dest)).filter((name) => name.startsWith('Cuttler.fresh-'))
+    assert.equal(fs.readFileSync(path.join(path.dirname(dest), backups[0], 'Preferences'), 'utf8'), '{}')
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('a read-only fonts destination is a blocked notice and does not throw', () => {
+  const home = tempHome()
+  const source = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const dest = path.join(home, 'Library/Fonts', APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(source, { recursive: true })
+    fs.writeFileSync(path.join(source, 'a.otf'), 'a')
+    fs.mkdirSync(dest, { recursive: true })
+    fs.writeFileSync(path.join(dest, '.DS_Store'), '')
+    fs.chmodSync(dest, 0o555)
+    const result = migrateLegacyMacAppDirs(home)
+    assert.equal(result.movedFonts, false)
+    assert.equal(result.fontsRenameReason, 'EACCES')
+    assert.equal(fs.readFileSync(path.join(source, 'a.otf'), 'utf8'), 'a')
+    assert.match(migrationStallMessage(result), /EACCES/)
+    assert.equal(launchAfterMigrationFailure(home).blockWorker, false)
+  } finally {
+    fs.chmodSync(dest, 0o755)
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('a symlink fonts destination is not treated as a plain directory', () => {
+  const home = tempHome()
+  const source = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const dest = path.join(home, 'Library/Fonts', APP_FOLDER_NAME)
+  const target = path.join(home, 'empty-font-target')
+  try {
+    fs.mkdirSync(source, { recursive: true })
+    fs.writeFileSync(path.join(source, 'a.otf'), 'a')
+    fs.mkdirSync(target, { recursive: true })
+    fs.symlinkSync(target, dest)
+    const result = migrateLegacyMacAppDirs(home)
+    assert.equal(result.movedFonts, false)
+    assert.equal(result.fontsRenameReason, 'symlink')
+    assert.equal(fs.lstatSync(dest).isSymbolicLink(), true)
+    assert.equal(fs.readFileSync(path.join(source, 'a.otf'), 'utf8'), 'a')
+    assert.equal(fs.readdirSync(target).length, 0)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('an uncommitted font pair does not rewrite the catalog', () => {
+  const home = tempHome()
+  const dataRoot = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
+  const source = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const dest = path.join(home, 'Library/Fonts', APP_FOLDER_NAME)
+  const oldFont = path.join(source, 'a.otf')
+  try {
+    fs.mkdirSync(dataRoot, { recursive: true })
+    fs.mkdirSync(source, { recursive: true })
+    fs.mkdirSync(dest, { recursive: true })
+    fs.writeFileSync(oldFont, 'old')
+    fs.writeFileSync(path.join(dest, 'b.otf'), 'new')
+    fs.writeFileSync(path.join(dataRoot, 'settings.json'), '{}\n')
+    fs.writeFileSync(path.join(dataRoot, 'catalog.json'), catalog([{ id: 'a', installedPath: oldFont }]))
+    fs.writeFileSync(
+      path.join(home, 'Library/Application Support', PENDING_MIGRATION_FILE),
+      JSON.stringify({
+        version: 1,
+        needsRewrite: true,
+        replacements: [{ from: source, to: dest, committed: false, phase: 'renaming' }],
+        dataRoot,
+      }),
+    )
+    migrateLegacyMacAppDirs(home)
+    const kept = JSON.parse(fs.readFileSync(path.join(dataRoot, 'catalog.json'), 'utf8')).entries[0].installedPath
+    assert.equal(kept, oldFont)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('an old font record says which folder the catalog points at', () => {
+  const home = tempHome()
+  const dataRoot = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
+  const source = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const dest = path.join(home, 'Library/Fonts', APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(dataRoot, { recursive: true })
+    fs.mkdirSync(source, { recursive: true })
+    fs.mkdirSync(dest, { recursive: true })
+    fs.writeFileSync(path.join(source, 'a.otf'), 'a')
+    fs.writeFileSync(path.join(dest, 'b.otf'), 'b')
+    fs.writeFileSync(path.join(dataRoot, 'settings.json'), '{}\n')
+    fs.writeFileSync(path.join(dataRoot, 'catalog.json'), catalog([{ id: 'a', installedPath: path.join(source, 'a.otf') }]))
+    fs.writeFileSync(
+      path.join(home, 'Library/Application Support', PENDING_MIGRATION_FILE),
+      JSON.stringify({
+        version: 1,
+        needsRewrite: true,
+        replacements: [{ from: source, to: dest, committed: true }],
+        dataRoot,
+      }),
+    )
+    const result = migrateLegacyMacAppDirs(home)
+    const notice = migrationStallMessage(result)
+    assert.match(notice, new RegExp(`The catalog points at ${source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`))
+    assert.equal(notice.includes('Cuttler is using'), false)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('a staged font record is kept and names the catalog folder', () => {
+  const home = tempHome()
+  const dataRoot = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
+  const source = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const dest = path.join(home, 'Library/Fonts', APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(dataRoot, { recursive: true })
+    fs.mkdirSync(source, { recursive: true })
+    fs.mkdirSync(dest, { recursive: true })
+    fs.writeFileSync(path.join(source, 'a.otf'), 'a')
+    fs.writeFileSync(path.join(dest, 'b.otf'), 'b')
+    fs.writeFileSync(path.join(dataRoot, 'settings.json'), '{}\n')
+    fs.writeFileSync(path.join(dataRoot, 'catalog.json'), catalog([{ id: 'a', installedPath: path.join(source, 'a.otf') }]))
+    fs.writeFileSync(
+      path.join(home, 'Library/Application Support', PENDING_MIGRATION_FILE),
+      JSON.stringify({
+        version: 1,
+        needsRewrite: true,
+        replacements: [{ from: source, to: dest, phase: 'staged', committed: false }],
+        dataRoot,
+      }),
+    )
+    const result = migrateLegacyMacAppDirs(home)
+    const notice = migrationStallMessage(result)
+    assert.match(notice, /staged copy from an earlier test build/)
+    assert.match(notice, /nothing was deleted/)
+    assert.match(notice, /The catalog points at/)
+    assert.equal(notice.includes('already has files'), false)
+    assert.equal(fs.readFileSync(path.join(source, 'a.otf'), 'utf8'), 'a')
+    assert.equal(fs.readFileSync(path.join(dest, 'b.otf'), 'utf8'), 'b')
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('a committed font record with an empty destination still migrates', () => {
+  const home = tempHome()
+  const dataRoot = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
+  const source = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const dest = path.join(home, 'Library/Fonts', APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(dataRoot, { recursive: true })
+    fs.mkdirSync(source, { recursive: true })
+    fs.mkdirSync(dest, { recursive: true })
+    fs.writeFileSync(path.join(source, 'a.otf'), 'a')
+    fs.writeFileSync(path.join(dataRoot, 'settings.json'), '{}\n')
+    fs.writeFileSync(path.join(dataRoot, 'catalog.json'), catalog([{ id: 'a', installedPath: path.join(source, 'a.otf') }]))
+    fs.writeFileSync(
+      path.join(home, 'Library/Application Support', PENDING_MIGRATION_FILE),
+      JSON.stringify({
+        version: 1,
+        needsRewrite: true,
+        replacements: [{ from: source, to: dest, committed: true }],
+        dataRoot,
+      }),
+    )
+    const result = migrateLegacyMacAppDirs(home)
+    assert.equal(result.movedFonts, true)
+    assert.equal(fs.readFileSync(path.join(dest, 'a.otf'), 'utf8'), 'a')
+    const kept = JSON.parse(fs.readFileSync(path.join(dataRoot, 'catalog.json'), 'utf8')).entries[0].installedPath
+    assert.equal(kept, path.join(dest, 'a.otf'))
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('the other full font folder is named once when the primary one moves', () => {
+  const home = tempHome()
+  const primary = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const other = path.join(home, 'Library/Fonts', LEGACY_APP_FOLDER_NAME)
+  const dest = path.join(home, 'Library/Fonts', APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(primary, { recursive: true })
+    fs.mkdirSync(other, { recursive: true })
+    fs.writeFileSync(path.join(primary, 'a.otf'), 'primary')
+    fs.writeFileSync(path.join(other, 'b.otf'), 'other')
+    const result = migrateLegacyMacAppDirs(home)
+    assert.equal(result.movedFonts, true)
+    assert.equal(fs.readFileSync(path.join(dest, 'a.otf'), 'utf8'), 'primary')
+    assert.equal(fs.readFileSync(path.join(other, 'b.otf'), 'utf8'), 'other')
+    assert.match(migrationStallMessage(result), /Font Butler/)
+    assert.match(migrationStallMessage(result), /kept, nothing deleted/)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('a fonts partial inside Library/Fonts is listed and not removed', () => {
+  const home = tempHome()
+  const partial = path.join(home, 'Library/Fonts', 'Cuttler.partial-7-7')
+  const dataRoot = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(dataRoot, { recursive: true })
+    fs.writeFileSync(path.join(dataRoot, 'settings.json'), '{}\n')
+    fs.mkdirSync(partial, { recursive: true })
+    fs.writeFileSync(path.join(partial, 'a.otf'), 'dup')
+    const result = migrateLegacyMacAppDirs(home)
+    assert.equal(fs.readFileSync(path.join(partial, 'a.otf'), 'utf8'), 'dup')
+    assert.match(migrationStallMessage(result), /Library\/Fonts\/Cuttler\.partial-7-7/)
+    assert.match(migrationStallMessage(result), /kept, nothing deleted/)
   } finally {
     fs.rmSync(home, { recursive: true, force: true })
   }

@@ -1,8 +1,57 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { ANNOUNCEMENTS, WHATS_NEW_PAGES } from '../../shared/announcements.ts'
+import { ANNOUNCEMENTS, WHATS_NEW_PAGES, nextAnnouncementToShow } from '../../shared/announcements.ts'
+
+test('each fonts rename reason keeps its own announcement id', () => {
+  const exdev = nextAnnouncementToShow({
+    currentVersion: '0.4.1',
+    libraryEstablished: true,
+    fontsRenameReason: 'EXDEV',
+  })
+  const eacces = nextAnnouncementToShow({
+    currentVersion: '0.4.1',
+    libraryEstablished: true,
+    fontsRenameReason: 'EACCES',
+    state: { seenIds: ['fonts-rename-EXDEV'], firstRunVersion: '0.4.1' },
+  })
+  assert.equal(exdev.announcement?.id, 'fonts-rename-EXDEV')
+  assert.equal(eacces.announcement?.id, 'fonts-rename-EACCES')
+})
+
+test('the app accepts a fonts rename notice', () => {
+  const app = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8')
+  assert.match(app, /payload\.showWhen === 'fonts-rename-blocked'/)
+  assert.match(app, /payload\.showWhen === 'old-head-kept'/)
+})
+
+test('a seen leftover-folder notice stays dismissed until the paths change', () => {
+  const first = nextAnnouncementToShow({
+    currentVersion: '0.4.1',
+    libraryEstablished: true,
+    oldHeadNotice: true,
+    oldHeadNoticeId: 'old-head-kept-aaaa',
+  })
+  const again = nextAnnouncementToShow({
+    currentVersion: '0.4.1',
+    libraryEstablished: true,
+    oldHeadNotice: true,
+    oldHeadNoticeId: 'old-head-kept-aaaa',
+    state: { seenIds: ['old-head-kept-aaaa'], firstRunVersion: '0.4.1' },
+  })
+  const changed = nextAnnouncementToShow({
+    currentVersion: '0.4.1',
+    libraryEstablished: true,
+    oldHeadNotice: true,
+    oldHeadNoticeId: 'old-head-kept-bbbb',
+    state: { seenIds: ['old-head-kept-aaaa'], firstRunVersion: '0.4.1' },
+  })
+  assert.equal(first.announcement?.id, 'old-head-kept-aaaa')
+  assert.notEqual(again.announcement?.id, 'old-head-kept-aaaa')
+  assert.equal(changed.announcement?.id, 'old-head-kept-bbbb')
+})
 
 test('whats-new pages start with the rename, then each shipped feature', () => {
   assert.deepEqual(
