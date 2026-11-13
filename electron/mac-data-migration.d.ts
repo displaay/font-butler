@@ -19,12 +19,10 @@ export type MacDirMigrationHooks = {
   crashAfterCopyCommit?: boolean
   /** Called with the temp directory before a cross-device copy starts. */
   onPartialDir?: (dir: string) => void
-  /** Final rename of a verified copy onto the destination. Tests force EXDEV or EACCES. */
-  renameIntoPlace?: (from: string, to: string) => void
-  /** Throw after a font copy is recorded as staged and before it is renamed into Fonts. */
-  crashAfterStaged?: boolean
-  /** st_dev of a directory. Tests use this to simulate a volume change. */
-  deviceId?: (dir: string) => number | string | null
+  /** Fonts folder rename. Tests force EXDEV, EACCES, or a kill after the rename. */
+  fontRenameSync?: (from: string, to: string) => void
+  /** Throw after the fonts rename and before the placed record is written. */
+  crashAfterFontRename?: boolean
   /** Throw after the rename into place and before the committed flag is written. */
   crashBeforeCommitRecord?: boolean
   /** Throw instead of writing the committed flag. The copy is already in place. */
@@ -105,9 +103,6 @@ export function migrationAnnouncementFlags(result: MacDataMigration | null | und
   migrationStalled: boolean
   migrationLeftover: boolean
 }
-export function movePartialDirectory(dest: string): string
-export function isOurMovePartialName(name: string): boolean
-export function cleanMovePartials(home: string): void
 export function committedLeftoverDirectories(home: string): string[]
 export function readSingletonLockPid(lockPath: string): number | null
 export function singletonCookieHeld(cookiePath: string): boolean | null
