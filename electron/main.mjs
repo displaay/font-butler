@@ -462,10 +462,12 @@ function startMainUiAfterBootstrap() {
   void loadAppUpdate()
   void loadRetailStatus()
   try {
+    const migrationNotice = migrationAnnouncementFlags(macDataMigration)
     pendingAnnouncement = presentPendingAnnouncement({
       userDataDir: app.getPath('userData'),
       currentVersion: app.getVersion(),
-      ...migrationAnnouncementFlags(macDataMigration),
+      migrationStalled: migrationNotice.migrationStalled,
+      migrationLeftover: migrationNotice.migrationLeftover,
       migration: macDataMigration,
     })
     deliverPendingAnnouncement()

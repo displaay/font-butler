@@ -734,85 +734,66 @@ test('an emptied destination does not adopt a committed leftover source', () => 
   }
 })
 
-test('a crash before the commit record still adopts the verified destination', () => {
-  const home = tempHome()
-  const legacyData = path.join(home, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
-  const legacyInstall = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
-  try {
-    fs.mkdirSync(legacyData, { recursive: true })
-    fs.mkdirSync(legacyInstall, { recursive: true })
-    fs.writeFileSync(
-      path.join(legacyData, 'catalog.json'),
-      catalog([{ id: 'copied', installedPath: path.join(legacyInstall, 'Family.otf') }]),
-    )
-    fs.writeFileSync(path.join(legacyData, 'keep.otf'), 'keep')
-    fs.writeFileSync(path.join(legacyInstall, 'Family.otf'), 'font-bytes')
-    const sourceFiles = listFiles(legacyData)
-    assert.throws(
-      () => migrateLegacyMacAppDirs(home, { renameSync: exdevRename(), crashBeforeCommitRecord: true }),
-      /killed before the copy commit record/,
-    )
-    const dataRoot = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
-    assert.deepEqual(listFiles(legacyData), sourceFiles)
-    assert.equal(fs.readFileSync(path.join(dataRoot, 'keep.otf'), 'utf8'), 'keep')
-    const pendingPath = path.join(home, 'Library/Application Support', PENDING_MIGRATION_FILE)
-    const pending = JSON.parse(fs.readFileSync(pendingPath, 'utf8'))
-    assert.equal(
-      pending.replacements.some(
-        (pair: { from: string; committed?: boolean }) => pair.from === legacyData && pair.committed === true,
-      ),
-      false,
-    )
-    const next = migrateLegacyMacAppDirs(home, {
-      renameSync(from, to) {
-        if (from === legacyData) throw new Error('refused to move leftover data')
-        fs.renameSync(from, to)
-      },
-    })
-    assert.equal(next.stalled, false)
-    assert.equal(next.stalledDataDir, null)
-    assert.equal(next.leftoverDataDir, legacyData)
-    assert.deepEqual(listFiles(legacyData), sourceFiles)
-    assert.equal(fs.readFileSync(path.join(dataRoot, 'keep.otf'), 'utf8'), 'keep')
-    assert.equal(fs.readFileSync(path.join(legacyData, 'keep.otf'), 'utf8'), 'keep')
-    const row = JSON.parse(fs.readFileSync(path.join(dataRoot, 'catalog.json'), 'utf8')).entries[0]
-    assert.equal(row.id, 'copied')
-    assert.equal(row.installedPath, path.join(next.installDir, 'Family.otf'))
-    assert.match(fs.readFileSync(path.join(legacyData, 'catalog.json'), 'utf8'), /Font Buttler/)
-    assert.equal(fs.readFileSync(path.join(next.installDir, 'Family.otf'), 'utf8'), 'font-bytes')
-  } finally {
-    fs.rmSync(home, { recursive: true, force: true })
-  }
-})
+function fileBytes(root: string): Record<string, string> {
+  const bytes: Record<string, string> = {}
+  for (const name of listFiles(root)) bytes[name] = fs.readFileSync(path.join(root, name), 'utf8')
+  return bytes
+}
 
-test('a failed commit record still adopts the verified destination on the next launch', () => {
+function assertUncommittedCopyStalls(
+  hook: 'crashBeforeCommitRecord' | 'failCommitRecord',
+  differ: boolean,
+) {
   const home = tempHome()
   const legacyData = path.join(home, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
   try {
     fs.mkdirSync(legacyData, { recursive: true })
     fs.writeFileSync(path.join(legacyData, 'catalog.json'), catalog([{ id: 'copied' }]))
     fs.writeFileSync(path.join(legacyData, 'keep.otf'), 'keep')
-    assert.throws(
-      () => migrateLegacyMacAppDirs(home, { renameSync: exdevRename(), failCommitRecord: true }),
-      /commit record failed/,
-    )
+    const pattern = hook === 'crashBeforeCommitRecord' ? /killed before the copy commit record/ : /commit record failed/
+    assert.throws(() => migrateLegacyMacAppDirs(home, { renameSync: exdevRename(), [hook]: true }), pattern)
     const dataRoot = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
-    assert.equal(fs.readFileSync(path.join(legacyData, 'keep.otf'), 'utf8'), 'keep')
-    assert.equal(fs.readFileSync(path.join(dataRoot, 'keep.otf'), 'utf8'), 'keep')
-    const next = migrateLegacyMacAppDirs(home, {
-      renameSync(from, to) {
-        if (from === legacyData) throw new Error('refused to move leftover data')
-        fs.renameSync(from, to)
-      },
-    })
-    assert.equal(next.stalled, false)
-    assert.equal(next.leftoverDataDir, legacyData)
-    assert.equal(fs.readFileSync(path.join(legacyData, 'keep.otf'), 'utf8'), 'keep')
-    assert.equal(fs.readFileSync(path.join(dataRoot, 'keep.otf'), 'utf8'), 'keep')
-    assert.equal(JSON.parse(fs.readFileSync(path.join(dataRoot, 'catalog.json'), 'utf8')).entries[0].id, 'copied')
+    if (differ) fs.writeFileSync(path.join(dataRoot, 'Preferences'), 'chromium')
+    const sourceBefore = fileBytes(legacyData)
+    const destBefore = fileBytes(dataRoot)
+    const pendingPath = path.join(home, 'Library/Application Support', PENDING_MIGRATION_FILE)
+    const pendingBefore = JSON.parse(fs.readFileSync(pendingPath, 'utf8'))
+    assert.equal(
+      pendingBefore.replacements.some((pair: { committed?: boolean }) => pair.committed === true),
+      false,
+    )
+    const next = migrateLegacyMacAppDirs(home)
+    assert.equal(next.stalled, true)
+    assert.equal(next.leftoverDataDir, null)
+    assert.equal(next.movedData, false)
+    assert.equal(next.stalledDataDir, legacyData)
+    assert.deepEqual(fileBytes(legacyData), sourceBefore)
+    assert.deepEqual(fileBytes(dataRoot), destBefore)
+    const pendingAfter = JSON.parse(fs.readFileSync(pendingPath, 'utf8'))
+    assert.equal(
+      pendingAfter.replacements.some((pair: { committed?: boolean }) => pair.committed === true),
+      false,
+    )
   } finally {
     fs.rmSync(home, { recursive: true, force: true })
   }
+}
+
+test('a crash before the commit record stalls and leaves both folders untouched', () => {
+  assertUncommittedCopyStalls('crashBeforeCommitRecord', false)
+  assertUncommittedCopyStalls('crashBeforeCommitRecord', true)
+})
+
+test('a failed commit record stalls and leaves both folders untouched', () => {
+  assertUncommittedCopyStalls('failCommitRecord', false)
+  assertUncommittedCopyStalls('failCommitRecord', true)
+})
+
+test('launch does not hash or compare library trees to recover an uncommitted copy', () => {
+  const source = fs.readFileSync(new URL('../electron/mac-data-migration.mjs', import.meta.url), 'utf8')
+  assert.equal(source.includes('confirmVerifiedCopies'), false)
+  assert.deepEqual(source.match(/directoryTreesMatch\(/g), ['directoryTreesMatch(', 'directoryTreesMatch('])
+  assert.match(source, /directoryTreesMatch\(from, tmp\)/)
 })
 
 test('a folder move rewrites mutation journal snapshot, destination, and catalog paths', () => {

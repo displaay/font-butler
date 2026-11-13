@@ -212,8 +212,8 @@ export function moveDirectoryAtomic(from, to, hooks = {}) {
           killed.code = 'ECOPYGAP'
           throw killed
         }
-        // The destination is the library from here on. Record that before
-        // touching the source, so a crash during cleanup can recover it.
+        // The copy is the library only after this record is written. A crash
+        // before that stalls and does not adopt either folder.
         hooks.onCopyCommitted?.(from, to)
         if (backup) {
           try {
@@ -1073,30 +1073,6 @@ function markCopyCommitted(home, current, from, to) {
   return next
 }
 
-/**
- * A crash after the verified rename, before the committed flag is written,
- * leaves two identical trees and an uncommitted pending pair. That dest is
- * the copy. A different dest does not match and is left alone.
- */
-function confirmVerifiedCopies(home, pending) {
-  if (!pending?.replacements?.length) return pending
-  let current = pending
-  for (const pair of [...current.replacements]) {
-    if (pair?.committed === true) continue
-    if (typeof pair?.from !== 'string' || typeof pair?.to !== 'string') continue
-    if (!followedDirectory(pair.from) || !followedDirectory(pair.to)) continue
-    let matches = false
-    try {
-      matches = directoryTreesMatch(pair.from, pair.to)
-    } catch {
-      matches = false
-    }
-    if (!matches) continue
-    current = markCopyCommitted(home, current, pair.from, pair.to)
-  }
-  return current
-}
-
 function rewriteKeptLibrary(pending, dataRoot) {
   if (!pending?.replacements?.length) return
   const retainingOldLibrary = Boolean(pending.stalledDataDir && followedDirectory(pending.stalledDataDir))
@@ -1121,7 +1097,7 @@ export function migrateLegacyMacAppDirs(home, hooks) {
   const owner = waitForLegacyLibraryOwner(home, hooks)
   if (owner?.kind === 'legacy') return ownerBlockedResult(dataRoot, installDir, owner)
   if (owner?.kind === 'same-app') return sameAppInstanceResult(dataRoot, installDir, owner)
-  let pending = confirmVerifiedCopies(home, readPendingMigration(home))
+  let pending = readPendingMigration(home)
   if (pending) rewriteKeptLibrary(pending, dataRoot)
   const committedSources = new Set(
     (pending?.replacements ?? [])
@@ -1205,7 +1181,15 @@ export function migrateLegacyMacAppDirs(home, hooks) {
     const library = pending.stalledDataDir && followedDirectory(pending.stalledDataDir)
       ? pending.stalledDataDir
       : dataRoot
-    if (followedDirectory(library) && (record.dataFrom || record.fontsFrom)) {
+    // An uncommitted copy that stalled must not gain a marker in either folder.
+    const uncommittedData = pending.replacements.some(
+      (pair) => pair?.committed !== true && pair?.to === dataRoot && followedDirectory(pair.from),
+    )
+    if (
+      followedDirectory(library) &&
+      (record.dataFrom || record.fontsFrom) &&
+      !(data.status === 'stalled' && uncommittedData && library === data.source)
+    ) {
       writeMarker(library, record)
     }
     const keepPending = pending.replacements.some((pair) => {

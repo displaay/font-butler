@@ -130,12 +130,72 @@ test('a stalled migration names the old folder and a quiet move shows nothing ne
 
 test('main wires leftover notices separately from a real stall', () => {
   const main = readFileSync(new URL('./main.mjs', import.meta.url), 'utf8')
-  const callStart = main.indexOf('presentPendingAnnouncement({')
+  const callStart = main.indexOf('const migrationNotice = migrationAnnouncementFlags(macDataMigration)')
   const callEnd = main.indexOf('deliverPendingAnnouncement()', callStart)
   const call = main.slice(callStart, callEnd)
   assert.match(call, /migrationAnnouncementFlags\(macDataMigration\)/)
+  assert.match(call, /migrationStalled:\s*migrationNotice\.migrationStalled/)
+  assert.match(call, /migrationLeftover:\s*migrationNotice\.migrationLeftover/)
   assert.doesNotMatch(call, /stalled === true/)
   assert.doesNotMatch(call, /migrationNeedsNotice/)
+  const stalled = migrationAnnouncementFlags({ stalled: true, leftoverDataDir: '/old' })
+  const leftover = migrationAnnouncementFlags({
+    stalled: false,
+    leftoverDataDir: '/Users/me/Library/Application Support/Font Buttler',
+    leftoverFontsDir: '/Users/me/Library/Fonts/Font Buttler',
+  })
+  assert.deepEqual(stalled, { migrationStalled: true, migrationLeftover: false })
+  assert.deepEqual(leftover, { migrationStalled: false, migrationLeftover: true })
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-ann-wire-'))
+  try {
+    fs.writeFileSync(path.join(dir, 'settings.json'), '{}\n')
+    fs.writeFileSync(
+      path.join(dir, 'announcements.json'),
+      JSON.stringify({ seenIds: ['whats-new'], firstRunVersion: '0.4.0' }),
+    )
+    assert.equal(
+      presentPendingAnnouncement({
+        userDataDir: dir,
+        currentVersion: '0.4.1',
+        migrationStalled: stalled.migrationStalled,
+        migrationLeftover: stalled.migrationLeftover,
+        migration: { stalled: true, stalledDataDir: '/old', dataRoot: '/new', installDir: '/fonts' },
+      })?.id,
+      'migration-stalled',
+    )
+    assert.equal(
+      presentPendingAnnouncement({
+        userDataDir: dir,
+        currentVersion: '0.4.1',
+        migrationStalled: leftover.migrationStalled,
+        migration: {
+          stalled: false,
+          leftoverDataDir: '/Users/me/Library/Application Support/Font Buttler',
+          dataRoot: '/Users/me/Library/Application Support/Cuttler',
+          installDir: '/Users/me/Library/Fonts/Cuttler',
+        },
+      }),
+      null,
+    )
+    assert.equal(
+      presentPendingAnnouncement({
+        userDataDir: dir,
+        currentVersion: '0.4.1',
+        migrationStalled: leftover.migrationStalled,
+        migrationLeftover: leftover.migrationLeftover,
+        migration: {
+          stalled: false,
+          leftoverDataDir: '/Users/me/Library/Application Support/Font Buttler',
+          leftoverFontsDir: '/Users/me/Library/Fonts/Font Buttler',
+          dataRoot: '/Users/me/Library/Application Support/Cuttler',
+          installDir: '/Users/me/Library/Fonts/Cuttler',
+        },
+      })?.id,
+      'migration-leftover',
+    )
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('announcements host no longer opens a dark-glass BrowserWindow', () => {
