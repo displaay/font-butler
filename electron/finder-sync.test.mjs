@@ -60,11 +60,15 @@ import {
   FINDER_SYNC_ERROR_SHOWN_TTL_MS,
   FINDER_SYNC_ERROR_UNKNOWN_ACTION,
   FINDER_SYNC_MISSING_APP,
+  FINDER_SYNC_LEGACY_SUPPORT_DIRS,
+  FINDER_SYNC_PENDING_ERROR_CODES,
   FINDER_SYNC_PENDING_ERROR_FILE,
+  FINDER_SYNC_PENDING_ERROR_LIBRARY_FILES,
   FINDER_SYNC_PENDING_ERROR_MAX_BYTES,
   FINDER_SYNC_PENDING_ERROR_MAX_ENTRIES,
+  FINDER_SYNC_RELEASE_SUPPORT_DIR,
+  FINDER_SYNC_TEST_SUPPORT_DIR,
   FINDER_SYNC_TEST_USER_DATA_DIR,
-  FINDER_SYNC_USER_DATA_DIR,
   FINDER_SYNC_REQUEST_CAP,
   FINDER_SYNC_SOCKET_DIR,
   FINDER_SYNC_TOO_LARGE,
@@ -103,6 +107,12 @@ import {
   finderSyncRequestSeen,
   noteFinderSyncRequest,
   addFinderSyncPendingError,
+  carryFinderSyncPendingError,
+  consumeFinderSyncPendingErrorFiles,
+  finderSyncPendingErrorConsumePaths,
+  finderSyncPendingErrorFolderName,
+  finderSyncPendingErrorWriteDirectory,
+  finderSyncSupportDirHasLibrary,
   parsePluginkitFinderSync,
   planFinderSyncAgentRegistration,
   planFinderSyncRegistration,
@@ -687,11 +697,42 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(agent, /NSLog\(@"Finder Sync:/)
   assert.match(agent, /finder-sync-pending-error\.json/)
   assert.equal(FINDER_SYNC_TEST_USER_DATA_DIR, TEST_FEED_USER_DATA_DIR)
-  assert.equal(FINDER_SYNC_USER_DATA_DIR, 'Font Buttler')
-  assert.match(
-    agent,
-    new RegExp(`g_testFeed \\? @"${FINDER_SYNC_TEST_USER_DATA_DIR}" : @"${FINDER_SYNC_USER_DATA_DIR}"`),
+  assert.equal(FINDER_SYNC_TEST_SUPPORT_DIR, TEST_FEED_USER_DATA_DIR)
+  assert.equal(FINDER_SYNC_RELEASE_SUPPORT_DIR, 'Cuttler')
+  assert.deepEqual(FINDER_SYNC_LEGACY_SUPPORT_DIRS, ['Font Buttler', 'Font Butler'])
+  assert.deepEqual(FINDER_SYNC_PENDING_ERROR_LIBRARY_FILES, ['catalog.json', 'settings.json'])
+  assert.deepEqual(FINDER_SYNC_PENDING_ERROR_CODES, [
+    FINDER_SYNC_ERROR_MISSING_APP,
+    FINDER_SYNC_ERROR_NOT_RUNNING,
+    FINDER_SYNC_ERROR_LOGIN_ITEMS,
+    FINDER_SYNC_ERROR_UNKNOWN_ACTION,
+  ])
+  const pendingChoice = agent.slice(
+    agent.indexOf('static BOOL PendingErrorDirHasLibrary'),
+    agent.indexOf('static void WritePendingFinderSyncError'),
   )
+  assert.match(pendingChoice, /g_testFeed/)
+  assert.match(pendingChoice, /PendingErrorDirHasLibrary/)
+  assert.match(pendingChoice, /S_ISLNK/)
+  assert.match(pendingChoice, /S_ISREG/)
+  for (const marker of FINDER_SYNC_PENDING_ERROR_LIBRARY_FILES) {
+    assert.ok(pendingChoice.includes(`@"${marker}"`))
+  }
+  const testFolderAt = pendingChoice.indexOf(`@"${FINDER_SYNC_TEST_SUPPORT_DIR}"`)
+  const previousFolderAt = pendingChoice.indexOf(`@"${FINDER_SYNC_LEGACY_SUPPORT_DIRS[0]}",`)
+  const oneTFolderAt = pendingChoice.indexOf(`@"${FINDER_SYNC_LEGACY_SUPPORT_DIRS[1]}"`)
+  const releaseFolderAt = pendingChoice.indexOf(`@"${FINDER_SYNC_RELEASE_SUPPORT_DIR}"`)
+  assert.ok(testFolderAt >= 0 && previousFolderAt > testFolderAt)
+  assert.ok(oneTFolderAt > previousFolderAt)
+  assert.ok(releaseFolderAt > oneTFolderAt)
+  const writePending = agent.slice(
+    agent.indexOf('static void WritePendingFinderSyncError'),
+    agent.indexOf('static void ReportFinderSyncError'),
+  )
+  assert.match(writePending, /PendingFinderSyncErrorDirectory\(\)/)
+  assert.doesNotMatch(writePending, /@"Font Buttler"/)
+  assert.match(agent, /S_ISLNK\(st\.st_mode\)/)
+  assert.match(agent, /S_ISREG\(st\.st_mode\)/)
   assert.match(agent, /O_RDONLY \| O_NOFOLLOW/)
   assert.match(agent, /fstat\(fd, &st\)/)
   assert.match(agent, /kPendingErrorMaxBytes = 8192/)
@@ -821,9 +862,12 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(main, /routeFinderSyncError/)
   assert.match(main, /presentFinderSyncUserError/)
   assert.match(main, /consumeFinderSyncPendingErrors\(\)/)
-  assert.match(main, /readFinderSyncPendingErrorFile/)
+  assert.match(main, /consumeFinderSyncPendingErrorFiles/)
+  assert.match(main, /finderSyncPendingErrorConsumePaths/)
+  assert.match(main, /includeOtherSupportDirs: shouldMigrateRealMacLibrary/)
   assert.match(main, /finderSyncErrorsShown = new Map\(\)/)
-  assert.match(main, /FINDER_SYNC_PENDING_ERROR_FILE/)
+  assert.match(readRepo('electron/finder-sync.mjs'), /readFinderSyncPendingErrorFile/)
+  assert.match(readRepo('electron/finder-sync-pending-error.mjs'), new RegExp(FINDER_SYNC_PENDING_ERROR_FILE.replaceAll('.', '\\.')))
   assert.match(main, /dialog\.showErrorBox\(title, route\.message\)/)
   assert.match(main, /finderSyncProductDisplayName\(appPath\)/)
   assert.doesNotMatch(main, /UNUserNotificationCenter/)
@@ -1985,6 +2029,251 @@ test('a pending Finder Sync error file ignores a symlink, an oversize file, and 
     assert.deepEqual(malformed.errors, [])
   } finally {
     rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('the helper writes the pending Finder Sync error where that launch reads it', () => {
+  assert.equal(finderSyncPendingErrorFolderName({}), FINDER_SYNC_RELEASE_SUPPORT_DIR)
+  assert.equal(finderSyncPendingErrorFolderName({ established: [] }), 'Cuttler')
+  assert.equal(
+    finderSyncPendingErrorFolderName({ established: ['Font Buttler'] }),
+    'Font Buttler',
+  )
+  assert.equal(
+    finderSyncPendingErrorFolderName({ established: ['Cuttler', 'Font Buttler'] }),
+    'Font Buttler',
+  )
+  assert.equal(finderSyncPendingErrorFolderName({ established: ['Font Butler'] }), 'Font Butler')
+  assert.equal(
+    finderSyncPendingErrorFolderName({ established: ['Font Butler', 'Font Buttler'] }),
+    'Font Buttler',
+  )
+  assert.equal(
+    finderSyncPendingErrorFolderName({ testFeed: true, established: ['Font Buttler', 'Cuttler'] }),
+    FINDER_SYNC_TEST_SUPPORT_DIR,
+  )
+
+  const support = mkdtempSync(path.join(tmpdir(), 'font-butler-support-'))
+  try {
+    assert.equal(finderSyncPendingErrorWriteDirectory(support), path.join(support, 'Cuttler'))
+    assert.equal(finderSyncSupportDirHasLibrary(path.join(support, 'Font Buttler')), false)
+
+    const legacy = path.join(support, 'Font Buttler')
+    mkdirSync(legacy)
+    assert.equal(finderSyncSupportDirHasLibrary(legacy), false)
+    writeFileSync(path.join(legacy, 'notes.txt'), 'no')
+    assert.equal(finderSyncSupportDirHasLibrary(legacy), false)
+    assert.equal(finderSyncPendingErrorWriteDirectory(support), path.join(support, 'Cuttler'))
+
+    writeFileSync(path.join(legacy, 'catalog.json'), '{"version":1}')
+    assert.equal(finderSyncSupportDirHasLibrary(legacy), true)
+    mkdirSync(path.join(support, 'Cuttler'))
+    writeFileSync(path.join(support, 'Cuttler', 'settings.json'), '{}')
+    assert.equal(finderSyncPendingErrorWriteDirectory(support), legacy)
+
+    const oneT = path.join(support, 'Font Butler')
+    mkdirSync(oneT)
+    writeFileSync(path.join(oneT, 'settings.json'), '{}')
+    assert.equal(finderSyncPendingErrorWriteDirectory(support), legacy)
+
+    unlinkSync(path.join(legacy, 'catalog.json'))
+    assert.equal(finderSyncPendingErrorWriteDirectory(support), oneT)
+
+    const linkedLibrary = path.join(support, 'real-library')
+    mkdirSync(linkedLibrary)
+    writeFileSync(path.join(linkedLibrary, 'catalog.json'), '{}')
+    const linked = path.join(support, 'linked')
+    symlinkSync(linkedLibrary, linked)
+    assert.equal(finderSyncSupportDirHasLibrary(linked), false)
+    symlinkSync(path.join(linkedLibrary, 'catalog.json'), path.join(oneT, 'catalog.json'))
+    unlinkSync(path.join(oneT, 'settings.json'))
+    assert.equal(finderSyncSupportDirHasLibrary(oneT), false)
+    assert.equal(finderSyncPendingErrorWriteDirectory(support), path.join(support, 'Cuttler'))
+
+    assert.equal(
+      finderSyncPendingErrorWriteDirectory(support, { testFeed: true }),
+      path.join(support, 'Font Buttler Test'),
+    )
+  } finally {
+    rmSync(support, { recursive: true, force: true })
+  }
+})
+
+test('a queued Finder Sync error is shown once from the live folder and from a legacy leftover', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-consume-'))
+  const support = path.join(root, 'Application Support')
+  mkdirSync(support)
+  const record = (code, at) => JSON.stringify({ errors: [{ code, at }] })
+  try {
+    const cuttler = path.join(support, 'Cuttler')
+    const previous = path.join(support, 'Font Buttler')
+    const oneT = path.join(support, 'Font Butler')
+    const testFeed = path.join(support, 'Font Buttler Test')
+    mkdirSync(cuttler)
+    mkdirSync(previous)
+    mkdirSync(oneT)
+    mkdirSync(testFeed)
+    writeFileSync(path.join(cuttler, FINDER_SYNC_PENDING_ERROR_FILE), record(FINDER_SYNC_ERROR_LOGIN_ITEMS, 4))
+    writeFileSync(path.join(previous, FINDER_SYNC_PENDING_ERROR_FILE), record(FINDER_SYNC_ERROR_MISSING_APP, 2))
+    writeFileSync(
+      path.join(oneT, FINDER_SYNC_PENDING_ERROR_FILE),
+      JSON.stringify({
+        errors: [
+          { code: FINDER_SYNC_ERROR_MISSING_APP, at: 9 },
+          { code: 'not-a-code', at: 1 },
+          { code: FINDER_SYNC_ERROR_NOT_RUNNING, at: 3 },
+        ],
+      }),
+    )
+
+    const migrated = finderSyncPendingErrorConsumePaths({
+      userDataDir: cuttler,
+      appSupportDir: support,
+      includeOtherSupportDirs: true,
+    })
+    assert.deepEqual(migrated, [
+      path.join(cuttler, FINDER_SYNC_PENDING_ERROR_FILE),
+      path.join(previous, FINDER_SYNC_PENDING_ERROR_FILE),
+      path.join(oneT, FINDER_SYNC_PENDING_ERROR_FILE),
+    ])
+    const shown = consumeFinderSyncPendingErrorFiles(migrated, { appPath: path.join(root, 'Cuttler.app') })
+    assert.deepEqual(
+      shown.map((item) => item.code),
+      [FINDER_SYNC_ERROR_LOGIN_ITEMS, FINDER_SYNC_ERROR_MISSING_APP, FINDER_SYNC_ERROR_NOT_RUNNING],
+    )
+    assert.equal(shown[2].message, 'Cuttler is not running.')
+    assert.equal(existsSync(path.join(cuttler, FINDER_SYNC_PENDING_ERROR_FILE)), false)
+    assert.equal(existsSync(path.join(previous, FINDER_SYNC_PENDING_ERROR_FILE)), false)
+    assert.equal(existsSync(path.join(oneT, FINDER_SYNC_PENDING_ERROR_FILE)), false)
+    assert.deepEqual(consumeFinderSyncPendingErrorFiles(migrated), [])
+
+    writeFileSync(path.join(previous, FINDER_SYNC_PENDING_ERROR_FILE), record(FINDER_SYNC_ERROR_MISSING_APP, 5))
+    writeFileSync(path.join(cuttler, FINDER_SYNC_PENDING_ERROR_FILE), record(FINDER_SYNC_ERROR_UNKNOWN_ACTION, 6))
+    const stalled = finderSyncPendingErrorConsumePaths({
+      userDataDir: previous,
+      appSupportDir: support,
+      includeOtherSupportDirs: true,
+    })
+    assert.deepEqual(stalled, [
+      path.join(previous, FINDER_SYNC_PENDING_ERROR_FILE),
+      path.join(cuttler, FINDER_SYNC_PENDING_ERROR_FILE),
+      path.join(oneT, FINDER_SYNC_PENDING_ERROR_FILE),
+    ])
+    const stalledShown = consumeFinderSyncPendingErrorFiles(stalled)
+    assert.deepEqual(
+      stalledShown.map((item) => item.code),
+      [FINDER_SYNC_ERROR_MISSING_APP, FINDER_SYNC_ERROR_UNKNOWN_ACTION],
+    )
+    assert.equal(existsSync(path.join(previous, FINDER_SYNC_PENDING_ERROR_FILE)), false)
+    assert.equal(existsSync(path.join(cuttler, FINDER_SYNC_PENDING_ERROR_FILE)), false)
+
+    const secret = path.join(root, 'secret.json')
+    writeFileSync(secret, record(FINDER_SYNC_ERROR_LOGIN_ITEMS, 7))
+    symlinkSync(secret, path.join(previous, FINDER_SYNC_PENDING_ERROR_FILE))
+    writeFileSync(path.join(oneT, FINDER_SYNC_PENDING_ERROR_FILE), 'x'.repeat(FINDER_SYNC_PENDING_ERROR_MAX_BYTES + 1))
+    const leftovers = consumeFinderSyncPendingErrorFiles(
+      finderSyncPendingErrorConsumePaths({
+        userDataDir: cuttler,
+        appSupportDir: support,
+        includeOtherSupportDirs: true,
+      }),
+    )
+    assert.deepEqual(leftovers, [])
+    assert.equal(lstatSync(path.join(previous, FINDER_SYNC_PENDING_ERROR_FILE)).isSymbolicLink(), true)
+    assert.match(readFileSync(secret, 'utf8'), /login-items/)
+    assert.equal(existsSync(path.join(oneT, FINDER_SYNC_PENDING_ERROR_FILE)), false)
+
+    unlinkSync(path.join(previous, FINDER_SYNC_PENDING_ERROR_FILE))
+    writeFileSync(path.join(previous, FINDER_SYNC_PENDING_ERROR_FILE), record(FINDER_SYNC_ERROR_LOGIN_ITEMS, 8))
+    writeFileSync(path.join(testFeed, FINDER_SYNC_PENDING_ERROR_FILE), record(FINDER_SYNC_ERROR_MISSING_APP, 8))
+    const isolated = finderSyncPendingErrorConsumePaths({
+      userDataDir: testFeed,
+      appSupportDir: support,
+      includeOtherSupportDirs: false,
+    })
+    assert.deepEqual(isolated, [path.join(testFeed, FINDER_SYNC_PENDING_ERROR_FILE)])
+    const isolatedShown = consumeFinderSyncPendingErrorFiles(isolated)
+    assert.deepEqual(isolatedShown.map((item) => item.code), [FINDER_SYNC_ERROR_MISSING_APP])
+    assert.match(readFileSync(path.join(previous, FINDER_SYNC_PENDING_ERROR_FILE), 'utf8'), /login-items/)
+    assert.equal(existsSync(path.join(testFeed, FINDER_SYNC_PENDING_ERROR_FILE)), false)
+
+    const custom = path.join(root, 'override')
+    mkdirSync(custom)
+    writeFileSync(path.join(custom, FINDER_SYNC_PENDING_ERROR_FILE), record(FINDER_SYNC_ERROR_NOT_RUNNING, 1))
+    const overridden = finderSyncPendingErrorConsumePaths({
+      userDataDir: custom,
+      appSupportDir: support,
+      includeOtherSupportDirs: false,
+    })
+    assert.deepEqual(overridden, [path.join(custom, FINDER_SYNC_PENDING_ERROR_FILE)])
+    assert.deepEqual(
+      consumeFinderSyncPendingErrorFiles(overridden).map((item) => item.code),
+      [FINDER_SYNC_ERROR_NOT_RUNNING],
+    )
+    assert.match(readFileSync(path.join(previous, FINDER_SYNC_PENDING_ERROR_FILE), 'utf8'), /login-items/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a pending Finder Sync error in a fresh Cuttler folder is carried into the library before that folder is replaced', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-carry-'))
+  try {
+    const source = path.join(root, 'Font Buttler')
+    const dest = path.join(root, 'Cuttler')
+    mkdirSync(source)
+    mkdirSync(dest)
+    writeFileSync(
+      path.join(source, FINDER_SYNC_PENDING_ERROR_FILE),
+      JSON.stringify({ errors: [{ code: FINDER_SYNC_ERROR_NOT_RUNNING, at: 2 }] }),
+    )
+    writeFileSync(
+      path.join(dest, FINDER_SYNC_PENDING_ERROR_FILE),
+      JSON.stringify({
+        errors: [
+          { code: FINDER_SYNC_ERROR_NOT_RUNNING, at: 9 },
+          { code: 'owned', at: 1 },
+          { code: FINDER_SYNC_ERROR_MISSING_APP, at: 4 },
+        ],
+      }),
+    )
+    assert.equal(carryFinderSyncPendingError(source, dest), true)
+    const carried = JSON.parse(readFileSync(path.join(source, FINDER_SYNC_PENDING_ERROR_FILE), 'utf8'))
+    assert.deepEqual(carried.errors, [
+      { code: FINDER_SYNC_ERROR_NOT_RUNNING, at: 2 },
+      { code: FINDER_SYNC_ERROR_MISSING_APP, at: 4 },
+    ])
+    assert.equal(lstatSync(path.join(source, FINDER_SYNC_PENDING_ERROR_FILE)).mode & 0o777, 0o600)
+    assert.match(readFileSync(path.join(dest, FINDER_SYNC_PENDING_ERROR_FILE), 'utf8'), /owned/)
+    assert.equal(carryFinderSyncPendingError(source, dest), false)
+
+    const outside = path.join(root, 'outside.json')
+    writeFileSync(outside, JSON.stringify({ errors: [{ code: FINDER_SYNC_ERROR_LOGIN_ITEMS, at: 3 }] }))
+    unlinkSync(path.join(dest, FINDER_SYNC_PENDING_ERROR_FILE))
+    symlinkSync(outside, path.join(dest, FINDER_SYNC_PENDING_ERROR_FILE))
+    const kept = readFileSync(path.join(source, FINDER_SYNC_PENDING_ERROR_FILE), 'utf8')
+    assert.equal(carryFinderSyncPendingError(source, dest), false)
+    assert.equal(readFileSync(path.join(source, FINDER_SYNC_PENDING_ERROR_FILE), 'utf8'), kept)
+    assert.equal(readFileSync(outside, 'utf8').includes('login-items'), true)
+
+    unlinkSync(path.join(dest, FINDER_SYNC_PENDING_ERROR_FILE))
+    writeFileSync(
+      path.join(dest, FINDER_SYNC_PENDING_ERROR_FILE),
+      JSON.stringify({ errors: [{ code: FINDER_SYNC_ERROR_LOGIN_ITEMS, at: 3 }] }),
+    )
+    unlinkSync(path.join(source, FINDER_SYNC_PENDING_ERROR_FILE))
+    symlinkSync(outside, path.join(source, FINDER_SYNC_PENDING_ERROR_FILE))
+    assert.equal(carryFinderSyncPendingError(source, dest), false)
+    assert.equal(lstatSync(path.join(source, FINDER_SYNC_PENDING_ERROR_FILE)).isSymbolicLink(), true)
+    assert.equal(readFileSync(outside, 'utf8').includes('missing-app'), false)
+
+    unlinkSync(path.join(source, FINDER_SYNC_PENDING_ERROR_FILE))
+    writeFileSync(path.join(source, FINDER_SYNC_PENDING_ERROR_FILE), kept)
+    writeFileSync(path.join(dest, FINDER_SYNC_PENDING_ERROR_FILE), 'x'.repeat(FINDER_SYNC_PENDING_ERROR_MAX_BYTES + 1))
+    assert.equal(carryFinderSyncPendingError(source, dest), false)
+    assert.equal(readFileSync(path.join(source, FINDER_SYNC_PENDING_ERROR_FILE), 'utf8'), kept)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
   }
 })
 
