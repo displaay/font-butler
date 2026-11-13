@@ -189,11 +189,38 @@ static BOOL WritePendingBytes(const char *filePath, NSData *data) {
   return YES;
 }
 
+// A real directory with a regular catalog.json or settings.json. A symlink
+// is not the library. Matches finderSyncSupportDirHasLibrary.
+static BOOL PendingErrorDirHasLibrary(NSString *dir) {
+  const char *dirPath = dir.fileSystemRepresentation;
+  struct stat st;
+  if (lstat(dirPath, &st) != 0 || S_ISLNK(st.st_mode) || !S_ISDIR(st.st_mode)) return NO;
+  for (NSString *name in @[ @"catalog.json", @"settings.json" ]) {
+    NSString *file = [dir stringByAppendingPathComponent:name];
+    if (lstat(file.fileSystemRepresentation, &st) == 0 && S_ISREG(st.st_mode)) return YES;
+  }
+  return NO;
+}
+
+// Same choice as finderSyncPendingErrorFolderName. The test feed stays in
+// Font Buttler Test. A legacy folder that still has the library is where
+// this launch reads: not moved yet, the move stalled, or 0.4.0 is still
+// running. Font Buttler wins over Font Butler. Writing the only copy into
+// a fresh Cuttler folder would be deleted when that folder is moved aside.
+// Otherwise the app reads Cuttler.
+static NSString *PendingFinderSyncErrorDirectory(void) {
+  NSString *support = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support"];
+  if (g_testFeed) return [support stringByAppendingPathComponent:@"Font Buttler Test"];
+  for (NSString *legacy in @[ @"Font Buttler", @"Font Butler" ]) {
+    NSString *dir = [support stringByAppendingPathComponent:legacy];
+    if (PendingErrorDirHasLibrary(dir)) return dir;
+  }
+  return [support stringByAppendingPathComponent:@"Cuttler"];
+}
+
 static void WritePendingFinderSyncError(NSString *code) {
   if (!FinderSyncErrorCodeIsKnown(code)) return;
-  NSString *folder = g_testFeed ? @"Font Buttler Test" : @"Font Buttler";
-  NSString *dir = [[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support"]
-      stringByAppendingPathComponent:folder];
+  NSString *dir = PendingFinderSyncErrorDirectory();
   const char *dirPath = dir.fileSystemRepresentation;
   struct stat st;
   if (lstat(dirPath, &st) != 0) {

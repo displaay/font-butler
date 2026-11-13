@@ -1,10 +1,32 @@
 import { createHash } from 'node:crypto'
-import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync } from 'node:fs'
+import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync, unlinkSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { Worker } from 'node:worker_threads'
 import { FINDER_COMPARE, FINDER_INSTALL_AS, isClaimedFontPath, isInstallableFontPath } from './finder-install.mjs'
+import {
+  FINDER_SYNC_PENDING_ERROR_MAX_BYTES,
+  FINDER_SYNC_PENDING_ERROR_MAX_ENTRIES,
+  parseFinderSyncPendingErrorEntries,
+  readFinderSyncPendingErrorRecord,
+} from './finder-sync-pending-error.mjs'
 import { TEST_FEED_USER_DATA_DIR } from './test-feed-data.mjs'
+
+export {
+  FINDER_SYNC_LEGACY_SUPPORT_DIRS,
+  FINDER_SYNC_PENDING_ERROR_CODES,
+  FINDER_SYNC_PENDING_ERROR_FILE,
+  FINDER_SYNC_PENDING_ERROR_LIBRARY_FILES,
+  FINDER_SYNC_PENDING_ERROR_MAX_BYTES,
+  FINDER_SYNC_PENDING_ERROR_MAX_ENTRIES,
+  FINDER_SYNC_RELEASE_SUPPORT_DIR,
+  FINDER_SYNC_TEST_SUPPORT_DIR,
+  carryFinderSyncPendingError,
+  finderSyncPendingErrorConsumePaths,
+  finderSyncPendingErrorFolderName,
+  finderSyncPendingErrorWriteDirectory,
+  finderSyncSupportDirHasLibrary,
+} from './finder-sync-pending-error.mjs'
 
 export const FINDER_SYNC_BUNDLE_ID = 'app.fontbutler.desktop.FinderSync'
 export const FINDER_SYNC_TEST_BUNDLE_ID = 'app.fontbutler.desktop.FinderSync.Test'
@@ -50,9 +72,6 @@ export const FINDER_SYNC_AGENT_DISABLED =
   'Turn on Font Buttler in Login Items. Until then, use Services (right-click > Services > Install).'
 export const FINDER_SYNC_REQUEST_TTL_MS = 2 * 60 * 1000
 export const FINDER_SYNC_REQUEST_CAP = 256
-export const FINDER_SYNC_PENDING_ERROR_FILE = 'finder-sync-pending-error.json'
-export const FINDER_SYNC_PENDING_ERROR_MAX_BYTES = 8 * 1024
-export const FINDER_SYNC_PENDING_ERROR_MAX_ENTRIES = 5
 /** Suppress a repeat of the same Finder Sync error only for this long. */
 export const FINDER_SYNC_ERROR_SHOWN_TTL_MS = 30 * 1000
 export const FINDER_SYNC_NOT_RUNNING = 'Font Buttler is not running.'
@@ -61,8 +80,7 @@ export const FINDER_SYNC_ERROR_MISSING_APP = 'missing-app'
 export const FINDER_SYNC_ERROR_NOT_RUNNING = 'not-running'
 export const FINDER_SYNC_ERROR_LOGIN_ITEMS = 'login-items'
 export const FINDER_SYNC_ERROR_UNKNOWN_ACTION = 'unknown-action'
-/** Release userData folder. The test feed uses TEST_FEED_USER_DATA_DIR. */
-export const FINDER_SYNC_USER_DATA_DIR = 'Font Buttler'
+/** Test-feed userData directory. The release helper no longer has one fixed folder. */
 export const FINDER_SYNC_TEST_USER_DATA_DIR = TEST_FEED_USER_DATA_DIR
 const FINDER_SYNC_ARCH_NAMES = ['ia32', 'x64', 'armv7l', 'arm64', 'universal']
 
@@ -479,25 +497,9 @@ function pendingErrorByteLength(text) {
  * FINDER_SYNC_PENDING_ERROR_MAX_ENTRIES codes are kept.
  */
 export function readFinderSyncPendingErrors(text, appPath) {
-  if (!text || pendingErrorByteLength(text) > FINDER_SYNC_PENDING_ERROR_MAX_BYTES) return []
-  let parsed
-  try {
-    parsed = JSON.parse(text)
-  } catch {
-    return []
-  }
-  const list = Array.isArray(parsed?.errors) ? parsed.errors : []
-  const seen = new Set()
-  const errors = []
-  for (const item of list) {
-    if (errors.length >= FINDER_SYNC_PENDING_ERROR_MAX_ENTRIES) break
-    const code = typeof item?.code === 'string' ? item.code : ''
-    const message = finderSyncErrorMessage(code, appPath)
-    if (!message || seen.has(code)) continue
-    seen.add(code)
-    errors.push({ code, message, at: typeof item?.at === 'number' ? item.at : 0 })
-  }
-  return errors
+  return parseFinderSyncPendingErrorEntries(text)
+    .map((item) => ({ ...item, message: finderSyncErrorMessage(item.code, appPath) }))
+    .filter((item) => item.message)
 }
 
 export function addFinderSyncPendingError(text, code, now = Date.now()) {
@@ -517,48 +519,43 @@ export function addFinderSyncPendingError(text, code, now = Date.now()) {
  * is returned for deletion even when its contents are ignored.
  */
 export function readFinderSyncPendingErrorFile(filePath, io = { openSync, fstatSync, readSync, closeSync }, appPath) {
-  if (!filePath || typeof io?.openSync !== 'function' || typeof io?.fstatSync !== 'function' || typeof io?.readSync !== 'function' || typeof io?.closeSync !== 'function') {
-    return { errors: [], discard: false, reason: 'unavailable' }
+  const read = readFinderSyncPendingErrorRecord(filePath, io)
+  return {
+    discard: read.discard,
+    reason: read.reason,
+    errors: read.errors
+      .map((item) => ({ ...item, message: finderSyncErrorMessage(item.code, appPath) }))
+      .filter((item) => item.message),
   }
-  let fd
-  try {
-    fd = io.openSync(filePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
-  } catch (error) {
-    if (error?.code === 'ENOENT') return { errors: [], discard: false, reason: 'absent' }
-    if (error?.code === 'ELOOP' || error?.code === 'EMLINK' || error?.code === 'EPERM') {
-      return { errors: [], discard: false, reason: 'symlink' }
+}
+
+/**
+ * Read every queued record, drop files that were actually read, and return
+ * each known code once. userData and a leftover legacy file can both name
+ * the same code; it is shown once. Unknown codes are already dropped.
+ * A symlink is not deleted.
+ */
+export function consumeFinderSyncPendingErrorFiles(filePaths, { io, appPath, unlink = unlinkSync } = {}) {
+  const seen = new Set()
+  const errors = []
+  const discardPaths = []
+  for (const filePath of filePaths ?? []) {
+    const read = readFinderSyncPendingErrorFile(filePath, io, appPath)
+    if (read.discard) discardPaths.push(filePath)
+    for (const item of read.errors) {
+      if (seen.has(item.code) || errors.length >= FINDER_SYNC_PENDING_ERROR_MAX_ENTRIES) continue
+      seen.add(item.code)
+      errors.push(item)
     }
-    return { errors: [], discard: false, reason: 'unreadable' }
   }
-  try {
-    const stat = io.fstatSync(fd)
-    if (typeof stat?.isFile !== 'function' || !stat.isFile()) {
-      return { errors: [], discard: false, reason: 'not-file' }
-    }
-    if (typeof stat.size !== 'number' || stat.size < 0 || stat.size > FINDER_SYNC_PENDING_ERROR_MAX_BYTES) {
-      return { errors: [], discard: true, reason: 'oversize' }
-    }
-    const buffer = Buffer.alloc(stat.size)
-    let got = 0
-    while (got < stat.size) {
-      const count = io.readSync(fd, buffer, got, stat.size - got, null)
-      if (count <= 0) break
-      got += count
-    }
-    return {
-      errors: readFinderSyncPendingErrors(buffer.subarray(0, got).toString('utf8'), appPath),
-      discard: true,
-      reason: 'ok',
-    }
-  } catch {
-    return { errors: [], discard: true, reason: 'unreadable' }
-  } finally {
+  for (const filePath of discardPaths) {
     try {
-      io.closeSync(fd)
+      unlink(filePath)
     } catch {
-      // The descriptor is already closed.
+      // A later launch can read the file again.
     }
   }
+  return errors
 }
 
 function pruneFinderSyncErrorsShown(alreadyShown, now, ttl) {

@@ -62,17 +62,17 @@ import {
 } from './finder-install.mjs'
 import {
   FINDER_SYNC_AGENT_DISABLED,
-  FINDER_SYNC_PENDING_ERROR_FILE,
   FINDER_SYNC_SETTINGS_URL,
   FINDER_SYNC_TOO_MANY_FILES,
   commitFinderSyncAgentRegistration,
+  consumeFinderSyncPendingErrorFiles,
   finderSyncAgentBundleProgram,
+  finderSyncPendingErrorConsumePaths,
   finderSyncRequestSeen,
   finderSyncWireAction,
   formatFinderSyncRejections,
   noteFinderSyncRequest,
   readFinderSyncAgentRecord,
-  readFinderSyncPendingErrorFile,
   finderSyncProductDisplayName,
   claimSameExecutableInstance,
   releaseSameExecutableInstance,
@@ -1267,16 +1267,21 @@ function presentFinderSyncUserError(code) {
 }
 
 function consumeFinderSyncPendingErrors() {
-  const file = path.join(app.getPath('userData'), FINDER_SYNC_PENDING_ERROR_FILE)
-  const read = readFinderSyncPendingErrorFile(file, undefined, currentFinderSyncBundle())
-  if (read.discard) {
-    try {
-      fs.unlinkSync(file)
-    } catch {
-      // A later launch can read the file again after the short show window.
-    }
-  }
-  for (const item of read.errors) presentFinderSyncUserError(item.code)
+  // userData is Cuttler after a move or a fresh install, and the old folder
+  // when the move stalled. The helper writes the live library. Also read the
+  // other support folders so a record left by the previous helper, or written
+  // beside a library this launch is not using, is shown once and deleted.
+  // Test feed and FONT_BUTLER_DATA / FONTCASE_DATA stay on userData alone.
+  const files = finderSyncPendingErrorConsumePaths({
+    userDataDir: app.getPath('userData'),
+    appSupportDir: app.getPath('appData'),
+    includeOtherSupportDirs: shouldMigrateRealMacLibrary({
+      platform: process.platform,
+      testFeed: testFeedPlan?.isolate === true,
+    }),
+  })
+  const errors = consumeFinderSyncPendingErrorFiles(files, { appPath: currentFinderSyncBundle() })
+  for (const item of errors) presentFinderSyncUserError(item.code)
 }
 
 function finderSyncAgentRecordFile() {

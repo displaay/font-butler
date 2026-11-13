@@ -14,6 +14,7 @@ import crypto from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { carryFinderSyncPendingError } from './finder-sync-pending-error.mjs'
 
 export const APP_FOLDER_NAME = 'Cuttler'
 /** 0.4.0 on-disk name. Higher priority than the one-t folder. */
@@ -998,6 +999,14 @@ export function migrateLegacyMacAppDirs(home, hooks) {
     movedFrom: marker?.dataFrom ?? pending?.dataFrom ?? null,
     hooks,
     beforeMove(source) {
+      // A fresh Cuttler folder is renamed aside and deleted. A queued Finder
+      // error written there would go with it. Copy the record into the
+      // library first. A failure must not block the move.
+      try {
+        carryFinderSyncPendingError(source, dataRoot)
+      } catch {
+        // The library move still has to finish.
+      }
       pending = rememberMove(home, pending, { from: source, to: dataRoot }, {
         dataRoot,
         dataFrom: path.basename(source),

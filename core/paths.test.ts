@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
+import { FINDER_SYNC_PENDING_ERROR_FILE } from '../electron/finder-sync-pending-error.mjs'
 import {
   FOLDER_MIGRATION_FILE,
   MIGRATION_DATA_ROOT_ENV,
@@ -208,6 +209,71 @@ test('Font Buttler application support and fonts folders move to Cuttler and rew
     assert.equal(row.installations[0].path, path.join(next.installDir, 'Family.otf'))
     assert.equal(row.installations[0].parkedPath, path.join(next.dataRoot, 'Disabled', 'Family.otf'))
     assert.equal(fs.existsSync(path.join(next.dataRoot, FOLDER_MIGRATION_FILE)), true)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('a Finder Sync error written into a fresh Cuttler folder survives the library move', () => {
+  const home = tempHome()
+  const legacyData = path.join(home, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  const nextData = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(legacyData, { recursive: true })
+    fs.mkdirSync(nextData, { recursive: true })
+    fs.writeFileSync(path.join(legacyData, 'catalog.json'), catalog([{ id: '1' }]))
+    fs.writeFileSync(
+      path.join(nextData, FINDER_SYNC_PENDING_ERROR_FILE),
+      JSON.stringify({ errors: [{ code: 'missing-app', at: 4 }, { code: 'not-a-code', at: 1 }] }),
+    )
+    const next = migrateLegacyMacAppDirs(home)
+    assert.equal(next.movedData, true)
+    assert.equal(next.stalled, false)
+    assert.equal(fs.existsSync(legacyData), false)
+    const kept = JSON.parse(fs.readFileSync(path.join(next.dataRoot, FINDER_SYNC_PENDING_ERROR_FILE), 'utf8'))
+    assert.deepEqual(kept.errors, [{ code: 'missing-app', at: 4 }])
+    assert.equal(fs.lstatSync(path.join(next.dataRoot, FINDER_SYNC_PENDING_ERROR_FILE)).mode & 0o777, 0o600)
+    const names = fs.readdirSync(path.join(home, 'Library/Application Support'))
+    assert.equal(names.some((name) => name.startsWith(`${APP_FOLDER_NAME}.fresh-`)), false)
+
+    const secretHome = tempHome()
+    try {
+      const secretLegacy = path.join(secretHome, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+      const secretNext = path.join(secretHome, 'Library/Application Support', APP_FOLDER_NAME)
+      const secret = path.join(secretHome, 'secret.json')
+      fs.mkdirSync(secretLegacy, { recursive: true })
+      fs.mkdirSync(secretNext, { recursive: true })
+      fs.writeFileSync(path.join(secretLegacy, 'catalog.json'), catalog([{ id: '1' }]))
+      fs.writeFileSync(secret, JSON.stringify({ errors: [{ code: 'login-items', at: 1 }] }))
+      fs.symlinkSync(secret, path.join(secretNext, FINDER_SYNC_PENDING_ERROR_FILE))
+      const moved = migrateLegacyMacAppDirs(secretHome)
+      assert.equal(moved.movedData, true)
+      assert.equal(fs.existsSync(path.join(moved.dataRoot, FINDER_SYNC_PENDING_ERROR_FILE)), false)
+      assert.match(fs.readFileSync(secret, 'utf8'), /login-items/)
+    } finally {
+      fs.rmSync(secretHome, { recursive: true, force: true })
+    }
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('an empty Font Buttler folder does not discard a queued Finder Sync error in Cuttler', () => {
+  const home = tempHome()
+  const legacyData = path.join(home, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  const nextData = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
+  try {
+    fs.mkdirSync(legacyData, { recursive: true })
+    fs.mkdirSync(nextData, { recursive: true })
+    fs.writeFileSync(
+      path.join(nextData, FINDER_SYNC_PENDING_ERROR_FILE),
+      JSON.stringify({ errors: [{ code: 'not-running', at: 8 }] }),
+    )
+    const next = migrateLegacyMacAppDirs(home)
+    assert.equal(next.movedData, true)
+    assert.equal(fs.existsSync(legacyData), false)
+    const kept = JSON.parse(fs.readFileSync(path.join(next.dataRoot, FINDER_SYNC_PENDING_ERROR_FILE), 'utf8'))
+    assert.deepEqual(kept.errors, [{ code: 'not-running', at: 8 }])
   } finally {
     fs.rmSync(home, { recursive: true, force: true })
   }
