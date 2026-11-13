@@ -1,8 +1,30 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { ANNOUNCEMENTS, WHATS_NEW_PAGES } from '../../shared/announcements.ts'
+import { ANNOUNCEMENTS, WHATS_NEW_PAGES, nextAnnouncementToShow } from '../../shared/announcements.ts'
+
+test('each fonts rename reason keeps its own announcement id', () => {
+  const exdev = nextAnnouncementToShow({
+    currentVersion: '0.4.1',
+    libraryEstablished: true,
+    fontsRenameReason: 'EXDEV',
+  })
+  const eacces = nextAnnouncementToShow({
+    currentVersion: '0.4.1',
+    libraryEstablished: true,
+    fontsRenameReason: 'EACCES',
+    state: { seenIds: ['fonts-rename-EXDEV'], firstRunVersion: '0.4.1' },
+  })
+  assert.equal(exdev.announcement?.id, 'fonts-rename-EXDEV')
+  assert.equal(eacces.announcement?.id, 'fonts-rename-EACCES')
+})
+
+test('the app accepts a fonts rename notice', () => {
+  const app = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8')
+  assert.match(app, /payload\.showWhen === 'fonts-rename-blocked'/)
+})
 
 test('whats-new pages start with the rename, then each shipped feature', () => {
   assert.deepEqual(

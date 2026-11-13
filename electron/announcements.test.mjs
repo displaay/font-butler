@@ -219,6 +219,28 @@ test('main wires leftover notices separately from a real stall', () => {
   }
 })
 
+test('a blocked fonts rename notice keeps its explanation', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-ann-fonts-'))
+  try {
+    fs.writeFileSync(path.join(dir, 'settings.json'), '{}\n')
+    const migration = {
+      fontsStayDir: '/Users/me/Library/Fonts/Font Buttler',
+      fontsRenameReason: 'EXDEV',
+      installDir: '/Users/me/Library/Fonts/Cuttler',
+    }
+    const shown = presentPendingAnnouncement({
+      userDataDir: dir,
+      currentVersion: '0.4.1',
+      fontsRenameReason: 'EXDEV',
+      migration,
+    })
+    assert.equal(shown?.showWhen, 'fonts-rename-blocked')
+    assert.match(shown?.body ?? '', /different disks/)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('announcements host no longer opens a dark-glass BrowserWindow', () => {
   const source = readFileSync(new URL('./announcements.mjs', import.meta.url), 'utf8')
   assert.doesNotMatch(source, /BrowserWindow/)
