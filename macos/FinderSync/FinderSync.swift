@@ -17,6 +17,10 @@ import FinderSync
 /// not: installing from a system font folder is not a use case. Dropbox and
 /// iCloud Drive are File Provider domains, and a Finder Sync menu often does
 /// not appear there. Services remain the way to install from those folders.
+/// File-level lets are initialised on first use. The appex is compiled with
+/// `-parse-as-library`; script mode would leave them uninitialised because
+/// this process starts at `_NSExtensionMain`, and the contextual menu's
+/// first `Set.contains` would crash.
 private let fontExtensions: Set<String> = ["otf", "ttf", "ttc", "otc", "woff", "woff2"]
 
 @objc protocol FontButtlerFinderSyncHandoff {

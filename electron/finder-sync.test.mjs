@@ -155,6 +155,7 @@ import {
   finderSyncCodesignIdentity,
   finderSyncCompileArgs,
   finderSyncEntitlementsPlist,
+  finderSyncTopLevelShape,
   finderSyncInfoPlist,
   finderSyncSignArgs,
   macosSwiftTarget,
@@ -372,6 +373,7 @@ test('Finder Sync appex identity, plist, and swiftc command stay distinct for te
     output: '/out/FontButtlerFinderSync',
   })
   assert.ok(args.includes('swiftc') === false)
+  assert.ok(args.includes('-parse-as-library'))
   assert.ok(args.includes('-application-extension'))
   assert.ok(args.includes('_NSExtensionMain'))
   assert.ok(args.includes('FinderSync'))
@@ -388,6 +390,58 @@ test('Finder Sync appex identity, plist, and swiftc command stay distinct for te
   const generated = finderSyncEntitlementsPlist(true)
   assert.equal(entitlementTextListsGroup(generated, finderSyncAppGroup(true)), true)
   assert.equal(entitlementTextListsGroup(generated, finderSyncAppGroup(false)), false)
+})
+
+test('Finder Sync swiftc parses the appex as a library so file-level lets are initialised', () => {
+  const args = finderSyncCompileArgs({
+    sdk: '/sdk',
+    target: 'arm64-apple-macosx11.0',
+    source: 'macos/FinderSync/FinderSync.swift',
+    output: '/out/FontButtlerFinderSync',
+  })
+  const libraryFlag = args.indexOf('-parse-as-library')
+  const sourceIndex = args.findIndex((arg) => String(arg).endsWith('.swift'))
+  const entry = args.indexOf('-e')
+  assert.ok(libraryFlag >= 0 && sourceIndex > libraryFlag)
+  assert.equal(args[entry - 1], '-Xlinker')
+  assert.equal(args[entry + 1], '-Xlinker')
+  assert.equal(args[entry + 2], '_NSExtensionMain')
+
+  const scriptsDir = fileURLToPath(new URL('../scripts/', import.meta.url))
+  const swiftcScripts = readdirSync(scriptsDir)
+    .filter((name) => name.startsWith('build-') && name.endsWith('.mjs'))
+    .filter((name) => /\bswiftc\b/.test(readFileSync(path.join(scriptsDir, name), 'utf8')))
+  assert.deepEqual(swiftcScripts, ['build-finder-sync.mjs'])
+  for (const name of swiftcScripts) {
+    assert.match(readFileSync(path.join(scriptsDir, name), 'utf8'), /['"]-parse-as-library['"]/)
+  }
+
+  const swift = readRepo('macos/FinderSync/FinderSync.swift')
+  const shape = finderSyncTopLevelShape(swift)
+  assert.deepEqual(shape.storedGlobals, [
+    'fontExtensions',
+    'finderSyncMissingApp',
+    'finderSyncAgentDisabled',
+    'finderSyncProductAppNames',
+  ])
+  assert.deepEqual(shape.executable, [])
+  assert.match(swift, /fontExtensions\.contains/)
+  assert.match(swift, /if isFontFile\(url\)/)
+  assert.match(swift, /allSatisfy\(isInstallSelection\)/)
+
+  const sample = finderSyncTopLevelShape(`
+private let fontExtensions: Set<String> = ["otf"]
+private func parentAppURL() -> URL? {
+    for _ in 0..<12 {
+        if Date() < Date() { return nil }
+    }
+    return nil
+}
+private let finderSyncProductAppNames: Set<String> = ["Cuttler.app"]
+print("runs at top level")
+`)
+  assert.deepEqual(sample.storedGlobals, ['fontExtensions', 'finderSyncProductAppNames'])
+  assert.deepEqual(sample.executable, ['print("runs at top level")'])
 })
 
 test('Finder Sync monitors home, /Users/Shared, and /Volumes', () => {
@@ -2476,9 +2530,11 @@ test('the release assert checks the appex signature and leaves notarization to t
     )
     const calls = []
     const group = finderSyncAppGroup(false)
+    const librarySymbols = '                 U _NSExtensionMain\n'
     const failures = finderSyncReleaseFailures(app, {
       runCommand(command, args) {
         calls.push([command, args])
+        if (command === 'nm') return { status: 0, output: librarySymbols }
         if (command === 'codesign' && args.includes('--entitlements')) {
           return {
             status: 0,
@@ -2492,6 +2548,7 @@ test('the release assert checks the appex signature and leaves notarization to t
       },
     })
     assert.deepEqual(failures, [], failures.join('\n'))
+    assert.ok(calls.some((call) => call[0] === 'nm' && call[1][0] === '-g' && /FontButtlerFinderSync$/.test(call[1].at(-1))))
     assert.ok(calls.some((call) => call[0] === 'codesign' && call[1].includes('--deep') && call[1].includes('--strict')))
     assert.equal(calls.some((call) => call[0] === 'spctl'), false)
     assert.equal(calls.some((call) => call[1].includes('--test-requirement')), false)
@@ -2503,6 +2560,7 @@ test('the release assert checks the appex signature and leaves notarization to t
 
     const rejected = finderSyncReleaseFailures(app, {
       runCommand(command, args) {
+        if (command === 'nm') return { status: 0, output: librarySymbols }
         if (command === 'codesign' && args.includes('--verify')) return { status: 1, output: '' }
         if (command === 'codesign' && args.includes('--entitlements')) {
           return {
@@ -2521,6 +2579,40 @@ test('the release assert checks the appex signature and leaves notarization to t
     assert.ok(rejected.some((failure) => /hardened runtime/.test(failure)))
     assert.equal(rejected.some((failure) => /Notarized Developer ID/.test(failure)), false)
     assert.ok(rejected.some((failure) => failure.includes(group)))
+
+    const scriptMain = finderSyncReleaseFailures(app, {
+      runCommand(command, args) {
+        if (command === 'nm') {
+          return { status: 0, output: '0000000100003f50 T _main\n                 U _NSExtensionMain\n' }
+        }
+        if (command === 'codesign' && args.includes('--entitlements')) {
+          return {
+            status: 0,
+            output: `<key>${FINDER_SYNC_ENTITLEMENT}</key><key>${FINDER_SYNC_APP_GROUP_ENTITLEMENT}</key><string>${group}</string>`,
+          }
+        }
+        return {
+          status: 0,
+          output: `Authority=Developer ID Application: ${DEVELOPER_ID_IDENTITY}\nTeamIdentifier=${DEVELOPER_ID_TEAM}\nflags=0x10000(runtime)`,
+        }
+      },
+    })
+    assert.deepEqual(
+      scriptMain,
+      [
+        'The Finder Sync appex defines _main. swiftc compiled it as a script, so file-level lets such as fontExtensions are uninitialised and the contextual menu crashes. Compile with -parse-as-library.',
+      ],
+    )
+    const unreadSymbols = finderSyncReleaseFailures(app, {
+      runCommand(command) {
+        if (command === 'nm') return { status: 1, output: 'nm: no such file' }
+        return {
+          status: 0,
+          output: `Authority=Developer ID Application: ${DEVELOPER_ID_IDENTITY}\nTeamIdentifier=${DEVELOPER_ID_TEAM}\nflags=0x10000(runtime)\n<key>${FINDER_SYNC_ENTITLEMENT}</key><key>${FINDER_SYNC_APP_GROUP_ENTITLEMENT}</key><string>${group}</string>`,
+        }
+      },
+    })
+    assert.ok(unreadSymbols.some((failure) => /symbol table/.test(failure)))
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

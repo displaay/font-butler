@@ -61,6 +61,7 @@ const CPU_NAMES = new Map([
 export const AUTOMATED_CHECKS = [
   { id: 'appex-present', title: 'Finder Sync appex bundle is inside the app' },
   { id: 'appex-entry', title: 'swiftc entry point _NSExtensionMain is in the appex' },
+  { id: 'appex-script-main', title: 'appex has no Swift script main beside _NSExtensionMain' },
   { id: 'appex-arch', title: 'appex architecture matches the app' },
   { id: 'receiver-present', title: 'finder-sync-receiver.node is in the bundle' },
   { id: 'helper-present', title: 'Finder Sync helper executable is in the bundle' },
@@ -93,7 +94,8 @@ export const MANUAL_MAC_CHECKS = [
   {
     id: 'menu-roots',
     action: 'Right-click a font in your home folder, in /Users/Shared, and on a volume under /Volumes.',
-    expect: 'Install and Install as… appear. They do not come from monitoring /Library/Fonts.',
+    expect:
+      'Install and Install as… appear, and Finder does not crash. They do not come from monitoring /Library/Fonts.',
   },
   {
     id: 'file-provider',
@@ -219,6 +221,25 @@ export function sameArchSet(left, right) {
 
 export function nmListsExtensionMain(text) {
   return /(^|\s)_NSExtensionMain(\s|$)/m.test(String(text ?? ''))
+}
+
+/**
+ * A defined `_main` means swiftc compiled the appex as a script. File-level
+ * lets are then initialised only from that main, which `_NSExtensionMain`
+ * never calls. `-O` may dead-strip an unreferenced `_main`; this reports
+ * the symbol when the linker kept it. It does not run the contextual menu.
+ */
+export function nmDefinesScriptMain(text) {
+  return /^[ \t]*[0-9a-fA-F]+\s+[tT]\s+_main(?:\s|$)/m.test(String(text ?? '').replaceAll('\r', ''))
+}
+
+export function appexSymbolTableProblem(text, status = 0) {
+  if ((status ?? 1) !== 0) return 'nm could not read the Finder Sync appex symbol table.'
+  if (nmDefinesScriptMain(text)) {
+    return 'The Finder Sync appex defines _main. swiftc compiled it as a script, so file-level lets such as fontExtensions are uninitialised and the contextual menu crashes. Compile with -parse-as-library.'
+  }
+  if (!nmListsExtensionMain(text)) return '_NSExtensionMain was not found in the Finder Sync appex symbol table.'
+  return ''
 }
 
 export function straySliceNames(paths) {
@@ -443,6 +464,14 @@ export function buildChecklist(observations = {}) {
     nmListsExtensionMain(observations.appexNm)
       ? pass('appex-entry', '_NSExtensionMain is in the appex symbol table.')
       : fail('appex-entry', observations.appexNmError || '_NSExtensionMain was not found in nm output.'),
+    !String(observations.appexNm ?? '').trim()
+      ? fail('appex-script-main', observations.appexNmError || 'nm did not return an appex symbol table.')
+      : nmDefinesScriptMain(observations.appexNm)
+        ? fail(
+            'appex-script-main',
+            'nm shows a defined _main, so the appex was compiled as a Swift script and file-level lets such as fontExtensions are uninitialised. Rebuild with -parse-as-library.',
+          )
+        : pass('appex-script-main', 'No defined _main. File-level lets initialise on first use.'),
     sameArchSet(observations.appArchs, observations.appexArchs)
       ? pass('appex-arch', `App and appex are ${observations.appexArchs.join(', ')}.`)
       : fail(
