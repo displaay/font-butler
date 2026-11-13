@@ -8,6 +8,11 @@
  * A destination that already has real data is not replaced and the source
  * is not deleted. That case is stalled: the caller shows it. A silent
  * "leave it" with no flag is the library-vanished bug.
+ *
+ * A cross-device copy that has been checked and renamed into place is the
+ * library. Removing the source is cleanup. If that cleanup fails, or the
+ * process dies before it runs, the leftover source is kept and recorded.
+ * It is not adopted, and it is not deleted further.
  */
 
 import crypto from 'node:crypto'
@@ -168,6 +173,8 @@ function copyTree(from, to, copyFileSync) {
  * only after the new folder is in place. Cross-device renames copy to a
  * sibling temp, check the copy, then rename it into place and remove the source.
  * `hooks.renameSync` is only the from→to attempt, so tests can force EXDEV.
+ * Returns the source path when that folder is still on disk after the copy
+ * has been committed, and null when the source is gone.
  */
 export function moveDirectoryAtomic(from, to, hooks = {}) {
   const renameAcross = hooks.renameSync ?? fs.renameSync
@@ -183,12 +190,14 @@ export function moveDirectoryAtomic(from, to, hooks = {}) {
       fs.renameSync(backup, to)
     }
   }
+  let leftover = null
   try {
     try {
       renameAcross(from, to)
     } catch (error) {
       if (error?.code !== 'EXDEV') throw error
       const tmp = `${to}.partial-${process.pid}-${process.hrtime.bigint()}`
+      let committed = false
       try {
         copyTree(from, tmp, copyFileSync)
         if (!directoryTreesMatch(from, tmp)) {
@@ -197,17 +206,50 @@ export function moveDirectoryAtomic(from, to, hooks = {}) {
           throw mismatch
         }
         fs.renameSync(tmp, to)
-        fs.rmSync(from, { recursive: true, force: true })
+        committed = true
+        // The destination is the library from here on. Record that before
+        // touching the source, so a crash during cleanup can recover it.
+        hooks.onCopyCommitted?.(from, to)
+        if (backup) {
+          try {
+            fs.rmSync(backup, { recursive: true, force: true })
+          } catch {
+            // The folder moved aside was fresh. Leaving it does not change the library.
+          }
+          backup = null
+        }
+        if (hooks.crashAfterCopyCommit) {
+          const killed = new Error('killed after the copy commit')
+          killed.code = 'ECOPYCOMMIT'
+          throw killed
+        }
+        const remove = hooks.rmSync ?? fs.rmSync
+        try {
+          remove(from, { recursive: true, force: true })
+        } catch (cleanupError) {
+          if (cleanupError?.code === 'ECOPYCOMMIT') throw cleanupError
+          // One attempt. Do not delete more of a source that is already partial.
+        }
+        if (lstatOrNull(from)) leftover = from
       } catch (copyError) {
+        if (copyError?.code === 'ECOPYCOMMIT') throw copyError
+        if (committed) {
+          const stuck = new Error('Library copy is in place; source cleanup did not finish')
+          stuck.code = 'ECOMMITTED'
+          stuck.cause = copyError
+          throw stuck
+        }
         fs.rmSync(tmp, { recursive: true, force: true })
         throw copyError
       }
     }
   } catch (error) {
+    if (error?.code === 'ECOPYCOMMIT' || error?.code === 'ECOMMITTED') throw error
     restoreBackup()
     throw error
   }
   if (backup) fs.rmSync(backup, { recursive: true, force: true })
+  return leftover
 }
 
 function applyReplacements(value, replacements) {
@@ -381,7 +423,7 @@ function unresolvedLibraryLink(dir) {
   return Boolean(st?.isSymbolicLink() && !followedDirectory(dir))
 }
 
-function migrateSide({ dest, sources, unused, movedFrom, hooks, beforeMove }) {
+function migrateSide({ dest, sources, unused, movedFrom, hooks, beforeMove, committedSources }) {
   const present = sources.filter(followedDirectory)
   const dangling = sources.filter(unresolvedLibraryLink)
   if (present.length === 0) {
@@ -394,6 +436,10 @@ function migrateSide({ dest, sources, unused, movedFrom, hooks, beforeMove }) {
     return movedIndex !== -1 && rank > movedIndex
   }
   if (!unused(dest)) {
+    // The verified copy is already at dest. A source that is still here was
+    // left after that commit. Do not adopt it and do not copy over dest.
+    const committedSource = present.find((dir) => committedSources?.has(dir))
+    if (committedSource) return { status: 'moved', source: committedSource, leftover: committedSource }
     const blocking = present.find((dir) => !unused(dir) && !ignored(dir))
     if (blocking) return { status: 'stalled', source: blocking, occupied: true }
     return { status: 'absent', source: null }
@@ -401,15 +447,20 @@ function migrateSide({ dest, sources, unused, movedFrom, hooks, beforeMove }) {
   const source = present.find((dir) => !unused(dir)) ?? present[0]
   try {
     beforeMove?.(source, dest)
-    moveDirectoryAtomic(source, dest, hooks)
-  } catch {
+    const leftover = moveDirectoryAtomic(source, dest, hooks)
+    return {
+      status: 'moved',
+      source,
+      leftover: leftover && lstatOrNull(leftover) ? leftover : null,
+    }
+  } catch (error) {
+    if (error?.code === 'ECOPYCOMMIT' || error?.code === 'ECOMMITTED') throw error
     // The source is still the library. Dest was restored if a fresh folder
     // had been moved aside. Say so instead of continuing with an empty Cuttler.
     if (followedDirectory(source)) return { status: 'stalled', source, occupied: false }
     if (followedDirectory(dest)) return { status: 'moved', source }
     throw new Error(`Could not move ${source}`)
   }
-  return { status: 'moved', source }
 }
 
 function stallSentence(kind, oldDir, newDir, occupied) {
@@ -420,19 +471,36 @@ function stallSentence(kind, oldDir, newDir, occupied) {
   return `Your ${noun} still in ${oldDir}. Cuttler already had files in ${newDir}, so that folder was left unchanged.`
 }
 
+function leftoverSentence(kind, oldDir, newDir) {
+  const noun = kind === 'fonts' ? 'fonts are' : 'library is'
+  return `Your ${noun} in ${newDir}. The previous folder at ${oldDir} could not be fully removed, so it was left in place for cleanup.`
+}
+
 export function migrationStallMessage(result) {
-  if (!result?.stalled) return ''
+  if (!result) return ''
   const parts = []
-  if (result.stalledDataDir) {
+  if (result.stalled && result.stalledDataDir) {
     parts.push(stallSentence('library', result.stalledDataDir, result.dataRoot, result.dataOccupied))
   }
-  if (result.stalledFontsDir) {
+  if (result.stalled && result.stalledFontsDir) {
     parts.push(stallSentence('fonts', result.stalledFontsDir, result.installDir, result.fontsOccupied))
   }
-  if (parts.length === 0) {
-    return 'Your library is still in the previous folder. Cuttler already had files at the new path, so nothing was moved or deleted.'
+  if (result.leftoverDataDir) {
+    parts.push(leftoverSentence('library', result.leftoverDataDir, result.dataRoot))
   }
-  return parts.join(' ')
+  if (result.leftoverFontsDir) {
+    parts.push(leftoverSentence('fonts', result.leftoverFontsDir, result.installDir))
+  }
+  if (parts.length > 0) return parts.join(' ')
+  if (!result.stalled) return ''
+  return 'Your library is still in the previous folder. Cuttler already had files at the new path, so nothing was moved or deleted.'
+}
+
+/** True when the launch should keep showing the migration notice. */
+export function migrationNeedsNotice(result) {
+  if (!result) return false
+  if (result.stalled === true) return true
+  return Boolean(result.leftoverDataDir || result.leftoverFontsDir)
 }
 
 export function adoptedMigrationDataRoot(env = process.env) {
@@ -956,9 +1024,29 @@ function sameAppInstanceResult(dataRoot, installDir, owner) {
 }
 
 function movedReplacements(pending, { omitDest = '' } = {}) {
-  return (pending?.replacements ?? []).filter(
-    (pair) => pair.to !== omitDest && !followedDirectory(pair.from) && followedDirectory(pair.to),
-  )
+  return (pending?.replacements ?? []).filter((pair) => {
+    if (pair.to === omitDest || !followedDirectory(pair.to)) return false
+    // A committed copy is in place even when the source folder is still there.
+    if (pair.committed === true) return true
+    return !followedDirectory(pair.from)
+  })
+}
+
+function markCopyCommitted(home, current, from, to) {
+  const replacements = (current?.replacements ?? []).map((item) => ({ ...item }))
+  const index = replacements.findIndex((item) => item.from === from && item.to === to)
+  if (index === -1) replacements.push({ from, to, committed: true })
+  else replacements[index] = { ...replacements[index], committed: true }
+  const next = {
+    needsRewrite: true,
+    replacements,
+    dataRoot: current?.dataRoot,
+    stalledDataDir: current?.stalledDataDir === from ? null : current?.stalledDataDir ?? null,
+    dataFrom: current?.dataFrom ?? null,
+    fontsFrom: current?.fontsFrom ?? null,
+  }
+  writePendingMigration(home, next)
+  return next
 }
 
 function rewriteKeptLibrary(pending, dataRoot) {
@@ -987,6 +1075,18 @@ export function migrateLegacyMacAppDirs(home, hooks) {
   if (owner?.kind === 'same-app') return sameAppInstanceResult(dataRoot, installDir, owner)
   let pending = readPendingMigration(home)
   if (pending) rewriteKeptLibrary(pending, dataRoot)
+  const committedSources = new Set(
+    (pending?.replacements ?? [])
+      .filter((item) => item?.committed === true && typeof item.from === 'string')
+      .map((item) => item.from),
+  )
+  const moveHooks = {
+    ...hooks,
+    onCopyCommitted(from, to) {
+      committedSources.add(from)
+      pending = markCopyCommitted(home, pending, from, to)
+    },
+  }
   const dataSources = LEGACY_APP_FOLDER_NAMES.map((name) =>
     path.join(home, 'Library/Application Support', name),
   )
@@ -997,7 +1097,8 @@ export function migrateLegacyMacAppDirs(home, hooks) {
     sources: dataSources,
     unused: isFreshDataRoot,
     movedFrom: marker?.dataFrom ?? pending?.dataFrom ?? null,
-    hooks,
+    hooks: moveHooks,
+    committedSources,
     beforeMove(source) {
       // A fresh Cuttler folder is renamed aside and deleted. A queued Finder
       // error written there would go with it. Copy the record into the
@@ -1026,7 +1127,8 @@ export function migrateLegacyMacAppDirs(home, hooks) {
     sources: fontSources,
     unused: isEmptyDir,
     movedFrom: marker?.fontsFrom ?? pending?.fontsFrom ?? null,
-    hooks,
+    hooks: moveHooks,
+    committedSources,
     beforeMove(source) {
       pending = rememberMove(home, pending, { from: source, to: installDir }, {
         dataRoot,
@@ -1053,15 +1155,23 @@ export function migrateLegacyMacAppDirs(home, hooks) {
     if (followedDirectory(library) && (record.dataFrom || record.fontsFrom)) {
       writeMarker(library, record)
     }
-    const unfinished = pending.replacements.some((pair) => followedDirectory(pair.from))
-    if (!unfinished) clearPendingMigration(home)
+    const keepPending = pending.replacements.some((pair) => {
+      if (!lstatOrNull(pair.from)) return false
+      if (pair.committed === true) return true
+      return followedDirectory(pair.from)
+    })
+    if (!keepPending) clearPendingMigration(home)
   }
+  const leftoverDataDir = data.status === 'moved' && data.leftover && lstatOrNull(data.leftover) ? data.leftover : null
+  const leftoverFontsDir = fonts.status === 'moved' && fonts.leftover && lstatOrNull(fonts.leftover) ? fonts.leftover : null
   return {
     dataRoot,
     installDir,
     stalled: data.status === 'stalled' || fonts.status === 'stalled',
     stalledDataDir: data.status === 'stalled' ? data.source : null,
     stalledFontsDir: fonts.status === 'stalled' ? fonts.source : null,
+    leftoverDataDir,
+    leftoverFontsDir,
     dataOccupied: data.status === 'stalled' ? data.occupied !== false : false,
     fontsOccupied: fonts.status === 'stalled' ? fonts.occupied !== false : false,
     movedData: data.status === 'moved',

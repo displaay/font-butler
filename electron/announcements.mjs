@@ -81,7 +81,14 @@ export function presentPendingAnnouncement({ userDataDir, currentVersion, migrat
   if (!announcement) return null
   if (announcement.showWhen === 'migration-stalled') {
     const body = migrationStallMessage(migration)
-    if (body) return { ...announcement, body }
+    if (body) {
+      const leftoverOnly = !migration?.stalled && (migration?.leftoverDataDir || migration?.leftoverFontsDir)
+      return {
+        ...announcement,
+        body,
+        title: leftoverOnly ? 'Old folder left behind' : announcement.title,
+      }
+    }
   }
   return announcement
 }

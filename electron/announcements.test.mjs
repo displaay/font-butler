@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
-import { migrationStallMessage } from './mac-data-migration.mjs'
+import { migrationNeedsNotice, migrationStallMessage } from './mac-data-migration.mjs'
 import {
   dismissAnnouncement,
   presentPendingAnnouncement,
@@ -76,6 +76,30 @@ test('a stalled migration names the old folder and a quiet move shows nothing ne
       }),
       null,
     )
+    const leftover = {
+      stalled: false,
+      dataRoot: '/Users/me/Library/Application Support/Cuttler',
+      installDir: '/Users/me/Library/Fonts/Cuttler',
+      stalledDataDir: null,
+      stalledFontsDir: null,
+      leftoverDataDir: '/Users/me/Library/Application Support/Font Buttler',
+      leftoverFontsDir: '/Users/me/Library/Fonts/Font Buttler',
+      movedData: true,
+      movedFonts: true,
+    }
+    assert.equal(migrationNeedsNotice(leftover), true)
+    assert.equal(migrationNeedsNotice({ stalled: false }), false)
+    const leftBehind = presentPendingAnnouncement({
+      userDataDir: dir,
+      currentVersion: '0.4.1',
+      migrationStalled: migrationNeedsNotice(leftover),
+      migration: leftover,
+    })
+    assert.equal(leftBehind?.id, 'migration-stalled')
+    assert.equal(leftBehind?.title, 'Old folder left behind')
+    assert.equal(leftBehind?.body, migrationStallMessage(leftover))
+    assert.match(leftBehind?.body ?? '', /could not be fully removed/)
+    assert.equal((leftBehind?.body ?? '').includes('still in'), false)
     const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-ann-fresh-'))
     try {
       assert.equal(presentPendingAnnouncement({ userDataDir: fresh, currentVersion: '0.4.1' }), null)

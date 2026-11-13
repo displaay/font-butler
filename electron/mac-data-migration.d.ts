@@ -11,8 +11,12 @@ export const MIGRATION_HANDLED_ENV: string
 export type MacDirMigrationHooks = {
   renameSync?: (from: string, to: string) => void
   copyFileSync?: (from: string, to: string) => void
+  /** Source removal after a committed cross-device copy. Tests use this to fail partway. */
+  rmSync?: (target: string, options: { recursive: boolean; force: boolean }) => void
   failRewrite?: boolean
   crashAfterDataMove?: boolean
+  /** Throw after the verified copy is renamed into place and recorded, before source removal. */
+  crashAfterCopyCommit?: boolean
   selfPid?: number
   isAlive?: (pid: number) => boolean
   cookieHeld?: (cookiePath: string, pid?: number) => boolean | null
@@ -32,6 +36,12 @@ export type MacDataMigration = {
   stalled: boolean
   stalledDataDir: string | null
   stalledFontsDir: string | null
+  /**
+   * Source folder still on disk after the destination copy was committed.
+   * The library is dataRoot / installDir. This path is not adopted.
+   */
+  leftoverDataDir?: string | null
+  leftoverFontsDir?: string | null
   /** False when a move failed and the destination was not already in use. */
   dataOccupied: boolean
   fontsOccupied: boolean
@@ -51,7 +61,7 @@ export type MacDataMigration = {
 
 export function isFreshDataRoot(dir: string): boolean
 export function isEmptyDir(dir: string): boolean
-export function moveDirectoryAtomic(from: string, to: string, hooks?: MacDirMigrationHooks): void
+export function moveDirectoryAtomic(from: string, to: string, hooks?: MacDirMigrationHooks): string | null
 export function rewriteJsonLegacyPaths(
   filePath: string,
   replacements: Array<{ from: string; to: string }>,
@@ -75,6 +85,7 @@ export function rewriteCatalogLegacyPaths(
   replacements: Array<{ from: string; to: string }>,
 ): void
 export function migrationStallMessage(result: MacDataMigration | null | undefined): string
+export function migrationNeedsNotice(result: MacDataMigration | null | undefined): boolean
 export function readSingletonLockPid(lockPath: string): number | null
 export function singletonCookieHeld(cookiePath: string): boolean | null
 export function isLegacyAppExecutable(exePath: string): boolean

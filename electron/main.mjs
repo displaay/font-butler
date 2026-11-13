@@ -26,6 +26,7 @@ import {
   launchAfterMigrationFailure,
   legacyOwnerBlockMessage,
   migrateLegacyMacAppDirs,
+  migrationNeedsNotice,
   shouldMigrateRealMacLibrary,
 } from './mac-data-migration.mjs'
 import { isAllowedAppUpdateUrl, trayTooltip } from './app-update.mjs'
@@ -463,7 +464,7 @@ function startMainUiAfterBootstrap() {
     pendingAnnouncement = presentPendingAnnouncement({
       userDataDir: app.getPath('userData'),
       currentVersion: app.getVersion(),
-      migrationStalled: macDataMigration?.stalled === true,
+      migrationStalled: migrationNeedsNotice(macDataMigration),
       migration: macDataMigration,
     })
     deliverPendingAnnouncement()
