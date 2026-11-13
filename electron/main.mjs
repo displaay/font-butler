@@ -464,6 +464,7 @@ function stageLaunchAnnouncement() {
       migrationStalled: migrationNotice.migrationStalled,
       migrationLeftover: migrationNotice.migrationLeftover,
       fontsRenameReason: migrationNotice.fontsRenameReason,
+      oldHeadNotice: migrationNotice.oldHeadNotice,
       migration: macDataMigration,
     }))
   } catch (error) {

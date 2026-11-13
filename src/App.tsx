@@ -1126,7 +1126,8 @@ function AppShell() {
             payload.showWhen === 'upgrade' ||
           payload.showWhen === 'migration-stalled' ||
           payload.showWhen === 'migration-leftover' ||
-          payload.showWhen === 'fonts-rename-blocked'
+          payload.showWhen === 'fonts-rename-blocked' ||
+          payload.showWhen === 'old-head-kept'
               ? payload.showWhen
               : undefined,
         }

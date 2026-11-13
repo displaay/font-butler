@@ -1,4 +1,4 @@
-export type AnnouncementShowWhen = 'upgrade' | 'always' | 'migration-stalled' | 'migration-leftover' | 'fonts-rename-blocked'
+export type AnnouncementShowWhen = 'upgrade' | 'always' | 'migration-stalled' | 'migration-leftover' | 'fonts-rename-blocked' | 'old-head-kept'
 
 export type AnnouncementPage = {
   id: string
@@ -156,6 +156,8 @@ export function nextAnnouncementToShow(input: {
   migrationLeftover?: boolean
   /** Fonts rename could not finish. Shown once per reason, then stays dismissed. */
   fontsRenameReason?: string | null
+  /** Old partials or backup folders left on disk. Shown once. */
+  oldHeadNotice?: boolean
 }): { announcement: Announcement | null; seedSeen: boolean; state: AnnouncementState } {
   const announcements = input.announcements ?? ANNOUNCEMENTS
   const currentVersion = String(input.currentVersion ?? '').trim()
@@ -165,7 +167,7 @@ export function nextAnnouncementToShow(input: {
   const migrationLeftover = input.migrationLeftover === true
   const fontsRenameReason = typeof input.fontsRenameReason === 'string' ? input.fontsRenameReason : ''
 
-  if (!hasRecord && !libraryEstablished && !migrationStalled && !migrationLeftover && !fontsRenameReason) {
+  if (!hasRecord && !libraryEstablished && !migrationStalled && !migrationLeftover && !fontsRenameReason && input.oldHeadNotice !== true) {
     const seeded: AnnouncementState = {
       seenIds: allAnnouncementIds(announcements),
       firstRunVersion: currentVersion || null,
@@ -188,7 +190,7 @@ export function nextAnnouncementToShow(input: {
         announcement: {
           id,
           sinceVersion: '0.4.1',
-          title: fontsRenameReason === 'old-head' ? 'Both font folders kept' : 'Fonts left in place',
+          title: fontsRenameReason === 'old-head' || fontsRenameReason === 'placed' ? 'Both font folders kept' : 'Fonts left in place',
           body: '',
           celebrate: false,
           showWhen: 'fonts-rename-blocked',
@@ -196,6 +198,20 @@ export function nextAnnouncementToShow(input: {
         seedSeen: false,
         state,
       }
+    }
+  }
+  if (input.oldHeadNotice === true && !seen.has('old-head-kept')) {
+    return {
+      announcement: {
+        id: 'old-head-kept',
+        sinceVersion: '0.4.1',
+        title: 'Old folders kept',
+        body: '',
+        celebrate: false,
+        showWhen: 'old-head-kept',
+      },
+      seedSeen: false,
+      state,
     }
   }
   for (const item of announcements) {

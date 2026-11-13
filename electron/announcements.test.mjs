@@ -88,11 +88,12 @@ test('a stalled migration names the old folder and a quiet move shows nothing ne
       movedFonts: true,
     }
     const flags = migrationAnnouncementFlags(leftover)
-    assert.deepEqual(flags, { migrationStalled: false, migrationLeftover: true, fontsRenameReason: null })
+    assert.deepEqual(flags, { migrationStalled: false, migrationLeftover: true, fontsRenameReason: null, oldHeadNotice: false })
     assert.deepEqual(migrationAnnouncementFlags({ stalled: true, leftoverDataDir: leftover.leftoverDataDir }), {
       migrationStalled: true,
       migrationLeftover: false,
       fontsRenameReason: null,
+      oldHeadNotice: false,
     })
     const leftBehind = presentPendingAnnouncement({
       userDataDir: dir,
@@ -138,6 +139,7 @@ test('main wires leftover notices separately from a real stall', () => {
   assert.match(call, /migrationStalled:\s*migrationNotice\.migrationStalled/)
   assert.match(call, /migrationLeftover:\s*migrationNotice\.migrationLeftover/)
   assert.match(call, /fontsRenameReason:\s*migrationNotice\.fontsRenameReason/)
+  assert.match(call, /oldHeadNotice:\s*migrationNotice\.oldHeadNotice/)
   const ready = main.slice(main.indexOf('app.whenReady()'))
   const stageAt = ready.indexOf('stageLaunchAnnouncement()')
   const bootstrapAt = ready.indexOf('bootstrapApi()')
@@ -163,8 +165,8 @@ test('main wires leftover notices separately from a real stall', () => {
     leftoverDataDir: '/Users/me/Library/Application Support/Font Buttler',
     leftoverFontsDir: '/Users/me/Library/Fonts/Font Buttler',
   })
-  assert.deepEqual(stalled, { migrationStalled: true, migrationLeftover: false, fontsRenameReason: null })
-  assert.deepEqual(leftover, { migrationStalled: false, migrationLeftover: true, fontsRenameReason: null })
+  assert.deepEqual(stalled, { migrationStalled: true, migrationLeftover: false, fontsRenameReason: null, oldHeadNotice: false })
+  assert.deepEqual(leftover, { migrationStalled: false, migrationLeftover: true, fontsRenameReason: null, oldHeadNotice: false })
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-ann-wire-'))
   try {
     fs.writeFileSync(path.join(dir, 'settings.json'), '{}\n')
