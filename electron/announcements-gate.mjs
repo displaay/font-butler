@@ -98,10 +98,11 @@ export function nextAnnouncementToShow(input) {
       }
     }
   }
-  if (input.oldHeadNotice === true && !seen.has('old-head-kept')) {
+  const oldHeadNoticeId = typeof input.oldHeadNoticeId === 'string' ? input.oldHeadNoticeId : ''
+  if (input.oldHeadNotice === true && oldHeadNoticeId && !seen.has(oldHeadNoticeId)) {
     return {
       announcement: {
-        id: 'old-head-kept',
+        id: oldHeadNoticeId,
         sinceVersion: '0.4.1',
         title: 'Old folders kept',
         body: '',

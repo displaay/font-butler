@@ -62,6 +62,7 @@ export function planAnnouncementPopup({
   migrationLeftover = false,
   fontsRenameReason = null,
   oldHeadNotice = false,
+  oldHeadNoticeId = null,
 }) {
   const filePath = announcementsFilePath(userDataDir)
   const raw = readAnnouncementStateFile(filePath)
@@ -74,6 +75,7 @@ export function planAnnouncementPopup({
     migrationLeftover,
     fontsRenameReason,
     oldHeadNotice,
+    oldHeadNoticeId,
   })
   if (planned.seedSeen) {
     writeAnnouncementStateFile(filePath, planned.state)
@@ -92,6 +94,7 @@ export function presentPendingAnnouncement({
   migrationLeftover = false,
   fontsRenameReason = null,
   oldHeadNotice = false,
+  oldHeadNoticeId = null,
   migration = null,
 }) {
   const planned = planAnnouncementPopup({
@@ -101,6 +104,7 @@ export function presentPendingAnnouncement({
     migrationLeftover,
     fontsRenameReason,
     oldHeadNotice,
+    oldHeadNoticeId,
   })
   const announcement = planned.announcement
   if (!announcement) return null

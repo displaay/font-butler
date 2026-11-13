@@ -24,6 +24,33 @@ test('each fonts rename reason keeps its own announcement id', () => {
 test('the app accepts a fonts rename notice', () => {
   const app = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8')
   assert.match(app, /payload\.showWhen === 'fonts-rename-blocked'/)
+  assert.match(app, /payload\.showWhen === 'old-head-kept'/)
+})
+
+test('a seen leftover-folder notice stays dismissed until the paths change', () => {
+  const first = nextAnnouncementToShow({
+    currentVersion: '0.4.1',
+    libraryEstablished: true,
+    oldHeadNotice: true,
+    oldHeadNoticeId: 'old-head-kept-aaaa',
+  })
+  const again = nextAnnouncementToShow({
+    currentVersion: '0.4.1',
+    libraryEstablished: true,
+    oldHeadNotice: true,
+    oldHeadNoticeId: 'old-head-kept-aaaa',
+    state: { seenIds: ['old-head-kept-aaaa'], firstRunVersion: '0.4.1' },
+  })
+  const changed = nextAnnouncementToShow({
+    currentVersion: '0.4.1',
+    libraryEstablished: true,
+    oldHeadNotice: true,
+    oldHeadNoticeId: 'old-head-kept-bbbb',
+    state: { seenIds: ['old-head-kept-aaaa'], firstRunVersion: '0.4.1' },
+  })
+  assert.equal(first.announcement?.id, 'old-head-kept-aaaa')
+  assert.notEqual(again.announcement?.id, 'old-head-kept-aaaa')
+  assert.equal(changed.announcement?.id, 'old-head-kept-bbbb')
 })
 
 test('whats-new pages start with the rename, then each shipped feature', () => {

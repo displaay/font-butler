@@ -542,7 +542,12 @@ export function migrationStallMessage(result) {
     )
   }
   const fontsDir = result.fontsStayDir || (result.stalled ? result.stalledFontsDir : null)
-  if ((result.fontsRenameReason === 'old-head' || result.fontsRenameReason === 'placed') && fontsDir) {
+  if (result.fontsRenameReason === 'staged' && fontsDir) {
+    const pointed = result.catalogPointsAt || fontsDir
+    parts.push(
+      `A staged copy from an earlier test build was kept and nothing was deleted. The catalog points at ${pointed}.`,
+    )
+  } else if ((result.fontsRenameReason === 'old-head' || result.fontsRenameReason === 'placed') && fontsDir) {
     const pointed = result.catalogPointsAt || result.installDir
     parts.push(
       `Both font folders were kept and nothing was deleted. The catalog points at ${pointed}. ${fontsDir} is still on disk.`,
@@ -555,6 +560,8 @@ export function migrationStallMessage(result) {
     parts.push(`Your fonts stay in ${fontsDir}. The rename did not finish because the folders are on different disks (EXDEV). Nothing was copied or removed.`)
   } else if (fontsDir && (result.fontsRenameReason === 'EACCES' || result.fontsRenameReason === 'EPERM')) {
     parts.push(`Your fonts stay in ${fontsDir}. The rename was not permitted (${result.fontsRenameReason}). Nothing was copied or removed.`)
+  } else if (fontsDir && result.fontsRenameReason && result.fontsRenameReason !== 'occupied') {
+    parts.push(`Your fonts stay in ${fontsDir}. The rename did not finish (${result.fontsRenameReason}). Nothing was copied or removed.`)
   } else if (fontsDir) {
     parts.push(
       result.fontsOccupied === true
@@ -582,13 +589,17 @@ export function migrationStallMessage(result) {
  */
 export function migrationAnnouncementFlags(result) {
   if (result?.blockedByOwner || result?.runningInstanceDataDir) {
-    return { migrationStalled: false, migrationLeftover: false, fontsRenameReason: null, oldHeadNotice: false }
+    return { migrationStalled: false, migrationLeftover: false, fontsRenameReason: null, oldHeadNotice: false, oldHeadNoticeId: null }
   }
   const migrationStalled = result?.stalled === true
   const migrationLeftover = !migrationStalled && Boolean(result?.leftoverDataDir || result?.leftoverFontsDir)
   const fontsRenameReason = typeof result?.fontsRenameReason === 'string' ? result.fontsRenameReason : null
-  const oldHeadNotice = Array.isArray(result?.oldHeadNotes) && result.oldHeadNotes.length > 0
-  return { migrationStalled, migrationLeftover, fontsRenameReason, oldHeadNotice }
+  const notes = Array.isArray(result?.oldHeadNotes) ? result.oldHeadNotes.filter((item) => typeof item === 'string') : []
+  const oldHeadNotice = notes.length > 0
+  const oldHeadNoticeId = oldHeadNotice
+    ? `old-head-kept-${crypto.createHash('sha256').update([...notes].sort().join('\n')).digest('hex').slice(0, 12)}`
+    : null
+  return { migrationStalled, migrationLeftover, fontsRenameReason, oldHeadNotice, oldHeadNoticeId }
 }
 
 /** Directories left behind after a committed copy. Callers must not modify them. */
@@ -1137,9 +1148,10 @@ function movedReplacements(home, pending, { omitDest = '' } = {}) {
   return (pending?.replacements ?? []).filter((pair) => {
     if (!recordPairAllowed(home, pair)) return false
     if (pair.to === omitDest || !followedDirectory(pair.to) || isEmptyDir(pair.to)) return false
-    if (libraryFontsDestination(pair.to) && !fontDestPlaced(pair)) return false
+    if (libraryFontsDestination(pair.to) && pair.committed === true && !fontDestPlaced(pair)) return false
     // A committed copy is in place even when the source folder is still there.
     if (pair.committed === true) return true
+    if (libraryFontsDestination(pair.to) && !fontDestPlaced(pair)) return false
     return !followedDirectory(pair.from)
   })
 }
@@ -1482,8 +1494,13 @@ function renameLegacyFonts(home, pending, hooks, fontsFrom, dataRoot) {
     recorded = null
   }
   const intent = recorded && (recorded.phase === 'renaming' || recorded.committed !== true)
+  if (recorded?.phase === 'staged') {
+    const source = lexicalFontSource(home, recorded.from) ?? recorded.from
+    const pointed = catalogPointsAt(dataRoot, source, to)
+    return { ...notice(source, 'staged', false), catalogPointsAt: pointed, pending }
+  }
   const keptRecord = recorded && (recorded.committed === true || recorded.phase === 'placed') && recorded.phase !== 'renaming'
-  if (keptRecord && plainDirectory(recorded.from) && plainDirectory(recorded.to)) {
+  if (keptRecord && plainDirectory(recorded.from) && plainDirectory(recorded.to) && !plainEmptyDirectory(recorded.to)) {
     const source = lexicalFontSource(home, recorded.from) ?? recorded.from
     const pointed = catalogPointsAt(dataRoot, source, to)
     return { ...notice(source, recorded.phase === 'placed' ? 'placed' : 'old-head', true), catalogPointsAt: pointed, pending }
@@ -1499,7 +1516,13 @@ function renameLegacyFonts(home, pending, hooks, fontsFrom, dataRoot) {
     return notice(source, destStat.isSymbolicLink() ? 'symlink' : 'file', true)
   }
   if (plainDirectory(to) && !plainEmptyDirectory(to)) return notice(source, 'occupied', true)
-  if (plainEmptyDirectory(to)) rmdirEmptyPlainDir(to)
+  if (plainEmptyDirectory(to)) {
+    try {
+      if (!rmdirEmptyPlainDir(to) && lstatOrNull(to)) return notice(source, 'occupied', true)
+    } catch (error) {
+      return { ...notice(source, error?.code || 'EIO', false), pending }
+    }
+  }
   if (!intent) pending = updateFontPair(home, pending, source, to, { phase: 'renaming', committed: false })
   try {
     rename(source, to)
@@ -1561,7 +1584,7 @@ export function migrateLegacyMacAppDirs(home, hooks) {
   const data = migrateSide({
     dest: dataRoot,
     sources: dataSources,
-    unused: (dir) => isFreshDataRoot(dir) && safeToDiscardFresh(dir),
+    unused: isFreshDataRoot,
     movedFrom: marker?.dataFrom ?? pending?.dataFrom ?? null,
     hooks: moveHooks,
     committedSources,

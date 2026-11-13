@@ -156,8 +156,10 @@ export function nextAnnouncementToShow(input: {
   migrationLeftover?: boolean
   /** Fonts rename could not finish. Shown once per reason, then stays dismissed. */
   fontsRenameReason?: string | null
-  /** Old partials or backup folders left on disk. Shown once. */
+  /** Old partials or backup folders left on disk. Shown once per set of paths. */
   oldHeadNotice?: boolean
+  /** Hashed id for that set. A new path is a new id. */
+  oldHeadNoticeId?: string | null
 }): { announcement: Announcement | null; seedSeen: boolean; state: AnnouncementState } {
   const announcements = input.announcements ?? ANNOUNCEMENTS
   const currentVersion = String(input.currentVersion ?? '').trim()
@@ -200,10 +202,11 @@ export function nextAnnouncementToShow(input: {
       }
     }
   }
-  if (input.oldHeadNotice === true && !seen.has('old-head-kept')) {
+  const oldHeadNoticeId = typeof input.oldHeadNoticeId === 'string' ? input.oldHeadNoticeId : ''
+  if (input.oldHeadNotice === true && oldHeadNoticeId && !seen.has(oldHeadNoticeId)) {
     return {
       announcement: {
-        id: 'old-head-kept',
+        id: oldHeadNoticeId,
         sinceVersion: '0.4.1',
         title: 'Old folders kept',
         body: '',

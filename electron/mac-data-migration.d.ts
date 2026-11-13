@@ -104,6 +104,7 @@ export function migrationAnnouncementFlags(result: MacDataMigration | null | und
   migrationLeftover: boolean
   fontsRenameReason: string | null
   oldHeadNotice: boolean
+  oldHeadNoticeId: string | null
 }
 export function committedLeftoverDirectories(home: string): string[]
 export function readSingletonLockPid(lockPath: string): number | null

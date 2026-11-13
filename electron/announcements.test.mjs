@@ -88,12 +88,13 @@ test('a stalled migration names the old folder and a quiet move shows nothing ne
       movedFonts: true,
     }
     const flags = migrationAnnouncementFlags(leftover)
-    assert.deepEqual(flags, { migrationStalled: false, migrationLeftover: true, fontsRenameReason: null, oldHeadNotice: false })
+    assert.deepEqual(flags, { migrationStalled: false, migrationLeftover: true, fontsRenameReason: null, oldHeadNotice: false, oldHeadNoticeId: null })
     assert.deepEqual(migrationAnnouncementFlags({ stalled: true, leftoverDataDir: leftover.leftoverDataDir }), {
       migrationStalled: true,
       migrationLeftover: false,
       fontsRenameReason: null,
       oldHeadNotice: false,
+      oldHeadNoticeId: null,
     })
     const leftBehind = presentPendingAnnouncement({
       userDataDir: dir,
@@ -140,6 +141,7 @@ test('main wires leftover notices separately from a real stall', () => {
   assert.match(call, /migrationLeftover:\s*migrationNotice\.migrationLeftover/)
   assert.match(call, /fontsRenameReason:\s*migrationNotice\.fontsRenameReason/)
   assert.match(call, /oldHeadNotice:\s*migrationNotice\.oldHeadNotice/)
+  assert.match(call, /oldHeadNoticeId:\s*migrationNotice\.oldHeadNoticeId/)
   const ready = main.slice(main.indexOf('app.whenReady()'))
   const stageAt = ready.indexOf('stageLaunchAnnouncement()')
   const bootstrapAt = ready.indexOf('bootstrapApi()')
@@ -165,8 +167,8 @@ test('main wires leftover notices separately from a real stall', () => {
     leftoverDataDir: '/Users/me/Library/Application Support/Font Buttler',
     leftoverFontsDir: '/Users/me/Library/Fonts/Font Buttler',
   })
-  assert.deepEqual(stalled, { migrationStalled: true, migrationLeftover: false, fontsRenameReason: null, oldHeadNotice: false })
-  assert.deepEqual(leftover, { migrationStalled: false, migrationLeftover: true, fontsRenameReason: null, oldHeadNotice: false })
+  assert.deepEqual(stalled, { migrationStalled: true, migrationLeftover: false, fontsRenameReason: null, oldHeadNotice: false, oldHeadNoticeId: null })
+  assert.deepEqual(leftover, { migrationStalled: false, migrationLeftover: true, fontsRenameReason: null, oldHeadNotice: false, oldHeadNoticeId: null })
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-ann-wire-'))
   try {
     fs.writeFileSync(path.join(dir, 'settings.json'), '{}\n')
@@ -214,6 +216,23 @@ test('main wires leftover notices separately from a real stall', () => {
       })?.id,
       'migration-leftover',
     )
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('a fresh install still shows a leftover-folder notice', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-ann-fresh-kept-'))
+  try {
+    const shown = presentPendingAnnouncement({
+      userDataDir: dir,
+      currentVersion: '0.4.1',
+      oldHeadNotice: true,
+      oldHeadNoticeId: 'old-head-kept-abc123abc123',
+      migration: { oldHeadNotes: ['/Users/me/Library/Fonts/Cuttler.partial-1-1'] },
+    })
+    assert.equal(shown?.id, 'old-head-kept-abc123abc123')
+    assert.equal(shown?.showWhen, 'old-head-kept')
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }
