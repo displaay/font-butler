@@ -60,6 +60,7 @@ export function planAnnouncementPopup({
   currentVersion,
   migrationStalled = false,
   migrationLeftover = false,
+  fontsRenameReason = null,
 }) {
   const filePath = announcementsFilePath(userDataDir)
   const raw = readAnnouncementStateFile(filePath)
@@ -70,6 +71,7 @@ export function planAnnouncementPopup({
     libraryEstablished,
     migrationStalled,
     migrationLeftover,
+    fontsRenameReason,
   })
   if (planned.seedSeen) {
     writeAnnouncementStateFile(filePath, planned.state)
@@ -86,11 +88,22 @@ export function presentPendingAnnouncement({
   currentVersion,
   migrationStalled = false,
   migrationLeftover = false,
+  fontsRenameReason = null,
   migration = null,
 }) {
-  const planned = planAnnouncementPopup({ userDataDir, currentVersion, migrationStalled, migrationLeftover })
+  const planned = planAnnouncementPopup({
+    userDataDir,
+    currentVersion,
+    migrationStalled,
+    migrationLeftover,
+    fontsRenameReason,
+  })
   const announcement = planned.announcement
   if (!announcement) return null
+  if (announcement.showWhen === 'fonts-rename-blocked') {
+    const body = migrationStallMessage(migration)
+    return { ...announcement, body: body || announcement.body }
+  }
   if (announcement.showWhen === 'migration-leftover') {
     const body = migrationStallMessage(migration)
     return { ...announcement, title: 'Old folder left behind', body: body || announcement.body }

@@ -546,7 +546,11 @@ export function migrationStallMessage(result) {
     )
   }
   const fontsDir = result.fontsStayDir || (result.stalled ? result.stalledFontsDir : null)
-  if (fontsDir) {
+  if (result.fontsRenameReason === 'old-head' && fontsDir) {
+    parts.push(
+      `Both font folders were kept and nothing was deleted. Cuttler is using ${result.installDir}. ${fontsDir} is still on disk.`,
+    )
+  } else if (fontsDir) {
     parts.push(
       result.fontsOccupied === true
         ? `Your fonts stay in ${fontsDir}. ${result.installDir} already has files, so nothing was moved.`
@@ -573,11 +577,12 @@ export function migrationStallMessage(result) {
  */
 export function migrationAnnouncementFlags(result) {
   if (result?.blockedByOwner || result?.runningInstanceDataDir) {
-    return { migrationStalled: false, migrationLeftover: false }
+    return { migrationStalled: false, migrationLeftover: false, fontsRenameReason: null }
   }
   const migrationStalled = result?.stalled === true
   const migrationLeftover = !migrationStalled && Boolean(result?.leftoverDataDir || result?.leftoverFontsDir)
-  return { migrationStalled, migrationLeftover }
+  const fontsRenameReason = typeof result?.fontsRenameReason === 'string' ? result.fontsRenameReason : null
+  return { migrationStalled, migrationLeftover, fontsRenameReason }
 }
 
 /** Directories left behind after a committed copy. Callers must not modify them. */
@@ -1171,32 +1176,38 @@ function libraryCopyUncommitted(pending, dataRoot) {
   )
 }
 
-function knownDirs(home, parentName) {
-  let root = path.join(home, 'Library', parentName)
-  try {
-    root = fs.realpathSync(root)
-  } catch {
-    root = path.resolve(root)
-  }
+function lexicalDirs(home, parentName) {
+  const root = path.join(home, 'Library', parentName)
   return {
-    dest: path.resolve(path.join(root, APP_FOLDER_NAME)),
-    sources: LEGACY_APP_FOLDER_NAMES.map((name) => path.resolve(path.join(root, name))),
+    dest: path.join(root, APP_FOLDER_NAME),
+    sources: LEGACY_APP_FOLDER_NAMES.map((name) => path.join(root, name)),
+  }
+}
+
+function pathsIdentify(actual, known) {
+  if (!actual || !known) return false
+  if (path.resolve(actual) === path.resolve(known)) return true
+  try {
+    return fs.realpathSync(actual) === fs.realpathSync(known)
+  } catch {
+    return false
   }
 }
 
 function fontPairAllowed(home, pair) {
-  const fonts = knownDirs(home, 'Fonts')
-  const from = path.resolve(String(pair?.from ?? ''))
-  const to = path.resolve(String(pair?.to ?? ''))
-  return fonts.sources.includes(from) && to === fonts.dest
+  const fonts = lexicalDirs(home, 'Fonts')
+  return fonts.sources.some((dir) => pathsIdentify(pair?.from, dir)) && pathsIdentify(pair?.to, fonts.dest)
 }
 
 function recordPairAllowed(home, pair) {
   if (fontPairAllowed(home, pair)) return true
-  const data = knownDirs(home, 'Application Support')
-  const from = path.resolve(String(pair?.from ?? ''))
-  const to = path.resolve(String(pair?.to ?? ''))
-  return data.sources.includes(from) && to === data.dest
+  const data = lexicalDirs(home, 'Application Support')
+  return data.sources.some((dir) => pathsIdentify(pair?.from, dir)) && pathsIdentify(pair?.to, data.dest)
+}
+
+function lexicalFontSource(home, from) {
+  const fonts = lexicalDirs(home, 'Fonts')
+  return fonts.sources.find((dir) => pathsIdentify(from, dir)) ?? null
 }
 
 function plainDirectory(dir) {
@@ -1204,27 +1215,48 @@ function plainDirectory(dir) {
   return Boolean(st && st.isDirectory() && !st.isSymbolicLink())
 }
 
+function isFinderJunk(name) {
+  return name === '.DS_Store' || name === '.localized'
+}
+
 function plainEmptyDirectory(dir) {
   if (!plainDirectory(dir)) return false
+  let names = []
   try {
-    return fs.readdirSync(dir).length === 0
+    names = fs.readdirSync(dir)
   } catch {
     return false
   }
+  return names.every((name) => isFinderJunk(name))
 }
 
-/** The only font-folder removal. rmdir fails when the directory is not empty. */
+/** Unlink Finder metadata, then rmdir. Never rm -r a font folder. */
 function rmdirEmptyPlainDir(dir) {
-  if (!plainEmptyDirectory(dir)) return false
+  if (!plainDirectory(dir)) return false
+  let names = []
+  try {
+    names = fs.readdirSync(dir)
+  } catch {
+    return false
+  }
+  if (names.some((name) => !isFinderJunk(name))) return false
+  for (const name of names) {
+    const abs = path.join(dir, name)
+    const st = lstatOrNull(abs)
+    if (!st || st.isSymbolicLink() || !st.isFile()) return false
+    fs.unlinkSync(abs)
+  }
+  if (fs.readdirSync(dir).length !== 0) return false
   fs.rmdirSync(dir)
   return true
 }
 
 function updateFontPair(home, current, from, to, patch) {
   const replacements = (current?.replacements ?? []).map((item) => ({ ...item }))
-  const index = replacements.findIndex((item) => item.from === from && item.to === to)
-  if (index === -1) replacements.push({ from, to, ...patch })
-  else replacements[index] = { ...replacements[index], ...patch }
+  const index = replacements.findIndex((item) => pathsIdentify(item.from, from) && pathsIdentify(item.to, to))
+  const nextPair = { ...(index === -1 ? {} : replacements[index]), ...patch, from, to }
+  if (index === -1) replacements.push(nextPair)
+  else replacements[index] = nextPair
   const next = {
     needsRewrite: true,
     replacements,
@@ -1245,13 +1277,20 @@ function oldHeadLeftoverName(name) {
   )
 }
 
+function moveToLeftovers(abs, leftoversDir, name) {
+  fs.mkdirSync(leftoversDir, { recursive: true })
+  let dest = path.join(leftoversDir, name)
+  if (lstatOrNull(dest)) dest = `${dest}-${process.pid}`
+  fs.renameSync(abs, dest)
+  return dest
+}
+
 function sweepOldHeadLeftovers(home) {
-  const parents = [
-    path.join(home, 'Library'),
-    path.join(home, 'Library/Application Support'),
-    path.join(home, 'Library/Fonts'),
-  ]
   const notes = []
+  const support = path.join(home, 'Library/Application Support')
+  const leftovers = path.join(support, APP_FOLDER_NAME, 'Leftovers')
+  const sourceIntact = LEGACY_APP_FOLDER_NAMES.some((name) => plainDirectory(path.join(support, name)))
+  const parents = [path.join(home, 'Library'), support]
   for (const parent of parents) {
     let entries = []
     try {
@@ -1262,16 +1301,46 @@ function sweepOldHeadLeftovers(home) {
     for (const entry of entries) {
       if (!oldHeadLeftoverName(entry.name) || entry.isSymbolicLink() || !entry.isDirectory()) continue
       const abs = path.join(parent, entry.name)
-      const partial = !entry.name.startsWith('Cuttler.fresh-')
-      if (partial && !directoryHasPartialMarker(abs)) continue
+      const fresh = entry.name.startsWith('Cuttler.fresh-')
+      if (!fresh && !directoryHasPartialMarker(abs)) continue
       if (plainEmptyDirectory(abs)) {
-        try {
-          fs.rmdirSync(abs)
-        } catch {
-          notes.push(abs)
-        }
+        rmdirEmptyPlainDir(abs)
         continue
       }
+      if (directoryHasPartialMarker(abs) && sourceIntact) {
+        fs.rmSync(abs, { recursive: true, force: true })
+        continue
+      }
+      try {
+        notes.push(moveToLeftovers(abs, leftovers, entry.name))
+      } catch {
+        notes.push(abs)
+      }
+    }
+  }
+  return notes
+}
+
+function sweepFontDuplicates(home) {
+  const notes = []
+  const fontsRoot = path.join(home, 'Library/Fonts')
+  const leftovers = path.join(home, 'Library/Application Support', APP_FOLDER_NAME, 'Leftovers')
+  let entries = []
+  try {
+    entries = fs.readdirSync(fontsRoot, { withFileTypes: true })
+  } catch {
+    return notes
+  }
+  for (const entry of entries) {
+    if (!oldHeadLeftoverName(entry.name) || entry.isSymbolicLink() || !entry.isDirectory()) continue
+    const abs = path.join(fontsRoot, entry.name)
+    if (plainEmptyDirectory(abs)) {
+      rmdirEmptyPlainDir(abs)
+      continue
+    }
+    try {
+      notes.push(moveToLeftovers(abs, leftovers, entry.name))
+    } catch {
       notes.push(abs)
     }
   }
@@ -1283,48 +1352,82 @@ function sweepOldHeadLeftovers(home) {
  * A cross-device mount or a permission error is left in place. Nothing is copied
  * and no font folder is removed except an empty directory via rmdir.
  */
-function renameLegacyFonts(home, pending, hooks) {
-  const fonts = knownDirs(home, 'Fonts')
+function dropReplacement(home, current, pair) {
+  const replacements = (current?.replacements ?? []).filter((item) => item !== pair)
+  if (replacements.length === 0) {
+    clearPendingMigration(home)
+    return null
+  }
+  const next = { ...current, needsRewrite: true, replacements }
+  writePendingMigration(home, next)
+  return next
+}
+
+function chooseFontSource(fonts, from, fontsFrom) {
+  if (from && (plainDirectory(from) || lstatOrNull(from))) return from
+  const movedIndex = LEGACY_APP_FOLDER_NAMES.indexOf(fontsFrom ?? '')
+  for (const dir of fonts.sources) {
+    const rank = LEGACY_APP_FOLDER_NAMES.indexOf(path.basename(dir))
+    if (movedIndex !== -1 && rank > movedIndex) continue
+    if (plainDirectory(dir) || lstatOrNull(dir)?.isSymbolicLink()) return dir
+  }
+  return null
+}
+
+/**
+ * Fonts/Font Buttler and Fonts/Cuttler are siblings, so the move is a rename.
+ * Records and catalog rewrites keep the lexical path. realpath is only for
+ * checking that a record names those folders. A cross-device mount or a
+ * permission error is left in place. Nothing is copied.
+ */
+function renameLegacyFonts(home, pending, hooks, fontsFrom) {
+  const fonts = lexicalDirs(home, 'Fonts')
   const rename = hooks?.fontRenameSync ?? fs.renameSync
-  const stay = (source, occupied = false) => ({
-    status: 'stalled',
+  const to = fonts.dest
+  const notice = (source, reason, occupied = false) => ({
+    status: 'blocked',
     source,
     occupied,
     fontsStayDir: source,
+    fontsRenameReason: reason,
+    pending,
   })
   const placed = (source) => {
-    pending = updateFontPair(home, pending, source, fonts.dest, { phase: 'placed', committed: true })
-    return { status: 'moved', source, pending }
+    const lexical = lexicalFontSource(home, source) ?? source
+    pending = updateFontPair(home, pending, lexical, to, { phase: 'placed', committed: true })
+    return { status: 'moved', source: lexical, pending }
   }
-  const recorded = (pending?.replacements ?? []).find(
-    (item) =>
-      item?.phase === 'renaming' ||
-      (item?.committed === true && item.phase == null && libraryFontsDestination(item.to)),
+  let recorded = (pending?.replacements ?? []).find(
+    (item) => item?.phase === 'renaming' || libraryFontsDestination(item?.to),
   )
   if (recorded && !fontPairAllowed(home, recorded)) {
-    return { status: 'stalled', source: null, occupied: false, pending }
+    console.error('Dropping a font migration record whose paths are not the Cuttler font folders')
+    pending = dropReplacement(home, pending, recorded)
+    recorded = null
   }
-  if (recorded?.committed === true && recorded.phase == null && plainDirectory(recorded.from) && plainDirectory(recorded.to)) {
-    return stay(recorded.from, true)
+  const intent = recorded && (recorded.phase === 'renaming' || recorded.committed !== true)
+  const oldHead = recorded?.committed === true && recorded.phase == null
+  if (oldHead && plainDirectory(recorded.from) && plainDirectory(recorded.to)) {
+    return notice(lexicalFontSource(home, recorded.from) ?? recorded.from, 'old-head', true)
   }
-  const from = recorded && fontPairAllowed(home, recorded) ? path.resolve(recorded.from) : null
-  const to = fonts.dest
-  if (from && !lstatOrNull(from) && plainDirectory(to)) return placed(from)
-  const source = from && (plainDirectory(from) || lstatOrNull(from))
-    ? from
-    : fonts.sources.find((dir) => plainDirectory(dir) || lstatOrNull(dir)?.isSymbolicLink())
+  const from = recorded && fontPairAllowed(home, recorded) ? lexicalFontSource(home, recorded.from) : null
+  if (from && !lstatOrNull(from) && plainDirectory(to) && !plainEmptyDirectory(to)) return placed(from)
+  const source = chooseFontSource(fonts, from, fontsFrom)
   if (!source) return { status: 'absent', source: null, pending }
   const sourceStat = lstatOrNull(source)
-  if (!sourceStat || sourceStat.isSymbolicLink() || !sourceStat.isDirectory()) return stay(source, false)
-  if (plainDirectory(to) && !plainEmptyDirectory(to)) return stay(source, true)
-  if (plainEmptyDirectory(to)) rmdirEmptyPlainDir(to)
-  if (!recorded || recorded.phase !== 'renaming') {
-    pending = updateFontPair(home, pending, source, to, { phase: 'renaming', committed: false })
+  if (!sourceStat || sourceStat.isSymbolicLink() || !sourceStat.isDirectory()) return notice(source, 'symlink', false)
+  const destStat = lstatOrNull(to)
+  if (destStat && !plainDirectory(to)) {
+    return notice(source, destStat.isSymbolicLink() ? 'symlink' : 'file', true)
   }
+  if (plainDirectory(to) && !plainEmptyDirectory(to)) return notice(source, 'occupied', true)
+  if (plainEmptyDirectory(to)) rmdirEmptyPlainDir(to)
+  if (!intent) pending = updateFontPair(home, pending, source, to, { phase: 'renaming', committed: false })
   try {
     rename(source, to)
   } catch (error) {
-    if (error?.code === 'EXDEV' || error?.code === 'EACCES' || error?.code === 'EPERM') return { ...stay(source, false), pending }
+    const code = error?.code
+    if (code === 'EXDEV' || code === 'EACCES' || code === 'EPERM') return { ...notice(source, code, false), pending }
     throw error
   }
   if (hooks?.crashAfterFontRename) {
@@ -1399,13 +1502,14 @@ export function migrateLegacyMacAppDirs(home, hooks) {
   if (hooks?.crashAfterDataMove) {
     throw new Error('killed after the data folder rename')
   }
+  oldHeadNotes.push(...sweepFontDuplicates(home))
   // The library copy is not the library until its commit record is written.
   // Moving fonts first would activate both font folders and rewrite only one catalog.
   const unfinishedDataCopy = data.status === 'stalled' && libraryCopyUncommitted(pending, dataRoot)
   const fonts = unfinishedDataCopy
     ? { status: 'absent', source: null, occupied: false }
-    : renameLegacyFonts(home, pending, hooks)
-  if (fonts.pending) pending = fonts.pending
+    : renameLegacyFonts(home, pending, hooks, marker?.fontsFrom ?? pending?.fontsFrom ?? null)
+  if (Object.prototype.hasOwnProperty.call(fonts, 'pending')) pending = fonts.pending
   pending = readPendingMigration(home) ?? pending
   if (data.status === 'stalled' && data.source) {
     pending = rememberMove(home, pending, null, { dataRoot, stalledDataDir: data.source })
@@ -1445,18 +1549,19 @@ export function migrateLegacyMacAppDirs(home, hooks) {
   return {
     dataRoot,
     installDir,
-    stalled: data.status === 'stalled' || fonts.status === 'stalled',
+    stalled: data.status === 'stalled',
     stalledDataDir: data.status === 'stalled' ? data.source : null,
-    stalledFontsDir: fonts.status === 'stalled' ? fonts.source : null,
+    stalledFontsDir: fonts.status === 'blocked' ? fonts.source : null,
     leftoverDataDir,
     leftoverFontsDir,
     leftoverDataDestEmpty: data.destEmpty === true,
     leftoverFontsDestEmpty: fonts.destEmpty === true,
     unfinishedDataCopy,
     fontsStayDir: fonts.fontsStayDir ?? null,
+    fontsRenameReason: fonts.fontsRenameReason ?? null,
     oldHeadNotes,
     dataOccupied: data.status === 'stalled' ? data.occupied !== false : false,
-    fontsOccupied: fonts.status === 'stalled' ? fonts.occupied === true : false,
+    fontsOccupied: fonts.status === 'blocked' ? fonts.occupied === true : false,
     movedData: data.status === 'moved',
     movedFonts: fonts.status === 'moved',
     blockedByOwner: false,

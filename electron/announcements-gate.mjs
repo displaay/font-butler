@@ -64,8 +64,9 @@ export function nextAnnouncementToShow(input) {
   const libraryEstablished = input.libraryEstablished === true
   const migrationStalled = input.migrationStalled === true
   const migrationLeftover = input.migrationLeftover === true
+  const fontsRenameReason = typeof input.fontsRenameReason === 'string' ? input.fontsRenameReason : ''
 
-  if (!hasRecord && !libraryEstablished && !migrationStalled && !migrationLeftover) {
+  if (!hasRecord && !libraryEstablished && !migrationStalled && !migrationLeftover && !fontsRenameReason) {
     return {
       announcement: null,
       seedSeen: true,
@@ -80,6 +81,23 @@ export function nextAnnouncementToShow(input) {
   if (!state.firstRunVersion && currentVersion) state.firstRunVersion = currentVersion
 
   const seen = new Set(state.seenIds)
+  if (fontsRenameReason) {
+    const id = `fonts-rename-${fontsRenameReason}`
+    if (!seen.has(id)) {
+      return {
+        announcement: {
+          id,
+          sinceVersion: '0.4.1',
+          title: fontsRenameReason === 'old-head' ? 'Both font folders kept' : 'Fonts left in place',
+          body: '',
+          celebrate: false,
+          showWhen: 'fonts-rename-blocked',
+        },
+        seedSeen: false,
+        state,
+      }
+    }
+  }
   for (const item of announcements) {
     if (seen.has(item.id) && !(item.showWhen === 'migration-stalled' && migrationStalled)) continue
     if (item.showWhen === 'upgrade' && !libraryEstablished) continue

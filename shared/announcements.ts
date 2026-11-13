@@ -1,4 +1,4 @@
-export type AnnouncementShowWhen = 'upgrade' | 'always' | 'migration-stalled' | 'migration-leftover'
+export type AnnouncementShowWhen = 'upgrade' | 'always' | 'migration-stalled' | 'migration-leftover' | 'fonts-rename-blocked'
 
 export type AnnouncementPage = {
   id: string
@@ -154,6 +154,8 @@ export function nextAnnouncementToShow(input: {
   migrationStalled?: boolean
   /** Leftover folder after a committed copy. Shown once, then stays dismissed. */
   migrationLeftover?: boolean
+  /** Fonts rename could not finish. Shown once per reason, then stays dismissed. */
+  fontsRenameReason?: string | null
 }): { announcement: Announcement | null; seedSeen: boolean; state: AnnouncementState } {
   const announcements = input.announcements ?? ANNOUNCEMENTS
   const currentVersion = String(input.currentVersion ?? '').trim()
@@ -161,8 +163,9 @@ export function nextAnnouncementToShow(input: {
   const libraryEstablished = input.libraryEstablished === true
   const migrationStalled = input.migrationStalled === true
   const migrationLeftover = input.migrationLeftover === true
+  const fontsRenameReason = typeof input.fontsRenameReason === 'string' ? input.fontsRenameReason : ''
 
-  if (!hasRecord && !libraryEstablished && !migrationStalled && !migrationLeftover) {
+  if (!hasRecord && !libraryEstablished && !migrationStalled && !migrationLeftover && !fontsRenameReason) {
     const seeded: AnnouncementState = {
       seenIds: allAnnouncementIds(announcements),
       firstRunVersion: currentVersion || null,
@@ -178,6 +181,23 @@ export function nextAnnouncementToShow(input: {
   }
 
   const seen = new Set(state.seenIds)
+  if (fontsRenameReason) {
+    const id = `fonts-rename-${fontsRenameReason}`
+    if (!seen.has(id)) {
+      return {
+        announcement: {
+          id,
+          sinceVersion: '0.4.1',
+          title: fontsRenameReason === 'old-head' ? 'Both font folders kept' : 'Fonts left in place',
+          body: '',
+          celebrate: false,
+          showWhen: 'fonts-rename-blocked',
+        },
+        seedSeen: false,
+        state,
+      }
+    }
+  }
   for (const item of announcements) {
     if (seen.has(item.id) && !(item.showWhen === 'migration-stalled' && migrationStalled)) continue
     if (item.showWhen === 'upgrade' && !libraryEstablished) continue

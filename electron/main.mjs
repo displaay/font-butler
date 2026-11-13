@@ -463,6 +463,7 @@ function stageLaunchAnnouncement() {
       currentVersion: app.getVersion(),
       migrationStalled: migrationNotice.migrationStalled,
       migrationLeftover: migrationNotice.migrationLeftover,
+      fontsRenameReason: migrationNotice.fontsRenameReason,
       migration: macDataMigration,
     }))
   } catch (error) {
