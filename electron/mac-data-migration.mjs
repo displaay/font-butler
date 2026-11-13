@@ -138,6 +138,54 @@ function describeTree(root) {
   return rows
 }
 
+/** macOS loads every font file under Library/Fonts, including a half-written copy. */
+function libraryFontsDestination(dir) {
+  const parts = path.resolve(String(dir ?? '')).split(path.sep)
+  const fontsAt = parts.lastIndexOf('Fonts')
+  return fontsAt > 0 && parts[fontsAt - 1] === 'Library'
+}
+
+/**
+ * Cross-device copies need a temp folder on the same volume as the destination
+ * so the last rename is atomic. Fonts temps go in Application Support, which
+ * shares that volume on a normal home and is not a font folder.
+ */
+export function movePartialDirectory(dest) {
+  const stamp = `${process.pid}-${process.hrtime.bigint()}`
+  if (libraryFontsDestination(dest)) {
+    const library = path.dirname(path.dirname(path.resolve(dest)))
+    return path.join(library, 'Application Support', `.cuttler-move.partial-${stamp}`)
+  }
+  return `${dest}.partial-${stamp}`
+}
+
+/** Ours only: `Cuttler.partial-<pid>-<time>` or `.cuttler-move.partial-<pid>-<time>`. */
+export function isOurMovePartialName(name) {
+  return (
+    /^(?:Cuttler|Font Buttler|Font Butler)\.partial-\d+-\d+$/.test(name) ||
+    /^\.cuttler-move\.partial-\d+-\d+$/.test(name)
+  )
+}
+
+export function cleanMovePartials(home) {
+  const parents = [
+    path.join(home, 'Library/Application Support'),
+    path.join(home, 'Library/Fonts'),
+  ]
+  for (const dir of parents) {
+    let names = []
+    try {
+      names = fs.readdirSync(dir)
+    } catch {
+      continue
+    }
+    for (const name of names) {
+      if (!isOurMovePartialName(name)) continue
+      fs.rmSync(path.join(dir, name), { recursive: true, force: true })
+    }
+  }
+}
+
 function directoryTreesMatch(from, to) {
   const left = describeTree(from)
   const right = describeTree(to)
@@ -196,7 +244,8 @@ export function moveDirectoryAtomic(from, to, hooks = {}) {
       renameAcross(from, to)
     } catch (error) {
       if (error?.code !== 'EXDEV') throw error
-      const tmp = `${to}.partial-${process.pid}-${process.hrtime.bigint()}`
+      const tmp = movePartialDirectory(to)
+      hooks.onPartialDir?.(tmp)
       let committed = false
       try {
         copyTree(from, tmp, copyFileSync)
@@ -447,7 +496,14 @@ function migrateSide({ dest, sources, unused, movedFrom, hooks, beforeMove, comm
   // A committed copy's leftover is never the library, even when dest was
   // emptied later and now looks unused. Do not rename that source back in.
   const committedSource = present.find((dir) => committedSources?.has(dir))
-  if (committedSource) return { status: 'moved', source: committedSource, leftover: committedSource }
+  if (committedSource) {
+    return {
+      status: 'moved',
+      source: committedSource,
+      leftover: committedSource,
+      destEmpty: unused(dest),
+    }
+  }
   if (!unused(dest)) {
     const blocking = present.find((dir) => !unused(dir) && !ignored(dir))
     if (blocking) return { status: 'stalled', source: blocking, occupied: true }
@@ -472,15 +528,22 @@ function migrateSide({ dest, sources, unused, movedFrom, hooks, beforeMove, comm
   }
 }
 
-function stallSentence(kind, oldDir, newDir, occupied) {
+function stallSentence(kind, oldDir, newDir, occupied, unfinishedCopy = false) {
   const noun = kind === 'fonts' ? 'fonts are' : 'library is'
+  if (unfinishedCopy) {
+    return `Your ${noun} still in ${oldDir}. ${newDir} is an unfinished copy and can be removed.`
+  }
   if (occupied === false) {
     return `Your ${noun} still in ${oldDir}. The move to ${newDir} did not finish, so the old folder was left unchanged.`
   }
   return `Your ${noun} still in ${oldDir}. Cuttler already had files in ${newDir}, so that folder was left unchanged.`
 }
 
-function leftoverSentence(kind, oldDir, newDir) {
+function leftoverSentence(kind, oldDir, newDir, destEmpty = false) {
+  if (destEmpty) {
+    const noun = kind === 'fonts' ? 'fonts are' : 'library is'
+    return `The folder at ${newDir} is empty. Your previous ${noun} still at ${oldDir}.`
+  }
   const where = kind === 'fonts' ? `Your fonts are in ${newDir}.` : `Your library is in ${newDir}.`
   const active = kind === 'fonts' ? ' Fonts in that folder may still be active.' : ''
   return `${where} ${oldDir} is no longer used. You can remove it.${active}`
@@ -490,16 +553,18 @@ export function migrationStallMessage(result) {
   if (!result) return ''
   const parts = []
   if (result.stalled && result.stalledDataDir) {
-    parts.push(stallSentence('library', result.stalledDataDir, result.dataRoot, result.dataOccupied))
+    parts.push(
+      stallSentence('library', result.stalledDataDir, result.dataRoot, result.dataOccupied, result.unfinishedDataCopy),
+    )
   }
   if (result.stalled && result.stalledFontsDir) {
     parts.push(stallSentence('fonts', result.stalledFontsDir, result.installDir, result.fontsOccupied))
   }
   if (result.leftoverDataDir) {
-    parts.push(leftoverSentence('library', result.leftoverDataDir, result.dataRoot))
+    parts.push(leftoverSentence('library', result.leftoverDataDir, result.dataRoot, result.leftoverDataDestEmpty))
   }
   if (result.leftoverFontsDir) {
-    parts.push(leftoverSentence('fonts', result.leftoverFontsDir, result.installDir))
+    parts.push(leftoverSentence('fonts', result.leftoverFontsDir, result.installDir, result.leftoverFontsDestEmpty))
   }
   if (parts.length > 0) return parts.join(' ')
   if (!result.stalled) return ''
@@ -1087,9 +1152,16 @@ function rewriteKeptLibrary(pending, dataRoot) {
   rewriteLibraryFiles(target, replacements)
 }
 
+function libraryCopyUncommitted(pending, dataRoot) {
+  return (pending?.replacements ?? []).some(
+    (pair) => pair?.committed !== true && pair?.to === dataRoot && followedDirectory(pair.from) && followedDirectory(dataRoot),
+  )
+}
+
 export function migrateLegacyMacAppDirs(home, hooks) {
   const dataRoot = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
   const installDir = path.join(home, 'Library/Fonts', APP_FOLDER_NAME)
+  cleanMovePartials(home)
   // 0.4.0's instance lock lives in the legacy folder. Electron's own lock
   // follows this process's userData (Cuttler) and cannot see that owner.
   // Wait out a quitting updater, then refuse rather than move the library
@@ -1151,20 +1223,29 @@ export function migrateLegacyMacAppDirs(home, hooks) {
   if (hooks?.crashAfterDataMove) {
     throw new Error('killed after the data folder rename')
   }
-  const fonts = migrateSide({
-    dest: installDir,
-    sources: fontSources,
-    unused: isEmptyDir,
-    movedFrom: marker?.fontsFrom ?? pending?.fontsFrom ?? null,
-    hooks: moveHooks,
-    committedSources,
-    beforeMove(source) {
-      pending = rememberMove(home, pending, { from: source, to: installDir }, {
-        dataRoot,
-        fontsFrom: path.basename(source),
+  // The library copy is not the library until its commit record is written.
+  // Moving fonts first would activate both font folders and rewrite only one catalog.
+  const unfinishedDataCopy = data.status === 'stalled' && libraryCopyUncommitted(pending, dataRoot)
+  const fonts = unfinishedDataCopy
+    ? {
+        status: fontSources.some((dir) => followedDirectory(dir)) ? 'stalled' : 'absent',
+        source: fontSources.find((dir) => followedDirectory(dir)) ?? null,
+        occupied: false,
+      }
+    : migrateSide({
+        dest: installDir,
+        sources: fontSources,
+        unused: isEmptyDir,
+        movedFrom: marker?.fontsFrom ?? pending?.fontsFrom ?? null,
+        hooks: moveHooks,
+        committedSources,
+        beforeMove(source) {
+          pending = rememberMove(home, pending, { from: source, to: installDir }, {
+            dataRoot,
+            fontsFrom: path.basename(source),
+          })
+        },
       })
-    },
-  })
   pending = readPendingMigration(home) ?? pending
   if (data.status === 'stalled' && data.source) {
     pending = rememberMove(home, pending, null, { dataRoot, stalledDataDir: data.source })
@@ -1177,7 +1258,7 @@ export function migrateLegacyMacAppDirs(home, hooks) {
     pending = { ...pending, dataFrom: record.dataFrom, fontsFrom: record.fontsFrom, dataRoot }
     writePendingMigration(home, pending)
     if (hooks?.failRewrite) throw new Error('rewrite failed')
-    rewriteKeptLibrary(pending, dataRoot)
+    if (!unfinishedDataCopy) rewriteKeptLibrary(pending, dataRoot)
     const library = pending.stalledDataDir && followedDirectory(pending.stalledDataDir)
       ? pending.stalledDataDir
       : dataRoot
@@ -1209,6 +1290,9 @@ export function migrateLegacyMacAppDirs(home, hooks) {
     stalledFontsDir: fonts.status === 'stalled' ? fonts.source : null,
     leftoverDataDir,
     leftoverFontsDir,
+    leftoverDataDestEmpty: data.destEmpty === true,
+    leftoverFontsDestEmpty: fonts.destEmpty === true,
+    unfinishedDataCopy,
     dataOccupied: data.status === 'stalled' ? data.occupied !== false : false,
     fontsOccupied: fonts.status === 'stalled' ? fonts.occupied !== false : false,
     movedData: data.status === 'moved',

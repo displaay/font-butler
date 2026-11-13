@@ -17,6 +17,8 @@ export type MacDirMigrationHooks = {
   crashAfterDataMove?: boolean
   /** Throw after the verified copy is renamed into place and recorded, before source removal. */
   crashAfterCopyCommit?: boolean
+  /** Called with the temp directory before a cross-device copy starts. */
+  onPartialDir?: (dir: string) => void
   /** Throw after the rename into place and before the committed flag is written. */
   crashBeforeCommitRecord?: boolean
   /** Throw instead of writing the committed flag. The copy is already in place. */
@@ -46,6 +48,10 @@ export type MacDataMigration = {
    */
   leftoverDataDir?: string | null
   leftoverFontsDir?: string | null
+  /** The Cuttler data folder is an uncommitted copy of the library still in use. */
+  unfinishedDataCopy?: boolean
+  leftoverDataDestEmpty?: boolean
+  leftoverFontsDestEmpty?: boolean
   /** False when a move failed and the destination was not already in use. */
   dataOccupied: boolean
   fontsOccupied: boolean
@@ -93,6 +99,9 @@ export function migrationAnnouncementFlags(result: MacDataMigration | null | und
   migrationStalled: boolean
   migrationLeftover: boolean
 }
+export function movePartialDirectory(dest: string): string
+export function isOurMovePartialName(name: string): boolean
+export function cleanMovePartials(home: string): void
 export function committedLeftoverDirectories(home: string): string[]
 export function readSingletonLockPid(lockPath: string): number | null
 export function singletonCookieHeld(cookiePath: string): boolean | null

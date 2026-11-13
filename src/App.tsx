@@ -1100,7 +1100,14 @@ function AppShell() {
       if (!text || text.includes('\n')) return
       toast.message(text)
     })
-    const stopAnnouncement = window.fontButlerDesktop?.onAnnouncement?.((payload) => {
+    const applyAnnouncement = (payload: {
+      id?: string
+      title?: string
+      body?: string
+      celebrate?: boolean
+      sinceVersion?: string
+      showWhen?: string
+    } | null | undefined) => {
       if (!payload || typeof payload !== 'object') return
       const id = typeof payload.id === 'string' ? payload.id : ''
       const title = typeof payload.title === 'string' ? payload.title : ''
@@ -1120,8 +1127,14 @@ function AppShell() {
             ? payload.showWhen
             : undefined,
       })
+    }
+    let cancelled = false
+    void window.fontButlerDesktop?.pullAnnouncement?.().then((payload) => {
+      if (!cancelled) applyAnnouncement(payload)
     })
+    const stopAnnouncement = window.fontButlerDesktop?.onAnnouncement?.(applyAnnouncement)
     return () => {
+      cancelled = true
       window.removeEventListener('keydown', onKeyDown)
       stopInstall?.()
       stopDesktop?.()

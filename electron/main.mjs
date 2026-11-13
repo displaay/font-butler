@@ -42,6 +42,7 @@ import {
 import { createDocumentAppObserver } from './document-app-watch.mjs'
 import { createDocumentOpenWatch, documentWatchIpc } from './document-open-watch.mjs'
 import { createExternalFontOpenNotifier } from './external-font-open-notify.mjs'
+import { createAnnouncementSlot } from './announcement-delivery.mjs'
 import { dismissAnnouncement, presentPendingAnnouncement } from './announcements.mjs'
 import { applyTestFeedDataIsolation } from './test-feed-data.mjs'
 import { macosDockIconPng } from './dock-icon.mjs'
@@ -446,13 +447,8 @@ const RETAIL_TICK_MS = 60 * 1000
 let retailStatus = null
 /** @type {null | (() => Promise<boolean>)} */
 let runPackagedBootstrap = null
-/** @type {null | { id: string, title: string, body: string, celebrate: boolean, sinceVersion?: string, showWhen?: string }} */
-let pendingAnnouncement = null
-
-function deliverPendingAnnouncement() {
-  if (!pendingAnnouncement || !mainWindow || mainWindow.isDestroyed()) return
-  mainWindow.webContents.send('announcement:show', pendingAnnouncement)
-}
+/** Held until the renderer pulls it and later acknowledges the dismiss. */
+const announcementSlot = createAnnouncementSlot()
 
 function startMainUiAfterBootstrap() {
   void listenForApiEvents()
@@ -463,14 +459,13 @@ function startMainUiAfterBootstrap() {
   void loadRetailStatus()
   try {
     const migrationNotice = migrationAnnouncementFlags(macDataMigration)
-    pendingAnnouncement = presentPendingAnnouncement({
+    announcementSlot.stage(presentPendingAnnouncement({
       userDataDir: app.getPath('userData'),
       currentVersion: app.getVersion(),
       migrationStalled: migrationNotice.migrationStalled,
       migrationLeftover: migrationNotice.migrationLeftover,
       migration: macDataMigration,
-    })
-    deliverPendingAnnouncement()
+    }))
   } catch (error) {
     console.error('Could not present announcement', error)
   }
@@ -3069,18 +3064,19 @@ if (launchMode === 'quit') {
 
 ipcMain.on('renderer-app-mounted', () => {
   flushWatchNotices()
-  deliverPendingAnnouncement()
 })
+
+ipcMain.handle('announcement:pending', () => announcementSlot.pull())
 
 ipcMain.on('announcement:dismiss', (_event, id) => {
   try {
     if (typeof id === 'string' && id.trim()) {
+      announcementSlot.acknowledge(id.trim())
       dismissAnnouncement({ userDataDir: app.getPath('userData'), id: id.trim() })
     }
   } catch (error) {
     console.error('Could not dismiss announcement', error)
   }
-  pendingAnnouncement = null
 })
 
 ipcMain.handle('quit-app', () => {

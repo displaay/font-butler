@@ -15,8 +15,11 @@ import {
   isLegacyAppExecutable,
   legacyLibraryHasRunningOwner,
   legacyOwnerBlockMessage,
+  cleanMovePartials,
+  isOurMovePartialName,
   migrationAnnouncementFlags,
   migrationStallMessage,
+  movePartialDirectory,
   readSingletonLockPid,
   singletonCookieHeld,
 } from '../electron/mac-data-migration.mjs'
@@ -729,6 +732,10 @@ test('an emptied destination does not adopt a committed leftover source', () => 
     assert.equal(fs.existsSync(path.join(first.installDir, 'a.otf')), false)
     assert.equal(fs.existsSync(path.join(first.dataRoot, 'catalog.json')), false)
     assert.equal(fs.readFileSync(path.join(first.dataRoot, 'probe.txt'), 'utf8'), 'leave-this')
+    const emptied = migrationStallMessage(again)
+    assert.match(emptied, /is empty/)
+    assert.match(emptied, /Application Support\/Font Buttler/)
+    assert.match(emptied, /Fonts\/Font Buttler/)
   } finally {
     fs.rmSync(home, { recursive: true, force: true })
   }
@@ -746,16 +753,21 @@ function assertUncommittedCopyStalls(
 ) {
   const home = tempHome()
   const legacyData = path.join(home, 'Library/Application Support', PREVIOUS_APP_FOLDER_NAME)
+  const legacyInstall = path.join(home, 'Library/Fonts', PREVIOUS_APP_FOLDER_NAME)
+  const oldFont = path.join(legacyInstall, 'Family.otf')
   try {
     fs.mkdirSync(legacyData, { recursive: true })
-    fs.writeFileSync(path.join(legacyData, 'catalog.json'), catalog([{ id: 'copied' }]))
+    fs.mkdirSync(legacyInstall, { recursive: true })
+    fs.writeFileSync(path.join(legacyData, 'catalog.json'), catalog([{ id: 'copied', installedPath: oldFont }]))
     fs.writeFileSync(path.join(legacyData, 'keep.otf'), 'keep')
+    fs.writeFileSync(oldFont, 'font-bytes')
     const pattern = hook === 'crashBeforeCommitRecord' ? /killed before the copy commit record/ : /commit record failed/
     assert.throws(() => migrateLegacyMacAppDirs(home, { renameSync: exdevRename(), [hook]: true }), pattern)
     const dataRoot = path.join(home, 'Library/Application Support', APP_FOLDER_NAME)
     if (differ) fs.writeFileSync(path.join(dataRoot, 'Preferences'), 'chromium')
     const sourceBefore = fileBytes(legacyData)
     const destBefore = fileBytes(dataRoot)
+    const fontsBefore = fileBytes(legacyInstall)
     const pendingPath = path.join(home, 'Library/Application Support', PENDING_MIGRATION_FILE)
     const pendingBefore = JSON.parse(fs.readFileSync(pendingPath, 'utf8'))
     assert.equal(
@@ -766,9 +778,21 @@ function assertUncommittedCopyStalls(
     assert.equal(next.stalled, true)
     assert.equal(next.leftoverDataDir, null)
     assert.equal(next.movedData, false)
+    assert.equal(next.movedFonts, false)
     assert.equal(next.stalledDataDir, legacyData)
+    assert.equal(next.stalledFontsDir, legacyInstall)
     assert.deepEqual(fileBytes(legacyData), sourceBefore)
     assert.deepEqual(fileBytes(dataRoot), destBefore)
+    assert.deepEqual(fileBytes(legacyInstall), fontsBefore)
+    assert.equal(fs.existsSync(path.join(home, 'Library/Fonts', APP_FOLDER_NAME)), false)
+    const kept = JSON.parse(fs.readFileSync(path.join(legacyData, 'catalog.json'), 'utf8')).entries[0]
+    const copied = JSON.parse(fs.readFileSync(path.join(dataRoot, 'catalog.json'), 'utf8')).entries[0]
+    assert.equal(kept.installedPath, oldFont)
+    assert.equal(copied.installedPath, oldFont)
+    const notice = migrationStallMessage(next)
+    assert.match(notice, /unfinished copy/)
+    assert.match(notice, /can be removed/)
+    assert.equal(notice.includes('already had files'), false)
     const pendingAfter = JSON.parse(fs.readFileSync(pendingPath, 'utf8'))
     assert.equal(
       pendingAfter.replacements.some((pair: { committed?: boolean }) => pair.committed === true),
@@ -787,6 +811,52 @@ test('a crash before the commit record stalls and leaves both folders untouched'
 test('a failed commit record stalls and leaves both folders untouched', () => {
   assertUncommittedCopyStalls('failCommitRecord', false)
   assertUncommittedCopyStalls('failCommitRecord', true)
+})
+
+test('a font copy is staged outside Library/Fonts and stale partials are removed', () => {
+  const home = tempHome()
+  const support = path.join(home, 'Library/Application Support')
+  const fonts = path.join(home, 'Library/Fonts')
+  const installDir = path.join(fonts, APP_FOLDER_NAME)
+  try {
+    const staged = movePartialDirectory(installDir)
+    assert.equal(staged.includes(`${path.sep}Library${path.sep}Fonts${path.sep}`), false)
+    assert.equal(path.dirname(staged), support)
+    assert.equal(isOurMovePartialName(path.basename(staged)), true)
+    assert.equal(isOurMovePartialName('Notes.partial-1-2'), false)
+    fs.mkdirSync(support, { recursive: true })
+    fs.mkdirSync(fonts, { recursive: true })
+    fs.mkdirSync(path.join(fonts, 'Cuttler.partial-4-9'))
+    fs.writeFileSync(path.join(fonts, 'Cuttler.partial-4-9', 'A.otf'), 'stale')
+    fs.mkdirSync(path.join(support, '.cuttler-move.partial-1-2'))
+    fs.writeFileSync(path.join(support, '.cuttler-move.partial-1-2', 'B.otf'), 'stale')
+    fs.mkdirSync(path.join(fonts, 'Notes.partial-1-2'))
+    fs.writeFileSync(path.join(fonts, 'Notes.partial-1-2', 'keep.txt'), 'other')
+    const seen: string[] = []
+    fs.mkdirSync(path.join(fonts, PREVIOUS_APP_FOLDER_NAME), { recursive: true })
+    fs.writeFileSync(path.join(fonts, PREVIOUS_APP_FOLDER_NAME, 'Family.otf'), 'font')
+    migrateLegacyMacAppDirs(home, {
+      renameSync() {
+        const error = new Error('cross device') as NodeJS.ErrnoException
+        error.code = 'EXDEV'
+        throw error
+      },
+      onPartialDir(dir: string) {
+        seen.push(dir)
+      },
+    })
+    assert.equal(fs.existsSync(path.join(fonts, 'Cuttler.partial-4-9')), false)
+    assert.equal(fs.existsSync(path.join(support, '.cuttler-move.partial-1-2')), false)
+    assert.equal(fs.readFileSync(path.join(fonts, 'Notes.partial-1-2', 'keep.txt'), 'utf8'), 'other')
+    assert.equal(seen.some((dir) => dir.includes(`${path.sep}Library${path.sep}Fonts${path.sep}`)), false)
+    assert.equal(seen.some((dir) => path.dirname(dir) === support), true)
+    assert.equal(fs.existsSync(path.join(installDir, 'Family.otf')), true)
+    assert.equal(seen.some((dir) => fs.existsSync(dir)), false)
+    cleanMovePartials(home)
+    assert.equal(fs.readFileSync(path.join(fonts, 'Notes.partial-1-2', 'keep.txt'), 'utf8'), 'other')
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
 })
 
 test('launch does not hash or compare library trees to recover an uncommitted copy', () => {

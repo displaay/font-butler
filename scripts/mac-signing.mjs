@@ -119,20 +119,22 @@ export function testFeedBuildRequested(env) {
 }
 
 /** Boolean true only for a test-feed pack. Other env vars leave it false. */
-export function buildIdentityDocument(env) {
-  return { testBuild: testFeedBuildRequested(env) }
+export function buildIdentityDocument(env, commit = null) {
+  const document = { testBuild: testFeedBuildRequested(env) }
+  if (typeof commit === 'string' && /^[0-9a-f]{7,40}$/.test(commit)) document.commit = commit
+  return document
 }
 
 /**
  * Stamp the logout-probe gate into the packaged app as
  * `Contents/Resources/build-identity.json`. The repo file stays `testBuild: false`.
  */
-export function applyBuildIdentityResource(build, env, identityFile) {
+export function applyBuildIdentityResource(build, env, identityFile, commit = null) {
   const extraResources = Array.isArray(build?.extraResources) ? [...build.extraResources] : []
   extraResources.push({ from: identityFile, to: 'build-identity.json' })
   return {
     build: { ...build, extraResources },
-    document: buildIdentityDocument(env),
+    document: buildIdentityDocument(env, commit),
   }
 }
 
