@@ -7,6 +7,7 @@ import { FINDER_COMPARE, FINDER_INSTALL_AS, isClaimedFontPath, isInstallableFont
 import {
   FINDER_SYNC_PENDING_ERROR_MAX_BYTES,
   FINDER_SYNC_PENDING_ERROR_MAX_ENTRIES,
+  finderSyncGroupContainerDirectory,
   parseFinderSyncPendingErrorEntries,
   readFinderSyncPendingErrorRecord,
 } from './finder-sync-pending-error.mjs'
@@ -364,7 +365,20 @@ export function commitFinderSyncAgentRegistration({
     return { plan, status: status || '', record: stored, saved: false, refused: true }
   }
   let resultStatus = status || ''
-  if (plan.action === 'unregister' || plan.action === 'reregister') unregister()
+  if (plan.action === 'unregister' || plan.action === 'reregister') {
+    const removed = unregister()
+    const failed = removed && typeof removed === 'object' && (removed.ok === false || removed.error)
+    if (failed) {
+      return {
+        plan,
+        status: resultStatus,
+        record: stored,
+        saved: false,
+        refused: false,
+        error: String(removed.error || 'Finder Sync agent unregister failed.'),
+      }
+    }
+  }
   if (plan.action === 'register' || plan.action === 'reregister') {
     const registered = register()
     if (typeof registered === 'string' && registered) resultStatus = registered
@@ -820,29 +834,32 @@ export function finderSyncMainExecutable(appPath, { exists = existsSync, readFil
 }
 
 /**
- * Home, `/Users/Shared`, `/Volumes`, and each mounted volume in `mounts`.
- * `/` and `/Library/Fonts` are not monitored. Registering `/Volumes` alone
- * does not put a menu on a mounted disk image, hidden or visible, so each
- * mount path is included. File Provider folders are not added. `home` is
- * ignored when it is not a safe absolute path.
+ * Whether a mounted-volume path is added to the Finder Sync directory set.
+ * This is the tested rule. FinderSync.swift `finderSyncMountPathIncluded`
+ * repeats it: the appex cannot call this module. `/`, `/Library/Fonts`, and
+ * `/System/Volumes` (Data, Preboot, VM) are out. A hidden disk image under
+ * `/Volumes` stays in. `finderSyncMonitorDirectories` is not a second list.
  */
-export function finderSyncMonitorDirectories(home, mounts = []) {
-  const directories = []
-  if (typeof home === 'string' && home !== '/' && home !== FINDER_SYNC_SYSTEM_FONTS_ROOT && isSafeFinderSyncPath(home)) {
-    directories.push(home)
-  }
-  for (const root of [FINDER_SYNC_SHARED_ROOT, FINDER_SYNC_VOLUMES_ROOT]) {
-    if (!directories.includes(root)) directories.push(root)
-  }
-  const list = Array.isArray(mounts) ? mounts : []
-  for (const mount of list) {
-    if (typeof mount !== 'string') continue
-    const normalized = mount.length > 1 ? mount.replace(/\/+$/, '') : mount
-    if (!isSafeFinderSyncPath(normalized) || normalized === '/' || normalized === FINDER_SYNC_SYSTEM_FONTS_ROOT) continue
-    if (normalized.startsWith(`${FINDER_SYNC_SYSTEM_FONTS_ROOT}/`)) continue
-    if (!directories.includes(normalized)) directories.push(normalized)
-  }
-  return directories
+export function finderSyncMountPathIncluded(mountPath) {
+  if (typeof mountPath !== 'string') return false
+  const normalized = mountPath.length > 1 ? mountPath.replace(/\/+$/, '') : mountPath
+  if (!isSafeFinderSyncPath(normalized)) return false
+  if (normalized === '/' || normalized === FINDER_SYNC_SYSTEM_FONTS_ROOT) return false
+  if (normalized.startsWith(`${FINDER_SYNC_SYSTEM_FONTS_ROOT}/`)) return false
+  if (normalized === '/System/Volumes' || normalized.startsWith('/System/Volumes/')) return false
+  return true
+}
+
+/**
+ * Group container to read and delete on this launch.
+ * The test feed reads only its own group. An isolated data root
+ * (`FONT_BUTLER_DATA` / `FONTCASE_DATA`, `includeInstalledGroup` false)
+ * reads none, so it does not consume the installed app's queued error.
+ */
+export function finderSyncPendingErrorGroupContainer(homeDir, { testFeed = false, includeInstalledGroup = false } = {}) {
+  if (testFeed === true) return finderSyncGroupContainerDirectory(homeDir, finderSyncAppGroup(true))
+  if (includeInstalledGroup === true) return finderSyncGroupContainerDirectory(homeDir, finderSyncAppGroup(false))
+  return ''
 }
 
 /**

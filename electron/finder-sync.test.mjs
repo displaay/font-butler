@@ -33,6 +33,7 @@ import {
   LEGACY_APP_PRODUCT_BUNDLE,
   TEST_FEED_APP_BUNDLE,
 } from './app-update-install.mjs'
+import { shouldMigrateRealMacLibrary } from './mac-data-migration.mjs'
 import { TEST_FEED_USER_DATA_DIR } from './test-feed-data.mjs'
 import { FINDER_INSTALL, FINDER_INSTALL_AS, FINDER_LINK_TO } from './finder-install.mjs'
 import {
@@ -99,7 +100,8 @@ import {
   finderSyncProductDisplayName,
   finderSyncSocketDirectoryName,
   finderSyncSocketName,
-  finderSyncMonitorDirectories,
+  finderSyncMountPathIncluded,
+  finderSyncPendingErrorGroupContainer,
   finderSyncWireAction,
   fontMagicKind,
   formatFinderSyncRejections,
@@ -454,19 +456,17 @@ print("runs at top level")
 test('Finder Sync monitors home, /Users/Shared, and /Volumes', () => {
   assert.equal(FINDER_SYNC_SHARED_ROOT, '/Users/Shared')
   assert.equal(FINDER_SYNC_SYSTEM_FONTS_ROOT, '/Library/Fonts')
-  assert.deepEqual(finderSyncMonitorDirectories('/Users/ada'), ['/Users/ada', '/Users/Shared', '/Volumes'])
-  assert.deepEqual(finderSyncMonitorDirectories('/'), ['/Users/Shared', '/Volumes'])
-  assert.deepEqual(finderSyncMonitorDirectories('relative'), ['/Users/Shared', '/Volumes'])
-  assert.deepEqual(finderSyncMonitorDirectories('/Users/Shared'), ['/Users/Shared', '/Volumes'])
-  assert.equal(finderSyncMonitorDirectories('/Users/ada').includes('/Library/Fonts'), false)
-  assert.equal(finderSyncMonitorDirectories('/Library/Fonts').includes('/Library/Fonts'), false)
-  assert.deepEqual(finderSyncMonitorDirectories('/Users/ada', ['/', '/Volumes/Cuttler/', '/Library/Fonts', '/Volumes/Hidden DMG']), [
-    '/Users/ada',
-    '/Users/Shared',
-    '/Volumes',
-    '/Volumes/Cuttler',
-    '/Volumes/Hidden DMG',
-  ])
+  assert.equal(finderSyncMountPathIncluded('/'), false)
+  assert.equal(finderSyncMountPathIncluded('/Library/Fonts'), false)
+  assert.equal(finderSyncMountPathIncluded('/Library/Fonts/Supplemental'), false)
+  assert.equal(finderSyncMountPathIncluded('/System/Volumes'), false)
+  assert.equal(finderSyncMountPathIncluded('/System/Volumes/Data'), false)
+  assert.equal(finderSyncMountPathIncluded('/System/Volumes/Preboot'), false)
+  assert.equal(finderSyncMountPathIncluded('/System/Volumes/VM'), false)
+  assert.equal(finderSyncMountPathIncluded('/Volumes/Hidden DMG'), true)
+  assert.equal(finderSyncMountPathIncluded('/Volumes/Hidden DMG/'), true)
+  assert.equal(finderSyncMountPathIncluded('/Volumes/Cuttler'), true)
+  assert.equal(finderSyncMountPathIncluded('relative'), false)
 
   const bundleId = FINDER_SYNC_TEST_BUNDLE_ID
   const current = finderSyncAppexBundlePath('/Applications/Font Buttler Test/Font Buttler.app')
@@ -692,10 +692,32 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   const nativeTest = readRepo('electron/finder-sync-xpc-test.mm')
   const validator = readRepo('electron/finder-sync.mjs')
   assert.match(swift, /fileURLWithPath: "\/Volumes"/)
-  assert.match(swift, /mountedVolumeURLs/)
-  assert.match(swift, /didMountNotification/)
-  assert.match(swift, /didUnmountNotification/)
+  const mountedFn = swift.slice(
+    swift.indexOf('private func finderSyncMountedVolumeURLs'),
+    swift.indexOf('private func finderSyncMountPathIncluded'),
+  )
+  assert.match(mountedFn, /FileManager\.default\.mountedVolumeURLs\(includingResourceValuesForKeys: keys, options: \[\]\)/)
+  assert.doesNotMatch(mountedFn, /NSWorkspace/)
+  assert.doesNotMatch(mountedFn, /skipHiddenVolumes/)
+  const includedFn = swift.slice(
+    swift.indexOf('private func finderSyncMountPathIncluded'),
+    swift.indexOf('private func finderSyncDirectoryURLs'),
+  )
+  assert.match(includedFn, /path == "\/"/)
+  assert.match(includedFn, /path == "\/Library\/Fonts"/)
+  assert.match(includedFn, /path\.hasPrefix\("\/Library\/Fonts\/"\)/)
+  assert.match(includedFn, /path == "\/System\/Volumes"/)
+  assert.match(includedFn, /path\.hasPrefix\("\/System\/Volumes\/"\)/)
+  const directoryFn = swift.slice(
+    swift.indexOf('private func finderSyncDirectoryURLs'),
+    swift.indexOf('@objc(FontButtlerFinderSync)'),
+  )
+  assert.match(directoryFn, /for url in finderSyncMountedVolumeURLs\(\)/)
+  assert.match(directoryFn, /if !finderSyncMountPathIncluded\(path\)/)
+  assert.match(swift, /NSWorkspace\.didMountNotification/)
+  assert.match(swift, /NSWorkspace\.didUnmountNotification/)
   assert.doesNotMatch(swift, /skipHiddenVolumes/)
+  assert.doesNotMatch(swift, /NSWorkspace\.shared\.mountedVolumeURLs/)
   assert.match(swift, /fileURLWithPath: "\/Users\/Shared"/)
   assert.match(swift, /getpwuid\(getuid\(\)\)/)
   assert.match(swift, /pw_dir/)
@@ -724,11 +746,21 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(swift, /finderSyncMissingApp/)
   assert.match(swift, /finderSyncAgentDisabled/)
   assert.doesNotMatch(swift, /UNUserNotificationCenter/)
-  assert.match(swift, /%\{public\}@/)
-  assert.match(swift, /os_log\(/)
-  assert.match(swift, /queueFinderSyncPendingError/)
-  assert.match(swift, /containerURL\(forSecurityApplicationGroupIdentifier:/)
-  assert.match(swift, /finder-sync-pending-error\.json/)
+  const pendingFn = swift.slice(
+    swift.indexOf('private func queueFinderSyncPendingError'),
+    swift.indexOf('private func isFontFile'),
+  )
+  assert.match(pendingFn, /containerURL\(forSecurityApplicationGroupIdentifier: group\)/)
+  assert.match(pendingFn, /appendingPathComponent\("finder-sync-pending-error\.json"\)/)
+  assert.match(pendingFn, /open\(\$0, O_RDONLY \| O_NOFOLLOW\)/)
+  assert.match(pendingFn, /\(info\.st_mode & S_IFMT\) == S_IFREG/)
+  assert.match(pendingFn, /"login-items"/)
+  assert.match(swift, /os_log\("Finder Sync: %\{public\}@", type: \.error, message\)/)
+  assert.match(swift, /os_log\("Finder Sync: %\{public\}@ \(%\{public\}@\)", type: \.error, message, detail\)/)
+  assert.match(
+    swift,
+    /showFinderSyncError\(finderSyncAgentDisabled, code: "login-items", detail: probe\.detail\)/,
+  )
   assert.doesNotMatch(swift, /NSLog\(/)
   assert.doesNotMatch(swift, /NSAlert/)
   assert.ok(swift.includes(FINDER_SYNC_MISSING_APP))
@@ -941,7 +973,10 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(main, /consumeFinderSyncPendingErrors\(\)/)
   assert.match(main, /consumeFinderSyncPendingErrorFiles/)
   assert.match(main, /finderSyncPendingErrorConsumePaths/)
-  assert.match(main, /includeOtherSupportDirs: shouldMigrateRealMacLibrary/)
+  assert.match(main, /includeOtherSupportDirs: includeInstalledRecords/)
+  assert.match(main, /includeInstalledRecords = shouldMigrateRealMacLibrary/)
+  assert.match(main, /groupContainerDir: finderSyncPendingErrorGroupContainer/)
+  assert.match(main, /includeInstalledGroup: includeInstalledRecords/)
   assert.match(main, /finderSyncErrorsShown = new Map\(\)/)
   assert.match(readRepo('electron/finder-sync.mjs'), /readFinderSyncPendingErrorFile/)
   assert.match(readRepo('electron/finder-sync-pending-error.mjs'), new RegExp(FINDER_SYNC_PENDING_ERROR_FILE.replaceAll('.', '\\.')))
@@ -1818,6 +1853,32 @@ test('Finder Sync Mach service matches in the helper, the LaunchAgent plist, and
     groupContainerDir: container,
   })
   assert.equal(consumed[1], `${container}/finder-sync-pending-error.json`)
+  const home = '/Users/ada'
+  const releaseGroup = finderSyncPendingErrorGroupContainer(home, { includeInstalledGroup: true })
+  assert.equal(releaseGroup, container)
+  const testGroup = finderSyncPendingErrorGroupContainer(home, { testFeed: true })
+  assert.equal(testGroup, finderSyncGroupContainerDirectory(home, finderSyncAppGroup(true)))
+  assert.notEqual(testGroup, container)
+  const isolated = finderSyncPendingErrorGroupContainer(home, {
+    includeInstalledGroup: shouldMigrateRealMacLibrary({
+      platform: 'darwin',
+      env: { FONT_BUTLER_DATA: '/tmp/isolated' },
+    }),
+  })
+  assert.equal(isolated, '')
+  const fontcase = finderSyncPendingErrorGroupContainer(home, {
+    includeInstalledGroup: shouldMigrateRealMacLibrary({
+      platform: 'darwin',
+      env: { FONTCASE_DATA: '/tmp/isolated' },
+    }),
+  })
+  assert.equal(fontcase, '')
+  const isolatedFiles = finderSyncPendingErrorConsumePaths({
+    userDataDir: '/tmp/isolated/Cuttler',
+    groupContainerDir: isolated,
+  })
+  assert.deepEqual(isolatedFiles, ['/tmp/isolated/Cuttler/finder-sync-pending-error.json'])
+  assert.equal(isolatedFiles.some((file) => file.includes('Group Containers')), false)
 })
 
 test('a second launch from the same bundle path does not register again', () => {
@@ -2036,6 +2097,41 @@ test('a second launch from the same bundle path does not register again', () => 
   })
   assert.deepEqual(calls, [])
   assert.equal(versionOnly.plan.action, 'keep')
+
+  calls.length = 0
+  const unregisterFailed = commitFinderSyncAgentRegistration({
+    testFeed: false,
+    currentBundle: bundle,
+    helperPath: helper,
+    version: '0.4.1',
+    currentMachService: service,
+    record: readFinderSyncAgentRecord(JSON.stringify({
+      enabled: true,
+      appBundlePath: bundle,
+      helperPath: helper,
+      version: '0.4.0',
+    })),
+    status: 'enabled',
+    unregister() {
+      calls.push('unregister')
+      return { ok: false, error: 'SMAppService unregister failed.' }
+    },
+    register() {
+      calls.push('register')
+      return 'enabled'
+    },
+  })
+  assert.deepEqual(calls, ['unregister'])
+  assert.equal(unregisterFailed.saved, false)
+  assert.equal(unregisterFailed.record.machService, '')
+  assert.match(unregisterFailed.error, /unregister failed/)
+  const registration = readRepo('electron/main.mjs')
+  const apply = registration.slice(
+    registration.indexOf('function applyFinderSyncAgentRegistration'),
+    registration.indexOf('function reportFinderSyncAgentStatus'),
+  )
+  assert.match(apply, /const removed = parseAgentJson\(addon\.unregisterAgent\(\)\)/)
+  assert.match(apply, /return \{ ok: false, error: removed\.error \}/)
 
   const seen = new Map()
   assert.equal(finderSyncRequestSeen(seen, 'click-1', 1_000), false)

@@ -182,10 +182,11 @@ export function finderSyncGroupContainerDirectory(homeDir, group) {
 
 /**
  * Files the app reads once, then deletes.
- * userData is first, then the app-group container. The other Application
- * Support folders are added only for a real Mac library. A test feed and a
- * FONT_BUTLER_DATA / FONTCASE_DATA launch pass includeOtherSupportDirs false
- * so they do not read or delete the installed app's record.
+ * userData is first. `groupContainerDir` is added only when the caller
+ * passes one. An isolated FONT_BUTLER_DATA / FONTCASE_DATA launch passes
+ * an empty group directory so this does not read or delete the installed
+ * release app's queued error. The other Application Support folders are
+ * added only for a real Mac library.
  */
 export function finderSyncPendingErrorConsumePaths({
   userDataDir,

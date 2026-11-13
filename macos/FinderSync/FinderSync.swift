@@ -15,9 +15,9 @@ import os
 /// and an open-document event is delivered as coming from Launch Services.
 ///
 /// Home, `/Users/Shared`, `/Volumes`, and each mounted volume are monitored.
-/// `/Volumes` alone does not show a menu on a disk image, hidden or visible,
-/// so each mount from `NSWorkspace` is registered and updated on didMount
-/// and didUnmount. `/` and `/Library/Fonts` are not. Dropbox and iCloud
+/// `/Volumes` alone does not show a menu on a disk image, hidden or visible.
+/// Mounts come from `FileManager` and are updated on didMount and didUnmount.
+/// `/`, `/Library/Fonts`, and `/System/Volumes` are not. Dropbox and iCloud
 /// Drive are File Provider domains, and a Finder Sync menu often does not
 /// appear there. Services remain the way to install from those folders.
 /// File-level lets are initialised on first use. The appex is compiled with
@@ -45,10 +45,19 @@ private func finderSyncHomeDirectory() -> URL? {
     return URL(fileURLWithPath: path, isDirectory: true)
 }
 
-/// Every mounted volume except `/` and `/Library/Fonts`. The enumeration
-/// options are empty so a hidden disk image stays in the set.
+/// `FileManager.mountedVolumeURLs` is the API. `NSWorkspace` has no such
+/// method. Empty options keep a hidden disk image. `/System/Volumes`
+/// (Data, Preboot, VM) is not a user mount.
 private func finderSyncMountedVolumeURLs() -> [URL] {
-    NSWorkspace.shared.mountedVolumeURLs(includingResourceValuesForKeys: nil, options: []) ?? []
+    let keys: [URLResourceKey] = []
+    return FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: keys, options: []) ?? []
+}
+
+/// Same exclusions as `finderSyncMountPathIncluded` in electron/finder-sync.mjs.
+private func finderSyncMountPathIncluded(_ path: String) -> Bool {
+    if path == "/" || path == "/Library/Fonts" || path.hasPrefix("/Library/Fonts/") { return false }
+    if path == "/System/Volumes" || path.hasPrefix("/System/Volumes/") { return false }
+    return true
 }
 
 private func finderSyncDirectoryURLs() -> Set<URL> {
@@ -60,8 +69,11 @@ private func finderSyncDirectoryURLs() -> Set<URL> {
         monitored.insert(home, at: 0)
     }
     for url in finderSyncMountedVolumeURLs() {
-        let path = url.standardizedFileURL.path
-        if path == "/" || path == "/Library/Fonts" || path.hasPrefix("/Library/Fonts/") { continue }
+        var path = url.standardizedFileURL.path
+        if path.count > 1 && path.hasSuffix("/") {
+            path = String(path.dropLast())
+        }
+        if !finderSyncMountPathIncluded(path) { continue }
         monitored.append(url)
     }
     return Set(monitored)
@@ -195,7 +207,7 @@ private func queueFinderSyncPendingError(_ code: String) {
     let existing = filePath.withCString { open($0, O_RDONLY | O_NOFOLLOW) }
     if existing >= 0 {
         var info = stat()
-        if fstat(existing, &info) == 0, info.st_size > 0, info.st_size <= 8192, (Int32(info.st_mode) & S_IFMT) == S_IFREG {
+        if fstat(existing, &info) == 0, info.st_size > 0, info.st_size <= 8192, (info.st_mode & S_IFMT) == S_IFREG {
             let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: Int(info.st_size))
             defer { buffer.deallocate() }
             let got = read(existing, buffer, Int(info.st_size))
