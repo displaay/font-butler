@@ -1309,14 +1309,22 @@ async function consumeFinderSyncPendingErrors() {
     groupContainerDir: '',
   })
   let timer
+  let consumePromise
   try {
-    const errors = await Promise.race([
-      consumeFinderSyncPendingErrorFilesAsync(files, { appPath: currentFinderSyncBundle() }),
+    consumePromise = consumeFinderSyncPendingErrorFilesAsync(files, { appPath: currentFinderSyncBundle() })
+    let errors = await Promise.race([
+      consumePromise,
       new Promise((resolve) => {
-        timer = setTimeout(() => resolve([]), FINDER_SYNC_PENDING_ERROR_TIMEOUT_MS)
+        timer = setTimeout(() => resolve(null), FINDER_SYNC_PENDING_ERROR_TIMEOUT_MS)
         timer.unref?.()
       }),
     ])
+    if (errors === null) {
+      // The read is slow. The consume has already started deleting the files
+      // it reads, so waiting for it keeps every removed record presented
+      // instead of dropping the codes the timed-out race never returned.
+      errors = await consumePromise
+    }
     for (const item of errors) presentFinderSyncUserError(item.code)
   } catch (error) {
     console.error('Could not consume pending Finder Sync errors', error)

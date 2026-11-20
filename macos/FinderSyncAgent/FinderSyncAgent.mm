@@ -246,6 +246,30 @@ static void WritePendingFinderSyncError(NSString *code) {
   WritePendingBytes(filePath, data);
 }
 
+// The app already received this code over the socket, so drop it from the
+// record a later launch would read. The next launch must not repeat an error
+// the running app just presented.
+static void RemovePendingFinderSyncError(NSString *code) {
+  if (!FinderSyncErrorCodeIsKnown(code)) return;
+  NSString *file = [PendingFinderSyncErrorDirectory() stringByAppendingPathComponent:@"finder-sync-pending-error.json"];
+  const char *filePath = file.fileSystemRepresentation;
+  struct stat st;
+  if (lstat(filePath, &st) != 0 || !S_ISREG(st.st_mode)) return;
+  NSArray *errors = ReadPendingFinderSyncErrors(filePath);
+  NSMutableArray *kept = [NSMutableArray array];
+  for (id item in errors) {
+    if ([item[@"code"] isEqualToString:code]) continue;
+    [kept addObject:item];
+  }
+  if (kept.count == errors.count) return;
+  if (kept.count == 0) {
+    unlink(filePath);
+    return;
+  }
+  NSData *data = [NSJSONSerialization dataWithJSONObject:@{@"errors" : kept} options:0 error:nil];
+  if (data) WritePendingBytes(filePath, data);
+}
+
 static void ReportFinderSyncError(void (^reply)(NSString *), NSString *code, NSString *message) {
   NSLog(@"Finder Sync: %@", message ?: @"");
   if (FinderSyncErrorCodeIsKnown(code) && !ForwardErrorToApp(code)) WritePendingFinderSyncError(code);
@@ -781,11 +805,29 @@ static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL over
     if (accepted.count >= kPendingErrorMaxEntries) break;
     [accepted addObject:item];
   }
+  if (accepted.count == 0) {
+    if (reply) reply(@"No known pending Finder Sync error codes.");
+    return;
+  }
+  // Persist on this thread and reply before any forward. The appex waits only
+  // 0.4 s, and the serial forward queue can be held for up to ~32 s by a
+  // submitAction that is launching the app. A reply after that wait would
+  // make the appex keep and re-send its record after the app's 30 s
+  // duplicate window. A failed write replies with an error so the appex
+  // keeps its record instead of unlinking a code that was not saved.
+  for (NSString *code in accepted) {
+    if (!WritePendingFinderSyncError(code)) {
+      if (reply) reply([NSString stringWithFormat:@"Could not record the pending Finder Sync error %@.", code]);
+      return;
+    }
+  }
+  if (reply) reply(nil);
   dispatch_async(self.forwardQueue, ^{
     for (NSString *code in accepted) {
-      if (!ForwardErrorToApp(code)) WritePendingFinderSyncError(code);
+      // The app presents the code live here, so the record a later launch
+      // would read must not repeat it.
+      if (ForwardErrorToApp(code)) RemovePendingFinderSyncError(code);
     }
-    if (reply) reply(nil);
   });
 }
 

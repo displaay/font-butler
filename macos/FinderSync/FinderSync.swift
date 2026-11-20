@@ -247,8 +247,7 @@ private func queueFinderSyncPendingError(_ code: String) {
     if entries.count >= 5 { entries.removeFirst() }
     entries.append(["code": code, "at": Int64(Date().timeIntervalSince1970 * 1000)])
     guard let data = try? JSONSerialization.data(withJSONObject: ["errors": entries]) else { return }
-    let tempPath = filePath + ".tmp"
-    _ = tempPath.withCString { unlink($0) }
+    let tempPath = filePath + ".\(UUID().uuidString).tmp"
     let output = tempPath.withCString { open($0, O_CREAT | O_EXCL | O_NOFOLLOW | O_WRONLY, 0o600) }
     if output < 0 { return }
     let wrote = data.withUnsafeBytes { raw -> Bool in
@@ -289,6 +288,8 @@ private func flushPendingFinderSyncErrors(service: String) {
         if codes.count >= 5 { break }
     }
     guard !codes.isEmpty else { return }
+    // An error reply, or the 0.4 s wait expiring before one, keeps the record
+    // so a later handoff or launch can drain it again.
     let attempt = connectFinderSync(service: service, timeout: 0.4) { remote, attempt in
         remote.reportPendingErrors(codes) { error in
             if error == nil {

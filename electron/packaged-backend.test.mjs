@@ -99,3 +99,59 @@ test('renderer handles background init failure from waitForServiceReady', () => 
   assert.match(appTsx, /waitForServiceReady\([\s\S]*?\)[\s\S]*?\.catch\(/)
   assert.match(appTsx, /setError\(message\)/)
 })
+
+test('a port:0 worker serves the loopback host of the port it actually bound', async () => {
+  const dataDir = mkdtempSync(path.join(tmpdir(), 'fb-port-zero-'))
+  const result = await new Promise((resolve, reject) => {
+    const env = {
+      ...process.env,
+      FONT_BUTLER_SERVE: '1',
+      FONT_BUTLER_DATA: dataDir,
+      FONT_BUTLER_API_PORT: '0',
+    }
+    delete env.FONT_BUTLER_TEST
+    delete env.FONT_BUTLER_DEV_BOOTSTRAP
+    const child = spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], {
+      cwd: repoRoot,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stderr.on('data', (chunk) => {
+      stderr += String(chunk)
+    })
+    child.stdout.on('data', (chunk) => {
+      stdout += String(chunk)
+    })
+    child.on('exit', (code) => {
+      reject(new Error(`worker exited early with ${code}\n${stderr}`))
+    })
+    const poll = setInterval(() => {
+      const match = stdout.match(/Cuttler API on http:\/\/127\.0\.0\.1:(\d+)/)
+      if (!match) return
+      clearInterval(poll)
+      const port = Number(match[1])
+      if (!port) return
+      fetch(`http://127.0.0.1:${port}/api/health`)
+        .then(async (response) => {
+          const health = await response.json().catch(() => ({}))
+          child.kill()
+          resolve({ port, status: response.status, health, stderr })
+        })
+        .catch((error) => {
+          clearInterval(poll)
+          child.kill()
+          reject(new Error(`health on the bound port failed: ${error}\n${stderr}`))
+        })
+    }, 40)
+    setTimeout(() => {
+      clearInterval(poll)
+      child.kill()
+      reject(new Error(`timed out waiting for the bound port\n${stdout}\n${stderr}`))
+    }, 15_000)
+  })
+  assert.ok(result.port > 0, `expected an ephemeral bound port, got ${result.port}`)
+  assert.equal(result.status, 200)
+  assert.ok(!result.health.error, `expected no host error, got ${JSON.stringify(result.health)}`)
+})

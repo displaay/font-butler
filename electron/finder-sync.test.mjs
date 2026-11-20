@@ -774,6 +774,9 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(pendingFn, /"login-items"/)
   assert.match(pendingFn, /private func queueFinderSyncPendingError/)
   assert.match(pendingFn, /private func flushPendingFinderSyncErrors/)
+  assert.match(pendingFn, /UUID\(\)\.uuidString\)\.tmp/)
+  assert.doesNotMatch(pendingFn, /filePath \+ "\.tmp"/)
+  assert.match(pendingFn, /if attempt\.accepted \{[\s\S]*?unlink\(\$0\)[\s\S]*?\}/)
   const selectionFn = swift.slice(
     swift.indexOf('private func isInstallSelection'),
     swift.indexOf('private func menuTitle'),
@@ -1010,7 +1013,8 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
     main.indexOf('function presentFinderSyncUserError'),
     main.indexOf('async function consumeFinderSyncPendingErrors'),
   )
-  assert.match(presenterFn, /dialog\.showMessageBox/)
+  assert.match(presenterFn, /dialog\.showMessageBox\(/)
+  assert.doesNotMatch(presenterFn, /dialog\.showMessageBoxSync/)
   assert.doesNotMatch(presenterFn, /dialog\.showErrorBox/)
   assert.match(main, /finderSyncProductDisplayName\(appPath\)/)
   assert.doesNotMatch(main, /UNUserNotificationCenter/)
@@ -1022,7 +1026,20 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.doesNotMatch(main, /launchctl/)
   assert.doesNotMatch(main, /parseLaunchctlProgram/)
   assert.match(agent, /!ForwardErrorToApp\(code\)\) WritePendingFinderSyncError\(code\)/)
+  const reportFn = agent.slice(
+    agent.lastIndexOf('- (void)reportPendingErrors:'),
+    agent.indexOf('@end', agent.lastIndexOf('- (void)reportPendingErrors:')),
+  )
+  assert.ok(
+    reportFn.indexOf('reply(nil)') >= 0 &&
+      reportFn.indexOf('reply(nil)') < reportFn.indexOf('dispatch_async(self.forwardQueue'),
+    'expected the agent to reply once the record is persisted, before it forwards',
+  )
+  assert.match(reportFn, /Could not record the pending Finder Sync error/)
+  assert.match(reportFn, /if \(ForwardErrorToApp\(code\)\) RemovePendingFinderSyncError\(code\)/)
+  assert.match(agent, /static void RemovePendingFinderSyncError/)
   assert.match(receiver, /json\[@"error"\]/)
+  assert.match(main, /if \(errors === null\) \{[\s\S]*?await consumePromise/)
   assert.ok(swift.includes(FINDER_SYNC_AGENT_DISABLED))
   const enableHandler = main.slice(main.indexOf("ipcMain.handle('set-finder-sync-agent-enabled'"))
   const beforeSave = enableHandler.slice(0, enableHandler.indexOf('saveFinderSyncAgentRecord'))

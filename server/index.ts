@@ -161,6 +161,7 @@ export async function startFontButlerServer(
   )
   const service = new FontButlerService()
   const initState = createInitState()
+  let boundPort = PORT
   let resolveBackgroundReady: () => void = () => {}
   let rejectBackgroundReady: (error: Error) => void = () => {}
   const backgroundReady = new Promise<void>((resolve, reject) => {
@@ -186,7 +187,10 @@ app.onError((error, c) => {
 })
 
 app.use('*', async (c, next) => {
-  const denied = denyRemoteRequest(c, PORT, extraOrigins)
+  // boundPort is the port serve() actually bound. A port:0 fallback binds an
+  // ephemeral port, and checking Host/Origin against the requested 0 would
+  // 403 the app's own loopback requests.
+  const denied = denyRemoteRequest(c, boundPort, extraOrigins)
   if (denied) return denied
   return next()
 })
@@ -1573,6 +1577,7 @@ mountEventsRoutes(app, {
 
   return new Promise<{ port: number; token: string }>((resolve, reject) => {
     const server = serve({ fetch: app.fetch, port: PORT, hostname: '127.0.0.1' }, (info) => {
+      boundPort = info.port
       console.log(`Cuttler API on http://127.0.0.1:${info.port}`)
       resolve({ port: info.port, token: apiToken })
       void runServiceInit()
