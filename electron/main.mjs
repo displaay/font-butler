@@ -64,6 +64,7 @@ import {
   FINDER_SYNC_ERROR_LOGIN_ITEMS,
   FINDER_SYNC_SETTINGS_URL,
   FINDER_SYNC_TOO_MANY_FILES,
+  awaitFinderSyncPendingErrorConsume,
   commitFinderSyncAgentRegistration,
   consumeFinderSyncPendingErrorFilesAsync,
   finderSyncAgentBundleProgram,
@@ -1308,29 +1309,19 @@ async function consumeFinderSyncPendingErrors() {
     includeOtherSupportDirs: includeInstalledRecords,
     groupContainerDir: '',
   })
-  let timer
-  let consumePromise
-  try {
-    consumePromise = consumeFinderSyncPendingErrorFilesAsync(files, { appPath: currentFinderSyncBundle() })
-    let errors = await Promise.race([
-      consumePromise,
-      new Promise((resolve) => {
-        timer = setTimeout(() => resolve(null), FINDER_SYNC_PENDING_ERROR_TIMEOUT_MS)
-        timer.unref?.()
-      }),
-    ])
-    if (errors === null) {
-      // The read is slow. The consume has already started deleting the files
-      // it reads, so waiting for it keeps every removed record presented
-      // instead of dropping the codes the timed-out race never returned.
-      errors = await consumePromise
-    }
-    for (const item of errors) presentFinderSyncUserError(item.code)
-  } catch (error) {
-    console.error('Could not consume pending Finder Sync errors', error)
-  } finally {
-    if (timer) clearTimeout(timer)
-  }
+  await awaitFinderSyncPendingErrorConsume({
+    consumePromise: consumeFinderSyncPendingErrorFilesAsync(files, { appPath: currentFinderSyncBundle() }),
+    timeoutMs: FINDER_SYNC_PENDING_ERROR_TIMEOUT_MS,
+    onPresent: (code) => presentFinderSyncUserError(code),
+    onTimeout: () => {
+      console.warn(
+        `Pending Finder Sync error consume exceeded ${FINDER_SYNC_PENDING_ERROR_TIMEOUT_MS}ms; continuing startup while it finishes.`,
+      )
+    },
+    onError: (error) => {
+      console.error('Could not consume pending Finder Sync errors', error)
+    },
+  })
 }
 
 function scheduleFinderSyncPendingErrorConsume() {

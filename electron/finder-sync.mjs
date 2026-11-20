@@ -37,6 +37,7 @@ export {
   FINDER_SYNC_PENDING_ERROR_MAX_ENTRIES,
   FINDER_SYNC_RELEASE_SUPPORT_DIR,
   FINDER_SYNC_TEST_SUPPORT_DIR,
+  awaitFinderSyncPendingErrorConsume,
   carryFinderSyncPendingError,
   finderSyncGroupContainerDirectory,
   finderSyncPendingErrorConsumePaths,

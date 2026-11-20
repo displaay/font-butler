@@ -114,6 +114,7 @@ import {
   finderSyncRequestSeen,
   noteFinderSyncRequest,
   addFinderSyncPendingError,
+  awaitFinderSyncPendingErrorConsume,
   carryFinderSyncPendingError,
   consumeFinderSyncPendingErrorFiles,
   consumeFinderSyncPendingErrorFilesAsync,
@@ -846,7 +847,7 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   ])
   const pendingChoice = agent.slice(
     agent.indexOf('static BOOL PendingErrorDirHasLibrary'),
-    agent.indexOf('static void WritePendingFinderSyncError'),
+    agent.indexOf('static dispatch_queue_t PendingErrorFileQueue'),
   )
   assert.match(pendingChoice, /g_testFeed/)
   assert.match(pendingChoice, /PendingErrorDirHasLibrary/)
@@ -863,11 +864,25 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.ok(oneTFolderAt > previousFolderAt)
   assert.ok(releaseFolderAt > oneTFolderAt)
   const writePending = agent.slice(
-    agent.indexOf('static void WritePendingFinderSyncError'),
+    agent.indexOf('static BOOL WritePendingFinderSyncErrorsLocked'),
     agent.indexOf('static void ReportFinderSyncError'),
   )
   assert.match(writePending, /PendingFinderSyncErrorDirectory\(\)/)
   assert.doesNotMatch(writePending, /@"Font Buttler"/)
+  assert.match(writePending, /static BOOL WritePendingFinderSyncErrors\(/)
+  assert.match(writePending, /static BOOL WritePendingFinderSyncError\(/)
+  assert.match(writePending, /static BOOL TakePendingFinderSyncErrorIfPresent\(/)
+  assert.match(writePending, /if \(!addedAny\) return YES;/)
+  assert.match(writePending, /return WritePendingBytes\(filePath, data\);/)
+  assert.match(writePending, /dispatch_sync\(PendingErrorFileQueue\(\)/)
+  const writePendingBytesFn = agent.slice(
+    agent.indexOf('static BOOL WritePendingBytes'),
+    agent.indexOf('static BOOL PendingErrorDirHasLibrary'),
+  )
+  assert.match(writePendingBytesFn, /NSUUID\.UUID\.UUIDString/)
+  assert.match(writePendingBytesFn, /%s\.%d\.%s\.tmp/)
+  assert.doesNotMatch(writePendingBytesFn, /"%s\.tmp"/)
+  assert.doesNotMatch(writePendingBytesFn, /unlink\(tempPath\);\s*\n\s*int fd/)
   assert.match(agent, /S_ISLNK\(st\.st_mode\)/)
   assert.match(agent, /S_ISREG\(st\.st_mode\)/)
   assert.match(agent, /O_RDONLY \| O_NOFOLLOW/)
@@ -1035,11 +1050,19 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
       reportFn.indexOf('reply(nil)') < reportFn.indexOf('dispatch_async(self.forwardQueue'),
     'expected the agent to reply once the record is persisted, before it forwards',
   )
-  assert.match(reportFn, /Could not record the pending Finder Sync error/)
-  assert.match(reportFn, /if \(ForwardErrorToApp\(code\)\) RemovePendingFinderSyncError\(code\)/)
-  assert.match(agent, /static void RemovePendingFinderSyncError/)
+  assert.match(reportFn, /if \(!WritePendingFinderSyncErrors\(accepted\)\)/)
+  assert.match(reportFn, /Could not record the pending Finder Sync errors/)
+  assert.match(reportFn, /if \(!TakePendingFinderSyncErrorIfPresent\(code\)\) continue;/)
+  assert.match(reportFn, /if \(!ForwardErrorToApp\(code\)\) WritePendingFinderSyncError\(code\);/)
+  assert.match(agent, /static BOOL TakePendingFinderSyncErrorIfPresent\(/)
   assert.match(receiver, /json\[@"error"\]/)
-  assert.match(main, /if \(errors === null\) \{[\s\S]*?await consumePromise/)
+  const consumeFn = main.slice(
+    main.indexOf('async function consumeFinderSyncPendingErrors'),
+    main.indexOf('function scheduleFinderSyncPendingErrorConsume'),
+  )
+  assert.match(consumeFn, /awaitFinderSyncPendingErrorConsume\(/)
+  assert.match(consumeFn, /onPresent:\s*\(code\) => presentFinderSyncUserError\(code\)/)
+  assert.match(consumeFn, /onTimeout:\s*\(\) =>/)
   assert.ok(swift.includes(FINDER_SYNC_AGENT_DISABLED))
   const enableHandler = main.slice(main.indexOf("ipcMain.handle('set-finder-sync-agent-enabled'"))
   const beforeSave = enableHandler.slice(0, enableHandler.indexOf('saveFinderSyncAgentRecord'))
@@ -3235,5 +3258,73 @@ test('resolvePackagedApiPort logs once on EADDRINUSE and falls back cleanly to a
     assert.ok(resolved.port > 0)
   } finally {
     await new Promise((resolve) => occupied.close(resolve))
+  }
+})
+
+test('awaitFinderSyncPendingErrorConsume times out without blocking and still presents late resolved records', async () => {
+  const fastPresented = []
+  let fastTimeouts = 0
+  const fast = await awaitFinderSyncPendingErrorConsume({
+    consumePromise: Promise.resolve([{ code: FINDER_SYNC_ERROR_NOT_RUNNING, at: 1 }]),
+    timeoutMs: 200,
+    onPresent: (code) => fastPresented.push(code),
+    onTimeout: () => {
+      fastTimeouts += 1
+    },
+  })
+  assert.equal(fast.timedOut, false)
+  assert.equal(fastTimeouts, 0)
+  assert.deepEqual(fastPresented, [FINDER_SYNC_ERROR_NOT_RUNNING])
+
+  const keepAlive = setTimeout(() => {}, 2_000)
+  try {
+    let resolveLate
+    const latePromise = new Promise((resolve) => {
+      resolveLate = resolve
+    })
+    const latePresented = []
+    let lateTimeouts = 0
+    const late = await awaitFinderSyncPendingErrorConsume({
+      consumePromise: latePromise,
+      timeoutMs: 15,
+      onPresent: (code) => latePresented.push(code),
+      onTimeout: () => {
+        lateTimeouts += 1
+      },
+    })
+    assert.equal(late.timedOut, true)
+    assert.equal(lateTimeouts, 1)
+    assert.deepEqual(latePresented, [])
+
+    resolveLate([
+      { code: FINDER_SYNC_ERROR_MISSING_APP, at: 2 },
+      { code: FINDER_SYNC_ERROR_LOGIN_ITEMS, at: 3 },
+    ])
+    await late.settledPromise
+    assert.equal(lateTimeouts, 1)
+    assert.deepEqual(latePresented, [FINDER_SYNC_ERROR_MISSING_APP, FINDER_SYNC_ERROR_LOGIN_ITEMS])
+
+    let rejectLate
+    const failingPromise = new Promise((_, reject) => {
+      rejectLate = reject
+    })
+    const errors = []
+    let errTimeouts = 0
+    const errored = await awaitFinderSyncPendingErrorConsume({
+      consumePromise: failingPromise,
+      timeoutMs: 15,
+      onTimeout: () => {
+        errTimeouts += 1
+      },
+      onError: (err) => errors.push(err),
+    })
+    assert.equal(errored.timedOut, true)
+    assert.equal(errTimeouts, 1)
+    rejectLate(new Error('disk stalled'))
+    await errored.settledPromise
+    assert.equal(errors.length, 1)
+    assert.match(errors[0].message, /disk stalled/)
+  } finally {
+    clearTimeout(keepAlive)
   }
 })

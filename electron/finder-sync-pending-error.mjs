@@ -374,3 +374,44 @@ export function carryFinderSyncPendingError(sourceDir, destDir) {
     return false
   }
 }
+
+/**
+ * Await pending-error consumption for at most `timeoutMs`. When the timer
+ * fires first, log once via `onTimeout` and return without cancelling the
+ * in-flight consume so every unlinked record is still presented when it settles.
+ */
+export async function awaitFinderSyncPendingErrorConsume({
+  consumePromise,
+  timeoutMs = 2_000,
+  onPresent,
+  onTimeout,
+  onError,
+} = {}) {
+  let timedOut = false
+  const settledPromise = Promise.resolve(consumePromise).then(
+    (errors) => {
+      for (const item of Array.isArray(errors) ? errors : []) {
+        onPresent?.(item.code)
+      }
+      return Array.isArray(errors) ? errors : []
+    },
+    (error) => {
+      onError?.(error)
+      return []
+    },
+  )
+  let timer
+  const outcome = await Promise.race([
+    settledPromise.then(() => 'done'),
+    new Promise((resolve) => {
+      timer = setTimeout(() => {
+        timedOut = true
+        onTimeout?.()
+        resolve('timeout')
+      }, timeoutMs)
+      timer.unref?.()
+    }),
+  ])
+  if (timer) clearTimeout(timer)
+  return { timedOut: timedOut || outcome === 'timeout', settledPromise }
+}
