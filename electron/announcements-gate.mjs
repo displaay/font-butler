@@ -12,6 +12,14 @@ export const ANNOUNCEMENTS = [
     showWhen: 'migration-stalled',
   },
   {
+    id: 'migration-leftover',
+    sinceVersion: '0.4.1',
+    title: 'Old folder left behind',
+    body: 'The previous folder is no longer used. You can remove it.',
+    celebrate: false,
+    showWhen: 'migration-leftover',
+  },
+  {
     id: 'whats-new',
     sinceVersion: '0.4.0',
     title: "What's new",
@@ -45,7 +53,8 @@ export function allAnnouncementIds(list = ANNOUNCEMENTS) {
  * Fresh install (no library, no record, migration did not stall): seed every
  * current id as seen. Existing library with no record: treat as upgrade and
  * show the first match. migration-stalled is shown only when the caller
- * passes migrationStalled from the folder migration. This list does not
+ * passes migrationStalled from the folder migration, and it stays up while
+ * that flag is set. migration-leftover shows once. This list does not
  * look at folders.
  */
 export function nextAnnouncementToShow(input) {
@@ -54,8 +63,10 @@ export function nextAnnouncementToShow(input) {
   const hasRecord = input.state != null
   const libraryEstablished = input.libraryEstablished === true
   const migrationStalled = input.migrationStalled === true
+  const migrationLeftover = input.migrationLeftover === true
+  const fontsRenameReason = typeof input.fontsRenameReason === 'string' ? input.fontsRenameReason : ''
 
-  if (!hasRecord && !libraryEstablished && !migrationStalled) {
+  if (!hasRecord && !libraryEstablished && !migrationStalled && !migrationLeftover && !fontsRenameReason && input.oldHeadNotice !== true) {
     return {
       announcement: null,
       seedSeen: true,
@@ -70,10 +81,43 @@ export function nextAnnouncementToShow(input) {
   if (!state.firstRunVersion && currentVersion) state.firstRunVersion = currentVersion
 
   const seen = new Set(state.seenIds)
+  if (fontsRenameReason) {
+    const id = `fonts-rename-${fontsRenameReason}`
+    if (!seen.has(id)) {
+      return {
+        announcement: {
+          id,
+          sinceVersion: '0.4.1',
+          title: fontsRenameReason === 'old-head' || fontsRenameReason === 'placed' ? 'Both font folders kept' : 'Fonts left in place',
+          body: '',
+          celebrate: false,
+          showWhen: 'fonts-rename-blocked',
+        },
+        seedSeen: false,
+        state,
+      }
+    }
+  }
+  const oldHeadNoticeId = typeof input.oldHeadNoticeId === 'string' ? input.oldHeadNoticeId : ''
+  if (input.oldHeadNotice === true && oldHeadNoticeId && !seen.has(oldHeadNoticeId)) {
+    return {
+      announcement: {
+        id: oldHeadNoticeId,
+        sinceVersion: '0.4.1',
+        title: 'Old folders kept',
+        body: '',
+        celebrate: false,
+        showWhen: 'old-head-kept',
+      },
+      seedSeen: false,
+      state,
+    }
+  }
   for (const item of announcements) {
     if (seen.has(item.id) && !(item.showWhen === 'migration-stalled' && migrationStalled)) continue
     if (item.showWhen === 'upgrade' && !libraryEstablished) continue
     if (item.showWhen === 'migration-stalled' && !migrationStalled) continue
+    if (item.showWhen === 'migration-leftover' && !migrationLeftover) continue
     return { announcement: item, seedSeen: false, state }
   }
   return { announcement: null, seedSeen: false, state }

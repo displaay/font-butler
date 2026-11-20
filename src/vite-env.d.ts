@@ -63,6 +63,15 @@ declare global {
           }>,
         ) => void,
       ) => () => void
+      pullAnnouncement?: () => Promise<{
+        id?: string
+        title?: string
+        body?: string
+        celebrate?: boolean
+        sinceVersion?: string
+        showWhen?: 'upgrade' | 'always' | 'migration-stalled' | 'migration-leftover'
+        pages?: { id: string; title: string; body: string }[]
+      } | null>
       onAnnouncement?: (
         callback: (payload: {
           id?: string
@@ -70,7 +79,7 @@ declare global {
           body?: string
           celebrate?: boolean
           sinceVersion?: string
-          showWhen?: 'upgrade' | 'always' | 'migration-stalled'
+          showWhen?: 'upgrade' | 'always' | 'migration-stalled' | 'migration-leftover'
         }) => void,
       ) => () => void
       dismissAnnouncement?: (id: string) => void

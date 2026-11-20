@@ -62,7 +62,15 @@ if (stamped.build?.extraMetadata?.fontButlerTestFeed === true) {
 const configDir = mkdtempSync(path.join(tmpdir(), 'font-butler-mac-'))
 const configPath = path.join(configDir, 'electron-builder.json')
 const identityFile = path.join(configDir, 'build-identity.json')
-const identified = applyBuildIdentityResource(stamped.build, process.env, identityFile)
+function currentCommit(cwd) {
+  try {
+    const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).trim()
+    return /^[0-9a-f]{7,40}$/.test(sha) ? sha : null
+  } catch {
+    return null
+  }
+}
+const identified = applyBuildIdentityResource(stamped.build, process.env, identityFile, currentCommit(repoRoot))
 writeFileSync(identityFile, `${JSON.stringify(identified.document, null, 2)}\n`)
 if (identified.document.testBuild === true) {
   console.log(
