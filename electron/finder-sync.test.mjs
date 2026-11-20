@@ -34,6 +34,7 @@ import {
   TEST_FEED_APP_BUNDLE,
 } from './app-update-install.mjs'
 import { TEST_FEED_USER_DATA_DIR } from './test-feed-data.mjs'
+import { PENDING_MIGRATION_FILE, committedLeftoverDirectories } from './mac-data-migration.mjs'
 import { FINDER_INSTALL, FINDER_INSTALL_AS, FINDER_LINK_TO } from './finder-install.mjs'
 import {
   FINDER_SYNC_APP_GROUP_ENTITLEMENT,
@@ -919,6 +920,7 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(main, /consumeFinderSyncPendingErrorFiles/)
   assert.match(main, /finderSyncPendingErrorConsumePaths/)
   assert.match(main, /includeOtherSupportDirs: shouldMigrateRealMacLibrary/)
+  assert.match(main, /skipDirs: committedLeftoverDirectories\(app\.getPath\('home'\)\)/)
   assert.match(main, /finderSyncErrorsShown = new Map\(\)/)
   assert.match(readRepo('electron/finder-sync.mjs'), /readFinderSyncPendingErrorFile/)
   assert.match(readRepo('electron/finder-sync-pending-error.mjs'), new RegExp(FINDER_SYNC_PENDING_ERROR_FILE.replaceAll('.', '\\.')))
@@ -2150,6 +2152,50 @@ test('the helper writes the pending Finder Sync error where that launch reads it
     )
   } finally {
     rmSync(support, { recursive: true, force: true })
+  }
+})
+
+test('a committed leftover folder is not read or deleted for a Finder Sync error', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-leftover-consume-'))
+  const support = path.join(root, 'Library/Application Support')
+  const cuttler = path.join(support, 'Cuttler')
+  const previous = path.join(support, 'Font Buttler')
+  const oneT = path.join(support, 'Font Butler')
+  const record = (code, at) => JSON.stringify({ errors: [{ code, at }] })
+  try {
+    mkdirSync(cuttler, { recursive: true })
+    mkdirSync(previous, { recursive: true })
+    mkdirSync(oneT, { recursive: true })
+    writeFileSync(path.join(cuttler, FINDER_SYNC_PENDING_ERROR_FILE), record(FINDER_SYNC_ERROR_LOGIN_ITEMS, 4))
+    const leftoverText = record(FINDER_SYNC_ERROR_MISSING_APP, 2)
+    const leftoverFile = path.join(previous, FINDER_SYNC_PENDING_ERROR_FILE)
+    writeFileSync(leftoverFile, leftoverText)
+    writeFileSync(path.join(oneT, FINDER_SYNC_PENDING_ERROR_FILE), record(FINDER_SYNC_ERROR_NOT_RUNNING, 3))
+    writeFileSync(
+      path.join(support, PENDING_MIGRATION_FILE),
+      JSON.stringify({
+        version: 1,
+        needsRewrite: true,
+        replacements: [{ from: previous, to: cuttler, committed: true }],
+      }),
+    )
+    const skip = committedLeftoverDirectories(root)
+    assert.deepEqual(skip, [previous])
+    const files = finderSyncPendingErrorConsumePaths({
+      userDataDir: cuttler,
+      appSupportDir: support,
+      includeOtherSupportDirs: true,
+      skipDirs: skip,
+    })
+    assert.equal(files.includes(leftoverFile), false)
+    assert.equal(files.includes(path.join(cuttler, FINDER_SYNC_PENDING_ERROR_FILE)), true)
+    assert.equal(files.includes(path.join(oneT, FINDER_SYNC_PENDING_ERROR_FILE)), true)
+    consumeFinderSyncPendingErrorFiles(files, { appPath: path.join(root, 'Cuttler.app') })
+    assert.equal(readFileSync(leftoverFile, 'utf8'), leftoverText)
+    assert.equal(existsSync(path.join(cuttler, FINDER_SYNC_PENDING_ERROR_FILE)), false)
+    assert.equal(existsSync(path.join(oneT, FINDER_SYNC_PENDING_ERROR_FILE)), false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
   }
 })
 

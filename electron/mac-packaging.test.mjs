@@ -47,6 +47,7 @@ import {
   TEST_FEED_PRODUCT_NAME,
   TEST_FEED_VERSION_ENV,
   applyBuildIdentityResource,
+  buildIdentityDocument,
   applyNotaryEnv,
   applyTestFeedMetadata,
   developerIdInKeychainOutput,
@@ -1009,9 +1010,19 @@ test('a test-feed pack stamps extraMetadata and does not change a normal pack', 
   assert.match(bad.error, /FONT_BUTLER_TEST_VERSION/)
   assert.match(readRepo('scripts/mac-pack.mjs'), /applyTestFeedMetadata/)
   assert.match(readRepo('scripts/mac-pack.mjs'), /applyBuildIdentityResource/)
+  assert.match(
+    readRepo('scripts/mac-pack.mjs'),
+    /applyBuildIdentityResource\(\s*stamped\.build,\s*process\.env,\s*identityFile,\s*currentCommit\(repoRoot\)\s*\)/,
+  )
   assert.equal(PRODUCTION_APP_ID, 'app.fontbutler.desktop')
   const identity = applyBuildIdentityResource(build, {}, '/tmp/build-identity.json')
   assert.deepEqual(identity.document, { testBuild: false })
+  assert.deepEqual(buildIdentityDocument({}), { testBuild: false })
+  assert.equal(buildIdentityDocument({}, '6dd42abedd346b0bb376187c25eeff48ed66d992').commit, '6dd42abedd346b0bb376187c25eeff48ed66d992')
+  assert.equal(buildIdentityDocument({}, 'not-a-commit').commit, undefined)
+  const packedFiles = pkg().build.files
+  assert.equal(packedFiles.includes('!electron/**/*.png'), true)
+  assert.equal(packedFiles.includes('!electron/announcement/**'), true)
   assert.deepEqual(
     applyBuildIdentityResource(build, { FONT_BUTLER_TEST: '1', FONT_BUTLER_DATA: '/tmp/isolated' }, '/tmp/id.json')
       .document,

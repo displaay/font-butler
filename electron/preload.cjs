@@ -76,6 +76,7 @@ contextBridge.exposeInMainWorld('fontButlerDesktop', {
     }
     return () => watchNoticeListeners.delete(listener)
   },
+  pullAnnouncement: () => ipcRenderer.invoke('announcement:pending'),
   onAnnouncement: (callback) => {
     const listener = (_event, payload) => callback(payload)
     ipcRenderer.on('announcement:show', listener)
