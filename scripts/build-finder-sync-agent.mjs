@@ -22,6 +22,7 @@ import {
   finderSyncAgentPlistName,
   finderSyncAppGroup,
   finderSyncMachService,
+  finderSyncParentBundleId,
 } from '../electron/finder-sync.mjs'
 import { DEVELOPER_ID_IDENTITY } from './mac-signing.mjs'
 import { finderSyncCodesignIdentity, plistString } from './build-finder-sync.mjs'
@@ -219,8 +220,9 @@ export function finderSyncAgentFailures({
   }
   const associated = [...String(plist).matchAll(/<key>AssociatedBundleIdentifiers<\/key>\s*<array>([\s\S]*?)<\/array>/g)]
   const ids = associated[0] ? [...associated[0][1].matchAll(/<string>([^<]*)<\/string>/g)].map((match) => match[1]) : []
-  if (ids.length !== 1 || ids[0] !== 'app.fontbutler.desktop') {
-    failures.push('The Finder Sync agent must associate only app.fontbutler.desktop.')
+  const expectedParent = finderSyncParentBundleId(testFeed)
+  if (ids.length !== 1 || ids[0] !== expectedParent) {
+    failures.push(`The Finder Sync agent must associate only ${expectedParent}.`)
   }
   if (plistString(infoPlist, 'CFBundleIdentifier') !== label) {
     failures.push(`The Finder Sync agent bundle id is ${plistString(infoPlist, 'CFBundleIdentifier') || 'missing'}, expected ${label}.`)

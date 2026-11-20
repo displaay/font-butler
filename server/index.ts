@@ -1620,8 +1620,17 @@ const invokedAsCli = process.argv[1]
 // Packaged Electron forks this bundle as a child process so retail sync (and other API work)
 // cannot freeze the UI process. FONT_BUTLER_SERVE is set only by that worker, never by import.
 if (invokedAsCli || process.env.FONT_BUTLER_SERVE === '1') {
-  await startFontButlerServer({
-    staticDir: process.env.FONT_BUTLER_STATIC_DIR,
-    port: process.env.FONT_BUTLER_API_PORT ? Number(process.env.FONT_BUTLER_API_PORT) : undefined,
-  })
+  try {
+    await startFontButlerServer({
+      staticDir: process.env.FONT_BUTLER_STATIC_DIR,
+      port: process.env.FONT_BUTLER_API_PORT ? Number(process.env.FONT_BUTLER_API_PORT) : undefined,
+    })
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'EADDRINUSE') {
+      console.error('Cuttler API port is already in use (EADDRINUSE)')
+      process.exitCode = 1
+    } else {
+      throw error
+    }
+  }
 }

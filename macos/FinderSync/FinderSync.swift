@@ -29,10 +29,11 @@ private let fontExtensions: Set<String> = ["otf", "ttf", "ttc", "otc", "woff", "
 @objc protocol FontButtlerFinderSyncHandoff {
     func statusWithReply(_ reply: @escaping (String?) -> Void)
     func submitAction(_ action: String, paths: [String], requestId: String, reply: @escaping (String?) -> Void)
+    func reportPendingErrors(_ codes: [String], reply: @escaping (String?) -> Void)
 }
 
-private let finderSyncMissingApp = "Font Buttler couldn't be found. Open it once from its new location."
-private let finderSyncAgentDisabled = "Turn on Font Buttler in Login Items. Until then, use Services (right-click > Services > Install)."
+private let finderSyncMissingApp = "Cuttler couldn't be found. Open it once from its new location."
+private let finderSyncAgentDisabled = "Turn on Cuttler in Login Items. Until then, use Services (right-click > Services > Install)."
 
 /// In this sandboxed appex, FileManager's current-user home is the container
 /// (`~/Library/Containers/<appex-id>/Data`), so Desktop, Documents, and
@@ -93,6 +94,12 @@ final class FontButtlerFinderSync: FIFinderSync {
                 self?.refreshFinderSyncDirectories()
             }
             volumeObservers.append(token)
+        }
+        let service = menuTitle(key: "FontButtlerMachService", fallback: "")
+        if !service.isEmpty {
+            handoffQueue.async {
+                flushPendingFinderSyncErrors(service: service)
+            }
         }
     }
 
@@ -195,14 +202,17 @@ private func showFinderSyncError(_ message: String, code: String = "", detail: S
     }
 }
 
-private func queueFinderSyncPendingError(_ code: String) {
-    let allowed = ["missing-app", "not-running", "login-items", "unknown-action"]
-    guard allowed.contains(code) else { return }
+private let finderSyncPendingErrorAllowedCodes = ["missing-app", "not-running", "login-items", "unknown-action"]
+
+private func pendingErrorGroupFilePath() -> String? {
     let group = menuTitle(key: "FontButtlerAppGroup", fallback: "")
     guard !group.isEmpty,
           let directory = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group)
-    else { return }
-    let filePath = directory.appendingPathComponent("finder-sync-pending-error.json").path
+    else { return nil }
+    return directory.appendingPathComponent("finder-sync-pending-error.json").path
+}
+
+private func readFinderSyncPendingErrorEntries(filePath: String) -> (entries: [[String: Any]], readable: Bool) {
     var entries: [[String: Any]] = []
     let existing = filePath.withCString { open($0, O_RDONLY | O_NOFOLLOW) }
     if existing >= 0 {
@@ -218,9 +228,21 @@ private func queueFinderSyncPendingError(_ code: String) {
             }
         }
         close(existing)
-    } else if errno != ENOENT {
-        return
+        return (entries, true)
     }
+    if errno == ENOENT {
+        return ([], true)
+    }
+    return ([], false)
+}
+
+private func queueFinderSyncPendingError(_ code: String) {
+    guard finderSyncPendingErrorAllowedCodes.contains(code),
+          let filePath = pendingErrorGroupFilePath()
+    else { return }
+    let readResult = readFinderSyncPendingErrorEntries(filePath: filePath)
+    guard readResult.readable else { return }
+    var entries = readResult.entries
     if entries.contains(where: { ($0["code"] as? String) == code }) { return }
     if entries.count >= 5 { entries.removeFirst() }
     entries.append(["code": code, "at": Int64(Date().timeIntervalSince1970 * 1000)])
@@ -251,17 +273,54 @@ private func queueFinderSyncPendingError(_ code: String) {
     }
 }
 
+/// Drain any queued app-group error codes over XPC to the helper so the main
+/// Electron app never opens the sandboxed group container directly.
+private func flushPendingFinderSyncErrors(service: String) {
+    guard !service.isEmpty, let filePath = pendingErrorGroupFilePath() else { return }
+    let readResult = readFinderSyncPendingErrorEntries(filePath: filePath)
+    guard readResult.readable else { return }
+    var codes: [String] = []
+    for item in readResult.entries {
+        guard let code = item["code"] as? String,
+              finderSyncPendingErrorAllowedCodes.contains(code),
+              !codes.contains(code)
+        else { continue }
+        codes.append(code)
+        if codes.count >= 5 { break }
+    }
+    guard !codes.isEmpty else { return }
+    let attempt = connectFinderSync(service: service, timeout: 0.4) { remote, attempt in
+        remote.reportPendingErrors(codes) { error in
+            if error == nil {
+                attempt.succeed()
+            } else {
+                attempt.fail(error ?? "")
+            }
+        }
+    }
+    if attempt.accepted {
+        _ = filePath.withCString { unlink($0) }
+    }
+}
+
+private let bundlePackageExtensions: Set<String> = [
+    "app", "appex", "bundle", "framework", "kext", "mdimporter", "mpkg",
+    "pkg", "plugin", "prefpane", "qlgenerator", "saver", "xpc",
+]
+
 private func isFontFile(_ url: URL) -> Bool {
     fontExtensions.contains(url.pathExtension.lowercased())
 }
 
-/// Font files, and folders. The app imports a folder the same way Services does.
+/// Font files, and folders. Bundles and packages (such as `.app` or `.pkg`) are excluded.
 private func isInstallSelection(_ url: URL) -> Bool {
-    if isFontFile(url) { return true }
-    if url.hasDirectoryPath { return true }
-    let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+    let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey, .isSymbolicLinkKey])
     if values?.isSymbolicLink == true { return false }
-    return values?.isDirectory == true
+    if values?.isPackage == true { return false }
+    if bundlePackageExtensions.contains(url.pathExtension.lowercased()) { return false }
+    if isFontFile(url) { return true }
+    if let isDirectory = values?.isDirectory { return isDirectory }
+    return url.hasDirectoryPath
 }
 
 private func menuTitle(key: String, fallback: String) -> String {
@@ -382,6 +441,7 @@ func deliverFinderSyncHandoff(service: String, action: String, paths: [String], 
         showFinderSyncError(finderSyncAgentDisabled, code: "login-items", detail: probe.detail)
         return
     }
+    flushPendingFinderSyncErrors(service: service)
     // The helper's whole forward wait is kForwardAfterSpawnSeconds (20).
     let attempt = sendFinderSyncHandoff(service: service, action: action, paths: paths, requestId: requestId, timeout: 35)
     if attempt.accepted { return }

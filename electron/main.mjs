@@ -61,14 +61,14 @@ import {
   suggestedFamilyName,
 } from './finder-install.mjs'
 import {
-  FINDER_SYNC_AGENT_DISABLED,
+  FINDER_SYNC_ERROR_LOGIN_ITEMS,
   FINDER_SYNC_SETTINGS_URL,
   FINDER_SYNC_TOO_MANY_FILES,
   commitFinderSyncAgentRegistration,
-  consumeFinderSyncPendingErrorFiles,
+  consumeFinderSyncPendingErrorFilesAsync,
   finderSyncAgentBundleProgram,
+  finderSyncAgentDisabledMessage,
   finderSyncMachService,
-  finderSyncPendingErrorGroupContainer,
   finderSyncPendingErrorConsumePaths,
   finderSyncRequestSeen,
   finderSyncWireAction,
@@ -85,6 +85,7 @@ import {
   readFinderSyncFiles,
   scanFinderSyncSelection,
 } from './finder-sync.mjs'
+import { resolvePackagedApiPort } from './api-port.mjs'
 import { deliverNativeNotice, electronNotificationPermission } from './notify.mjs'
 import {
   LOGOUT_CANCELLED,
@@ -1245,7 +1246,19 @@ function registerNativeFinderServices() {
 const finderSyncRequests = new Map()
 const finderSyncErrorsShown = new Map()
 
+const FINDER_SYNC_PENDING_ERROR_TIMEOUT_MS = 2_000
+
+function isFinderSyncAgentCurrentlyEnabled() {
+  if (process.platform !== 'darwin') return false
+  const addon = loadFinderSyncReceiver()
+  if (!addon?.agentStatus) return false
+  return parseAgentJson(addon.agentStatus()).status === 'enabled'
+}
+
 function presentFinderSyncUserError(code) {
+  if (code === FINDER_SYNC_ERROR_LOGIN_ITEMS && isFinderSyncAgentCurrentlyEnabled()) {
+    return
+  }
   const now = Date.now()
   const appPath = currentFinderSyncBundle()
   const route = routeFinderSyncError({
@@ -1265,17 +1278,25 @@ function presentFinderSyncUserError(code) {
     notice.show()
     return
   }
-  dialog.showErrorBox(title, route.message)
+  const options = {
+    type: 'warning',
+    title,
+    message: route.message,
+    buttons: ['OK'],
+    defaultId: 0,
+  }
+  const parent = mainWindow && !mainWindow.isDestroyed() && mainWindowKind === 'main' ? mainWindow : undefined
+  void (parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options))
 }
 
-function consumeFinderSyncPendingErrors() {
+async function consumeFinderSyncPendingErrors() {
   // userData is Cuttler after a move or a fresh install, and the old folder
-  // when the move stalled. The helper writes the live library. Also read the
-  // other support folders so a record left by the previous helper, or written
-  // beside a library this launch is not using, is shown once and deleted.
+  // when the move stalled. The helper writes the live library under
+  // Application Support, outside Group Containers, so reading here never
+  // triggers App Data TCC. The sandboxed appex drains its own group
+  // container over XPC to the helper.
   // Test feed and FONT_BUTLER_DATA / FONTCASE_DATA stay off the installed
-  // release app's support folders and its group container. The test feed
-  // still reads its own group container.
+  // release app's support folders.
   const testFeed = testFeedPlan?.isolate === true
   const includeInstalledRecords = shouldMigrateRealMacLibrary({
     platform: process.platform,
@@ -1285,13 +1306,40 @@ function consumeFinderSyncPendingErrors() {
     userDataDir: app.getPath('userData'),
     appSupportDir: app.getPath('appData'),
     includeOtherSupportDirs: includeInstalledRecords,
-    groupContainerDir: finderSyncPendingErrorGroupContainer(app.getPath('home'), {
-      testFeed,
-      includeInstalledGroup: includeInstalledRecords,
-    }),
+    groupContainerDir: '',
   })
-  const errors = consumeFinderSyncPendingErrorFiles(files, { appPath: currentFinderSyncBundle() })
-  for (const item of errors) presentFinderSyncUserError(item.code)
+  let timer
+  try {
+    const errors = await Promise.race([
+      consumeFinderSyncPendingErrorFilesAsync(files, { appPath: currentFinderSyncBundle() }),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve([]), FINDER_SYNC_PENDING_ERROR_TIMEOUT_MS)
+        timer.unref?.()
+      }),
+    ])
+    for (const item of errors) presentFinderSyncUserError(item.code)
+  } catch (error) {
+    console.error('Could not consume pending Finder Sync errors', error)
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+function scheduleFinderSyncPendingErrorConsume() {
+  let ran = false
+  const run = () => {
+    if (ran || isQuitting) return
+    ran = true
+    void consumeFinderSyncPendingErrors()
+  }
+  const win = mainWindow
+  if (win && !win.isDestroyed() && mainWindowKind === 'main' && win.webContents?.isLoading?.()) {
+    win.webContents.once('did-finish-load', run)
+    const fallback = setTimeout(run, 1_500)
+    fallback.unref?.()
+    return
+  }
+  setImmediate(run)
 }
 
 function finderSyncAgentRecordFile() {
@@ -1389,7 +1437,7 @@ function applyFinderSyncAgentRegistration(addon, { surface = false } = {}) {
     result.status !== 'enabled' &&
     result.status !== 'unsupported'
   ) {
-    dialog.showErrorBox('Finder menu', `${result.error}\n\n${FINDER_SYNC_AGENT_DISABLED}`)
+    dialog.showErrorBox('Finder menu', `${result.error}\n\n${finderSyncAgentDisabledMessage(currentBundle)}`)
   }
   return result
 }
@@ -1425,7 +1473,10 @@ function registerFinderSyncReceiver({ surface = false, registerAgent = true } = 
       const action = finderSyncWireAction(payload?.action)
       if (!action) {
         console.error('Finder Sync handoff refused', 'action')
-        dialog.showErrorBox('Install', 'Font Buttler could not read that Finder selection. Use Services (right-click > Services > Install).')
+        dialog.showErrorBox(
+          'Install',
+          `${finderSyncProductDisplayName(currentFinderSyncBundle())} could not read that Finder selection. Use Services (right-click > Services > Install).`,
+        )
         return
       }
       if (payload?.overflow === 'files') {
@@ -2615,6 +2666,8 @@ function buildAppMenu() {
   ])
 }
 
+let receiverOnly = false
+
 if (process.argv.includes('--finder-sync-agent-status')) {
   app.whenReady().then(() => {
     reportFinderSyncAgentStatus()
@@ -2661,7 +2714,7 @@ const launchMode = sharedLibraryLaunchMode({
   sameExecutableHeld: instance.held,
   sharedLockHeld: !gotLock,
 })
-const receiverOnly = launchMode === 'receiver'
+receiverOnly = launchMode === 'receiver'
 if (launchMode === 'quit') {
   app.quit()
 } else {
@@ -2801,16 +2854,25 @@ if (launchMode === 'quit') {
       apiChild = child
       let settled = false
       let buffer = ''
+      let startupStderr = ''
 
       function finish(error, info) {
         if (settled) return
         settled = true
         if (error) {
+          if (error.code !== 'EADDRINUSE' && startupStderr) {
+            logDebugMultiline('api-stderr', startupStderr)
+            console.error(startupStderr.trimEnd())
+          }
           error.tail = buffer.slice(-4000)
           child.kill()
           apiChild = null
           reject(error)
           return
+        }
+        if (startupStderr) {
+          logDebugMultiline('api-stderr', startupStderr)
+          console.error(startupStderr.trimEnd())
         }
         resolve(info)
       }
@@ -2851,8 +2913,12 @@ if (launchMode === 'quit') {
         const text = String(chunk)
         buffer += text
         apiWorkerLogTail = buffer.slice(-8000)
-        logDebugMultiline('api-stderr', text)
         if (buffer.length > 64_000) buffer = buffer.slice(-32_000)
+        if (!settled) {
+          startupStderr += text
+          return
+        }
+        logDebugMultiline('api-stderr', text)
         console.error(text.trimEnd())
       })
     })
@@ -2876,28 +2942,38 @@ if (launchMode === 'quit') {
       throw new Error('Packaged API worker is missing (electron/server.bundle.mjs).')
     }
     const preferred = Number(new URL(API).port || DEFAULT_API_PORT)
-    let lastError
-    for (let port = preferred; port < preferred + 20; port += 1) {
-      try {
-        const info = await spawnApiWorker({ serverPath, staticDir, port })
-        API = `http://127.0.0.1:${info.port}`
-        publishApiEndpoint(API)
-        if (info.token) {
-          apiToken = info.token
-        }
-        if (!process.env.FONT_BUTLER_UI && !process.env.FONTCASE_UI) {
-          UI = API
-        }
-        return
-      } catch (error) {
-        lastError = error
-        if (error && typeof error === 'object' && 'code' in error && error.code === 'EADDRINUSE') {
-          continue
-        }
-        throw error
+    let loggedPortFallback = false
+    const logPortFallbackOnce = (portInUse) => {
+      if (loggedPortFallback) return
+      loggedPortFallback = true
+      const message = `Cuttler API port ${portInUse} is already in use; falling back to an available port.`
+      console.warn(message)
+      logDebug('bootstrap', message)
+    }
+    const resolved = await resolvePackagedApiPort({
+      preferredPort: preferred,
+      onFallback: (portInUse) => logPortFallbackOnce(portInUse),
+    })
+    const applyWorkerInfo = (info) => {
+      API = `http://127.0.0.1:${info.port}`
+      publishApiEndpoint(API)
+      if (info.token) {
+        apiToken = info.token
+      }
+      if (!process.env.FONT_BUTLER_UI && !process.env.FONTCASE_UI) {
+        UI = API
       }
     }
-    throw lastError
+    try {
+      applyWorkerInfo(await spawnApiWorker({ serverPath, staticDir, port: resolved.port }))
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'EADDRINUSE') {
+        logPortFallbackOnce(resolved.port)
+        applyWorkerInfo(await spawnApiWorker({ serverPath, staticDir, port: 0 }))
+        return
+      }
+      throw error
+    }
   }
 
   async function bootstrapApi(options = {}) {
@@ -3021,7 +3097,6 @@ if (launchMode === 'quit') {
       return
     }
     const bootstrapOk = await bootstrapApi()
-    consumeFinderSyncPendingErrors()
     ensureTray()
     if (bootstrapOk) {
       startMainUiAfterBootstrap()
@@ -3032,6 +3107,7 @@ if (launchMode === 'quit') {
         if (!isQuitting) void retailTick()
       }, RETAIL_TICK_MS)
     }
+    scheduleFinderSyncPendingErrorConsume()
     try {
       refreshFinderSyncRegistration({
         platform: process.platform,
@@ -3181,14 +3257,15 @@ ipcMain.handle('set-finder-sync-agent-enabled', (_event, enabled) => {
 
 ipcMain.handle('open-finder-sync-login-items', () => {
   if (process.platform !== 'darwin') return false
+  const disabledMessage = finderSyncAgentDisabledMessage(currentFinderSyncBundle())
   const addon = loadFinderSyncReceiver()
   if (!addon?.openLoginItems) {
-    dialog.showErrorBox('Finder menu', FINDER_SYNC_AGENT_DISABLED)
+    dialog.showErrorBox('Finder menu', disabledMessage)
     return false
   }
   const opened = parseAgentJson(addon.openLoginItems())
   if (opened.ok !== true) {
-    dialog.showErrorBox('Finder menu', opened.error || FINDER_SYNC_AGENT_DISABLED)
+    dialog.showErrorBox('Finder menu', opened.error || disabledMessage)
     return false
   }
   return true

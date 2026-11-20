@@ -41,8 +41,10 @@ static const uint32_t kMaxFrame = 2 * 1024 * 1024;
 static BOOL g_testFeed = NO;
 static BOOL g_launchedApp = NO;
 static pid_t g_spawnedPid = 0;
-static NSString *const kMissingAppMessage =
-    @"Font Buttler couldn't be found. Open it once from its new location.";
+static NSString *RunningProductName(void);
+static NSString *MissingAppMessage(void) {
+  return [NSString stringWithFormat:@"%@ couldn't be found. Open it once from its new location.", RunningProductName()];
+}
 static const off_t kPendingErrorMaxBytes = 8192;
 static const NSUInteger kPendingErrorMaxEntries = 5;
 // Shorter than the XPC client's submit wait. A reply after that wait is
@@ -408,11 +410,11 @@ static NSString *LaunchContainingAppOnce(void) {
   if (g_launchedApp) return nil;
   NSURL *appURL = ContainingAppURL();
   NSString *binary = BundleExecutable(appURL);
-  if (!binary.length) return kMissingAppMessage;
+  if (!binary.length) return MissingAppMessage();
   g_launchedApp = YES;
   if (!SpawnExecutable(binary)) {
     g_launchedApp = NO;
-    return kMissingAppMessage;
+    return MissingAppMessage();
   }
   return nil;
 }
@@ -665,6 +667,7 @@ static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL over
                paths:(NSArray<NSString *> *)paths
            requestId:(NSString *)requestId
                reply:(void (^)(NSString *error))reply;
+- (void)reportPendingErrors:(NSArray<NSString *> *)codes reply:(void (^)(NSString *error))reply;
 @end
 
 @interface FontButtlerFinderSyncAgent : NSObject <NSXPCListenerDelegate, FontButtlerFinderSyncHandoff>
@@ -766,6 +769,23 @@ static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL over
       usleep(50 * 1000);
     }
     ReportFinderSyncError(reply, @"not-running", NotRunningMessage());
+  });
+}
+
+- (void)reportPendingErrors:(NSArray<NSString *> *)codes reply:(void (^)(NSString *))reply {
+  NSArray *incoming = [codes isKindOfClass:[NSArray class]] ? codes : @[];
+  NSMutableArray<NSString *> *accepted = [NSMutableArray array];
+  for (id item in incoming) {
+    if (![item isKindOfClass:[NSString class]]) continue;
+    if (!FinderSyncErrorCodeIsKnown(item) || [accepted containsObject:item]) continue;
+    if (accepted.count >= kPendingErrorMaxEntries) break;
+    [accepted addObject:item];
+  }
+  dispatch_async(self.forwardQueue, ^{
+    for (NSString *code in accepted) {
+      if (!ForwardErrorToApp(code)) WritePendingFinderSyncError(code);
+    }
+    if (reply) reply(nil);
   });
 }
 

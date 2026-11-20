@@ -1,5 +1,19 @@
 import { createHash } from 'node:crypto'
-import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync, unlinkSync } from 'node:fs'
+import {
+  closeSync,
+  constants as fsConstants,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  promises as fsPromises,
+  readFileSync,
+  readSync,
+  readdirSync,
+  readlinkSync,
+  realpathSync,
+  unlinkSync,
+} from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { Worker } from 'node:worker_threads'
@@ -10,6 +24,7 @@ import {
   finderSyncGroupContainerDirectory,
   parseFinderSyncPendingErrorEntries,
   readFinderSyncPendingErrorRecord,
+  readFinderSyncPendingErrorRecordAsync,
 } from './finder-sync-pending-error.mjs'
 import { TEST_FEED_USER_DATA_DIR } from './test-feed-data.mjs'
 
@@ -28,11 +43,14 @@ export {
   finderSyncPendingErrorFolderName,
   finderSyncPendingErrorWriteDirectory,
   finderSyncSupportDirHasLibrary,
+  readFinderSyncPendingErrorRecord,
+  readFinderSyncPendingErrorRecordAsync,
 } from './finder-sync-pending-error.mjs'
 
 export const FINDER_SYNC_BUNDLE_ID = 'app.fontbutler.desktop.FinderSync'
 export const FINDER_SYNC_TEST_BUNDLE_ID = 'app.fontbutler.desktop.FinderSync.Test'
 export const FINDER_SYNC_PARENT_BUNDLE_ID = 'app.fontbutler.desktop'
+export const FINDER_SYNC_TEST_PARENT_BUNDLE_ID = 'app.fontbutler.desktop.test'
 export const FINDER_SYNC_AGENT_BUNDLE_ID = 'app.fontbutler.desktop.FinderSyncAgent'
 export const FINDER_SYNC_AGENT_TEST_BUNDLE_ID = 'app.fontbutler.desktop.FinderSyncAgent.Test'
 export const FINDER_SYNC_AGENT_EXECUTABLE = 'FontButtlerFinderSyncAgent'
@@ -69,14 +87,14 @@ export const FINDER_SYNC_CHANGED_BEFORE_INSTALL = 'The file changed before it co
 export const FINDER_SYNC_TREE_DEPTH = 10
 export const FINDER_SYNC_TREE_TOO_DEEP = 'That folder is nested more than 10 levels deep.'
 export const FINDER_SYNC_MISSING_APP =
-  "Font Buttler couldn't be found. Open it once from its new location."
+  "Cuttler couldn't be found. Open it once from its new location."
 export const FINDER_SYNC_AGENT_DISABLED =
-  'Turn on Font Buttler in Login Items. Until then, use Services (right-click > Services > Install).'
+  'Turn on Cuttler in Login Items. Until then, use Services (right-click > Services > Install).'
 export const FINDER_SYNC_REQUEST_TTL_MS = 2 * 60 * 1000
 export const FINDER_SYNC_REQUEST_CAP = 256
 /** Suppress a repeat of the same Finder Sync error only for this long. */
 export const FINDER_SYNC_ERROR_SHOWN_TTL_MS = 30 * 1000
-export const FINDER_SYNC_NOT_RUNNING = 'Font Buttler is not running.'
+export const FINDER_SYNC_NOT_RUNNING = 'Cuttler is not running.'
 export const FINDER_SYNC_UNKNOWN_ACTION = 'Unknown Finder Sync action.'
 export const FINDER_SYNC_ERROR_MISSING_APP = 'missing-app'
 export const FINDER_SYNC_ERROR_NOT_RUNNING = 'not-running'
@@ -181,6 +199,10 @@ export function finderSyncAgentBundleProgram() {
 export function finderSyncAgentCodeSigningRequirement(testFeed) {
   const identifier = finderSyncAgentBundleId(Boolean(testFeed))
   return `anchor apple generic and certificate leaf[subject.OU] = "${FINDER_SYNC_TEAM_ID}" and identifier "${identifier}"`
+}
+
+export function finderSyncParentBundleId(testFeed) {
+  return testFeed ? FINDER_SYNC_TEST_PARENT_BUNDLE_ID : FINDER_SYNC_PARENT_BUNDLE_ID
 }
 
 /**
@@ -379,14 +401,29 @@ export function commitFinderSyncAgentRegistration({
       }
     }
   }
+  let registerError = ''
   if (plan.action === 'register' || plan.action === 'reregister') {
     const registered = register()
-    if (typeof registered === 'string' && registered) resultStatus = registered
+    if (typeof registered === 'string' && registered) {
+      resultStatus = registered
+    } else if (registered && typeof registered === 'object') {
+      if (typeof registered.status === 'string' && registered.status) resultStatus = registered.status
+      if (registered.ok === false || registered.error) {
+        registerError = String(registered.error || 'Finder Sync agent registration failed.')
+      }
+    }
   }
-  const approved = resultStatus === 'enabled' || resultStatus === 'requires-approval'
+  const approved = !registerError && (resultStatus === 'enabled' || resultStatus === 'requires-approval')
   const bundle = absoluteBundlePath(currentBundle)
   if (!approved || !bundle || optedOut || plan.action === 'unregister') {
-    return { plan, status: resultStatus, record: stored, saved: false, refused: false }
+    return {
+      plan,
+      status: resultStatus,
+      record: stored,
+      saved: false,
+      refused: false,
+      ...(registerError ? { error: registerError } : {}),
+    }
   }
   const next = {
     enabled: true,
@@ -416,6 +453,14 @@ export function finderSyncProductDisplayName(appPath) {
     if (FINDER_SYNC_PRODUCT_EXECUTABLES.includes(name)) return name
   }
   return 'Cuttler'
+}
+
+export function finderSyncMissingAppMessage(appPath) {
+  return `${finderSyncProductDisplayName(appPath)} couldn't be found. Open it once from its new location.`
+}
+
+export function finderSyncAgentDisabledMessage(appPath) {
+  return `Turn on ${finderSyncProductDisplayName(appPath)} in Login Items. Until then, use Services (right-click > Services > Install).`
 }
 
 export function finderSyncNotRunningMessage(appPath) {
@@ -541,7 +586,9 @@ export function releaseSameExecutableInstance({ lockPath, pid, io } = {}) {
 
 /** Fixed copy for a known Finder Sync error code. Anything else is empty. */
 export function finderSyncErrorMessage(code, appPath) {
+  if (code === FINDER_SYNC_ERROR_MISSING_APP) return finderSyncMissingAppMessage(appPath)
   if (code === FINDER_SYNC_ERROR_NOT_RUNNING) return finderSyncNotRunningMessage(appPath)
+  if (code === FINDER_SYNC_ERROR_LOGIN_ITEMS) return finderSyncAgentDisabledMessage(appPath)
   return Object.hasOwn(FINDER_SYNC_ERROR_MESSAGES, code) ? FINDER_SYNC_ERROR_MESSAGES[code] : ''
 }
 
@@ -609,6 +656,43 @@ export function consumeFinderSyncPendingErrorFiles(filePaths, { io, appPath, unl
   for (const filePath of discardPaths) {
     try {
       unlink(filePath)
+    } catch {
+      // A later launch can read the file again.
+    }
+  }
+  return errors
+}
+
+export async function readFinderSyncPendingErrorFileAsync(filePath, io = fsPromises, appPath) {
+  const read = await readFinderSyncPendingErrorRecordAsync(filePath, io)
+  return {
+    discard: read.discard,
+    reason: read.reason,
+    errors: read.errors
+      .map((item) => ({ ...item, message: finderSyncErrorMessage(item.code, appPath) }))
+      .filter((item) => item.message),
+  }
+}
+
+export async function consumeFinderSyncPendingErrorFilesAsync(
+  filePaths,
+  { io, appPath, unlink = fsPromises.unlink } = {},
+) {
+  const seen = new Set()
+  const errors = []
+  const discardPaths = []
+  for (const filePath of filePaths ?? []) {
+    const read = await readFinderSyncPendingErrorFileAsync(filePath, io, appPath)
+    if (read.discard) discardPaths.push(filePath)
+    for (const item of read.errors) {
+      if (seen.has(item.code) || errors.length >= FINDER_SYNC_PENDING_ERROR_MAX_ENTRIES) continue
+      seen.add(item.code)
+      errors.push(item)
+    }
+  }
+  for (const filePath of discardPaths) {
+    try {
+      await unlink(filePath)
     } catch {
       // A later launch can read the file again.
     }
@@ -711,7 +795,7 @@ export function finderSyncAgentLaunchAgentPlist(testFeed) {
     <string>${xmlEscape(program)}</string>
     <key>AssociatedBundleIdentifiers</key>
     <array>
-      <string>${FINDER_SYNC_PARENT_BUNDLE_ID}</string>
+      <string>${xmlEscape(finderSyncParentBundleId(testFeed))}</string>
     </array>
     <key>MachServices</key>
     <dict>

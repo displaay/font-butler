@@ -6,6 +6,7 @@ import {
   fsyncSync,
   lstatSync,
   openSync,
+  promises as fsPromises,
   readSync,
   renameSync,
   unlinkSync,
@@ -117,6 +118,55 @@ export function readFinderSyncPendingErrorRecord(filePath, io = defaultReadIo) {
   } finally {
     try {
       io.closeSync(fd)
+    } catch {
+      // The descriptor is already closed.
+    }
+  }
+}
+
+/**
+ * Async variant of `readFinderSyncPendingErrorRecord` using fs.promises so
+ * startup never blocks the main thread on slow I/O.
+ */
+export async function readFinderSyncPendingErrorRecordAsync(filePath, io = fsPromises) {
+  if (!filePath || typeof io?.open !== 'function') {
+    return { errors: [], discard: false, reason: 'unavailable' }
+  }
+  let handle
+  try {
+    handle = await io.open(filePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { errors: [], discard: false, reason: 'absent' }
+    if (error?.code === 'ELOOP' || error?.code === 'EMLINK' || error?.code === 'EPERM') {
+      return { errors: [], discard: false, reason: 'symlink' }
+    }
+    return { errors: [], discard: false, reason: 'unreadable' }
+  }
+  try {
+    const stat = await handle.stat()
+    if (typeof stat?.isFile !== 'function' || !stat.isFile()) {
+      return { errors: [], discard: false, reason: 'not-file' }
+    }
+    if (typeof stat.size !== 'number' || stat.size < 0 || stat.size > FINDER_SYNC_PENDING_ERROR_MAX_BYTES) {
+      return { errors: [], discard: true, reason: 'oversize' }
+    }
+    const buffer = Buffer.alloc(stat.size)
+    let got = 0
+    while (got < stat.size) {
+      const { bytesRead } = await handle.read(buffer, got, stat.size - got, null)
+      if (bytesRead <= 0) break
+      got += bytesRead
+    }
+    return {
+      errors: parseFinderSyncPendingErrorEntries(buffer.subarray(0, got).toString('utf8')),
+      discard: true,
+      reason: 'ok',
+    }
+  } catch {
+    return { errors: [], discard: true, reason: 'unreadable' }
+  } finally {
+    try {
+      await handle.close()
     } catch {
       // The descriptor is already closed.
     }

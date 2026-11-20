@@ -66,7 +66,7 @@ export function finderSyncInfoPlist({
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleDisplayName</key>
-    <string>Font Buttler</string>
+    <string>${xmlEscape(testFeed ? 'Font Buttler Test' : 'Cuttler')}</string>
     <key>CFBundleExecutable</key>
     <string>${xmlEscape(executable)}</string>
     <key>CFBundleIdentifier</key>
