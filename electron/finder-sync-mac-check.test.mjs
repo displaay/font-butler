@@ -21,8 +21,11 @@ import {
   nmListsExtensionMain,
   parseAgentStatusOutput,
   parseMacCheckArgs,
+  bundleFromServiceListing,
   finderSyncAppLaunchEnv,
+  finderSyncRoundtripBlockReason,
   parseRoundtripArgs,
+  productExecutablesFromPgrep,
   sameArchSet,
   selectProductAppBundle,
   appexCoveredByAppNotarization,
@@ -332,4 +335,57 @@ test('the default app launch env does not contain the real HOME', () => {
   assert.match(roundtrip, /finderSyncAppLaunchEnv\(/)
   assert.match(roundtrip, /env: launch\.env/)
   assert.match(roundtrip, /spawn\(binary, \[\], \{ detached: true, stdio: 'ignore', env: launch\.env \}\)/)
+  const blockAt = roundtrip.indexOf('finderSyncRoundtripBlockReason(')
+  const statusAt = roundtrip.indexOf("'--finder-sync-agent-status'")
+  const spawnAt = roundtrip.indexOf('spawn(binary, [], { detached: true')
+  assert.ok(blockAt > 0 && blockAt < statusAt && blockAt < spawnAt)
+})
+
+test('the roundtrip refuses a running product or a LaunchAgent for another bundle', () => {
+  assert.deepEqual(
+    productExecutablesFromPgrep('431 Cuttler\n432 Font Buttler\n433 Font Buttler Test\n434 other'),
+    ['Cuttler', 'Font Buttler', 'Font Buttler Test'],
+  )
+  assert.deepEqual(productExecutablesFromPgrep(''), [])
+  const listing = [
+    'path = /Applications/Cuttler.app/Contents/Library/LaunchAgents/app.fontbutler.desktop.FinderSyncAgent.plist',
+    'program = /Applications/Cuttler.app/Contents/Helpers/FontButtlerFinderSyncAgent.app/Contents/MacOS/FontButtlerFinderSyncAgent',
+  ].join('\n')
+  assert.equal(bundleFromServiceListing(listing), '/Applications/Cuttler.app')
+  assert.equal(
+    bundleFromServiceListing('url = file:///Users/tester/Font Buttler Test.app/Contents/MacOS/Font Buttler Test'),
+    '/Users/tester/Font Buttler Test.app',
+  )
+  assert.equal(bundleFromServiceListing('Could not find service'), '')
+  const running = finderSyncRoundtripBlockReason({
+    runningExecutables: ['Cuttler'],
+    registrationBundle: '/tmp/build/Cuttler.app',
+    appBundle: '/tmp/build/Cuttler.app',
+  })
+  assert.match(running, /Refusing to start: Cuttler is already running/)
+  assert.match(running, /separate macOS user account/)
+  const otherBundle = finderSyncRoundtripBlockReason({
+    runningExecutables: [],
+    registrationBundle: '/Applications/Cuttler.app',
+    appBundle: '/tmp/build/Cuttler.app',
+  })
+  assert.match(otherBundle, /registered at \/Applications\/Cuttler\.app/)
+  assert.match(otherBundle, /not \/tmp\/build\/Cuttler\.app/)
+  assert.equal(
+    finderSyncRoundtripBlockReason({
+      registrationBundle: '/tmp/build/Cuttler.app',
+      appBundle: '/tmp/build/Cuttler.app/',
+    }),
+    '',
+  )
+  assert.equal(
+    finderSyncRoundtripBlockReason({
+      registrationBundle: '',
+      appBundle: '/tmp/build/Font Buttler.app',
+    }),
+    '',
+  )
+  const probe = finderSyncRoundtripBlockReason({ probeError: 'could not run pgrep (ENOENT).' })
+  assert.match(probe, /could not run pgrep/)
+  assert.match(probe, /separate macOS user account/)
 })

@@ -2270,17 +2270,15 @@ test('a second launch from the same bundle path does not register again', () => 
   assert.ok(statusFlagAt >= 0 && statusFlagAt < isolateAt && statusFlagAt < migrateAt)
   assert.match(registration.slice(isolateAt - 120, isolateAt), /finderSyncAgentStatusOnly \? \{ isolate: false \}/)
   assert.match(registration, /!finderSyncAgentStatusOnly &&\s*canSetUserData &&\s*shouldMigrateRealMacLibrary/)
-  assert.match(registration, /!finderSyncAgentStatusOnly && testFeedPlan\?\.isolate !== true && canSetUserData/)
+  assert.match(registration, /electronUserDataForDataOverride\(explicitDataOverride\)/)
+  assert.match(registration, /userDataDirForLaunch\(/)
+  assert.match(registration, /overrideUserData \|\| testFeedPlan\?\.isolate !== true/)
   const statusBranch = registration.slice(
     registration.indexOf('if (finderSyncAgentStatusOnly) {'),
     registration.indexOf('} else {', registration.indexOf('if (finderSyncAgentStatusOnly) {')),
   )
-  assert.match(statusBranch, /setTimeout\(/)
-  assert.match(statusBranch, /10_000/)
-  assert.match(statusBranch, /app\.exit\(1\)/)
-  assert.match(statusBranch, /process\.exit\(1\)/)
-  assert.match(statusBranch, /Promise\.race\(\[\s*app\.whenReady\(\)/)
-  assert.doesNotMatch(statusBranch, /applyTestFeedDataIsolation|migrateLegacyMacAppDirs|app\.setPath\(/)
+  assert.match(statusBranch, /reportFinderSyncAgentStatus\(\)/)
+  assert.doesNotMatch(statusBranch, /whenReady|setTimeout|Promise\.race|setPath|registerAgent|unregisterAgent/)
 
   const seen = new Map()
   assert.equal(finderSyncRequestSeen(seen, 'click-1', 1_000), false)
@@ -3187,6 +3185,179 @@ test('a Finder job delivered after startup reaches showMainWindow without Refere
       timeout: 15_000,
     })
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('--finder-sync-agent-status exits before whenReady and does not touch userData', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-agent-status-'))
+  const callsFile = path.join(root, 'calls.txt')
+  const dataDir = path.join(root, 'real-library')
+  writeFileSync(callsFile, '')
+  const mainUrl = pathToFileURL(fileURLToPath(new URL('./main.mjs', import.meta.url))).href
+  const harness = `
+    import { appendFileSync } from 'node:fs'
+    import { registerHooks } from 'node:module'
+    const callsFile = ${JSON.stringify(callsFile)}
+    const note = (line) => appendFileSync(callsFile, line + '\\n')
+    const appMock = {
+      isPackaged: false,
+      isReady: () => false,
+      getPath: (name) => name,
+      setPath: (key, value) => note('setPath ' + key + ' ' + value),
+      whenReady: () => { note('whenReady'); return new Promise(() => {}) },
+      exit: (code) => note('exit ' + code),
+      requestSingleInstanceLock: () => { note('lock'); return true },
+      on: () => {},
+      quit: () => note('quit'),
+      getVersion: () => '0.4.1',
+      setName: () => {},
+    }
+    const electronStub = {
+      app: appMock,
+      BrowserWindow: class {},
+      clipboard: { writeText: () => {} },
+      Menu: { buildFromTemplate: () => ({}), setApplicationMenu: () => {} },
+      Notification: class { static isSupported() { return false } on() {} show() {} },
+      Tray: class { setToolTip() {} setContextMenu() {} on() {} },
+      dialog: { showErrorBox: () => note('dialog'), showMessageBox: () => Promise.resolve({ response: 0 }) },
+      ipcMain: { handle: () => note('ipc'), on: () => {} },
+      nativeImage: { createFromPath: () => ({ isEmpty: () => true }) },
+      nativeTheme: { shouldUseDarkColors: false, on: () => {} },
+      shell: { openExternal: () => Promise.resolve() },
+      utilityProcess: { fork: () => { note('fork'); throw new Error('fork') } },
+    }
+    registerHooks({
+      resolve(specifier, context, next) {
+        if (specifier === 'electron') return { shortCircuit: true, url: 'mock:electron' }
+        return next(specifier, context)
+      },
+      load(url, context, next) {
+        if (url === 'mock:electron') {
+          globalThis.__electronMock = electronStub
+          return {
+            shortCircuit: true,
+            format: 'module',
+            source: 'const m = globalThis.__electronMock; export default m; export const { app, BrowserWindow, clipboard, Menu, Notification, Tray, dialog, ipcMain, nativeImage, nativeTheme, shell, utilityProcess } = m;',
+          }
+        }
+        return next(url, context)
+      },
+    })
+    await import(${JSON.stringify(mainUrl)})
+    note('imported')
+    process.exit(2)
+  `
+  try {
+    const result = spawnSync(
+      process.execPath,
+      ['--input-type=module', '-e', harness, '--', '--finder-sync-agent-status'],
+      {
+        encoding: 'utf8',
+        timeout: 8_000,
+        env: {
+          ...process.env,
+          HOME: root,
+          FONT_BUTLER_DATA: dataDir,
+          FONTCASE_DATA: dataDir,
+        },
+      },
+    )
+    const calls = readFileSync(callsFile, 'utf8')
+    assert.equal(result.error, undefined, calls + '\n' + result.stderr)
+    assert.match(result.stdout, /finder-sync-agent-status \{/)
+    assert.equal(result.status, 1)
+    assert.doesNotMatch(calls, /whenReady/)
+    assert.doesNotMatch(calls, /setPath/)
+    assert.doesNotMatch(calls, /lock|ipc|dialog|quit|fork|imported/)
+    assert.match(calls, /exit 1/)
+    assert.equal(existsSync(dataDir), false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('FONT_BUTLER_DATA redirects userData before the app is ready', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-userdata-override-'))
+  const callsFile = path.join(root, 'calls.txt')
+  const dataDir = path.join(root, 'library')
+  const homeDir = path.join(root, 'home')
+  mkdirSync(homeDir, { recursive: true })
+  writeFileSync(callsFile, '')
+  const mainUrl = pathToFileURL(fileURLToPath(new URL('./main.mjs', import.meta.url))).href
+  const harness = `
+    import { appendFileSync } from 'node:fs'
+    import { registerHooks } from 'node:module'
+    const callsFile = ${JSON.stringify(callsFile)}
+    const note = (line) => appendFileSync(callsFile, line + '\\n')
+    const appMock = {
+      isPackaged: false,
+      isReady: () => false,
+      getPath: (name) => name === 'home' ? ${JSON.stringify(homeDir)} : name === 'appData' ? ${JSON.stringify(path.join(root, 'appdata'))} : ${JSON.stringify(root)},
+      setPath: (key, value) => note('setPath ' + key + ' ' + value),
+      whenReady: () => { note('whenReady'); process.exit(0); return Promise.resolve() },
+      exit: (code) => note('exit ' + code),
+      requestSingleInstanceLock: () => { note('lock'); return true },
+      on: () => {},
+      quit: () => {},
+      getVersion: () => '0.4.1',
+      setName: () => {},
+      dock: { hide() {}, setIcon() {} },
+    }
+    const electronStub = {
+      app: appMock,
+      BrowserWindow: class { static getAllWindows() { return [] } },
+      clipboard: { writeText: () => {} },
+      Menu: { buildFromTemplate: () => ({}), setApplicationMenu: () => {} },
+      Notification: class { static isSupported() { return false } on() {} show() {} },
+      Tray: class { setToolTip() {} setContextMenu() {} on() {} },
+      dialog: { showErrorBox: () => {}, showMessageBox: () => Promise.resolve({ response: 0 }), showOpenDialog: () => Promise.resolve({ canceled: true, filePaths: [] }) },
+      ipcMain: { handle: () => {}, on: () => {} },
+      nativeImage: { createFromPath: () => ({ isEmpty: () => true, resize: () => ({ setTemplateImage() {} }) }) },
+      nativeTheme: { shouldUseDarkColors: false, on: () => {} },
+      shell: { openExternal: () => Promise.resolve() },
+      utilityProcess: { fork: () => ({ on() {}, stdout: { on() {} }, stderr: { on() {} }, kill() {} }) },
+    }
+    process.on('uncaughtException', (err) => { console.error(err); process.exit(1) })
+    process.on('unhandledRejection', (err) => { console.error(err); process.exit(1) })
+    registerHooks({
+      resolve(specifier, context, next) {
+        if (specifier === 'electron') return { shortCircuit: true, url: 'mock:electron' }
+        return next(specifier, context)
+      },
+      load(url, context, next) {
+        if (url === 'mock:electron') {
+          globalThis.__electronMock = electronStub
+          return {
+            shortCircuit: true,
+            format: 'module',
+            source: 'const m = globalThis.__electronMock; export default m; export const { app, BrowserWindow, clipboard, Menu, Notification, Tray, dialog, ipcMain, nativeImage, nativeTheme, shell, utilityProcess } = m;',
+          }
+        }
+        return next(url, context)
+      },
+    })
+    await import(${JSON.stringify(mainUrl)})
+  `
+  try {
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', harness], {
+      encoding: 'utf8',
+      timeout: 8_000,
+      env: {
+        ...process.env,
+        HOME: homeDir,
+        FONT_BUTLER_DATA: dataDir,
+      },
+    })
+    const calls = readFileSync(callsFile, 'utf8')
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}\n${calls}`)
+    const setPaths = calls.split(/\n/).filter((line) => line.startsWith('setPath userData '))
+    assert.deepEqual(setPaths, [`setPath userData ${path.join(dataDir, 'electron-user-data')}`])
+    assert.match(calls, /whenReady/)
+    const whenReadyAt = calls.indexOf('whenReady')
+    const setPathAt = calls.indexOf('setPath userData ')
+    assert.ok(setPathAt >= 0 && setPathAt < whenReadyAt)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

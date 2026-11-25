@@ -12,6 +12,7 @@ import {
 import {
   FINDER_SYNC_MAX_BYTES,
   FINDER_SYNC_MAX_FILES,
+  FINDER_SYNC_PRODUCT_EXECUTABLES,
   FINDER_SYNC_TOO_LARGE,
   FINDER_SYNC_TOO_MANY_FILES,
   FINDER_SYNC_TREE_TOO_DEEP,
@@ -224,6 +225,87 @@ export function finderSyncAppLaunchEnv({ realHome = false, env = process.env, te
     tempHome,
     warning: '',
   }
+}
+
+const PRODUCT_APP_NAMES = ['Font Buttler Test.app', 'Font Buttler.app', 'Cuttler.app']
+
+function normalizeBundlePath(filePath) {
+  if (typeof filePath !== 'string') return ''
+  const trimmed = filePath.trim().replace(/\/+$/, '')
+  if (!trimmed.startsWith('/')) return ''
+  return path.resolve(trimmed)
+}
+
+/**
+ * Executable names from `pgrep -x -l`. Longer product names are matched
+ * first so "Font Buttler Test" is not reported as "Font Buttler".
+ */
+export function productExecutablesFromPgrep(output) {
+  const wanted = [...FINDER_SYNC_PRODUCT_EXECUTABLES].sort((a, b) => b.length - a.length)
+  const found = []
+  for (const line of String(output ?? '').split(/\r?\n/)) {
+    const name = line.replace(/^\s*\d+\s+/, '').trim()
+    if (wanted.includes(name) && !found.includes(name)) found.push(name)
+  }
+  return found
+}
+
+/**
+ * First product `.app` path in `launchctl print` or a BTM dump. The match
+ * stops at the bundle, so a LaunchAgent path inside Contents still yields
+ * the app under test.
+ */
+export function bundleFromServiceListing(text) {
+  const source = String(text ?? '')
+  let best = ''
+  for (const name of PRODUCT_APP_NAMES) {
+    const needle = `/${name}`
+    let from = 0
+    while (from < source.length) {
+      const at = source.indexOf(needle, from)
+      if (at < 0) break
+      const end = at + needle.length
+      let begin = at
+      while (begin > 0 && !/[\s"'=]/.test(source[begin - 1])) begin -= 1
+      const raw = source.slice(begin, end)
+      const pathStart = raw.startsWith('file://') ? raw.indexOf('/', 'file://'.length) : raw.startsWith('/') ? 0 : -1
+      const candidate = pathStart >= 0 ? raw.slice(pathStart) : ''
+      if (candidate.startsWith('/') && (!best || candidate.length < best.length)) best = candidate
+      from = end
+    }
+  }
+  return best
+}
+
+/**
+ * Empty when the roundtrip may launch. A running Cuttler or Font Buttler
+ * process, or a LaunchAgent registered for a different bundle, is refused.
+ * A throwaway HOME does not isolate SMAppService, the app group, or the
+ * per-user socket; only a separate macOS user account does.
+ */
+export function finderSyncRoundtripBlockReason({
+  runningExecutables = [],
+  registrationBundle = '',
+  appBundle = '',
+  probeError = '',
+} = {}) {
+  if (typeof probeError === 'string' && probeError.trim()) {
+    return `Refusing to start: ${probeError.trim()} Only a separate macOS user account isolates registration.`
+  }
+  const running = []
+  for (const name of runningExecutables) {
+    const trimmed = String(name ?? '').trim()
+    if (FINDER_SYNC_PRODUCT_EXECUTABLES.includes(trimmed) && !running.includes(trimmed)) running.push(trimmed)
+  }
+  if (running.length) {
+    return `Refusing to start: ${running.join(', ')} is already running. A throwaway HOME does not isolate SMAppService, the app group, or the per-user socket. Use a separate macOS user account.`
+  }
+  const registered = normalizeBundlePath(registrationBundle)
+  const underTest = normalizeBundlePath(appBundle)
+  if (registered && underTest && registered !== underTest) {
+    return `Refusing to start: the LaunchAgent for this label is registered at ${registered}, not ${underTest}. Only a separate macOS user account isolates registration.`
+  }
+  return ''
 }
 
 export function parseAgentStatusOutput(text) {

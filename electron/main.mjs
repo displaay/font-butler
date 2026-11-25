@@ -44,7 +44,12 @@ import { createDocumentOpenWatch, documentWatchIpc } from './document-open-watch
 import { createExternalFontOpenNotifier } from './external-font-open-notify.mjs'
 import { createAnnouncementSlot } from './announcement-delivery.mjs'
 import { dismissAnnouncement, presentPendingAnnouncement } from './announcements.mjs'
-import { applyTestFeedDataIsolation } from './test-feed-data.mjs'
+import {
+  applyTestFeedDataIsolation,
+  electronUserDataForDataOverride,
+  explicitFontDataOverride,
+  userDataDirForLaunch,
+} from './test-feed-data.mjs'
 import { macosDockIconPng } from './dock-icon.mjs'
 import { createLoginItemApplier } from './login-item.mjs'
 import {
@@ -143,6 +148,10 @@ const require = createRequire(import.meta.url)
 // Read before any userData, migration, or test-feed path change. mac-check
 // runs this against an extracted copy and must not touch the real library.
 const finderSyncAgentStatusOnly = process.argv.includes('--finder-sync-agent-status')
+// Captured before test-feed isolation fills FONT_BUTLER_DATA in. A throwaway
+// HOME does not move Electron userData on macOS (NSHomeDirectory uses
+// getpwuid). This override does, for both Cuttler and a marked test build.
+const explicitDataOverride = explicitFontDataOverride(process.env)
 
 // Before requestSingleInstanceLock and before app ready. Only the packaged
 // fontButlerTestFeed marker selects this. A LaunchServices relaunch has no
@@ -207,20 +216,32 @@ if (macDataMigration?.blockedByOwner) {
   // which would create an empty Cuttler library beside the one still in use.
   process.exit(0)
 }
-if (!finderSyncAgentStatusOnly && testFeedPlan?.isolate !== true && canSetUserData) {
+if (!finderSyncAgentStatusOnly && canSetUserData) {
   const runningRoot = macDataMigration?.runningInstanceDataDir || ''
   const stalledRoot =
     !runningRoot && macDataMigration?.stalled && macDataMigration.stalledDataDir
       ? macDataMigration.stalledDataDir
       : ''
-  if (stalledRoot) {
+  const overrideUserData = electronUserDataForDataOverride(explicitDataOverride)
+  // A data override keeps the library where the caller put it. Do not also
+  // pin the stalled Cuttler root, and do not leave userData in Application
+  // Support where Chromium would take the real SingletonLock.
+  if (!overrideUserData && testFeedPlan?.isolate !== true && stalledRoot) {
     process.env[MIGRATION_STALL_ENV] = '1'
     process.env[MIGRATION_DATA_ROOT_ENV] = stalledRoot
   }
-  app.setPath(
-    'userData',
-    runningRoot || stalledRoot || path.join(app.getPath('appData'), APP_FOLDER_NAME),
-  )
+  if (overrideUserData || testFeedPlan?.isolate !== true) {
+    app.setPath(
+      'userData',
+      userDataDirForLaunch({
+        explicitDataOverride,
+        runningRoot,
+        stalledRoot,
+        appSupportDir: app.getPath('appData'),
+        appFolderName: APP_FOLDER_NAME,
+      }),
+    )
+  }
 }
 
 const debugLog = createDebugLogStore()
@@ -1462,17 +1483,37 @@ function applyFinderSyncAgentRegistration(addon, { surface = false } = {}) {
 }
 
 function reportFinderSyncAgentStatus() {
-  let addon = null
-  try {
-    addon = require('./finder-sync-receiver.node')
-  } catch {
-    addon = null
+  let report = {
+    line: 'finder-sync-agent-status {"status":"unavailable","error":"Finder Sync agent status failed."}\n',
+    exitCode: 1,
   }
-  const report = readFinderSyncAgentStatus({
-    agentStatus: addon && typeof addon.agentStatus === 'function' ? () => addon.agentStatus() : undefined,
-  })
-  fs.writeSync(1, report.line)
-  app.exit(report.exitCode)
+  try {
+    let addon = null
+    try {
+      addon = require('./finder-sync-receiver.node')
+    } catch {
+      addon = null
+    }
+    report = readFinderSyncAgentStatus({
+      agentStatus: addon && typeof addon.agentStatus === 'function' ? () => addon.agentStatus() : undefined,
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    report = {
+      line: `finder-sync-agent-status ${JSON.stringify({ status: 'unavailable', error: message })}\n`,
+      exitCode: 1,
+    }
+  }
+  try {
+    fs.writeSync(1, report.line)
+  } catch {
+    // stdout is already gone.
+  }
+  try {
+    app.exit(report.exitCode)
+  } catch {
+    // app.exit can throw before ready.
+  }
   process.exit(report.exitCode)
 }
 
@@ -2688,49 +2729,11 @@ function buildAppMenu() {
 let receiverOnly = false
 
 if (finderSyncAgentStatusOnly) {
-  // whenReady can fail to resolve on a test-feed build. Exit anyway.
-  setTimeout(() => {
-    try {
-      fs.writeSync(
-        1,
-        'finder-sync-agent-status {"status":"unavailable","error":"Finder Sync agent status did not finish within 10s."}\n',
-      )
-    } catch {
-      // stdout is already gone.
-    }
-    try {
-      app.exit(1)
-    } catch {
-      // app.exit can throw before ready.
-    }
-    process.exit(1)
-  }, 10_000)
-  const readyOrTimeout = Promise.race([
-    app.whenReady().then(() => true),
-    new Promise((resolve) => {
-      setTimeout(() => resolve(false), 8_000)
-    }),
-  ])
-  readyOrTimeout.then((ready) => {
-    if (!ready) {
-      try {
-        fs.writeSync(
-          1,
-          'finder-sync-agent-status {"status":"unavailable","error":"The app was not ready in time."}\n',
-        )
-      } catch {
-        // stdout is already gone.
-      }
-      try {
-        app.exit(1)
-      } catch {
-        // app.exit can throw before ready.
-      }
-      process.exit(1)
-      return
-    }
-    reportFinderSyncAgentStatus()
-  })
+  // Synchronous. Waiting for the app to become ready creates the default
+  // userData directory (~/Library/Application Support/Cuttler or Font
+  // Buttler Test) before this process can exit. The report uses no app
+  // or BrowserWindow API.
+  reportFinderSyncAgentStatus()
 } else {
 // Electron's lock follows userData, which Cuttler and the installed Font
 // Buttler.app share. A second copy of this exact binary quits. A newer binary

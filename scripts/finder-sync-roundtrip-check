@@ -1,13 +1,22 @@
 #!/usr/bin/env node
 /**
- * After a signed macOS build, register the Finder Sync LaunchAgent from the
- * app, ping the launchd-vended Mach service, submit one font path through
- * the helper socket, and confirm the negative clients are rejected.
+ * After a signed macOS build, launch the full app (a normal launch registers
+ * the Finder Sync LaunchAgent), ping the launchd-vended Mach service, submit
+ * one font path through the helper socket, and confirm the negative clients
+ * are rejected. `--finder-sync-agent-status` is read-only: it does not
+ * register, unregister, or save the agent.
  *
  *   scripts/finder-sync-roundtrip-check [/path/to/Font Buttler.app] [--real-home]
  *
  * The app binary is launched with HOME and FONT_BUTLER_DATA in a throwaway
  * directory. --real-home keeps the caller's HOME and prints a warning.
+ * On macOS, NSHomeDirectory uses getpwuid, so HOME alone does not move
+ * Electron userData. FONT_BUTLER_DATA does. SMAppService, pluginkit, the
+ * app group containers, and the per-user socket stay on the signed-in user.
+ * Only a separate macOS user account isolates registration. Tester runs
+ * should use one. This script refuses to start when Cuttler or Font Buttler
+ * is already running, or when this flavour's LaunchAgent is registered for
+ * a different bundle.
  *
  * The positive client is signed with Developer ID and the appex identifier.
  * One negative client is ad-hoc signed with that identifier. Another is
@@ -26,6 +35,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readAppTestFeedMarker } from '../electron/app-update-install.mjs'
 import {
+  FINDER_SYNC_PRODUCT_EXECUTABLES,
+  finderSyncAgentLabel,
   finderSyncBundleId,
   finderSyncMachService,
   finderSyncMainExecutable,
@@ -33,7 +44,13 @@ import {
   finderSyncSocketName,
 } from '../electron/finder-sync.mjs'
 import { DEVELOPER_ID_IDENTITY } from './mac-signing.mjs'
-import { finderSyncAppLaunchEnv, parseRoundtripArgs } from './finder-sync-mac-check-lib.mjs'
+import {
+  bundleFromServiceListing,
+  finderSyncAppLaunchEnv,
+  finderSyncRoundtripBlockReason,
+  parseRoundtripArgs,
+  productExecutablesFromPgrep,
+} from './finder-sync-mac-check-lib.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const clientSource = path.join(repoRoot, 'macos/FinderSyncAgent/FinderSyncPingClient.mm')
@@ -123,6 +140,34 @@ function main() {
   if (!binary) {
     fail(`No Cuttler or Font Buttler executable inside ${app}. The zip keeps the Font Buttler.app name and the Cuttler binary.`)
   }
+  const probes = []
+  let probeError = ''
+  for (const name of FINDER_SYNC_PRODUCT_EXECUTABLES) {
+    const result = run('pgrep', ['-x', '-l', name])
+    if (result.error) {
+      probeError = `could not run pgrep (${result.error.code || result.error.message}).`
+      break
+    }
+    const status = result.status ?? 1
+    if (status === 0) probes.push(result.stdout ?? '')
+    else if (status !== 1) {
+      probeError = `pgrep ${name} exited ${status}.`
+      break
+    }
+  }
+  const label = finderSyncAgentLabel(testFeed)
+  const uid = typeof process.getuid === 'function' ? process.getuid() : 0
+  const printed = probeError ? { stdout: '', stderr: '' } : run('launchctl', ['print', `gui/${uid}/${label}`])
+  if (!probeError && printed.error) {
+    probeError = `could not run launchctl (${printed.error.code || printed.error.message}).`
+  }
+  const blockReason = finderSyncRoundtripBlockReason({
+    runningExecutables: productExecutablesFromPgrep(probes.join('\n')),
+    registrationBundle: bundleFromServiceListing(`${printed.stdout ?? ''}\n${printed.stderr ?? ''}`),
+    appBundle: app,
+    probeError,
+  })
+  if (blockReason) fail(blockReason)
   console.log(`app: ${app}`)
   console.log(`flavour: ${testFeed ? 'test' : 'release'}`)
   console.log(`service: ${service}`)
