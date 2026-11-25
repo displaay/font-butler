@@ -148,12 +148,16 @@ export function linuxRefusalMessage() {
 }
 
 export function parseMacCheckArgs(argv) {
-  const args = { app: '', dmg: '', zip: '', json: false, error: '' }
+  const args = { app: '', dmg: '', zip: '', json: false, realHome: false, error: '' }
   const rest = [...argv]
   while (rest.length) {
     const token = rest.shift()
     if (token === '--json') {
       args.json = true
+      continue
+    }
+    if (token === '--real-home') {
+      args.realHome = true
       continue
     }
     if (token === '--dmg' || token === '--zip') {
@@ -177,6 +181,49 @@ export function parseMacCheckArgs(argv) {
   }
   if (!args.app) args.error = 'Pass the path to a signed Font Buttler.app.'
   return args
+}
+
+export function parseRoundtripArgs(argv) {
+  const args = { app: '', realHome: false, error: '' }
+  const rest = [...argv]
+  while (rest.length) {
+    const token = rest.shift()
+    if (token === '--real-home') {
+      args.realHome = true
+      continue
+    }
+    if (token.startsWith('--')) {
+      args.error = `Unknown option ${token}.`
+      return args
+    }
+    if (args.app) {
+      args.error = 'Pass one app path.'
+      return args
+    }
+    args.app = token
+  }
+  return args
+}
+
+/**
+ * Environment for launching the Font Buttler binary from the Mac checks.
+ * The default HOME and FONT_BUTLER_DATA are a throwaway directory. The real
+ * HOME is copied through only when `realHome` is set.
+ */
+export function finderSyncAppLaunchEnv({ realHome = false, env = process.env, tempHome = '', home = env?.HOME ?? '' } = {}) {
+  if (realHome === true) {
+    return {
+      env: { ...env },
+      tempHome: '',
+      warning: `WARNING: launching the app with the real HOME${home ? ` (${home})` : ''}. This can read and write the user's library.`,
+    }
+  }
+  if (!tempHome) throw new Error('A throwaway HOME is required unless --real-home is set.')
+  return {
+    env: { ...env, HOME: tempHome, FONT_BUTLER_DATA: path.join(tempHome, 'data') },
+    tempHome,
+    warning: '',
+  }
 }
 
 export function parseAgentStatusOutput(text) {

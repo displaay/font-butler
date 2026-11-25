@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { test } from 'node:test'
 import {
   AUTOMATED_CHECKS,
@@ -20,6 +21,8 @@ import {
   nmListsExtensionMain,
   parseAgentStatusOutput,
   parseMacCheckArgs,
+  finderSyncAppLaunchEnv,
+  parseRoundtripArgs,
   sameArchSet,
   selectProductAppBundle,
   appexCoveredByAppNotarization,
@@ -278,7 +281,11 @@ test('a complete signed-app observation passes, and a missing entitlement or pen
   const args = parseMacCheckArgs(['/Applications/Font Buttler.app', '--dmg', '/tmp/Font.dmg', '--json'])
   assert.equal(args.error, '')
   assert.equal(args.json, true)
+  assert.equal(args.realHome, false)
   assert.equal(args.dmg, '/tmp/Font.dmg')
+  const realHome = parseMacCheckArgs(['/Applications/Cuttler.app', '--real-home'])
+  assert.equal(realHome.error, '')
+  assert.equal(realHome.realHome, true)
   assert.match(parseMacCheckArgs([]).error, /Font Buttler\.app/)
   assert.match(linuxRefusalMessage(), /macOS/)
   assert.equal(MANUAL_MAC_CHECKS.length, 9)
@@ -286,4 +293,43 @@ test('a complete signed-app observation passes, and a missing entitlement or pen
     assert.ok(item.action)
     assert.ok(item.expect)
   }
+})
+
+test('the default app launch env does not contain the real HOME', () => {
+  const real = '/Users/tester'
+  const temp = '/tmp/font-butler-throwaway'
+  const planned = finderSyncAppLaunchEnv({
+    realHome: false,
+    home: real,
+    tempHome: temp,
+    env: {
+      HOME: real,
+      FONT_BUTLER_DATA: path.join(real, 'Library/Application Support/Cuttler/data'),
+      PATH: '/usr/bin',
+    },
+  })
+  assert.equal(planned.warning, '')
+  assert.equal(planned.env.HOME, temp)
+  assert.equal(planned.env.FONT_BUTLER_DATA, path.join(temp, 'data'))
+  assert.equal(planned.env.PATH, '/usr/bin')
+  for (const value of Object.values(planned.env)) {
+    assert.equal(String(value).includes(real), false)
+  }
+  assert.throws(() => finderSyncAppLaunchEnv({ realHome: false, env: { HOME: real } }), /throwaway HOME/)
+  const allowed = finderSyncAppLaunchEnv({
+    realHome: true,
+    home: real,
+    env: { HOME: real, FONT_BUTLER_DATA: path.join(real, 'data') },
+  })
+  assert.equal(allowed.env.HOME, real)
+  assert.match(allowed.warning, /WARNING: launching the app with the real HOME \(\/Users\/tester\)/)
+  assert.equal(parseRoundtripArgs(['/Applications/Cuttler.app']).realHome, false)
+  assert.equal(parseRoundtripArgs(['--real-home', '/Applications/Cuttler.app']).realHome, true)
+  const check = readFileSync(new URL('../scripts/finder-sync-mac-check.mjs', import.meta.url), 'utf8')
+  const roundtrip = readFileSync(new URL('../scripts/finder-sync-roundtrip-check', import.meta.url), 'utf8')
+  assert.match(check, /runAppBinary\(mainExecutable, \['--finder-sync-agent-status'\]/)
+  assert.match(check, /finderSyncAppLaunchEnv\(/)
+  assert.match(roundtrip, /finderSyncAppLaunchEnv\(/)
+  assert.match(roundtrip, /env: launch\.env/)
+  assert.match(roundtrip, /spawn\(binary, \[\], \{ detached: true, stdio: 'ignore', env: launch\.env \}\)/)
 })

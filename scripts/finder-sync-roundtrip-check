@@ -4,7 +4,10 @@
  * app, ping the launchd-vended Mach service, submit one font path through
  * the helper socket, and confirm the negative clients are rejected.
  *
- *   scripts/finder-sync-roundtrip-check [/path/to/Font Buttler.app]
+ *   scripts/finder-sync-roundtrip-check [/path/to/Font Buttler.app] [--real-home]
+ *
+ * The app binary is launched with HOME and FONT_BUTLER_DATA in a throwaway
+ * directory. --real-home keeps the caller's HOME and prints a warning.
  *
  * The positive client is signed with Developer ID and the appex identifier.
  * One negative client is ad-hoc signed with that identifier. Another is
@@ -30,6 +33,7 @@ import {
   finderSyncSocketName,
 } from '../electron/finder-sync.mjs'
 import { DEVELOPER_ID_IDENTITY } from './mac-signing.mjs'
+import { finderSyncAppLaunchEnv, parseRoundtripArgs } from './finder-sync-mac-check-lib.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const clientSource = path.join(repoRoot, 'macos/FinderSyncAgent/FinderSyncPingClient.mm')
@@ -108,7 +112,9 @@ function main() {
     console.log('skipped: Finder Sync roundtrip runs on macOS after a signed build')
     process.exit(0)
   }
-  const app = findApp(process.argv[2])
+  const args = parseRoundtripArgs(process.argv.slice(2))
+  if (args.error) fail(args.error)
+  const app = findApp(args.app)
   if (!app) fail('Pass the path to a signed Cuttler.app or Font Buttler.app.')
   const testFeed = readAppTestFeedMarker(app) === true
   const service = finderSyncMachService(testFeed)
@@ -120,7 +126,14 @@ function main() {
   console.log(`app: ${app}`)
   console.log(`flavour: ${testFeed ? 'test' : 'release'}`)
   console.log(`service: ${service}`)
-  const status = run(binary, ['--finder-sync-agent-status'], { timeout: 60000 })
+  const tempHome = args.realHome ? '' : mkdtempSync(path.join(tmpdir(), 'font-butler-roundtrip-home-'))
+  const launch = finderSyncAppLaunchEnv({ realHome: args.realHome, tempHome, env: process.env })
+  if (launch.warning) console.error(launch.warning)
+  const removeLaunchHome = () => {
+    if (tempHome) rmSync(tempHome, { recursive: true, force: true })
+  }
+  process.on('exit', removeLaunchHome)
+  const status = run(binary, ['--finder-sync-agent-status'], { timeout: 60000, env: launch.env })
   const output = `${status.stdout ?? ''}\n${status.stderr ?? ''}`
   const line = output
     .split(/\r?\n/)
@@ -234,7 +247,7 @@ function main() {
     const tempDir = run('getconf', ['DARWIN_USER_TEMP_DIR'])
     const socketDir = (tempDir.stdout ?? '').trim()
     if (!socketDir) fail('DARWIN_USER_TEMP_DIR was empty.')
-    const appProcess = spawn(binary, [], { detached: true, stdio: 'ignore' })
+    const appProcess = spawn(binary, [], { detached: true, stdio: 'ignore', env: launch.env })
     appPid = appProcess.pid ?? 0
     appProcess.unref()
     const socketName = finderSyncSocketName(testFeed)
