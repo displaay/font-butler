@@ -540,7 +540,7 @@ test('Finder Sync monitors home, /Users/Shared, and /Volumes', () => {
   assert.equal(finderSyncRegistrationHold({ appPath: translocated }).includes('translocated'), true)
   assert.equal(
     finderSyncRegistrationHold({ appPath: '/Volumes/Cuttler 1.0/Cuttler.app' }),
-    'this copy is running from /Volumes',
+    'this copy is running from /Volumes, including an install on an external drive',
   )
   assert.equal(
     finderSyncRegistrationHold({ appPath: '/Applications/Cuttler.app', explicitDataOverride: '/tmp/library' }),

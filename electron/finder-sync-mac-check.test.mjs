@@ -22,6 +22,7 @@ import {
   nmListsExtensionMain,
   parseAgentStatusOutput,
   parseMacCheckArgs,
+  FINDER_SYNC_PROCESS_PROBE_ARGV,
   bundleFromServiceListing,
   finderSyncAppLaunchEnv,
   finderSyncRoundtripBlockReason,
@@ -342,6 +343,10 @@ test('the default app launch env does not contain the real HOME', () => {
   const statusAt = roundtrip.indexOf("'--finder-sync-agent-status'")
   const spawnAt = roundtrip.indexOf('spawn(binary, [], { detached: true')
   assert.ok(blockAt > 0 && blockAt < statusAt && blockAt < spawnAt)
+  assert.deepEqual([...FINDER_SYNC_PROCESS_PROBE_ARGV], ['ps', '-axwwo', 'pid=,comm='])
+  assert.match(FINDER_SYNC_PROCESS_PROBE_ARGV[1], /ww/)
+  assert.match(roundtrip, /FINDER_SYNC_PROCESS_PROBE_ARGV/)
+  assert.doesNotMatch(roundtrip, /pgrep|'-axo'|"-axo"|-axo /)
 })
 
 test('the roundtrip refuses a running product or a LaunchAgent for another bundle', () => {
@@ -364,6 +369,14 @@ test('the roundtrip refuses a running product or a LaunchAgent for another bundl
     'Cuttler',
   )
   assert.equal(productExecutableFromCommand('/usr/bin/ssh'), '')
+  const longHelper =
+    '/Applications/Cuttler.app/Contents/Frameworks/Cuttler Helper (Renderer).app/Contents/MacOS/Cuttler Helper (Renderer)'
+  const longTest =
+    '/Users/tester/Library/Caches/font-butler-roundtrip/Font Buttler Test.app/Contents/MacOS/Font Buttler Test'
+  assert.ok(longHelper.length > 80, String(longHelper.length))
+  assert.ok(longTest.length > 80, String(longTest.length))
+  assert.equal(productExecutableFromCommand(longHelper), 'Cuttler')
+  assert.equal(productExecutableFromCommand(longTest), 'Font Buttler Test')
   assert.deepEqual(productExecutablesFromProcessList(processList), ['Font Buttler Test', 'Cuttler'])
   assert.deepEqual(productExecutablesFromProcessList(''), [])
   const listing = [

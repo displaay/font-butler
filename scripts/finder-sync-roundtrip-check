@@ -44,6 +44,7 @@ import {
 } from '../electron/finder-sync.mjs'
 import { DEVELOPER_ID_IDENTITY } from './mac-signing.mjs'
 import {
+  FINDER_SYNC_PROCESS_PROBE_ARGV,
   bundleFromServiceListing,
   finderSyncAppLaunchEnv,
   finderSyncRoundtripBlockReason,
@@ -139,12 +140,10 @@ function main() {
   if (!binary) {
     fail(`No Cuttler or Font Buttler executable inside ${app}. The zip keeps the Font Buttler.app name and the Cuttler binary.`)
   }
-  // pgrep -x matches p_comm, which macOS truncates to 16 characters.
-  // "Font Buttler Test" and "Cuttler Helper (Renderer)" never match it.
-  // ps comm is the full executable path.
   let processList = ''
   let probeError = ''
-  const listed = run('ps', ['-axo', 'pid=,comm='])
+  const [probeCommand, ...probeArgs] = FINDER_SYNC_PROCESS_PROBE_ARGV
+  const listed = run(probeCommand, probeArgs)
   if (listed.error) {
     probeError = `could not run ps (${listed.error.code || listed.error.message}).`
   } else if ((listed.status ?? 1) !== 0) {

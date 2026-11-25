@@ -292,7 +292,9 @@ function absoluteBundlePath(filePath) {
 export function finderSyncRegistrationHold({ appPath = '', explicitDataOverride = '' } = {}) {
   if (isTranslocatedAppPath(appPath)) return 'this copy is translocated'
   const bundle = String(appPath ?? '').replace(/\/+$/, '')
-  if (bundle === '/Volumes' || bundle.startsWith('/Volumes/')) return 'this copy is running from /Volumes'
+  if (bundle === '/Volumes' || bundle.startsWith('/Volumes/')) {
+    return 'this copy is running from /Volumes, including an install on an external drive'
+  }
   if (typeof explicitDataOverride === 'string' && explicitDataOverride.trim()) {
     return 'FONT_BUTLER_DATA or FONTCASE_DATA is set'
   }

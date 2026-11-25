@@ -247,10 +247,15 @@ export function normalizeBundlePath(filePath, { realpath = realpathSync } = {}) 
 }
 
 /**
- * Product names whose executable path is in `ps -axo pid=,comm=` output.
- * `comm` is the full path. `pgrep -x` matches p_comm, which macOS truncates
- * to 16 characters, so "Font Buttler Test" and the Helper processes never
- * appear there. Longer names are tried first.
+ * Process listing for the roundtrip. `-ww` is required: with no TTY, macOS
+ * ps clips to 79 columns, which cuts a Helper path and a long Font Buttler
+ * Test path before the matcher can see the end.
+ */
+export const FINDER_SYNC_PROCESS_PROBE_ARGV = Object.freeze(['ps', '-axwwo', 'pid=,comm='])
+
+/**
+ * Product names whose executable path is in that ps listing. `comm` is the
+ * full path. Longer names are tried first.
  */
 export function productExecutableFromCommand(command) {
   const text = String(command ?? '')
