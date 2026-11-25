@@ -133,6 +133,7 @@ import {
   sameExecutableLockPath,
   sharedLibraryLaunchMode,
   readFinderSyncAgentRecord,
+  readFinderSyncAgentStatus,
   readFinderSyncPendingErrorFile,
   readFinderSyncPendingErrorRecord,
   readFinderSyncPendingErrorRecordAsync,
@@ -2235,6 +2236,51 @@ test('a second launch from the same bundle path does not register again', () => 
   )
   assert.match(apply, /const removed = parseAgentJson\(addon\.unregisterAgent\(\)\)/)
   assert.match(apply, /return \{ ok: false, error: removed\.error \}/)
+
+  const statusCalls = []
+  const statusReport = readFinderSyncAgentStatus({
+    currentBundle: '/Volumes/Cuttler/Cuttler.app',
+    recordedBundle: '/Applications/Cuttler.app',
+    agentStatus() {
+      statusCalls.push('agentStatus')
+      return JSON.stringify({ status: 'not-registered' })
+    },
+    registerAgent() {
+      statusCalls.push('register')
+    },
+    unregisterAgent() {
+      statusCalls.push('unregister')
+    },
+    saveRecord() {
+      statusCalls.push('save')
+    },
+  })
+  assert.deepEqual(statusCalls, ['agentStatus'])
+  assert.match(statusReport.line, /not-registered/)
+  assert.equal(statusReport.exitCode, 1)
+  const statusFn = registration.slice(
+    registration.indexOf('function reportFinderSyncAgentStatus'),
+    registration.indexOf('function registerFinderSyncReceiver'),
+  )
+  assert.match(statusFn, /readFinderSyncAgentStatus/)
+  assert.doesNotMatch(statusFn, /applyFinderSyncAgentRegistration|registerAgent|unregisterAgent|saveFinderSyncAgentRecord/)
+  const statusFlagAt = registration.indexOf("const finderSyncAgentStatusOnly = process.argv.includes('--finder-sync-agent-status')")
+  const isolateAt = registration.indexOf('applyTestFeedDataIsolation(app)')
+  const migrateAt = registration.indexOf('migrateLegacyMacAppDirs(')
+  assert.ok(statusFlagAt >= 0 && statusFlagAt < isolateAt && statusFlagAt < migrateAt)
+  assert.match(registration.slice(isolateAt - 120, isolateAt), /finderSyncAgentStatusOnly \? \{ isolate: false \}/)
+  assert.match(registration, /!finderSyncAgentStatusOnly &&\s*canSetUserData &&\s*shouldMigrateRealMacLibrary/)
+  assert.match(registration, /!finderSyncAgentStatusOnly && testFeedPlan\?\.isolate !== true && canSetUserData/)
+  const statusBranch = registration.slice(
+    registration.indexOf('if (finderSyncAgentStatusOnly) {'),
+    registration.indexOf('} else {', registration.indexOf('if (finderSyncAgentStatusOnly) {')),
+  )
+  assert.match(statusBranch, /setTimeout\(/)
+  assert.match(statusBranch, /10_000/)
+  assert.match(statusBranch, /app\.exit\(1\)/)
+  assert.match(statusBranch, /process\.exit\(1\)/)
+  assert.match(statusBranch, /Promise\.race\(\[\s*app\.whenReady\(\)/)
+  assert.doesNotMatch(statusBranch, /applyTestFeedDataIsolation|migrateLegacyMacAppDirs|app\.setPath\(/)
 
   const seen = new Map()
   assert.equal(finderSyncRequestSeen(seen, 'click-1', 1_000), false)

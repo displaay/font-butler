@@ -336,6 +336,25 @@ export function planFinderSyncAgentRegistration({
   return { ...plan, action: 'register', reason: status || 'not-registered' }
 }
 
+/**
+ * Print-only agent status. Callers may pass register, unregister, and save
+ * hooks from the real addon; this never calls them, including when
+ * `recordedBundle` and `currentBundle` differ.
+ */
+export function readFinderSyncAgentStatus({ agentStatus } = {}) {
+  let line = 'finder-sync-agent-status {"status":"unavailable","error":"Finder Sync receiver is not loaded."}\n'
+  try {
+    if (typeof agentStatus !== 'function') throw new Error('Finder Sync receiver is not loaded.')
+    const status = agentStatus()
+    const text = typeof status === 'string' ? status : JSON.stringify(status ?? null)
+    line = `finder-sync-agent-status ${text}\n`
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    line = `finder-sync-agent-status ${JSON.stringify({ status: 'unavailable', error: message })}\n`
+  }
+  return { line, exitCode: line.includes('"status":"enabled"') ? 0 : 1 }
+}
+
 export function readFinderSyncAgentRecord(text) {
   const empty = { enabled: true, appBundlePath: '', helperPath: '', version: '', program: '', machService: '' }
   if (!text) return empty

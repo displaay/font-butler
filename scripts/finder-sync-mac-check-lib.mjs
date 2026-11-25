@@ -493,9 +493,17 @@ export function buildChecklist(observations = {}) {
   ]
 
   const status = observations.agentStatus
-  const known = new Set(['enabled', 'requires-approval', 'not-found'])
-  if (status && known.has(status.status)) {
+  const registered = new Set(['enabled', 'requires-approval'])
+  const unregistered = new Set(['not-registered', 'not-found'])
+  if (status && registered.has(status.status)) {
     results.push(pass('agent-status', `SMAppService status is ${status.status}.`))
+  } else if (status && unregistered.has(status.status)) {
+    results.push(
+      fail(
+        'agent-status',
+        `This copy is not the registered login item (SMAppService status ${status.status}). --finder-sync-agent-status does not register or unregister it.`,
+      ),
+    )
   } else {
     results.push(fail('agent-status', observations.agentStatusError || `Unreadable agent status ${status?.status ?? ''}.`.trim()))
   }

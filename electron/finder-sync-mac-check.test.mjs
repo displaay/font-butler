@@ -253,6 +253,14 @@ test('a complete signed-app observation passes, and a missing entitlement or pen
   const pending = buildChecklist(passingObservations({ agentStatus: { status: 'requires-approval' } }))
   assert.equal(pending.find((item) => item.id === 'agent-status').state, 'pass')
   assert.match(pending.find((item) => item.id === 'agent-status').reason, /requires-approval/)
+  for (const status of ['not-registered', 'not-found']) {
+    const unregistered = buildChecklist(passingObservations({ agentStatus: { status } }))
+    const item = unregistered.find((entry) => entry.id === 'agent-status')
+    assert.equal(item.state, 'fail')
+    assert.match(item.reason, new RegExp(status))
+    assert.match(item.reason, /does not register/)
+    assert.doesNotMatch(item.reason, /Unreadable/)
+  }
   assert.equal(pending.find((item) => item.id === 'launchd-vend').state, 'fail')
   assert.equal(pending.find((item) => item.id === 'xpc-accept').state, 'fail')
   assert.equal(summarizeChecklist(pending).ok, false)

@@ -79,6 +79,7 @@ import {
   formatFinderSyncRejections,
   noteFinderSyncRequest,
   readFinderSyncAgentRecord,
+  readFinderSyncAgentStatus,
   finderSyncProductDisplayName,
   claimSameExecutableInstance,
   releaseSameExecutableInstance,
@@ -139,11 +140,16 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
 
+// Read before any userData, migration, or test-feed path change. mac-check
+// runs this against an extracted copy and must not touch the real library.
+const finderSyncAgentStatusOnly = process.argv.includes('--finder-sync-agent-status')
+
 // Before requestSingleInstanceLock and before app ready. Only the packaged
 // fontButlerTestFeed marker selects this. A LaunchServices relaunch has no
 // environment, so the marker alone has to isolate the test build. A marked
-// build must not move the real library.
-const testFeedPlan = applyTestFeedDataIsolation(app)
+// build must not move the real library. Status mode skips it: setPath would
+// create ~/Library/Application Support/Font Buttler Test.
+const testFeedPlan = finderSyncAgentStatusOnly ? { isolate: false } : applyTestFeedDataIsolation(app)
 
 // 0.4.0 pinned userData at Font Buttler. This release uses Cuttler and moves
 // the old folders on first launch. Must run before ready, and before Electron
@@ -153,6 +159,7 @@ let macDataMigration = null
 let migrationFailure = null
 const canSetUserData = typeof app.isReady !== 'function' || !app.isReady()
 if (
+  !finderSyncAgentStatusOnly &&
   canSetUserData &&
   shouldMigrateRealMacLibrary({
     platform: process.platform,
@@ -200,7 +207,7 @@ if (macDataMigration?.blockedByOwner) {
   // which would create an empty Cuttler library beside the one still in use.
   process.exit(0)
 }
-if (testFeedPlan?.isolate !== true && canSetUserData) {
+if (!finderSyncAgentStatusOnly && testFeedPlan?.isolate !== true && canSetUserData) {
   const runningRoot = macDataMigration?.runningInstanceDataDir || ''
   const stalledRoot =
     !runningRoot && macDataMigration?.stalled && macDataMigration.stalledDataDir
@@ -1455,18 +1462,18 @@ function applyFinderSyncAgentRegistration(addon, { surface = false } = {}) {
 }
 
 function reportFinderSyncAgentStatus() {
-  let line = 'finder-sync-agent-status {"status":"unavailable","error":"Finder Sync receiver is not loaded."}\n'
+  let addon = null
   try {
-    const addon = require('./finder-sync-receiver.node')
-    applyFinderSyncAgentRegistration(addon, { surface: false })
-    const status = addon.agentStatus()
-    line = `finder-sync-agent-status ${status}\n`
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    line = `finder-sync-agent-status ${JSON.stringify({ status: 'unavailable', error: message })}\n`
+    addon = require('./finder-sync-receiver.node')
+  } catch {
+    addon = null
   }
-  fs.writeSync(1, line)
-  app.exit(line.includes('"status":"enabled"') ? 0 : 1)
+  const report = readFinderSyncAgentStatus({
+    agentStatus: addon && typeof addon.agentStatus === 'function' ? () => addon.agentStatus() : undefined,
+  })
+  fs.writeSync(1, report.line)
+  app.exit(report.exitCode)
+  process.exit(report.exitCode)
 }
 
 function registerFinderSyncReceiver({ surface = false, registerAgent = true } = {}) {
@@ -2680,8 +2687,48 @@ function buildAppMenu() {
 
 let receiverOnly = false
 
-if (process.argv.includes('--finder-sync-agent-status')) {
-  app.whenReady().then(() => {
+if (finderSyncAgentStatusOnly) {
+  // whenReady can fail to resolve on a test-feed build. Exit anyway.
+  setTimeout(() => {
+    try {
+      fs.writeSync(
+        1,
+        'finder-sync-agent-status {"status":"unavailable","error":"Finder Sync agent status did not finish within 10s."}\n',
+      )
+    } catch {
+      // stdout is already gone.
+    }
+    try {
+      app.exit(1)
+    } catch {
+      // app.exit can throw before ready.
+    }
+    process.exit(1)
+  }, 10_000)
+  const readyOrTimeout = Promise.race([
+    app.whenReady().then(() => true),
+    new Promise((resolve) => {
+      setTimeout(() => resolve(false), 8_000)
+    }),
+  ])
+  readyOrTimeout.then((ready) => {
+    if (!ready) {
+      try {
+        fs.writeSync(
+          1,
+          'finder-sync-agent-status {"status":"unavailable","error":"The app was not ready in time."}\n',
+        )
+      } catch {
+        // stdout is already gone.
+      }
+      try {
+        app.exit(1)
+      } catch {
+        // app.exit can throw before ready.
+      }
+      process.exit(1)
+      return
+    }
     reportFinderSyncAgentStatus()
   })
 } else {
