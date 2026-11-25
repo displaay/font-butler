@@ -2,6 +2,7 @@
  * Pure checks for scripts/finder-sync-mac-check.mjs.
  * Parsing and classification run on Linux. The command itself is macOS-only.
  */
+import { realpathSync } from 'node:fs'
 import path from 'node:path'
 import {
   APP_PRODUCT_BUNDLE,
@@ -229,23 +230,50 @@ export function finderSyncAppLaunchEnv({ realHome = false, env = process.env, te
 
 const PRODUCT_APP_NAMES = ['Font Buttler Test.app', 'Font Buttler.app', 'Cuttler.app']
 
-function normalizeBundlePath(filePath) {
+/**
+ * Resolve a bundle path. realpath collapses /tmp and /private/tmp. A path
+ * that is not on disk yet falls back to path.resolve.
+ */
+export function normalizeBundlePath(filePath, { realpath = realpathSync } = {}) {
   if (typeof filePath !== 'string') return ''
   const trimmed = filePath.trim().replace(/\/+$/, '')
   if (!trimmed.startsWith('/')) return ''
-  return path.resolve(trimmed)
+  const resolved = path.resolve(trimmed)
+  try {
+    return realpath(resolved)
+  } catch {
+    return resolved
+  }
 }
 
 /**
- * Executable names from `pgrep -x -l`. Longer product names are matched
- * first so "Font Buttler Test" is not reported as "Font Buttler".
+ * Product names whose executable path is in `ps -axo pid=,comm=` output.
+ * `comm` is the full path. `pgrep -x` matches p_comm, which macOS truncates
+ * to 16 characters, so "Font Buttler Test" and the Helper processes never
+ * appear there. Longer names are tried first.
  */
-export function productExecutablesFromPgrep(output) {
-  const wanted = [...FINDER_SYNC_PRODUCT_EXECUTABLES].sort((a, b) => b.length - a.length)
+export function productExecutableFromCommand(command) {
+  const text = String(command ?? '')
+  const names = [...FINDER_SYNC_PRODUCT_EXECUTABLES].sort((a, b) => b.length - a.length)
+  for (const name of names) {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const pattern = new RegExp(
+      `/${escaped}\\.app/Contents/(?:MacOS/${escaped}(?:\\s|$)|Frameworks/${escaped} Helper[^/]*\\.app/)`,
+    )
+    if (pattern.test(text)) return name
+  }
+  return ''
+}
+
+export function productExecutablesFromProcessList(output) {
   const found = []
   for (const line of String(output ?? '').split(/\r?\n/)) {
-    const name = line.replace(/^\s*\d+\s+/, '').trim()
-    if (wanted.includes(name) && !found.includes(name)) found.push(name)
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    const match = trimmed.match(/^\d+\s+(.*)$/)
+    const command = match ? match[1].trim() : trimmed
+    const name = productExecutableFromCommand(command)
+    if (name && !found.includes(name)) found.push(name)
   }
   return found
 }

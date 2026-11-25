@@ -35,7 +35,6 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readAppTestFeedMarker } from '../electron/app-update-install.mjs'
 import {
-  FINDER_SYNC_PRODUCT_EXECUTABLES,
   finderSyncAgentLabel,
   finderSyncBundleId,
   finderSyncMachService,
@@ -49,7 +48,7 @@ import {
   finderSyncAppLaunchEnv,
   finderSyncRoundtripBlockReason,
   parseRoundtripArgs,
-  productExecutablesFromPgrep,
+  productExecutablesFromProcessList,
 } from './finder-sync-mac-check-lib.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -140,20 +139,18 @@ function main() {
   if (!binary) {
     fail(`No Cuttler or Font Buttler executable inside ${app}. The zip keeps the Font Buttler.app name and the Cuttler binary.`)
   }
-  const probes = []
+  // pgrep -x matches p_comm, which macOS truncates to 16 characters.
+  // "Font Buttler Test" and "Cuttler Helper (Renderer)" never match it.
+  // ps comm is the full executable path.
+  let processList = ''
   let probeError = ''
-  for (const name of FINDER_SYNC_PRODUCT_EXECUTABLES) {
-    const result = run('pgrep', ['-x', '-l', name])
-    if (result.error) {
-      probeError = `could not run pgrep (${result.error.code || result.error.message}).`
-      break
-    }
-    const status = result.status ?? 1
-    if (status === 0) probes.push(result.stdout ?? '')
-    else if (status !== 1) {
-      probeError = `pgrep ${name} exited ${status}.`
-      break
-    }
+  const listed = run('ps', ['-axo', 'pid=,comm='])
+  if (listed.error) {
+    probeError = `could not run ps (${listed.error.code || listed.error.message}).`
+  } else if ((listed.status ?? 1) !== 0) {
+    probeError = `ps exited ${listed.status}.`
+  } else {
+    processList = listed.stdout ?? ''
   }
   const label = finderSyncAgentLabel(testFeed)
   const uid = typeof process.getuid === 'function' ? process.getuid() : 0
@@ -162,7 +159,7 @@ function main() {
     probeError = `could not run launchctl (${printed.error.code || printed.error.message}).`
   }
   const blockReason = finderSyncRoundtripBlockReason({
-    runningExecutables: productExecutablesFromPgrep(probes.join('\n')),
+    runningExecutables: productExecutablesFromProcessList(processList),
     registrationBundle: bundleFromServiceListing(`${printed.stdout ?? ''}\n${printed.stderr ?? ''}`),
     appBundle: app,
     probeError,

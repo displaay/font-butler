@@ -91,6 +91,7 @@ import {
   sameExecutableLockPath,
   sharedLibraryLaunchMode,
   routeFinderSyncError,
+  finderSyncRegistrationHold,
   refreshFinderSyncRegistration,
   readFinderSyncFiles,
   scanFinderSyncSelection,
@@ -1432,8 +1433,32 @@ function loadFinderSyncReceiver() {
   }
 }
 
+let finderSyncRegistrationHoldLogged = false
+
+function logFinderSyncRegistrationHold(reason) {
+  if (finderSyncRegistrationHoldLogged || !reason) return
+  finderSyncRegistrationHoldLogged = true
+  console.info(`Finder Sync registration skipped: ${reason}.`)
+}
+
+function currentFinderSyncRegistrationHold() {
+  return finderSyncRegistrationHold({
+    appPath: currentFinderSyncBundle(),
+    explicitDataOverride,
+  })
+}
+
 function applyFinderSyncAgentRegistration(addon, { surface = false } = {}) {
   if (!addon) return { status: 'unavailable', error: 'Finder Sync receiver is not loaded.' }
+  const hold = currentFinderSyncRegistrationHold()
+  if (hold) {
+    logFinderSyncRegistrationHold(hold)
+    try {
+      return parseAgentJson(addon.agentStatus())
+    } catch {
+      return { status: 'unavailable', error: 'Finder Sync receiver is not loaded.' }
+    }
+  }
   const record = loadFinderSyncAgentRecord()
   const testFeed = runningTestFeed()
   if (record.enabled === false) {
@@ -1450,6 +1475,7 @@ function applyFinderSyncAgentRegistration(addon, { surface = false } = {}) {
     currentMachService: finderSyncMachService(testFeed),
     record,
     status: status.status,
+    hold,
     unregister() {
       const removed = parseAgentJson(addon.unregisterAgent())
       if (removed?.error) {
@@ -3171,6 +3197,8 @@ if (launchMode === 'quit') {
       }, RETAIL_TICK_MS)
     }
     scheduleFinderSyncPendingErrorConsume()
+    const registrationHold = currentFinderSyncRegistrationHold()
+    if (registrationHold) logFinderSyncRegistrationHold(registrationHold)
     try {
       refreshFinderSyncRegistration({
         platform: process.platform,
@@ -3178,6 +3206,7 @@ if (launchMode === 'quit') {
         appPath: outermostAppBundle(process.execPath),
         testFeed: runningTestFeed(),
         spawnSync,
+        hold: registrationHold,
       })
     } catch (error) {
       console.error('Finder Sync registration was not refreshed', error)
@@ -3300,6 +3329,11 @@ ipcMain.handle('get-finder-sync-agent-status', () => {
 
 ipcMain.handle('set-finder-sync-agent-enabled', (_event, enabled) => {
   if (process.platform !== 'darwin') return false
+  const hold = currentFinderSyncRegistrationHold()
+  if (hold) {
+    logFinderSyncRegistrationHold(hold)
+    return false
+  }
   const addon = loadFinderSyncReceiver()
   if (!addon) return false
   const next = enabled === true

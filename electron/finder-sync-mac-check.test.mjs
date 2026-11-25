@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import {
@@ -24,8 +25,10 @@ import {
   bundleFromServiceListing,
   finderSyncAppLaunchEnv,
   finderSyncRoundtripBlockReason,
+  normalizeBundlePath,
   parseRoundtripArgs,
-  productExecutablesFromPgrep,
+  productExecutableFromCommand,
+  productExecutablesFromProcessList,
   sameArchSet,
   selectProductAppBundle,
   appexCoveredByAppNotarization,
@@ -342,11 +345,27 @@ test('the default app launch env does not contain the real HOME', () => {
 })
 
 test('the roundtrip refuses a running product or a LaunchAgent for another bundle', () => {
-  assert.deepEqual(
-    productExecutablesFromPgrep('431 Cuttler\n432 Font Buttler\n433 Font Buttler Test\n434 other'),
-    ['Cuttler', 'Font Buttler', 'Font Buttler Test'],
+  assert.equal('Font Buttler Test'.length, 17)
+  const processList = [
+    '431 /Applications/Font Buttler Test.app/Contents/MacOS/Font Buttler Test',
+    '432 /Applications/Cuttler.app/Contents/Frameworks/Cuttler Helper (Renderer).app/Contents/MacOS/Cuttler Helper (Renderer)',
+    '433 /usr/bin/ssh',
+    '434 Font Buttler Tes',
+    '435 /Applications/Notes.app/Contents/MacOS/Notes',
+  ].join('\n')
+  assert.equal(
+    productExecutableFromCommand('/Applications/Font Buttler Test.app/Contents/MacOS/Font Buttler Test'),
+    'Font Buttler Test',
   )
-  assert.deepEqual(productExecutablesFromPgrep(''), [])
+  assert.equal(
+    productExecutableFromCommand(
+      '/Applications/Cuttler.app/Contents/Frameworks/Cuttler Helper (Renderer).app/Contents/MacOS/Cuttler Helper (Renderer)',
+    ),
+    'Cuttler',
+  )
+  assert.equal(productExecutableFromCommand('/usr/bin/ssh'), '')
+  assert.deepEqual(productExecutablesFromProcessList(processList), ['Font Buttler Test', 'Cuttler'])
+  assert.deepEqual(productExecutablesFromProcessList(''), [])
   const listing = [
     'path = /Applications/Cuttler.app/Contents/Library/LaunchAgents/app.fontbutler.desktop.FinderSyncAgent.plist',
     'program = /Applications/Cuttler.app/Contents/Helpers/FontButtlerFinderSyncAgent.app/Contents/MacOS/FontButtlerFinderSyncAgent',
@@ -385,7 +404,34 @@ test('the roundtrip refuses a running product or a LaunchAgent for another bundl
     }),
     '',
   )
-  const probe = finderSyncRoundtripBlockReason({ probeError: 'could not run pgrep (ENOENT).' })
-  assert.match(probe, /could not run pgrep/)
+  const probe = finderSyncRoundtripBlockReason({ probeError: 'could not run ps (ENOENT).' })
+  assert.match(probe, /could not run ps/)
   assert.match(probe, /separate macOS user account/)
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-bundle-path-'))
+  try {
+    const real = path.join(root, 'real')
+    const viaLink = path.join(root, 'link')
+    mkdirSync(path.join(real, 'Cuttler.app'), { recursive: true })
+    symlinkSync(real, viaLink)
+    const realBundle = path.join(real, 'Cuttler.app')
+    const linkBundle = path.join(viaLink, 'Cuttler.app')
+    assert.equal(normalizeBundlePath(linkBundle), normalizeBundlePath(realBundle))
+    assert.equal(
+      finderSyncRoundtripBlockReason({ registrationBundle: linkBundle, appBundle: realBundle }),
+      '',
+    )
+    assert.equal(normalizeBundlePath('/no/such/Cuttler.app'), path.resolve('/no/such/Cuttler.app'))
+    assert.equal(
+      normalizeBundlePath('/tmp/missing/Cuttler.app', {
+        realpath() {
+          const error = new Error('missing')
+          error.code = 'ENOENT'
+          throw error
+        },
+      }),
+      path.resolve('/tmp/missing/Cuttler.app'),
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })

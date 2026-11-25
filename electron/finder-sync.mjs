@@ -17,6 +17,7 @@ import {
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { Worker } from 'node:worker_threads'
+import { isTranslocatedAppPath } from './app-update-install.mjs'
 import { FINDER_COMPARE, FINDER_INSTALL_AS, isClaimedFontPath, isInstallableFontPath } from './finder-install.mjs'
 import {
   FINDER_SYNC_PENDING_ERROR_MAX_BYTES,
@@ -281,6 +282,23 @@ function absoluteBundlePath(filePath) {
  * launch from the same path with that same name does not register again.
  * A version change alone does not: only a missing or different service does.
  */
+/**
+ * A second copy must not take over the user's SMAppService or pluginkit
+ * registration. Translocated downloads, disk images under /Volumes, and a
+ * caller-supplied FONT_BUTLER_DATA or FONTCASE_DATA are those copies.
+ * Empty means this launch may register. /Applications, including a real
+ * move onto that path, is empty.
+ */
+export function finderSyncRegistrationHold({ appPath = '', explicitDataOverride = '' } = {}) {
+  if (isTranslocatedAppPath(appPath)) return 'this copy is translocated'
+  const bundle = String(appPath ?? '').replace(/\/+$/, '')
+  if (bundle === '/Volumes' || bundle.startsWith('/Volumes/')) return 'this copy is running from /Volumes'
+  if (typeof explicitDataOverride === 'string' && explicitDataOverride.trim()) {
+    return 'FONT_BUTLER_DATA or FONTCASE_DATA is set'
+  }
+  return ''
+}
+
 export function planFinderSyncAgentRegistration({
   testFeed = false,
   currentBundle,
@@ -388,10 +406,28 @@ export function commitFinderSyncAgentRegistration({
   record,
   status,
   optedOut = false,
+  hold = '',
   unregister = () => {},
   register = () => status,
 } = {}) {
   const stored = readFinderSyncAgentRecord(JSON.stringify(record ?? {}))
+  const held = typeof hold === 'string' ? hold.trim() : ''
+  if (held) {
+    return {
+      plan: {
+        action: 'keep',
+        label: finderSyncAgentLabel(testFeed),
+        plist: finderSyncAgentPlistName(testFeed),
+        testFeed: Boolean(testFeed),
+        reason: held,
+      },
+      status: status || '',
+      record: stored,
+      saved: false,
+      refused: false,
+      skipped: true,
+    }
+  }
   const plan = planFinderSyncAgentRegistration({
     testFeed,
     currentBundle,
@@ -1007,7 +1043,10 @@ export function refreshFinderSyncRegistration({
   appPath,
   testFeed = false,
   spawnSync,
+  hold = '',
 } = {}) {
+  const held = typeof hold === 'string' ? hold.trim() : ''
+  if (held) return { action: 'none', reason: held, skipped: true }
   if (platform !== 'darwin' || packaged !== true || !appPath || typeof spawnSync !== 'function') {
     return { action: 'none', reason: 'skipped' }
   }

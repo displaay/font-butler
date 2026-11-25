@@ -139,6 +139,7 @@ import {
   readFinderSyncPendingErrorRecordAsync,
   readFinderSyncPendingErrors,
   routeFinderSyncError,
+  finderSyncRegistrationHold,
   refreshFinderSyncRegistration,
   createFinderSyncIo,
   readFinderSyncFiles,
@@ -534,6 +535,83 @@ test('Finder Sync monitors home, /Users/Shared, and /Volumes', () => {
   assert.equal(leftDisabled.action, 'none')
   assert.equal(leftDisabled.reason, 'disabled')
   assert.equal(refreshFinderSyncRegistration({ platform: 'linux', packaged: true }).reason, 'skipped')
+
+  const translocated = '/private/var/folders/ab/AppTranslocation/XYZ/d/Cuttler.app'
+  assert.equal(finderSyncRegistrationHold({ appPath: translocated }).includes('translocated'), true)
+  assert.equal(
+    finderSyncRegistrationHold({ appPath: '/Volumes/Cuttler 1.0/Cuttler.app' }),
+    'this copy is running from /Volumes',
+  )
+  assert.equal(
+    finderSyncRegistrationHold({ appPath: '/Applications/Cuttler.app', explicitDataOverride: '/tmp/library' }),
+    'FONT_BUTLER_DATA or FONTCASE_DATA is set',
+  )
+  assert.equal(finderSyncRegistrationHold({ appPath: '/Applications/Cuttler.app' }), '')
+  assert.equal(
+    finderSyncRegistrationHold({ appPath: '/System/Volumes/Data/Applications/Cuttler.app' }),
+    '',
+  )
+  const movedHome = planFinderSyncAgentRegistration({
+    currentBundle: '/Applications/Cuttler.app',
+    recordedBundle: '/Users/daniel/Downloads/Cuttler.app',
+    status: 'enabled',
+    currentMachService: finderSyncMachService(false),
+    recordedMachService: finderSyncMachService(false),
+  })
+  assert.equal(movedHome.action, 'reregister')
+  assert.equal(movedHome.reason, 'moved')
+  const callsAfterMove = []
+  const adopted = refreshFinderSyncRegistration({
+    platform: 'darwin',
+    packaged: true,
+    appPath: '/Applications/Font Buttler Test/Font Buttler.app',
+    testFeed: true,
+    spawnSync(command, args) {
+      callsAfterMove.push([command, args])
+      if (args.includes('-m')) {
+        return { status: 0, stdout: listed('+', stalePath), stderr: '' }
+      }
+      return { status: 0, stdout: '', stderr: '' }
+    },
+  })
+  assert.equal(adopted.action, 'reregister')
+  assert.equal(callsAfterMove.some((call) => call[1][0] === '-a'), true)
+  for (const held of [
+    finderSyncRegistrationHold({ appPath: translocated }),
+    finderSyncRegistrationHold({ appPath: '/Volumes/Cuttler/Cuttler.app' }),
+    finderSyncRegistrationHold({ explicitDataOverride: ' /tmp/library ' }),
+  ]) {
+    const pluginkitCalls = []
+    const skipped = refreshFinderSyncRegistration({
+      platform: 'darwin',
+      packaged: true,
+      appPath: '/Volumes/Cuttler/Cuttler.app',
+      hold: held,
+      spawnSync(command, args) {
+        pluginkitCalls.push([command, args])
+        return { status: 0, stdout: listed('+', stalePath), stderr: '' }
+      },
+    })
+    assert.equal(skipped.skipped, true, held)
+    assert.equal(pluginkitCalls.length, 0, held)
+    const agentCalls = []
+    const committed = commitFinderSyncAgentRegistration({
+      currentBundle: '/Volumes/Cuttler/Cuttler.app',
+      record: { enabled: true, appBundlePath: '/Applications/Cuttler.app', machService: finderSyncMachService(false) },
+      status: 'enabled',
+      currentMachService: finderSyncMachService(false),
+      hold: held,
+      unregister() {
+        agentCalls.push('unregister')
+      },
+      register() {
+        agentCalls.push('register')
+        return 'enabled'
+      },
+    })
+    assert.equal(committed.skipped, true, held)
+    assert.deepEqual(agentCalls, [], held)
+  }
 })
 
 test('appex signing is inside-out and the release check requires sandbox, team, and Developer ID', () => {
