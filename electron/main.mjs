@@ -114,6 +114,7 @@ import {
   menuBarUpdateBadge,
   menuBarTrayIconPath,
   outdatedFamilies,
+  resolveTrayIconPaths,
   unreadOperationIdsToMark,
 } from './updates-menu.mjs'
 import {
@@ -379,13 +380,13 @@ function iconPackDir(style) {
 }
 
 function trayIconPaths() {
-  // 'classic' has no icon pack: build/icons/classic does not exist, so the
-  // existsSync checks below fall back to the original bundled icons.
-  const quiet = path.join(iconPackDir(appIconStyle), 'tray.png')
-  return {
-    quiet: fs.existsSync(quiet) ? quiet : MENUBAR_ICON_PATH,
-    attention: MENUBAR_ATTENTION_ICON_PATH,
-  }
+  return resolveTrayIconPaths({
+    style: appIconStyle,
+    iconPackDir: path.join(__dirname, '../build/icons'),
+    existsSync: fs.existsSync,
+    defaultQuiet: MENUBAR_ICON_PATH,
+    defaultAttention: MENUBAR_ATTENTION_ICON_PATH,
+  })
 }
 
 function dockIconImage(file) {
