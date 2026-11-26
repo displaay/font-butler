@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import {
@@ -9,6 +10,7 @@ import {
   menuBarTrayIconPath,
   menuBarUpdateBadge,
   outdatedFamilies,
+  resolveTrayIconPaths,
   TRAY_SECTION_LIMIT,
   unreadOperationIdsToMark,
 } from './updates-menu.mjs'
@@ -63,6 +65,52 @@ test('menuBarNeedsAttention is true only for unread activity, not font or app up
   assert.equal(menuBarNeedsAttention({ hasUnread: false, hasUpdates: true }), false)
   assert.equal(menuBarNeedsAttention({ hasUnread: false, hasUpdates: false, hasAppUpdate: true }), false)
   assert.equal(menuBarNeedsAttention({ hasUnread: true, hasUpdates: true, hasAppUpdate: true }), true)
+})
+
+test('resolveTrayIconPaths keeps the bundled icons for classic', () => {
+  const paths = resolveTrayIconPaths({
+    style: 'classic',
+    iconPackDir: '/app/build/icons',
+    existsSync: () => false,
+    defaultQuiet: 'menubarTemplate.png',
+    defaultAttention: 'menubarNotificationTemplate.svg',
+  })
+  assert.deepEqual(paths, {
+    quiet: 'menubarTemplate.png',
+    attention: 'menubarNotificationTemplate.svg',
+  })
+})
+
+test('resolveTrayIconPaths pairs tray.png with tray-attention.png for cuttler', () => {
+  const paths = resolveTrayIconPaths({
+    style: 'cuttler',
+    iconPackDir: '/app/build/icons',
+    existsSync: () => true,
+    defaultQuiet: 'menubarTemplate.png',
+    defaultAttention: 'menubarNotificationTemplate.svg',
+  })
+  assert.deepEqual(paths, {
+    quiet: path.join('/app/build/icons/cuttler', 'tray.png'),
+    attention: path.join('/app/build/icons/cuttler', 'tray-attention.png'),
+  })
+})
+
+test('resolveTrayIconPaths never falls back to the default attention icon', () => {
+  const paths = resolveTrayIconPaths({
+    style: 'bright',
+    iconPackDir: '/app/build/icons',
+    existsSync: (file) => file.endsWith('tray.png'),
+    defaultQuiet: 'menubarTemplate.png',
+    defaultAttention: 'menubarNotificationTemplate.svg',
+  })
+  assert.equal(paths.quiet, path.join('/app/build/icons/bright', 'tray.png'))
+  assert.equal(paths.attention, paths.quiet)
+})
+
+test('main.mjs resolves tray icon paths through resolveTrayIconPaths', () => {
+  const main = readFileSync(new URL('./main.mjs', import.meta.url), 'utf8')
+  assert.match(main, /resolveTrayIconPaths\(/)
+  assert.match(main, /defaultAttention: MENUBAR_ATTENTION_ICON_PATH/)
 })
 
 test('menuBarTrayIconPath keeps the quiet icon when only updates are available', () => {

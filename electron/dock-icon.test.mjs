@@ -67,6 +67,8 @@ test('cuttler menu bar icons are 22px and 44px black templates', () => {
   for (const [file, size] of [
     ['build/icons/cuttler/tray.png', 22],
     ['build/icons/cuttler/tray@2x.png', 44],
+    ['build/icons/cuttler/tray-attention.png', 22],
+    ['build/icons/cuttler/tray-attention@2x.png', 44],
   ]) {
     const icon = decodePng(readFileSync(new URL(`../${file}`, import.meta.url)))
     assert.equal(icon.width, size, file)
@@ -82,4 +84,36 @@ test('cuttler menu bar icons are 22px and 44px black templates', () => {
     }
     assert.ok(opaque > 20, file)
   }
+})
+
+test('cuttler tray-attention adds a dot in the top-right without overlapping the mark', () => {
+  const quiet = decodePng(readFileSync(new URL('../build/icons/cuttler/tray.png', import.meta.url)))
+  const attention = decodePng(
+    readFileSync(new URL('../build/icons/cuttler/tray-attention.png', import.meta.url)),
+  )
+  assert.equal(attention.width, quiet.width)
+  assert.equal(attention.height, quiet.height)
+  const at = (image, x, y) => image.data[(y * image.width + x) * 4 + 3]
+  // Quiet is empty in the top strip; only the dot paints there.
+  let dotPixels = 0
+  for (let y = 0; y < 3; y += 1) {
+    for (let x = 0; x < quiet.width; x += 1) {
+      if (at(attention, x, y) > 16) {
+        assert.equal(at(quiet, x, y) <= 16, true, `quiet is also opaque at ${x},${y}`)
+        assert.ok(x >= quiet.width / 2, `dot pixel ${x},${y} is not in the right half`)
+        dotPixels += 1
+      }
+    }
+  }
+  assert.ok(dotPixels > 5, `expected a visible dot in the top strip, got ${dotPixels} pixels`)
+  // The dot sits in the top-right corner and leaves a gap above the mark.
+  assert.ok(at(attention, quiet.width - 1, 0) <= 16, 'dot clips the right edge')
+  assert.equal(at(attention, 4, 21), 0, 'dot or mark clips the bottom edge')
+})
+
+test('packaged app ships the cuttler attention tray icon', () => {
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+  assert.ok(pkg.build.files.includes('build/icons/**/*'))
+  const updatesMenu = readFileSync(new URL('./updates-menu.mjs', import.meta.url), 'utf8')
+  assert.match(updatesMenu, /tray-attention\.png/)
 })

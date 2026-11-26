@@ -1,3 +1,5 @@
+import path from 'node:path'
+
 export function familyNameOf(entry) {
   return entry.customFamilyName || entry.faces?.[0]?.familyName || 'Unknown'
 }
@@ -67,6 +69,25 @@ export function menuBarUpdateBadge(_input) {
 
 export function menuBarTrayIconPath(input, { quiet, attention }) {
   return menuBarNeedsAttention(input) ? attention : quiet
+}
+
+export function resolveTrayIconPaths({
+  style,
+  iconPackDir,
+  existsSync,
+  defaultQuiet,
+  defaultAttention,
+}) {
+  const packDir = path.join(iconPackDir, style)
+  const quiet = path.join(packDir, 'tray.png')
+  // Icon packs without a tray.png (e.g. classic) keep the original bundled icons.
+  if (!existsSync(quiet)) {
+    return { quiet: defaultQuiet, attention: defaultAttention }
+  }
+  const attention = path.join(packDir, 'tray-attention.png')
+  // Never fall back to the default attention icon: it would swap in the old
+  // Butt mark on packs that ship their own menu bar icon.
+  return { quiet, attention: existsSync(attention) ? attention : quiet }
 }
 
 export function unreadOperationIdsToMark({
