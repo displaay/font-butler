@@ -131,7 +131,7 @@ function quietFailure(
   now: number,
   reason: string,
 ): AppUpdateStatus {
-  console.warn(`Font Butler update check skipped (${reason})`)
+  console.warn(`Cuttler update check skipped (${reason})`)
   if (cached?.status) {
     return cached.status
   }

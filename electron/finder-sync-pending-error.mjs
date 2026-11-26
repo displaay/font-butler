@@ -6,6 +6,7 @@ import {
   fsyncSync,
   lstatSync,
   openSync,
+  promises as fsPromises,
   readSync,
   renameSync,
   unlinkSync,
@@ -124,6 +125,55 @@ export function readFinderSyncPendingErrorRecord(filePath, io = defaultReadIo) {
 }
 
 /**
+ * Async variant of `readFinderSyncPendingErrorRecord` using fs.promises so
+ * startup never blocks the main thread on slow I/O.
+ */
+export async function readFinderSyncPendingErrorRecordAsync(filePath, io = fsPromises) {
+  if (!filePath || typeof io?.open !== 'function') {
+    return { errors: [], discard: false, reason: 'unavailable' }
+  }
+  let handle
+  try {
+    handle = await io.open(filePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { errors: [], discard: false, reason: 'absent' }
+    if (error?.code === 'ELOOP' || error?.code === 'EMLINK' || error?.code === 'EPERM') {
+      return { errors: [], discard: false, reason: 'symlink' }
+    }
+    return { errors: [], discard: false, reason: 'unreadable' }
+  }
+  try {
+    const stat = await handle.stat()
+    if (typeof stat?.isFile !== 'function' || !stat.isFile()) {
+      return { errors: [], discard: false, reason: 'not-file' }
+    }
+    if (typeof stat.size !== 'number' || stat.size < 0 || stat.size > FINDER_SYNC_PENDING_ERROR_MAX_BYTES) {
+      return { errors: [], discard: true, reason: 'oversize' }
+    }
+    const buffer = Buffer.alloc(stat.size)
+    let got = 0
+    while (got < stat.size) {
+      const { bytesRead } = await handle.read(buffer, got, stat.size - got, null)
+      if (bytesRead <= 0) break
+      got += bytesRead
+    }
+    return {
+      errors: parseFinderSyncPendingErrorEntries(buffer.subarray(0, got).toString('utf8')),
+      discard: true,
+      reason: 'ok',
+    }
+  } catch {
+    return { errors: [], discard: true, reason: 'unreadable' }
+  } finally {
+    try {
+      await handle.close()
+    } catch {
+      // The descriptor is already closed.
+    }
+  }
+}
+
+/**
  * Release folder for finder-sync-pending-error.json.
  * Test feed always uses its own directory.
  * An established legacy library wins, Font Buttler before Font Butler.
@@ -170,16 +220,29 @@ export function finderSyncPendingErrorWriteDirectory(appSupportDir, { testFeed =
 }
 
 /**
+ * App-group container the sandboxed appex can write. The helper's
+ * Application Support file is outside that sandbox, so a lookup that never
+ * reaches the helper is recorded here instead.
+ */
+export function finderSyncGroupContainerDirectory(homeDir, group) {
+  if (typeof homeDir !== 'string' || !homeDir.startsWith('/')) return ''
+  if (typeof group !== 'string' || !group || group.includes('/') || group.includes('\0')) return ''
+  return path.join(homeDir, 'Library/Group Containers', group)
+}
+
+/**
  * Files the app reads once, then deletes.
- * userData is always first. The other Application Support folders are added
- * only for a real Mac library. A test feed and a FONT_BUTLER_DATA /
- * FONTCASE_DATA launch pass includeOtherSupportDirs false so they do not
- * read or delete the installed app's record.
+ * userData is first. `groupContainerDir` is added only when the caller
+ * passes one. An isolated FONT_BUTLER_DATA / FONTCASE_DATA launch passes
+ * an empty group directory so this does not read or delete the installed
+ * release app's queued error. The other Application Support folders are
+ * added only for a real Mac library.
  */
 export function finderSyncPendingErrorConsumePaths({
   userDataDir,
   appSupportDir,
   includeOtherSupportDirs = false,
+  groupContainerDir = '',
   skipDirs = [],
 } = {}) {
   const files = []
@@ -194,6 +257,7 @@ export function finderSyncPendingErrorConsumePaths({
     files.push(file)
   }
   add(userDataDir)
+  add(groupContainerDir)
   if (includeOtherSupportDirs === true && appSupportDir) {
     add(path.join(appSupportDir, FINDER_SYNC_RELEASE_SUPPORT_DIR))
     for (const name of FINDER_SYNC_LEGACY_SUPPORT_DIRS) add(path.join(appSupportDir, name))
@@ -313,4 +377,45 @@ export function carryFinderSyncPendingError(sourceDir, destDir) {
   } catch {
     return false
   }
+}
+
+/**
+ * Await pending-error consumption for at most `timeoutMs`. When the timer
+ * fires first, log once via `onTimeout` and return without cancelling the
+ * in-flight consume so every unlinked record is still presented when it settles.
+ */
+export async function awaitFinderSyncPendingErrorConsume({
+  consumePromise,
+  timeoutMs = 2_000,
+  onPresent,
+  onTimeout,
+  onError,
+} = {}) {
+  let timedOut = false
+  const settledPromise = Promise.resolve(consumePromise).then(
+    (errors) => {
+      for (const item of Array.isArray(errors) ? errors : []) {
+        onPresent?.(item.code)
+      }
+      return Array.isArray(errors) ? errors : []
+    },
+    (error) => {
+      onError?.(error)
+      return []
+    },
+  )
+  let timer
+  const outcome = await Promise.race([
+    settledPromise.then(() => 'done'),
+    new Promise((resolve) => {
+      timer = setTimeout(() => {
+        timedOut = true
+        onTimeout?.()
+        resolve('timeout')
+      }, timeoutMs)
+      timer.unref?.()
+    }),
+  ])
+  if (timer) clearTimeout(timer)
+  return { timedOut: timedOut || outcome === 'timeout', settledPromise }
 }

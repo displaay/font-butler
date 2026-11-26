@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { test } from 'node:test'
 import {
   AUTOMATED_CHECKS,
@@ -20,6 +22,14 @@ import {
   nmListsExtensionMain,
   parseAgentStatusOutput,
   parseMacCheckArgs,
+  FINDER_SYNC_PROCESS_PROBE_ARGV,
+  bundleFromServiceListing,
+  finderSyncAppLaunchEnv,
+  finderSyncRoundtripBlockReason,
+  normalizeBundlePath,
+  parseRoundtripArgs,
+  productExecutableFromCommand,
+  productExecutablesFromProcessList,
   sameArchSet,
   selectProductAppBundle,
   appexCoveredByAppNotarization,
@@ -28,7 +38,7 @@ import {
   straySliceNames,
   summarizeChecklist,
 } from '../scripts/finder-sync-mac-check-lib.mjs'
-import { finderSyncAppGroup } from './finder-sync.mjs'
+import { finderSyncAppGroup, finderSyncMachService } from './finder-sync.mjs'
 
 const group = finderSyncAppGroup(false)
 
@@ -56,6 +66,8 @@ function passingObservations(extra = {}) {
       ['com.apple.security.application-groups', group],
     ]),
     appexEntitlements: entitlements([['com.apple.security.application-groups', group]]),
+    appexMachService: finderSyncMachService(false),
+    launchAgentServices: [finderSyncMachService(false)],
     helperEntitlements: entitlements([['com.apple.security.application-groups', group]]),
     helperCodesignDisplay: 'Identifier=app.fontbutler.desktop.FinderSyncAgent\nflags=0x10000(runtime)\n',
     spctlApp: { ok: true, reason: 'Notarized Developer ID' },
@@ -186,6 +198,7 @@ test('archive app discovery accepts Cuttler and Font Buttler product names', () 
   assert.match(roundtrip, /finderSyncMainExecutable\(app\)/)
   const check = readFileSync(new URL('../scripts/finder-sync-mac-check.mjs', import.meta.url), 'utf8')
   assert.match(check, /finderSyncMainExecutable\(app\)/)
+  assert.match(check, /launchAgentServices: finderSyncAgentMachServiceKeys\(readPlistText\(finderSyncAgentPlistPath\(app, testFeed\)\)\)/)
 })
 
 test('a complete signed-app observation passes, and a missing entitlement or pending approval fails', () => {
@@ -215,6 +228,28 @@ test('a complete signed-app observation passes, and a missing entitlement or pen
   const missingNm = buildChecklist(passingObservations({ appexNm: '', appexNmError: 'The appex executable is missing.' }))
   assert.equal(missingNm.find((item) => item.id === 'appex-script-main').state, 'fail')
 
+  const bareGroup = buildChecklist(passingObservations({
+    appexMachService: group,
+    launchAgentServices: [group],
+  }))
+  assert.equal(bareGroup.find((item) => item.id === 'mach-service-suffix').state, 'fail')
+  const mismatched = buildChecklist(passingObservations({
+    appexMachService: finderSyncMachService(false),
+    launchAgentServices: [finderSyncMachService(true)],
+  }))
+  assert.equal(mismatched.find((item) => item.id === 'mach-service-suffix').state, 'fail')
+  assert.match(mismatched.find((item) => item.id === 'mach-service-suffix').reason, /LaunchAgent/)
+  const droppedServices = buildChecklist(passingObservations({ launchAgentServices: undefined }))
+  assert.equal(droppedServices.find((item) => item.id === 'mach-service-suffix').state, 'fail')
+  const testService = buildChecklist(passingObservations({
+    testFeed: true,
+    appexEntitlements: entitlements([['com.apple.security.application-groups', finderSyncAppGroup(true)]]),
+    appexMachService: finderSyncMachService(true),
+    launchAgentServices: [finderSyncMachService(true)],
+    helperCodesignDisplay: 'Identifier=app.fontbutler.desktop.FinderSyncAgent.Test\nflags=0x10000(runtime)\n',
+  }))
+  assert.equal(testService.find((item) => item.id === 'mach-service-suffix').state, 'pass')
+
   assert.equal(missingEvents.find((item) => item.id === 'app-entitlements').state, 'fail')
 
   const jitOnHelper = buildChecklist(passingObservations({
@@ -228,6 +263,14 @@ test('a complete signed-app observation passes, and a missing entitlement or pen
   const pending = buildChecklist(passingObservations({ agentStatus: { status: 'requires-approval' } }))
   assert.equal(pending.find((item) => item.id === 'agent-status').state, 'pass')
   assert.match(pending.find((item) => item.id === 'agent-status').reason, /requires-approval/)
+  for (const status of ['not-registered', 'not-found']) {
+    const unregistered = buildChecklist(passingObservations({ agentStatus: { status } }))
+    const item = unregistered.find((entry) => entry.id === 'agent-status')
+    assert.equal(item.state, 'fail')
+    assert.match(item.reason, new RegExp(status))
+    assert.match(item.reason, /does not register/)
+    assert.doesNotMatch(item.reason, /Unreadable/)
+  }
   assert.equal(pending.find((item) => item.id === 'launchd-vend').state, 'fail')
   assert.equal(pending.find((item) => item.id === 'xpc-accept').state, 'fail')
   assert.equal(summarizeChecklist(pending).ok, false)
@@ -245,12 +288,163 @@ test('a complete signed-app observation passes, and a missing entitlement or pen
   const args = parseMacCheckArgs(['/Applications/Font Buttler.app', '--dmg', '/tmp/Font.dmg', '--json'])
   assert.equal(args.error, '')
   assert.equal(args.json, true)
+  assert.equal(args.realHome, false)
   assert.equal(args.dmg, '/tmp/Font.dmg')
+  const realHome = parseMacCheckArgs(['/Applications/Cuttler.app', '--real-home'])
+  assert.equal(realHome.error, '')
+  assert.equal(realHome.realHome, true)
   assert.match(parseMacCheckArgs([]).error, /Font Buttler\.app/)
   assert.match(linuxRefusalMessage(), /macOS/)
   assert.equal(MANUAL_MAC_CHECKS.length, 9)
   for (const item of MANUAL_MAC_CHECKS) {
     assert.ok(item.action)
     assert.ok(item.expect)
+  }
+})
+
+test('the default app launch env does not contain the real HOME', () => {
+  const real = '/Users/tester'
+  const temp = '/tmp/font-butler-throwaway'
+  const planned = finderSyncAppLaunchEnv({
+    realHome: false,
+    home: real,
+    tempHome: temp,
+    env: {
+      HOME: real,
+      FONT_BUTLER_DATA: path.join(real, 'Library/Application Support/Cuttler/data'),
+      PATH: '/usr/bin',
+    },
+  })
+  assert.equal(planned.warning, '')
+  assert.equal(planned.env.HOME, temp)
+  assert.equal(planned.env.FONT_BUTLER_DATA, path.join(temp, 'data'))
+  assert.equal(planned.env.PATH, '/usr/bin')
+  for (const value of Object.values(planned.env)) {
+    assert.equal(String(value).includes(real), false)
+  }
+  assert.throws(() => finderSyncAppLaunchEnv({ realHome: false, env: { HOME: real } }), /throwaway HOME/)
+  const allowed = finderSyncAppLaunchEnv({
+    realHome: true,
+    home: real,
+    env: { HOME: real, FONT_BUTLER_DATA: path.join(real, 'data') },
+  })
+  assert.equal(allowed.env.HOME, real)
+  assert.match(allowed.warning, /WARNING: launching the app with the real HOME \(\/Users\/tester\)/)
+  assert.equal(parseRoundtripArgs(['/Applications/Cuttler.app']).realHome, false)
+  assert.equal(parseRoundtripArgs(['--real-home', '/Applications/Cuttler.app']).realHome, true)
+  const check = readFileSync(new URL('../scripts/finder-sync-mac-check.mjs', import.meta.url), 'utf8')
+  const roundtrip = readFileSync(new URL('../scripts/finder-sync-roundtrip-check', import.meta.url), 'utf8')
+  assert.match(check, /runAppBinary\(mainExecutable, \['--finder-sync-agent-status'\]/)
+  assert.match(check, /finderSyncAppLaunchEnv\(/)
+  assert.match(roundtrip, /finderSyncAppLaunchEnv\(/)
+  assert.match(roundtrip, /env: launch\.env/)
+  assert.match(roundtrip, /spawn\(binary, \[\], \{ detached: true, stdio: 'ignore', env: launch\.env \}\)/)
+  const blockAt = roundtrip.indexOf('finderSyncRoundtripBlockReason(')
+  const statusAt = roundtrip.indexOf("'--finder-sync-agent-status'")
+  const spawnAt = roundtrip.indexOf('spawn(binary, [], { detached: true')
+  assert.ok(blockAt > 0 && blockAt < statusAt && blockAt < spawnAt)
+  assert.deepEqual([...FINDER_SYNC_PROCESS_PROBE_ARGV], ['ps', '-axwwo', 'pid=,comm='])
+  assert.match(FINDER_SYNC_PROCESS_PROBE_ARGV[1], /ww/)
+  assert.match(roundtrip, /FINDER_SYNC_PROCESS_PROBE_ARGV/)
+  assert.doesNotMatch(roundtrip, /pgrep|'-axo'|"-axo"|-axo /)
+})
+
+test('the roundtrip refuses a running product or a LaunchAgent for another bundle', () => {
+  assert.equal('Font Buttler Test'.length, 17)
+  const processList = [
+    '431 /Applications/Font Buttler Test.app/Contents/MacOS/Font Buttler Test',
+    '432 /Applications/Cuttler.app/Contents/Frameworks/Cuttler Helper (Renderer).app/Contents/MacOS/Cuttler Helper (Renderer)',
+    '433 /usr/bin/ssh',
+    '434 Font Buttler Tes',
+    '435 /Applications/Notes.app/Contents/MacOS/Notes',
+  ].join('\n')
+  assert.equal(
+    productExecutableFromCommand('/Applications/Font Buttler Test.app/Contents/MacOS/Font Buttler Test'),
+    'Font Buttler Test',
+  )
+  assert.equal(
+    productExecutableFromCommand(
+      '/Applications/Cuttler.app/Contents/Frameworks/Cuttler Helper (Renderer).app/Contents/MacOS/Cuttler Helper (Renderer)',
+    ),
+    'Cuttler',
+  )
+  assert.equal(productExecutableFromCommand('/usr/bin/ssh'), '')
+  const longHelper =
+    '/Applications/Cuttler.app/Contents/Frameworks/Cuttler Helper (Renderer).app/Contents/MacOS/Cuttler Helper (Renderer)'
+  const longTest =
+    '/Users/tester/Library/Caches/font-butler-roundtrip/Font Buttler Test.app/Contents/MacOS/Font Buttler Test'
+  assert.ok(longHelper.length > 80, String(longHelper.length))
+  assert.ok(longTest.length > 80, String(longTest.length))
+  assert.equal(productExecutableFromCommand(longHelper), 'Cuttler')
+  assert.equal(productExecutableFromCommand(longTest), 'Font Buttler Test')
+  assert.deepEqual(productExecutablesFromProcessList(processList), ['Font Buttler Test', 'Cuttler'])
+  assert.deepEqual(productExecutablesFromProcessList(''), [])
+  const listing = [
+    'path = /Applications/Cuttler.app/Contents/Library/LaunchAgents/app.fontbutler.desktop.FinderSyncAgent.plist',
+    'program = /Applications/Cuttler.app/Contents/Helpers/FontButtlerFinderSyncAgent.app/Contents/MacOS/FontButtlerFinderSyncAgent',
+  ].join('\n')
+  assert.equal(bundleFromServiceListing(listing), '/Applications/Cuttler.app')
+  assert.equal(
+    bundleFromServiceListing('url = file:///Users/tester/Font Buttler Test.app/Contents/MacOS/Font Buttler Test'),
+    '/Users/tester/Font Buttler Test.app',
+  )
+  assert.equal(bundleFromServiceListing('Could not find service'), '')
+  const running = finderSyncRoundtripBlockReason({
+    runningExecutables: ['Cuttler'],
+    registrationBundle: '/tmp/build/Cuttler.app',
+    appBundle: '/tmp/build/Cuttler.app',
+  })
+  assert.match(running, /Refusing to start: Cuttler is already running/)
+  assert.match(running, /separate macOS user account/)
+  const otherBundle = finderSyncRoundtripBlockReason({
+    runningExecutables: [],
+    registrationBundle: '/Applications/Cuttler.app',
+    appBundle: '/tmp/build/Cuttler.app',
+  })
+  assert.match(otherBundle, /registered at \/Applications\/Cuttler\.app/)
+  assert.match(otherBundle, /not \/tmp\/build\/Cuttler\.app/)
+  assert.equal(
+    finderSyncRoundtripBlockReason({
+      registrationBundle: '/tmp/build/Cuttler.app',
+      appBundle: '/tmp/build/Cuttler.app/',
+    }),
+    '',
+  )
+  assert.equal(
+    finderSyncRoundtripBlockReason({
+      registrationBundle: '',
+      appBundle: '/tmp/build/Font Buttler.app',
+    }),
+    '',
+  )
+  const probe = finderSyncRoundtripBlockReason({ probeError: 'could not run ps (ENOENT).' })
+  assert.match(probe, /could not run ps/)
+  assert.match(probe, /separate macOS user account/)
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-bundle-path-'))
+  try {
+    const real = path.join(root, 'real')
+    const viaLink = path.join(root, 'link')
+    mkdirSync(path.join(real, 'Cuttler.app'), { recursive: true })
+    symlinkSync(real, viaLink)
+    const realBundle = path.join(real, 'Cuttler.app')
+    const linkBundle = path.join(viaLink, 'Cuttler.app')
+    assert.equal(normalizeBundlePath(linkBundle), normalizeBundlePath(realBundle))
+    assert.equal(
+      finderSyncRoundtripBlockReason({ registrationBundle: linkBundle, appBundle: realBundle }),
+      '',
+    )
+    assert.equal(normalizeBundlePath('/no/such/Cuttler.app'), path.resolve('/no/such/Cuttler.app'))
+    assert.equal(
+      normalizeBundlePath('/tmp/missing/Cuttler.app', {
+        realpath() {
+          const error = new Error('missing')
+          error.code = 'ENOENT'
+          throw error
+        },
+      }),
+      path.resolve('/tmp/missing/Cuttler.app'),
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
   }
 })

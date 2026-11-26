@@ -5,7 +5,14 @@ import path from 'node:path'
 import { test } from 'node:test'
 import { detectAppUpdateRuntime, readAppTestFeedMarker } from './app-update-install.mjs'
 import { migrateLegacyMacAppDirs, shouldMigrateRealMacLibrary } from './mac-data-migration.mjs'
-import { applyTestFeedDataIsolation, planTestFeedDataIsolation, TEST_FEED_USER_DATA_DIR } from './test-feed-data.mjs'
+import {
+  applyTestFeedDataIsolation,
+  electronUserDataForDataOverride,
+  explicitFontDataOverride,
+  planTestFeedDataIsolation,
+  TEST_FEED_USER_DATA_DIR,
+  userDataDirForLaunch,
+} from './test-feed-data.mjs'
 
 function fakeApp(appData, { ready = false } = {}) {
   const paths = { appData, userData: path.join(appData, 'Font Buttler') }
@@ -77,6 +84,43 @@ test('a marked build keeps an explicit FONT_BUTLER_DATA and still moves userData
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+test('FONT_BUTLER_DATA redirects Electron userData for Cuttler and a marked test build', () => {
+  assert.equal(explicitFontDataOverride({}), '')
+  assert.equal(explicitFontDataOverride({ FONT_BUTLER_DATA: '  ' }), '')
+  assert.equal(explicitFontDataOverride({ FONTCASE_DATA: '/tmp/legacy' }), '/tmp/legacy')
+  assert.equal(
+    explicitFontDataOverride({ FONT_BUTLER_DATA: '/tmp/library', FONTCASE_DATA: '/tmp/legacy' }),
+    '/tmp/library',
+  )
+  assert.equal(electronUserDataForDataOverride(''), '')
+  assert.equal(electronUserDataForDataOverride('  /tmp/library  '), path.resolve('/tmp/library/electron-user-data'))
+  const testUserData = path.join('/Users/tester/Library/Application Support', TEST_FEED_USER_DATA_DIR)
+  assert.equal(
+    userDataDirForLaunch({
+      explicitDataOverride: '/tmp/library',
+      testFeedUserData: testUserData,
+      appSupportDir: '/Users/tester/Library/Application Support',
+      appFolderName: 'Cuttler',
+    }),
+    path.resolve('/tmp/library/electron-user-data'),
+  )
+  assert.equal(
+    userDataDirForLaunch({
+      testFeedUserData: testUserData,
+      appSupportDir: '/Users/tester/Library/Application Support',
+      appFolderName: 'Cuttler',
+    }),
+    testUserData,
+  )
+  assert.equal(
+    userDataDirForLaunch({
+      appSupportDir: '/Users/tester/Library/Application Support',
+      appFolderName: 'Cuttler',
+    }),
+    path.join('/Users/tester/Library/Application Support', 'Cuttler'),
+  )
 })
 
 test('an unmarked build does not change userData or FONT_BUTLER_DATA', () => {

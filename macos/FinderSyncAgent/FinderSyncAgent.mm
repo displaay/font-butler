@@ -25,8 +25,8 @@ static NSString *const kReleaseRequirement =
     @"anchor apple generic and certificate leaf[subject.OU] = \"A7WWML89LQ\" and identifier \"app.fontbutler.desktop.FinderSync\"";
 static NSString *const kTestRequirement =
     @"anchor apple generic and certificate leaf[subject.OU] = \"A7WWML89LQ\" and identifier \"app.fontbutler.desktop.FinderSync.Test\"";
-static NSString *const kReleaseService = @"A7WWML89LQ.group.app.fontbutler.desktop.FinderSync";
-static NSString *const kTestService = @"A7WWML89LQ.group.app.fontbutler.desktop.FinderSync.Test";
+static NSString *const kReleaseService = @"A7WWML89LQ.group.app.fontbutler.desktop.FinderSync.agent";
+static NSString *const kTestService = @"A7WWML89LQ.group.app.fontbutler.desktop.FinderSync.Test.agent";
 static NSString *const kReleaseAgentBundleId = @"app.fontbutler.desktop.FinderSyncAgent";
 static NSString *const kTestAgentBundleId = @"app.fontbutler.desktop.FinderSyncAgent.Test";
 // The socket peer must be the Font Buttler app. Both flavours share this id.
@@ -41,8 +41,10 @@ static const uint32_t kMaxFrame = 2 * 1024 * 1024;
 static BOOL g_testFeed = NO;
 static BOOL g_launchedApp = NO;
 static pid_t g_spawnedPid = 0;
-static NSString *const kMissingAppMessage =
-    @"Font Buttler couldn't be found. Open it once from its new location.";
+static NSString *RunningProductName(void);
+static NSString *MissingAppMessage(void) {
+  return [NSString stringWithFormat:@"%@ couldn't be found. Open it once from its new location.", RunningProductName()];
+}
 static const off_t kPendingErrorMaxBytes = 8192;
 static const NSUInteger kPendingErrorMaxEntries = 5;
 // Shorter than the XPC client's submit wait. A reply after that wait is
@@ -164,14 +166,18 @@ static NSArray *ReadPendingFinderSyncErrors(const char *filePath) {
   return errors;
 }
 
-// The temp file is created 0600, then renamed over the record. There is no
-// chmod after that rename.
+// The temp file is created 0600 with a unique per-write name, then renamed over
+// the record. There is no chmod after that rename. Callers must run on
+// PendingErrorFileQueue().
 static BOOL WritePendingBytes(const char *filePath, NSData *data) {
   if (!data || data.length == 0 || data.length > (NSUInteger)kPendingErrorMaxBytes) return NO;
   char tempPath[PATH_MAX];
-  int formatted = snprintf(tempPath, sizeof(tempPath), "%s.tmp", filePath);
+  int pid = (int)[NSProcessInfo processInfo].processIdentifier;
+  NSString *uuid = NSUUID.UUID.UUIDString;
+  const char *uuidBytes = uuid.UTF8String;
+  if (!uuidBytes || uuidBytes[0] == '\0') return NO;
+  int formatted = snprintf(tempPath, sizeof(tempPath), "%s.%d.%s.tmp", filePath, pid, uuidBytes);
   if (formatted <= 0 || (size_t)formatted >= sizeof(tempPath)) return NO;
-  unlink(tempPath);
   int fd = open(tempPath, O_CREAT | O_EXCL | O_NOFOLLOW | O_WRONLY, 0600);
   if (fd < 0) return NO;
   if (fchmod(fd, 0600) != 0) {
@@ -218,30 +224,119 @@ static NSString *PendingFinderSyncErrorDirectory(void) {
   return [support stringByAppendingPathComponent:@"Cuttler"];
 }
 
-static void WritePendingFinderSyncError(NSString *code) {
-  if (!FinderSyncErrorCodeIsKnown(code)) return;
+// Every read, modify, write, and unlink of finder-sync-pending-error.json in
+// this helper runs on this dedicated serial queue so XPC reports and
+// forwardQueue updates never race, without blocking XPC replies behind
+// forwardQueue's startup wait.
+static dispatch_queue_t PendingErrorFileQueue(void) {
+  static dispatch_queue_t queue = nil;
+  static dispatch_once_t onceToken;
+  dispatch_once(&onceToken, ^{
+    queue = dispatch_queue_create("app.fontbutler.desktop.FinderSyncAgent.pendingError", DISPATCH_QUEUE_SERIAL);
+  });
+  return queue;
+}
+
+static BOOL WritePendingFinderSyncErrorsLocked(NSArray<NSString *> *codes) {
+  if (![codes isKindOfClass:[NSArray class]]) return NO;
+  NSMutableArray<NSString *> *validCodes = [NSMutableArray array];
+  for (id item in codes) {
+    if (![item isKindOfClass:[NSString class]]) continue;
+    if (!FinderSyncErrorCodeIsKnown(item) || [validCodes containsObject:item]) continue;
+    if (validCodes.count >= kPendingErrorMaxEntries) break;
+    [validCodes addObject:item];
+  }
+  if (validCodes.count == 0) return NO;
+
   NSString *dir = PendingFinderSyncErrorDirectory();
   const char *dirPath = dir.fileSystemRepresentation;
   struct stat st;
   if (lstat(dirPath, &st) != 0) {
-    if (mkdir(dirPath, 0700) != 0) return;
+    if (mkdir(dirPath, 0700) != 0) return NO;
     chmod(dirPath, 0700);
   } else if (S_ISLNK(st.st_mode) || !S_ISDIR(st.st_mode)) {
-    return;
+    return NO;
   }
+
   NSString *file = [dir stringByAppendingPathComponent:@"finder-sync-pending-error.json"];
   const char *filePath = file.fileSystemRepresentation;
-  if (lstat(filePath, &st) == 0 && !S_ISREG(st.st_mode)) return;
+  if (lstat(filePath, &st) == 0 && !S_ISREG(st.st_mode)) return NO;
+
   NSMutableArray *errors = [ReadPendingFinderSyncErrors(filePath) mutableCopy];
+  NSMutableSet<NSString *> *existingCodes = [NSMutableSet set];
   for (id item in errors) {
-    if ([item[@"code"] isEqualToString:code]) return;
+    NSString *existing = [item isKindOfClass:[NSDictionary class]] ? item[@"code"] : nil;
+    if ([existing isKindOfClass:[NSString class]]) [existingCodes addObject:existing];
   }
-  if (errors.count >= kPendingErrorMaxEntries) [errors removeObjectAtIndex:0];
+
   NSTimeInterval millis = floor(NSDate.date.timeIntervalSince1970 * 1000.0);
-  [errors addObject:@{@"code" : code, @"at" : @((long long)millis)}];
+  BOOL addedAny = NO;
+  for (NSString *code in validCodes) {
+    if ([existingCodes containsObject:code]) continue;
+    if (errors.count >= kPendingErrorMaxEntries) {
+      id dropped = errors.firstObject;
+      NSString *droppedCode = [dropped isKindOfClass:[NSDictionary class]] ? dropped[@"code"] : nil;
+      if ([droppedCode isKindOfClass:[NSString class]]) [existingCodes removeObject:droppedCode];
+      [errors removeObjectAtIndex:0];
+    }
+    [errors addObject:@{@"code" : code, @"at" : @((long long)millis)}];
+    [existingCodes addObject:code];
+    addedAny = YES;
+  }
+  if (!addedAny) return YES;
+
   NSData *data = [NSJSONSerialization dataWithJSONObject:@{@"errors" : errors} options:0 error:nil];
-  if (!data) return;
-  WritePendingBytes(filePath, data);
+  if (!data) return NO;
+  return WritePendingBytes(filePath, data);
+}
+
+static BOOL WritePendingFinderSyncErrors(NSArray<NSString *> *codes) {
+  __block BOOL wrote = NO;
+  dispatch_sync(PendingErrorFileQueue(), ^{
+    wrote = WritePendingFinderSyncErrorsLocked(codes);
+  });
+  return wrote;
+}
+
+static BOOL WritePendingFinderSyncError(NSString *code) {
+  if (!FinderSyncErrorCodeIsKnown(code)) return NO;
+  return WritePendingFinderSyncErrors(@[ code ]);
+}
+
+// Check and remove the pending error under the file-state queue right before
+// forwarding to the app. If the app already consumed the file while
+// forwardQueue waited, the code is absent and the forward is skipped.
+static BOOL TakePendingFinderSyncErrorIfPresentLocked(NSString *code) {
+  if (!FinderSyncErrorCodeIsKnown(code)) return NO;
+  NSString *file = [PendingFinderSyncErrorDirectory() stringByAppendingPathComponent:@"finder-sync-pending-error.json"];
+  const char *filePath = file.fileSystemRepresentation;
+  struct stat st;
+  if (lstat(filePath, &st) != 0 || !S_ISREG(st.st_mode)) return NO;
+  NSArray *errors = ReadPendingFinderSyncErrors(filePath);
+  NSMutableArray *kept = [NSMutableArray array];
+  BOOL found = NO;
+  for (id item in errors) {
+    if ([item[@"code"] isEqualToString:code]) {
+      found = YES;
+      continue;
+    }
+    [kept addObject:item];
+  }
+  if (!found) return NO;
+  if (kept.count == 0) {
+    return unlink(filePath) == 0;
+  }
+  NSData *data = [NSJSONSerialization dataWithJSONObject:@{@"errors" : kept} options:0 error:nil];
+  if (!data) return NO;
+  return WritePendingBytes(filePath, data);
+}
+
+static BOOL TakePendingFinderSyncErrorIfPresent(NSString *code) {
+  __block BOOL took = NO;
+  dispatch_sync(PendingErrorFileQueue(), ^{
+    took = TakePendingFinderSyncErrorIfPresentLocked(code);
+  });
+  return took;
 }
 
 static void ReportFinderSyncError(void (^reply)(NSString *), NSString *code, NSString *message) {
@@ -408,11 +503,11 @@ static NSString *LaunchContainingAppOnce(void) {
   if (g_launchedApp) return nil;
   NSURL *appURL = ContainingAppURL();
   NSString *binary = BundleExecutable(appURL);
-  if (!binary.length) return kMissingAppMessage;
+  if (!binary.length) return MissingAppMessage();
   g_launchedApp = YES;
   if (!SpawnExecutable(binary)) {
     g_launchedApp = NO;
-    return kMissingAppMessage;
+    return MissingAppMessage();
   }
   return nil;
 }
@@ -665,6 +760,7 @@ static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL over
                paths:(NSArray<NSString *> *)paths
            requestId:(NSString *)requestId
                reply:(void (^)(NSString *error))reply;
+- (void)reportPendingErrors:(NSArray<NSString *> *)codes reply:(void (^)(NSString *error))reply;
 @end
 
 @interface FontButtlerFinderSyncAgent : NSObject <NSXPCListenerDelegate, FontButtlerFinderSyncHandoff>
@@ -766,6 +862,43 @@ static BOOL ForwardToApp(NSString *action, NSArray<NSString *> *paths, BOOL over
       usleep(50 * 1000);
     }
     ReportFinderSyncError(reply, @"not-running", NotRunningMessage());
+  });
+}
+
+- (void)reportPendingErrors:(NSArray<NSString *> *)codes reply:(void (^)(NSString *))reply {
+  NSArray *incoming = [codes isKindOfClass:[NSArray class]] ? codes : @[];
+  NSMutableArray<NSString *> *accepted = [NSMutableArray array];
+  for (id item in incoming) {
+    if (![item isKindOfClass:[NSString class]]) continue;
+    if (!FinderSyncErrorCodeIsKnown(item) || [accepted containsObject:item]) continue;
+    if (accepted.count >= kPendingErrorMaxEntries) break;
+    [accepted addObject:item];
+  }
+  if (accepted.count == 0) {
+    if (reply) reply(@"No known pending Finder Sync error codes.");
+    return;
+  }
+  // Persist all accepted codes in one atomic write on the dedicated file-state
+  // serial queue and reply before any forward. The appex waits only 0.4 s,
+  // and the serial forward queue can be held for up to ~32 s by a submitAction
+  // that is launching the app. A reply after that wait would make the appex
+  // keep and re-send its record after the app's 30 s duplicate window. A
+  // failed write replies with an error so the appex keeps its record instead
+  // of unlinking codes that were not saved.
+  if (!WritePendingFinderSyncErrors(accepted)) {
+    if (reply) reply(@"Could not record the pending Finder Sync errors.");
+    return;
+  }
+  if (reply) reply(nil);
+  NSArray<NSString *> *toForward = [accepted copy];
+  dispatch_async(self.forwardQueue, ^{
+    for (NSString *code in toForward) {
+      // Forward only if the code is still in the Application Support record.
+      // Removing it under the file-state queue before sending cancels the
+      // forward if the app already consumed the file while forwardQueue waited.
+      if (!TakePendingFinderSyncErrorIfPresent(code)) continue;
+      if (!ForwardErrorToApp(code)) WritePendingFinderSyncError(code);
+    }
   });
 }
 

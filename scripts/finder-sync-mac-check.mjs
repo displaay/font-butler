@@ -2,7 +2,10 @@
 /**
  * Run the automatable Finder Sync Mac checklist against a signed app.
  *
- *   node scripts/finder-sync-mac-check.mjs "/path/to/Font Buttler.app" [--dmg path] [--zip path] [--json]
+ *   node scripts/finder-sync-mac-check.mjs "/path/to/Font Buttler.app" [--dmg path] [--zip path] [--json] [--real-home]
+ *
+ * The app binary is launched with HOME and FONT_BUTLER_DATA in a throwaway
+ * directory. --real-home keeps the caller's HOME and prints a warning.
  *
  * Prints one PASS, FAIL, or SKIP line per automatable item, then a numbered
  * manual list. Exits non-zero when an automatable item fails. On Linux it
@@ -14,9 +17,9 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readAppTestFeedMarker } from '../electron/app-update-install.mjs'
-import { finderSyncMainExecutable } from '../electron/finder-sync.mjs'
-import { finderSyncAppexPath } from './build-finder-sync.mjs'
-import { finderSyncAgentExecutablePath } from './build-finder-sync-agent.mjs'
+import { finderSyncAgentMachServiceKeys, finderSyncMainExecutable } from '../electron/finder-sync.mjs'
+import { finderSyncAppexPath, plistString } from './build-finder-sync.mjs'
+import { finderSyncAgentExecutablePath, finderSyncAgentPlistPath } from './build-finder-sync-agent.mjs'
 import { findAppBundles } from './assert-notarized-mac-release.mjs'
 import { strayMachOFiles } from './macho-slices.mjs'
 import { runFinderSyncXpcRejectionTest } from './test-finder-sync-xpc.mjs'
@@ -29,6 +32,7 @@ import {
   machoArchs,
   parseMacCheckArgs,
   parseAgentStatusOutput,
+  finderSyncAppLaunchEnv,
   selectProductAppBundle,
   spctlNotarized,
   staplerAccepted,
@@ -44,6 +48,16 @@ function run(command, args, options = {}) {
     output: `${result.stdout ?? ''}\n${result.stderr ?? ''}`,
     error: result.error?.message ?? '',
   }
+}
+
+function readPlistText(file) {
+  if (!existsSync(file)) return ''
+  const raw = readFileSync(file)
+  if (raw.length >= 6 && raw.subarray(0, 6).toString('ascii') === 'bplist') {
+    const converted = run('plutil', ['-convert', 'xml1', '-o', '-', file])
+    return converted.status === 0 ? converted.output : ''
+  }
+  return raw.toString('utf8')
 }
 
 function readHeader(file) {
@@ -97,7 +111,18 @@ function artifactChecks(appPath) {
   }
 }
 
-function collect(app, dmg, zip) {
+function runAppBinary(executable, args, options, realHome) {
+  const tempHome = realHome ? '' : mkdtempSync(path.join(tmpdir(), 'font-butler-mac-check-home-'))
+  const launch = finderSyncAppLaunchEnv({ realHome, tempHome, env: process.env })
+  if (launch.warning) console.error(launch.warning)
+  try {
+    return run(executable, args, { ...options, env: launch.env })
+  } finally {
+    if (tempHome) rmSync(tempHome, { recursive: true, force: true })
+  }
+}
+
+function collect(app, dmg, zip, realHome = false) {
   const testFeed = readAppTestFeedMarker(app) === true
   const appex = finderSyncAppexPath(app)
   const appexExecutable = path.join(appex, 'Contents', 'MacOS', 'FontButtlerFinderSync')
@@ -106,7 +131,7 @@ function collect(app, dmg, zip) {
   const helper = finderSyncAgentExecutablePath(app)
   const nm = existsSync(appexExecutable) ? run('nm', ['-g', appexExecutable]) : { output: '', error: 'The appex executable is missing.' }
   const statusRun = mainExecutable
-    ? run(mainExecutable, ['--finder-sync-agent-status'], { timeout: 60000 })
+    ? runAppBinary(mainExecutable, ['--finder-sync-agent-status'], { timeout: 60000 }, realHome)
     : { status: 1, output: '', error: `No Cuttler or Font Buttler executable inside ${app}.` }
   const agentStatus = parseAgentStatusOutput(statusRun.output)
   const observations = {
@@ -123,6 +148,8 @@ function collect(app, dmg, zip) {
     agentStatusError: agentStatus ? '' : statusRun.output.trim() || statusRun.error || 'The app did not print a Finder Sync agent status.',
     appEntitlements: run('codesign', ['-d', '--entitlements', ':-', app]).output,
     appexEntitlements: existsSync(appex) ? run('codesign', ['-d', '--entitlements', ':-', appex]).output : '',
+    appexMachService: plistString(readPlistText(path.join(appex, 'Contents', 'Info.plist')), 'FontButtlerMachService'),
+    launchAgentServices: finderSyncAgentMachServiceKeys(readPlistText(finderSyncAgentPlistPath(app, testFeed))),
     helperEntitlements: '',
     helperCodesignDisplay: '',
     spctlApp: assessSpctl(app),
@@ -152,7 +179,9 @@ function collect(app, dmg, zip) {
     }
   }
   if (agentStatus?.status === 'enabled') {
-    const roundtrip = run(path.join(repoRoot, 'scripts', 'finder-sync-roundtrip-check'), [app], { timeout: 180000 })
+    const roundtrip = run(path.join(repoRoot, 'scripts', 'finder-sync-roundtrip-check'), realHome ? [app, '--real-home'] : [app], {
+      timeout: 180000,
+    })
     observations.roundtrip = { status: roundtrip.status, output: roundtrip.output, error: roundtrip.error }
   }
   return buildChecklist(observations)
@@ -162,7 +191,7 @@ function main() {
   const args = parseMacCheckArgs(process.argv.slice(2))
   if (args.error) {
     console.error(args.error)
-    console.error('Usage: node scripts/finder-sync-mac-check.mjs "/path/to/Font Buttler.app" [--dmg path] [--zip path] [--json]')
+    console.error('Usage: node scripts/finder-sync-mac-check.mjs "/path/to/Font Buttler.app" [--dmg path] [--zip path] [--json] [--real-home]')
     process.exit(2)
   }
   if (process.platform !== 'darwin') {
@@ -177,7 +206,7 @@ function main() {
     else console.error(message)
     process.exit(2)
   }
-  const results = collect(path.resolve(args.app), args.dmg, args.zip)
+  const results = collect(path.resolve(args.app), args.dmg, args.zip, args.realHome)
   const summary = summarizeChecklist(results)
   if (args.json) {
     console.log(JSON.stringify({ ...summary, results, manual: formatManualList() }, null, 2))

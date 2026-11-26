@@ -25,14 +25,16 @@ import {
 import net from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { test } from 'node:test'
+import { resolvePackagedApiPort } from './api-port.mjs'
 import {
   APP_PRODUCT_BUNDLE,
   DEVELOPER_ID_TEAM,
   LEGACY_APP_PRODUCT_BUNDLE,
   TEST_FEED_APP_BUNDLE,
 } from './app-update-install.mjs'
+import { shouldMigrateRealMacLibrary } from './mac-data-migration.mjs'
 import { TEST_FEED_USER_DATA_DIR } from './test-feed-data.mjs'
 import { PENDING_MIGRATION_FILE, committedLeftoverDirectories } from './mac-data-migration.mjs'
 import { FINDER_INSTALL, FINDER_INSTALL_AS, FINDER_LINK_TO } from './finder-install.mjs'
@@ -78,6 +80,7 @@ import {
   FINDER_SYNC_CHANGED_BEFORE_INSTALL,
   finderSyncAgentBundleProgram,
   finderSyncAgentCodeSigningRequirement,
+  finderSyncAgentDisabledMessage,
   finderSyncAgentInfoPlist,
   finderSyncAgentLabel,
   finderSyncAgentLaunchAgentPlist,
@@ -91,15 +94,19 @@ import {
   finderSyncCodeSigningRequirement,
   finderSyncContainingApp,
   finderSyncMachService,
+  finderSyncMachServiceSuffix,
   finderSyncMainExecutable,
   finderSyncMenuTitle,
+  finderSyncMissingAppMessage,
   finderSyncPlistExecutable,
   finderSyncNotRunningMessage,
+  finderSyncParentBundleId,
   finderSyncParentCodeSigningRequirement,
   finderSyncProductDisplayName,
   finderSyncSocketDirectoryName,
   finderSyncSocketName,
-  finderSyncMonitorDirectories,
+  finderSyncMountPathIncluded,
+  finderSyncPendingErrorGroupContainer,
   finderSyncWireAction,
   fontMagicKind,
   formatFinderSyncRejections,
@@ -108,8 +115,11 @@ import {
   finderSyncRequestSeen,
   noteFinderSyncRequest,
   addFinderSyncPendingError,
+  awaitFinderSyncPendingErrorConsume,
   carryFinderSyncPendingError,
   consumeFinderSyncPendingErrorFiles,
+  consumeFinderSyncPendingErrorFilesAsync,
+  finderSyncGroupContainerDirectory,
   finderSyncPendingErrorConsumePaths,
   finderSyncPendingErrorFolderName,
   finderSyncPendingErrorWriteDirectory,
@@ -123,9 +133,13 @@ import {
   sameExecutableLockPath,
   sharedLibraryLaunchMode,
   readFinderSyncAgentRecord,
+  readFinderSyncAgentStatus,
   readFinderSyncPendingErrorFile,
+  readFinderSyncPendingErrorRecord,
+  readFinderSyncPendingErrorRecordAsync,
   readFinderSyncPendingErrors,
   routeFinderSyncError,
+  finderSyncRegistrationHold,
   refreshFinderSyncRegistration,
   createFinderSyncIo,
   readFinderSyncFiles,
@@ -217,8 +231,13 @@ test('Finder Sync handoff names one app group and one code-signing requirement p
   assert.equal(finderSyncWireAction(FINDER_INSTALL_AS), FINDER_INSTALL_AS)
   assert.equal(finderSyncWireAction('compare'), 'compare')
   assert.equal(finderSyncWireAction(FINDER_LINK_TO), null)
-  assert.equal(finderSyncAppGroup(false), finderSyncMachService(false))
-  assert.equal(finderSyncAppGroup(true), finderSyncMachService(true))
+  assert.equal(finderSyncMachService(false), `${finderSyncAppGroup(false)}.agent`)
+  assert.equal(finderSyncMachService(true), `${finderSyncAppGroup(true)}.agent`)
+  assert.equal(finderSyncMachServiceSuffix(finderSyncMachService(false), finderSyncAppGroup(false)), 'agent')
+  assert.equal(finderSyncMachServiceSuffix(finderSyncMachService(true), finderSyncAppGroup(true)), 'agent')
+  assert.equal(finderSyncMachServiceSuffix(finderSyncAppGroup(false), finderSyncAppGroup(false)), '')
+  assert.equal(finderSyncMachServiceSuffix(finderSyncAppGroup(true), finderSyncAppGroup(true)), '')
+  assert.notEqual(finderSyncMachService(false), finderSyncMachService(true))
   assert.equal(finderSyncAppGroup(false), `${FINDER_SYNC_TEAM_ID}.group.${FINDER_SYNC_BUNDLE_ID}`)
   assert.equal(finderSyncAppGroup(true), `${FINDER_SYNC_TEAM_ID}.group.${FINDER_SYNC_TEST_BUNDLE_ID}`)
   assert.equal(finderSyncAppGroupIsTeamPrefixed(finderSyncAppGroup(false)), true)
@@ -423,6 +442,8 @@ test('Finder Sync swiftc parses the appex as a library so file-level lets are in
     'fontExtensions',
     'finderSyncMissingApp',
     'finderSyncAgentDisabled',
+    'finderSyncPendingErrorAllowedCodes',
+    'bundlePackageExtensions',
     'finderSyncProductAppNames',
   ])
   assert.deepEqual(shape.executable, [])
@@ -448,12 +469,18 @@ print("runs at top level")
 test('Finder Sync monitors home, /Users/Shared, and /Volumes', () => {
   assert.equal(FINDER_SYNC_SHARED_ROOT, '/Users/Shared')
   assert.equal(FINDER_SYNC_SYSTEM_FONTS_ROOT, '/Library/Fonts')
-  assert.deepEqual(finderSyncMonitorDirectories('/Users/ada'), ['/Users/ada', '/Users/Shared', '/Volumes'])
-  assert.deepEqual(finderSyncMonitorDirectories('/'), ['/Users/Shared', '/Volumes'])
-  assert.deepEqual(finderSyncMonitorDirectories('relative'), ['/Users/Shared', '/Volumes'])
-  assert.deepEqual(finderSyncMonitorDirectories('/Users/Shared'), ['/Users/Shared', '/Volumes'])
-  assert.equal(finderSyncMonitorDirectories('/Users/ada').includes('/Library/Fonts'), false)
-  assert.equal(finderSyncMonitorDirectories('/Library/Fonts').includes('/Library/Fonts'), false)
+  assert.equal(finderSyncMountPathIncluded('/'), false)
+  assert.equal(finderSyncMountPathIncluded('/Library/Fonts'), false)
+  assert.equal(finderSyncMountPathIncluded('/Library/Fonts/Supplemental'), false)
+  assert.equal(finderSyncMountPathIncluded('/System/Volumes'), false)
+  assert.equal(finderSyncMountPathIncluded('/System/Volumes/Data'), false)
+  assert.equal(finderSyncMountPathIncluded('/System/Volumes/Preboot'), false)
+  assert.equal(finderSyncMountPathIncluded('/System/Volumes/VM'), false)
+  assert.equal(finderSyncMountPathIncluded('/System/VolumesX'), true)
+  assert.equal(finderSyncMountPathIncluded('/Volumes/Hidden DMG'), true)
+  assert.equal(finderSyncMountPathIncluded('/Volumes/Hidden DMG/'), true)
+  assert.equal(finderSyncMountPathIncluded('/Volumes/Cuttler'), true)
+  assert.equal(finderSyncMountPathIncluded('relative'), false)
 
   const bundleId = FINDER_SYNC_TEST_BUNDLE_ID
   const current = finderSyncAppexBundlePath('/Applications/Font Buttler Test/Font Buttler.app')
@@ -508,6 +535,83 @@ test('Finder Sync monitors home, /Users/Shared, and /Volumes', () => {
   assert.equal(leftDisabled.action, 'none')
   assert.equal(leftDisabled.reason, 'disabled')
   assert.equal(refreshFinderSyncRegistration({ platform: 'linux', packaged: true }).reason, 'skipped')
+
+  const translocated = '/private/var/folders/ab/AppTranslocation/XYZ/d/Cuttler.app'
+  assert.equal(finderSyncRegistrationHold({ appPath: translocated }).includes('translocated'), true)
+  assert.equal(
+    finderSyncRegistrationHold({ appPath: '/Volumes/Cuttler 1.0/Cuttler.app' }),
+    'this copy is running from /Volumes, including an install on an external drive',
+  )
+  assert.equal(
+    finderSyncRegistrationHold({ appPath: '/Applications/Cuttler.app', explicitDataOverride: '/tmp/library' }),
+    'FONT_BUTLER_DATA or FONTCASE_DATA is set',
+  )
+  assert.equal(finderSyncRegistrationHold({ appPath: '/Applications/Cuttler.app' }), '')
+  assert.equal(
+    finderSyncRegistrationHold({ appPath: '/System/Volumes/Data/Applications/Cuttler.app' }),
+    '',
+  )
+  const movedHome = planFinderSyncAgentRegistration({
+    currentBundle: '/Applications/Cuttler.app',
+    recordedBundle: '/Users/daniel/Downloads/Cuttler.app',
+    status: 'enabled',
+    currentMachService: finderSyncMachService(false),
+    recordedMachService: finderSyncMachService(false),
+  })
+  assert.equal(movedHome.action, 'reregister')
+  assert.equal(movedHome.reason, 'moved')
+  const callsAfterMove = []
+  const adopted = refreshFinderSyncRegistration({
+    platform: 'darwin',
+    packaged: true,
+    appPath: '/Applications/Font Buttler Test/Font Buttler.app',
+    testFeed: true,
+    spawnSync(command, args) {
+      callsAfterMove.push([command, args])
+      if (args.includes('-m')) {
+        return { status: 0, stdout: listed('+', stalePath), stderr: '' }
+      }
+      return { status: 0, stdout: '', stderr: '' }
+    },
+  })
+  assert.equal(adopted.action, 'reregister')
+  assert.equal(callsAfterMove.some((call) => call[1][0] === '-a'), true)
+  for (const held of [
+    finderSyncRegistrationHold({ appPath: translocated }),
+    finderSyncRegistrationHold({ appPath: '/Volumes/Cuttler/Cuttler.app' }),
+    finderSyncRegistrationHold({ explicitDataOverride: ' /tmp/library ' }),
+  ]) {
+    const pluginkitCalls = []
+    const skipped = refreshFinderSyncRegistration({
+      platform: 'darwin',
+      packaged: true,
+      appPath: '/Volumes/Cuttler/Cuttler.app',
+      hold: held,
+      spawnSync(command, args) {
+        pluginkitCalls.push([command, args])
+        return { status: 0, stdout: listed('+', stalePath), stderr: '' }
+      },
+    })
+    assert.equal(skipped.skipped, true, held)
+    assert.equal(pluginkitCalls.length, 0, held)
+    const agentCalls = []
+    const committed = commitFinderSyncAgentRegistration({
+      currentBundle: '/Volumes/Cuttler/Cuttler.app',
+      record: { enabled: true, appBundlePath: '/Applications/Cuttler.app', machService: finderSyncMachService(false) },
+      status: 'enabled',
+      currentMachService: finderSyncMachService(false),
+      hold: held,
+      unregister() {
+        agentCalls.push('unregister')
+      },
+      register() {
+        agentCalls.push('register')
+        return 'enabled'
+      },
+    })
+    assert.equal(committed.skipped, true, held)
+    assert.deepEqual(agentCalls, [], held)
+  }
 })
 
 test('appex signing is inside-out and the release check requires sandbox, team, and Developer ID', () => {
@@ -679,6 +783,32 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   const nativeTest = readRepo('electron/finder-sync-xpc-test.mm')
   const validator = readRepo('electron/finder-sync.mjs')
   assert.match(swift, /fileURLWithPath: "\/Volumes"/)
+  const mountedFn = swift.slice(
+    swift.indexOf('private func finderSyncMountedVolumeURLs'),
+    swift.indexOf('private func finderSyncMountPathIncluded'),
+  )
+  assert.match(mountedFn, /FileManager\.default\.mountedVolumeURLs\(includingResourceValuesForKeys: keys, options: \[\]\)/)
+  assert.doesNotMatch(mountedFn, /NSWorkspace/)
+  assert.doesNotMatch(mountedFn, /skipHiddenVolumes/)
+  const includedFn = swift.slice(
+    swift.indexOf('private func finderSyncMountPathIncluded'),
+    swift.indexOf('private func finderSyncDirectoryURLs'),
+  )
+  assert.match(includedFn, /path == "\/"/)
+  assert.match(includedFn, /path == "\/Library\/Fonts"/)
+  assert.match(includedFn, /path\.hasPrefix\("\/Library\/Fonts\/"\)/)
+  assert.match(includedFn, /path == "\/System\/Volumes"/)
+  assert.match(includedFn, /path\.hasPrefix\("\/System\/Volumes\/"\)/)
+  const directoryFn = swift.slice(
+    swift.indexOf('private func finderSyncDirectoryURLs'),
+    swift.indexOf('@objc(FontButtlerFinderSync)'),
+  )
+  assert.match(directoryFn, /for url in finderSyncMountedVolumeURLs\(\)/)
+  assert.match(directoryFn, /if !finderSyncMountPathIncluded\(path\)/)
+  assert.match(swift, /NSWorkspace\.didMountNotification/)
+  assert.match(swift, /NSWorkspace\.didUnmountNotification/)
+  assert.doesNotMatch(swift, /skipHiddenVolumes/)
+  assert.doesNotMatch(swift, /NSWorkspace\.shared\.mountedVolumeURLs/)
   assert.match(swift, /fileURLWithPath: "\/Users\/Shared"/)
   assert.match(swift, /getpwuid\(getuid\(\)\)/)
   assert.match(swift, /pw_dir/)
@@ -690,24 +820,57 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(swift, /selectedItemURLs/)
   assert.match(swift, /allSatisfy\(isInstallSelection\)/)
   assert.match(swift, /hasDirectoryPath/)
+  assert.match(swift, /\.isPackageKey/)
+  assert.match(swift, /values\?\.isPackage == true/)
+  assert.match(swift, /bundlePackageExtensions\.contains/)
+  assert.match(swift, /"app"/)
   assert.match(swift, /"Install"/)
   assert.match(swift, /Install as…/)
   assert.match(swift, /FontButtlerInstallTitle/)
   assert.match(swift, /parentAppURL/)
   assert.match(swift, /NSXPCConnection/)
   assert.match(swift, /submitAction/)
+  assert.match(swift, /reportPendingErrors/)
+  assert.match(swift, /flushPendingFinderSyncErrors/)
   assert.match(swift, /statusWithReply/)
   assert.match(swift, /UUID\(\)\.uuidString/)
   assert.match(swift, /"installAs"/)
   assert.match(swift, /"compare"/)
   assert.match(swift, /FontButtlerCompareTitle/)
   assert.match(agent, /@"compare"/)
+  assert.match(agent, /reportPendingErrors:/)
   assert.match(receiver, /isEqualToString:@"compare"/)
   assert.match(swift, /#available\(macOS 13\.0, \*\)/)
   assert.match(swift, /finderSyncMissingApp/)
   assert.match(swift, /finderSyncAgentDisabled/)
   assert.doesNotMatch(swift, /UNUserNotificationCenter/)
-  assert.match(swift, /NSLog\(/)
+  const pendingFn = swift.slice(
+    swift.indexOf('private let finderSyncPendingErrorAllowedCodes'),
+    swift.indexOf('private let bundlePackageExtensions'),
+  )
+  assert.match(pendingFn, /containerURL\(forSecurityApplicationGroupIdentifier: group\)/)
+  assert.match(pendingFn, /appendingPathComponent\("finder-sync-pending-error\.json"\)/)
+  assert.match(pendingFn, /open\(\$0, O_RDONLY \| O_NOFOLLOW\)/)
+  assert.match(pendingFn, /\(info\.st_mode & S_IFMT\) == S_IFREG/)
+  assert.match(pendingFn, /"login-items"/)
+  assert.match(pendingFn, /private func queueFinderSyncPendingError/)
+  assert.match(pendingFn, /private func flushPendingFinderSyncErrors/)
+  assert.match(pendingFn, /UUID\(\)\.uuidString\)\.tmp/)
+  assert.doesNotMatch(pendingFn, /filePath \+ "\.tmp"/)
+  assert.match(pendingFn, /if attempt\.accepted \{[\s\S]*?unlink\(\$0\)[\s\S]*?\}/)
+  const selectionFn = swift.slice(
+    swift.indexOf('private func isInstallSelection'),
+    swift.indexOf('private func menuTitle'),
+  )
+  assert.ok(selectionFn.indexOf('isPackage == true') < selectionFn.indexOf('isFontFile(url)'))
+  assert.ok(selectionFn.indexOf('bundlePackageExtensions.contains') < selectionFn.indexOf('hasDirectoryPath'))
+  assert.match(swift, /os_log\("Finder Sync: %\{public\}@", type: \.error, message\)/)
+  assert.match(swift, /os_log\("Finder Sync: %\{public\}@ \(%\{public\}@\)", type: \.error, message, detail\)/)
+  assert.match(
+    swift,
+    /showFinderSyncError\(finderSyncAgentDisabled, code: "login-items", detail: probe\.detail\)/,
+  )
+  assert.doesNotMatch(swift, /NSLog\(/)
   assert.doesNotMatch(swift, /NSAlert/)
   assert.ok(swift.includes(FINDER_SYNC_MISSING_APP))
   assert.doesNotMatch(swift, /addingTimeInterval\(10\)/)
@@ -764,7 +927,7 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   ])
   const pendingChoice = agent.slice(
     agent.indexOf('static BOOL PendingErrorDirHasLibrary'),
-    agent.indexOf('static void WritePendingFinderSyncError'),
+    agent.indexOf('static dispatch_queue_t PendingErrorFileQueue'),
   )
   assert.match(pendingChoice, /g_testFeed/)
   assert.match(pendingChoice, /PendingErrorDirHasLibrary/)
@@ -781,11 +944,25 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.ok(oneTFolderAt > previousFolderAt)
   assert.ok(releaseFolderAt > oneTFolderAt)
   const writePending = agent.slice(
-    agent.indexOf('static void WritePendingFinderSyncError'),
+    agent.indexOf('static BOOL WritePendingFinderSyncErrorsLocked'),
     agent.indexOf('static void ReportFinderSyncError'),
   )
   assert.match(writePending, /PendingFinderSyncErrorDirectory\(\)/)
   assert.doesNotMatch(writePending, /@"Font Buttler"/)
+  assert.match(writePending, /static BOOL WritePendingFinderSyncErrors\(/)
+  assert.match(writePending, /static BOOL WritePendingFinderSyncError\(/)
+  assert.match(writePending, /static BOOL TakePendingFinderSyncErrorIfPresent\(/)
+  assert.match(writePending, /if \(!addedAny\) return YES;/)
+  assert.match(writePending, /return WritePendingBytes\(filePath, data\);/)
+  assert.match(writePending, /dispatch_sync\(PendingErrorFileQueue\(\)/)
+  const writePendingBytesFn = agent.slice(
+    agent.indexOf('static BOOL WritePendingBytes'),
+    agent.indexOf('static BOOL PendingErrorDirHasLibrary'),
+  )
+  assert.match(writePendingBytesFn, /NSUUID\.UUID\.UUIDString/)
+  assert.match(writePendingBytesFn, /%s\.%d\.%s\.tmp/)
+  assert.doesNotMatch(writePendingBytesFn, /"%s\.tmp"/)
+  assert.doesNotMatch(writePendingBytesFn, /unlink\(tempPath\);\s*\n\s*int fd/)
   assert.match(agent, /S_ISLNK\(st\.st_mode\)/)
   assert.match(agent, /S_ISREG\(st\.st_mode\)/)
   assert.match(agent, /O_RDONLY \| O_NOFOLLOW/)
@@ -802,7 +979,8 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(agent, /@"unknown-action"/)
   assert.doesNotMatch(readRepo('scripts/build-finder-sync-agent.mjs'), /UserNotifications/)
   assert.doesNotMatch(readRepo('scripts/build-finder-sync.mjs'), /UserNotifications/)
-  assert.ok(agent.includes(FINDER_SYNC_MISSING_APP))
+  assert.match(agent, /RunningProductName\(\)/)
+  assert.ok(agent.includes("couldn't be found. Open it once from its new location."))
   assert.match(agent, /posix_spawn/)
   assert.doesNotMatch(agent, /openApplicationAtURL/)
   assert.doesNotMatch(agent, /strcmp|kSecCodeInfoTeamIdentifier|kSecGuestAttributePid|LOCAL_PEERPID|getpid/)
@@ -916,25 +1094,56 @@ test('Finder Sync sources hand off over XPC and the pack builds the appex', () =
   assert.match(main, /appBundlePath/)
   assert.match(main, /routeFinderSyncError/)
   assert.match(main, /presentFinderSyncUserError/)
-  assert.match(main, /consumeFinderSyncPendingErrors\(\)/)
-  assert.match(main, /consumeFinderSyncPendingErrorFiles/)
+  assert.match(main, /async function consumeFinderSyncPendingErrors/)
+  assert.match(main, /scheduleFinderSyncPendingErrorConsume\(\)/)
+  assert.match(main, /consumeFinderSyncPendingErrorFilesAsync/)
   assert.match(main, /finderSyncPendingErrorConsumePaths/)
-  assert.match(main, /includeOtherSupportDirs: shouldMigrateRealMacLibrary/)
+  assert.match(main, /includeOtherSupportDirs: includeInstalledRecords/)
+  assert.match(main, /includeInstalledRecords = shouldMigrateRealMacLibrary/)
+  assert.match(main, /groupContainerDir: ''/)
   assert.match(main, /skipDirs: committedLeftoverDirectories\(app\.getPath\('home'\)\)/)
   assert.match(main, /finderSyncErrorsShown = new Map\(\)/)
-  assert.match(readRepo('electron/finder-sync.mjs'), /readFinderSyncPendingErrorFile/)
+  assert.match(readRepo('electron/finder-sync.mjs'), /readFinderSyncPendingErrorFileAsync/)
   assert.match(readRepo('electron/finder-sync-pending-error.mjs'), new RegExp(FINDER_SYNC_PENDING_ERROR_FILE.replaceAll('.', '\\.')))
-  assert.match(main, /dialog\.showErrorBox\(title, route\.message\)/)
+  const presenterFn = main.slice(
+    main.indexOf('function presentFinderSyncUserError'),
+    main.indexOf('async function consumeFinderSyncPendingErrors'),
+  )
+  assert.match(presenterFn, /dialog\.showMessageBox\(/)
+  assert.doesNotMatch(presenterFn, /dialog\.showMessageBoxSync/)
+  assert.doesNotMatch(presenterFn, /dialog\.showErrorBox/)
   assert.match(main, /finderSyncProductDisplayName\(appPath\)/)
   assert.doesNotMatch(main, /UNUserNotificationCenter/)
   const readyHandler = main.slice(main.indexOf('app.whenReady()'))
   const bootstrapAt = readyHandler.indexOf('await bootstrapApi()')
-  const consumeAt = readyHandler.indexOf('consumeFinderSyncPendingErrors()')
-  assert.ok(bootstrapAt >= 0 && consumeAt > bootstrapAt)
+  const uiAt = readyHandler.indexOf('startMainUiAfterBootstrap()')
+  const consumeAt = readyHandler.indexOf('scheduleFinderSyncPendingErrorConsume()')
+  assert.ok(bootstrapAt >= 0 && uiAt > bootstrapAt && consumeAt > uiAt)
   assert.doesNotMatch(main, /launchctl/)
   assert.doesNotMatch(main, /parseLaunchctlProgram/)
   assert.match(agent, /!ForwardErrorToApp\(code\)\) WritePendingFinderSyncError\(code\)/)
+  const reportFn = agent.slice(
+    agent.lastIndexOf('- (void)reportPendingErrors:'),
+    agent.indexOf('@end', agent.lastIndexOf('- (void)reportPendingErrors:')),
+  )
+  assert.ok(
+    reportFn.indexOf('reply(nil)') >= 0 &&
+      reportFn.indexOf('reply(nil)') < reportFn.indexOf('dispatch_async(self.forwardQueue'),
+    'expected the agent to reply once the record is persisted, before it forwards',
+  )
+  assert.match(reportFn, /if \(!WritePendingFinderSyncErrors\(accepted\)\)/)
+  assert.match(reportFn, /Could not record the pending Finder Sync errors/)
+  assert.match(reportFn, /if \(!TakePendingFinderSyncErrorIfPresent\(code\)\) continue;/)
+  assert.match(reportFn, /if \(!ForwardErrorToApp\(code\)\) WritePendingFinderSyncError\(code\);/)
+  assert.match(agent, /static BOOL TakePendingFinderSyncErrorIfPresent\(/)
   assert.match(receiver, /json\[@"error"\]/)
+  const consumeFn = main.slice(
+    main.indexOf('async function consumeFinderSyncPendingErrors'),
+    main.indexOf('function scheduleFinderSyncPendingErrorConsume'),
+  )
+  assert.match(consumeFn, /awaitFinderSyncPendingErrorConsume\(/)
+  assert.match(consumeFn, /onPresent:\s*\(code\) => presentFinderSyncUserError\(code\)/)
+  assert.match(consumeFn, /onTimeout:\s*\(\) =>/)
   assert.ok(swift.includes(FINDER_SYNC_AGENT_DISABLED))
   const enableHandler = main.slice(main.indexOf("ipcMain.handle('set-finder-sync-agent-enabled'"))
   const beforeSave = enableHandler.slice(0, enableHandler.indexOf('saveFinderSyncAgentRecord'))
@@ -1004,6 +1213,9 @@ test('Finder Sync LaunchAgent plist is per flavour and the roundtrip check skips
   assert.match(releasePlist, /<key>RunAtLoad<\/key>\s*<false\/>/)
   assert.doesNotMatch(releasePlist, /KeepAlive/)
   assert.match(releasePlist, new RegExp(`<key>BundleProgram</key>\\s*<string>${finderSyncAgentBundleProgram()}</string>`))
+  assert.match(releasePlist, new RegExp(`<key>AssociatedBundleIdentifiers</key>\\s*<array>\\s*<string>${finderSyncParentBundleId(false)}</string>`))
+  assert.match(testPlist, new RegExp(`<key>AssociatedBundleIdentifiers</key>\\s*<array>\\s*<string>${finderSyncParentBundleId(true)}</string>`))
+  assert.doesNotMatch(testPlist, /<string>app\.fontbutler\.desktop<\/string>/)
   assert.notEqual(finderSyncAgentPlistName(false), finderSyncAgentPlistName(true))
   assert.notEqual(finderSyncSocketName(false), finderSyncSocketName(true))
   const signed = finderSyncAgentFailures({
@@ -1019,6 +1231,32 @@ test('Finder Sync LaunchAgent plist is per flavour and the roundtrip check skips
     requireDeveloperId: true,
   })
   assert.deepEqual(signed, [])
+  const signedTest = finderSyncAgentFailures({
+    present: true,
+    plist: testPlist,
+    infoPlist: `<key>CFBundleIdentifier</key><string>${finderSyncAgentLabel(true)}</string><key>LSBackgroundOnly</key><true/>`,
+    executablePresent: true,
+    programMatches: true,
+    testFeed: true,
+    codesignDisplay: `Identifier=${finderSyncAgentLabel(true)}\nAuthority=Developer ID Application: DANIEL QUISEK (A7WWML89LQ)\nTeamIdentifier=A7WWML89LQ\nflags=0x10000(runtime)`,
+    codesignVerifyStatus: 0,
+    entitlementText: `<string>${finderSyncAppGroup(true)}</string>`,
+    requireDeveloperId: true,
+  })
+  assert.deepEqual(signedTest, [])
+  const wrongAssociatedTest = finderSyncAgentFailures({
+    present: true,
+    plist: testPlist.replace(finderSyncParentBundleId(true), finderSyncParentBundleId(false)),
+    infoPlist: `<key>CFBundleIdentifier</key><string>${finderSyncAgentLabel(true)}</string><key>LSBackgroundOnly</key><true/>`,
+    executablePresent: true,
+    programMatches: true,
+    testFeed: true,
+    codesignDisplay: `Identifier=${finderSyncAgentLabel(true)}`,
+    codesignVerifyStatus: 0,
+    entitlementText: `<string>${finderSyncAppGroup(true)}</string>`,
+    requireDeveloperId: false,
+  })
+  assert.ok(wrongAssociatedTest.some((failure) => failure.includes(finderSyncParentBundleId(true))))
   const wrongFlavour = finderSyncAgentFailures({
     present: true,
     otherPresent: true,
@@ -1595,7 +1833,7 @@ test('the handoff finds Cuttler.app and the zip Font Buttler.app that contain th
   assert.match(agent, /kForwardWhileStartingSeconds = 32/)
   const parentMatch = agent.slice(
     agent.indexOf('static BOOL ParentExecutableMatches'),
-    agent.indexOf('static NSString *RunningProductName'),
+    agent.indexOf('static NSString *RunningProductName(void) {'),
   )
   assert.match(parentMatch, /PeerMeetsParentRequirement\(fd\)/)
   assert.match(parentMatch, /PathIsInsideApp\(kernel, appURL\.path\)/)
@@ -1767,9 +2005,68 @@ test('the handoff finds Cuttler.app and the zip Font Buttler.app that contain th
   assert.equal(zipBundle.reason, 'moved')
 })
 
+test('Finder Sync Mach service matches in the helper, the LaunchAgent plist, and the appex', () => {
+  const agent = readRepo('macos/FinderSyncAgent/FinderSyncAgent.mm')
+  const receiver = readRepo('electron/finder-sync-receiver.mm')
+  for (const testFeed of [false, true]) {
+    const group = finderSyncAppGroup(testFeed)
+    const service = finderSyncMachService(testFeed)
+    assert.equal(finderSyncMachServiceSuffix(service, group), 'agent')
+    assert.notEqual(service, group)
+    assert.deepEqual(finderSyncAgentMachServiceKeys(finderSyncAgentLaunchAgentPlist(testFeed)), [service])
+    const info = finderSyncInfoPlist({
+      bundleId: finderSyncBundleId(testFeed),
+      version: '0.4.1',
+      testFeed,
+    })
+    assert.equal(plistString(info, 'FontButtlerMachService'), service)
+    assert.equal(plistString(info, 'FontButtlerAppGroup'), group)
+    const literal = `@"${service}"`
+    assert.equal(agent.includes(literal), true)
+    assert.equal(receiver.includes(literal), true)
+  }
+  assert.match(readRepo('electron/main.mjs'), /machService: record\.machService/)
+  assert.match(readRepo('electron/main.mjs'), /currentMachService: finderSyncMachService\(testFeed\)/)
+  const container = finderSyncGroupContainerDirectory('/Users/ada', finderSyncAppGroup(false))
+  assert.equal(container, `/Users/ada/Library/Group Containers/${finderSyncAppGroup(false)}`)
+  assert.equal(finderSyncGroupContainerDirectory('/Users/ada', ''), '')
+  const consumed = finderSyncPendingErrorConsumePaths({
+    userDataDir: '/Users/ada/Library/Application Support/Cuttler',
+    groupContainerDir: container,
+  })
+  assert.equal(consumed[1], `${container}/finder-sync-pending-error.json`)
+  const home = '/Users/ada'
+  const releaseGroup = finderSyncPendingErrorGroupContainer(home, { includeInstalledGroup: true })
+  assert.equal(releaseGroup, container)
+  const testGroup = finderSyncPendingErrorGroupContainer(home, { testFeed: true })
+  assert.equal(testGroup, finderSyncGroupContainerDirectory(home, finderSyncAppGroup(true)))
+  assert.notEqual(testGroup, container)
+  const isolated = finderSyncPendingErrorGroupContainer(home, {
+    includeInstalledGroup: shouldMigrateRealMacLibrary({
+      platform: 'darwin',
+      env: { FONT_BUTLER_DATA: '/tmp/isolated' },
+    }),
+  })
+  assert.equal(isolated, '')
+  const fontcase = finderSyncPendingErrorGroupContainer(home, {
+    includeInstalledGroup: shouldMigrateRealMacLibrary({
+      platform: 'darwin',
+      env: { FONTCASE_DATA: '/tmp/isolated' },
+    }),
+  })
+  assert.equal(fontcase, '')
+  const isolatedFiles = finderSyncPendingErrorConsumePaths({
+    userDataDir: '/tmp/isolated/Cuttler',
+    groupContainerDir: isolated,
+  })
+  assert.deepEqual(isolatedFiles, ['/tmp/isolated/Cuttler/finder-sync-pending-error.json'])
+  assert.equal(isolatedFiles.some((file) => file.includes('Group Containers')), false)
+})
+
 test('a second launch from the same bundle path does not register again', () => {
   const bundle = '/Applications/Font Buttler.app'
   const helper = `${bundle}/${finderSyncAgentBundleProgram()}`
+  const service = finderSyncMachService(false)
   const calls = []
   let record = readFinderSyncAgentRecord('')
   const launch = (status) => {
@@ -1777,7 +2074,8 @@ test('a second launch from the same bundle path does not register again', () => 
       testFeed: false,
       currentBundle: bundle,
       helperPath: helper,
-      version: '0.3.12',
+      version: '0.4.1',
+      currentMachService: service,
       record,
       status,
       unregister() {
@@ -1796,7 +2094,8 @@ test('a second launch from the same bundle path does not register again', () => 
   assert.equal(first.saved, true)
   assert.equal(record.appBundlePath, bundle)
   assert.equal(record.helperPath, helper)
-  assert.equal(record.version, '0.3.12')
+  assert.equal(record.version, '0.4.1')
+  assert.equal(record.machService, service)
   assert.equal(record.enabled, true)
   calls.length = 0
   const second = launch('enabled')
@@ -1812,7 +2111,8 @@ test('a second launch from the same bundle path does not register again', () => 
     testFeed: false,
     currentBundle: movedBundle,
     helperPath: `${movedBundle}/${finderSyncAgentBundleProgram()}`,
-    version: '0.3.12',
+    version: '0.4.1',
+    currentMachService: service,
     record,
     status: 'enabled',
     unregister() {
@@ -1852,7 +2152,8 @@ test('a second launch from the same bundle path does not register again', () => 
     testFeed: false,
     currentBundle: bundle,
     helperPath: helper,
-    version: '0.3.12',
+    version: '0.4.1',
+    currentMachService: service,
     record: legacy,
     status: 'enabled',
     unregister() {
@@ -1872,8 +2173,9 @@ test('a second launch from the same bundle path does not register again', () => 
     testFeed: false,
     currentBundle: bundle,
     helperPath: helper,
-    version: '0.3.12',
-    record: readFinderSyncAgentRecord(JSON.stringify({ enabled: true, program: helper })),
+    version: '0.4.1',
+    currentMachService: service,
+    record: readFinderSyncAgentRecord(JSON.stringify({ enabled: true, program: helper, machService: service })),
     status: 'enabled',
     unregister() {
       calls.push('unregister')
@@ -1892,7 +2194,8 @@ test('a second launch from the same bundle path does not register again', () => 
     testFeed: false,
     currentBundle: bundle,
     helperPath: helper,
-    version: '0.3.12',
+    version: '0.4.1',
+    currentMachService: service,
     record: legacySame.record,
     status: 'enabled',
     unregister() {
@@ -1905,6 +2208,155 @@ test('a second launch from the same bundle path does not register again', () => 
   })
   assert.deepEqual(calls, [])
   assert.equal(legacyDone.plan.reason, 'enabled')
+
+  calls.length = 0
+  const fromRelease = commitFinderSyncAgentRegistration({
+    testFeed: false,
+    currentBundle: bundle,
+    helperPath: helper,
+    version: '0.4.1',
+    currentMachService: service,
+    record: readFinderSyncAgentRecord(JSON.stringify({
+      enabled: true,
+      appBundlePath: bundle,
+      helperPath: helper,
+      version: '0.4.0',
+    })),
+    status: 'enabled',
+    unregister() {
+      calls.push('unregister')
+    },
+    register() {
+      calls.push('register')
+      return 'enabled'
+    },
+  })
+  assert.deepEqual(calls, ['unregister', 'register'])
+  assert.equal(fromRelease.plan.action, 'reregister')
+  assert.equal(fromRelease.plan.reason, 'mach-service')
+  assert.equal(fromRelease.record.machService, service)
+  calls.length = 0
+  const oldName = commitFinderSyncAgentRegistration({
+    testFeed: false,
+    currentBundle: bundle,
+    helperPath: helper,
+    version: '0.4.1',
+    currentMachService: service,
+    record: readFinderSyncAgentRecord(JSON.stringify({
+      enabled: true,
+      appBundlePath: bundle,
+      helperPath: helper,
+      version: '0.4.1',
+      machService: finderSyncAppGroup(false),
+    })),
+    status: 'enabled',
+    unregister() {
+      calls.push('unregister')
+    },
+    register() {
+      calls.push('register')
+      return 'enabled'
+    },
+  })
+  assert.deepEqual(calls, ['unregister', 'register'])
+  assert.equal(oldName.plan.reason, 'mach-service')
+  calls.length = 0
+  const versionOnly = commitFinderSyncAgentRegistration({
+    testFeed: false,
+    currentBundle: bundle,
+    helperPath: helper,
+    version: '0.4.2',
+    currentMachService: service,
+    record: fromRelease.record,
+    status: 'enabled',
+    unregister() {
+      calls.push('unregister')
+    },
+    register() {
+      calls.push('register')
+      return 'enabled'
+    },
+  })
+  assert.deepEqual(calls, [])
+  assert.equal(versionOnly.plan.action, 'keep')
+
+  calls.length = 0
+  const unregisterFailed = commitFinderSyncAgentRegistration({
+    testFeed: false,
+    currentBundle: bundle,
+    helperPath: helper,
+    version: '0.4.1',
+    currentMachService: service,
+    record: readFinderSyncAgentRecord(JSON.stringify({
+      enabled: true,
+      appBundlePath: bundle,
+      helperPath: helper,
+      version: '0.4.0',
+    })),
+    status: 'enabled',
+    unregister() {
+      calls.push('unregister')
+      return { ok: false, error: 'SMAppService unregister failed.' }
+    },
+    register() {
+      calls.push('register')
+      return 'enabled'
+    },
+  })
+  assert.deepEqual(calls, ['unregister'])
+  assert.equal(unregisterFailed.saved, false)
+  assert.equal(unregisterFailed.record.machService, '')
+  assert.match(unregisterFailed.error, /unregister failed/)
+  const registration = readRepo('electron/main.mjs')
+  const apply = registration.slice(
+    registration.indexOf('function applyFinderSyncAgentRegistration'),
+    registration.indexOf('function reportFinderSyncAgentStatus'),
+  )
+  assert.match(apply, /const removed = parseAgentJson\(addon\.unregisterAgent\(\)\)/)
+  assert.match(apply, /return \{ ok: false, error: removed\.error \}/)
+
+  const statusCalls = []
+  const statusReport = readFinderSyncAgentStatus({
+    currentBundle: '/Volumes/Cuttler/Cuttler.app',
+    recordedBundle: '/Applications/Cuttler.app',
+    agentStatus() {
+      statusCalls.push('agentStatus')
+      return JSON.stringify({ status: 'not-registered' })
+    },
+    registerAgent() {
+      statusCalls.push('register')
+    },
+    unregisterAgent() {
+      statusCalls.push('unregister')
+    },
+    saveRecord() {
+      statusCalls.push('save')
+    },
+  })
+  assert.deepEqual(statusCalls, ['agentStatus'])
+  assert.match(statusReport.line, /not-registered/)
+  assert.equal(statusReport.exitCode, 1)
+  const statusFn = registration.slice(
+    registration.indexOf('function reportFinderSyncAgentStatus'),
+    registration.indexOf('function registerFinderSyncReceiver'),
+  )
+  assert.match(statusFn, /readFinderSyncAgentStatus/)
+  assert.doesNotMatch(statusFn, /applyFinderSyncAgentRegistration|registerAgent|unregisterAgent|saveFinderSyncAgentRecord/)
+  const statusFlagAt = registration.indexOf("const finderSyncAgentStatusOnly = process.argv.includes('--finder-sync-agent-status')")
+  const isolateAt = registration.indexOf('applyTestFeedDataIsolation(app)')
+  const migrateAt = registration.indexOf('migrateLegacyMacAppDirs(')
+  assert.ok(statusFlagAt >= 0 && statusFlagAt < isolateAt && statusFlagAt < migrateAt)
+  assert.match(registration.slice(isolateAt - 120, isolateAt), /finderSyncAgentStatusOnly \? \{ isolate: false \}/)
+  assert.match(registration, /!finderSyncAgentStatusOnly &&\s*canSetUserData &&\s*shouldMigrateRealMacLibrary/)
+  assert.match(registration, /electronUserDataForDataOverride\(explicitDataOverride\)/)
+  assert.match(registration, /userDataDirForLaunch\(/)
+  assert.match(registration, /overrideUserData \|\| testFeedPlan\?\.isolate !== true/)
+  const statusBranch = registration.slice(
+    registration.indexOf('if (finderSyncAgentStatusOnly) {'),
+    registration.indexOf('} else {', registration.indexOf('if (finderSyncAgentStatusOnly) {')),
+  )
+  assert.match(statusBranch, /reportFinderSyncAgentStatus\(\)/)
+  assert.doesNotMatch(statusBranch, /whenReady|setTimeout|Promise\.race|setPath|registerAgent|unregisterAgent/)
 
   const seen = new Map()
   assert.equal(finderSyncRequestSeen(seen, 'click-1', 1_000), false)
@@ -2661,5 +3113,559 @@ test('the release assert checks the appex signature and leaves notarization to t
     assert.ok(unreadSymbols.some((failure) => /symbol table/.test(failure)))
   } finally {
     rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a Finder job delivered after startup reaches showMainWindow without ReferenceError on receiverOnly', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-receiver-only-'))
+  const dataDir = path.join(root, 'data')
+  const homeDir = path.join(root, 'home')
+  const fontFile = path.join(root, 'Sample.otf')
+  mkdirSync(dataDir, { recursive: true })
+  mkdirSync(homeDir, { recursive: true })
+  writeFileSync(fontFile, Buffer.from([0x4f, 0x54, 0x54, 0x4f, 0, 1, 0, 0]))
+  const mainUrl = pathToFileURL(fileURLToPath(new URL('./main.mjs', import.meta.url))).href
+  const harness = `
+    import assert from 'node:assert/strict'
+    import http from 'node:http'
+    import { registerHooks } from 'node:module'
+    const events = new Map()
+    const shownCalls = []
+    const sentMessages = []
+    const apiServer = http.createServer((req, res) => {
+      res.setHeader('Content-Type', 'application/json')
+      if (req.url === '/api/bootstrap') {
+        res.end(JSON.stringify({ token: 'test-token' }))
+        return
+      }
+      if (req.url === '/api/events') {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+        res.end('')
+        return
+      }
+      res.end(JSON.stringify({ ok: true, entries: [], operations: [], catalog: [], settings: {} }))
+    })
+    await new Promise((resolve) => apiServer.listen(0, '127.0.0.1', resolve))
+    process.env.FONT_BUTLER_API = \`http://127.0.0.1:\${apiServer.address().port}\`
+    class FakeBrowserWindow {
+      constructor() {
+        this._destroyed = false
+        this._listeners = new Map()
+        this.webContents = {
+          on: () => {},
+          once: (ev, cb) => { if (ev === 'did-finish-load') setImmediate(cb) },
+          isLoading: () => false,
+          send: (channel, payload) => sentMessages.push({ channel, payload }),
+          setWindowOpenHandler: () => {},
+        }
+      }
+      static getAllWindows() { return [] }
+      isDestroyed() { return this._destroyed }
+      isMinimized() { return false }
+      isVisible() { return true }
+      restore() {}
+      show() { shownCalls.push('show') }
+      focus() { shownCalls.push('focus') }
+      loadURL() { return Promise.resolve() }
+      setBackgroundColor() {}
+      on(ev, cb) {
+        if (!this._listeners.has(ev)) this._listeners.set(ev, [])
+        this._listeners.get(ev).push(cb)
+      }
+      removeAllListeners() {}
+      destroy() { this._destroyed = true }
+    }
+    const appMock = {
+      isPackaged: false,
+      dock: { hide() {}, setIcon() {} },
+      requestSingleInstanceLock: () => true,
+      getPath: (name) => name === 'userData' ? ${JSON.stringify(dataDir)} : name === 'home' ? ${JSON.stringify(homeDir)} : ${JSON.stringify(root)},
+      getVersion: () => '0.4.1',
+      setName: () => {},
+      setPath: () => {},
+      on: (ev, cb) => {
+        if (!events.has(ev)) events.set(ev, [])
+        events.get(ev).push(cb)
+      },
+      whenReady: () => Promise.resolve(),
+      quit: () => {},
+      exit: () => {},
+    }
+    class FakeNotification {
+      static isSupported() { return false }
+      on() {}
+      show() {}
+    }
+    const electronStub = {
+      app: appMock,
+      BrowserWindow: FakeBrowserWindow,
+      clipboard: { writeText: () => {} },
+      Menu: { buildFromTemplate: () => ({}), setApplicationMenu: () => {} },
+      Notification: FakeNotification,
+      Tray: class { setToolTip() {} setContextMenu() {} on() {} },
+      dialog: { showErrorBox: () => {}, showMessageBox: () => Promise.resolve({ response: 0 }), showOpenDialog: () => Promise.resolve({ canceled: true, filePaths: [] }) },
+      ipcMain: { handle: () => {}, on: () => {} },
+      nativeImage: { createFromPath: () => ({ isEmpty: () => true, resize: () => ({ setTemplateImage() {} }) }) },
+      nativeTheme: { shouldUseDarkColors: false, on: () => {} },
+      shell: { openExternal: () => Promise.resolve() },
+      utilityProcess: { fork: () => ({ on() {}, stdout: { on() {} }, stderr: { on() {} }, kill() {} }) },
+    }
+    process.on('unhandledRejection', (err) => {
+      console.error(err)
+      process.exit(1)
+    })
+    process.on('uncaughtException', (err) => {
+      console.error(err)
+      process.exit(1)
+    })
+    registerHooks({
+      resolve(specifier, context, next) {
+        if (specifier === 'electron') return { shortCircuit: true, url: 'mock:electron' }
+        return next(specifier, context)
+      },
+      load(url, context, next) {
+        if (url === 'mock:electron') {
+          globalThis.__electronMock = electronStub
+          return {
+            shortCircuit: true,
+            format: 'module',
+            source: 'const m = globalThis.__electronMock; export default m; export const { app, BrowserWindow, clipboard, Menu, Notification, Tray, dialog, ipcMain, nativeImage, nativeTheme, shell, utilityProcess } = m;',
+          }
+        }
+        return next(url, context)
+      },
+    })
+    await import(${JSON.stringify(mainUrl)})
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    shownCalls.length = 0
+    sentMessages.length = 0
+    const secondInstanceHandlers = events.get('second-instance') ?? []
+    assert.ok(secondInstanceHandlers.length > 0, 'expected second-instance handler')
+    secondInstanceHandlers[0]({}, ['Cuttler', '--finder-compare', ${JSON.stringify(fontFile)}])
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    assert.ok(shownCalls.includes('show'), 'expected showMainWindow() to call win.show()')
+    assert.ok(
+      sentMessages.some((m) => m.channel === 'finder-compare' && m.payload?.paths?.[0] === ${JSON.stringify(fontFile)}),
+      'expected finder-compare sent after showMainWindow()',
+    )
+    apiServer.close()
+    process.exit(0)
+  `
+  try {
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', harness], {
+      env: {
+        ...process.env,
+        HOME: homeDir,
+        FONT_BUTLER_DATA: dataDir,
+        FONT_BUTLER_API: 'http://127.0.0.1:43182',
+      },
+      encoding: 'utf8',
+      timeout: 15_000,
+    })
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('--finder-sync-agent-status exits before whenReady and does not touch userData', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-agent-status-'))
+  const callsFile = path.join(root, 'calls.txt')
+  const dataDir = path.join(root, 'real-library')
+  writeFileSync(callsFile, '')
+  const mainUrl = pathToFileURL(fileURLToPath(new URL('./main.mjs', import.meta.url))).href
+  const harness = `
+    import { appendFileSync } from 'node:fs'
+    import { registerHooks } from 'node:module'
+    const callsFile = ${JSON.stringify(callsFile)}
+    const note = (line) => appendFileSync(callsFile, line + '\\n')
+    const appMock = {
+      isPackaged: false,
+      isReady: () => false,
+      getPath: (name) => name,
+      setPath: (key, value) => note('setPath ' + key + ' ' + value),
+      whenReady: () => { note('whenReady'); return new Promise(() => {}) },
+      exit: (code) => note('exit ' + code),
+      requestSingleInstanceLock: () => { note('lock'); return true },
+      on: () => {},
+      quit: () => note('quit'),
+      getVersion: () => '0.4.1',
+      setName: () => {},
+    }
+    const electronStub = {
+      app: appMock,
+      BrowserWindow: class {},
+      clipboard: { writeText: () => {} },
+      Menu: { buildFromTemplate: () => ({}), setApplicationMenu: () => {} },
+      Notification: class { static isSupported() { return false } on() {} show() {} },
+      Tray: class { setToolTip() {} setContextMenu() {} on() {} },
+      dialog: { showErrorBox: () => note('dialog'), showMessageBox: () => Promise.resolve({ response: 0 }) },
+      ipcMain: { handle: () => note('ipc'), on: () => {} },
+      nativeImage: { createFromPath: () => ({ isEmpty: () => true }) },
+      nativeTheme: { shouldUseDarkColors: false, on: () => {} },
+      shell: { openExternal: () => Promise.resolve() },
+      utilityProcess: { fork: () => { note('fork'); throw new Error('fork') } },
+    }
+    registerHooks({
+      resolve(specifier, context, next) {
+        if (specifier === 'electron') return { shortCircuit: true, url: 'mock:electron' }
+        return next(specifier, context)
+      },
+      load(url, context, next) {
+        if (url === 'mock:electron') {
+          globalThis.__electronMock = electronStub
+          return {
+            shortCircuit: true,
+            format: 'module',
+            source: 'const m = globalThis.__electronMock; export default m; export const { app, BrowserWindow, clipboard, Menu, Notification, Tray, dialog, ipcMain, nativeImage, nativeTheme, shell, utilityProcess } = m;',
+          }
+        }
+        return next(url, context)
+      },
+    })
+    await import(${JSON.stringify(mainUrl)})
+    note('imported')
+    process.exit(2)
+  `
+  try {
+    const result = spawnSync(
+      process.execPath,
+      ['--input-type=module', '-e', harness, '--', '--finder-sync-agent-status'],
+      {
+        encoding: 'utf8',
+        timeout: 8_000,
+        env: {
+          ...process.env,
+          HOME: root,
+          FONT_BUTLER_DATA: dataDir,
+          FONTCASE_DATA: dataDir,
+        },
+      },
+    )
+    const calls = readFileSync(callsFile, 'utf8')
+    assert.equal(result.error, undefined, calls + '\n' + result.stderr)
+    assert.match(result.stdout, /finder-sync-agent-status \{/)
+    assert.equal(result.status, 1)
+    assert.doesNotMatch(calls, /whenReady/)
+    assert.doesNotMatch(calls, /setPath/)
+    assert.doesNotMatch(calls, /lock|ipc|dialog|quit|fork|imported/)
+    assert.match(calls, /exit 1/)
+    assert.equal(existsSync(dataDir), false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('FONT_BUTLER_DATA redirects userData before the app is ready', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-userdata-override-'))
+  const callsFile = path.join(root, 'calls.txt')
+  const dataDir = path.join(root, 'library')
+  const homeDir = path.join(root, 'home')
+  mkdirSync(homeDir, { recursive: true })
+  writeFileSync(callsFile, '')
+  const mainUrl = pathToFileURL(fileURLToPath(new URL('./main.mjs', import.meta.url))).href
+  const harness = `
+    import { appendFileSync } from 'node:fs'
+    import { registerHooks } from 'node:module'
+    const callsFile = ${JSON.stringify(callsFile)}
+    const note = (line) => appendFileSync(callsFile, line + '\\n')
+    const appMock = {
+      isPackaged: false,
+      isReady: () => false,
+      getPath: (name) => name === 'home' ? ${JSON.stringify(homeDir)} : name === 'appData' ? ${JSON.stringify(path.join(root, 'appdata'))} : ${JSON.stringify(root)},
+      setPath: (key, value) => note('setPath ' + key + ' ' + value),
+      whenReady: () => { note('whenReady'); process.exit(0); return Promise.resolve() },
+      exit: (code) => note('exit ' + code),
+      requestSingleInstanceLock: () => { note('lock'); return true },
+      on: () => {},
+      quit: () => {},
+      getVersion: () => '0.4.1',
+      setName: () => {},
+      dock: { hide() {}, setIcon() {} },
+    }
+    const electronStub = {
+      app: appMock,
+      BrowserWindow: class { static getAllWindows() { return [] } },
+      clipboard: { writeText: () => {} },
+      Menu: { buildFromTemplate: () => ({}), setApplicationMenu: () => {} },
+      Notification: class { static isSupported() { return false } on() {} show() {} },
+      Tray: class { setToolTip() {} setContextMenu() {} on() {} },
+      dialog: { showErrorBox: () => {}, showMessageBox: () => Promise.resolve({ response: 0 }), showOpenDialog: () => Promise.resolve({ canceled: true, filePaths: [] }) },
+      ipcMain: { handle: () => {}, on: () => {} },
+      nativeImage: { createFromPath: () => ({ isEmpty: () => true, resize: () => ({ setTemplateImage() {} }) }) },
+      nativeTheme: { shouldUseDarkColors: false, on: () => {} },
+      shell: { openExternal: () => Promise.resolve() },
+      utilityProcess: { fork: () => ({ on() {}, stdout: { on() {} }, stderr: { on() {} }, kill() {} }) },
+    }
+    process.on('uncaughtException', (err) => { console.error(err); process.exit(1) })
+    process.on('unhandledRejection', (err) => { console.error(err); process.exit(1) })
+    registerHooks({
+      resolve(specifier, context, next) {
+        if (specifier === 'electron') return { shortCircuit: true, url: 'mock:electron' }
+        return next(specifier, context)
+      },
+      load(url, context, next) {
+        if (url === 'mock:electron') {
+          globalThis.__electronMock = electronStub
+          return {
+            shortCircuit: true,
+            format: 'module',
+            source: 'const m = globalThis.__electronMock; export default m; export const { app, BrowserWindow, clipboard, Menu, Notification, Tray, dialog, ipcMain, nativeImage, nativeTheme, shell, utilityProcess } = m;',
+          }
+        }
+        return next(url, context)
+      },
+    })
+    await import(${JSON.stringify(mainUrl)})
+  `
+  try {
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', harness], {
+      encoding: 'utf8',
+      timeout: 8_000,
+      env: {
+        ...process.env,
+        HOME: homeDir,
+        FONT_BUTLER_DATA: dataDir,
+      },
+    })
+    const calls = readFileSync(callsFile, 'utf8')
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}\n${calls}`)
+    const setPaths = calls.split(/\n/).filter((line) => line.startsWith('setPath userData '))
+    assert.deepEqual(setPaths, [`setPath userData ${path.join(dataDir, 'electron-user-data')}`])
+    assert.match(calls, /whenReady/)
+    const whenReadyAt = calls.indexOf('whenReady')
+    const setPathAt = calls.indexOf('setPath userData ')
+    assert.ok(setPathAt >= 0 && setPathAt < whenReadyAt)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('removing queueFinderSyncPendingError from FinderSync.swift breaks the pending-error check', () => {
+  const swift = readRepo('macos/FinderSync/FinderSync.swift')
+  function pendingErrorQueueFailures(source) {
+    const failures = []
+    if (!/private func queueFinderSyncPendingError\(_ code: String\)/.test(source)) {
+      failures.push('queueFinderSyncPendingError definition is missing.')
+    }
+    const showStart = source.indexOf('private func showFinderSyncError(')
+    const showEnd = showStart >= 0 ? source.indexOf('\nprivate let finderSyncPendingErrorAllowedCodes', showStart) : -1
+    const showBody = showStart >= 0 && showEnd > showStart ? source.slice(showStart, showEnd) : ''
+    if (!/queueFinderSyncPendingError\(code\)/.test(showBody)) {
+      failures.push('showFinderSyncError does not call queueFinderSyncPendingError(code).')
+    }
+    return failures
+  }
+  assert.deepEqual(pendingErrorQueueFailures(swift), [])
+  const withoutDefinition = swift.replace(
+    /private func queueFinderSyncPendingError\(_ code: String\) \{[\s\S]*?\n\}/,
+    '',
+  )
+  assert.ok(pendingErrorQueueFailures(withoutDefinition).length > 0)
+  const withoutCall = swift.replace(/queueFinderSyncPendingError\(code\)/g, '')
+  assert.ok(pendingErrorQueueFailures(withoutCall).length > 0)
+})
+
+test('commitFinderSyncAgentRegistration handles register failures without saving', () => {
+  const bundle = '/Applications/Cuttler.app'
+  const helper = `${bundle}/${finderSyncAgentBundleProgram()}`
+  const service = finderSyncMachService(false)
+
+  const registerNotRegistered = commitFinderSyncAgentRegistration({
+    testFeed: false,
+    currentBundle: bundle,
+    helperPath: helper,
+    version: '0.4.1',
+    currentMachService: service,
+    record: readFinderSyncAgentRecord(''),
+    status: 'not-registered',
+    register() {
+      return 'not-registered'
+    },
+  })
+  assert.equal(registerNotRegistered.plan.action, 'register')
+  assert.equal(registerNotRegistered.saved, false)
+  assert.equal(registerNotRegistered.status, 'not-registered')
+  assert.equal(registerNotRegistered.record.machService, '')
+
+  const reregisterFailed = commitFinderSyncAgentRegistration({
+    testFeed: false,
+    currentBundle: bundle,
+    helperPath: helper,
+    version: '0.4.1',
+    currentMachService: service,
+    record: readFinderSyncAgentRecord(JSON.stringify({
+      enabled: true,
+      appBundlePath: bundle,
+      helperPath: helper,
+      version: '0.4.0',
+    })),
+    status: 'enabled',
+    unregister() {
+      return { ok: true }
+    },
+    register() {
+      return { ok: false, status: 'unavailable', error: 'SMAppService register failed.' }
+    },
+  })
+  assert.equal(reregisterFailed.plan.action, 'reregister')
+  assert.equal(reregisterFailed.saved, false)
+  assert.equal(reregisterFailed.status, 'unavailable')
+  assert.match(reregisterFailed.error, /register failed/)
+  assert.equal(reregisterFailed.record.machService, '')
+})
+
+test('consumeFinderSyncPendingErrorFilesAsync reads and unlinks asynchronously while keeping symlinks and isolated roots intact', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'font-butler-pending-async-'))
+  try {
+    const support = path.join(root, 'Application Support')
+    const cuttler = path.join(support, 'Cuttler')
+    const installed = path.join(support, 'Font Buttler')
+    const testDir = path.join(support, 'Font Buttler Test')
+    const isolatedDir = path.join(root, 'isolated')
+    mkdirSync(cuttler, { recursive: true })
+    mkdirSync(installed, { recursive: true })
+    mkdirSync(testDir, { recursive: true })
+    mkdirSync(isolatedDir, { recursive: true })
+
+    const secret = path.join(root, 'secret.json')
+    writeFileSync(secret, JSON.stringify({ errors: [{ code: FINDER_SYNC_ERROR_LOGIN_ITEMS, at: 1 }] }))
+    symlinkSync(secret, path.join(cuttler, FINDER_SYNC_PENDING_ERROR_FILE))
+    writeFileSync(
+      path.join(installed, FINDER_SYNC_PENDING_ERROR_FILE),
+      JSON.stringify({ errors: [{ code: FINDER_SYNC_ERROR_MISSING_APP, at: 2 }] }),
+    )
+    writeFileSync(
+      path.join(isolatedDir, FINDER_SYNC_PENDING_ERROR_FILE),
+      JSON.stringify({ errors: [{ code: FINDER_SYNC_ERROR_NOT_RUNNING, at: 3 }] }),
+    )
+
+    const includeInstalled = shouldMigrateRealMacLibrary({
+      platform: 'darwin',
+      testFeed: false,
+      env: { FONT_BUTLER_DATA: isolatedDir },
+    })
+    assert.equal(includeInstalled, false)
+    const isolatedPaths = finderSyncPendingErrorConsumePaths({
+      userDataDir: isolatedDir,
+      appSupportDir: support,
+      includeOtherSupportDirs: includeInstalled,
+      groupContainerDir: '',
+    })
+    assert.deepEqual(isolatedPaths, [path.join(isolatedDir, FINDER_SYNC_PENDING_ERROR_FILE)])
+    const consumedIsolated = await consumeFinderSyncPendingErrorFilesAsync(isolatedPaths)
+    assert.deepEqual(consumedIsolated.map((item) => item.code), [FINDER_SYNC_ERROR_NOT_RUNNING])
+    assert.equal(consumedIsolated[0].message, 'Cuttler is not running.')
+    assert.equal(existsSync(path.join(isolatedDir, FINDER_SYNC_PENDING_ERROR_FILE)), false)
+    assert.equal(existsSync(path.join(installed, FINDER_SYNC_PENDING_ERROR_FILE)), true)
+
+    const releasePaths = finderSyncPendingErrorConsumePaths({
+      userDataDir: cuttler,
+      appSupportDir: support,
+      includeOtherSupportDirs: true,
+      groupContainerDir: '',
+    })
+    const consumedRelease = await consumeFinderSyncPendingErrorFilesAsync(releasePaths)
+    assert.deepEqual(consumedRelease.map((item) => item.code), [FINDER_SYNC_ERROR_MISSING_APP])
+    assert.equal(consumedRelease[0].message, FINDER_SYNC_MISSING_APP)
+    assert.equal(lstatSync(path.join(cuttler, FINDER_SYNC_PENDING_ERROR_FILE)).isSymbolicLink(), true)
+    assert.equal(existsSync(path.join(installed, FINDER_SYNC_PENDING_ERROR_FILE)), false)
+
+    const asyncMissing = await readFinderSyncPendingErrorRecordAsync(path.join(root, 'nope.json'))
+    assert.equal(asyncMissing.reason, 'absent')
+    assert.equal(finderSyncMissingAppMessage('/Applications/Cuttler.app'), FINDER_SYNC_MISSING_APP)
+    assert.match(finderSyncMissingAppMessage('/Applications/Font Buttler Test.app'), /^Font Buttler Test couldn't be found/)
+    assert.match(finderSyncAgentDisabledMessage('/Applications/Font Buttler Test.app'), /^Turn on Font Buttler Test in Login Items/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('resolvePackagedApiPort logs once on EADDRINUSE and falls back cleanly to an open port', async () => {
+  const occupied = net.createServer()
+  await new Promise((resolve) => occupied.listen(0, '127.0.0.1', resolve))
+  const busyPort = occupied.address().port
+  const fallbackLogs = []
+  try {
+    const resolved = await resolvePackagedApiPort({
+      preferredPort: busyPort,
+      onFallback(portInUse) {
+        fallbackLogs.push(portInUse)
+      },
+    })
+    assert.deepEqual(fallbackLogs, [busyPort])
+    assert.equal(resolved.fallback, true)
+    assert.notEqual(resolved.port, busyPort)
+    assert.ok(resolved.port > 0)
+  } finally {
+    await new Promise((resolve) => occupied.close(resolve))
+  }
+})
+
+test('awaitFinderSyncPendingErrorConsume times out without blocking and still presents late resolved records', async () => {
+  const fastPresented = []
+  let fastTimeouts = 0
+  const fast = await awaitFinderSyncPendingErrorConsume({
+    consumePromise: Promise.resolve([{ code: FINDER_SYNC_ERROR_NOT_RUNNING, at: 1 }]),
+    timeoutMs: 200,
+    onPresent: (code) => fastPresented.push(code),
+    onTimeout: () => {
+      fastTimeouts += 1
+    },
+  })
+  assert.equal(fast.timedOut, false)
+  assert.equal(fastTimeouts, 0)
+  assert.deepEqual(fastPresented, [FINDER_SYNC_ERROR_NOT_RUNNING])
+
+  const keepAlive = setTimeout(() => {}, 2_000)
+  try {
+    let resolveLate
+    const latePromise = new Promise((resolve) => {
+      resolveLate = resolve
+    })
+    const latePresented = []
+    let lateTimeouts = 0
+    const late = await awaitFinderSyncPendingErrorConsume({
+      consumePromise: latePromise,
+      timeoutMs: 15,
+      onPresent: (code) => latePresented.push(code),
+      onTimeout: () => {
+        lateTimeouts += 1
+      },
+    })
+    assert.equal(late.timedOut, true)
+    assert.equal(lateTimeouts, 1)
+    assert.deepEqual(latePresented, [])
+
+    resolveLate([
+      { code: FINDER_SYNC_ERROR_MISSING_APP, at: 2 },
+      { code: FINDER_SYNC_ERROR_LOGIN_ITEMS, at: 3 },
+    ])
+    await late.settledPromise
+    assert.equal(lateTimeouts, 1)
+    assert.deepEqual(latePresented, [FINDER_SYNC_ERROR_MISSING_APP, FINDER_SYNC_ERROR_LOGIN_ITEMS])
+
+    let rejectLate
+    const failingPromise = new Promise((_, reject) => {
+      rejectLate = reject
+    })
+    const errors = []
+    let errTimeouts = 0
+    const errored = await awaitFinderSyncPendingErrorConsume({
+      consumePromise: failingPromise,
+      timeoutMs: 15,
+      onTimeout: () => {
+        errTimeouts += 1
+      },
+      onError: (err) => errors.push(err),
+    })
+    assert.equal(errored.timedOut, true)
+    assert.equal(errTimeouts, 1)
+    rejectLate(new Error('disk stalled'))
+    await errored.settledPromise
+    assert.equal(errors.length, 1)
+    assert.match(errors[0].message, /disk stalled/)
+  } finally {
+    clearTimeout(keepAlive)
   }
 })

@@ -44,7 +44,12 @@ import { createDocumentOpenWatch, documentWatchIpc } from './document-open-watch
 import { createExternalFontOpenNotifier } from './external-font-open-notify.mjs'
 import { createAnnouncementSlot } from './announcement-delivery.mjs'
 import { dismissAnnouncement, presentPendingAnnouncement } from './announcements.mjs'
-import { applyTestFeedDataIsolation } from './test-feed-data.mjs'
+import {
+  applyTestFeedDataIsolation,
+  electronUserDataForDataOverride,
+  explicitFontDataOverride,
+  userDataDirForLaunch,
+} from './test-feed-data.mjs'
 import { macosDockIconPng } from './dock-icon.mjs'
 import { createLoginItemApplier } from './login-item.mjs'
 import {
@@ -64,28 +69,34 @@ import {
   suggestedFamilyName,
 } from './finder-install.mjs'
 import {
-  FINDER_SYNC_AGENT_DISABLED,
+  FINDER_SYNC_ERROR_LOGIN_ITEMS,
   FINDER_SYNC_SETTINGS_URL,
   FINDER_SYNC_TOO_MANY_FILES,
+  awaitFinderSyncPendingErrorConsume,
   commitFinderSyncAgentRegistration,
-  consumeFinderSyncPendingErrorFiles,
+  consumeFinderSyncPendingErrorFilesAsync,
   finderSyncAgentBundleProgram,
+  finderSyncAgentDisabledMessage,
+  finderSyncMachService,
   finderSyncPendingErrorConsumePaths,
   finderSyncRequestSeen,
   finderSyncWireAction,
   formatFinderSyncRejections,
   noteFinderSyncRequest,
   readFinderSyncAgentRecord,
+  readFinderSyncAgentStatus,
   finderSyncProductDisplayName,
   claimSameExecutableInstance,
   releaseSameExecutableInstance,
   sameExecutableLockPath,
   sharedLibraryLaunchMode,
   routeFinderSyncError,
+  finderSyncRegistrationHold,
   refreshFinderSyncRegistration,
   readFinderSyncFiles,
   scanFinderSyncSelection,
 } from './finder-sync.mjs'
+import { resolvePackagedApiPort } from './api-port.mjs'
 import { deliverNativeNotice, electronNotificationPermission } from './notify.mjs'
 import {
   LOGOUT_CANCELLED,
@@ -135,11 +146,20 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
 
+// Read before any userData, migration, or test-feed path change. mac-check
+// runs this against an extracted copy and must not touch the real library.
+const finderSyncAgentStatusOnly = process.argv.includes('--finder-sync-agent-status')
+// Captured before test-feed isolation fills FONT_BUTLER_DATA in. A throwaway
+// HOME does not move Electron userData on macOS (NSHomeDirectory uses
+// getpwuid). This override does, for both Cuttler and a marked test build.
+const explicitDataOverride = explicitFontDataOverride(process.env)
+
 // Before requestSingleInstanceLock and before app ready. Only the packaged
 // fontButlerTestFeed marker selects this. A LaunchServices relaunch has no
 // environment, so the marker alone has to isolate the test build. A marked
-// build must not move the real library.
-const testFeedPlan = applyTestFeedDataIsolation(app)
+// build must not move the real library. Status mode skips it: setPath would
+// create ~/Library/Application Support/Font Buttler Test.
+const testFeedPlan = finderSyncAgentStatusOnly ? { isolate: false } : applyTestFeedDataIsolation(app)
 
 // 0.4.0 pinned userData at Font Buttler. This release uses Cuttler and moves
 // the old folders on first launch. Must run before ready, and before Electron
@@ -149,6 +169,7 @@ let macDataMigration = null
 let migrationFailure = null
 const canSetUserData = typeof app.isReady !== 'function' || !app.isReady()
 if (
+  !finderSyncAgentStatusOnly &&
   canSetUserData &&
   shouldMigrateRealMacLibrary({
     platform: process.platform,
@@ -196,20 +217,32 @@ if (macDataMigration?.blockedByOwner) {
   // which would create an empty Cuttler library beside the one still in use.
   process.exit(0)
 }
-if (testFeedPlan?.isolate !== true && canSetUserData) {
+if (!finderSyncAgentStatusOnly && canSetUserData) {
   const runningRoot = macDataMigration?.runningInstanceDataDir || ''
   const stalledRoot =
     !runningRoot && macDataMigration?.stalled && macDataMigration.stalledDataDir
       ? macDataMigration.stalledDataDir
       : ''
-  if (stalledRoot) {
+  const overrideUserData = electronUserDataForDataOverride(explicitDataOverride)
+  // A data override keeps the library where the caller put it. Do not also
+  // pin the stalled Cuttler root, and do not leave userData in Application
+  // Support where Chromium would take the real SingletonLock.
+  if (!overrideUserData && testFeedPlan?.isolate !== true && stalledRoot) {
     process.env[MIGRATION_STALL_ENV] = '1'
     process.env[MIGRATION_DATA_ROOT_ENV] = stalledRoot
   }
-  app.setPath(
-    'userData',
-    runningRoot || stalledRoot || path.join(app.getPath('appData'), APP_FOLDER_NAME),
-  )
+  if (overrideUserData || testFeedPlan?.isolate !== true) {
+    app.setPath(
+      'userData',
+      userDataDirForLaunch({
+        explicitDataOverride,
+        runningRoot,
+        stalledRoot,
+        appSupportDir: app.getPath('appData'),
+        appFolderName: APP_FOLDER_NAME,
+      }),
+    )
+  }
 }
 
 const debugLog = createDebugLogStore()
@@ -1253,7 +1286,19 @@ function registerNativeFinderServices() {
 const finderSyncRequests = new Map()
 const finderSyncErrorsShown = new Map()
 
+const FINDER_SYNC_PENDING_ERROR_TIMEOUT_MS = 2_000
+
+function isFinderSyncAgentCurrentlyEnabled() {
+  if (process.platform !== 'darwin') return false
+  const addon = loadFinderSyncReceiver()
+  if (!addon?.agentStatus) return false
+  return parseAgentJson(addon.agentStatus()).status === 'enabled'
+}
+
 function presentFinderSyncUserError(code) {
+  if (code === FINDER_SYNC_ERROR_LOGIN_ITEMS && isFinderSyncAgentCurrentlyEnabled()) {
+    return
+  }
   const now = Date.now()
   const appPath = currentFinderSyncBundle()
   const route = routeFinderSyncError({
@@ -1273,28 +1318,69 @@ function presentFinderSyncUserError(code) {
     notice.show()
     return
   }
-  dialog.showErrorBox(title, route.message)
+  const options = {
+    type: 'warning',
+    title,
+    message: route.message,
+    buttons: ['OK'],
+    defaultId: 0,
+  }
+  const parent = mainWindow && !mainWindow.isDestroyed() && mainWindowKind === 'main' ? mainWindow : undefined
+  void (parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options))
 }
 
-function consumeFinderSyncPendingErrors() {
+async function consumeFinderSyncPendingErrors() {
   // userData is Cuttler after a move or a fresh install, and the old folder
-  // when the move stalled. The helper writes the live library. Also read the
-  // other support folders so a record left by the previous helper, or written
-  // beside a library this launch is not using, is shown once and deleted.
-  // Test feed and FONT_BUTLER_DATA / FONTCASE_DATA stay on userData alone.
+  // when the move stalled. The helper writes the live library under
+  // Application Support, outside Group Containers, so reading here never
+  // triggers App Data TCC. The sandboxed appex drains its own group
+  // container over XPC to the helper.
+  // Test feed and FONT_BUTLER_DATA / FONTCASE_DATA stay off the installed
+  // release app's support folders.
+  const testFeed = testFeedPlan?.isolate === true
+  const includeInstalledRecords = shouldMigrateRealMacLibrary({
+    platform: process.platform,
+    testFeed,
+  })
   const files = finderSyncPendingErrorConsumePaths({
     userDataDir: app.getPath('userData'),
     appSupportDir: app.getPath('appData'),
-    includeOtherSupportDirs: shouldMigrateRealMacLibrary({
-      platform: process.platform,
-      testFeed: testFeedPlan?.isolate === true,
-    }),
+    includeOtherSupportDirs: includeInstalledRecords,
+    groupContainerDir: '',
     // A committed copy's leftover is not the live library. Do not read or
     // delete anything inside it, including a queued Finder Sync error.
     skipDirs: committedLeftoverDirectories(app.getPath('home')),
   })
-  const errors = consumeFinderSyncPendingErrorFiles(files, { appPath: currentFinderSyncBundle() })
-  for (const item of errors) presentFinderSyncUserError(item.code)
+  await awaitFinderSyncPendingErrorConsume({
+    consumePromise: consumeFinderSyncPendingErrorFilesAsync(files, { appPath: currentFinderSyncBundle() }),
+    timeoutMs: FINDER_SYNC_PENDING_ERROR_TIMEOUT_MS,
+    onPresent: (code) => presentFinderSyncUserError(code),
+    onTimeout: () => {
+      console.warn(
+        `Pending Finder Sync error consume exceeded ${FINDER_SYNC_PENDING_ERROR_TIMEOUT_MS}ms; continuing startup while it finishes.`,
+      )
+    },
+    onError: (error) => {
+      console.error('Could not consume pending Finder Sync errors', error)
+    },
+  })
+}
+
+function scheduleFinderSyncPendingErrorConsume() {
+  let ran = false
+  const run = () => {
+    if (ran || isQuitting) return
+    ran = true
+    void consumeFinderSyncPendingErrors()
+  }
+  const win = mainWindow
+  if (win && !win.isDestroyed() && mainWindowKind === 'main' && win.webContents?.isLoading?.()) {
+    win.webContents.once('did-finish-load', run)
+    const fallback = setTimeout(run, 1_500)
+    fallback.unref?.()
+    return
+  }
+  setImmediate(run)
 }
 
 function finderSyncAgentRecordFile() {
@@ -1318,6 +1404,7 @@ function saveFinderSyncAgentRecord(record) {
       appBundlePath: record.appBundlePath || '',
       helperPath: record.helperPath || '',
       version: record.version || '',
+      machService: record.machService || '',
     }),
   )
 }
@@ -1346,8 +1433,32 @@ function loadFinderSyncReceiver() {
   }
 }
 
+let finderSyncRegistrationHoldLogged = false
+
+function logFinderSyncRegistrationHold(reason) {
+  if (finderSyncRegistrationHoldLogged || !reason) return
+  finderSyncRegistrationHoldLogged = true
+  console.info(`Finder Sync registration skipped: ${reason}.`)
+}
+
+function currentFinderSyncRegistrationHold() {
+  return finderSyncRegistrationHold({
+    appPath: currentFinderSyncBundle(),
+    explicitDataOverride,
+  })
+}
+
 function applyFinderSyncAgentRegistration(addon, { surface = false } = {}) {
   if (!addon) return { status: 'unavailable', error: 'Finder Sync receiver is not loaded.' }
+  const hold = currentFinderSyncRegistrationHold()
+  if (hold) {
+    logFinderSyncRegistrationHold(hold)
+    try {
+      return parseAgentJson(addon.agentStatus())
+    } catch {
+      return { status: 'unavailable', error: 'Finder Sync receiver is not loaded.' }
+    }
+  }
   const record = loadFinderSyncAgentRecord()
   const testFeed = runningTestFeed()
   if (record.enabled === false) {
@@ -1361,10 +1472,18 @@ function applyFinderSyncAgentRegistration(addon, { surface = false } = {}) {
     currentBundle,
     helperPath: currentBundle ? path.join(currentBundle, finderSyncAgentBundleProgram()) : '',
     version: app.getVersion(),
+    currentMachService: finderSyncMachService(testFeed),
     record,
     status: status.status,
+    hold,
     unregister() {
-      addon.unregisterAgent()
+      const removed = parseAgentJson(addon.unregisterAgent())
+      if (removed?.error) {
+        console.error('Finder Sync agent unregister failed', removed.error)
+        result = removed
+        return { ok: false, error: removed.error }
+      }
+      return { ok: true }
     },
     register() {
       result = parseAgentJson(addon.registerAgent())
@@ -1384,24 +1503,44 @@ function applyFinderSyncAgentRegistration(addon, { surface = false } = {}) {
     result.status !== 'enabled' &&
     result.status !== 'unsupported'
   ) {
-    dialog.showErrorBox('Finder menu', `${result.error}\n\n${FINDER_SYNC_AGENT_DISABLED}`)
+    dialog.showErrorBox('Finder menu', `${result.error}\n\n${finderSyncAgentDisabledMessage(currentBundle)}`)
   }
   return result
 }
 
 function reportFinderSyncAgentStatus() {
-  let line = 'finder-sync-agent-status {"status":"unavailable","error":"Finder Sync receiver is not loaded."}\n'
+  let report = {
+    line: 'finder-sync-agent-status {"status":"unavailable","error":"Finder Sync agent status failed."}\n',
+    exitCode: 1,
+  }
   try {
-    const addon = require('./finder-sync-receiver.node')
-    applyFinderSyncAgentRegistration(addon, { surface: false })
-    const status = addon.agentStatus()
-    line = `finder-sync-agent-status ${status}\n`
+    let addon = null
+    try {
+      addon = require('./finder-sync-receiver.node')
+    } catch {
+      addon = null
+    }
+    report = readFinderSyncAgentStatus({
+      agentStatus: addon && typeof addon.agentStatus === 'function' ? () => addon.agentStatus() : undefined,
+    })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    line = `finder-sync-agent-status ${JSON.stringify({ status: 'unavailable', error: message })}\n`
+    report = {
+      line: `finder-sync-agent-status ${JSON.stringify({ status: 'unavailable', error: message })}\n`,
+      exitCode: 1,
+    }
   }
-  fs.writeSync(1, line)
-  app.exit(line.includes('"status":"enabled"') ? 0 : 1)
+  try {
+    fs.writeSync(1, report.line)
+  } catch {
+    // stdout is already gone.
+  }
+  try {
+    app.exit(report.exitCode)
+  } catch {
+    // app.exit can throw before ready.
+  }
+  process.exit(report.exitCode)
 }
 
 function registerFinderSyncReceiver({ surface = false, registerAgent = true } = {}) {
@@ -1420,7 +1559,10 @@ function registerFinderSyncReceiver({ surface = false, registerAgent = true } = 
       const action = finderSyncWireAction(payload?.action)
       if (!action) {
         console.error('Finder Sync handoff refused', 'action')
-        dialog.showErrorBox('Install', 'Font Buttler could not read that Finder selection. Use Services (right-click > Services > Install).')
+        dialog.showErrorBox(
+          'Install',
+          `${finderSyncProductDisplayName(currentFinderSyncBundle())} could not read that Finder selection. Use Services (right-click > Services > Install).`,
+        )
         return
       }
       if (payload?.overflow === 'files') {
@@ -2610,10 +2752,14 @@ function buildAppMenu() {
   ])
 }
 
-if (process.argv.includes('--finder-sync-agent-status')) {
-  app.whenReady().then(() => {
-    reportFinderSyncAgentStatus()
-  })
+let receiverOnly = false
+
+if (finderSyncAgentStatusOnly) {
+  // Synchronous. Waiting for the app to become ready creates the default
+  // userData directory (~/Library/Application Support/Cuttler or Font
+  // Buttler Test) before this process can exit. The report uses no app
+  // or BrowserWindow API.
+  reportFinderSyncAgentStatus()
 } else {
 // Electron's lock follows userData, which Cuttler and the installed Font
 // Buttler.app share. A second copy of this exact binary quits. A newer binary
@@ -2656,7 +2802,7 @@ const launchMode = sharedLibraryLaunchMode({
   sameExecutableHeld: instance.held,
   sharedLockHeld: !gotLock,
 })
-const receiverOnly = launchMode === 'receiver'
+receiverOnly = launchMode === 'receiver'
 if (launchMode === 'quit') {
   app.quit()
 } else {
@@ -2796,16 +2942,25 @@ if (launchMode === 'quit') {
       apiChild = child
       let settled = false
       let buffer = ''
+      let startupStderr = ''
 
       function finish(error, info) {
         if (settled) return
         settled = true
         if (error) {
+          if (error.code !== 'EADDRINUSE' && startupStderr) {
+            logDebugMultiline('api-stderr', startupStderr)
+            console.error(startupStderr.trimEnd())
+          }
           error.tail = buffer.slice(-4000)
           child.kill()
           apiChild = null
           reject(error)
           return
+        }
+        if (startupStderr) {
+          logDebugMultiline('api-stderr', startupStderr)
+          console.error(startupStderr.trimEnd())
         }
         resolve(info)
       }
@@ -2846,8 +3001,12 @@ if (launchMode === 'quit') {
         const text = String(chunk)
         buffer += text
         apiWorkerLogTail = buffer.slice(-8000)
-        logDebugMultiline('api-stderr', text)
         if (buffer.length > 64_000) buffer = buffer.slice(-32_000)
+        if (!settled) {
+          startupStderr += text
+          return
+        }
+        logDebugMultiline('api-stderr', text)
         console.error(text.trimEnd())
       })
     })
@@ -2871,28 +3030,38 @@ if (launchMode === 'quit') {
       throw new Error('Packaged API worker is missing (electron/server.bundle.mjs).')
     }
     const preferred = Number(new URL(API).port || DEFAULT_API_PORT)
-    let lastError
-    for (let port = preferred; port < preferred + 20; port += 1) {
-      try {
-        const info = await spawnApiWorker({ serverPath, staticDir, port })
-        API = `http://127.0.0.1:${info.port}`
-        publishApiEndpoint(API)
-        if (info.token) {
-          apiToken = info.token
-        }
-        if (!process.env.FONT_BUTLER_UI && !process.env.FONTCASE_UI) {
-          UI = API
-        }
-        return
-      } catch (error) {
-        lastError = error
-        if (error && typeof error === 'object' && 'code' in error && error.code === 'EADDRINUSE') {
-          continue
-        }
-        throw error
+    let loggedPortFallback = false
+    const logPortFallbackOnce = (portInUse) => {
+      if (loggedPortFallback) return
+      loggedPortFallback = true
+      const message = `Cuttler API port ${portInUse} is already in use; falling back to an available port.`
+      console.warn(message)
+      logDebug('bootstrap', message)
+    }
+    const resolved = await resolvePackagedApiPort({
+      preferredPort: preferred,
+      onFallback: (portInUse) => logPortFallbackOnce(portInUse),
+    })
+    const applyWorkerInfo = (info) => {
+      API = `http://127.0.0.1:${info.port}`
+      publishApiEndpoint(API)
+      if (info.token) {
+        apiToken = info.token
+      }
+      if (!process.env.FONT_BUTLER_UI && !process.env.FONTCASE_UI) {
+        UI = API
       }
     }
-    throw lastError
+    try {
+      applyWorkerInfo(await spawnApiWorker({ serverPath, staticDir, port: resolved.port }))
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'EADDRINUSE') {
+        logPortFallbackOnce(resolved.port)
+        applyWorkerInfo(await spawnApiWorker({ serverPath, staticDir, port: 0 }))
+        return
+      }
+      throw error
+    }
   }
 
   async function bootstrapApi(options = {}) {
@@ -3017,7 +3186,6 @@ if (launchMode === 'quit') {
       return
     }
     const bootstrapOk = await bootstrapApi()
-    consumeFinderSyncPendingErrors()
     ensureTray()
     if (bootstrapOk) {
       startMainUiAfterBootstrap()
@@ -3028,6 +3196,9 @@ if (launchMode === 'quit') {
         if (!isQuitting) void retailTick()
       }, RETAIL_TICK_MS)
     }
+    scheduleFinderSyncPendingErrorConsume()
+    const registrationHold = currentFinderSyncRegistrationHold()
+    if (registrationHold) logFinderSyncRegistrationHold(registrationHold)
     try {
       refreshFinderSyncRegistration({
         platform: process.platform,
@@ -3035,6 +3206,7 @@ if (launchMode === 'quit') {
         appPath: outermostAppBundle(process.execPath),
         testFeed: runningTestFeed(),
         spawnSync,
+        hold: registrationHold,
       })
     } catch (error) {
       console.error('Finder Sync registration was not refreshed', error)
@@ -3157,6 +3329,11 @@ ipcMain.handle('get-finder-sync-agent-status', () => {
 
 ipcMain.handle('set-finder-sync-agent-enabled', (_event, enabled) => {
   if (process.platform !== 'darwin') return false
+  const hold = currentFinderSyncRegistrationHold()
+  if (hold) {
+    logFinderSyncRegistrationHold(hold)
+    return false
+  }
   const addon = loadFinderSyncReceiver()
   if (!addon) return false
   const next = enabled === true
@@ -3179,14 +3356,15 @@ ipcMain.handle('set-finder-sync-agent-enabled', (_event, enabled) => {
 
 ipcMain.handle('open-finder-sync-login-items', () => {
   if (process.platform !== 'darwin') return false
+  const disabledMessage = finderSyncAgentDisabledMessage(currentFinderSyncBundle())
   const addon = loadFinderSyncReceiver()
   if (!addon?.openLoginItems) {
-    dialog.showErrorBox('Finder menu', FINDER_SYNC_AGENT_DISABLED)
+    dialog.showErrorBox('Finder menu', disabledMessage)
     return false
   }
   const opened = parseAgentJson(addon.openLoginItems())
   if (opened.ok !== true) {
-    dialog.showErrorBox('Finder menu', opened.error || FINDER_SYNC_AGENT_DISABLED)
+    dialog.showErrorBox('Finder menu', opened.error || disabledMessage)
     return false
   }
   return true

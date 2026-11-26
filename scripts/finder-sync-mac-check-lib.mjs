@@ -2,6 +2,7 @@
  * Pure checks for scripts/finder-sync-mac-check.mjs.
  * Parsing and classification run on Linux. The command itself is macOS-only.
  */
+import { realpathSync } from 'node:fs'
 import path from 'node:path'
 import {
   APP_PRODUCT_BUNDLE,
@@ -12,12 +13,14 @@ import {
 import {
   FINDER_SYNC_MAX_BYTES,
   FINDER_SYNC_MAX_FILES,
+  FINDER_SYNC_PRODUCT_EXECUTABLES,
   FINDER_SYNC_TOO_LARGE,
   FINDER_SYNC_TOO_MANY_FILES,
   FINDER_SYNC_TREE_TOO_DEEP,
   FINDER_SYNC_TEAM_ID,
   finderSyncAgentBundleId,
   finderSyncAppGroup,
+  finderSyncMachServiceSuffix,
   validateFinderSyncSelection,
 } from '../electron/finder-sync.mjs'
 import { DEVELOPER_ID_IDENTITY } from './mac-signing.mjs'
@@ -69,6 +72,7 @@ export const AUTOMATED_CHECKS = [
   { id: 'agent-status', title: 'SMAppService status from --finder-sync-agent-status' },
   { id: 'app-entitlements', title: 'app entitlements: allow-jit, apple-events, and the team group' },
   { id: 'appex-group', title: 'appex entitlements use this build’s team-prefixed group' },
+  { id: 'mach-service-suffix', title: 'Mach service is <app-group>.<suffix>, in the appex and the LaunchAgent' },
   { id: 'helper-runtime', title: 'helper has the hardened runtime and no allow-jit' },
   { id: 'helper-identifier', title: 'helper identifier matches this build' },
   { id: 'spctl-app', title: 'spctl reports Notarized Developer ID for the app' },
@@ -93,9 +97,10 @@ export const AUTOMATED_CHECKS = [
 export const MANUAL_MAC_CHECKS = [
   {
     id: 'menu-roots',
-    action: 'Right-click a font in your home folder, in /Users/Shared, and on a volume under /Volumes.',
+    action:
+      'Right-click a font in your home folder, in /Users/Shared, and on a mounted disk image, including one Finder hides.',
     expect:
-      'Install and Install as… appear, and Finder does not crash. They do not come from monitoring /Library/Fonts.',
+      'Install and Install as… appear on the disk image itself, and Finder does not crash. They do not come from monitoring /Library/Fonts.',
   },
   {
     id: 'file-provider',
@@ -145,12 +150,16 @@ export function linuxRefusalMessage() {
 }
 
 export function parseMacCheckArgs(argv) {
-  const args = { app: '', dmg: '', zip: '', json: false, error: '' }
+  const args = { app: '', dmg: '', zip: '', json: false, realHome: false, error: '' }
   const rest = [...argv]
   while (rest.length) {
     const token = rest.shift()
     if (token === '--json') {
       args.json = true
+      continue
+    }
+    if (token === '--real-home') {
+      args.realHome = true
       continue
     }
     if (token === '--dmg' || token === '--zip') {
@@ -174,6 +183,162 @@ export function parseMacCheckArgs(argv) {
   }
   if (!args.app) args.error = 'Pass the path to a signed Font Buttler.app.'
   return args
+}
+
+export function parseRoundtripArgs(argv) {
+  const args = { app: '', realHome: false, error: '' }
+  const rest = [...argv]
+  while (rest.length) {
+    const token = rest.shift()
+    if (token === '--real-home') {
+      args.realHome = true
+      continue
+    }
+    if (token.startsWith('--')) {
+      args.error = `Unknown option ${token}.`
+      return args
+    }
+    if (args.app) {
+      args.error = 'Pass one app path.'
+      return args
+    }
+    args.app = token
+  }
+  return args
+}
+
+/**
+ * Environment for launching the Font Buttler binary from the Mac checks.
+ * The default HOME and FONT_BUTLER_DATA are a throwaway directory. The real
+ * HOME is copied through only when `realHome` is set.
+ */
+export function finderSyncAppLaunchEnv({ realHome = false, env = process.env, tempHome = '', home = env?.HOME ?? '' } = {}) {
+  if (realHome === true) {
+    return {
+      env: { ...env },
+      tempHome: '',
+      warning: `WARNING: launching the app with the real HOME${home ? ` (${home})` : ''}. This can read and write the user's library.`,
+    }
+  }
+  if (!tempHome) throw new Error('A throwaway HOME is required unless --real-home is set.')
+  return {
+    env: { ...env, HOME: tempHome, FONT_BUTLER_DATA: path.join(tempHome, 'data') },
+    tempHome,
+    warning: '',
+  }
+}
+
+const PRODUCT_APP_NAMES = ['Font Buttler Test.app', 'Font Buttler.app', 'Cuttler.app']
+
+/**
+ * Resolve a bundle path. realpath collapses /tmp and /private/tmp. A path
+ * that is not on disk yet falls back to path.resolve.
+ */
+export function normalizeBundlePath(filePath, { realpath = realpathSync } = {}) {
+  if (typeof filePath !== 'string') return ''
+  const trimmed = filePath.trim().replace(/\/+$/, '')
+  if (!trimmed.startsWith('/')) return ''
+  const resolved = path.resolve(trimmed)
+  try {
+    return realpath(resolved)
+  } catch {
+    return resolved
+  }
+}
+
+/**
+ * Process listing for the roundtrip. `-ww` is required: with no TTY, macOS
+ * ps clips to 79 columns, which cuts a Helper path and a long Font Buttler
+ * Test path before the matcher can see the end.
+ */
+export const FINDER_SYNC_PROCESS_PROBE_ARGV = Object.freeze(['ps', '-axwwo', 'pid=,comm='])
+
+/**
+ * Product names whose executable path is in that ps listing. `comm` is the
+ * full path. Longer names are tried first.
+ */
+export function productExecutableFromCommand(command) {
+  const text = String(command ?? '')
+  const names = [...FINDER_SYNC_PRODUCT_EXECUTABLES].sort((a, b) => b.length - a.length)
+  for (const name of names) {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const pattern = new RegExp(
+      `/${escaped}\\.app/Contents/(?:MacOS/${escaped}(?:\\s|$)|Frameworks/${escaped} Helper[^/]*\\.app/)`,
+    )
+    if (pattern.test(text)) return name
+  }
+  return ''
+}
+
+export function productExecutablesFromProcessList(output) {
+  const found = []
+  for (const line of String(output ?? '').split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    const match = trimmed.match(/^\d+\s+(.*)$/)
+    const command = match ? match[1].trim() : trimmed
+    const name = productExecutableFromCommand(command)
+    if (name && !found.includes(name)) found.push(name)
+  }
+  return found
+}
+
+/**
+ * First product `.app` path in `launchctl print` or a BTM dump. The match
+ * stops at the bundle, so a LaunchAgent path inside Contents still yields
+ * the app under test.
+ */
+export function bundleFromServiceListing(text) {
+  const source = String(text ?? '')
+  let best = ''
+  for (const name of PRODUCT_APP_NAMES) {
+    const needle = `/${name}`
+    let from = 0
+    while (from < source.length) {
+      const at = source.indexOf(needle, from)
+      if (at < 0) break
+      const end = at + needle.length
+      let begin = at
+      while (begin > 0 && !/[\s"'=]/.test(source[begin - 1])) begin -= 1
+      const raw = source.slice(begin, end)
+      const pathStart = raw.startsWith('file://') ? raw.indexOf('/', 'file://'.length) : raw.startsWith('/') ? 0 : -1
+      const candidate = pathStart >= 0 ? raw.slice(pathStart) : ''
+      if (candidate.startsWith('/') && (!best || candidate.length < best.length)) best = candidate
+      from = end
+    }
+  }
+  return best
+}
+
+/**
+ * Empty when the roundtrip may launch. A running Cuttler or Font Buttler
+ * process, or a LaunchAgent registered for a different bundle, is refused.
+ * A throwaway HOME does not isolate SMAppService, the app group, or the
+ * per-user socket; only a separate macOS user account does.
+ */
+export function finderSyncRoundtripBlockReason({
+  runningExecutables = [],
+  registrationBundle = '',
+  appBundle = '',
+  probeError = '',
+} = {}) {
+  if (typeof probeError === 'string' && probeError.trim()) {
+    return `Refusing to start: ${probeError.trim()} Only a separate macOS user account isolates registration.`
+  }
+  const running = []
+  for (const name of runningExecutables) {
+    const trimmed = String(name ?? '').trim()
+    if (FINDER_SYNC_PRODUCT_EXECUTABLES.includes(trimmed) && !running.includes(trimmed)) running.push(trimmed)
+  }
+  if (running.length) {
+    return `Refusing to start: ${running.join(', ')} is already running. A throwaway HOME does not isolate SMAppService, the app group, or the per-user socket. Use a separate macOS user account.`
+  }
+  const registered = normalizeBundlePath(registrationBundle)
+  const underTest = normalizeBundlePath(appBundle)
+  if (registered && underTest && registered !== underTest) {
+    return `Refusing to start: the LaunchAgent for this label is registered at ${registered}, not ${underTest}. Only a separate macOS user account isolates registration.`
+  }
+  return ''
 }
 
 export function parseAgentStatusOutput(text) {
@@ -490,9 +655,17 @@ export function buildChecklist(observations = {}) {
   ]
 
   const status = observations.agentStatus
-  const known = new Set(['enabled', 'requires-approval', 'not-found'])
-  if (status && known.has(status.status)) {
+  const registered = new Set(['enabled', 'requires-approval'])
+  const unregistered = new Set(['not-registered', 'not-found'])
+  if (status && registered.has(status.status)) {
     results.push(pass('agent-status', `SMAppService status is ${status.status}.`))
+  } else if (status && unregistered.has(status.status)) {
+    results.push(
+      fail(
+        'agent-status',
+        `This copy is not the registered login item (SMAppService status ${status.status}). --finder-sync-agent-status does not register or unregister it.`,
+      ),
+    )
   } else {
     results.push(fail('agent-status', observations.agentStatusError || `Unreadable agent status ${status?.status ?? ''}.`.trim()))
   }
@@ -511,6 +684,22 @@ export function buildChecklist(observations = {}) {
     appexGroups.length === 1 && appexGroups[0] === group
       ? pass('appex-group', group)
       : fail('appex-group', `Appex group is ${appexGroups[0] || 'missing'}, expected ${group}.`),
+  )
+  const appexGroup = appexGroups.length === 1 ? appexGroups[0] : ''
+  const machService = String(observations.appexMachService ?? '')
+  const launchServices = Array.isArray(observations.launchAgentServices) ? observations.launchAgentServices : []
+  const machSuffix = finderSyncMachServiceSuffix(machService, appexGroup)
+  const machOk = machSuffix.length > 0 && launchServices.length === 1 && launchServices[0] === machService
+  results.push(
+    machOk
+      ? pass(
+          'mach-service-suffix',
+          `${machService} is ${appexGroup}.${machSuffix}. A sandboxed mach-lookup is not run: the ping client is unsandboxed.`,
+        )
+      : fail(
+          'mach-service-suffix',
+          `Mach service ${machService || 'missing'} must be ${appexGroup || 'the appex group'} plus a non-empty suffix, and the LaunchAgent must vend that same name.`,
+        ),
   )
   const helperRuntimeOk = hardenedRuntime(helperDisplay) && !entitlementsHaveKey(helperEntitlements, 'com.apple.security.cs.allow-jit')
   results.push(

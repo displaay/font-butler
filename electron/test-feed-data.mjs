@@ -4,6 +4,50 @@ import { outermostAppBundle, readAppTestFeedMarker } from './app-update-install.
 /** userData directory name for a packaged build stamped fontButlerTestFeed. */
 export const TEST_FEED_USER_DATA_DIR = 'Font Buttler Test'
 
+/** Chromium files sit beside the library, not inside it. */
+export const ELECTRON_USER_DATA_DIR = 'electron-user-data'
+
+/**
+ * `FONT_BUTLER_DATA` wins over `FONTCASE_DATA`. Empty and whitespace-only
+ * values are unset. This is the value from before test-feed isolation fills
+ * the variable in.
+ */
+export function explicitFontDataOverride(env = {}) {
+  for (const value of [env.FONT_BUTLER_DATA, env.FONTCASE_DATA]) {
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
+}
+
+/** Electron userData for an explicit data override. Empty when there is none. */
+export function electronUserDataForDataOverride(dataDir) {
+  const trimmed = typeof dataDir === 'string' ? dataDir.trim() : ''
+  if (!trimmed) return ''
+  return path.join(path.resolve(trimmed), ELECTRON_USER_DATA_DIR)
+}
+
+/**
+ * Where this launch stores Electron userData. An explicit data override wins
+ * for both Cuttler and a marked test build. Otherwise a test build keeps its
+ * own directory, and Cuttler uses the migration root or Application Support.
+ */
+export function userDataDirForLaunch({
+  explicitDataOverride = '',
+  testFeedUserData = '',
+  runningRoot = '',
+  stalledRoot = '',
+  appSupportDir = '',
+  appFolderName = '',
+} = {}) {
+  const override = electronUserDataForDataOverride(explicitDataOverride)
+  if (override) return override
+  if (testFeedUserData) return testFeedUserData
+  if (runningRoot) return runningRoot
+  if (stalledRoot) return stalledRoot
+  if (appSupportDir && appFolderName) return path.join(appSupportDir, appFolderName)
+  return ''
+}
+
 /**
  * Isolate a marked test build from the real library.
  * Unmarked builds return isolate: false and must not change paths or env.
