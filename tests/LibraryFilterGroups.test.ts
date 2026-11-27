@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { after, describe, test } from 'node:test'
 import { Window } from 'happy-dom'
 import type { LibraryFilter } from '../src/lib/types.ts'
+import { LIBRARY_FILTER_GROUPS_KEY } from '../shared/library-filter-groups.ts'
 
 const FILTERS: LibraryFilter[] = [
   'installed',
@@ -31,6 +32,14 @@ const globals = {
   navigator: dom.navigator,
   localStorage: dom.localStorage,
   MutationObserver: dom.MutationObserver,
+  Event: dom.Event,
+  CustomEvent: dom.CustomEvent,
+  FocusEvent: dom.FocusEvent,
+  KeyboardEvent: dom.KeyboardEvent,
+  MouseEvent: dom.MouseEvent,
+  DragEvent: dom.DragEvent,
+  PointerEvent: dom.PointerEvent,
+  NodeFilter: dom.NodeFilter,
   getComputedStyle: dom.getComputedStyle.bind(dom),
   requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
   cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
@@ -38,6 +47,79 @@ const globals = {
 }
 for (const [key, value] of Object.entries(globals)) {
   Object.defineProperty(globalThis, key, { value, configurable: true, writable: true })
+}
+
+const keepNodeBuiltins = new Set([
+  'AbortController',
+  'AbortSignal',
+  'Array',
+  'ArrayBuffer',
+  'Blob',
+  'Boolean',
+  'BroadcastChannel',
+  'Buffer',
+  'DataView',
+  'Date',
+  'Error',
+  'EvalError',
+  'File',
+  'Float32Array',
+  'Float64Array',
+  'FormData',
+  'Function',
+  'Headers',
+  'Infinity',
+  'Int16Array',
+  'Int32Array',
+  'Int8Array',
+  'Intl',
+  'JSON',
+  'Map',
+  'Math',
+  'MessageChannel',
+  'MessagePort',
+  'Number',
+  'Object',
+  'Promise',
+  'RangeError',
+  'ReadableStream',
+  'ReferenceError',
+  'RegExp',
+  'Request',
+  'Response',
+  'Set',
+  'String',
+  'Symbol',
+  'SyntaxError',
+  'TextDecoder',
+  'TextEncoder',
+  'TransformStream',
+  'TypeError',
+  'URIError',
+  'URL',
+  'URLSearchParams',
+  'Uint16Array',
+  'Uint32Array',
+  'Uint8Array',
+  'Uint8ClampedArray',
+  'WeakMap',
+  'WeakSet',
+  'WritableStream',
+])
+for (const key of new Set([
+  ...Object.getOwnPropertyNames(dom),
+  ...Object.getOwnPropertyNames(Object.getPrototypeOf(dom)),
+])) {
+  if (!/^[A-Z]/.test(key) || keepNodeBuiltins.has(key)) continue
+  try {
+    Object.defineProperty(globalThis, key, {
+      value: (dom as unknown as Record<string, unknown>)[key],
+      configurable: true,
+      writable: true,
+    })
+  } catch {
+    // Some window accessors are not writable from Node.
+  }
 }
 
 class ResizeObserverStub {
@@ -314,6 +396,277 @@ test('filter group headings use capitalize styling', async () => {
   await React.act(async () => {
     root.unmount()
   })
+})
+
+function groupOrder(): string[] {
+  return [...document.querySelectorAll('[data-filter-group]')].map(
+    (element) => element.getAttribute('data-filter-group') ?? '',
+  )
+}
+
+function storedGroupIds(): string[] {
+  const raw = localStorage.getItem(LIBRARY_FILTER_GROUPS_KEY)
+  if (!raw) return []
+  const parsed = JSON.parse(raw) as { id: string; visible: boolean }[]
+  return parsed.map((group) => `${group.id}:${group.visible ? 'shown' : 'hidden'}`)
+}
+
+function dispatchDrag(target: Element, type: string, clientY = 0) {
+  const event = new dom.DragEvent(type, {
+    bubbles: true,
+    cancelable: true,
+  })
+  Object.defineProperty(event, 'clientX', { value: 12 })
+  Object.defineProperty(event, 'clientY', { value: clientY })
+  const store = new Map<string, string>()
+  Object.defineProperty(event, 'dataTransfer', {
+    value: {
+      effectAllowed: 'all',
+      dropEffect: 'none',
+      types: ['text/plain'],
+      setData(kind: string, value: string) {
+        store.set(kind, value)
+      },
+      getData(kind: string) {
+        return store.get(kind) ?? ''
+      },
+    },
+  })
+  target.dispatchEvent(event)
+}
+
+function stubGroupRect(id: string, top: number, height: number) {
+  const group = document.querySelector(`[data-filter-group="${id}"]`)
+  assert.ok(group, `expected filter group ${id}`)
+  Object.defineProperty(group, 'getBoundingClientRect', {
+    configurable: true,
+    value: () =>
+      ({
+        x: 0,
+        y: top,
+        top,
+        left: 0,
+        right: 240,
+        bottom: top + height,
+        width: 240,
+        height,
+        toJSON() {
+          return {}
+        },
+      }) as DOMRect,
+  })
+  return group
+}
+
+test('dragging a filter heading reorders visible groups and keeps hidden ones', async () => {
+  localStorage.setItem(
+    LIBRARY_FILTER_GROUPS_KEY,
+    JSON.stringify([
+      { id: 'status', visible: true },
+      { id: 'classification', visible: false },
+      { id: 'type', visible: true },
+      { id: 'source', visible: true },
+      { id: 'destination', visible: true },
+      { id: 'format', visible: true },
+      { id: 'foundry', visible: false },
+    ]),
+  )
+  const host = document.createElement('div')
+  document.body.append(host)
+  const root = createRoot(host)
+
+  await React.act(async () => {
+    root.render(React.createElement(Harness, { initial: [] }))
+  })
+
+  const statusHeading = document.querySelector('button[aria-label="Hide status"]')
+  const installed = buttonByLabel('Installed')
+  assert.ok(statusHeading, 'expected the Status heading')
+  assert.equal(statusHeading.getAttribute('draggable'), 'true')
+  assert.match(statusHeading.className, /cursor-grab/)
+  assert.match(statusHeading.className, /active:cursor-grabbing/)
+  assert.equal(statusHeading.getAttribute('title'), 'Drag to reorder Status')
+  assert.equal(installed?.getAttribute('draggable'), null)
+  assert.deepEqual(groupOrder(), ['status', 'type', 'source', 'destination', 'format'])
+
+  await React.act(async () => {
+    installed!.click()
+  })
+  assert.deepEqual(pressedFilters(), ['Filter installed'])
+  assert.deepEqual(groupOrder(), ['status', 'type', 'source', 'destination', 'format'])
+
+  await React.act(async () => {
+    statusHeading.click()
+  })
+  assert.equal(document.querySelector('button[aria-label="Show status"]') != null, true)
+  assert.equal(buttonByLabel('Installed'), undefined)
+  const showStatus = document.querySelector('button[aria-label="Show status"]')
+  assert.ok(showStatus, 'expected Status to collapse')
+  await React.act(async () => {
+    showStatus.click()
+  })
+  assert.ok(buttonByLabel('Installed'), 'expected Status to expand again without reordering')
+
+  const formatHeading = document.querySelector('button[aria-label="Hide format"]')
+  assert.ok(formatHeading, 'expected the Format heading')
+
+  await React.act(async () => {
+    dispatchDrag(formatHeading, 'dragstart')
+  })
+  assert.equal(document.querySelector('[data-filter-group="format"]')?.getAttribute('data-dragging'), 'true')
+  assert.match(document.querySelector('[data-filter-group="format"]')?.className ?? '', /opacity-60/)
+  const statusGroup = stubGroupRect('status', 0, 100)
+
+  await React.act(async () => {
+    dispatchDrag(statusGroup, 'dragover', 20)
+  })
+  assert.equal(statusGroup.getAttribute('data-drop-line'), 'before')
+  assert.equal(statusGroup.querySelector('span[aria-hidden]')?.className.includes('top-0'), true)
+
+  const statusGroupLower = stubGroupRect('status', 0, 100)
+  await React.act(async () => {
+    dispatchDrag(statusGroupLower, 'dragover', 80)
+  })
+  assert.equal(statusGroupLower.getAttribute('data-drop-line'), 'after')
+  assert.equal(statusGroupLower.querySelector('span[aria-hidden]')?.className.includes('bottom-0'), true)
+
+  const statusGroupDrop = stubGroupRect('status', 0, 100)
+  await React.act(async () => {
+    dispatchDrag(statusGroupDrop, 'drop', 20)
+    dispatchDrag(formatHeading, 'dragend')
+  })
+  assert.deepEqual(groupOrder(), ['format', 'status', 'type', 'source', 'destination'])
+  assert.equal(document.querySelector('[data-dragging="true"]'), null)
+  assert.equal(document.querySelector('[data-drop-line]'), null)
+  assert.deepEqual(storedGroupIds(), [
+    'format:shown',
+    'classification:hidden',
+    'status:shown',
+    'type:shown',
+    'source:shown',
+    'destination:shown',
+    'foundry:hidden',
+  ])
+  assert.deepEqual(pressedFilters(), ['Filter installed'])
+
+  await React.act(async () => {
+    buttonByLabel('Edit filters')!.click()
+  })
+  const dialogLabels = [...document.querySelectorAll('li span')]
+    .map((span) => (span.textContent ?? '').trim())
+    .filter(Boolean)
+  assert.deepEqual(dialogLabels, [
+    'Format',
+    'Classification',
+    'Status',
+    'Type',
+    'Source',
+    'Destination',
+    'Foundries',
+  ])
+
+  await React.act(async () => {
+    root.unmount()
+  })
+  localStorage.removeItem(LIBRARY_FILTER_GROUPS_KEY)
+})
+
+test('a click, a self-drop, Escape, and a drop outside do not reorder filter groups', async () => {
+  localStorage.removeItem(LIBRARY_FILTER_GROUPS_KEY)
+  const host = document.createElement('div')
+  document.body.append(host)
+  const root = createRoot(host)
+
+  await React.act(async () => {
+    root.render(React.createElement(Harness, { initial: [] }))
+  })
+  const initial = groupOrder()
+  const statusHeading = document.querySelector('button[aria-label="Hide status"]')
+  const typeHeading = document.querySelector('button[aria-label="Hide type"]')
+  assert.ok(statusHeading && typeHeading)
+  const statusGroup = stubGroupRect('status', 0, 100)
+
+  await React.act(async () => {
+    statusHeading.click()
+  })
+  assert.equal(localStorage.getItem(LIBRARY_FILTER_GROUPS_KEY), null)
+  await React.act(async () => {
+    document.querySelector('button[aria-label="Show status"]')!.click()
+  })
+
+  await React.act(async () => {
+    dispatchDrag(statusHeading, 'dragstart')
+    dispatchDrag(statusGroup, 'drop', 10)
+    dispatchDrag(statusHeading, 'dragend')
+  })
+  assert.deepEqual(groupOrder(), initial)
+  assert.equal(localStorage.getItem(LIBRARY_FILTER_GROUPS_KEY), null)
+
+  await React.act(async () => {
+    dispatchDrag(statusHeading, 'dragstart')
+  })
+  await React.act(async () => {
+    window.dispatchEvent(new dom.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+  })
+  assert.equal(document.querySelector('[data-dragging="true"]'), null)
+  await React.act(async () => {
+    dispatchDrag(stubGroupRect('type', 120, 80), 'drop', 10)
+    dispatchDrag(statusHeading, 'dragend')
+  })
+  assert.deepEqual(groupOrder(), initial)
+
+  await React.act(async () => {
+    dispatchDrag(typeHeading, 'dragstart')
+    dispatchDrag(typeHeading, 'dragend')
+  })
+  assert.deepEqual(groupOrder(), initial)
+  assert.equal(localStorage.getItem(LIBRARY_FILTER_GROUPS_KEY), null)
+
+  await React.act(async () => {
+    root.unmount()
+  })
+})
+
+test('Alt+Arrow moves a filter group and stays in sync with Edit filters', async () => {
+  localStorage.removeItem(LIBRARY_FILTER_GROUPS_KEY)
+  const host = document.createElement('div')
+  document.body.append(host)
+  const root = createRoot(host)
+
+  await React.act(async () => {
+    root.render(React.createElement(Harness, { initial: [] }))
+  })
+  const statusHeading = document.querySelector('button[aria-label="Hide status"]')
+  assert.ok(statusHeading)
+  assert.equal(statusHeading.getAttribute('aria-keyshortcuts'), 'Alt+ArrowUp Alt+ArrowDown')
+
+  await React.act(async () => {
+    statusHeading.dispatchEvent(
+      new dom.KeyboardEvent('keydown', { key: 'ArrowDown', altKey: true, bubbles: true, cancelable: true }),
+    )
+  })
+  assert.deepEqual(groupOrder(), ['type', 'status', 'source', 'destination', 'format'])
+  assert.deepEqual(storedGroupIds(), [
+    'type:shown',
+    'status:shown',
+    'source:shown',
+    'destination:shown',
+    'format:shown',
+    'classification:hidden',
+    'foundry:hidden',
+  ])
+
+  await React.act(async () => {
+    statusHeading.dispatchEvent(
+      new dom.KeyboardEvent('keydown', { key: 'ArrowUp', altKey: true, bubbles: true, cancelable: true }),
+    )
+  })
+  assert.deepEqual(groupOrder(), ['status', 'type', 'source', 'destination', 'format'])
+
+  await React.act(async () => {
+    root.unmount()
+  })
+  localStorage.removeItem(LIBRARY_FILTER_GROUPS_KEY)
 })
 
 test('classification stays hidden until Edit filters turns that group on', async () => {

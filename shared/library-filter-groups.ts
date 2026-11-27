@@ -94,6 +94,42 @@ export function moveLibraryFilterGroup(
   return next
 }
 
+/**
+ * Move one visible group before or after another visible group.
+ * Hidden groups stay in their original slots, so a sidebar reorder cannot
+ * drop them or slide them into a different place in the full order.
+ * Returns the same array when the drop is a no-op or the target is invalid.
+ */
+export function moveVisibleLibraryFilterGroup(
+  groups: readonly LibraryFilterGroupPref[],
+  fromId: string,
+  toId: string,
+  placement: 'before' | 'after',
+): LibraryFilterGroupPref[] {
+  if (placement !== 'before' && placement !== 'after') return groups as LibraryFilterGroupPref[]
+  if (!isLibraryFilterGroupId(fromId) || !isLibraryFilterGroupId(toId) || fromId === toId) {
+    return groups as LibraryFilterGroupPref[]
+  }
+  const visible = groups.filter((group) => group.visible)
+  const fromIndex = visible.findIndex((group) => group.id === fromId)
+  const toIndex = visible.findIndex((group) => group.id === toId)
+  if (fromIndex < 0 || toIndex < 0) return groups as LibraryFilterGroupPref[]
+
+  const nextVisible = visible.slice()
+  const [row] = nextVisible.splice(fromIndex, 1)
+  if (!row) return groups as LibraryFilterGroupPref[]
+  let insertAt = nextVisible.findIndex((group) => group.id === toId)
+  if (insertAt < 0) return groups as LibraryFilterGroupPref[]
+  if (placement === 'after') insertAt += 1
+  nextVisible.splice(insertAt, 0, row)
+  if (nextVisible.every((group, index) => group.id === visible[index]?.id)) {
+    return groups as LibraryFilterGroupPref[]
+  }
+
+  let cursor = 0
+  return groups.map((group) => (group.visible ? nextVisible[cursor++]! : group))
+}
+
 export function filterBelongsToGroup(filter: string, group: LibraryFilterGroupId): boolean {
   switch (group) {
     case 'status':
