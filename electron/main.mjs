@@ -412,6 +412,11 @@ function applyDockIcon() {
   if (process.platform !== 'darwin' || !app.dock) {
     return
   }
+  // Before the saved appIcon setting has loaded, keep the bundle's static
+  // icon.icns so the Dock does not flash the classic fallback on launch.
+  if (!appIconStyleLoaded) {
+    return
+  }
   const styled = path.join(iconPackDir(appIconStyle), 'app.png')
   const image = dockIconImage(styled) ?? dockIconImage(ICON_PATH)
   if (image) {
@@ -439,6 +444,7 @@ function hideDockIconIfNoAppWindowNeedsIt(closingWindow) {
 
 function applyAppIconSetting(style) {
   appIconStyle = parseAppIconStyle(style)
+  appIconStyleLoaded = true
   applyDockIcon()
   refreshTrayMenu()
 }
@@ -462,6 +468,8 @@ let catalogEntries = []
 let activityOperations = []
 let menuBarIconEnabled = true
 let appIconStyle = 'classic'
+/** False until applyAppIconSetting has loaded the saved appIcon from settings. */
+let appIconStyleLoaded = false
 let clearOfficeFontCacheEnabled = true
 let clearAdobeFontCacheEnabled = true
 let nativeNotificationsEnabled = false
