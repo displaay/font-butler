@@ -211,6 +211,42 @@ body {
   pointer-events: auto;
 }
 
+/* Side-by-side width. Below the md breakpoint the column stays full width. */
+@media (min-width: 48rem) {
+  .sidebar-column {
+    width: var(--sidebar-width, 14rem);
+    min-width: var(--sidebar-width, 14rem);
+    max-width: var(--sidebar-width, 14rem);
+    flex-basis: var(--sidebar-width, 14rem);
+    flex-shrink: 0;
+  }
+}
+
+/*
+  Radix sizes the scroll viewport's child as `display: table; min-width: 100%`.
+  That table grows with nowrap rows and with the vertical scrollbar gutter, and
+  the viewport's overflow-x clips the right edge. Count badges then disappear
+  under the main panel. A definite flex column keeps labels truncating inside
+  the column and the badges fully visible.
+*/
+.sidebar-column [data-radix-scroll-area-viewport] {
+  overflow-x: hidden !important;
+}
+
+.sidebar-column [data-radix-scroll-area-viewport] > div {
+  display: flex !important;
+  flex-direction: column !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+}
+
+html[data-sidebar-resizing],
+html[data-sidebar-resizing] body {
+  cursor: col-resize;
+  user-select: none;
+}
+
 .overlay-scroll-on-scroll .overlay-scroll-bar {
   opacity: 0;
   pointer-events: none;

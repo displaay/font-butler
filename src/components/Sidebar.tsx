@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties, type ReactNode } from 'react'
 import { AdobeLogo, TrialBadge } from '@/components/Badges'
 import {
   ALargeSmall,
@@ -72,6 +72,8 @@ import {
   shouldShowUpdatesTab,
 } from '@/lib/app-update'
 import { cn } from '@/lib/utils'
+import { SidebarResizeHandle } from '@/components/SidebarResizeHandle'
+import { useSidebarResize } from '@/components/useSidebarResize'
 import { watchFolderLabel, RETAIL_LIBRARY_FILTER, RETAIL_LIBRARY_LABEL, TEST_INSTALL_FILTER, TEST_INSTALL_LABEL } from '@/lib/watchFolders'
 import { isSmartProject } from '../../shared/smart-projects.ts'
 import type { FamilyTag, FamilyTagAssignment } from '../../shared/family-tags.ts'
@@ -174,7 +176,7 @@ function foundryFilterRows(
 
 function navButtonClass(active: boolean, extra?: string) {
   return cn(
-    'h-8 justify-start font-normal text-muted-foreground hover:bg-black/[0.05] dark:hover:bg-white/[0.08]',
+    'h-8 min-w-0 max-w-full justify-start font-normal text-muted-foreground hover:bg-black/[0.05] dark:hover:bg-white/[0.08] [&_svg]:shrink-0',
     active && 'bg-black/[0.05] font-medium text-foreground dark:bg-white/[0.08]',
     extra,
   )
@@ -218,7 +220,7 @@ export function LibraryFiltersPanel({
   }
 
   return (
-    <div className="flex w-full flex-col gap-0.5 md:mt-2 md:border-t md:pt-2">
+    <div className="flex w-full min-w-0 flex-col gap-0.5 md:mt-2 md:border-t md:pt-2">
       <div className="group/library-filters flex w-full min-h-6 items-center gap-0.5 px-1 pt-1">
         <button
           type="button"
@@ -341,7 +343,7 @@ export function LibraryFilterGroups({
   const foundryRows = foundryFilterRows(libraryFilterCounts, libraryFilters)
 
   return (
-    <div className="flex w-full flex-wrap gap-3 md:flex-col md:gap-2">
+    <div className="flex w-full min-w-0 flex-wrap gap-3 md:flex-col md:gap-2">
       {visibleGroups.map((pref) => {
         const defined = LIBRARY_FILTER_GROUPS.find((group) => group.id === pref.id)
         const headingText = defined?.heading ?? LIBRARY_FILTER_GROUP_LABELS[pref.id]
@@ -365,7 +367,7 @@ export function LibraryFilterGroups({
                 icon: Building2,
               }))
         return (
-          <div key={pref.id} className="flex w-full flex-col gap-0.5">
+          <div key={pref.id} className="flex w-full min-w-0 flex-col gap-0.5">
             <div className="group/filter-section flex w-full items-center gap-0.5 px-1 pt-1">
               <button
                 type="button"
@@ -408,8 +410,8 @@ export function LibraryFilterGroups({
                       onClick={() => toggleFilter(filter.id)}
                     >
                       <Icon className="size-3.5 opacity-70" />
-                      <span className="min-w-0 truncate">{filter.label}</span>
-                      <Badge className="ml-auto">{libraryFilterCounts[filter.id] ?? 0}</Badge>
+                      <span className="min-w-0 flex-1 truncate">{filter.label}</span>
+                      <Badge className="ml-auto shrink-0">{libraryFilterCounts[filter.id] ?? 0}</Badge>
                     </Button>
                   )
                 })
@@ -510,7 +512,7 @@ export function SidebarItem({
       <span className="min-w-0 truncate">{label}</span>
       {labelBadge}
       {showCount || hoverAction ? (
-        <span className="ml-auto inline-flex items-center gap-0.5">
+        <span className="ml-auto inline-flex shrink-0 items-center gap-0.5">
           {hoverAction ? (
             <span
               role="button"
@@ -719,6 +721,7 @@ export function Sidebar({
   appUpdateInstall?: { phase?: AppUpdateInstallPhase; percent?: number; error?: string } | null
   onInstallAppUpdate?: () => void
 }) {
+  const sidebarResize = useSidebarResize()
   const searchTags = useMemo(
     () => (tagDefinitions ?? []).map((tag) => ({ id: tag.id, name: tag.name })),
     [tagDefinitions],
@@ -887,7 +890,11 @@ export function Sidebar({
   }
 
   return (
-    <aside className="sidebar-column flex h-auto w-full shrink-0 flex-col border-b bg-sidebar text-sidebar-foreground md:h-full md:max-h-full md:w-56 md:border-r md:border-b-0">
+    <aside
+      className="sidebar-column relative flex h-auto w-full min-w-0 shrink-0 flex-col overflow-visible border-b bg-sidebar text-sidebar-foreground md:h-full md:max-h-full md:border-r md:border-b-0"
+      style={{ '--sidebar-width': `${sidebarResize.width}px` } as CSSProperties}
+    >
+      <div className="flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-x-hidden">
       {insetTrafficLights ? (
         <div className="app-region-drag hidden h-10 shrink-0 md:block" aria-hidden />
       ) : null}
@@ -903,8 +910,8 @@ export function Sidebar({
           onLibraryFiltersChange={onLibraryFiltersChange}
         />
       </div>
-      <ScrollArea className="overlay-scroll-hover min-h-0 flex-1" overlay>
-        <nav className="flex flex-row flex-wrap gap-0.5 px-3 pb-2 md:flex-col md:flex-nowrap">
+      <ScrollArea className="overlay-scroll-hover min-h-0 w-full min-w-0 max-w-full flex-1" overlay>
+        <nav className="flex min-w-0 max-w-full flex-row flex-wrap gap-0.5 px-3 pb-2 md:flex-col md:flex-nowrap">
         {TABS.filter(
           (item) =>
             item.id !== 'updates' ||
@@ -1044,7 +1051,7 @@ export function Sidebar({
           )
         })}
         {(onCreateProject || (projects && projects.length > 0)) && (
-          <div className="flex w-full flex-col gap-0.5 md:mt-2 md:border-t md:pt-2">
+          <div className="flex w-full min-w-0 flex-col gap-0.5 md:mt-2 md:border-t md:pt-2">
             <div className="group/projects flex w-full items-center gap-0.5 px-1 pt-1">
               <button
                 type="button"
@@ -1182,7 +1189,7 @@ export function Sidebar({
                     <Folder className="size-3.5 opacity-70" />
                   )}
                   {nameField}
-                  <Badge className="ml-auto">{memberCount}</Badge>
+                  <Badge className="ml-auto shrink-0">{memberCount}</Badge>
                 </>
               )
               return (
@@ -1302,7 +1309,7 @@ export function Sidebar({
           </div>
         )}
         {showSavedFilters && (
-          <div className="flex w-full flex-col gap-0.5 md:mt-2 md:border-t md:pt-2">
+          <div className="flex w-full min-w-0 flex-col gap-0.5 md:mt-2 md:border-t md:pt-2">
             <div className="group/filters flex w-full items-center gap-0.5 px-1 pt-1">
               <button
                 type="button"
@@ -1426,7 +1433,7 @@ export function Sidebar({
           </div>
         )}
         {tab === 'library' && (duplicatesCount ?? 0) > 0 && onOpenDuplicates ? (
-          <div className="flex w-full flex-col gap-0.5 md:mt-2 md:border-t md:pt-2">
+          <div className="flex w-full min-w-0 flex-col gap-0.5 md:mt-2 md:border-t md:pt-2">
             <Button
               type="button"
               size="default"
@@ -1436,7 +1443,7 @@ export function Sidebar({
             >
               <Copy className="size-3.5 opacity-70" />
               <span className="min-w-0 truncate">Duplicates</span>
-              <Badge className="ml-auto bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+              <Badge className="ml-auto shrink-0 bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200">
                 {duplicatesCount}
               </Badge>
             </Button>
@@ -1457,7 +1464,7 @@ export function Sidebar({
         ) : null}
       </nav>
       </ScrollArea>
-      <div className="border-t px-3 py-2">
+      <div className="min-w-0 border-t px-3 py-2">
         <div className="group/settings relative">
           <Button
             variant="ghost"
@@ -1505,6 +1512,16 @@ export function Sidebar({
           ) : null}
         </div>
       </div>
+      </div>
+      <SidebarResizeHandle
+        width={sidebarResize.width}
+        dragging={sidebarResize.dragging}
+        min={sidebarResize.bounds.min}
+        max={sidebarResize.bounds.max}
+        onPointerDown={sidebarResize.onPointerDown}
+        onDoubleClick={sidebarResize.reset}
+        onKeyDown={sidebarResize.onKeyDown}
+      />
     </aside>
   )
 }
