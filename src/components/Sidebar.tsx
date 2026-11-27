@@ -177,7 +177,7 @@ function foundryFilterRows(
 
 function navButtonClass(active: boolean, extra?: string) {
   return cn(
-    'h-8 min-w-0 max-w-full justify-start font-normal text-muted-foreground hover:bg-black/[0.05] dark:hover:bg-white/[0.08] [&_svg]:shrink-0',
+    'h-8 min-w-0 max-w-full justify-start text-left font-normal text-muted-foreground hover:bg-black/[0.05] dark:hover:bg-white/[0.08] [&_svg]:shrink-0',
     active && 'bg-black/[0.05] font-medium text-foreground dark:bg-white/[0.08]',
     extra,
   )
@@ -547,7 +547,7 @@ export function LibraryFilterGroups({
                       onClick={() => toggleFilter(filter.id)}
                     >
                       <Icon className="size-3.5 opacity-70" />
-                      <span className="min-w-0 flex-1 truncate">{filter.label}</span>
+                      <span className="min-w-0 flex-1 truncate text-left">{filter.label}</span>
                       <Badge className="ml-auto shrink-0">{libraryFilterCounts[filter.id] ?? 0}</Badge>
                     </Button>
                   )
