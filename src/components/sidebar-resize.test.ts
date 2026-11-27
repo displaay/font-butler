@@ -88,6 +88,10 @@ test('drag, keyboard, and double-click resize the sidebar and persist it', async
   assert.match(handle.className, /select-none/)
   assert.match(handle.className, /(?:^|\s)hidden(?:\s|$)/)
   assert.match(handle.className, /md:block/)
+  assert.match(handle.className, /-right-2/)
+  assert.match(handle.className, /(?:^|\s)w-2(?:\s|$)/)
+  assert.match(handle.className, /z-30/)
+  assert.doesNotMatch(handle.className, /(?:^|\s)right-0(?:\s|$)/)
   assert.equal(host.firstElementChild?.getAttribute('data-width'), String(SIDEBAR_DEFAULT_WIDTH))
 
   await act(async () => {
@@ -182,15 +186,23 @@ test('filter rows truncate labels and keep count badges from shrinking', async (
 test('sidebar column locks its width and stops the scroll viewport from growing', async () => {
   const css = await readFile(new URL('../index.css', import.meta.url), 'utf8')
   const sidebar = await readFile(new URL('./Sidebar.tsx', import.meta.url), 'utf8')
+  const handle = await readFile(new URL('./SidebarResizeHandle.tsx', import.meta.url), 'utf8')
   assert.match(css, /\.sidebar-column \[data-radix-scroll-area-viewport\] > div \{[\s\S]*min-width: 0 !important/)
   assert.match(css, /overflow-x: hidden !important/)
   assert.match(css, /width: var\(--sidebar-width, 14rem\)/)
+  const asideOpen = sidebar.slice(sidebar.indexOf('<aside'), sidebar.indexOf('>', sidebar.indexOf('<aside')) + 1)
+  assert.match(asideOpen, /overflow-visible/)
+  assert.doesNotMatch(asideOpen, /overflow-x-hidden/)
   assert.match(sidebar, /overflow-x-hidden/)
   assert.match(sidebar, /--sidebar-width/)
   assert.doesNotMatch(sidebar, /md:w-56/)
   assert.match(sidebar, /<SidebarResizeHandle/)
   assert.match(sidebar, /min-w-0 flex-1 truncate/)
   assert.match(sidebar, /ml-auto shrink-0/)
+  assert.match(handle, /-right-2/)
+  assert.match(handle, /w-2/)
+  assert.match(handle, /left-0 w-px/)
+  assert.doesNotMatch(handle, /right-0/)
 })
 
 after(() => {

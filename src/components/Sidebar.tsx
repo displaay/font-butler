@@ -891,9 +891,10 @@ export function Sidebar({
 
   return (
     <aside
-      className="sidebar-column relative flex h-auto w-full min-w-0 shrink-0 flex-col overflow-x-hidden border-b bg-sidebar text-sidebar-foreground md:h-full md:max-h-full md:border-r md:border-b-0"
+      className="sidebar-column relative flex h-auto w-full min-w-0 shrink-0 flex-col overflow-visible border-b bg-sidebar text-sidebar-foreground md:h-full md:max-h-full md:border-r md:border-b-0"
       style={{ '--sidebar-width': `${sidebarResize.width}px` } as CSSProperties}
     >
+      <div className="flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-x-hidden">
       {insetTrafficLights ? (
         <div className="app-region-drag hidden h-10 shrink-0 md:block" aria-hidden />
       ) : null}
@@ -1510,6 +1511,7 @@ export function Sidebar({
             </button>
           ) : null}
         </div>
+      </div>
       </div>
       <SidebarResizeHandle
         width={sidebarResize.width}

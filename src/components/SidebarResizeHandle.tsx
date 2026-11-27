@@ -28,7 +28,9 @@ export function SidebarResizeHandle({
       aria-valuenow={width}
       tabIndex={0}
       className={cn(
-        'group absolute inset-y-0 right-0 z-30 hidden w-3 cursor-col-resize touch-none select-none md:block',
+        // Sit fully outside the column. The overlay scrollbar is 8px on the inner edge;
+        // this 8px strip starts at the border and only covers the main panel's left padding.
+        'group absolute inset-y-0 -right-2 z-30 hidden w-2 cursor-col-resize touch-none select-none md:block',
         'focus-visible:outline-none',
       )}
       onPointerDown={onPointerDown}
@@ -41,7 +43,7 @@ export function SidebarResizeHandle({
       <span
         aria-hidden
         className={cn(
-          'pointer-events-none absolute inset-y-0 right-0 w-px transition-colors',
+          'pointer-events-none absolute inset-y-0 left-0 w-px transition-colors',
           dragging ? 'bg-foreground/70' : 'bg-transparent group-hover:bg-foreground/35',
         )}
       />
