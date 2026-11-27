@@ -88,6 +88,7 @@ import {
   LIBRARY_FILTER_GROUPS_KEY,
   LIBRARY_FILTER_GROUP_LABELS,
   defaultLibraryFilterGroups,
+  moveVisibleLibraryFilterGroup,
   readLibraryFilterGroups,
   withoutGroupFilters,
   type LibraryFilterGroupId,
@@ -211,11 +212,17 @@ export function LibraryFiltersPanel({
   const showSave = Boolean(onCreateSavedFilter && hasActiveLibraryCriteria)
 
   function persistFilterGroups(next: LibraryFilterGroupPref[]) {
+    const newlyHidden = next.filter((group) => {
+      if (group.visible) return false
+      return filterGroups.some((item) => item.id === group.id && item.visible)
+    })
     setFilterGroups(next)
     localStorage.setItem(LIBRARY_FILTER_GROUPS_KEY, JSON.stringify(next))
-    const hidden = next.filter((group) => !group.visible).map((group) => group.id)
-    if (hidden.length === 0) return
-    const cleared = hidden.reduce((filters, group) => withoutGroupFilters(filters, group), libraryFilters)
+    if (newlyHidden.length === 0) return
+    const cleared = newlyHidden.reduce(
+      (filters, group) => withoutGroupFilters(filters, group.id),
+      libraryFilters,
+    )
     if (cleared.length !== libraryFilters.length) onLibraryFiltersChange(cleared)
   }
 
@@ -293,6 +300,7 @@ export function LibraryFiltersPanel({
             onLibraryFiltersChange={onLibraryFiltersChange}
             filterGroupsOpen={filterGroupsOpen}
             onFilterGroupsOpenChange={onFilterGroupsOpenChange}
+            onReorder={persistFilterGroups}
           />
           <Button
             type="button"
@@ -323,6 +331,7 @@ export function LibraryFilterGroups({
   onLibraryFiltersChange,
   filterGroupsOpen,
   onFilterGroupsOpenChange,
+  onReorder,
 }: {
   groups?: LibraryFilterGroupPref[]
   libraryFilters: LibraryFilter[]
@@ -330,7 +339,32 @@ export function LibraryFilterGroups({
   onLibraryFiltersChange: (value: LibraryFilter[]) => void
   filterGroupsOpen: Record<string, boolean>
   onFilterGroupsOpenChange: (value: Record<string, boolean>) => void
+  onReorder?: (groups: LibraryFilterGroupPref[]) => void
 }) {
+  const [draggingId, setDraggingId] = useState<LibraryFilterGroupId | null>(null)
+  const [dropHint, setDropHint] = useState<{
+    id: LibraryFilterGroupId
+    placement: 'before' | 'after'
+  } | null>(null)
+  const draggingRef = useRef<LibraryFilterGroupId | null>(null)
+  const suppressClickRef = useRef(false)
+
+  function clearDrag() {
+    draggingRef.current = null
+    setDraggingId(null)
+    setDropHint(null)
+  }
+
+  useEffect(() => {
+    if (!draggingId) return
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== 'Escape') return
+      clearDrag()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [draggingId])
+
   function toggleFilter(id: LibraryFilter) {
     onLibraryFiltersChange(
       libraryFilters.includes(id)
@@ -339,8 +373,29 @@ export function LibraryFilterGroups({
     )
   }
 
+  function commitMove(fromId: string, toId: string, placement: 'before' | 'after') {
+    if (!onReorder) return
+    const next = moveVisibleLibraryFilterGroup(groups, fromId, toId, placement)
+    if (next === groups) return
+    onReorder(next)
+  }
+
+  function reorderWithKeyboard(id: LibraryFilterGroupId, key: 'ArrowUp' | 'ArrowDown') {
+    const visible = groups.filter((group) => group.visible)
+    const index = visible.findIndex((group) => group.id === id)
+    const neighbor = key === 'ArrowUp' ? visible[index - 1] : visible[index + 1]
+    if (!neighbor) return
+    commitMove(id, neighbor.id, key === 'ArrowUp' ? 'before' : 'after')
+  }
+
+  function placementFor(event: { clientY: number; currentTarget: HTMLElement }): 'before' | 'after' {
+    const rect = event.currentTarget.getBoundingClientRect()
+    return event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+  }
+
   const visibleGroups = groups.filter((group) => group.visible)
   const foundryRows = foundryFilterRows(libraryFilterCounts, libraryFilters)
+  const canReorder = Boolean(onReorder)
 
   return (
     <div className="flex w-full min-w-0 flex-wrap gap-3 md:flex-col md:gap-2">
@@ -366,20 +421,102 @@ export function LibraryFilterGroups({
                 label: row.label,
                 icon: Building2,
               }))
+        const hint = dropHint?.id === pref.id ? dropHint.placement : null
         return (
-          <div key={pref.id} className="flex w-full min-w-0 flex-col gap-0.5">
+          <div
+            key={pref.id}
+            data-filter-group={pref.id}
+            data-dragging={draggingId === pref.id ? 'true' : undefined}
+            data-drop-line={hint ?? undefined}
+            className={cn(
+              'relative flex w-full min-w-0 flex-col gap-0.5',
+              draggingId === pref.id && 'opacity-60',
+            )}
+            onDragOver={(event) => {
+              const from = draggingRef.current
+              if (!from || !canReorder) return
+              event.preventDefault()
+              event.dataTransfer.dropEffect = 'move'
+              if (from === pref.id) {
+                setDropHint((current) => (current?.id === pref.id ? null : current))
+                return
+              }
+              const placement = placementFor(event)
+              setDropHint((current) =>
+                current?.id === pref.id && current.placement === placement
+                  ? current
+                  : { id: pref.id, placement },
+              )
+            }}
+            onDragLeave={(event) => {
+              const next = event.relatedTarget
+              if (next instanceof Node && event.currentTarget.contains(next)) return
+              setDropHint((current) => (current?.id === pref.id ? null : current))
+            }}
+            onDrop={(event) => {
+              const from = draggingRef.current
+              if (!from || !canReorder) return
+              event.preventDefault()
+              event.stopPropagation()
+              commitMove(from, pref.id, placementFor(event))
+              clearDrag()
+            }}
+          >
+            {hint ? (
+              <span
+                aria-hidden
+                className={cn(
+                  'pointer-events-none absolute inset-x-2 z-10 h-0.5 rounded-full bg-foreground',
+                  hint === 'before' ? 'top-0' : 'bottom-0',
+                )}
+              />
+            ) : null}
             <div className="group/filter-section flex w-full items-center gap-0.5 px-1 pt-1">
               <button
                 type="button"
-                className="flex min-w-0 flex-1 items-center gap-1 px-1 text-left"
+                draggable={canReorder}
+                title={canReorder ? `Drag to reorder ${headingText}` : undefined}
+                aria-keyshortcuts={canReorder ? 'Alt+ArrowUp Alt+ArrowDown' : undefined}
+                className={cn(
+                  'flex min-w-0 flex-1 items-center gap-1 px-1 text-left',
+                  canReorder && 'cursor-grab active:cursor-grabbing',
+                )}
                 aria-expanded={groupOpen}
                 aria-label={groupOpen ? `Hide ${heading}` : `Show ${heading}`}
-                onClick={() =>
+                onPointerDown={() => {
+                  suppressClickRef.current = false
+                }}
+                onDragStart={(event) => {
+                  if (!canReorder) {
+                    event.preventDefault()
+                    return
+                  }
+                  event.dataTransfer.effectAllowed = 'move'
+                  event.dataTransfer.setData('text/plain', pref.id)
+                  draggingRef.current = pref.id
+                  suppressClickRef.current = true
+                  setDraggingId(pref.id)
+                  setDropHint(null)
+                }}
+                onDragEnd={() => {
+                  clearDrag()
+                }}
+                onKeyDown={(event) => {
+                  if (!canReorder || !event.altKey) return
+                  if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+                  event.preventDefault()
+                  reorderWithKeyboard(pref.id, event.key)
+                }}
+                onClick={() => {
+                  if (suppressClickRef.current) {
+                    suppressClickRef.current = false
+                    return
+                  }
                   onFilterGroupsOpenChange({
                     ...filterGroupsOpen,
                     [headingText]: !groupOpen,
                   })
-                }
+                }}
               >
                 <span className="text-[10px] font-medium capitalize tracking-wide text-muted-foreground">
                   {headingText}

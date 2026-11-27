@@ -3,8 +3,10 @@ import { test } from 'node:test'
 import {
   defaultLibraryFilterGroups,
   moveLibraryFilterGroup,
+  moveVisibleLibraryFilterGroup,
   normalizeLibraryFilterGroups,
   withoutGroupFilters,
+  type LibraryFilterGroupPref,
 } from '../shared/library-filter-groups.ts'
 
 test('filter groups default to today’s sidebar and keep the new groups hidden', () => {
@@ -38,4 +40,52 @@ test('moving a group reorders it and hiding it clears that group’s chips', () 
     'classification:serif',
     'foundry:Displaay',
   ])
+})
+
+const interleaved: LibraryFilterGroupPref[] = [
+  { id: 'status', visible: true },
+  { id: 'classification', visible: false },
+  { id: 'type', visible: true },
+  { id: 'foundry', visible: false },
+  { id: 'source', visible: true },
+  { id: 'destination', visible: true },
+  { id: 'format', visible: true },
+]
+
+test('moving a visible group up or down leaves hidden groups in their slots', () => {
+  const up = moveVisibleLibraryFilterGroup(interleaved, 'format', 'status', 'before')
+  assert.deepEqual(
+    up.map((group) => group.id),
+    ['format', 'classification', 'status', 'foundry', 'type', 'source', 'destination'],
+  )
+  assert.deepEqual(
+    up.filter((group) => group.visible).map((group) => group.id),
+    ['format', 'status', 'type', 'source', 'destination'],
+  )
+  assert.equal(up.find((group) => group.id === 'classification')?.visible, false)
+  assert.equal(up.find((group) => group.id === 'foundry')?.visible, false)
+
+  const down = moveVisibleLibraryFilterGroup(interleaved, 'status', 'source', 'after')
+  assert.deepEqual(
+    down.filter((group) => group.visible).map((group) => group.id),
+    ['type', 'source', 'status', 'destination', 'format'],
+  )
+  assert.equal(down[1]?.id, 'classification')
+  assert.equal(down[1]?.visible, false)
+  assert.equal(down[3]?.id, 'foundry')
+  assert.equal(down[3]?.visible, false)
+  assert.equal(down.length, interleaved.length)
+})
+
+test('dropping a visible group on itself or an invalid target is a no-op', () => {
+  const groups = defaultLibraryFilterGroups()
+  assert.equal(moveVisibleLibraryFilterGroup(groups, 'type', 'type', 'before'), groups)
+  assert.equal(moveVisibleLibraryFilterGroup(groups, 'type', 'type', 'after'), groups)
+  assert.equal(moveVisibleLibraryFilterGroup(groups, 'status', 'type', 'before'), groups)
+  assert.equal(moveVisibleLibraryFilterGroup(groups, 'type', 'status', 'after'), groups)
+  assert.equal(moveVisibleLibraryFilterGroup(groups, 'missing', 'type', 'before'), groups)
+  assert.equal(moveVisibleLibraryFilterGroup(groups, 'type', 'missing', 'after'), groups)
+  assert.equal(moveVisibleLibraryFilterGroup(groups, 'classification', 'status', 'before'), groups)
+  assert.equal(moveVisibleLibraryFilterGroup(groups, 'status', 'foundry', 'after'), groups)
+  assert.equal(moveVisibleLibraryFilterGroup(groups, 'format', 'source', 'beside' as 'before'), groups)
 })
