@@ -669,6 +669,89 @@ test('Alt+Arrow moves a filter group and stays in sync with Edit filters', async
   localStorage.removeItem(LIBRARY_FILTER_GROUPS_KEY)
 })
 
+test('reordering keeps filters from hidden groups, and hiding a group still clears them', async () => {
+  localStorage.setItem(
+    LIBRARY_FILTER_GROUPS_KEY,
+    JSON.stringify([
+      { id: 'status', visible: true },
+      { id: 'classification', visible: false },
+      { id: 'type', visible: true },
+      { id: 'source', visible: true },
+      { id: 'destination', visible: true },
+      { id: 'format', visible: true },
+      { id: 'foundry', visible: false },
+    ]),
+  )
+  const host = document.createElement('div')
+  document.body.append(host)
+  const root = createRoot(host)
+  const seen: LibraryFilter[][] = []
+
+  function PreserveHarness() {
+    const [filters, setFilters] = React.useState<LibraryFilter[]>(['installed', 'classification:serif'])
+    const [filterGroupsOpen, setFilterGroupsOpen] = React.useState({
+      ...groupsOpen,
+      Classification: true,
+    })
+    const [filtersPanelOpen, setFiltersPanelOpen] = React.useState(true)
+    return React.createElement(LibraryFiltersPanel, {
+      libraryFilters: filters,
+      libraryFilterCounts: counts,
+      onLibraryFiltersChange: (next: LibraryFilter[]) => {
+        seen.push(next)
+        setFilters(next)
+      },
+      filterGroupsOpen,
+      onFilterGroupsOpenChange: setFilterGroupsOpen,
+      filtersPanelOpen,
+      onFiltersPanelOpenChange: setFiltersPanelOpen,
+    })
+  }
+
+  await React.act(async () => {
+    root.render(React.createElement(PreserveHarness))
+  })
+  const statusHeading = document.querySelector('button[aria-label="Hide status"]')
+  assert.ok(statusHeading, 'expected the Status heading')
+  await React.act(async () => {
+    statusHeading.dispatchEvent(
+      new dom.KeyboardEvent('keydown', { key: 'ArrowDown', altKey: true, bubbles: true, cancelable: true }),
+    )
+  })
+  assert.deepEqual(groupOrder(), ['type', 'status', 'source', 'destination', 'format'])
+  assert.deepEqual(seen, [])
+  assert.deepEqual(pressedFilters(), ['Filter installed'])
+
+  await React.act(async () => {
+    buttonByLabel('Edit filters')!.click()
+  })
+  const showClassification = [...document.querySelectorAll('button[role="switch"]')].find(
+    (button) => button.getAttribute('aria-label') === 'Show Classification',
+  )
+  assert.ok(showClassification, 'expected the Classification visibility switch')
+  await React.act(async () => {
+    showClassification.click()
+  })
+  assert.deepEqual(seen, [])
+  assert.deepEqual(pressedFilters().sort(), ['Filter installed', 'Filter serif'])
+
+  const showStatus = [...document.querySelectorAll('button[role="switch"]')].find(
+    (button) => button.getAttribute('aria-label') === 'Show Status',
+  )
+  assert.ok(showStatus, 'expected the Status visibility switch')
+  await React.act(async () => {
+    showStatus.click()
+  })
+  assert.deepEqual(seen, [['classification:serif']])
+  assert.deepEqual(pressedFilters(), ['Filter serif'])
+  assert.equal(buttonByLabel('Installed'), undefined)
+
+  await React.act(async () => {
+    root.unmount()
+  })
+  localStorage.removeItem(LIBRARY_FILTER_GROUPS_KEY)
+})
+
 test('classification stays hidden until Edit filters turns that group on', async () => {
   const host = document.createElement('div')
   document.body.append(host)

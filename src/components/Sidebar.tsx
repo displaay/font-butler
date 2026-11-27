@@ -210,11 +210,17 @@ export function LibraryFiltersPanel({
   const showSave = Boolean(onCreateSavedFilter && hasActiveLibraryCriteria)
 
   function persistFilterGroups(next: LibraryFilterGroupPref[]) {
+    const newlyHidden = next.filter((group) => {
+      if (group.visible) return false
+      return filterGroups.some((item) => item.id === group.id && item.visible)
+    })
     setFilterGroups(next)
     localStorage.setItem(LIBRARY_FILTER_GROUPS_KEY, JSON.stringify(next))
-    const hidden = next.filter((group) => !group.visible).map((group) => group.id)
-    if (hidden.length === 0) return
-    const cleared = hidden.reduce((filters, group) => withoutGroupFilters(filters, group), libraryFilters)
+    if (newlyHidden.length === 0) return
+    const cleared = newlyHidden.reduce(
+      (filters, group) => withoutGroupFilters(filters, group.id),
+      libraryFilters,
+    )
     if (cleared.length !== libraryFilters.length) onLibraryFiltersChange(cleared)
   }
 
