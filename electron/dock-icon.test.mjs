@@ -63,6 +63,98 @@ test('cuttler dock icon keeps the yellow field and black mark inside the tile', 
   assert.equal(alpha(icon, 0, 0), 0)
 })
 
+function icnsPng(icns, type) {
+  let offset = 8
+  while (offset + 8 <= icns.length) {
+    const chunkType = icns.toString('ascii', offset, offset + 4)
+    const length = icns.readUInt32BE(offset + 4)
+    if (chunkType === type) return icns.subarray(offset + 8, offset + length)
+    offset += length
+  }
+  throw new Error(`icns chunk ${type} not found`)
+}
+
+function pngChunks(icns) {
+  assert.equal(icns.toString('ascii', 0, 4), 'icns', 'icns magic')
+  const total = icns.readUInt32BE(4)
+  assert.equal(total, icns.length, 'icns length matches file size')
+  const chunks = []
+  let offset = 8
+  while (offset + 8 <= icns.length) {
+    const type = icns.toString('ascii', offset, offset + 4)
+    const length = icns.readUInt32BE(offset + 4)
+    assert.ok(length >= 8 && offset + length <= icns.length, `chunk ${type} fits in the file`)
+    const data = icns.subarray(offset + 8, offset + length)
+    if (data.subarray(0, 8).equals(PNG_SIGNATURE)) {
+      chunks.push({ type, width: data.readUInt32BE(16), height: data.readUInt32BE(20) })
+    } else {
+      chunks.push({ type })
+    }
+    offset += length
+  }
+  assert.equal(offset, icns.length, 'icns chunks cover the file')
+  return chunks
+}
+
+const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
+
+test('packaged mac bundle icon shows the cuttler mark behind the running dock icon', () => {
+  const icns = readFileSync(new URL('../build/icon.icns', import.meta.url))
+  const chunks = pngChunks(icns)
+  const byType = new Map(chunks.map((chunk) => [chunk.type, chunk]))
+  for (const [type, size] of [
+    ['icp4', 16],
+    ['icp5', 32],
+    ['ic11', 32],
+    ['icp6', 64],
+    ['ic12', 64],
+    ['ic07', 128],
+    ['ic08', 256],
+    ['ic13', 256],
+    ['ic09', 512],
+    ['ic14', 512],
+    ['ic10', 1024],
+  ]) {
+    const chunk = byType.get(type)
+    assert.ok(chunk, `${type} chunk present`)
+    assert.equal(chunk.width, size, `${type} width`)
+    assert.equal(chunk.height, size, `${type} height`)
+  }
+  // The tile is shaped like macosDockIconPng so quitting the app does not
+  // jump between the shaped runtime dock icon and a full-bleed bundle icon.
+  const bundle = decodePng(icnsPng(icns, 'ic10'))
+  assert.equal(bundle.width, 1024)
+  assert.equal(bundle.height, 1024)
+  assert.equal(alpha(bundle, 0, 0), 0, 'bundle icon canvas corner')
+  assert.equal(alpha(bundle, 512, 40), 0, 'bundle icon top margin')
+  assert.equal(alpha(bundle, 100, 100), 0, 'bundle icon rounded corner')
+  assert.ok(alpha(bundle, 512, 140) > 200, 'bundle icon tile top edge')
+  assert.deepEqual([...pixel(bundle, 512, 140)], [255, 254, 0, 255], 'bundle icon yellow field')
+  assert.ok(pixel(bundle, 512, 512)[0] < 40, 'bundle icon dark cuttler mark')
+})
+
+test('bundle .icns does not fall back to the classic Butt palette', () => {
+  const icns = readFileSync(new URL('../build/icon.icns', import.meta.url))
+  const classic = shaped('build/icon.png')
+  // The classic icon is opaque black artwork at the tile top edge; cuttler is
+  // solid yellow there, so this distinguishes the two marks.
+  const classicTop = pixel(classic, 512, 140)
+  assert.ok(classicTop[0] < 40 && classicTop[2] < 40, 'classic icon is dark at tile top')
+  let offset = 8
+  let checked = 0
+  while (offset + 8 <= icns.length) {
+    const data = icns.subarray(offset + 8, offset + icns.readUInt32BE(offset + 4))
+    if (data.subarray(0, 8).equals(PNG_SIGNATURE)) {
+      const image = decodePng(data)
+      const top = pixel(image, image.width / 2, Math.round(image.height * 140 / 1024))
+      assert.ok(top[0] > 200 && top[1] > 200 && top[2] < 40, `chunk is yellow at tile top`)
+      checked += 1
+    }
+    offset += icns.readUInt32BE(offset + 4)
+  }
+  assert.ok(checked >= 11, `checked ${checked} png chunks`)
+})
+
 test('cuttler menu bar icons are 22px and 44px black templates', () => {
   for (const [file, size] of [
     ['build/icons/cuttler/tray.png', 22],

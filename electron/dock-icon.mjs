@@ -119,7 +119,7 @@ export function decodePng(png) {
   return { width, height, data: rgba }
 }
 
-function encodePng(width, height, rgba) {
+export function encodePng(width, height, rgba) {
   const stride = width * 4
   const raw = Buffer.alloc((stride + 1) * height)
   for (let y = 0; y < height; y += 1) {
