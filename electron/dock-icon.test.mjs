@@ -209,3 +209,21 @@ test('packaged app ships the cuttler attention tray icon', () => {
   const updatesMenu = readFileSync(new URL('./updates-menu.mjs', import.meta.url), 'utf8')
   assert.match(updatesMenu, /tray-attention\.png/)
 })
+
+test('startup does not paint the dock icon before the saved appIcon setting loads', () => {
+  const main = readFileSync(new URL('./main.mjs', import.meta.url), 'utf8')
+  // The gate must exist and default to "not yet loaded" so early applyDockIcon
+  // calls (app.whenReady / showDockIcon) leave the bundle's icon.icns in place.
+  assert.match(main, /let appIconStyleLoaded = false/)
+  // applyDockIcon itself must refuse to paint while the setting is unloaded.
+  const fn = main.match(/function applyDockIcon\(\) \{[\s\S]*?\n\}/)
+  assert.ok(fn, 'applyDockIcon function found')
+  assert.match(fn[0], /if \(!appIconStyleLoaded\) \{\s*\n\s*return/)
+  // Only loading the saved setting clears the gate; it must do so before painting.
+  const setter = main.match(/function applyAppIconSetting\(style\) \{[\s\S]*?\n\}/)
+  assert.ok(setter, 'applyAppIconSetting function found')
+  assert.ok(
+    setter[0].indexOf('appIconStyleLoaded = true') < setter[0].indexOf('applyDockIcon()'),
+    'applyAppIconSetting sets appIconStyleLoaded before painting the dock icon',
+  )
+})
